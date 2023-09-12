@@ -1,0 +1,32 @@
+Key +locomote [2] 0|0 [#]:
+  Key +direction [51] 4|4 [#]:
+    Key +droid [61] 0|0 [#]:
+     - mbtback [253] (Weight: 1.8)
+  Key +droid [61] 0|0 [#]:
+   - mbtwlkls, mbtwlkrs [252] (Weight: 1)
+Key +receivewound [40] 0|0 [#]:
+  Key +droid [61] 0|0 [#]:
+   - mbtwndft [256] (Weight: 1)
+  Key +meleecombat [44] 0|0 [#]:
+    Key +droid [61] 0|0 [#]:
+     - mbtwndft [255] (Weight: 1)
+Key +rangedcombat [48] 0|0 [#]:
+  Key +droid [61] 0|0 [#]:
+    Key +maintenance [62] 0|0 [#]:
+     - mbtrgat3 [258] (Weight: 2)
+    Key +assault [64] 0|0 [#]:
+     - mbtrngt2 [260] (Weight: 2)
+    Key +security [63] 0|0 [#]:
+     - mbtrngla [259] (Weight: 2)
+Key +playspecmotion [1] 0|0 [#]:
+  Key +droid [61] 0|0 [#]:
+   - mbtstd [250] (Weight: 1)
+Key +stand [5] 0|0 [#]:
+  Key +droid [61] 0|0 [#]:
+   - mbtstd, mbtfake1, mbtfake2 [251] (Weight: 1)
+Key +search [19] 0|0 [#]:
+  Key +droid [61] 0|0 [#]:
+   - mbtserch [257] (Weight: 3)
+Key +crumple [37] 0|0 [#]:
+  Key +droid [61] 0|0 [#]:
+   - mbdthch [254] (Weight: 1)

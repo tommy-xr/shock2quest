@@ -1,0 +1,12 @@
+
+[profile.dev.package.rapier3d]
+opt-level = 3
+
+[workspace]
+
+members = [
+    "runtimes/*",
+    "engine",
+    "shock2vr",
+    "dark",
+]

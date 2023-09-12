@@ -1,0 +1,28 @@
+
+# ADD GAME FILES HERE
+
+In order to run the game locally on desktop, you must copy over your own version of the game files.
+
+The folder structure should look like:
+
+```
+- ..\shock2quest
+    - \Data
+        - \res
+            - bitmap.crf
+            - book.crf
+            - editor.crf
+            - fam.crf
+            - fonts.crf
+            - iface.crf
+            - ...
+        - command1.mis
+        - shock2.gam
+        - ...
+```
+
+If you do not have a copy of the game, you can find it here:
+- [System Shock 2 on Steam](https://store.steampowered.com/app/238210/System_Shock_2/)
+- [System Shock 2 on GOG](https://www.gog.com/en/game/system_shock_2)
+
+You can often find it sale, but it is well worth the price.

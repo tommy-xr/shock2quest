@@ -1,0 +1,71 @@
+[package]
+name = "openxr"
+description = "High-level, mostly-safe OpenXR bindings"
+repository = "https://github.com/Ralith/openxrs"
+readme = "../README.md"
+version = "0.16.0"
+authors = ["Benjamin Saunders <ben.e.saunders@gmail.com>"]
+categories = ["api-bindings", "rendering"]
+keywords = ["vr"]
+license = "MIT/Apache-2.0"
+edition = "2018"
+
+[badges]
+maintenance = { status = "experimental" }
+
+[features]
+static = ["sys/static", "linked"]
+loaded = ["libloading"]
+linked = ["sys/linked"]
+mint = ["sys/mint"]
+default = ["loaded"]
+
+[dependencies]
+sys = { package = "openxr-sys", path = "../sys", version = "0.9.1" }
+libc = "0.2.50"
+libloading = { version = "0.7", optional = true }
+
+[dev-dependencies]
+ash = { version = "0.37", default-features = false, features = ["loaded"] }
+ctrlc = "3.1.5"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["profileapi"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "0.1"
+
+[package.metadata.docs.rs]
+features = ["linked", "loaded", "mint"]
+
+[[example]]
+name = "vulkan"
+
+[[example]]
+name = "vulkan-android"
+path = "examples/vulkan.rs"
+crate-type = ["cdylib"]
+
+# The following manifest metadata is used by cargo-apk to configure the example Android app for the Oculus Quest 1 and Quest 2.
+# It does not affect the openxr crate.
+[package.metadata.android]
+build_targets = ["aarch64-linux-android"]
+runtime_libs = "examples/libs"
+
+[package.metadata.android.sdk]
+min_sdk_version = 21
+target_sdk_version = 30
+
+[package.metadata.android.application.activity]
+theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+launch_mode = "singleTask"
+orientation = "landscape"
+resizeable_activity = "false"
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = [
+    "com.oculus.intent.category.VR",
+    "android.intent.category.LAUNCHER",
+]

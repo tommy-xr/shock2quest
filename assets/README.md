@@ -1,0 +1,1 @@
+** Placeholder for assets to be embedded in APK **

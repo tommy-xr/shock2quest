@@ -1,0 +1,82 @@
+Key +stand [5] 0|0 [#]:
+ - bsstand, bs111220, bs111221 [555] (Weight: 0)
+  Key +meleecombat [44] 0|0 [#]:
+   - bs113000 [557] (Weight: 0)
+  Key +babyspider [67] 0|0 [#]:
+   - bsstand, bs111220, bs111221 [1] (Weight: 0.2)
+  Key +wheel [7] 0|0 [#]:
+   - bsstand, bs111220, bs111221 [556] (Weight: 0.5)
+Key +discover [22] 0|0 [#]:
+ - bs112200 [572] (Weight: 0)
+Key +playspecmotion [1] 0|0 [#]:
+ - bs114002, spidtest [0] (Weight: 0)
+ - bs114002, spidtest [554] (Weight: 0)
+ - bs113701 [574] (Weight: 0)
+ - bs131010, bs141011 [576] (Weight: 0)
+ - bs141021 [577] (Weight: 0)
+Key +search [19] 0|0 [#]:
+ - bs112400, bs112100 [571] (Weight: 2)
+Key +idlegesture [28] 0|0 [#]:
+ - bs112001 [570] (Weight: 0)
+Key +stun [43] 0|0 [#]:
+ - bs113501 [581] (Weight: 0)
+Key +meleecombat [44] 0|0 [#]:
+  Key +attack [46] 0|0 [#]:
+   - bs113000, bs113001, bs113002, bs113003, bs141021 [568] (Weight: 1)
+    Key +babyspider [67] 0|0 [#]:
+     - bs113000, bs113002, bs113003, bs141021 [12] (Weight: 1.2)
+    Key +specialattack [47] 0|0 [#]:
+     - bs113000, bs113001 [569] (Weight: 1)
+      Key +babyspider [67] 0|0 [#]:
+       - bs113000, bs113002 [13] (Weight: 1.2)
+Key +locomote [2] 0|0 [#]:
+ - bs111010, bs111011 [558] (Weight: 0)
+  Key +locourgent [3] 0|0 [#]:
+   - bs111010, bs111011 [561] (Weight: 1)
+    Key +direction [51] 2|2 [#]:
+     - bs111211, bs111210 [563] (Weight: 1.8)
+      Key +babyspider [67] 0|0 [#]:
+       - bs111211, bs111210 [7] (Weight: 2)
+    Key +direction [51] 1|1 [#]:
+     - bs111030, bs111031 [562] (Weight: 1.8)
+      Key +babyspider [67] 0|0 [#]:
+       - bs111030, bs111031 [6] (Weight: 2)
+    Key +babyspider [67] 0|0 [#]:
+     - bs111010, bs111011 [5] (Weight: 1.2)
+  Key +direction [51] 2|2 [#]:
+   - bs111211, bs111210 [560] (Weight: 0.8)
+    Key +babyspider [67] 0|0 [#]:
+     - bs111211, bs111210 [4] (Weight: 1)
+  Key +direction [51] 1|1 [#]:
+   - bs111030, bs111031 [559] (Weight: 0.8)
+    Key +babyspider [67] 0|0 [#]:
+     - bs111030, bs111031 [3] (Weight: 1)
+  Key +meleecombat [44] 0|0 [#]:
+   - bs111010, bs111011 [564] (Weight: 0)
+    Key +babyspider [67] 0|0 [#]:
+     - bs111010, bs111011 [8] (Weight: 0.2)
+    Key +direction [51] 1|1 [#]:
+     - bs111030, bs111031 [565] (Weight: 0.8)
+      Key +babyspider [67] 0|0 [#]:
+       - bs111030, bs111031 [9] (Weight: 1)
+    Key +direction [51] 4|4 [#]:
+     - bs111017 [567] (Weight: 0.8)
+      Key +babyspider [67] 0|0 [#]:
+       - bs111017 [11] (Weight: 1)
+    Key +direction [51] 2|2 [#]:
+     - bs111211, bs111210 [566] (Weight: 0.8)
+      Key +babyspider [67] 0|0 [#]:
+       - bs111211, bs111210 [10] (Weight: 1)
+  Key +babyspider [67] 0|0 [#]:
+   - bs111010, bs111011 [2] (Weight: 0.2)
+Key +receivewound [40] 0|0 [#]:
+  Key +meleecombat [44] 0|0 [#]:
+   - bs113501, bs113502 [578] (Weight: 0)
+    Key +direction [51] 1|1 [#]:
+     - bs113502 [579] (Weight: 0.8)
+    Key +direction [51] 2|2 [#]:
+     - bs113501 [580] (Weight: 0.8)
+Key +rangedcombat [48] 0|0 [#]:
+ - bs114208 [575] (Weight: 0)
+Key +crumple [37] 0|0 [#]:
+ - aracdyng [573] (Weight: 0)

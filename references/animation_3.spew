@@ -1,0 +1,27 @@
+Key +playspecmotion [1] 0|0 [#]:
+  Key +overlord [70] 0|0 [#]:
+   - ovlidle2 [425] (Weight: 1)
+Key +locomote [2] 0|0 [#]:
+  Key +overlord [70] 0|0 [#]:
+   - ovlmove [427] (Weight: 1)
+Key +stand [5] 0|0 [#]:
+  Key +overlord [70] 0|0 [#]:
+   - ovlidle2 [426] (Weight: 1)
+Key +receivewound [40] 0|0 [#]:
+  Key +meleecombat [44] 0|0 [#]:
+    Key +overlord [70] 0|0 [#]:
+     - ovlrwdl, ovlrwdr [430] (Weight: 1)
+    Key +direction [51] 1|1 [#]:
+      Key +overlord [70] 0|0 [#]:
+       - ovlrwdl [431] (Weight: 1.8)
+    Key +direction [51] 2|2 [#]:
+      Key +overlord [70] 0|0 [#]:
+       - ovlrwdr [432] (Weight: 1.8)
+Key +rangedcombat [48] 0|0 [#]:
+  Key +overlord [70] 0|0 [#]:
+   - ovlshoot [428] (Weight: 1)
+Key +stun [43] 0|0 [#]:
+ - ovlrwdr [433] (Weight: 0)
+Key +search [19] 0|0 [#]:
+  Key +overlord [70] 0|0 [#]:
+   - ovlsrch [429] (Weight: 3)

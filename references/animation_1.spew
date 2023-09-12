@@ -1,0 +1,44 @@
+Key +plyrmelee [89] 1|1 [#]:
+  Key +plyrmeleeswing [91] 0|0 [#]:
+   - camsynch, midwup [441] (Weight: 1)
+  Key +plyrmeleeswing [91] 2|2 [#]:
+   - camsynch, highhold [447] (Weight: 1)
+Key +direction [51] 5|5 [#]:
+  Key +plyrmelee [89] 6|6 [#]:
+   - camsynch, gbhi [438] (Weight: 1.8)
+Key +plyrmelee [89] 4|4 [#]:
+ - camsynch, ph212202 [449] (Weight: 1)
+Key +plyrmelee [89] 2|2 [#]:
+  Key +plyrmeleeswing [91] 2|2 [#]:
+   - camsynch, highswing [448] (Weight: 1)
+  Key +plyrmeleeswing [91] 0|0 [#]:
+   - camsynch, gasllsw [442] (Weight: 1)
+Key +direction [51] 2|2 [#]:
+  Key +plyrmelee [89] 6|6 [#]:
+   - camsynch, gbrt [440] (Weight: 1.8)
+  Key +plyrmelee [89] 1|1 [#]:
+    Key +plyrmeleeswing [91] 1|1 [#]:
+     - camsynch, righthold [444] (Weight: 1.8)
+  Key +plyrmelee [89] 2|2 [#]:
+    Key +plyrmeleeswing [91] 1|1 [#]:
+     - camsynch, rightswing [446] (Weight: 1.8)
+Key +plyrmelee [89] 0|0 [#]:
+ - camsynch, ph212203 [435] (Weight: 1)
+Key +direction [51] 6|6 [#]:
+  Key +plyrmelee [89] 6|6 [#]:
+   - camsynch, gblo [437] (Weight: 1.8)
+Key +direction [51] 1|1 [#]:
+  Key +plyrmelee [89] 2|2 [#]:
+    Key +plyrmeleeswing [91] 1|1 [#]:
+     - camsynch, leftswing [445] (Weight: 1.8)
+  Key +plyrmelee [89] 6|6 [#]:
+   - camsynch, gblf [439] (Weight: 1.8)
+  Key +plyrmelee [89] 1|1 [#]:
+    Key +plyrmeleeswing [91] 1|1 [#]:
+     - camsynch, lefthold [443] (Weight: 1.8)
+Key +test [0] 0|0 [#]:
+ - camsynch [434] (Weight: 0)
+Key +plyrmelee [89] 3|3 [#]:
+ - camsynch, gbmid [436] (Weight: 1)
+Key +plyrmelee [89] 5|5 [#]:
+ - camsynch, ph212205 [450] (Weight: 1)

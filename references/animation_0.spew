@@ -1,0 +1,1103 @@
+// See GENERATION comment in motion db module
+Key +cs [94] 116|116 [#]:
+ - humtypew [146] (Weight: 0)
+Key +cs [94] 169|169 [#]:
+ - humairpt2 [199] (Weight: 0)
+Key +cs [94] 107|107 [#]:
+ - humbball [137] (Weight: 0)
+Key +cs [94] 54|54 [#]:
+ - femtalk1c [84] (Weight: 0)
+Key +cs [94] 53|53 [#]:
+ - femtalk2a [83] (Weight: 0)
+Key +cs [94] 146|146 [#]:
+ - shotalk2c [176] (Weight: 0)
+Key +cs [94] 14|14 [#]:
+ - ogpmela2 [44] (Weight: 0)
+Key +cs [94] 100|100 [#]:
+ - mdwrunlt [130] (Weight: 0)
+Key +cs [94] 71|71 [#]:
+ - cpssitc1 [101] (Weight: 0)
+Key +cs [94] 204|204 [#]:
+ - humdierun [234] (Weight: 0)
+Key +cs [94] 175|175 [#]:
+ - humtyp4 [205] (Weight: 0)
+Key +playspecmotion [1] 0|0 [#]:
+ - s42c6x, s10c1x, s27c1x, ogshoot1 [19] (Weight: 0)
+ - cpsldw1, cpsldw2, cpsldw3, cpsldw4, cpsldw5, cpsldw6, cpsldw7, cpsldw8, humdieup1, humcpsu1, humdie3, humdie3a, humdie3b, humdie3c, humcrytups, humcpssit, humdie01ps, humdiedn1, humdiedn2, humdiedn3, humdiedn4, humdiedn5, humdieup1, humdieup2, humdieup3, humdieup4, humdieup5, humcpsschr, cpssit2, cpssit3 [552] (Weight: 0)
+ - rmbleapf [553] (Weight: 0)
+  Key +midwife [65] 0|0 [#]:
+   - mdwaltbh, mdwpwrup, mdwpttrn [356] (Weight: 1)
+  Key +ninja [68] 0|0 [#]:
+   - njamelstd, njadodge [403] (Weight: 1)
+  Key +shodan [73] 0|0 [#]:
+   -  [536] (Weight: 1)
+  Key +grunt [57] 0|0 [#]:
+   -  [296] (Weight: 1)
+  Key +human [75] 0|0 [#]:
+   - humelect, humwlklk, humwlklr, humwalks, humdwstr, humupstr, humrunsk, humbakup, humalert, humaltlt, humaltrt, humalsnd, humdwlkl, humdwlkr, humclmbl, humclmbr, humtypew, humtalk3, humtalk1, humjumpf, humkleap, humsick2, humsick5, humswich, humtalk2a, humtalk2c, humtalk2d, humtalk2e, humtalk2f, humtalk3a, humtypew, humsick4, humtlkem, humtlkm1, humtlkm2, humtlkm3, humwlkgn, humblkt, humreothlp, macarena, bh114325 [329] (Weight: 1)
+  Key +player [76] 0|0 [#]:
+   - humidl02, plycrchd, plycrchu, plyswrnch, plyswrnch2 [451] (Weight: 1)
+  Key +monkey [77] 0|0 [#]:
+   - zkystd2 [383] (Weight: 1)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrreact, pdrdance, pdrtalk1, pdrtalk2, pdrtalk2a, pdrtalk2b, pdrtalk2c, pdroffst [479] (Weight: 1)
+  Key +delacroix [69] 0|0 [#]:
+   - delmlstd [243] (Weight: 1)
+  Key +female [74] 0|0 [#]:
+    Key +female [74] 0|0 [#]:
+     - fembakup, femdichr, femtalk1a, femtalk1b, femtalk1c, femtalk2a, femtalk2b, femtalk2c, femturnh, fembound [261] (Weight: 2)
+Key +cs [94] 7|7 [#]:
+ - ogpwlkrt [38] (Weight: 0)
+Key +cs [94] 195|195 [#]:
+ - ogpbzwlk [225] (Weight: 0)
+Key +cs [94] 201|201 [#]:
+ - humsalute3 [231] (Weight: 0)
+Key +cs [94] 114|114 [#]:
+ - cpsldw8 [144] (Weight: 0)
+Key +cs [94] 35|35 [#]:
+ - humshtsh [65] (Weight: 0)
+Key +cs [94] 73|73 [#]:
+ - cpsldw2 [103] (Weight: 0)
+Key +cs [94] 94|94 [#]:
+ - humswlk [124] (Weight: 0)
+Key +cs [94] 149|149 [#]:
+ - ogphlpme1 [179] (Weight: 0)
+Key +cs [94] 133|133 [#]:
+ - humkgdob1 [163] (Weight: 0)
+Key +player [76] 0|0 [#]:
+  Key +jumping [98] 0|0 [#]:
+   - plyjmpup1 [461] (Weight: 3)
+  Key +mantle [99] 0|0 [#]:
+   - plymant [470] (Weight: 3)
+Key +cs [94] 189|189 [#]:
+ - zkyidle1 [219] (Weight: 0)
+Key +cs [94] 210|210 [#]:
+ - humdie3 [240] (Weight: 0)
+Key +cs [94] 36|36 [#]:
+ - humshthp [66] (Weight: 0)
+Key +cs [94] 83|83 [#]:
+ - humstslf [113] (Weight: 0)
+Key +cs [94] 48|48 [#]:
+ - humunwlkr [78] (Weight: 0)
+Key +cs [94] 60|60 [#]:
+ - humidl5b [90] (Weight: 0)
+Key +cs [94] 24|24 [#]:
+ - humtlkem [54] (Weight: 0)
+Key +cs [94] 32|32 [#]:
+ - humsick4 [62] (Weight: 0)
+Key +cs [94] 122|122 [#]:
+ - humdthtkps [152] (Weight: 0)
+Key +cs [94] 37|37 [#]:
+ - humshake [67] (Weight: 0)
+Key +locomote [2] 0|0 [#]:
+  Key +midwife [65] 0|0 [#]:
+   - showlklt, showlkrt [368] (Weight: 1)
+  Key +meleecombat [44] 0|0 [#]:
+    Key +direction [51] 4|4 [#]:
+      Key +ninja [68] 0|0 [#]:
+       - mdwmelbu [423] (Weight: 1.8)
+      Key +monkey [77] 0|0 [#]:
+       - zkymelbu [388] (Weight: 1.8)
+      Key +prodroid [71] 0|0 [#]:
+       - pdrwkrv [491] (Weight: 1.8)
+      Key +shodan [73] 0|0 [#]:
+       - shomelbu [544] (Weight: 1.8)
+      Key +midwife [65] 0|0 [#]:
+       - mdwmelbu [372] (Weight: 1.8)
+      Key +delacroix [69] 0|0 [#]:
+       - delmelbu [249] (Weight: 1.8)
+      Key +servbot [103] 0|0 [#]:
+       - nmservbu [530] (Weight: 1.8)
+      Key +rumbler [72] 0|0 [#]:
+       - rmbmelbu [502] (Weight: 1.8)
+      Key +grunt [57] 0|0 [#]:
+       - ogpmelbu [310] (Weight: 1.8)
+        Key +shotgun [58] 0|0 [#]:
+         - ogpmelbu [266] (Weight: 2.8)
+        Key +grenade [60] 0|0 [#]:
+         - mdwmelbu [322] (Weight: 2.8)
+    Key +direction [51] 3|3 [#]:
+      Key +ninja [68] 0|0 [#]:
+       - mdwmelad [414] (Weight: 1.8)
+      Key +rumbler [72] 0|0 [#]:
+       - rmbmelad [501] (Weight: 1.8)
+      Key +shodan [73] 0|0 [#]:
+       - shomelad [543] (Weight: 1.8)
+      Key +grunt [57] 0|0 [#]:
+       - ogsrunl, ogsrunr [304] (Weight: 1.8)
+        Key +pipe [59] 0|0 [#]:
+         - ogsrunl, ogsrunr [289] (Weight: 2.8)
+      Key +monkey [77] 0|0 [#]:
+       - zkymelad [396] (Weight: 1.8)
+    Key +direction [51] 2|2 [#]:
+      Key +rumbler [72] 0|0 [#]:
+       - rmbmelsr [504] (Weight: 1.8)
+      Key +servbot [103] 0|0 [#]:
+       - nmservsr [523] (Weight: 1.8)
+      Key +monkey [77] 0|0 [#]:
+       - zkyhopr [401] (Weight: 1.8)
+      Key +delacroix [69] 0|0 [#]:
+       - delmelsr [248] (Weight: 1.8)
+      Key +midwife [65] 0|0 [#]:
+       - mdwmelsr [371] (Weight: 1.8)
+      Key +ninja [68] 0|0 [#]:
+       - mdwmelsr [416] (Weight: 1.8)
+      Key +shodan [73] 0|0 [#]:
+       - shomelsr [546] (Weight: 1.8)
+      Key +grunt [57] 0|0 [#]:
+       - ogpmelsr [306] (Weight: 1.8)
+    Key +midwife [65] 0|0 [#]:
+     - mdwmeld1, mdwmeld2 [373] (Weight: 1)
+    Key +servbot [103] 0|0 [#]:
+     - nmservw [517] (Weight: 1)
+    Key +direction [51] 1|1 [#]:
+      Key +rumbler [72] 0|0 [#]:
+       - rmbmelsl [503] (Weight: 1.8)
+      Key +ninja [68] 0|0 [#]:
+       - mdwmelsl [415] (Weight: 1.8)
+      Key +midwife [65] 0|0 [#]:
+       - mdwmelsl [370] (Weight: 1.8)
+      Key +shodan [73] 0|0 [#]:
+       - shomelsl [545] (Weight: 1.8)
+      Key +delacroix [69] 0|0 [#]:
+       - delmelsl [247] (Weight: 1.8)
+      Key +grunt [57] 0|0 [#]:
+       - ogpmelsl [307] (Weight: 1.8)
+      Key +monkey [77] 0|0 [#]:
+       - zkyhopl [402] (Weight: 1.8)
+      Key +servbot [103] 0|0 [#]:
+       - nmservsl [521] (Weight: 1.8)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbwlkl, rmbwlkr [499] (Weight: 1)
+  Key +monkey [77] 0|0 [#]:
+   - zkywlk [395] (Weight: 1)
+  Key +ninja [68] 0|0 [#]:
+   - njawlklt, njawlkrt [405] (Weight: 1)
+  Key +grunt [57] 0|0 [#]:
+   -  [299] (Weight: 1)
+    Key +pipe [59] 0|0 [#]:
+     - ogpbzwkl, ogpbzwkr [294] (Weight: 2)
+    Key +shotgun [58] 0|0 [#]:
+     - ogswlkl, ogswlkr [267] (Weight: 2)
+    Key +grenade [60] 0|0 [#]:
+     - oggwlkl, oggwlkr [317] (Weight: 2)
+  Key +poisoned [30] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humunwlkl, humunwlkr [333] (Weight: 1.5)
+  Key +direction [51] 4|4 [#]:
+    Key +monkey [77] 0|0 [#]:
+     - zkymelbu [389] (Weight: 1.8)
+    Key +ninja [68] 0|0 [#]:
+     - mdwmelbu [422] (Weight: 1.8)
+    Key +midwife [65] 0|0 [#]:
+     - mdwmelbu [382] (Weight: 1.8)
+    Key +grunt [57] 0|0 [#]:
+      Key +shotgun [58] 0|0 [#]:
+       - ogpmelbu [278] (Weight: 2.8)
+      Key +grenade [60] 0|0 [#]:
+       - mdwmelbu [321] (Weight: 2.8)
+    Key +prodroid [71] 0|0 [#]:
+     - pdrwkrv [490] (Weight: 1.8)
+    Key +player [76] 0|0 [#]:
+     - plywlkbk [454] (Weight: 1.8)
+  Key +human [75] 0|0 [#]:
+   - hamwalk [332] (Weight: 1)
+  Key +direction [51] 2|2 [#]:
+    Key +grunt [57] 0|0 [#]:
+     - ogpmelsr [308] (Weight: 1.8)
+    Key +servbot [103] 0|0 [#]:
+     - nmservsr [525] (Weight: 1.8)
+    Key +ninja [68] 0|0 [#]:
+     - mdwmelsr [421] (Weight: 1.8)
+    Key +midwife [65] 0|0 [#]:
+     - mdwmelsr [381] (Weight: 1.8)
+    Key +player [76] 0|0 [#]:
+     - ogpmelsr [472] (Weight: 1.8)
+  Key +player [76] 0|0 [#]:
+   - plywlklt, plywlkrt [453] (Weight: 1)
+   - humwlkrt, humwlklt [467] (Weight: 1)
+    Key +crouching [97] 0|0 [#]:
+     - plycrwlk [459] (Weight: 2)
+    Key +climbing [100] 0|0 [#]:
+     - humclmbl, humclmbr [477] (Weight: 3)
+  Key +servbot [103] 0|0 [#]:
+   - nmservw [516] (Weight: 1)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrwlklt, pdrwlkrt [488] (Weight: 1)
+  Key +locourgent [3] 0|0 [#]:
+    Key +direction [51] 4|4 [#]:
+      Key +human [75] 0|0 [#]:
+       - humrunbl, humrunbr [338] (Weight: 2.8)
+    Key +prodroid [71] 0|0 [#]:
+     - pdrwlklt, pdrwlkrt [489] (Weight: 2)
+    Key +direction [51] 1|1 [#]:
+      Key +human [75] 0|0 [#]:
+       - humlrunl, humlrunr [336] (Weight: 2.8)
+      Key +servbot [103] 0|0 [#]:
+       - nmservsl [528] (Weight: 2.8)
+    Key +female [74] 0|0 [#]:
+      Key +female [74] 0|0 [#]:
+       - femrsclt, femrscrt [265] (Weight: 3)
+    Key +servbot [103] 0|0 [#]:
+     - nmservr, nmservr2 [518] (Weight: 2)
+    Key +direction [51] 2|2 [#]:
+      Key +human [75] 0|0 [#]:
+       - humrrunl, humrrunr [337] (Weight: 2.8)
+      Key +servbot [103] 0|0 [#]:
+       - nmservsr [527] (Weight: 2.8)
+    Key +grunt [57] 0|0 [#]:
+      Key +shotgun [58] 0|0 [#]:
+       - ogsrunl, ogsrunr [269] (Weight: 3)
+      Key +grenade [60] 0|0 [#]:
+       - oggrunl, oggrunr [316] (Weight: 3)
+      Key +pipe [59] 0|0 [#]:
+       - ogsrunl, ogsrunr [293] (Weight: 3)
+    Key +ninja [68] 0|0 [#]:
+     - njarunlt, njarunrt [404] (Weight: 2)
+    Key +midwife [65] 0|0 [#]:
+     - mdwrunlt, mdwrunrt [376] (Weight: 2)
+    Key +meleecombat [44] 0|0 [#]:
+      Key +servbot [103] 0|0 [#]:
+       - nmservr, nmservr2 [519] (Weight: 2)
+      Key +direction [51] 2|2 [#]:
+        Key +servbot [103] 0|0 [#]:
+         - nmservsr [524] (Weight: 2.8)
+      Key +direction [51] 3|3 [#]:
+        Key +midwife [65] 0|0 [#]:
+         - mdwmelad [374] (Weight: 2.8)
+        Key +grunt [57] 0|0 [#]:
+         - ogsrunl, ogsrunr [305] (Weight: 2.8)
+          Key +pipe [59] 0|0 [#]:
+           - ogsrunl, ogsrunr [290] (Weight: 3.8)
+      Key +direction [51] 1|1 [#]:
+        Key +servbot [103] 0|0 [#]:
+         - nmservsl [522] (Weight: 2.8)
+    Key +monkey [77] 0|0 [#]:
+     - zkyrunlt, zkyrunrt [394] (Weight: 2)
+    Key +player [76] 0|0 [#]:
+     - bh111032, bh111033 [455] (Weight: 2)
+    Key +shodan [73] 0|0 [#]:
+     - shorunlt, shorunrt [541] (Weight: 2)
+    Key +human [75] 0|0 [#]:
+     - bh111032, bh111033 [335] (Weight: 2)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbrunr, rmbrunl [500] (Weight: 2)
+  Key +iswounded [4] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humwklmp [334] (Weight: 2)
+  Key +search [19] 0|0 [#]:
+    Key +midwife [65] 0|0 [#]:
+     - mdwswalklt, mdwswalkrt [379] (Weight: 3)
+    Key +prodroid [71] 0|0 [#]:
+     - pdrswalk [494] (Weight: 3)
+    Key +shodan [73] 0|0 [#]:
+     - shoswalk [548] (Weight: 3)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbswalk [510] (Weight: 3)
+    Key +monkey [77] 0|0 [#]:
+     - zkyswalk [398] (Weight: 3)
+    Key +grunt [57] 0|0 [#]:
+     - bh212oo8 [312] (Weight: 3)
+    Key +human [75] 0|0 [#]:
+     - humswlk [339] (Weight: 3)
+    Key +servbot [103] 0|0 [#]:
+     - nmservs [520] (Weight: 3)
+    Key +ninja [68] 0|0 [#]:
+     - njaswalk [419] (Weight: 3)
+  Key +direction [51] 1|1 [#]:
+    Key +servbot [103] 0|0 [#]:
+     - nmservsl [526] (Weight: 1.8)
+    Key +ninja [68] 0|0 [#]:
+     - mdwmelsl [420] (Weight: 1.8)
+    Key +player [76] 0|0 [#]:
+     - ogpmelsl [471] (Weight: 1.8)
+    Key +grunt [57] 0|0 [#]:
+     - ogpmelsl [309] (Weight: 1.8)
+    Key +midwife [65] 0|0 [#]:
+     - mdwmelsl [380] (Weight: 1.8)
+  Key +female [74] 0|0 [#]:
+    Key +female [74] 0|0 [#]:
+     - humunwlkl, humunwlkr [264] (Weight: 2)
+  Key +shodan [73] 0|0 [#]:
+   - showlklt, showlkrt [538] (Weight: 1)
+Key +cs [94] 57|57 [#]:
+ - femrscrt [87] (Weight: 0)
+Key +cs [94] 3|3 [#]:
+ - pdrtalk2c [34] (Weight: 0)
+Key +cs [94] 17|17 [#]:
+ - mdwwlklt [47] (Weight: 0)
+Key +cs [94] 41|41 [#]:
+ - humidl02 [71] (Weight: 0)
+Key +cs [94] 90|90 [#]:
+ - humraarm [120] (Weight: 0)
+Key +search [19] 0|0 [#]:
+  Key +monkey [77] 0|0 [#]:
+   - zkyserch [391] (Weight: 3)
+  Key +scan [21] 0|0 [#]:
+    Key +grunt [57] 0|0 [#]:
+     - plyserch [297] (Weight: 3.5)
+    Key +midwife [65] 0|0 [#]:
+     - mdwserch [358] (Weight: 3.5)
+    Key +prodroid [71] 0|0 [#]:
+     - pdrssrch [482] (Weight: 3.5)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbssrch [509] (Weight: 3.5)
+    Key +shodan [73] 0|0 [#]:
+     - shoserch [547] (Weight: 3.5)
+    Key +player [76] 0|0 [#]:
+     - plyserch [466] (Weight: 3.5)
+    Key +human [75] 0|0 [#]:
+     - humssrch [340] (Weight: 3.5)
+  Key +ninja [68] 0|0 [#]:
+   - njaserch [418] (Weight: 3)
+Key +rangedcombat [48] 0|0 [#]:
+  Key +shodan [73] 0|0 [#]:
+   - shorngat5, shorngat6, shorngat4, shorngat2, shorngat3, shorngat1 [549] (Weight: 1)
+  Key +ninja [68] 0|0 [#]:
+   - njarngat1, njarngat3 [413] (Weight: 1)
+  Key +human [75] 0|0 [#]:
+   - humshthp, humshtsh [347] (Weight: 1)
+    Key +withpistol [102] 0|0 [#]:
+     - nmpangle, nmpistol [348] (Weight: 1.9)
+  Key +midwife [65] 0|0 [#]:
+   - mdw1shts, mdwrngat3, mdwrngat4 [367] (Weight: 1)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbrngat, rmbratvr [511] (Weight: 1)
+  Key +player [76] 0|0 [#]:
+   - humshthp [469] (Weight: 1)
+    Key +crouching [97] 0|0 [#]:
+     - plycrsht [468] (Weight: 2)
+  Key +monkey [77] 0|0 [#]:
+   - zkyrngat1, zkyrngat2, zkyrgat3 [390] (Weight: 1)
+  Key +grunt [57] 0|0 [#]:
+    Key +shotgun [58] 0|0 [#]:
+     - ogsshot1, ogsshot2, ogsshot3 [270] (Weight: 2)
+    Key +grenade [60] 0|0 [#]:
+     - oggshot2, oggshot3, oggshot4 [314] (Weight: 2)
+Key +cs [94] 56|56 [#]:
+ - femtalk1a [86] (Weight: 0)
+Key +cs [94] 140|140 [#]:
+ - shotalk1a [170] (Weight: 0)
+Key +cs [94] 26|26 [#]:
+ - humtalk2f [56] (Weight: 0)
+Key +cs [94] 69|69 [#]:
+ - delmelbu [99] (Weight: 0)
+Key +cs [94] 34|34 [#]:
+ - humsick2 [64] (Weight: 0)
+Key +cs [94] 46|46 [#]:
+ - humcs22 [76] (Weight: 0)
+Key +cs [94] 165|165 [#]:
+ - humbuts [195] (Weight: 0)
+Key +cs [94] 123|123 [#]:
+ - humdrnkst [153] (Weight: 0)
+Key +cs [94] 187|187 [#]:
+ - zkyspin [217] (Weight: 0)
+Key +locourgent [3] 0|0 [#]:
+  Key +direction [51] 3|3 [#]:
+    Key +player [76] 0|0 [#]:
+      Key +jumping [98] 0|0 [#]:
+       - plyrjmpf [464] (Weight: 4.8)
+Key +cs [94] 124|124 [#]:
+ - mbdthch [154] (Weight: 0)
+Key +cs [94] 59|59 [#]:
+ - humidl02 [89] (Weight: 0)
+Key +cs [94] 117|117 [#]:
+ - humidl5b [147] (Weight: 0)
+Key +cs [94] 101|101 [#]:
+ - mdwrunrt [131] (Weight: 0)
+Key +cs [94] 76|76 [#]:
+ - delrelnt [106] (Weight: 0)
+Key +cs [94] 153|153 [#]:
+ - fembar [183] (Weight: 0)
+Key +cs [94] 186|186 [#]:
+ - humkgrob [216] (Weight: 0)
+Key +cs [94] 197|197 [#]:
+ - ogpmelbu [227] (Weight: 0)
+Key +cs [94] 68|68 [#]:
+ - delmelsl [98] (Weight: 0)
+Key +cs [94] 145|145 [#]:
+ - shotalk2c [175] (Weight: 0)
+Key +cs [94] 118|118 [#]:
+ - humidl5c [148] (Weight: 0)
+Key +discover [22] 0|0 [#]:
+  Key +challenge [25] 0|0 [#]:
+    Key +grunt [57] 0|0 [#]:
+      Key +shotgun [58] 0|0 [#]:
+       - ogschlng [268] (Weight: 2.5)
+    Key +midwife [65] 0|0 [#]:
+     -  [378] (Weight: 1.5)
+    Key +ninja [68] 0|0 [#]:
+     - njachlng [417] (Weight: 1.5)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbchlng [506] (Weight: 1.5)
+    Key +monkey [77] 0|0 [#]:
+     - zkychlng, zkychlng2 [384] (Weight: 1.5)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrchlng [486] (Weight: 1)
+  Key +pointout [23] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humpoint [344] (Weight: 1.5)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbidle [512] (Weight: 1)
+  Key +thwarted [26] 0|0 [#]:
+    Key +monkey [77] 0|0 [#]:
+     - zkythwtd [397] (Weight: 1.5)
+    Key +grunt [57] 0|0 [#]:
+      Key +pipe [59] 0|0 [#]:
+       - ogpthwtd [283] (Weight: 2.5)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbthwt [515] (Weight: 1.5)
+    Key +midwife [65] 0|0 [#]:
+     - bh114730 [360] (Weight: 1.5)
+    Key +shodan [73] 0|0 [#]:
+     -  [550] (Weight: 1.5)
+  Key +midwife [65] 0|0 [#]:
+   - mdwfrob [359] (Weight: 1)
+  Key +servbot [103] 0|0 [#]:
+   - nmservch [535] (Weight: 1)
+  Key +grunt [57] 0|0 [#]:
+   - ogpchlng4, ogpchlng5 [311] (Weight: 1)
+    Key +shotgun [58] 0|0 [#]:
+     -  [271] (Weight: 2)
+Key +cs [94] 152|152 [#]:
+ - cortez [182] (Weight: 0)
+Key +cs [94] 11|11 [#]:
+ - ogpmelrc [41] (Weight: 0)
+Key +cs [94] 113|113 [#]:
+ - humsupstbk [143] (Weight: 0)
+Key +cs [94] 96|96 [#]:
+ - humwlkwy [126] (Weight: 0)
+Key +cs [94] 92|92 [#]:
+ - mdwwlklt [122] (Weight: 0)
+Key +challenge [25] 0|0 [#]:
+  Key +grunt [57] 0|0 [#]:
+    Key +pipe [59] 0|0 [#]:
+     - ogpchlng4, ogpchlng5 [284] (Weight: 2.5)
+    Key +grenade [60] 0|0 [#]:
+     - oggchlng [313] (Weight: 2.5)
+Key +posekind [87] 0|0 [#]:
+ -  [18] (Weight: 0)
+Key +cs [94] 155|155 [#]:
+ - humbar [185] (Weight: 0)
+Key +cs [94] 108|108 [#]:
+ - humshower [138] (Weight: 0)
+Key +cs [94] 130|130 [#]:
+ - humswarm [160] (Weight: 0)
+Key +cs [94] 28|28 [#]:
+ - humtalk2d [58] (Weight: 0)
+Key +cs [94] 88|88 [#]:
+ - pdrtalk3 [118] (Weight: 0)
+Key +cs [94] 120|120 [#]:
+ - humfeel [150] (Weight: 0)
+Key +cs [94] 105|105 [#]:
+ - humhitblt [135] (Weight: 0)
+Key +cs [94] 38|38 [#]:
+ - humrunbl [68] (Weight: 0)
+Key +cs [94] 52|52 [#]:
+ - femtalk2b [82] (Weight: 0)
+Key +cs [94] 63|63 [#]:
+ - femdie2 [93] (Weight: 0)
+Key +cs [94] 16|16 [#]:
+ - mdwwlkrt [46] (Weight: 0)
+Key +cs [94] 104|104 [#]:
+ - femrscream [134] (Weight: 0)
+Key +cs [94] 5|5 [#]:
+ - pdrtalk2a [36] (Weight: 0)
+Key +facing [80] 0|0 [#]:
+  Key +action [83] 4|4 [#]:
+   -  [29] (Weight: 0.3)
+   -  [30] (Weight: 0.3)
+Key +cs [94] 18|18 [#]:
+ - mdwtu180 [48] (Weight: 0)
+Key +cs [94] 111|111 [#]:
+ - humhithipnl [141] (Weight: 0)
+Key +cs [94] 184|184 [#]:
+ - humcov [214] (Weight: 0)
+Key +cs [94] 55|55 [#]:
+ - femtalk1b [85] (Weight: 0)
+Key +cs [94] 205|205 [#]:
+ - humdcard [235] (Weight: 0)
+Key +cs [94] 207|207 [#]:
+ - humdie01 [237] (Weight: 0)
+Key +action [83] 7|7 [#]:
+ -  [23] (Weight: 0)
+Key +cs [94] 23|23 [#]:
+ - humwlkgn [53] (Weight: 0)
+Key +cs [94] 208|208 [#]:
+ - humdie2 [238] (Weight: 0)
+Key +cs [94] 164|164 [#]:
+ - humbakst [194] (Weight: 0)
+Key +cs [94] 106|106 [#]:
+ - humhitshtgn [136] (Weight: 0)
+Key +cs [94] 2|2 [#]:
+ - rmbleapf [33] (Weight: 0)
+Key +cs [94] 180|180 [#]:
+ - humwach [210] (Weight: 0)
+Key +cs [94] 33|33 [#]:
+ - humsick3 [63] (Weight: 0)
+Key +cs [94] 157|157 [#]:
+ - humbrav [187] (Weight: 0)
+Key +meleecombat [44] 0|0 [#]:
+  Key +attack [46] 0|0 [#]:
+    Key +direction [51] 0|0 [#]:
+      Key +player [76] 0|0 [#]:
+       - ogpmelstd, plyswrnch [476] (Weight: 2.8)
+      Key +servbot [103] 0|0 [#]:
+       - nmservm1, nmservm2, nmservmx [529] (Weight: 2.8)
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - ogpmelstd, ogpmelat2b1, ogpmelat2b2 [286] (Weight: 3.8)
+        Key +shotgun [58] 0|0 [#]:
+         - ogpmelat2a2, ogpmelat1 [275] (Weight: 3.8)
+    Key +midwife [65] 0|0 [#]:
+     - mdwmelstd, mdwmelat1, mdwmelat2, mdwmelat3, mdwmelat4, mdwmelat5 [363] (Weight: 2)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbstd, rmbsla2, rmbslrt2 [507] (Weight: 2)
+    Key +delacroix [69] 0|0 [#]:
+     - delmlstd, delmelat [245] (Weight: 2)
+    Key +ninja [68] 0|0 [#]:
+     - njamelstd, njamelat [408] (Weight: 2)
+    Key +specialattack [47] 0|0 [#]:
+      Key +rumbler [72] 0|0 [#]:
+       - rmbstd, rmbatcmb1, rmbatcmb2 [508] (Weight: 2)
+    Key +monkey [77] 0|0 [#]:
+     - zkystd2, zkymela1, zkymel2 [387] (Weight: 2)
+    Key +direction [51] 5|5 [#]:
+      Key +player [76] 0|0 [#]:
+       - ogpmelstd, plyswrnch2 [475] (Weight: 2.8)
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - ogpmelstd, bh413004, ogpmeldh [285] (Weight: 3.8)
+      Key +midwife [65] 0|0 [#]:
+       - mdwmelstd, ogpmeldh [365] (Weight: 2.8)
+    Key +direction [51] 6|6 [#]:
+      Key +midwife [65] 0|0 [#]:
+       - mdwmelstd, bh413001 [364] (Weight: 2.8)
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - ogpmelstd, bh413001 [287] (Weight: 3.8)
+  Key +specialattack [47] 0|0 [#]:
+    Key +delacroix [69] 0|0 [#]:
+     - delmlstd, delmelat [246] (Weight: 1)
+    Key +grunt [57] 0|0 [#]:
+      Key +pipe [59] 0|0 [#]:
+       - ogpmelstd, bh413005, ogpmelat1 [288] (Weight: 2)
+  Key +block [45] 0|0 [#]:
+    Key +direction [51] 5|5 [#]:
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - bh213231, bh213232, bh213233 [325] (Weight: 3.8)
+    Key +direction [51] 2|2 [#]:
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - bh213230 [328] (Weight: 3.8)
+    Key +grunt [57] 0|0 [#]:
+      Key +pipe [59] 0|0 [#]:
+       - bh21322z [324] (Weight: 3)
+    Key +direction [51] 1|1 [#]:
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - bh213225, bh213226, bh213227 [326] (Weight: 3.8)
+    Key +direction [51] 6|6 [#]:
+      Key +grunt [57] 0|0 [#]:
+        Key +pipe [59] 0|0 [#]:
+         - bh213222, bh213223, bh213224 [327] (Weight: 3.8)
+Key +cs [94] 44|44 [#]:
+ - humdie1 [74] (Weight: 0)
+Key +cs [94] 156|156 [#]:
+ - humbbl [186] (Weight: 0)
+Key +cs [94] 183|183 [#]:
+ - sholaf [213] (Weight: 0)
+Key +cs [94] 119|119 [#]:
+ - humtalk2a [149] (Weight: 0)
+Key +cs [94] 206|206 [#]:
+ - humidlka [236] (Weight: 0)
+Key +cs [94] 25|25 [#]:
+ - humtalk3a [55] (Weight: 0)
+Key +cs [94] 125|125 [#]:
+ - humunwlk [155] (Weight: 0)
+Key +cs [94] 127|127 [#]:
+ - bh413004 [157] (Weight: 0)
+Key +cs [94] 173|173 [#]:
+ - humtyp2 [203] (Weight: 0)
+Key +cs [94] 171|171 [#]:
+ - humairpt4 [201] (Weight: 0)
+Key +cs [94] 49|49 [#]:
+ - humunwlkl [79] (Weight: 0)
+Key +cs [94] 98|98 [#]:
+ - deldial [128] (Weight: 0)
+Key +cs [94] 143|143 [#]:
+ - shotalk2a [173] (Weight: 0)
+Key +grunt [57] 0|0 [#]:
+  Key +shotgun [58] 0|0 [#]:
+    Key +getup [101] 0|0 [#]:
+     - ogsgetup [277] (Weight: 2)
+  Key +pipe [59] 0|0 [#]:
+    Key +getup [101] 0|0 [#]:
+     - ogpgetup [295] (Weight: 2)
+  Key +grenade [60] 0|0 [#]:
+    Key +getup [101] 0|0 [#]:
+     - ogggetup [320] (Weight: 2)
+Key +cs [94] 185|185 [#]:
+ - humflee [215] (Weight: 0)
+Key +cs [94] 121|121 [#]:
+ - macarena [151] (Weight: 0)
+Key +cs [94] 45|45 [#]:
+ - humcstrl [75] (Weight: 0)
+Key +cs [94] 72|72 [#]:
+ - cpsreach [102] (Weight: 0)
+Key +stalled [29] 0|0 [#]:
+  Key +stun [43] 0|0 [#]:
+    Key +midwife [65] 0|0 [#]:
+     - mdwstun [375] (Weight: 1)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbstun [495] (Weight: 1)
+    Key +monkey [77] 0|0 [#]:
+     - zkystun [392] (Weight: 1)
+    Key +ninja [68] 0|0 [#]:
+     - njastun [406] (Weight: 1)
+    Key +human [75] 0|0 [#]:
+     - humstun [350] (Weight: 1)
+    Key +prodroid [71] 0|0 [#]:
+     - pdrstun [483] (Weight: 1)
+  Key +flail [33] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humshake [349] (Weight: 1.5)
+Key +cs [94] 177|177 [#]:
+ - humtu180 [207] (Weight: 0)
+Key +cs [94] 167|167 [#]:
+ - humlbut [197] (Weight: 0)
+Key +cs [94] 62|62 [#]:
+ - femdief1 [92] (Weight: 0)
+Key +cs [94] 199|199 [#]:
+ - humsalute1 [229] (Weight: 0)
+Key +cs [94] 103|103 [#]:
+ - humstslfps [133] (Weight: 0)
+Key +cs [94] 81|81 [#]:
+ - humdrink [111] (Weight: 0)
+Key +action [83] 0|0 [#]:
+ -  [20] (Weight: 0)
+Key +direction [51] 4|4 [#]:
+  Key +player [76] 0|0 [#]:
+    Key +jumping [98] 0|0 [#]:
+     - plyjmpbk [462] (Weight: 3.8)
+Key +cs [94] 137|137 [#]:
+ - humwshct1 [167] (Weight: 0)
+Key +cs [94] 95|95 [#]:
+ - humctwl [125] (Weight: 0)
+Key +cs [94] 58|58 [#]:
+ - femrsclt [88] (Weight: 0)
+Key +cs [94] 87|87 [#]:
+ - pdrtalk2 [117] (Weight: 0)
+Key +cs [94] 141|141 [#]:
+ - shotalk1b [171] (Weight: 0)
+Key +cs [94] 85|85 [#]:
+ - mdwratvr [115] (Weight: 0)
+Key +cs [94] 86|86 [#]:
+ - mdwrbegg [116] (Weight: 0)
+Key +cs [94] 6|6 [#]:
+ - pdrtalk1 [37] (Weight: 0)
+Key +cs [94] 163|163 [#]:
+ - digtalk [193] (Weight: 0)
+Key +cs [94] 97|97 [#]:
+ - humfreak [127] (Weight: 0)
+Key +action [83] 4|4 [#]:
+ -  [28] (Weight: 0)
+Key +cs [94] 43|43 [#]:
+ - humdthtk [73] (Weight: 0)
+Key +cs [94] 126|126 [#]:
+ - humunrun [156] (Weight: 0)
+Key +cs [94] 132|132 [#]:
+ - humuntu180 [162] (Weight: 0)
+Key +cs [94] 12|12 [#]:
+ - ogpmeloh [42] (Weight: 0)
+Key +cs [94] 82|82 [#]:
+ - humsrprs [112] (Weight: 0)
+Key +cs [94] 174|174 [#]:
+ - humtyp3 [204] (Weight: 0)
+Key +cs [94] 99|99 [#]:
+ - humstocytb [129] (Weight: 0)
+Key +cs [94] 4|4 [#]:
+ - pdrtalk2b [35] (Weight: 0)
+Key +cs [94] 93|93 [#]:
+ -  [123] (Weight: 0)
+Key +cs [94] 134|134 [#]:
+ - humkgdob2 [164] (Weight: 0)
+Key +cs [94] 77|77 [#]:
+ - humbaby [107] (Weight: 0)
+Key +cs [94] 193|193 [#]:
+ - mdwstalk [223] (Weight: 0)
+Key +cs [94] 128|128 [#]:
+ - humctdie [158] (Weight: 0)
+Key +cs [94] 21|21 [#]:
+ - mdwidle2 [51] (Weight: 0)
+Key +action [83] 1|1 [#]:
+  Key +hurtlevel [84] 1|1 [#]:
+   -  [25] (Weight: 0.3)
+  Key +hurtlevel [84] 0|0 [#]:
+   -  [24] (Weight: 0.3)
+Key +cs [94] 102|102 [#]:
+ - humsing [132] (Weight: 0)
+Key +cs [94] 176|176 [#]:
+ - humcpssit [206] (Weight: 0)
+Key +receivewound [40] 0|0 [#]:
+  Key +grunt [57] 0|0 [#]:
+    Key +shotgun [58] 0|0 [#]:
+     - ogprwnd1, ogprwnd2, ogprwnd3, ogprwnd4, ogprwnd5, ogprwnd6 [279] (Weight: 2)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrrewdf, pdrrewnd1, pdrrewnd2 [484] (Weight: 1)
+  Key +monkey [77] 0|0 [#]:
+   - zkyrwd1, zkyrwd2, zkyrwd3 [400] (Weight: 1)
+  Key +player [76] 0|0 [#]:
+   - ogprwnd1, ogprwnd2, ogprwnd3, ogprwnd4, ogprwnd5, ogprwnd6 [474] (Weight: 1)
+  Key +human [75] 0|0 [#]:
+   - humrewdf, humhitblt, humhitshtgn, humrewnd1, humrewnd1a [345] (Weight: 1)
+  Key +midwife [65] 0|0 [#]:
+   - mdwrewdo, mdwrewdb, mdwrewdf, mdwrwnd1, mdwrwnd2, mdwrwnd3 [361] (Weight: 1)
+  Key +meleecombat [44] 0|0 [#]:
+    Key +ninja [68] 0|0 [#]:
+     - njarewdf, njarewnd2 [411] (Weight: 1)
+    Key +grunt [57] 0|0 [#]:
+     - ogprwnd1, ogprwnd2, ogprwnd3, ogprwnd4, ogprwnd5, ogprwnd6, ogprecsw, ogprecwd [298] (Weight: 1)
+      Key +shotgun [58] 0|0 [#]:
+       - ogprwnd1, ogprwnd2, ogprwnd3, ogprwnd4, ogprwnd5, ogprwnd6 [272] (Weight: 2)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbrewdf, rmbrewnd1, rmbrewnd2, rmbrewnd3 [505] (Weight: 1)
+    Key +servbot [103] 0|0 [#]:
+     - nmservrw1, nmservrw2, nmservrw3, nmservrw4, nmservrw5 [531] (Weight: 1)
+    Key +human [75] 0|0 [#]:
+     - humrewdf, humrewnd1, humrewnd1a [346] (Weight: 1)
+    Key +midwife [65] 0|0 [#]:
+     - mdwrewdo, mdwrewdb, mdwrewdf, mdwrwnd1, mdwrwnd2, mdwrwnd3 [362] (Weight: 1)
+    Key +prodroid [71] 0|0 [#]:
+     - pdrrewdf [485] (Weight: 1)
+    Key +shodan [73] 0|0 [#]:
+     - shorewnd1, shorewnd2, shorewnd3, shorewnd4, shorewnd5, shorewnd6 [540] (Weight: 1)
+    Key +player [76] 0|0 [#]:
+     - ogprwnd1, ogprwnd2, ogprwnd3, ogprwnd4, ogprwnd5, ogprwnd6 [473] (Weight: 1)
+  Key +shodan [73] 0|0 [#]:
+   - shorewnd1, shorewnd2, shorewnd3, shorewnd4, shorewnd5, shorewnd6 [539] (Weight: 1)
+  Key +ninja [68] 0|0 [#]:
+   - njarewdf, njarewnd2 [412] (Weight: 1)
+  Key +psidamage [42] 0|0 [#]:
+    Key +meleecombat [44] 0|0 [#]:
+      Key +human [75] 0|0 [#]:
+       - humhtpsi [343] (Weight: 2)
+    Key +human [75] 0|0 [#]:
+     - humhtpsi [342] (Weight: 2)
+Key +action [83] 6|6 [#]:
+ -  [22] (Weight: 0)
+Key +cs [94] 75|75 [#]:
+ - delcurse [105] (Weight: 0)
+Key +cs [94] 89|89 [#]:
+ - valwlk [119] (Weight: 0)
+Key +test [0] 0|0 [#]:
+  Key +locomote [2] 0|0 [#]:
+   - humwlklt, humwlkrt [15] (Weight: 0)
+    Key +locourgent [3] 0|0 [#]:
+     - bh111032, bh111033 [16] (Weight: 1)
+  Key +idlegesture [28] 0|0 [#]:
+   - humidl02 [14] (Weight: 0)
+  Key +meleecombat [44] 0|0 [#]:
+    Key +attack [46] 0|0 [#]:
+      Key +direction [51] 0|0 [#]:
+       - s42c6x [17] (Weight: 1.8)
+Key +cs [94] 194|194 [#]:
+ - ogpsmwlk [224] (Weight: 0)
+Key +cs [94] 31|31 [#]:
+ - humsick5 [61] (Weight: 0)
+Key +cs [94] 74|74 [#]:
+ - cpsldw1 [104] (Weight: 0)
+Key +cs [94] 91|91 [#]:
+ - shotalk [121] (Weight: 0)
+Key +direction [51] 3|3 [#]:
+  Key +player [76] 0|0 [#]:
+    Key +jumping [98] 0|0 [#]:
+     - plyjmpfw [463] (Weight: 3.8)
+Key +cs [94] 40|40 [#]:
+ - humkleap [70] (Weight: 0)
+Key +cs [94] 42|42 [#]:
+ - humhtpsi [72] (Weight: 0)
+Key +cs [94] 168|168 [#]:
+ - humrepl [198] (Weight: 0)
+Key +cs [94] 212|212 [#]:
+ - femb3 [242] (Weight: 0)
+Key +action [83] 2|2 [#]:
+ - dead1, dead2, dead3 [26] (Weight: 0)
+Key +cs [94] 202|202 [#]:
+ - humsalute4 [232] (Weight: 0)
+Key +cs [94] 39|39 [#]:
+ - humpoint [69] (Weight: 0)
+Key +cs [94] 30|30 [#]:
+ - humswich [60] (Weight: 0)
+Key +cs [94] 190|190 [#]:
+ - zkyidle2 [220] (Weight: 0)
+Key +cs [94] 172|172 [#]:
+ - humtyp1 [202] (Weight: 0)
+Key +cs [94] 80|80 [#]:
+ - humcrawl [110] (Weight: 0)
+Key +cs [94] 178|178 [#]:
+ - humtul [208] (Weight: 0)
+Key +cs [94] 65|65 [#]:
+ - fembound [95] (Weight: 0)
+Key +cs [94] 29|29 [#]:
+ -  [59] (Weight: 0)
+Key +cs [94] 13|13 [#]:
+ - ogpmellc [43] (Weight: 0)
+Key +cs [94] 109|109 [#]:
+ - humboogie [139] (Weight: 0)
+Key +stun [43] 0|0 [#]:
+  Key +grunt [57] 0|0 [#]:
+    Key +grenade [60] 0|0 [#]:
+     - oggstun [315] (Weight: 2)
+    Key +shotgun [58] 0|0 [#]:
+     - ogsstun [273] (Weight: 2)
+    Key +pipe [59] 0|0 [#]:
+     - ogprwnd3 [282] (Weight: 2)
+Key +cs [94] 67|67 [#]:
+ - delmelsr [97] (Weight: 0)
+Key +cs [94] 50|50 [#]:
+ - femturnh [80] (Weight: 0)
+Key +cs [94] 182|182 [#]:
+ - mdwcareg [212] (Weight: 0)
+Key +cs [94] 161|161 [#]:
+ - deldie [191] (Weight: 0)
+Key +cs [94] 192|192 [#]:
+ - humfetal [222] (Weight: 0)
+Key +cs [94] 9|9 [#]:
+ - ogpturn [40] (Weight: 0)
+Key +cs [94] 51|51 [#]:
+ - femtalk2c [81] (Weight: 0)
+Key +cs [94] 20|20 [#]:
+ - mdwmelad [50] (Weight: 0)
+Key +cs [94] 19|19 [#]:
+ - mdwpttrn [49] (Weight: 0)
+Key +cs [94] 66|66 [#]:
+ - fembakup [96] (Weight: 0)
+Key +cs [94] 196|196 [#]:
+ - plyscare [226] (Weight: 0)
+Key +stand [5] 0|0 [#]:
+  Key +grunt [57] 0|0 [#]:
+    Key +pipe [59] 0|0 [#]:
+     - ogpstd, ogptu90l, ogptu90r, ogstu180, humstand [280] (Weight: 2)
+    Key +shotgun [58] 0|0 [#]:
+     - humstand, ogstul, ogstur, ogstu180 [274] (Weight: 2)
+    Key +grenade [60] 0|0 [#]:
+     - oggstd, oggtu90l, oggtu90r, oggtu180 [319] (Weight: 2)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbstd2, rmbtu90l, rmbtu90r, rmbtu180 [496] (Weight: 1)
+  Key +servbot [103] 0|0 [#]:
+   - nmservst, nmserv90r, nmserv90l, nmserv180 [533] (Weight: 1)
+  Key +monkey [77] 0|0 [#]:
+   - zkylong, zkytu90l, zkytu90r, zkytu180 [393] (Weight: 1)
+  Key +human [75] 0|0 [#]:
+   - humstand, humtul, humtur, humtu180 [330] (Weight: 1)
+  Key +player [76] 0|0 [#]:
+   - plystand2, plytu90l, plytu90r, plytu180 [460] (Weight: 1)
+    Key +leaningright [96] 0|0 [#]:
+     - plyleanr [457] (Weight: 1.8)
+    Key +crouching [97] 0|0 [#]:
+     - plycrch [458] (Weight: 2)
+    Key +leaningleft [95] 0|0 [#]:
+     - plyleanl [456] (Weight: 1.8)
+    Key +climbing [100] 0|0 [#]:
+     - humclstd [478] (Weight: 3)
+  Key +meleecombat [44] 0|0 [#]:
+    Key +ninja [68] 0|0 [#]:
+     - njamelstd [409] (Weight: 1)
+    Key +grunt [57] 0|0 [#]:
+      Key +pipe [59] 0|0 [#]:
+       - humstand [291] (Weight: 2)
+    Key +midwife [65] 0|0 [#]:
+     - mdwstand [366] (Weight: 1)
+    Key +delacroix [69] 0|0 [#]:
+     - delmlstd [244] (Weight: 1)
+    Key +rumbler [72] 0|0 [#]:
+     - rmbstd [497] (Weight: 1)
+    Key +monkey [77] 0|0 [#]:
+     - zkystd2 [386] (Weight: 1)
+  Key +shodan [73] 0|0 [#]:
+   - shostd, shostd2 [537] (Weight: 1)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrstd, pdrtu90l, pdrtu90r, pdrtu180 [481] (Weight: 1)
+  Key +ninja [68] 0|0 [#]:
+   - njamelstd [410] (Weight: 1)
+  Key +midwife [65] 0|0 [#]:
+   - mdwstd, humuntu90l, humuntu90r, humuntu180 [357] (Weight: 1)
+Key +cs [94] 148|148 [#]:
+ - plybreth [178] (Weight: 0)
+Key +crumple [37] 0|0 [#]:
+  Key +ninja [68] 0|0 [#]:
+   - njadie2, njadie3 [407] (Weight: 1)
+  Key +grunt [57] 0|0 [#]:
+   - plydie01, plydie2 [303] (Weight: 1)
+    Key +shotgun [58] 0|0 [#]:
+     - ogsdieup [276] (Weight: 2)
+    Key +pipe [59] 0|0 [#]:
+     - ogpdiefw, ogpdie2, ogpdie03 [292] (Weight: 2)
+    Key +grenade [60] 0|0 [#]:
+     - oggdie1, oggdie2a, oggdieup [318] (Weight: 2)
+  Key +midwife [65] 0|0 [#]:
+   - mdwdie2, humdie1, humdie3 [377] (Weight: 1)
+  Key +die [39] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humdieup1, humdie1, humdie2, humdie3, humdie01 [341] (Weight: 1.5)
+      Key +stageddeath [104] 0|0 [#]:
+       - humdie3 [355] (Weight: 2.4)
+  Key +female [74] 0|0 [#]:
+    Key +female [74] 0|0 [#]:
+     - femdief1, femdie2 [262] (Weight: 2)
+  Key +shodan [73] 0|0 [#]:
+   - bv113700 [551] (Weight: 1)
+  Key +servbot [103] 0|0 [#]:
+   - nmservd1, nmservd2 [532] (Weight: 1)
+  Key +player [76] 0|0 [#]:
+   - plydie01, plydie2, oggdie1, oggdieup, ogsdieup, ogpdiefw, ogpdie2, ogpdie03 [465] (Weight: 1)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrdeact [487] (Weight: 1)
+  Key +monkey [77] 0|0 [#]:
+   - zkydie1, zkydie3 [385] (Weight: 1)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbdie1, rmbdie2, rmbdie2s, rmbdie3 [513] (Weight: 1)
+Key +cs [94] 70|70 [#]:
+ - delmelat [100] (Weight: 0)
+Key +action [83] 3|3 [#]:
+ -  [27] (Weight: 0)
+Key +cs [94] 136|136 [#]:
+ - humkgdob4 [166] (Weight: 0)
+Key +cs [94] 84|84 [#]:
+ - humtears [114] (Weight: 0)
+Key +cs [94] 179|179 [#]:
+ - humtur [209] (Weight: 0)
+Key +cs [94] 200|200 [#]:
+ - humsalute2 [230] (Weight: 0)
+Key +explode [50] 0|0 [#]:
+  Key +prodroid [71] 0|0 [#]:
+   - pdrexp [480] (Weight: 1)
+Key +cs [94] 203|203 [#]:
+ - humsalute5 [233] (Weight: 0)
+Key +cs [94] 131|131 [#]:
+ - rmbplace [161] (Weight: 0)
+Key +cs [94] 188|188 [#]:
+ - zkyspncg [218] (Weight: 0)
+Key +cs [94] 147|147 [#]:
+ - shotalk2 [177] (Weight: 0)
+Key +cs [94] 166|166 [#]:
+ - humcpsschr [196] (Weight: 0)
+Key +cs [94] 191|191 [#]:
+ - ogphtgd2 [221] (Weight: 0)
+Key +cs [94] 112|112 [#]:
+ - humcryh2o [142] (Weight: 0)
+Key +cs [94] 211|211 [#]:
+ - femb2 [241] (Weight: 0)
+Key +worldfrob [11] 0|0 [#]:
+  Key +atchest [17] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humfrob, humpshbt3 [352] (Weight: 1.8)
+    Key +grunt [57] 0|0 [#]:
+     - humfrob [302] (Weight: 1.8)
+  Key +human [75] 0|0 [#]:
+   - humfrob [351] (Weight: 1)
+  Key +abovehead [18] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humpshbt1 [353] (Weight: 1.8)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrfrob [493] (Weight: 1)
+Key +cs [94] 115|115 [#]:
+ - humblkt [145] (Weight: 0)
+Key +cs [94] 61|61 [#]:
+ - femidle1a [91] (Weight: 0)
+Key +cs [94] 151|151 [#]:
+ - rmbdie1 [181] (Weight: 0)
+Key +cs [94] 129|129 [#]:
+ - humdrkbr [159] (Weight: 0)
+Key +cs [94] 209|209 [#]:
+ - humdieup1 [239] (Weight: 0)
+Key +cs [94] 15|15 [#]:
+ - ogpmela1 [45] (Weight: 0)
+Key +cs [94] 27|27 [#]:
+ - humtalk2e [57] (Weight: 0)
+Key +cs [94] 138|138 [#]:
+ - humwshct2 [168] (Weight: 0)
+Key +facing [80] 4|4 [#]:
+  Key +action [83] 4|4 [#]:
+   -  [31] (Weight: 0.3)
+Key +cs [94] 1|1 [#]:
+ - s42c6x [32] (Weight: 0)
+Key +cs [94] 64|64 [#]:
+ - femdichr [94] (Weight: 0)
+Key +cs [94] 198|198 [#]:
+ - plystand [228] (Weight: 0)
+Key +idlegesture [28] 0|0 [#]:
+  Key +human [75] 0|0 [#]:
+   - bh111048, bh111048, humidl5a, bh111048, humidl5a, bh111048, humidl5a, humidl5a, bh111048, humidlka, humidl5d, bb111000, bh111048, bh111001, bh111048, bh111005, bh111048, bh111048, bh112020, bh112502, bh114001, bh114003, bh114004, bh114005, bh114006, bh114007, bh114008, bh114009, bh111048 [331] (Weight: 1)
+  Key +monkey [77] 0|0 [#]:
+   - zkyidle1, zkyidle2 [399] (Weight: 1)
+  Key +female [74] 0|0 [#]:
+    Key +female [74] 0|0 [#]:
+     - femidle1a, bh111048, bh111048, humidl5a, femidle1a, bh111048, humidl5a, bh111048, humidl5a, humidl5a, bh111048, humidlka, humidl5d, bb111000, bh111048, bh111001, bh111048, bh111005, bh111048, bh111048, bh112020, bh112502, bh114001, bh114003, bh114004, bh114005, bh114006, bh114007, bh114008, bh114009, bh111048 [263] (Weight: 2)
+  Key +shodan [73] 0|0 [#]:
+   - shoidle1, shoidle2 [542] (Weight: 1)
+  Key +midwife [65] 0|0 [#]:
+   - mdwidle2, shoidle1, shoidle2 [369] (Weight: 1)
+  Key +poisoned [30] 0|0 [#]:
+    Key +human [75] 0|0 [#]:
+     - humidl5a, humidlka [354] (Weight: 1.5)
+  Key +servbot [103] 0|0 [#]:
+   - nmservi1, nmservi2, nmservi3, nmservi4 [534] (Weight: 1)
+  Key +prodroid [71] 0|0 [#]:
+   - pdrtalk2a, pdrtalk2b, pdrtalk2c, pdrtalk1, pdrtalk2 [492] (Weight: 1)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbidle2, rmbidle [498] (Weight: 1)
+  Key +grunt [57] 0|0 [#]:
+   - ogsidle1, ogsidle2, ogsidle3, ogsidle4 [300] (Weight: 1)
+   - oggidle1, oggidle2, oggidle3, oggidle4 [323] (Weight: 1)
+    Key +pipe [59] 0|0 [#]:
+     - ogpidle1, ogpidle2, ogpidle3 [281] (Weight: 2)
+  Key +ninja [68] 0|0 [#]:
+   - njaidle [424] (Weight: 1)
+  Key +player [76] 0|0 [#]:
+   - humidl02, bh111048, bh111048, humidl5a, bh111048, humidl5a, bh111048, humidl5a, humidl5a, bh111048, humidlka, bb111000, bh111048, bh111001, bh111048, bh111005, bh111048, bh111048, bh112020, bh112502, bh114001, bh114003, bh114004, bh114005, bh114006, bh114007, bh114008, bh114009, bh111048 [452] (Weight: 1)
+Key +cs [94] 181|181 [#]:
+ - ogpmelat1 [211] (Weight: 0)
+Key +cs [94] 78|78 [#]:
+ - humcpsch [108] (Weight: 0)
+Key +cs [94] 110|110 [#]:
+ - humhithipnl [140] (Weight: 0)
+Key +cs [94] 22|22 [#]:
+ - hung [52] (Weight: 0)
+Key +cs [94] 154|154 [#]:
+ - humairpt1 [184] (Weight: 0)
+Key +flail [33] 0|0 [#]:
+  Key +grunt [57] 0|0 [#]:
+   - humelect [301] (Weight: 1.5)
+  Key +rumbler [72] 0|0 [#]:
+   - rmbelect [514] (Weight: 1.5)
+Key +cs [94] 159|159 [#]:
+ - rmbpaw [189] (Weight: 0)
+Key +cs [94] 47|47 [#]:
+ - humbakup [77] (Weight: 0)
+Key +cs [94] 170|170 [#]:
+ - humairpt3 [200] (Weight: 0)
+Key +cs [94] 79|79 [#]:
+ - humcraps [109] (Weight: 0)
+Key +cs [94] 8|8 [#]:
+ - ogpwlklt [39] (Weight: 0)
+Key +cs [94] 158|158 [#]:
+ - humexpd [188] (Weight: 0)
+Key +action [83] 5|5 [#]:
+ -  [21] (Weight: 0)
+Key +cs [94] 162|162 [#]:
+ - digdie [192] (Weight: 0)
+Key +cs [94] 139|139 [#]:
+ - shotalk1 [169] (Weight: 0)
+Key +cs [94] 135|135 [#]:
+ - humkgdob3 [165] (Weight: 0)
+Key +cs [94] 144|144 [#]:
+ - shotalk2b [174] (Weight: 0)
+Key +cs [94] 150|150 [#]:
+ - ogphlpme2 [180] (Weight: 0)
+Key +cs [94] 160|160 [#]:
+ - delbeam [190] (Weight: 0)
+Key +cs [94] 142|142 [#]:
+ - shotalk1c [172] (Weight: 0)
