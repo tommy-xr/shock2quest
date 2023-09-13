@@ -1,15 +1,12 @@
 # shock2quest
 
->NOTE: This is currently in a a _pre-alpha_ state and not really playable in any meaningful way, yet.
-
 A project to experience the of System Shock 2 in virtual reality. System Shock 2 is one of my favorite games of all time, and the story and ambience would be a great for VR. 
 
 This project is a [game engine recreation](https://en.wikipedia.org/wiki/Game_engine_recreation) of the [Dark engine](https://en.wikipedia.org/wiki/Dark_Engine) - geared towards VR experiences.
 
-You'll need a full retail copy of System Shock 2 in order to play - recommend purchasing at either [GoG](https://www.gog.com/game/system_shock_2) or [Steam](https://store.steampowered.com/app/238210/System_Shock_2/). It's often on sale at one or the other for a couple bucks, and totally worth it.
+You'll need a full retail copy of System Shock 2 in order to play - recommend purchasing at either [GoG](https://www.gog.com/game/system_shock_2) or [Steam](https://store.steampowered.com/app/238210/System_Shock_2/). 
 
-Note that this is under development and is not really playable at this point. I also have to apologize for the quality of the code, this is my first Rust project - so certainly a lot of room for improvement (and a lot of hacks and experiments!)
-
+>NOTE: This is currently in a a _pre-alpha_ state and not really playable in any meaningful way, yet. I also have to apologize for the quality of the code, this is my first Rust project - so certainly a lot of room for improvement (and a lot of hacks and experiments!) It's a project done in bits of spare time, but wanted to share out in case it is fun or useful for anyone.
 
 ## Screenshots
 
