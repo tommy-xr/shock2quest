@@ -1,19 +1,18 @@
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
+    point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3,
 };
-use dark::{properties::PropPosition, SCALE_FACTOR};
+use dark::{SCALE_FACTOR};
 
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, World};
 
 use crate::{
-    mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::{
-        ai::ai_util::{self, random_binomial},
+        ai::ai_util::{self},
         Effect,
     },
     time::Time,
-    util::{get_position_from_transform, get_rotation_from_transform, vec3_to_point3},
+    util::{get_position_from_transform, get_rotation_from_transform},
 };
 
 use super::{Steering, SteeringOutput, SteeringStrategy};

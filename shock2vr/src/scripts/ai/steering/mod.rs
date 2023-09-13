@@ -9,9 +9,9 @@ pub use collision_avoidance_steering_strategy::*;
 pub use wander_steering_strategy::*;
 
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
+    Deg, EuclideanSpace, Point3,
 };
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 

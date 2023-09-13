@@ -1,19 +1,17 @@
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
+    Deg,
 };
-use dark::{properties::PropPosition, SCALE_FACTOR};
 
-use shipyard::{EntityId, Get, UniqueView, View, World};
+
+use shipyard::{EntityId, World};
 
 use crate::{
-    mission::PlayerInfo,
-    physics::{InternalCollisionGroups, PhysicsWorld},
+    physics::{PhysicsWorld},
     scripts::{ai::ai_util::random_binomial, Effect},
     time::Time,
-    util::{get_position_from_transform, get_rotation_from_transform, vec3_to_point3},
 };
 
-use super::{SteeringOutput, SteeringStrategy};
+use super::{SteeringOutput};
 
 pub struct WanderSteeringStrategy {
     maybe_current_heading: Option<Deg<f32>>,
