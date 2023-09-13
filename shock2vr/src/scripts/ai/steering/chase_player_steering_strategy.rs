@@ -29,30 +29,11 @@ impl SteeringStrategy for ChasePlayerSteeringStrategy {
         entity_id: EntityId,
         _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
-        // let player_pos = world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
-        // let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-
-        // // let mut effects = vec![];
-        // if let Ok(prop_pos) = v_current_pos.get(entity_id) {
-        //     let current_yaw = ai_util::current_yaw(entity_id, world);
-        //     let desired_yaw = ai_util::yaw_between_vectors(prop_pos.position, player_pos);
-        //     println!(
-        //         "Current Yaw: {:?} Desired yaw: {:?}",
-        //         current_yaw, desired_yaw
-        //     );
-        //     let eff = Effect::SetRotation {
-        //         entity_id,
-        //         rotation: Quaternion::from_angle_y(desired_yaw),
-        //     };
-        //     effects.push(eff);
-        // }
         let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
         let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-        //let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
 
+        // TODO: Check if player is visible?
         if let Ok(prop_pos) = v_current_pos.get(entity_id) {
-            //let current_yaw = ai_util::current_yaw(entity_id, world);
-            let _desired_yaw = ai_util::yaw_between_vectors(prop_pos.position, u_player.pos);
             return Some((
                 Steering::turn_to_point(
                     vec3_to_point3(prop_pos.position),
@@ -60,33 +41,8 @@ impl SteeringStrategy for ChasePlayerSteeringStrategy {
                 ),
                 Effect::NoEffect,
             ));
-            // println!(
-            //     "Current Yaw: {:?} Desired yaw: {:?}",
-            //     current_yaw, desired_yaw
-            // );
-            // let eff = Effect::SetRotation {
-            //     entity_id,
-            //     rotation: Quaternion::from_angle_y(desired_yaw),
-            // };
-            // effects.push(eff);
         };
+
         None
-
-        // let player = v_player.iter().next().unwrap();
-        // let player_transform = v_transform.get(player).unwrap().0;
-
-        // let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-        // let forward = player_transform
-        //     .transform_vector(vec3(0.0, 0.0, 1.0))
-        //     .normalize();
-        // let target = player_transform
-        //     .transform_point(point3(0.0, 0.0, 0.0))
-        //     .to_vec();
-
-        // let target = target + forward * 2.0;
-
-        // let steering_output = Steering::turn_to_point(position, target);
-
-        // Some((steering_output, Effect::NoEffect))
     }
 }
