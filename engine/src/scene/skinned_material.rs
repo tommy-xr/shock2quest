@@ -36,9 +36,8 @@ const VERTEX_SHADER_SOURCE: &str = r#"
         void main() {
             texCoord = inTex;
             vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            //vec4 temp = bone_matrices[bone_ids[0]];
-            //vec4 mod_position = vec4(inPos, 1.0);
-            //mod_position.y += float(bone_ids[0]) * 0.25;
+            // vec4 mod_position = vec4(inPos, 1.0);
+            // mod_position.y += float(bone_ids[0]) * 0.25;
             vec4 position = projection * view * world * mod_position;
             gl_Position = position;
         }

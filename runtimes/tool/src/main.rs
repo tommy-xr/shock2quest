@@ -220,7 +220,6 @@ pub fn main() {
 
     let turret = game.asset_cache.get(&MODELS_IMPORTER, "tu_l.bin");
     //let turret = game.asset_cache.get(&MODELS_IMPORTER, "camgrn.bin");
-    panic!();
 
     let mut obj = turret.to_scene_objects();
 
@@ -230,27 +229,13 @@ pub fn main() {
     let mut font_reader = BufReader::new(font);
     let font = Font::read(&mut font_reader);
 
-    // panic!("font");
-
     let mesh_file = File::open(resource_path("res/mesh/ASSASSIN.BIN")).unwrap();
     let mut mesh_reader = BufReader::new(mesh_file);
     let header = ss2_bin_header::read(&mut mesh_reader);
     let ai_mesh = ss2_bin_ai_loader::read(&mut mesh_reader, &header);
-    //let ai_obj = ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, &mut asset_cache);
 
     let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
     let mut motiondb_reader = BufReader::new(motiondb_file);
-    // let motiondb = motion::read(&mut motiondb_reader);
-    // let animation_clip = load_animation(&motiondb, "ogsshot1".to_owned());
-    // let animation_clip = load_animation(&motiondb, "BS111220".to_owned());
-
-    //let fbx = asset_cache.get(&FBX_IMPORTER, "vr_glove_model.fbx");
-
-    //panic!();
-
-    // let billboard_texture = asset_cache
-    //     .get(&BITMAP_ANIMATION_IMPORTER, "re301_.pcx".to_owned())
-    //     .clone();
 
     let mut camera_context = CameraContext::new();
 
@@ -320,51 +305,6 @@ pub fn main() {
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
         camera_obj.set_transform(Matrix4::from_translation(orig_camera_position));
         camera_obj.set_local_transform(Matrix4::from(orig_camera_rot));
-        //let animated_skeleton = animation_clip.a
-        // animation_player = AnimationPlayer::update(&animation_player, time.elapsed);
-        // let skinning_data = animation_player.get_transforms(&skeleton);
-        // let animated_skeleton = ss2_skeleton::animate(&skeleton, &animation_clip, frame);
-        // let skinning_data: [Matrix4<f32>; 40] = animated_skeleton.get_transforms();
-        // for i in 0..40 {
-        //     skinning_data[i] = Matrix4::from_translation(vec3(
-        //         0.0,
-        //         i.to_f32().unwrap() * time.total.as_secs_f32().sin(),
-        //         0.0,
-        //     ));
-        // }
-
-        let bm_frame = (time.total.as_secs_f32() * 10.0).to_usize().unwrap();
-        // let texture: Rc<dyn TextureTrait> = billboard_texture
-        //     .get_frame(bm_frame, dark::FrameOptions::Wrap)
-        //     .unwrap();
-        // let bitmap_texture_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
-        // let bitmap_texture_obj =
-        //     SceneObject::new(bitmap_texture_mat, Box::new(engine::scene::cube::create()));
-
-        // let scene = vec![bitmap_texture_obj];
-        // let mut scene = ai_obj
-        //     .iter()
-        //     .map(|scene_obj| {
-        //         let mut new_obj = scene_obj.borrow().clone();
-        //         new_obj.set_skinning_data(skinning_data);
-        //         new_obj
-        //     })
-        //     .collect::<Vec<SceneObject>>();
-
-        let text_material = engine::materials::ScreenSpaceMaterial::create(
-            font.texture.clone(),
-            vec4(1.0, 0.0, 0.0, 1.0),
-        );
-        let font_size = 30.0f32;
-        // 4 years earlier
-        // Ramsey Recruitment Ctr
-        // let text_string = "Ramsey Recruitment Ctr.";
-        let text_string = "0123456789 Ramsey Recruitment";
-        let text_mesh = font.get_mesh(text_string, vec2(200.0, 200.0), 30.0);
-        let text_obj = SceneObject::new(text_material, Box::new(text_mesh));
-        scene.push(text_obj);
-        // let text_obj = SceneObject::new(text_material, Box::new(text_mesh));
-        // scene.push(text_obj);
 
         let unit_vec = vec3(0.0, 0.0, 0.0);
         let unit_quat = Quaternion {
