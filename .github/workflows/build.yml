@@ -13,10 +13,16 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [macOS-latest]
+        os: [macOS-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
+  
+    # Install Linux-specific dependencies
+    - name: Install ALSA (Linux only)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      
     - name: Build
       run: cargo build --verbose --release
       working-directory: runtimes/desktop_runtime
