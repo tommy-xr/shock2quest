@@ -11,7 +11,7 @@ use cgmath::{vec4, Matrix4, Vector2, Vector3, Vector4};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTexture},
+    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinned},
     texture::{AnimatedTexture, TextureTrait},
     texture_format::TextureFormat,
 };
@@ -25,6 +25,7 @@ use crate::{
         self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_single,
         read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
     },
+    ss2_skeleton::{Bone, Skeleton},
     util::load_multiple_textures_for_model,
     SCALE_FACTOR,
 };
@@ -125,7 +126,11 @@ pub fn to_scene_objects(
 
     let test = slot_to_vertices
         .into_iter()
-        .collect::<Vec<(u16, Vec<VertexPositionTexture>)>>();
+        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinned>)>>();
+
+    let mut bones = Vec::new();
+    build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
+    let skeleton = Skeleton::create_from_bones(bones);
 
     let mut mesh_objects = test
         .into_iter()
@@ -181,16 +186,18 @@ pub fn to_scene_objects(
             if tex_path.contains("GLAS_S01") {
                 transparency = 0.8
             }
-
-            let material = RefCell::new(engine::scene::basic_material::create(
+            let mat = engine::scene::SkinnedMaterial::create(
                 diffuse_texture,
                 material.emissivity,
                 transparency,
-            ));
+            );
 
-            Some(engine::scene::scene_object::SceneObject::create(
-                material, geometry,
-            ))
+            let material = RefCell::new(mat);
+            let mut so = engine::scene::scene_object::SceneObject::create(material, geometry);
+
+            so.set_skinning_data(skeleton.get_transforms());
+
+            Some(so)
         })
         .collect::<Vec<SceneObject>>();
 
@@ -295,21 +302,20 @@ pub fn read_materials<T: Read + Seek>(
 }
 
 fn build_vertex(
-    transform: &Matrix4<f32>,
     vec: Vector3<f32>,
     uv: Vector2<f32>,
-) -> VertexPositionTexture {
-    let p = point3(vec.x, vec.y, vec.z);
-    let p_transformed = transform.transform_point(p);
-    let v_transformed = vec3(p_transformed.x, p_transformed.y, p_transformed.z);
-
-    VertexPositionTexture {
-        position: v_transformed,
+    bone_idx: u32,
+) -> VertexPositionTextureSkinned {
+    VertexPositionTextureSkinned {
+        position: vec,
         uv,
+        bone_indices: [bone_idx, 0, 0, 0],
     }
 }
 
-pub fn to_vertices(mesh: &SystemShock2ObjectMesh) -> HashMap<u16, Vec<VertexPositionTexture>> {
+pub fn to_vertices(
+    mesh: &SystemShock2ObjectMesh,
+) -> HashMap<u16, Vec<VertexPositionTextureSkinned>> {
     let polygons = &mesh.polygons;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
@@ -330,21 +336,21 @@ pub fn to_vertices(mesh: &SystemShock2ObjectMesh) -> HashMap<u16, Vec<VertexPosi
         let uv_len = uv_indices.len();
         if len > 1 && uv_len > 1 {
             for idx in 1..(len - 1) {
-                let transform = get_transform_for_point(mesh, indices[idx]);
+                let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
                 verts.push(build_vertex(
-                    &transform,
                     vertices[indices[idx] as usize],
                     uvs[uv_indices[idx] as usize],
+                    bone_idx,
                 ));
                 verts.push(build_vertex(
-                    &transform,
                     vertices[indices[idx + 1] as usize],
                     uvs[uv_indices[idx + 1_usize] as usize],
+                    bone_idx,
                 ));
                 verts.push(build_vertex(
-                    &transform,
                     vertices[indices[0] as usize],
                     uvs[uv_indices[0] as usize],
+                    bone_idx,
                 ));
             }
         }
@@ -353,15 +359,56 @@ pub fn to_vertices(mesh: &SystemShock2ObjectMesh) -> HashMap<u16, Vec<VertexPosi
     hashMap
 }
 
-fn get_transform_for_point(header: &SystemShock2ObjectMesh, usize: u16) -> Matrix4<f32> {
+fn get_bone_index_for_point(header: &SystemShock2ObjectMesh, usize: u16) -> u32 {
     // TODO: Improve perf by caching, instead of O(N^2) iteration across sub objects
+    let mut idx = 0;
     for so in &header.sub_objects {
         if usize >= so.point_start && usize < so.point_stop {
-            return so.transform;
+            return idx;
         }
+        idx = idx + 1
     }
 
-    Matrix4::identity()
+    0
+}
+
+fn build_skeleton_for_obj_mesh(
+    header: &SystemShock2ObjectMesh,
+    sub_object_idx: i32,
+    current_parent: Option<u32>,
+    bones: &mut Vec<Bone>,
+) -> () {
+    if sub_object_idx == -1 {
+        return;
+    }
+
+    if sub_object_idx as usize >= header.sub_objects.len() {
+        return;
+    }
+
+    let sub_object = &header.sub_objects[sub_object_idx as usize];
+
+    bones.push(Bone {
+        joint_id: sub_object_idx as u32,
+        local_transform: sub_object.transform,
+        parent_id: current_parent,
+    });
+
+    // Add all children
+    build_skeleton_for_obj_mesh(
+        header,
+        sub_object.child_sub_obj_idx as i32,
+        Some(sub_object_idx as u32),
+        bones,
+    );
+
+    // Add all peers
+    build_skeleton_for_obj_mesh(
+        header,
+        sub_object.next_sub_obj_idx as i32,
+        current_parent,
+        bones,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -511,6 +558,7 @@ fn read_vertices<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<V
 
 #[derive(Debug)]
 pub struct SubObjectHeader {
+    idx: u32,
     parent_idx: i32,
     name: String,
     transform: Matrix4<f32>,
@@ -530,35 +578,30 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
     let _obj_size = (header.offset_mats - header.offset_objs) / (header.num_objs as u32);
 
     let mut objs = Vec::new();
-    for _i in 0..header.num_objs {
+    for i in 0..header.num_objs {
         let name = read_string_with_size(reader, 8);
         let _obj_type = read_u8(reader);
         let parent_idx = read_i32(reader);
         let min_range = read_single(reader);
         let max_range = read_single(reader);
 
-        // Transfrorm
+        // Transform
         let mut decomposed = read_matrix(reader);
         decomposed.disp /= SCALE_FACTOR;
         let transform: Matrix4<f32> = decomposed.into();
 
-        // let rot: Quaternion<f32> = matrix.into();
-        // let euler: Euler<Deg<f32>> = cgmath::Euler::from(rot);
-        // println!("rot: {:?}", euler);
-
-        // let remainder = obj_size - 8;
-        // println!("-remainder: {}", remainder);
         let child_sub_obj_idx = read_i16(reader);
         let next_sub_obj_idx = read_i16(reader);
         let _vhot_start = read_i16(reader);
         let _num_vhots = read_i16(reader);
         let point_start = read_u16(reader);
         let sub_num_points = read_u16(reader);
-        let _ = read_bytes(reader, 12);
-        // println!("- start point: {point_start} num_points: {sub_num_points}");
 
-        //panic!("done");
+        // Not sure what this is
+        let _ = read_bytes(reader, 12);
+
         let soh = SubObjectHeader {
+            idx: i as u32,
             parent_idx,
             child_sub_obj_idx,
             next_sub_obj_idx,
@@ -569,7 +612,6 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
             point_start,
             point_stop: point_start + sub_num_points,
         };
-        println!("soh: {:?}", soh);
         objs.push(soh);
     }
     objs
