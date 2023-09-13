@@ -1,0 +1,25 @@
+name: Build & Unit Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macOS-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build --verbose --release
+      working-directory: runtimes/desktop_runtime
+    - name: Run tests
+      run: cargo test --verbose
+      working-directory: runtimes/desktop_runtime
