@@ -1,33 +1,51 @@
 
 # Development
 
-## 1. Clone Repoo
+## Source Code Overview
+
+- `shock2quest`
+    - `dark` - module that reads dark engine file formats (bin, mis, cal, gam, etc)
+    - `engine` - core OpenGL rendering engine
+    - `references` - just some output that was useful to refer to (ie, text form of the namemaps)
+    - `runtimes`
+        - `desktop_runtime` - code for running the desktop version 
+        - `tool` - a tool for viewing models and experimentation outside of gameplay
+        - `oculus_runtime` - runtime for oculus using OpenXR
+    - `shock2vr` - core gameplay logic
+        - `scripts` - implementation of all the scripts needed for objects
+        - `mission` - core logic for running a mission
+        - `save_load` - serializing, deserializing game state
+        - `creature` - constants and hitboxes for creature definitions
+
+## Set up
+
+### 1. Clone Repoo
 
 - `git clone https://github.com/tommybuilds/shock2quest`
 - `cd shock2quest`
 
-## 2. Provide data files
+### 2. Provide data files
 
 - Copy local game files (*.mis, res folder) into the `shock2quest/Data` folder
 
-## 3. Build Locally
+### 3. Build Locally
 
-## 3a. Desktop (Windows, OSX)
+#### 3a. Desktop (Windows, OSX)
 
 > __NOTE:__ In theory, this should work on Linux as well - just haven' tried.
 
-#### Pre-requisites
+##### Pre-requisites
 - Install [rust toolchain](https://www.rust-lang.org/tools/install)
 - (Windows) Install [cmake](https://cmake.org/install/)
 
-### Running
+##### Running
 
 - `cd runtimes/desktop_runtime`
 - `cargo run --release`
 
-## 3b. Oculus Quest 2
+#### 3b. Oculus Quest 2
 
-#### Pre-requisites
+##### Pre-requisites
 - Install Android SDK
     - Mac: 
         - Install Java 8: https://stackoverflow.com/a/46405092
@@ -46,7 +64,11 @@
     ```
     keytool -genkey -v -keystore develop.keystore -alias com_tommybuilds_shock2quest  -keyalg RSA -keysize 2048 -validity 10000
     ```
+- Make sure `adb` is installed and working. With Oculus connected, run `adb devices` and verify your headset shows up
+- Tweak ``
 
-- `source ./common.sh`
-- `cd oculus_runtime`
+##### Running
+
+- `cd runtimes/oculus_runtime`
+- `source ./set_up_android_sdk.sh`
 - `cargo apk run --release`
