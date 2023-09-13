@@ -3,12 +3,19 @@ use ai_util::*;
 
 pub mod steering;
 
+mod animated_monster_ai;
+pub use animated_monster_ai::*;
+
 use std::{cell::RefCell, rc::Rc};
 
 use cgmath::{
     point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
 };
-use dark::{motion::MotionQueryItem, properties::PropPosition, SCALE_FACTOR};
+use dark::{
+    motion::{MotionFlags, MotionQueryItem},
+    properties::PropPosition,
+    SCALE_FACTOR,
+};
 use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -24,13 +31,15 @@ use crate::{
 
 use self::steering::*;
 
-use super::{Effect, MessagePayload};
+use super::{Effect, Message, MessagePayload, Script};
 
 pub enum NextBehavior {
     NoOpinion,
     Next(Box<RefCell<dyn Behavior>>),
     Stay,
 }
+
+pub trait AI: Script {}
 
 pub trait Behavior {
     fn animation(&self) -> Vec<MotionQueryItem> {
