@@ -1,5 +1,3 @@
-
-
 use cgmath::{
     point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
 };
@@ -12,9 +10,7 @@ use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::ai::ai_util::random_binomial,
     time::Time,
-    util::{
-        get_position_from_transform, get_rotation_from_transform, vec3_to_point3,
-    },
+    util::{get_position_from_transform, get_rotation_from_transform, vec3_to_point3},
 };
 
 use super::{
@@ -64,9 +60,7 @@ pub trait SteeringStrategy {
 }
 
 pub fn chained(strategies: Vec<Box<dyn SteeringStrategy>>) -> Box<dyn SteeringStrategy> {
-    Box::new(ChainedSteeringStrategy {
-        strategies,
-    })
+    Box::new(ChainedSteeringStrategy { strategies })
 }
 
 pub struct ChainedSteeringStrategy {
