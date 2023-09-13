@@ -5,30 +5,24 @@ use cgmath::{
 };
 use dark::{
     motion::{MotionFlags, MotionQueryItem},
-    properties::PropPosition,
     SCALE_FACTOR,
 };
-use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
     time::Time,
-    util::{
-        get_position_from_matrix, get_position_from_transform, get_rotation_from_forward_vector,
-        get_rotation_from_matrix, get_rotation_from_transform,
-    },
 };
 
 use super::{
     ai_util::*,
+    behavior::*,
     steering::{Steering, SteeringOutput},
-    ChaseBehavior, DeadBehavior, Effect, Message, MessagePayload, NextBehavior, Script,
+    Effect, Message, MessagePayload, Script,
 };
 pub struct AnimatedMonsterAI {
     last_hit_sensor: Option<EntityId>,
-    current_behavior: Box<RefCell<dyn super::Behavior>>,
+    current_behavior: Box<RefCell<dyn Behavior>>,
     current_heading: Deg<f32>,
     is_dead: bool,
     took_damage: bool,
