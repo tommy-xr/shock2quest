@@ -13,7 +13,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [macOS-latest, windows-latest]
+        os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
@@ -21,7 +21,7 @@ jobs:
     # Install Linux-specific dependencies
     - name: Install ALSA (Linux only)
       if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
     # Install Windows-specific dependencies
     - name: Install CMake (Windows only)
