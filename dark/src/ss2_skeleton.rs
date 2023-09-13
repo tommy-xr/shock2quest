@@ -198,23 +198,7 @@ pub fn create(cal: SystemShock2Cal) -> Skeleton {
         }
     }
 
-    // Build global transform map
-    let animation_transforms = HashMap::new();
-    let mut global_transforms = HashMap::new();
-    for bone in &bones {
-        let _ignored = calc_and_cache_global_transform(
-            bone.joint_id,
-            &animation_transforms,
-            &mut global_transforms,
-            &bones,
-        );
-    }
-
-    Skeleton {
-        bones,
-        animation_transforms,
-        global_transforms,
-    }
+    Skeleton::create_from_bones(bones)
 }
 
 fn calc_and_cache_global_transform(
@@ -274,5 +258,9 @@ pub fn animate(base_skeleton: &Skeleton, animation_clip: &AnimationClip, frame: 
         );
     }
 
-    Skeleton::create_from_bones(bones)
+    Skeleton {
+        bones,
+        animation_transforms,
+        global_transforms,
+    }
 }
