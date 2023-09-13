@@ -13,7 +13,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [macOS-latest, ubuntu-latest]
+        os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
@@ -22,6 +22,11 @@ jobs:
     - name: Install ALSA (Linux only)
       if: runner.os == 'Linux'
       run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+    # Install Windows-specific dependencies
+    - name: Install CMake (Windows only)
+      if: runner.os == 'Windows'
+      run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
       
     - name: Build
       run: cargo build --verbose --release
