@@ -6,7 +6,7 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            CollisionAvoidanceSteeringStrategy, Steering, SteeringOutput, SteeringStrategy,
+            Steering, SteeringOutput,
         },
         Effect,
     },
@@ -25,10 +25,10 @@ impl Behavior for DeadBehavior {
     fn steer(
         &mut self,
         current_heading: Deg<f32>,
-        world: &World,
-        physics: &PhysicsWorld,
-        entity_id: EntityId,
-        time: &Time,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _entity_id: EntityId,
+        _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
         Some((Steering::from_current(current_heading), Effect::NoEffect))
     }

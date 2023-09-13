@@ -10,7 +10,7 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, Steering,
+            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy,
             SteeringOutput, SteeringStrategy,
         },
         Effect,
@@ -65,17 +65,17 @@ impl Behavior for ChaseBehavior {
     fn next_behavior(
         &self,
         world: &World,
-        physics: &PhysicsWorld,
+        _physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
-        let rand = rand::thread_rng().gen_range(0..100);
+        let _rand = rand::thread_rng().gen_range(0..100);
         let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
         let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
         //let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
 
         let melee_attack_distance = 8.0 / SCALE_FACTOR;
-        let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
-        let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
+        let _ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
+        let _ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
 
         if let Ok(prop_pos) = v_current_pos.get(entity_id) {
             let distance = (prop_pos.position - u_player.pos).magnitude();

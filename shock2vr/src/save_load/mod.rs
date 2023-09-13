@@ -70,8 +70,8 @@ fn add_contained_entities(
 /// because they are recreated by scripts
 ///
 fn get_entities_to_filter_out(world: &World) -> HashSet<u64> {
-    let gui_proxy_entity = world.borrow::<View<GuiPropProxyEntity>>().unwrap();
-    let hitbox = world.borrow::<View<RuntimePropHitBox>>().unwrap();
+    let _gui_proxy_entity = world.borrow::<View<GuiPropProxyEntity>>().unwrap();
+    let _hitbox = world.borrow::<View<RuntimePropHitBox>>().unwrap();
 
     let do_not_serialize = world.borrow::<View<RuntimePropDoNotSerialize>>().unwrap();
 

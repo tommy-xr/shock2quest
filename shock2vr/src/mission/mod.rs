@@ -3,15 +3,12 @@ pub mod entity_populator;
 pub mod spawn_location;
 pub mod visibility_engine;
 
-use collision::{Aabb, Aabb3};
+use collision::{Aabb};
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
 use std::{
-    borrow::BorrowMut,
-    cell,
     collections::{HashMap, HashSet},
-    fmt::Debug,
     fs::File,
     io::BufReader,
     rc::Rc,
@@ -59,13 +56,13 @@ use tracing::{info, trace, warn};
 
 use crate::{
     creature::{
-        get_creature_definition, get_entity_creature, HitBoxManager, HitBoxType, RuntimePropHitBox,
+        get_creature_definition, HitBoxManager,
     },
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
     input_context::{self},
     inventory::PlayerInventoryEntity,
-    mission::{entity_populator::EntityPopulator, visibility_engine::AlwaysVisible},
+    mission::{entity_populator::EntityPopulator},
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
@@ -81,7 +78,7 @@ use crate::{
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
-    util::{get_email_sound_file, has_refs, log_entity},
+    util::{get_email_sound_file, has_refs},
     virtual_hand::{self, Handedness, VirtualHand, VirtualHandEffect},
     GameOptions,
 };
@@ -843,7 +840,7 @@ impl Mission {
                         .unwrap();
 
                     if let Ok(hit_points) = (&mut v_hit_points).get(entity_id) {
-                        hit_points.hit_points = (hit_points.hit_points as i32 + delta);
+                        hit_points.hit_points += delta;
                     }
                 }
 
@@ -1331,7 +1328,7 @@ impl Mission {
 
     pub fn finish_render(
         &mut self,
-        asset_cache: &mut AssetCache,
+        _asset_cache: &mut AssetCache,
         view: Matrix4<f32>,
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
@@ -1353,7 +1350,7 @@ impl Mission {
         asset_cache: &mut AssetCache,
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        let v_position = self.world.borrow::<View<PropPosition>>().unwrap();
+        let _v_position = self.world.borrow::<View<PropPosition>>().unwrap();
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
 
@@ -1503,7 +1500,7 @@ impl Mission {
         }
 
         if options.debug_portals {
-            let (player_pos, player_rot) = {
+            let (player_pos, _player_rot) = {
                 let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
                 (player_info.pos, player_info.rotation)
             };
@@ -1788,7 +1785,7 @@ fn resolve_proxy_entity(world: &World, maybe_entity_id: Option<EntityId>) -> Opt
 
     if let Ok(proxy_entity) = maybe_prop_proxy_entity {
         // Proxy entity, return parent
-        return Some(proxy_entity.0);
+        Some(proxy_entity.0)
     } else {
         // Otherwise, return the current entity id
         maybe_entity_id

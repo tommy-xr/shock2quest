@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use cgmath::{Deg, InnerSpace};
 use dark::{motion::MotionQueryItem, properties::PropPosition, SCALE_FACTOR};
-use rand::Rng;
+
 use shipyard::*;
 
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, Steering,
+            ChasePlayerSteeringStrategy,
             SteeringOutput, SteeringStrategy,
         },
         Effect,
@@ -45,7 +45,7 @@ impl Behavior for MeleeAttackBehavior {
     fn next_behavior(
         &self,
         world: &World,
-        physics: &PhysicsWorld,
+        _physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
         let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();

@@ -1,19 +1,18 @@
 use std::f32::consts::PI;
 
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, Euler, InnerSpace, Matrix, Matrix3, Matrix4, Point3,
+    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3,
     Quaternion, Rad, Rotation3, SquareMatrix, Transform, Vector3,
 };
-use dark::{properties::*, SCALE_FACTOR};
+use dark::{properties::*};
 use rand::{thread_rng, Rng};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     creature,
-    physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
     scripts::{
-        script_util::get_first_link_with_template_and_data, Effect, Message, MessagePayload,
+        script_util::get_first_link_with_template_and_data, Effect,
     },
     util,
 };
@@ -133,7 +132,7 @@ pub(crate) fn does_entity_have_hitboxes(world: &World, entity_id: EntityId) -> b
     let v_creature_prop = world.borrow::<View<PropCreature>>().unwrap();
 
     // If the entity has a creature prop, we use hitboxes for damage
-    return v_creature_prop.contains(entity_id);
+    v_creature_prop.contains(entity_id)
 }
 
 pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
@@ -146,14 +145,14 @@ pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
 
     let position = util::get_position_from_matrix(&xform);
     let forward = xform.transform_vector(vec3(0.0, 0.0, 1.0)).normalize();
-    let debug_effect = Effect::DrawDebugLines {
+    
+    Effect::DrawDebugLines {
         lines: vec![(
             position + vec3(0.0, 0.5, 0.0),
             position + forward + vec3(0.0, 0.5, 0.0),
             vec4(1.0, 0.0, 0.0, 1.0),
         )],
-    };
-    debug_effect
+    }
 }
 
 pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {

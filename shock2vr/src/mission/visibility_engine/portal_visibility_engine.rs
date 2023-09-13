@@ -1,19 +1,16 @@
 use std::{
     collections::{HashMap, HashSet},
-    ffi::IntoStringError,
 };
 
-use cgmath::{frustum, point2, vec2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
-use collision::{Aabb2, Contains, Continuous, Discrete, Frustum, Relation, Union};
+use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
+use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
-    importers::TEXTURE_IMPORTER,
-    mission::{Cell, CellPortal, SystemShock2Level},
+    mission::{Cell, SystemShock2Level},
     properties::PropPosition,
 };
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPosition},
-    texture::TextureOptions,
+    scene::{SceneObject},
 };
 use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
 
@@ -140,7 +137,7 @@ impl PortalVisibilityEngine {
 
                     continue;
                 }
-                let ret = maybe_intersects.unwrap();
+                
 
                 // debug_cells.push(PortalDebugInfo {
                 //     from_cell: current_cell.idx,
@@ -149,7 +146,7 @@ impl PortalVisibilityEngine {
                 //     vertices: portal.all_vertices.clone(),
                 //     is_visible: true,
                 // });
-                ret
+                maybe_intersects.unwrap()
                 // } else {
                 //     current_screen_portal
             } else {
@@ -171,7 +168,7 @@ impl PortalVisibilityEngine {
                 screen_width,
                 screen_height,
                 projection_view,
-                &frustum,
+                frustum,
                 level,
                 visible_cells,
                 visited_cells,
@@ -256,7 +253,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
             &mut visible_cells,
             &mut visited_cells,
             &mut self.debug_portals,
-            &camera_cell,
+            camera_cell,
             0,
         );
 
@@ -291,7 +288,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
         *self.is_visible.get(&entity_id).unwrap_or(&false)
     }
 
-    fn debug_render(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
+    fn debug_render(&self, _asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         vec![]
         // let mut debug_objs = self
         //     .debug_portals

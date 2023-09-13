@@ -1,13 +1,13 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell};
 
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
+    vec3, vec4, Deg, Quaternion, Rotation3,
 };
 use dark::{
     motion::{MotionFlags, MotionQueryItem},
     SCALE_FACTOR,
 };
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, World};
 
 use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
@@ -60,11 +60,11 @@ impl AnimatedMonsterAI {
         };
 
         self.current_heading = Deg(self.current_heading.0 + turn_amount);
-        let rotation_effect = Effect::SetRotation {
+        
+        Effect::SetRotation {
             entity_id,
             rotation: Quaternion::from_angle_y(self.current_heading),
-        };
-        rotation_effect
+        }
     }
 
     fn try_tickle_sensor(
@@ -80,7 +80,7 @@ impl AnimatedMonsterAI {
 
         let distance = 8.0 / SCALE_FACTOR;
 
-        let direction = forward + down_vector;
+        let _direction = forward + down_vector;
 
         let maybe_hit_result = physics.ray_cast2(
             position,
@@ -211,7 +211,7 @@ impl Script for AnimatedMonsterAI {
                 self.took_damage = true;
                 Effect::AdjustHitPoints {
                     entity_id,
-                    delta: -1 * amount.round() as i32,
+                    delta: -(amount.round() as i32),
                 }
             }
             MessagePayload::AnimationCompleted => {
@@ -246,7 +246,7 @@ impl Script for AnimatedMonsterAI {
                         }
                     };
                     //self.current_behavior = Rc::new(IdleBehavior);
-                    self.animation_seq = self.animation_seq + 1;
+                    self.animation_seq += 1;
                     Effect::QueueAnimationBySchema {
                         entity_id,
                         motion_query_items: self.current_behavior.borrow().animation(),

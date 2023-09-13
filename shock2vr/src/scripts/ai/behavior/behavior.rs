@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use cgmath::*;
-use dark::{motion::MotionQueryItem, properties::PropPosition, SCALE_FACTOR};
+use dark::{motion::MotionQueryItem};
 use rand::Rng;
 use shipyard::*;
 
@@ -38,19 +38,19 @@ pub trait Behavior {
     fn steer(
         &mut self,
         current_heading: Deg<f32>,
-        world: &World,
-        physics: &PhysicsWorld,
-        entity_id: EntityId,
-        time: &Time,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _entity_id: EntityId,
+        _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
         Some((Steering::from_current(current_heading), Effect::NoEffect))
     }
 
     fn next_behavior(
         &self,
-        world: &World,
-        physics: &PhysicsWorld,
-        entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _entity_id: EntityId,
     ) -> NextBehavior {
         NextBehavior::NoOpinion
     }

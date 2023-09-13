@@ -49,8 +49,8 @@ impl TrapNewTripwire {
 
     fn should_activate(
         &mut self,
-        world: &World,
-        tripped_entity_id: EntityId,
+        _world: &World,
+        _tripped_entity_id: EntityId,
         trip_flags: &TripFlags,
     ) -> bool {
         if trip_flags.contains(TripFlags::Once) && self.has_activated {

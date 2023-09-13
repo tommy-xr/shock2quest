@@ -1,16 +1,15 @@
 use std::cell::RefCell;
 
-use cgmath::{Deg, InnerSpace};
-use dark::{motion::MotionQueryItem, properties::PropPosition, SCALE_FACTOR};
-use rand::Rng;
+use cgmath::{Deg};
+use dark::{motion::MotionQueryItem};
+
 use shipyard::*;
 
 use crate::{
-    mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, Steering,
+            ChasePlayerSteeringStrategy,
             SteeringOutput, SteeringStrategy,
         },
         Effect,
@@ -44,9 +43,9 @@ impl Behavior for RangedAttackBehavior {
 
     fn next_behavior(
         &self,
-        world: &World,
-        physics: &PhysicsWorld,
-        entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _entity_id: EntityId,
     ) -> NextBehavior {
         NextBehavior::Next(Box::new(RefCell::new(ChaseBehavior::new())))
     }

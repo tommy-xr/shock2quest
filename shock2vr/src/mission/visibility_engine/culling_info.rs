@@ -1,4 +1,4 @@
-use cgmath::{Matrix4, Vector2, Vector3};
+use cgmath::{Matrix4, Vector2};
 
 pub struct CullingInfo {
     pub view: Matrix4<f32>,

@@ -1,27 +1,25 @@
-use std::{cell::RefCell, rc::Rc};
+
 
 use cgmath::{
     point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, Rotation3,
 };
-use dark::{motion::MotionQueryItem, properties::PropPosition, SCALE_FACTOR};
-use rand::Rng;
+use dark::{properties::PropPosition, SCALE_FACTOR};
+
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
-    runtime_props::RuntimePropTransform,
     scripts::ai::ai_util::random_binomial,
     time::Time,
     util::{
-        get_position_from_matrix, get_position_from_transform, get_rotation_from_forward_vector,
-        get_rotation_from_matrix, get_rotation_from_transform, vec3_to_point3,
+        get_position_from_transform, get_rotation_from_transform, vec3_to_point3,
     },
 };
 
 use super::{
-    ai_util::{self, is_entity_door},
-    Effect, MessagePayload,
+    ai_util::{self},
+    Effect,
 };
 
 pub struct SteeringOutput {
@@ -67,7 +65,7 @@ pub trait SteeringStrategy {
 
 pub fn chained(strategies: Vec<Box<dyn SteeringStrategy>>) -> Box<dyn SteeringStrategy> {
     Box::new(ChainedSteeringStrategy {
-        strategies: strategies,
+        strategies,
     })
 }
 
@@ -110,9 +108,9 @@ impl WanderSteeringStrategy {
     pub fn steer(
         &mut self,
         current_heading: Deg<f32>,
-        world: &World,
-        physics: &PhysicsWorld,
-        entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
         if let Some(current_heading) = self.maybe_current_heading {
@@ -163,7 +161,7 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
         world: &World,
         physics: &PhysicsWorld,
         entity_id: EntityId,
-        time: &Time,
+        _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
         // TODO
         let height = 1.0 / SCALE_FACTOR;
@@ -198,7 +196,7 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
         ];
 
         let mut maybe_steering_output = None;
-        let mut dist = f32::MAX;
+        let _dist = f32::MAX;
         for (rotation, distance, mitigation) in whiskers_to_check {
             let forward = rotation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize();
             let end_point = position + forward * distance;
@@ -275,11 +273,11 @@ pub struct ChasePlayerSteeringStrategy;
 impl SteeringStrategy for ChasePlayerSteeringStrategy {
     fn steer(
         &mut self,
-        current_heading: Deg<f32>,
+        _current_heading: Deg<f32>,
         world: &World,
-        physics: &PhysicsWorld,
+        _physics: &PhysicsWorld,
         entity_id: EntityId,
-        time: &Time,
+        _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
         // let player_pos = world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
         // let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
@@ -304,7 +302,7 @@ impl SteeringStrategy for ChasePlayerSteeringStrategy {
 
         if let Ok(prop_pos) = v_current_pos.get(entity_id) {
             //let current_yaw = ai_util::current_yaw(entity_id, world);
-            let desired_yaw = ai_util::yaw_between_vectors(prop_pos.position, u_player.pos);
+            let _desired_yaw = ai_util::yaw_between_vectors(prop_pos.position, u_player.pos);
             return Some((
                 Steering::turn_to_point(
                     vec3_to_point3(prop_pos.position),
