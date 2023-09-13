@@ -124,41 +124,40 @@ pub fn to_scene_objects(
 
     let slot_to_vertices = to_vertices(mesh);
 
-    let test = slot_to_vertices
+    let vertices = slot_to_vertices
         .into_iter()
         .collect::<Vec<(u16, Vec<VertexPositionTextureSkinned>)>>();
 
     let mut bones = Vec::new();
     build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
+    let is_skinned = bones.len() > 1;
     let skeleton = Skeleton::create_from_bones(bones);
 
-    let mut mesh_objects = test
+    let mut mesh_objects = vertices
         .into_iter()
         .filter_map(|(slot, verts)| {
             if verts.is_empty() {
                 return None;
             }
-            let geometry: Rc<Box<dyn engine::scene::Geometry>> =
-                Rc::new(Box::new(engine::scene::mesh::create(verts)));
+
+            let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
+                Rc::new(Box::new(engine::scene::mesh::create(verts)))
+            } else {
+                // If not skinned, convert the vertices to non-skinned representation
+                let simpler_vertices =
+                    convert_skinned_vertices_to_static_vertices(&verts, &skeleton);
+                Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices)))
+            };
+
             let material = hashToMaterial.get(&slot).unwrap();
             let mut tex_path = material.name.to_string();
-
-            let mut texture_type: Box<dyn TextureFormat> = Box::new(engine::texture_format::PCX);
-
-            if tex_path.contains(".gif") {
-                texture_type = Box::new(engine::texture_format::GIF);
-            }
 
             // HACK... for broken texture name
             if tex_path.to_ascii_lowercase().contains("soft12.pcx") {
                 tex_path = "soft12 .pcx".to_owned();
             }
 
-            let maybe_texture = { asset_cache.get_opt(&TEXTURE_IMPORTER, &tex_path) };
-
-            maybe_texture.as_ref()?;
-
-            let texture = maybe_texture.unwrap();
+            let texture = asset_cache.get(&TEXTURE_IMPORTER, &tex_path);
 
             let diffuse_texture: Rc<dyn TextureTrait> = {
                 let mut animation_frames = load_multiple_textures_for_model(asset_cache, &tex_path);
@@ -173,24 +172,26 @@ pub fn to_scene_objects(
                 }
             };
 
-            // let texture_descriptor = Rc::new(RefCell::new(
-            //     engine::texture_descriptor::FilePathTextureDescriptor::new(
-            //         tex_path.clone(),
-            //         texture_type,
-            //     ),
-            // ));
-
             let mut transparency = material.transparency;
 
             // HACK: Why isn't GLAS_S01" loading transparency??
             if tex_path.contains("GLAS_S01") {
                 transparency = 0.8
             }
-            let mat = engine::scene::SkinnedMaterial::create(
-                diffuse_texture,
-                material.emissivity,
-                transparency,
-            );
+
+            let mat = if is_skinned {
+                engine::scene::SkinnedMaterial::create(
+                    diffuse_texture,
+                    material.emissivity,
+                    transparency,
+                )
+            } else {
+                engine::scene::basic_material::create(
+                    diffuse_texture,
+                    material.emissivity,
+                    transparency,
+                )
+            };
 
             let material = RefCell::new(mat);
             let mut so = engine::scene::scene_object::SceneObject::create(material, geometry);
@@ -476,7 +477,7 @@ pub fn read_polygons<T: Read + Seek>(
 }
 
 pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vhot> {
-    let mut ret = Vec::new();
+    let mut vhots = Vec::new();
 
     if header.num_vhots > 0 {
         reader
@@ -484,16 +485,15 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
             .unwrap();
 
         for _ in 0..header.num_vhots {
-            let vhot = Vhot::read(reader);
-            ret.push(vhot);
+            vhots.push(Vhot::read(reader));
         }
     }
-    ret.sort_by(|a, b| a.vhot_type.cmp(&b.vhot_type));
-    ret
+    vhots.sort_by(|a, b| a.vhot_type.cmp(&b.vhot_type));
+    vhots
 }
 
 pub fn read_uvs<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector2<f32>> {
-    let mut ret = Vec::new();
+    let mut uvs = Vec::new();
 
     let space = header.offset_vhots - header.offset_uvs;
     let num_uvs = space / (4 /* size of float */ * 2/* 2 floats in vector2 */);
@@ -504,12 +504,12 @@ pub fn read_uvs<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Ve
             .unwrap();
 
         for _idx in 0..num_uvs {
-            let vec = ss2_common::read_vec2(reader);
-            ret.push(vec);
+            let uv = ss2_common::read_vec2(reader);
+            uvs.push(uv);
         }
     }
 
-    ret
+    uvs
 }
 
 fn read_extended_materials<T: Read + Seek>(
@@ -547,9 +547,8 @@ fn read_vertices<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<V
     let mut vertices = Vec::new();
 
     let len = header.num_verts;
-    for idx in 0..len {
+    for _idx in 0..len {
         let vertex_position = read_vec3(reader) / SCALE_FACTOR;
-        //println!(" - Vertex {idx}: {vertex_position:?}");
         vertices.push(vertex_position);
     }
 
@@ -713,4 +712,29 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
         size_mat_extra,
         mat_flags,
     }
+}
+
+fn convert_skinned_vertices_to_static_vertices(
+    vertices: &Vec<VertexPositionTextureSkinned>,
+    skeleton: &Skeleton,
+) -> Vec<VertexPositionTexture> {
+    let mut v = Vec::new();
+
+    let bone_transform = skeleton.get_transforms()[0];
+    for vertex in vertices {
+        let bone_indices = vertex.bone_indices;
+        let position = bone_transform
+            .transform_point(point3(
+                vertex.position.x,
+                vertex.position.y,
+                vertex.position.z,
+            ))
+            .to_vec();
+        v.push(VertexPositionTexture {
+            position,
+            uv: vertex.uv,
+        });
+    }
+
+    v
 }
