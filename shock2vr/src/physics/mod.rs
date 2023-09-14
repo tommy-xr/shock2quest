@@ -883,11 +883,7 @@ impl PhysicsWorld {
             let data = collider.user_data;
             let maybe_entity_id = EntityId::from_inner(data as u64);
 
-            if maybe_entity_id == entity_to_ignore {
-                false
-            } else {
-                true
-            }
+            maybe_entity_id != entity_to_ignore
         };
         filter = filter.predicate(&binding);
 

@@ -1,9 +1,9 @@
 use cgmath::{
-    vec3, vec4, Deg, EuclideanSpace, Matrix4, Quaternion, Rotation, Rotation3, SquareMatrix,
-    Transform, Vector3, Point3,
+    vec3, vec4, Deg, EuclideanSpace, Matrix4, Quaternion, Rotation3, SquareMatrix,
+    Transform, Point3,
 };
 use dark::{
-    properties::{Link, PropKeySrc},
+    properties::{Link},
     SCALE_FACTOR,
 };
 
@@ -16,15 +16,13 @@ use crate::{
     scripts::{
         ai::ai_util::does_entity_have_hitboxes,
         script_util::{
-            get_all_links_of_type, get_all_links_with_template,
             get_first_link_with_template_and_data,
         },
         Message,
     },
     time::Time,
     util::{
-        get_position_from_transform, get_rotation_from_forward_vector, get_rotation_from_transform,
-        log_entity, vec3_to_point3,
+        get_position_from_transform, get_rotation_from_forward_vector, vec3_to_point3,
     },
 };
 
@@ -43,7 +41,7 @@ impl Script for InternalFastProjectileScript {
         entity_id: EntityId,
         world: &World,
         physics: &PhysicsWorld,
-        time: &Time,
+        _time: &Time,
     ) -> Effect {
         //let speed = 100.0;
         let distance = 1000.0;
@@ -55,7 +53,7 @@ impl Script for InternalFastProjectileScript {
 
         let current_position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
         let forward = xform.transform_vector(vec3(0.0, 0.0, -1.0));
-        let start_point = vec3_to_point3(current_position.into()) - forward * SCALE_FACTOR * 0.25;
+        let start_point = vec3_to_point3(current_position) - forward * SCALE_FACTOR * 0.25;
         let maybe_hit_spot = projectile_ray_cast(start_point, forward, physics, distance, world);
 
         if let Some(RayCastResult {
@@ -141,33 +139,12 @@ impl Script for InternalFastProjectileScript {
     }
     fn handle_message(
         &mut self,
-        entity_id: EntityId,
-        world: &World,
+        _entity_id: EntityId,
+        _world: &World,
         _physics: &PhysicsWorld,
-        msg: &MessagePayload,
+        _msg: &MessagePayload,
     ) -> Effect {
-        match msg {
-            // MessagePayload::Coll => {
-            //     let v_keycard_src = world.borrow::<View<PropKeySrc>>().unwrap();
-            //     let maybe_keycard = v_keycard_src.get(entity_id);
-            //     let acquire_key_card = {
-            //         if let Ok(key_card) = maybe_keycard {
-            //             Effect::AcquireKeyCard {
-            //                 key_card: key_card.0.clone(),
-            //             }
-            //         } else {
-            //             Effect::NoEffect
-            //         }
-            //     };
-
-            //     let destroy_self = Effect::DestroyEntity { entity_id };
-            //     Effect::Combined {
-            //         effects: vec![acquire_key_card, destroy_self],
-            //     }
-            // }
-            // // Does turn off need to be done for email?
-            _ => Effect::NoEffect,
-        }
+        Effect::NoEffect
     }
 }
 

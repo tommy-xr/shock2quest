@@ -18,7 +18,7 @@ mod virtual_hand;
 mod zip_asset_path;
 
 pub use mission::visibility_engine::CullingInfo;
-use util::log_property;
+
 
 use std::{
     collections::{HashMap, HashSet},
@@ -28,14 +28,14 @@ use std::{
 };
 
 use cgmath::{
-    vec3, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Transform, Vector2, Vector3,
+    vec3, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector2, Vector3,
 };
 use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
-    motion::{AnimationEvent, AnimationPlayer, MotionDB},
-    properties::{AmbientSoundFlags, PropAI, PropAmbientHacked, PropPosition},
+    motion::{MotionDB},
+    properties::{AmbientSoundFlags, PropAmbientHacked, PropPosition},
     SCALE_FACTOR,
 };
 use engine::{
@@ -53,7 +53,7 @@ use mission::{
 };
 use quest_info::QuestInfo;
 
-use runtime_props::RuntimePropTransform;
+
 use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
 use scripts::GlobalEffect;
 use shipyard::*;
@@ -65,7 +65,6 @@ use zip_asset_path::ZipAssetPath;
 
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
-    runtime_props::RuntimePropJointTransforms,
     scripts::{Effect, Message, MessagePayload},
 };
 
@@ -730,7 +729,7 @@ impl Game {
             screen_width,
             screen_height,
         );
-        let text_obj_dynamic = SceneObject::screen_space_text(
+        let _text_obj_dynamic = SceneObject::screen_space_text(
             "{dynamic}",
             font.clone(),
             16.0,

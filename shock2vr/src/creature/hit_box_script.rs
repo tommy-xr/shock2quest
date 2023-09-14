@@ -31,7 +31,7 @@ impl HitBoxScript {
 impl Script for HitBoxScript {
     fn handle_message(
         &mut self,
-        entity_id: EntityId,
+        _entity_id: EntityId,
         _world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,

@@ -9,7 +9,7 @@ use dark::properties::{Link, Links, PropHasRefs, PropPosition};
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
 use tracing::{info, warn};
 
-use crate::{creature::CreatureDefinition, runtime_props::RuntimePropTransform};
+use crate::{runtime_props::RuntimePropTransform};
 
 /// log_property
 ///
@@ -161,8 +161,8 @@ pub fn get_rotation_from_transform(world: &World, entity_id: EntityId) -> Quater
 
 pub fn get_position_from_matrix(xform: &Matrix4<f32>) -> Point3<f32> {
     let p = point3(0.0, 0.0, 0.0);
-    let transformed_p = xform.transform_point(p);
-    transformed_p
+    
+    xform.transform_point(p)
 }
 
 pub fn get_rotation_from_matrix(matrix: &Matrix4<f32>) -> Quaternion<f32> {
@@ -197,7 +197,7 @@ pub fn get_rotation_from_forward_vector(forward: Vector3<f32>) -> Quaternion<f32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Angle, Deg, Matrix4, Point3, Quaternion, Rad, Rotation3, Vector3};
+    use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector3};
 
     #[test]
     fn test_get_position_from_matrix() {

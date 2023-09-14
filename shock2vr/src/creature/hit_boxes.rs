@@ -1,15 +1,15 @@
-use std::{borrow::BorrowMut, collections::HashMap, hash::Hash};
+use std::{collections::HashMap};
 
 use cgmath::{vec3, EuclideanSpace, Matrix4};
 use collision::{Aabb, Aabb3};
 use dark::{
     model::Model,
-    motion::{AnimationPlayer, JointId},
+    motion::{JointId},
     properties::PropPosition,
 };
 use rapier3d::prelude::RigidBodyHandle;
 use shipyard::{
-    Component, EntitiesView, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World,
+    Component, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World,
 };
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
     runtime_props::{RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform},
     scripts::ScriptWorld,
     util::{
-        get_position_from_matrix, get_rotation_from_matrix, get_rotation_from_transform,
+        get_position_from_matrix, get_rotation_from_matrix,
         point3_to_vec3,
     },
 };
@@ -92,7 +92,7 @@ impl HitBoxManager {
                 let hit_box_map = self.hit_boxes.entry(id).or_insert_with(|| {
                     let mut out_hit_boxes = HashMap::new();
 
-                    for (joint_id, bbox) in hit_boxes.iter() {
+                    for (joint_id, _bbox) in hit_boxes.iter() {
                         let maybe_hitbox_type = creature_type.get_hitbox_type(*joint_id);
                         if maybe_hitbox_type.is_none() {
                             continue;
@@ -137,8 +137,7 @@ impl HitBoxManager {
                 let mut joint_index = 0;
                 for joint_xform in joint_xforms.0 {
                     let bbox = hit_boxes
-                        .get(&joint_index)
-                        .map(|bbox| *bbox)
+                        .get(&joint_index).copied()
                         .unwrap_or(Aabb3::zero());
                     let sizes = bbox.dim() * 1.0;
 
