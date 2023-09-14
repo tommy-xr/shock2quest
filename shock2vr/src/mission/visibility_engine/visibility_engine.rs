@@ -1,30 +1,24 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ffi::IntoStringError,
-};
 
-use cgmath::{frustum, point2, vec2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
-use collision::{Aabb2, Contains, Continuous, Discrete, Frustum, Relation, Union};
+
+
+
 use dark::{
-    importers::TEXTURE_IMPORTER,
-    mission::{Cell, CellPortal, SystemShock2Level},
-    properties::PropPosition,
+    mission::{SystemShock2Level},
 };
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPosition},
-    texture::TextureOptions,
+    scene::{SceneObject},
 };
-use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, World};
 
 use super::CullingInfo;
 
 pub trait VisibilityEngine {
-    fn prepare(&mut self, level: &SystemShock2Level, world: &World, culling_info: &CullingInfo) {}
+    fn prepare(&mut self, _level: &SystemShock2Level, _world: &World, _culling_info: &CullingInfo) {}
 
     fn is_visible(&mut self, entity_id: EntityId) -> bool;
 
-    fn debug_render(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
+    fn debug_render(&self, _asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         Vec::new()
     }
 }

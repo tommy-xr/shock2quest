@@ -1,14 +1,21 @@
 use std::f32::consts::PI;
 
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, Euler, InnerSpace, Matrix, Matrix3, Point3, Rad,
-    Transform, Vector3,
+    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3,
+    Quaternion, Rad, Rotation3, SquareMatrix, Transform, Vector3,
 };
-use dark::properties::{PropCreature, PropTranslatingDoor};
+use dark::{properties::*};
 use rand::{thread_rng, Rng};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{runtime_props::RuntimePropTransform, util};
+use crate::{
+    creature,
+    runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
+    scripts::{
+        script_util::get_first_link_with_template_and_data, Effect,
+    },
+    util,
+};
 
 ///
 /// random_binomial
@@ -125,5 +132,92 @@ pub(crate) fn does_entity_have_hitboxes(world: &World, entity_id: EntityId) -> b
     let v_creature_prop = world.borrow::<View<PropCreature>>().unwrap();
 
     // If the entity has a creature prop, we use hitboxes for damage
-    return v_creature_prop.contains(entity_id);
+    v_creature_prop.contains(entity_id)
+}
+
+pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
+    let xform = world
+        .borrow::<View<RuntimePropTransform>>()
+        .unwrap()
+        .get(entity_id)
+        .unwrap()
+        .0;
+
+    let position = util::get_position_from_matrix(&xform);
+    let forward = xform.transform_vector(vec3(0.0, 0.0, 1.0)).normalize();
+    
+    Effect::DrawDebugLines {
+        lines: vec![(
+            position + vec3(0.0, 0.5, 0.0),
+            position + forward + vec3(0.0, 0.5, 0.0),
+            vec4(1.0, 0.0, 0.0, 1.0),
+        )],
+    }
+}
+
+pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
+    let maybe_projectile =
+        get_first_link_with_template_and_data(world, entity_id, |link| match link {
+            Link::AIProjectile(data) => Some(*data),
+            _ => None,
+        });
+
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let v_joint_transforms = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
+
+    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
+    if let Some((projectile_id, options)) = maybe_projectile {
+        let root_transform = v_transform.get(entity_id).unwrap();
+        let forward = vec3(0.0, 0.0, -1.0);
+        let _up = vec3(0.0, 1.0, 0.0);
+
+        let creature_type = v_creature.get(entity_id).unwrap();
+        let joint_index = creature::get_creature_definition(creature_type.0)
+            .and_then(|def| def.get_mapped_joint(options.joint))
+            .unwrap_or(0);
+        let joint_transform = v_joint_transforms
+            .get(entity_id)
+            .map(|transform| transform.0.get(joint_index as usize))
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(Matrix4::identity());
+
+        let transform = root_transform.0 * joint_transform;
+
+        //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
+        let _position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
+
+        let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
+        // TODO: This rotation is needed for some monsters? Like the droids?
+        let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
+
+        // panic!("creating entity: {:?}", projectile_id);
+        Effect::CreateEntity {
+            template_id: projectile_id,
+            position: forward * 0.75,
+            // position: vec3(13.11, 0.382, 16.601),
+            // orientation: rotation,
+            orientation: Quaternion {
+                v: vec3(0.0, 0.0, 0.0),
+                s: 1.0,
+            },
+            velocity: vec3(0.0, 0.0, 0.0),
+            // root_transform: transform * rot_matrix,
+            root_transform: transform,
+        }
+    } else {
+        Effect::NoEffect
+    }
+}
+
+pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
+    let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
+
+    let maybe_prop_hit_points = v_prop_hit_points.get(entity_id);
+    if maybe_prop_hit_points.is_err() {
+        return false;
+    }
+
+    maybe_prop_hit_points.unwrap().hit_points <= 0
 }
