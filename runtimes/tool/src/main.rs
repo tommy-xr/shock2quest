@@ -3,6 +3,7 @@ use self::glfw::{Action, Context, Key};
 
 use cgmath::point3;
 use cgmath::Decomposed;
+use cgmath::Deg;
 use cgmath::Matrix4;
 use cgmath::Rad;
 
@@ -243,7 +244,12 @@ pub fn main() {
     let start_time = last_time;
 
     let mut frame = 0;
-    //let mut animation_player = AnimationPlayer::from_animation(&animation_clip);
+    let mut animation_player = AnimationPlayer::empty();
+    animation_player = AnimationPlayer::set_additional_joint_transform(
+        &animation_player,
+        2,
+        Matrix4::from_translation(vec3(-0.5, 0.0, 0.0)) * Matrix4::from_angle_x(Deg(45.0)),
+    );
     // render loop
     // -----------
     while !window.should_close() {
@@ -267,8 +273,25 @@ pub fn main() {
         //let (mut scene, pawn_offset, pawn_rotation) = game.render();
 
         let mut scene = vec![];
+        animation_player = AnimationPlayer::set_additional_joint_transform(
+            &animation_player,
+            2,
+            Matrix4::from_translation(vec3(-0.8, 0.0, 0.0)),
+        );
+        animation_player = AnimationPlayer::set_additional_joint_transform(
+            &animation_player,
+            1,
+            Matrix4::from_angle_x(Deg(90.0 + 45.0 * time.total.as_secs_f32().sin())),
+        );
+        let obj = turret.to_animated_scene_objects(&animation_player);
+
+        // let mut skinning_data = [Matrix4::identity(); 40];
+        // skinning_data[1] = Matrix4::from_translation(vec3(0.0, 1.0, 0.0));
+        //skinning_data[1] = Matrix4::from_translation(vec3(0.0, 1.0, 0.0));
         for o in obj {
-            scene.push(o.clone());
+            // let mut cloned_o = o.clone();
+            // cloned_o.set_skinning_data(skinning_data);
+            scene.push(o);
         }
 
         let yaw_rad = camera_context.yaw.to_radians();

@@ -20,11 +20,11 @@ pub enum AnimationEvent {
 
 #[derive(Clone)]
 pub struct AnimationPlayer {
-    pub animation: immutable::List<(Rc<AnimationClip>, AnimationFlags)>,
-    pub additional_joint_transforms: immutable::HashTrieMap<u32, Matrix4<f32>>,
-    pub last_animation: Option<Rc<AnimationClip>>,
-    pub current_frame: u32,
-    pub remaining_time: f32,
+    animation: immutable::List<(Rc<AnimationClip>, AnimationFlags)>,
+    additional_joint_transforms: immutable::HashTrieMap<u32, Matrix4<f32>>,
+    last_animation: Option<Rc<AnimationClip>>,
+    current_frame: u32,
+    remaining_time: f32,
 }
 
 impl AnimationPlayer {
@@ -63,6 +63,23 @@ impl AnimationPlayer {
             last_animation: None,
             current_frame: 0,
             remaining_time: 0.0,
+        }
+    }
+
+    pub fn set_additional_joint_transform(
+        player: &AnimationPlayer,
+        joint_idx: u32,
+        transform: Matrix4<f32>,
+    ) -> AnimationPlayer {
+        let new_transforms = player
+            .additional_joint_transforms
+            .insert(joint_idx, transform);
+        AnimationPlayer {
+            additional_joint_transforms: new_transforms,
+            animation: player.animation.clone(),
+            last_animation: player.last_animation.clone(),
+            current_frame: player.current_frame,
+            remaining_time: player.remaining_time,
         }
     }
 
@@ -177,30 +194,43 @@ impl AnimationPlayer {
             .map(|m| (m.0.clone(), false))
             .or_else(|| self.last_animation.clone().map(|m| (m, true)));
 
-        if maybe_current_clip.is_none() {
-            skeleton.get_transforms()
-        } else {
-            let (current_clip, is_last_anim) = maybe_current_clip.unwrap();
-            let current_frame = if is_last_anim {
+        // if maybe_current_clip.is_none() {
+        //     skeleton.get_transforms()
+        //     // ss2_skeleton::animate(
+        //     //     skeleton,
+        //     //     AnimationClip::empty(),
+        //     //     0,
+        //     //     &self.additional_joint_transforms,
+        //     // )
+        // } else {
+        let maybe_animation = &maybe_current_clip.as_ref().map(|m| m.0.clone());
+        let is_last_anim = maybe_current_clip.map(|m| m.1).unwrap_or(false);
+        //let (current_clip, is_last_anim) = maybe_current_clip.unwrap();
+        let current_frame = if let Some(current_clip) = maybe_animation.clone() {
+            if is_last_anim {
                 current_clip.num_frames - 1
             } else {
                 self.current_frame
-            };
-            let animated_skeleton = ss2_skeleton::animate(
-                skeleton,
-                &current_clip,
-                current_frame,
-                &self.additional_joint_transforms,
-            );
-            let mut ret = animated_skeleton.get_transforms();
+            }
+        } else {
+            0
+        };
+        let animated_skeleton = ss2_skeleton::animate(
+            skeleton,
+            maybe_animation.clone(),
+            current_frame,
+            &self.additional_joint_transforms,
+        );
+        let mut ret = animated_skeleton.get_transforms();
 
+        if let Some(current_clip) = maybe_animation {
             for i in 0..40 {
                 ret[i] = Matrix4::from_translation(
                     (current_frame as f32 / current_clip.num_frames as f32)
                         * vec3(0.0, current_clip.translation.y, 0.0),
                 ) * ret[i];
             }
-            ret
         }
+        ret
     }
 }

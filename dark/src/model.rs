@@ -71,7 +71,8 @@ impl AnimatedModel {
     fn animate(&self, animation_clip: &AnimationClip, frame: u32) -> AnimatedModel {
         let animated_skeleton = ss2_skeleton::animate(
             &self.skeleton,
-            animation_clip,
+            // TODO: is thi sused?
+            None,
             frame,
             &rpds::HashTrieMap::new(),
         );
@@ -132,20 +133,37 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn from_static(static_mesh: SystemShock2ObjectMesh, asset_cache: &mut AssetCache) -> Model {
-        let scene_objects = ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
+    pub fn from_obj_bin(
+        static_mesh: SystemShock2ObjectMesh,
+        asset_cache: &mut AssetCache,
+    ) -> Model {
+        let (scene_objects, skeleton) =
+            ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
         let bounding_box = static_mesh.bounding_box;
-        Model {
-            transform: Matrix4::identity(),
-            inner: InnerModel::Static(StaticModel {
-                scene_objects,
-                bounding_box,
-                vhots: static_mesh.vhots.clone(),
-            }),
+
+        if skeleton.bone_count() > 1 {
+            let hit_boxes = HashMap::new();
+            Model {
+                transform: Matrix4::identity(),
+                inner: InnerModel::Animated(AnimatedModel {
+                    skeleton: Rc::new(skeleton),
+                    scene_objects,
+                    hit_boxes: Rc::new(hit_boxes),
+                }),
+            }
+        } else {
+            Model {
+                transform: Matrix4::identity(),
+                inner: InnerModel::Static(StaticModel {
+                    scene_objects,
+                    bounding_box,
+                    vhots: static_mesh.vhots.clone(),
+                }),
+            }
         }
     }
 
-    pub fn from_ai(
+    pub fn from_ai_bin(
         ai_mesh: SystemShock2AIMesh,
         skeleton: Rc<Skeleton>,
         asset_cache: &mut AssetCache,

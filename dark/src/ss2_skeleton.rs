@@ -2,7 +2,7 @@
 // Helper class to work with skeletons in AI meshes
 
 use rpds as immutable;
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 
@@ -27,6 +27,10 @@ pub struct Bone {
 }
 
 impl Skeleton {
+    pub fn bone_count(&self) -> usize {
+        self.bones.len()
+    }
+
     pub fn get_transforms(&self) -> [Matrix4<f32>; 40] {
         let mut transforms = [Matrix4::identity(); 40];
         for (joint_id, transform) in self.global_transforms.iter() {
@@ -65,6 +69,7 @@ impl Skeleton {
                 bone.joint_id,
                 &animation_transforms,
                 &mut global_transforms,
+                &rpds::HashTrieMap::new(),
                 &bones,
             );
         }
@@ -76,39 +81,39 @@ impl Skeleton {
         }
     }
 
-    fn calc_and_cache_global_transform(
-        bone: JointId,
-        animation_transforms: &HashMap<JointId, Matrix4<f32>>,
-        global_transforms: &mut HashMap<JointId, Matrix4<f32>>,
-        bones: &Vec<Bone>,
-    ) -> Matrix4<f32> {
-        match global_transforms.get(&bone) {
-            Some(xform) => *xform,
-            None => {
-                let local_bone = bones.iter().find(|b| b.joint_id == bone).unwrap();
-                let local_transform = local_bone.local_transform;
+    // fn calc_and_cache_global_transform(
+    //     bone: JointId,
+    //     animation_transforms: &HashMap<JointId, Matrix4<f32>>,
+    //     global_transforms: &mut HashMap<JointId, Matrix4<f32>>,
+    //     bones: &Vec<Bone>,
+    // ) -> Matrix4<f32> {
+    //     match global_transforms.get(&bone) {
+    //         Some(xform) => *xform,
+    //         None => {
+    //             let local_bone = bones.iter().find(|b| b.joint_id == bone).unwrap();
+    //             let local_transform = local_bone.local_transform;
 
-                let animation_transform = match animation_transforms.get(&bone) {
-                    None => Matrix4::identity(),
-                    Some(m) => *m,
-                };
+    //             let animation_transform = match animation_transforms.get(&bone) {
+    //                 None => Matrix4::identity(),
+    //                 Some(m) => *m,
+    //             };
 
-                let parent_transform = match local_bone.parent_id {
-                    None => Matrix4::identity(),
-                    Some(parent_id) => calc_and_cache_global_transform(
-                        parent_id,
-                        animation_transforms,
-                        global_transforms,
-                        bones,
-                    ),
-                };
+    //             let parent_transform = match local_bone.parent_id {
+    //                 None => Matrix4::identity(),
+    //                 Some(parent_id) => calc_and_cache_global_transform(
+    //                     parent_id,
+    //                     animation_transforms,
+    //                     global_transforms,
+    //                     bones,
+    //                 ),
+    //             };
 
-                let global_transform = parent_transform * local_transform * animation_transform;
-                global_transforms.insert(local_bone.joint_id, global_transform);
-                global_transform
-            }
-        }
-    }
+    //             let global_transform = parent_transform * local_transform * animation_transform;
+    //             global_transforms.insert(local_bone.joint_id, global_transform);
+    //             global_transform
+    //         }
+    //     }
+    // }
 
     pub fn animate(
         base_skeleton: &Skeleton,
@@ -133,6 +138,7 @@ impl Skeleton {
                 bone.joint_id,
                 &animation_transforms,
                 &mut global_transforms,
+                &rpds::HashTrieMap::new(),
                 &bones,
             );
         }
@@ -206,6 +212,7 @@ fn calc_and_cache_global_transform(
     bone: JointId,
     animation_transforms: &HashMap<JointId, Matrix4<f32>>,
     global_transforms: &mut HashMap<JointId, Matrix4<f32>>,
+    joint_overrides: &rpds::HashTrieMap<JointId, Matrix4<f32>>,
     bones: &Vec<Bone>,
 ) -> Matrix4<f32> {
     match global_transforms.get(&bone) {
@@ -225,8 +232,18 @@ fn calc_and_cache_global_transform(
                     parent_id,
                     animation_transforms,
                     global_transforms,
+                    joint_overrides,
                     bones,
                 ),
+            };
+
+            // Use animation transform
+            let animation_transform = match joint_overrides.get(&bone) {
+                None => animation_transform,
+                Some(m) => {
+                    println!("using joint override!");
+                    *m
+                }
             };
 
             let global_transform = parent_transform * local_transform * animation_transform;
@@ -236,21 +253,67 @@ fn calc_and_cache_global_transform(
     }
 }
 
+// pub fn get_transforms(
+//     &skeleton: &Skeleton,
+//     additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
+// ) -> [Matrix4<f32>; 40] {
+//     // Simple strategy, no transform required
+//     // let mut transforms = [Matrix4::identity(); 40];
+//     // for (joint_id, transform) in skeleton.global_transforms.iter() {
+//     //     if joint_id >= &40 {
+//     //         break;
+//     //     }
+//     //     transforms[*joint_id as usize] = *transform;
+//     // }
+//     // transforms
+
+//     let bones = skeleton.bones.clone();
+
+//     let mut animation_transforms = HashMap::new();
+//     for (joint, transform) in additional_joint_transforms {
+//         animation_transforms.insert(*joint, *transform);
+//     }
+
+//     let mut global_transforms = HashMap::new();
+
+//     for bone in &bones {
+//         let _ignored = calc_and_cache_global_transform(
+//             bone.joint_id,
+//             &animation_transforms,
+//             &mut global_transforms,
+//             &additional_joint_transforms,
+//             &bones,
+//         );
+//     }
+
+//     Skeleton {
+//         bones,
+//         animation_transforms,
+//         global_transforms,
+//     }
+// }
+
 pub fn animate(
     base_skeleton: &Skeleton,
-    animation_clip: &AnimationClip,
+    animation_clip: Option<Rc<AnimationClip>>,
     frame: u32,
     additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
 ) -> Skeleton {
     let bones = base_skeleton.bones.clone();
 
-    let normalized_frame = frame % animation_clip.num_frames;
-
-    let animations = &animation_clip.joint_to_frame;
     let mut animation_transforms = HashMap::new();
-    for key in animations {
-        let (joint, frames) = key;
-        animation_transforms.insert(*joint, frames[normalized_frame as usize]);
+
+    if let Some(animation_clip) = animation_clip {
+        let normalized_frame = frame % animation_clip.num_frames;
+        let animations = &animation_clip.joint_to_frame;
+        for key in animations {
+            let (joint, frames) = key;
+            animation_transforms.insert(*joint, frames[normalized_frame as usize]);
+        }
+    }
+
+    for (joint, transform) in additional_joint_transforms {
+        animation_transforms.insert(*joint, *transform);
     }
 
     let mut global_transforms = HashMap::new();
@@ -260,6 +323,7 @@ pub fn animate(
             bone.joint_id,
             &animation_transforms,
             &mut global_transforms,
+            &additional_joint_transforms,
             &bones,
         );
     }

@@ -48,10 +48,10 @@ fn process_model(
     _config: &(),
 ) -> Model {
     match mesh {
-        SystemShockContentModel::Obj(obj) => Model::from_static(obj, asset_cache),
+        SystemShockContentModel::Obj(obj) => Model::from_obj_bin(obj, asset_cache),
         SystemShockContentModel::Mesh(mesh, skeleton) => {
             //let skeleton = ss2_skeleton::Skeleton::empty();
-            Model::from_ai(mesh, skeleton, asset_cache)
+            Model::from_ai_bin(mesh, skeleton, asset_cache)
         }
     }
 }
