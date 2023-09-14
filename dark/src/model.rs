@@ -69,7 +69,12 @@ impl AnimatedModel {
     }
 
     fn animate(&self, animation_clip: &AnimationClip, frame: u32) -> AnimatedModel {
-        let animated_skeleton = ss2_skeleton::animate(&self.skeleton, animation_clip, frame);
+        let animated_skeleton = ss2_skeleton::animate(
+            &self.skeleton,
+            animation_clip,
+            frame,
+            &rpds::HashTrieMap::new(),
+        );
         let new_data = animated_skeleton.get_transforms();
 
         let new_scene_objects = self
