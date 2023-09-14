@@ -140,7 +140,11 @@ pub enum Effect {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
     },
-
+    SetJointTransform {
+        entity_id: EntityId,
+        joint_id: u32,
+        transform: Matrix4<f32>,
+    },
     SetPlayerPosition {
         position: Vector3<f32>,
         is_teleport: bool,
