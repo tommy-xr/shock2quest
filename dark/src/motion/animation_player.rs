@@ -1,6 +1,7 @@
 use std::{rc::Rc, time::Duration};
 
 use cgmath::{vec3, Deg, Matrix4, Vector3};
+use num::complex::ComplexFloat;
 use rpds as immutable;
 
 use crate::ss2_skeleton::{self, Skeleton};
@@ -20,6 +21,7 @@ pub enum AnimationEvent {
 #[derive(Clone)]
 pub struct AnimationPlayer {
     pub animation: immutable::List<(Rc<AnimationClip>, AnimationFlags)>,
+    pub additional_joint_transforms: immutable::HashTrieMap<u32, Matrix4<f32>>,
     pub last_animation: Option<Rc<AnimationClip>>,
     pub current_frame: u32,
     pub remaining_time: f32,
@@ -30,6 +32,7 @@ impl AnimationPlayer {
         let animation = immutable::List::new();
         AnimationPlayer {
             animation,
+            additional_joint_transforms: immutable::HashTrieMap::new(),
             last_animation: None,
             current_frame: 0,
             remaining_time: 0.0,
@@ -39,6 +42,7 @@ impl AnimationPlayer {
         let animation = immutable::List::new();
         let animation = animation.push_front((animation_clip, AnimationFlags::Loop));
         AnimationPlayer {
+            additional_joint_transforms: immutable::HashTrieMap::new(),
             animation,
             last_animation: None,
             current_frame: 0,
@@ -54,6 +58,7 @@ impl AnimationPlayer {
             .push_front((animation, AnimationFlags::PlayOnce));
 
         AnimationPlayer {
+            additional_joint_transforms: player.additional_joint_transforms.clone(),
             animation: new_animation,
             last_animation: None,
             current_frame: 0,
@@ -108,6 +113,7 @@ impl AnimationPlayer {
                 match flags {
                     AnimationFlags::Loop => (
                         AnimationPlayer {
+                            additional_joint_transforms: player.additional_joint_transforms.clone(),
                             last_animation: player.last_animation.clone(),
                             animation: player.animation.clone(),
                             current_frame: next_frame - current_clip.num_frames,
@@ -122,6 +128,9 @@ impl AnimationPlayer {
                         let animation = player.animation.drop_first().unwrap_or_default();
                         (
                             AnimationPlayer {
+                                additional_joint_transforms: player
+                                    .additional_joint_transforms
+                                    .clone(),
                                 animation,
                                 last_animation,
                                 current_frame: 0,
@@ -147,6 +156,7 @@ impl AnimationPlayer {
                 };
                 (
                     AnimationPlayer {
+                        additional_joint_transforms: player.additional_joint_transforms.clone(),
                         last_animation: player.last_animation.clone(),
                         animation: player.animation.clone(),
                         current_frame: next_frame,
@@ -176,7 +186,12 @@ impl AnimationPlayer {
             } else {
                 self.current_frame
             };
-            let animated_skeleton = ss2_skeleton::animate(skeleton, &current_clip, current_frame);
+            let animated_skeleton = ss2_skeleton::animate(
+                skeleton,
+                &current_clip,
+                current_frame,
+                &self.additional_joint_transforms,
+            );
             let mut ret = animated_skeleton.get_transforms();
 
             for i in 0..40 {
