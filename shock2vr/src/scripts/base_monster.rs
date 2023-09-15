@@ -1,8 +1,12 @@
-use shipyard::{EntityId, World};
+use dark::properties::PropAI;
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
-use super::{ai::AnimatedMonsterAI, Effect, MessagePayload, Script};
+use super::{
+    ai::{AnimatedMonsterAI, CameraAI},
+    Effect, MessagePayload, NoopScript, Script,
+};
 
 pub struct BaseMonster {
     ai: Box<dyn Script>,
@@ -10,12 +14,40 @@ pub struct BaseMonster {
 impl BaseMonster {
     pub fn new() -> BaseMonster {
         BaseMonster {
-            ai: Box::new(AnimatedMonsterAI::new()),
+            ai: Box::new(NoopScript {}),
         }
     }
 }
 impl Script for BaseMonster {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        let v_ai = world.borrow::<View<PropAI>>().unwrap();
+
+        let maybe_prop_ai = v_ai.get(entity_id);
+
+        if maybe_prop_ai.is_err() {
+            return Effect::NoEffect;
+        }
+
+        let prop_ai = maybe_prop_ai.unwrap();
+
+        let ai: Box<dyn Script> = match prop_ai.0.to_ascii_lowercase().as_str() {
+            "camera" => Box::new(CameraAI::new()),
+            "melee" => Box::new(AnimatedMonsterAI::new()),
+            "ranged" => Box::new(AnimatedMonsterAI::new()),
+            "rangedmelee" => Box::new(AnimatedMonsterAI::new()),
+            "rangedexplode" => Box::new(AnimatedMonsterAI::new()),
+            "protocol" => Box::new(AnimatedMonsterAI::new()),
+            "shockdefault" => Box::new(AnimatedMonsterAI::new()),
+            //TODO:
+            "grub" => Box::new(NoopScript {}),
+            "swarmer" => Box::new(NoopScript {}),
+            "turret" => Box::new(NoopScript {}),
+
+            _ => Box::new(NoopScript {}),
+        };
+
+        self.ai = ai;
+
         self.ai.initialize(entity_id, world)
     }
 

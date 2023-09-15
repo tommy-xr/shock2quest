@@ -4,7 +4,7 @@ use crate::{
     motion::{AnimationClip, AnimationPlayer},
     ss2_bin_ai_loader::{self, SystemShock2AIMesh},
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
-    ss2_skeleton::{self, Skeleton},
+    ss2_skeleton::{self, AnimationInfo, Skeleton},
 };
 use cgmath::{Matrix4, SquareMatrix};
 use collision::Aabb3;
@@ -69,7 +69,14 @@ impl AnimatedModel {
     }
 
     fn animate(&self, animation_clip: &AnimationClip, frame: u32) -> AnimatedModel {
-        let animated_skeleton = ss2_skeleton::animate(&self.skeleton, animation_clip, frame);
+        let animated_skeleton = ss2_skeleton::animate(
+            &self.skeleton,
+            Some(AnimationInfo {
+                animation_clip: &animation_clip,
+                frame,
+            }),
+            &rpds::HashTrieMap::new(),
+        );
         let new_data = animated_skeleton.get_transforms();
 
         let new_scene_objects = self
@@ -127,20 +134,37 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn from_static(static_mesh: SystemShock2ObjectMesh, asset_cache: &mut AssetCache) -> Model {
-        let scene_objects = ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
+    pub fn from_obj_bin(
+        static_mesh: SystemShock2ObjectMesh,
+        asset_cache: &mut AssetCache,
+    ) -> Model {
+        let (scene_objects, skeleton) =
+            ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
         let bounding_box = static_mesh.bounding_box;
-        Model {
-            transform: Matrix4::identity(),
-            inner: InnerModel::Static(StaticModel {
-                scene_objects,
-                bounding_box,
-                vhots: static_mesh.vhots.clone(),
-            }),
+
+        if skeleton.bone_count() > 1 {
+            let hit_boxes = HashMap::new();
+            Model {
+                transform: Matrix4::identity(),
+                inner: InnerModel::Animated(AnimatedModel {
+                    skeleton: Rc::new(skeleton),
+                    scene_objects,
+                    hit_boxes: Rc::new(hit_boxes),
+                }),
+            }
+        } else {
+            Model {
+                transform: Matrix4::identity(),
+                inner: InnerModel::Static(StaticModel {
+                    scene_objects,
+                    bounding_box,
+                    vhots: static_mesh.vhots.clone(),
+                }),
+            }
         }
     }
 
-    pub fn from_ai(
+    pub fn from_ai_bin(
         ai_mesh: SystemShock2AIMesh,
         skeleton: Rc<Skeleton>,
         asset_cache: &mut AssetCache,

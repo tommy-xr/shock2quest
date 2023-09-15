@@ -112,7 +112,7 @@ pub fn read<T: Read + Seek>(
 pub fn to_scene_objects(
     mesh: &SystemShock2ObjectMesh,
     asset_cache: &mut AssetCache,
-) -> Vec<SceneObject> {
+) -> (Vec<SceneObject>, Skeleton) {
     let mut hashToMaterial = HashMap::new();
 
     let material_len = mesh.materials.len();
@@ -217,7 +217,7 @@ pub fn to_scene_objects(
         .collect::<Vec<SceneObject>>();
 
     mesh_objects.append(&mut vhot_objs);
-    mesh_objects
+    (mesh_objects, skeleton)
 }
 
 // Data

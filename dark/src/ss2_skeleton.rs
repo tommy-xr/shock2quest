@@ -1,7 +1,8 @@
 // ss2_skeleton.rs
 // Helper class to work with skeletons in AI meshes
 
-use std::collections::HashMap;
+use rpds as immutable;
+use std::{collections::HashMap, ops::Deref, rc::Rc};
 
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 
@@ -26,6 +27,10 @@ pub struct Bone {
 }
 
 impl Skeleton {
+    pub fn bone_count(&self) -> usize {
+        self.bones.len()
+    }
+
     pub fn get_transforms(&self) -> [Matrix4<f32>; 40] {
         let mut transforms = [Matrix4::identity(); 40];
         for (joint_id, transform) in self.global_transforms.iter() {
@@ -72,40 +77,6 @@ impl Skeleton {
             bones,
             animation_transforms,
             global_transforms,
-        }
-    }
-
-    fn calc_and_cache_global_transform(
-        bone: JointId,
-        animation_transforms: &HashMap<JointId, Matrix4<f32>>,
-        global_transforms: &mut HashMap<JointId, Matrix4<f32>>,
-        bones: &Vec<Bone>,
-    ) -> Matrix4<f32> {
-        match global_transforms.get(&bone) {
-            Some(xform) => *xform,
-            None => {
-                let local_bone = bones.iter().find(|b| b.joint_id == bone).unwrap();
-                let local_transform = local_bone.local_transform;
-
-                let animation_transform = match animation_transforms.get(&bone) {
-                    None => Matrix4::identity(),
-                    Some(m) => *m,
-                };
-
-                let parent_transform = match local_bone.parent_id {
-                    None => Matrix4::identity(),
-                    Some(parent_id) => calc_and_cache_global_transform(
-                        parent_id,
-                        animation_transforms,
-                        global_transforms,
-                        bones,
-                    ),
-                };
-
-                let global_transform = parent_transform * local_transform * animation_transform;
-                global_transforms.insert(local_bone.joint_id, global_transform);
-                global_transform
-            }
         }
     }
 
@@ -235,16 +206,37 @@ fn calc_and_cache_global_transform(
     }
 }
 
-pub fn animate(base_skeleton: &Skeleton, animation_clip: &AnimationClip, frame: u32) -> Skeleton {
+pub struct AnimationInfo<'a> {
+    pub animation_clip: &'a AnimationClip,
+    pub frame: u32,
+}
+
+pub fn animate(
+    base_skeleton: &Skeleton,
+    animation_info: Option<AnimationInfo>,
+    additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
+) -> Skeleton {
     let bones = base_skeleton.bones.clone();
 
-    let normalized_frame = frame % animation_clip.num_frames;
-
-    let animations = &animation_clip.joint_to_frame;
     let mut animation_transforms = HashMap::new();
-    for key in animations {
-        let (joint, frames) = key;
-        animation_transforms.insert(*joint, frames[normalized_frame as usize]);
+
+    if let Some(AnimationInfo {
+        animation_clip,
+        frame,
+    }) = animation_info
+    {
+        let normalized_frame = frame % animation_clip.num_frames;
+        let animations = &animation_clip.joint_to_frame;
+        for key in animations {
+            let (joint, frames) = key;
+            animation_transforms.insert(*joint, frames[normalized_frame as usize]);
+        }
+    }
+
+    // Have joint transforms completely override animation transforms
+    // TODO: Are there cases where joint transforms need to be used in the context of an animation transform? Maybe head rotation?
+    for (joint, transform) in additional_joint_transforms {
+        animation_transforms.insert(*joint, *transform);
     }
 
     let mut global_transforms = HashMap::new();
