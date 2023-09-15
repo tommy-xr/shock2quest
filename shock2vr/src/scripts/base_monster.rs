@@ -2,10 +2,7 @@ use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
-use super::{
-    ai::{AnimatedMonsterAI, CameraAI},
-    Effect, MessagePayload, Script,
-};
+use super::{ai::AnimatedMonsterAI, Effect, MessagePayload, Script};
 
 pub struct BaseMonster {
     ai: Box<dyn Script>,

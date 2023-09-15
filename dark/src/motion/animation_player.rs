@@ -4,7 +4,7 @@ use cgmath::{vec3, Deg, Matrix4, Vector3};
 use num::complex::ComplexFloat;
 use rpds as immutable;
 
-use crate::ss2_skeleton::{self, Skeleton};
+use crate::ss2_skeleton::{self, AnimationInfo, Skeleton};
 
 use super::{AnimationClip, MotionFlags};
 pub enum AnimationFlags {
@@ -199,7 +199,7 @@ impl AnimationPlayer {
         // If there is no animation, we still may need to apply joint transforms (ie, for camera or turret)
         if maybe_current_clip.is_none() {
             let animated_skeleton =
-                ss2_skeleton::animate(skeleton, None, 0, &self.additional_joint_transforms);
+                ss2_skeleton::animate(skeleton, None, &self.additional_joint_transforms);
             return animated_skeleton.get_transforms();
         }
 
@@ -214,8 +214,10 @@ impl AnimationPlayer {
 
         let animated_skeleton = ss2_skeleton::animate(
             skeleton,
-            Some(current_clip),
-            current_frame,
+            Some(AnimationInfo {
+                animation_clip: current_clip,
+                frame: current_frame,
+            }),
             &self.additional_joint_transforms,
         );
 

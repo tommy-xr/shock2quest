@@ -293,17 +293,25 @@ fn calc_and_cache_global_transform(
 //     }
 // }
 
+pub struct AnimationInfo<'a> {
+    pub animation_clip: &'a AnimationClip,
+    pub frame: u32,
+}
+
 pub fn animate(
     base_skeleton: &Skeleton,
-    animation_clip: Option<&AnimationClip>,
-    frame: u32,
+    animation_info: Option<AnimationInfo>,
     additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
 ) -> Skeleton {
     let bones = base_skeleton.bones.clone();
 
     let mut animation_transforms = HashMap::new();
 
-    if let Some(animation_clip) = animation_clip {
+    if let Some(AnimationInfo {
+        animation_clip,
+        frame,
+    }) = animation_info
+    {
         let normalized_frame = frame % animation_clip.num_frames;
         let animations = &animation_clip.joint_to_frame;
         for key in animations {

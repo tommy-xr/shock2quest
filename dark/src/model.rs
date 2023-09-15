@@ -4,7 +4,7 @@ use crate::{
     motion::{AnimationClip, AnimationPlayer},
     ss2_bin_ai_loader::{self, SystemShock2AIMesh},
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
-    ss2_skeleton::{self, Skeleton},
+    ss2_skeleton::{self, AnimationInfo, Skeleton},
 };
 use cgmath::{Matrix4, SquareMatrix};
 use collision::Aabb3;
@@ -71,8 +71,10 @@ impl AnimatedModel {
     fn animate(&self, animation_clip: &AnimationClip, frame: u32) -> AnimatedModel {
         let animated_skeleton = ss2_skeleton::animate(
             &self.skeleton,
-            Some(&animation_clip),
-            frame,
+            Some(AnimationInfo {
+                animation_clip: &animation_clip,
+                frame,
+            }),
             &rpds::HashTrieMap::new(),
         );
         let new_data = animated_skeleton.get_transforms();
