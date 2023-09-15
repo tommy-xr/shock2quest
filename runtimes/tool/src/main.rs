@@ -283,15 +283,10 @@ pub fn main() {
             1,
             Matrix4::from_angle_x(Deg(90.0 + 45.0 * time.total.as_secs_f32().sin())),
         );
-        let obj = turret.to_animated_scene_objects(&animation_player);
+        let turret_scene_obj = turret.to_animated_scene_objects(&animation_player);
 
-        // let mut skinning_data = [Matrix4::identity(); 40];
-        // skinning_data[1] = Matrix4::from_translation(vec3(0.0, 1.0, 0.0));
-        //skinning_data[1] = Matrix4::from_translation(vec3(0.0, 1.0, 0.0));
-        for o in obj {
-            // let mut cloned_o = o.clone();
-            // cloned_o.set_skinning_data(skinning_data);
-            scene.push(o);
+        for so in turret_scene_obj {
+            scene.push(so);
         }
 
         let yaw_rad = camera_context.yaw.to_radians();
@@ -311,10 +306,8 @@ pub fn main() {
             point3(0.0, 0.0, 0.0),
             vec3(0.0, 1.0, 0.0),
         );
-        let rot = mat.rot.invert();
 
         let cm = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0));
-        let new_obj = SceneObject::new(cm, Box::new(engine::scene::cube::create()));
 
         let orig_camera_forward = orig_camera_rot * vec3(0.0, 0.0, -1.0);
         let pointer_mat = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0));
