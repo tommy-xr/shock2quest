@@ -1,8 +1,6 @@
-use std::{cell::RefCell};
+use std::cell::RefCell;
 
-use cgmath::{
-    vec3, vec4, Deg, Quaternion, Rotation3,
-};
+use cgmath::{vec3, vec4, Deg, Quaternion, Rotation3};
 use dark::{
     motion::{MotionFlags, MotionQueryItem},
     SCALE_FACTOR,
@@ -51,7 +49,6 @@ impl AnimatedMonsterAI {
         let turn_velocity = self.current_behavior.borrow().turn_speed().0;
         let delta =
             clamp_to_minimal_delta_angle(steering_output.desired_heading - self.current_heading);
-        // clamp_to_minimal_delta_angle(steering_output.desired_heading - self.current_heading);
 
         let turn_amount = if delta.0 < 0.0 {
             (-turn_velocity * time.elapsed.as_secs_f32()).max(delta.0)
@@ -60,7 +57,7 @@ impl AnimatedMonsterAI {
         };
 
         self.current_heading = Deg(self.current_heading.0 + turn_amount);
-        
+
         Effect::SetRotation {
             entity_id,
             rotation: Quaternion::from_angle_y(self.current_heading),

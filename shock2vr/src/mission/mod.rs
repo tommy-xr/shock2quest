@@ -3,7 +3,7 @@ pub mod entity_populator;
 pub mod spawn_location;
 pub mod visibility_engine;
 
-use collision::{Aabb};
+use collision::Aabb;
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
@@ -55,14 +55,12 @@ use shipyard::{self, View, World};
 use tracing::{info, trace, warn};
 
 use crate::{
-    creature::{
-        get_creature_definition, HitBoxManager,
-    },
+    creature::{get_creature_definition, HitBoxManager},
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
     input_context::{self},
     inventory::PlayerInventoryEntity,
-    mission::{entity_populator::EntityPopulator},
+    mission::entity_populator::EntityPopulator,
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
@@ -956,6 +954,18 @@ impl Mission {
                                 !is_link_to_entity
                             })
                         }
+                    }
+                }
+                Effect::SetJointTransform {
+                    entity_id,
+                    joint_id,
+                    transform,
+                } => {
+                    let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
+                    if let Some(player) = maybe_player {
+                        *player = AnimationPlayer::set_additional_joint_transform(
+                            player, joint_id, transform,
+                        )
                     }
                 }
 
