@@ -13,8 +13,7 @@ pub struct BaseMonster {
 impl BaseMonster {
     pub fn new() -> BaseMonster {
         BaseMonster {
-            //ai: Box::new(AnimatedMonsterAI::new()),
-            ai: Box::new(CameraAI::new()),
+            ai: Box::new(AnimatedMonsterAI::new()),
         }
     }
 }

@@ -188,49 +188,47 @@ impl AnimationPlayer {
     }
 
     pub fn get_transforms(&self, skeleton: &Skeleton) -> [Matrix4<f32>; 40] {
+        // We need to clarify if this animation is the current run, or a carry over from the previous one,
+        // so add a separate boolean flag `is_last_anim` if we fallback to the last_animation.
         let maybe_current_clip = self
             .animation
             .first()
             .map(|m| (m.0.clone(), false))
             .or_else(|| self.last_animation.clone().map(|m| (m, true)));
 
-        // if maybe_current_clip.is_none() {
-        //     skeleton.get_transforms()
-        //     // ss2_skeleton::animate(
-        //     //     skeleton,
-        //     //     AnimationClip::empty(),
-        //     //     0,
-        //     //     &self.additional_joint_transforms,
-        //     // )
-        // } else {
-        let maybe_animation = &maybe_current_clip.as_ref().map(|m| m.0.clone());
-        let is_last_anim = maybe_current_clip.map(|m| m.1).unwrap_or(false);
-        //let (current_clip, is_last_anim) = maybe_current_clip.unwrap();
-        let current_frame = if let Some(current_clip) = maybe_animation.clone() {
-            if is_last_anim {
-                current_clip.num_frames - 1
-            } else {
-                self.current_frame
-            }
+        // If there is no animation, we still may need to apply joint transforms (ie, for camera or turret)
+        if maybe_current_clip.is_none() {
+            let animated_skeleton =
+                ss2_skeleton::animate(skeleton, None, 0, &self.additional_joint_transforms);
+            return animated_skeleton.get_transforms();
+        }
+
+        let (rc_animation_clip, is_last_anim) = maybe_current_clip.unwrap();
+        let current_clip = rc_animation_clip.as_ref();
+
+        let current_frame = if is_last_anim {
+            current_clip.num_frames - 1
         } else {
-            0
+            self.current_frame
         };
+
         let animated_skeleton = ss2_skeleton::animate(
             skeleton,
-            maybe_animation.clone(),
+            Some(current_clip),
             current_frame,
             &self.additional_joint_transforms,
         );
-        let mut ret = animated_skeleton.get_transforms();
 
-        if let Some(current_clip) = maybe_animation {
-            for i in 0..40 {
-                ret[i] = Matrix4::from_translation(
-                    (current_frame as f32 / current_clip.num_frames as f32)
-                        * vec3(0.0, current_clip.translation.y, 0.0),
-                ) * ret[i];
-            }
+        let mut animated_transforms = animated_skeleton.get_transforms();
+
+        // Apply any global translation changes in the current clip as well
+        for i in 0..40 {
+            animated_transforms[i] = Matrix4::from_translation(
+                (current_frame as f32 / current_clip.num_frames as f32)
+                    * vec3(0.0, current_clip.translation.y, 0.0),
+            ) * animated_transforms[i];
         }
-        ret
+
+        animated_transforms
     }
 }

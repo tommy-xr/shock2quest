@@ -2,7 +2,7 @@
 // Helper class to work with skeletons in AI meshes
 
 use rpds as immutable;
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, ops::Deref, rc::Rc};
 
 use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
 
@@ -295,7 +295,7 @@ fn calc_and_cache_global_transform(
 
 pub fn animate(
     base_skeleton: &Skeleton,
-    animation_clip: Option<Rc<AnimationClip>>,
+    animation_clip: Option<&AnimationClip>,
     frame: u32,
     additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
 ) -> Skeleton {

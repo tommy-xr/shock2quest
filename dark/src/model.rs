@@ -71,8 +71,7 @@ impl AnimatedModel {
     fn animate(&self, animation_clip: &AnimationClip, frame: u32) -> AnimatedModel {
         let animated_skeleton = ss2_skeleton::animate(
             &self.skeleton,
-            // TODO: is thi sused?
-            None,
+            Some(&animation_clip),
             frame,
             &rpds::HashTrieMap::new(),
         );
