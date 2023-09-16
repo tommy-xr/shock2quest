@@ -128,7 +128,6 @@ fn create_muzzle_flash(
         template_id: muzzle_flash_template_id,
         position: vhot_offset,
         orientation,
-        velocity: vec3(0.0, 0.0, 0.0),
         root_transform: transform.0,
     }
 }
@@ -161,7 +160,6 @@ fn create_projectile(
             v: vec3(0.0, 0.0, 0.0),
             s: 1.0,
         },
-        velocity: vec3(0.0, 0.0, 0.0),
         root_transform: transform.0,
     }
 }

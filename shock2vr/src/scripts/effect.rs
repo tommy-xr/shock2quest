@@ -67,7 +67,6 @@ pub enum Effect {
         template_id: i32,
         position: Vector3<f32>,
         orientation: Quaternion<f32>,
-        velocity: Vector3<f32>,
         root_transform: Matrix4<f32>,
     },
 

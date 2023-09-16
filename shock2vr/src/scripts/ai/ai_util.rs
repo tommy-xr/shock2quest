@@ -198,7 +198,6 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId) -> Effect {
                 v: vec3(0.0, 0.0, 0.0),
                 s: 1.0,
             },
-            velocity: vec3(0.0, 0.0, 0.0),
             // root_transform: transform * rot_matrix,
             root_transform: root_transform.0,
         }
@@ -233,7 +232,6 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId) -> Effect {
                 v: vec3(0.0, 0.0, 0.0),
                 s: 1.0,
             },
-            velocity: vec3(20.0, 0.0, 20.0),
             // root_transform: transform * rot_matrix,
             root_transform: root_transform.0,
         }
@@ -307,79 +305,6 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
                 v: vec3(0.0, 0.0, 0.0),
                 s: 1.0,
             },
-            velocity: vec3(0.0, 0.0, 0.0),
-            // root_transform: transform * rot_matrix,
-            root_transform: transform,
-        }
-    } else {
-        Effect::NoEffect
-    }
-}
-
-pub fn fire_ranged_projectile_core(
-    world: &World,
-    entity_id: EntityId,
-    position: Vector3<f32>,
-    transform: Matrix4<f32>,
-) -> Effect {
-    let maybe_projectile =
-        get_first_link_with_template_and_data(world, entity_id, |link| match link {
-            Link::AIProjectile(data) => Some(*data),
-            _ => None,
-        });
-
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let v_joint_transforms = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
-
-    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
-    if let Some((projectile_id, options)) = maybe_projectile {
-        println!("firing projectile!");
-        let root_transform = v_transform.get(entity_id).unwrap();
-        let forward = vec3(0.0, 0.0, -1.0);
-        let _up = vec3(0.0, 1.0, 0.0);
-
-        let creature_type = v_creature.get(entity_id).unwrap();
-        let joint_index = creature::get_creature_definition(creature_type.0)
-            .and_then(|def| def.get_mapped_joint(options.joint))
-            .unwrap_or(0);
-        let joint_transform = v_joint_transforms
-            .get(entity_id)
-            .map(|transform| transform.0.get(joint_index as usize))
-            .ok()
-            .flatten()
-            .copied()
-            .unwrap_or(Matrix4::identity());
-
-        //let transform = root_transform.0 * joint_transform;
-
-        // let _position = {
-        //     if let Some(position_override) = maybe_position_override {
-        //         position_override
-        //     } else {
-        //         joint_transform
-        //             .transform_point(point3(0.0, 0.0, 0.0))
-        //             .to_vec()
-        //     }
-        // };
-
-        //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
-        //let _position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
-
-        let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
-        // TODO: This rotation is needed for some monsters? Like the droids?
-        let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
-
-        // panic!("creating entity: {:?}", projectile_id);
-        Effect::CreateEntity {
-            template_id: projectile_id,
-            position,
-            // position: vec3(13.11, 0.382, 16.601),
-            // orientation: rotation,
-            orientation: Quaternion {
-                v: vec3(0.0, 0.0, 0.0),
-                s: 1.0,
-            },
-            velocity: vec3(0.0, 0.0, 0.0),
             // root_transform: transform * rot_matrix,
             root_transform: transform,
         }

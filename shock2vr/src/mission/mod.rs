@@ -876,7 +876,6 @@ impl Mission {
                     template_id,
                     position,
                     orientation,
-                    velocity: _,
                     root_transform,
                 } => {
                     self.create_entity_with_position(
