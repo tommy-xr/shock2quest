@@ -4,7 +4,7 @@ use cgmath::{
     point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad,
     Rotation3, SquareMatrix, Transform, Vector3,
 };
-use dark::properties::*;
+use dark::{properties::*, SCALE_FACTOR};
 use rand::{thread_rng, Rng};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
@@ -62,64 +62,9 @@ pub fn clamp_to_minimal_delta_angle(ang: Deg<f32>) -> Deg<f32> {
 }
 
 pub fn yaw_between_vectors(a: Vector3<f32>, b: Vector3<f32>) -> Deg<f32> {
-    // Project vectors onto the XZ plane
-    // TRY 1: Quat to Euler
-    // let diff = (b - a).normalize();
-    // let quat = util::get_rotation_from_forward_vector(diff);
-    // //let mat3 = quat.into();
-    // let euler: Euler<Rad<f32>> = Euler::from(quat);
-
-    // TRY 2: Quat to Euler
-    // let diff = (b - a).normalize();
-    // let before_quat = util::get_rotation_from_forward_vector(diff);
-    // let quat = vec4(
-    //     before_quat.v.x,
-    //     before_quat.v.y,
-    //     before_quat.v.z,
-    //     before_quat.s,
-    // );
-    // let sinr_cosp = 2.0 * (quat.w * quat.x + quat.y * quat.z);
-    // let cosr_cosp = 1.0 - 2.0 * (quat.x * quat.x + quat.y * quat.y);
-    // let roll = Rad(sinr_cosp.atan2(cosr_cosp));
-
-    // let sinp = 2.0 * (quat.w * quat.y - quat.z * quat.x);
-    // let pitch = if sinp.abs() >= 1.0 {
-    //     Rad(std::f32::consts::PI / 2.0 * sinp.signum())
-    // } else {
-    //     Rad(sinp.asin())
-    // };
-
-    // let siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y);
-    // let cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z);
-    // let yaw = Rad(siny_cosp.atan2(cosy_cosp));
-
-    // //(roll, pitch, yaw);
-    // yaw.into()
-
-    // Deg(euler.y.0 * 180.0 / PI)
-
-    // // FROM:
-
-    // // // Calculate the cosine of the angle
-    // let a_proj = vec3(a.x, 0.0, a.z);
-    // let b_proj = vec3(b.x, 0.0, b.z);
-    // //let cos_theta = a_proj.dot(b_proj) / (a_proj.magnitude() * b_proj.magnitude());
-
-    // let dot = a_proj.x * b_proj.x + a_proj.z * b_proj.z;
-    // let det = a_proj.x * b_proj.z - a_proj.z * b_proj.x;
-
-    // let angle = dot.atan2(det);
-    // Rad(angle).into()
-
     // Another try
     let ang = -(b.z - a.z).atan2(b.x - a.x) + PI / 2.0;
     Rad(ang).into()
-
-    // // Use atan2 to get the angle in radians taking into account the full 360 degrees
-    // let angle = sin_theta.atan2(cos_theta);
-
-    // // // Return the angle (in radians)
-    // Deg(angle * 180.0 / PI)
 }
 
 pub(crate) fn is_entity_door(world: &shipyard::World, entity_id: shipyard::EntityId) -> bool {
@@ -161,7 +106,7 @@ pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
 /// Handles firing a projectile through the AIRangedWeapon link, which is a proxy between the main entity link
 /// Used primarily by turrets
 ///
-pub fn fire_ranged_weapon(world: &World, entity_id: EntityId) -> Effect {
+pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaternion<f32>) -> Effect {
     // First, let's find the link
     let maybe_ranged_weapon = get_first_link_with_template_and_data(world, entity_id, |link| {
         if matches!(link, Link::AIRangedWeapon) {
@@ -183,9 +128,15 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId) -> Effect {
 
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let root_transform = v_transform.get(entity_id).unwrap();
-    let forward = vec3(-1.0, 0.0, 0.0);
-    let _up = vec3(0.0, 1.0, 0.0);
-    let _position = root_transform.0.transform_point(point3(0.0, 0.0, 0.0));
+    let forward_offset = 3.0 / SCALE_FACTOR;
+    let up_offset = 0.5 / SCALE_FACTOR;
+    let right_offset = 0.5 / SCALE_FACTOR;
+    let forward = vec3(right_offset, up_offset, 1.0 * forward_offset);
+    let _position =
+        root_transform
+            .0
+            .transform_point(point3(right_offset, up_offset, forward_offset))
+            + forward;
 
     if maybe_ranged_weapon_entity_id.is_none() {
         // Let's create the proxy entity...
@@ -194,15 +145,22 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId) -> Effect {
             position: _position.to_vec(),
             // position: vec3(13.11, 0.382, 16.601),
             // orientation: rotation,
-            orientation: Quaternion {
-                v: vec3(0.0, 0.0, 0.0),
-                s: 1.0,
-            },
+            orientation: rotation,
             // root_transform: transform * rot_matrix,
             root_transform: root_transform.0,
         }
     } else {
+        let rot_matrix: Matrix4<f32> = rotation.into();
+        let transformed_forward = root_transform.0.transform_vector(forward);
+        let debug_effect = Effect::DrawDebugLines {
+            lines: vec![(
+                _position,
+                _position + transformed_forward * 10.0 + vec3(0.0, -0.25, 0.0),
+                vec4(0.0, 1.0, 1.0, 1.0),
+            )],
+        };
         // We have the ranged weapon id, let's figure out its projectile
+        let mut fire_effects = vec![debug_effect];
 
         let ranged_weapon_entity_id = maybe_ranged_weapon_entity_id.unwrap();
         let maybe_projectile = get_first_link_with_template_and_data(
@@ -214,28 +172,45 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId) -> Effect {
             },
         );
 
-        if maybe_projectile.is_none() {
-            return Effect::NoEffect;
+        if let Some((projectile_id, options)) = maybe_projectile {
+            let (projectile_template_id, projectile_opts) = maybe_projectile.unwrap();
+
+            println!("fire ranged projectile!");
+            //fire_ranged_projectile_core(world, entity_id, forward * 0.7, root_transform.0)
+            fire_effects.push(Effect::CreateEntity {
+                // Testing
+                // template_id: -1415, // rocket turret
+                // template_id: -1414, // laser turret
+                template_id: projectile_template_id,
+                position: forward,
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                // root_transform: transform * rot_matrix,
+                root_transform: root_transform.0 * rot_matrix,
+            })
         }
 
-        let (projectile_template_id, projectile_opts) = maybe_projectile.unwrap();
-
-        println!("fire ranged projectile!");
-        //fire_ranged_projectile_core(world, entity_id, forward * 0.7, root_transform.0)
-        Effect::CreateEntity {
-            // Testing
-            // template_id: -1415, // rocket turret
-            // template_id: -1414, // laser turret
-            template_id: projectile_template_id,
-            position: forward * 0.75 * thread_rng().gen_range(0.0..5.0),
-            orientation: Quaternion {
-                v: vec3(0.0, 0.0, 0.0),
-                s: 1.0,
-            },
-            // root_transform: transform * rot_matrix,
-            root_transform: root_transform.0,
-        }
         //fire_ranged_projectile(world, maybe_projectile_entity_id.unwrap())
+
+        let maybe_muzzle_flash = get_first_link_with_template_and_data(
+            world,
+            ranged_weapon_entity_id,
+            |link| match link {
+                Link::GunFlash(data) => Some(*data),
+                _ => None,
+            },
+        );
+
+        if let Some((muzzle_flash_template_id, muzzle_flash_options)) = maybe_muzzle_flash {
+            println!("!! opts: {:?}", muzzle_flash_options);
+            fire_effects.push(Effect::CreateEntity {
+                template_id: muzzle_flash_template_id,
+                position: forward,
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                root_transform: root_transform.0 * rot_matrix,
+            })
+        }
+
+        Effect::combine(fire_effects)
     }
 }
 
