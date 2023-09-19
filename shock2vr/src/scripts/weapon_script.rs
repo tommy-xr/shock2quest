@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use cgmath::{vec3, Quaternion, Rad, Rotation3};
+use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad, Rotation3};
 use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
@@ -153,6 +153,8 @@ fn create_projectile(
 
     //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
 
+    let rot_matrix: Matrix4<f32> = Quaternion::from_angle_y(Deg(180.0)).into();
+
     Effect::CreateEntity {
         template_id: projectile_template_id,
         position: vhot_offset + forward * 0.5,
@@ -160,6 +162,6 @@ fn create_projectile(
             v: vec3(0.0, 0.0, 0.0),
             s: 1.0,
         },
-        root_transform: transform.0,
+        root_transform: transform.0 * rot_matrix,
     }
 }

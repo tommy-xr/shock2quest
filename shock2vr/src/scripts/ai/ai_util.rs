@@ -246,7 +246,7 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     if let Some((projectile_id, options)) = maybe_projectile {
         println!("firing projectile!");
         let root_transform = v_transform.get(entity_id).unwrap();
-        let forward = vec3(0.0, 0.0, -1.0);
+        let forward = vec3(0.0, 0.0, 1.0);
         let _up = vec3(0.0, 1.0, 0.0);
 
         let creature_type = v_creature.get(entity_id).unwrap();
@@ -261,25 +261,30 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
             .copied()
             .unwrap_or(Matrix4::identity());
 
-        let transform = root_transform.0 * joint_transform;
+        let transform = root_transform.0;
+        //let transform = root_transform.0 * joint_transform;
 
         //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
         let _position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
 
-        let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
+        //let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
         // TODO: This rotation is needed for some monsters? Like the droids?
-        let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
+        //let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
 
         // panic!("creating entity: {:?}", projectile_id);
         Effect::CreateEntity {
             template_id: projectile_id,
-            position: forward * 0.75,
+            position: _position.to_vec() + forward * 1.0,
             // position: vec3(13.11, 0.382, 16.601),
             // orientation: rotation,
-            orientation: Quaternion {
-                v: vec3(0.0, 0.0, 0.0),
-                s: 1.0,
-            },
+            // Not sure why, but it seems like the orientation of the AI models is off by 90 degrees for the bin models...
+            // so we have to corect, otherwise we get sideways lasers
+            // orientation: Quaternion::from_angle_y(Deg(180.0)),
+            // orientation: Quaternion {
+            //     s: 1.0,
+            //     v: vec3(0.0, 0.0, 0.0),
+            // },
+            orientation: Quaternion::from_angle_y(Deg(90.0)),
             // root_transform: transform * rot_matrix,
             root_transform: transform,
         }
