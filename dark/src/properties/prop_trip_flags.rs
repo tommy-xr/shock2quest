@@ -19,7 +19,7 @@ bitflags! {
         const Shove = 1 << 7;
         const Zap  = 1 << 8; // ??
         const EasterEgg = 1 << 9;
-        const Default = Self::Enter.bits | Self::Once.bits;
+        const Default = Self::Enter.bits | Self::Once.bits | Self::Player.bits;
     }
 }
 
@@ -38,7 +38,6 @@ impl PropTripFlags {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropTripFlags {
         let trip_flags = read_u32(reader);
         let t = TripFlags::from_bits(trip_flags).unwrap_or(TripFlags::Default);
-        println!("raw trip flags: {trip_flags} output flags: {t:?}");
         PropTripFlags { trip_flags: t }
     }
 }
