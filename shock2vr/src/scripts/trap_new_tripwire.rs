@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 
-use dark::properties::{PropLocalPlayer, PropTeleported, PropTripFlags, TripFlags};
+use dark::properties::{PropLocalPlayer, PropTeleported, PropTripFlags, TripFlags, PropTranslatingDoor};
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
 
 use crate::physics::PhysicsWorld;
 
 use super::{
-    script_util::{invert, send_to_all_switch_links},
-    Effect, MessagePayload, Script,
+    script_util::{invert, send_to_all_switch_links, get_all_switch_links},
+    Effect, MessagePayload, Script, std_door::StdDoor,
 };
 
 pub fn is_player(world: &World, entity_id: EntityId) -> bool {
@@ -49,17 +49,46 @@ impl TrapNewTripwire {
 
     fn should_activate(
         &mut self,
-        _world: &World,
-        _tripped_entity_id: EntityId,
+        world: &World,
+        self_entity_id: EntityId,
+        tripping_entity_id: EntityId,
         trip_flags: &TripFlags,
     ) -> bool {
-        if trip_flags.contains(TripFlags::Once) && self.has_activated {
+        // TODO
+        // There are still several other flags that need to be implemented, like:
+        // Shove
+        // Zap
+        // EasterEgg
+
+        let is_once = trip_flags.contains(TripFlags::Once);
+
+        if is_once && self.has_activated {
             false
-        // } else if trip_flags.contains(TripFlags::Player) {
-        //     is_player(world, tripped_entity_id)
+        } else if trip_flags.contains(TripFlags::Player) {
+
+            // TODO: TripFlags::Player
+            // I'm not sure what the TripFlags::Player is actually used for.
+            // It seems like - in the game - AI can trigger tripwires that are marked as Player
+            // So I'll ignore this condition for now.
+            let allow_ai_to_trigger = Self::is_linked_to_simple_door(world, self_entity_id);
+
+            is_player(world, tripping_entity_id) || (allow_ai_to_trigger && !is_once)
         } else {
             true
         }
+    }
+
+    fn is_linked_to_simple_door(world: &World, entity_id: EntityId) -> bool {
+        let links = get_all_switch_links(world, entity_id);
+    
+        let v_simple_door = world.borrow::<View<PropTranslatingDoor>>().unwrap();
+
+        // Are there any links that are a simple door?
+        // TODO: Make sure it is _simple_ - ie, not locked
+        // TODO: Handle rotating doors?
+        links.iter().any(|link| {
+            v_simple_door.get(*link).is_ok()
+        })
     }
 }
 impl Script for TrapNewTripwire {
@@ -86,7 +115,7 @@ impl Script for TrapNewTripwire {
 
         match msg {
             MessagePayload::SensorBeginIntersect { with } => {
-                if self.should_activate(world, *with, &trip_flags.trip_flags) {
+                if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
                     info!("activating tripwire");
                     self.has_activated = true;
                     let was_empty = self.entity_in_trap.is_empty();
