@@ -775,7 +775,6 @@ impl Mission {
 
             let mag = initial_velocity.magnitude();
             let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag));
-            //let x_velocity = root_transform.transform_vector(initial_velocity);
             if initial_velocity.magnitude() > 80.0 {
                 // Use raycast strategy for fast moving objects
                 script_world.add_entity2(
@@ -786,8 +785,6 @@ impl Mission {
                 physics.remove(created_entity.entity_id);
             } else {
                 id_to_physics.insert(created_entity.entity_id, rigid_body);
-                //let total_transform = root_transform *
-                //let x_velocity = root_transform.transform_vector(initial_velocity);
                 physics.set_velocity(created_entity.entity_id, (x_velocity / SCALE_FACTOR) * 1.5);
             }
         };

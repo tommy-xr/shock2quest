@@ -146,10 +146,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         Effect::CreateEntity {
             template_id: ranged_weapon,
             position: _position.to_vec(),
-            // position: vec3(13.11, 0.382, 16.601),
-            // orientation: rotation,
             orientation: rotation,
-            // root_transform: transform * rot_matrix,
             root_transform: root_transform.0,
         }
     } else {
@@ -178,8 +175,6 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         if let Some((projectile_id, options)) = maybe_projectile {
             let (projectile_template_id, projectile_opts) = maybe_projectile.unwrap();
 
-            println!("fire ranged projectile!");
-            //fire_ranged_projectile_core(world, entity_id, forward * 0.7, root_transform.0)
             fire_effects.push(Effect::CreateEntity {
                 // Testing
                 // template_id: -1415, // rocket turret
@@ -187,7 +182,6 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
                 template_id: projectile_template_id,
                 position: forward,
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
-                // root_transform: transform * rot_matrix,
                 root_transform: root_transform.0 * rot_matrix,
             });
 
@@ -199,8 +193,6 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             ));
         }
 
-        //fire_ranged_projectile(world, maybe_projectile_entity_id.unwrap())
-
         let maybe_muzzle_flash = get_first_link_with_template_and_data(
             world,
             ranged_weapon_entity_id,
@@ -211,7 +203,6 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         );
 
         if let Some((muzzle_flash_template_id, muzzle_flash_options)) = maybe_muzzle_flash {
-            println!("!! opts: {:?}", muzzle_flash_options);
             fire_effects.push(Effect::CreateEntity {
                 template_id: muzzle_flash_template_id,
                 position: forward,
@@ -254,7 +245,6 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
 
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     if let Some((projectile_id, options)) = maybe_projectile {
-        println!("firing projectile!");
         let root_transform = v_transform.get(entity_id).unwrap();
         let forward = vec3(0.0, 0.0, 1.0);
         let _up = vec3(0.0, 1.0, 0.0);
@@ -336,8 +326,6 @@ pub fn play_positional_sound(
     let mut query = tags;
     query.append(&mut class_tags);
 
-    println!("!!debug - playing positional sound - ${query:?}");
-
     Effect::PlayEnvironmentalSound {
         audio_handle: AudioHandle::new(),
         query: EnvSoundQuery::from_tag_values(query),
@@ -349,7 +337,6 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
-    // TODO: Check if player is visible?
     if let Ok(ent_pos) = v_current_pos.get(from_entity) {
         let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
         let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
@@ -364,9 +351,9 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
             true,
         );
 
-        println!("!! debug: {:?}", result);
         // If we didn't hit anything - player visible!
         // Currently, the ray cast doesn't intersect player...
+        // TODO: Check for entities, but pass-through transparent ones (ie, glass/windows)
         return result.is_none();
     };
 
