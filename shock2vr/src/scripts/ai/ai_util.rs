@@ -4,18 +4,21 @@ use cgmath::{
     point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad,
     Rotation3, SquareMatrix, Transform, Vector3,
 };
-use dark::{properties::*, SCALE_FACTOR};
+use dark::{properties::*, EnvSoundQuery, SCALE_FACTOR};
+use engine::audio::AudioHandle;
 use rand::{thread_rng, Rng};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World, UniqueView};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
+    mission::PlayerInfo,
+    physics::{CollisionGroup, InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
     scripts::{
         script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
         Effect,
     },
-    util, physics::{PhysicsWorld, CollisionGroup, InternalCollisionGroups}, mission::PlayerInfo,
+    util,
 };
 
 ///
@@ -186,7 +189,14 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 // root_transform: transform * rot_matrix,
                 root_transform: root_transform.0 * rot_matrix,
-            })
+            });
+
+            fire_effects.push(play_positional_sound(
+                ranged_weapon_entity_id,
+                world,
+                Some(_position.to_vec()),
+                vec![("event", "shoot")],
+            ));
         }
 
         //fire_ranged_projectile(world, maybe_projectile_entity_id.unwrap())
@@ -304,24 +314,61 @@ pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     maybe_prop_hit_points.unwrap().hit_points <= 0
 }
 
+pub fn play_positional_sound(
+    producing_entity: EntityId,
+    world: &World,
+    override_position: Option<Vector3<f32>>,
+    tags: Vec<(&str, &str)>,
+) -> Effect {
+    let v_class_tag = world.borrow::<View<PropClassTag>>().unwrap();
+    let mut class_tags = v_class_tag
+        .get(producing_entity)
+        .map(|p| p.class_tags())
+        .unwrap_or(vec![]);
+
+    let pos = match override_position {
+        None => {
+            let v_pos = world.borrow::<View<PropPosition>>().unwrap();
+            v_pos.get(producing_entity).unwrap().position
+        }
+        Some(pos) => pos,
+    };
+    let mut query = tags;
+    query.append(&mut class_tags);
+
+    println!("!!debug - playing positional sound - ${query:?}");
+
+    Effect::PlayEnvironmentalSound {
+        audio_handle: AudioHandle::new(),
+        query: EnvSoundQuery::from_tag_values(query),
+        position: pos,
+    }
+}
+
 pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
-        let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-        let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-        
-        // TODO: Check if player is visible?
-        if let Ok(ent_pos) = v_current_pos.get(from_entity) {
+    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
-            let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
-            let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
-            let direction = (end_point - start_point).normalize();
-            let distance = (end_point - start_point).magnitude();
-            let result = physics.ray_cast2(start_point, direction, distance, InternalCollisionGroups::WORLD, Some(from_entity), true)            ;
+    // TODO: Check if player is visible?
+    if let Ok(ent_pos) = v_current_pos.get(from_entity) {
+        let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+        let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
+        let direction = (end_point - start_point).normalize();
+        let distance = (end_point - start_point).magnitude();
+        let result = physics.ray_cast2(
+            start_point,
+            direction,
+            distance,
+            InternalCollisionGroups::WORLD,
+            Some(from_entity),
+            true,
+        );
 
-            println!("!! debug: {:?}", result);
-            // If we didn't hit anything - player visible!
-            // Currently, the ray cast doesn't intersect player...
-            return result.is_none()
-        };
+        println!("!! debug: {:?}", result);
+        // If we didn't hit anything - player visible!
+        // Currently, the ray cast doesn't intersect player...
+        return result.is_none();
+    };
 
-        false
+    false
 }

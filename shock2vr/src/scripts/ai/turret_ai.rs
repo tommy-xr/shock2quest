@@ -1,5 +1,6 @@
 use cgmath::{vec3, vec4, Deg, Matrix4, Quaternion, Rotation3};
-use shipyard::{EntityId, World};
+use dark::properties::PropPosition;
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
@@ -12,47 +13,76 @@ use super::{
 pub enum TurretState {
     Closed,
     Opening { progress: f32 },
-    Closing { progress: f32},
+    Closing { progress: f32 },
     Open,
 }
 
 impl TurretState {
-    pub fn update(current_state: &TurretState, entity_id: EntityId, time: &Time, world: &World, physics: &PhysicsWorld) -> (TurretState, Effect) {
-
+    pub fn update(
+        current_state: &TurretState,
+        entity_id: EntityId,
+        time: &Time,
+        world: &World,
+        physics: &PhysicsWorld,
+    ) -> (TurretState, Effect) {
         let is_player_visible = ai_util::is_player_visible(entity_id, world, physics);
-        
-        let new_state =  match current_state {
+
+        match current_state {
             TurretState::Closed => {
                 if (is_player_visible) {
-                    TurretState::Opening { progress: 0.0 }
+                    (
+                        TurretState::Opening { progress: 0.0 },
+                        ai_util::play_positional_sound(
+                            entity_id,
+                            world,
+                            None,
+                            vec![("event", "activate")],
+                        ),
+                    )
                 } else {
-                    TurretState::Closed
+                    (TurretState::Closed, Effect::NoEffect)
                 }
-            },
+            }
             TurretState::Opening { progress } => {
                 if (*progress >= 1.0) {
-                    TurretState::Open
+                    (TurretState::Open, Effect::NoEffect)
                 } else {
-                    TurretState::Opening { progress: progress + time.elapsed.as_secs_f32() / OPEN_TIME }
+                    (
+                        TurretState::Opening {
+                            progress: progress + time.elapsed.as_secs_f32() / OPEN_TIME,
+                        },
+                        Effect::NoEffect,
+                    )
                 }
-            },
+            }
             TurretState::Closing { progress } => {
                 if (*progress >= 1.0) {
-                    TurretState::Closed
+                    (TurretState::Closed, Effect::NoEffect)
                 } else {
-                    TurretState::Closing { progress: progress + time.elapsed.as_secs_f32() / OPEN_TIME }
+                    (
+                        TurretState::Closing {
+                            progress: progress + time.elapsed.as_secs_f32() / OPEN_TIME,
+                        },
+                        Effect::NoEffect,
+                    )
                 }
-            },
+            }
             TurretState::Open => {
-                 if (!is_player_visible) {
-                    TurretState::Closing { progress: 0.0 }
-                 } else {
-                    TurretState::Open
-                 }
-            },
-        };
-        (new_state, Effect::NoEffect)
-
+                if (!is_player_visible) {
+                    (
+                        TurretState::Closing { progress: 0.0 },
+                        ai_util::play_positional_sound(
+                            entity_id,
+                            world,
+                            None,
+                            vec![("event", "deactivate")],
+                        ),
+                    )
+                } else {
+                    (TurretState::Open, Effect::NoEffect)
+                }
+            }
+        }
     }
 }
 
@@ -78,7 +108,13 @@ impl TurretAI {
         }
     }
 
-    fn try_to_shoot(&mut self, time: &Time, world: &World, entity_id: EntityId, physics: &PhysicsWorld) -> Effect {
+    fn try_to_shoot(
+        &mut self,
+        time: &Time,
+        world: &World,
+        entity_id: EntityId,
+        physics: &PhysicsWorld,
+    ) -> Effect {
         let quat = Quaternion::from_angle_x(Deg(time.total.as_secs_f32().sin() * 90.0));
         let fire_projectile = if self.next_fire < time.total.as_secs_f32() {
             self.next_fire = time.total.as_secs_f32() + 1.0;
@@ -126,9 +162,8 @@ impl Script for TurretAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
-
-
-        let (new_state, state_eff) = TurretState::update(&self.current_state, entity_id, time, world, physics);
+        let (new_state, state_eff) =
+            TurretState::update(&self.current_state, entity_id, time, world, physics);
         self.current_state = new_state;
 
         let open_amount = match self.current_state {
@@ -143,7 +178,6 @@ impl Script for TurretAI {
             joint_id: 2,
             transform: Matrix4::from_translation(vec3(-0.75 * open_amount, 0.0, 0.0)),
         };
-
 
         let attack_eff = if matches!(self.current_state, TurretState::Open) {
             self.try_to_shoot(time, world, entity_id, physics)
