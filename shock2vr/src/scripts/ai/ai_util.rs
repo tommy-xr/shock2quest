@@ -6,7 +6,7 @@ use cgmath::{
 };
 use dark::{properties::*, SCALE_FACTOR};
 use rand::{thread_rng, Rng};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World, UniqueView};
 
 use crate::{
     creature,
@@ -15,7 +15,7 @@ use crate::{
         script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
         Effect,
     },
-    util,
+    util, physics::{PhysicsWorld, CollisionGroup, InternalCollisionGroups}, mission::PlayerInfo,
 };
 
 ///
@@ -302,4 +302,26 @@ pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     }
 
     maybe_prop_hit_points.unwrap().hit_points <= 0
+}
+
+pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+        let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+        let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+        
+        // TODO: Check if player is visible?
+        if let Ok(ent_pos) = v_current_pos.get(from_entity) {
+
+            let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+            let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
+            let direction = (end_point - start_point).normalize();
+            let distance = (end_point - start_point).magnitude();
+            let result = physics.ray_cast2(start_point, direction, distance, InternalCollisionGroups::WORLD, Some(from_entity), true)            ;
+
+            println!("!! debug: {:?}", result);
+            // If we didn't hit anything - player visible!
+            // Currently, the ray cast doesn't intersect player...
+            return result.is_none()
+        };
+
+        false
 }
