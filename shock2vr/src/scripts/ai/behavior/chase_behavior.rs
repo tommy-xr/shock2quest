@@ -10,15 +10,15 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy,
-            SteeringOutput, SteeringStrategy,
+            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, SteeringOutput,
+            SteeringStrategy,
         },
         Effect,
     },
     time::Time,
 };
 
-use super::{Behavior, MeleeAttackBehavior, NextBehavior};
+use super::{Behavior, MeleeAttackBehavior, NextBehavior, RangedAttackBehavior};
 
 pub struct ChaseBehavior {
     steering_strategy: Box<dyn SteeringStrategy>,
@@ -74,15 +74,15 @@ impl Behavior for ChaseBehavior {
         //let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
 
         let melee_attack_distance = 8.0 / SCALE_FACTOR;
-        let _ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
-        let _ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
+        let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
+        let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
 
         if let Ok(prop_pos) = v_current_pos.get(entity_id) {
             let distance = (prop_pos.position - u_player.pos).magnitude();
 
-            // if distance > ranged_min_attack_distance && distance < ranged_max_attack_distance {
-            //     return NextBehavior::Next(Box::new(RefCell::new(RangedAttackBehavior)));
-            // }
+            if distance > ranged_min_attack_distance && distance < ranged_max_attack_distance {
+                return NextBehavior::Next(Box::new(RefCell::new(RangedAttackBehavior)));
+            }
             if distance < melee_attack_distance {
                 return NextBehavior::Next(Box::new(RefCell::new(MeleeAttackBehavior)));
             }

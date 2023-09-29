@@ -24,7 +24,7 @@ const BASE_PATH: &str = "../../Data";
 
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(0);
 
-const SOUND_SCALE_FACTOR: f32 = 1.0;
+const SOUND_SCALE_FACTOR: f32 = 5.0;
 
 #[derive(Clone, Debug)]
 pub struct AudioHandle {

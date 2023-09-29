@@ -4,7 +4,7 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    ai::{AnimatedMonsterAI, CameraAI},
+    ai::{AnimatedMonsterAI, CameraAI, TurretAI},
     Effect, MessagePayload, NoopScript, Script,
 };
 
@@ -38,10 +38,10 @@ impl Script for BaseMonster {
             "rangedexplode" => Box::new(AnimatedMonsterAI::new()),
             "protocol" => Box::new(AnimatedMonsterAI::new()),
             "shockdefault" => Box::new(AnimatedMonsterAI::new()),
+            "turret" => Box::new(TurretAI::new()),
             //TODO:
             "grub" => Box::new(NoopScript {}),
             "swarmer" => Box::new(NoopScript {}),
-            "turret" => Box::new(NoopScript {}),
 
             _ => Box::new(NoopScript {}),
         };

@@ -1,18 +1,22 @@
 use std::f32::consts::PI;
 
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3,
-    Quaternion, Rad, Rotation3, SquareMatrix, Transform, Vector3,
+    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad,
+    Rotation3, SquareMatrix, Transform, Vector3,
 };
-use dark::{properties::*};
+use dark::{properties::*, EnvSoundQuery, SCALE_FACTOR};
+use engine::audio::AudioHandle;
 use rand::{thread_rng, Rng};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
+    mission::PlayerInfo,
+    physics::{CollisionGroup, InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
     scripts::{
-        script_util::get_first_link_with_template_and_data, Effect,
+        script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
+        Effect,
     },
     util,
 };
@@ -61,64 +65,9 @@ pub fn clamp_to_minimal_delta_angle(ang: Deg<f32>) -> Deg<f32> {
 }
 
 pub fn yaw_between_vectors(a: Vector3<f32>, b: Vector3<f32>) -> Deg<f32> {
-    // Project vectors onto the XZ plane
-    // TRY 1: Quat to Euler
-    // let diff = (b - a).normalize();
-    // let quat = util::get_rotation_from_forward_vector(diff);
-    // //let mat3 = quat.into();
-    // let euler: Euler<Rad<f32>> = Euler::from(quat);
-
-    // TRY 2: Quat to Euler
-    // let diff = (b - a).normalize();
-    // let before_quat = util::get_rotation_from_forward_vector(diff);
-    // let quat = vec4(
-    //     before_quat.v.x,
-    //     before_quat.v.y,
-    //     before_quat.v.z,
-    //     before_quat.s,
-    // );
-    // let sinr_cosp = 2.0 * (quat.w * quat.x + quat.y * quat.z);
-    // let cosr_cosp = 1.0 - 2.0 * (quat.x * quat.x + quat.y * quat.y);
-    // let roll = Rad(sinr_cosp.atan2(cosr_cosp));
-
-    // let sinp = 2.0 * (quat.w * quat.y - quat.z * quat.x);
-    // let pitch = if sinp.abs() >= 1.0 {
-    //     Rad(std::f32::consts::PI / 2.0 * sinp.signum())
-    // } else {
-    //     Rad(sinp.asin())
-    // };
-
-    // let siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y);
-    // let cosy_cosp = 1.0 - 2.0 * (quat.y * quat.y + quat.z * quat.z);
-    // let yaw = Rad(siny_cosp.atan2(cosy_cosp));
-
-    // //(roll, pitch, yaw);
-    // yaw.into()
-
-    // Deg(euler.y.0 * 180.0 / PI)
-
-    // // FROM:
-
-    // // // Calculate the cosine of the angle
-    // let a_proj = vec3(a.x, 0.0, a.z);
-    // let b_proj = vec3(b.x, 0.0, b.z);
-    // //let cos_theta = a_proj.dot(b_proj) / (a_proj.magnitude() * b_proj.magnitude());
-
-    // let dot = a_proj.x * b_proj.x + a_proj.z * b_proj.z;
-    // let det = a_proj.x * b_proj.z - a_proj.z * b_proj.x;
-
-    // let angle = dot.atan2(det);
-    // Rad(angle).into()
-
     // Another try
     let ang = -(b.z - a.z).atan2(b.x - a.x) + PI / 2.0;
     Rad(ang).into()
-
-    // // Use atan2 to get the angle in radians taking into account the full 360 degrees
-    // let angle = sin_theta.atan2(cos_theta);
-
-    // // // Return the angle (in radians)
-    // Deg(angle * 180.0 / PI)
 }
 
 pub(crate) fn is_entity_door(world: &shipyard::World, entity_id: shipyard::EntityId) -> bool {
@@ -145,7 +94,7 @@ pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
 
     let position = util::get_position_from_matrix(&xform);
     let forward = xform.transform_vector(vec3(0.0, 0.0, 1.0)).normalize();
-    
+
     Effect::DrawDebugLines {
         lines: vec![(
             position + vec3(0.0, 0.5, 0.0),
@@ -155,6 +104,135 @@ pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
     }
 }
 
+/// Fire Ranged Weapon
+///
+/// Handles firing a projectile through the AIRangedWeapon link, which is a proxy between the main entity link
+/// Used primarily by turrets
+///
+pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaternion<f32>) -> Effect {
+    // First, let's find the link
+    let maybe_ranged_weapon = get_first_link_with_template_and_data(world, entity_id, |link| {
+        if matches!(link, Link::AIRangedWeapon) {
+            Some(())
+        } else {
+            None
+        }
+    });
+
+    if maybe_ranged_weapon.is_none() {
+        return Effect::NoEffect;
+    }
+
+    let ranged_weapon = maybe_ranged_weapon.unwrap().0;
+
+    // Is there an entity aleady created for this link?
+
+    let maybe_ranged_weapon_entity_id = find_first_entity_by_template_id(world, ranged_weapon);
+
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let root_transform = v_transform.get(entity_id).unwrap();
+    let forward_offset = 3.0 / SCALE_FACTOR;
+    let up_offset = 0.5 / SCALE_FACTOR;
+    let right_offset = 0.5 / SCALE_FACTOR;
+    let forward = vec3(right_offset, up_offset, 1.0 * forward_offset);
+    let _position =
+        root_transform
+            .0
+            .transform_point(point3(right_offset, up_offset, forward_offset))
+            + forward;
+
+    if maybe_ranged_weapon_entity_id.is_none() {
+        // Let's create the proxy entity...
+        Effect::CreateEntity {
+            template_id: ranged_weapon,
+            position: _position.to_vec(),
+            orientation: rotation,
+            root_transform: root_transform.0,
+        }
+    } else {
+        let rot_matrix: Matrix4<f32> = rotation.into();
+        let transformed_forward = root_transform.0.transform_vector(forward);
+        let debug_effect = Effect::DrawDebugLines {
+            lines: vec![(
+                _position,
+                _position + transformed_forward * 10.0 + vec3(0.0, -0.25, 0.0),
+                vec4(0.0, 1.0, 1.0, 1.0),
+            )],
+        };
+        // We have the ranged weapon id, let's figure out its projectile
+        let mut fire_effects = vec![debug_effect];
+
+        let ranged_weapon_entity_id = maybe_ranged_weapon_entity_id.unwrap();
+        let maybe_projectile = get_first_link_with_template_and_data(
+            world,
+            ranged_weapon_entity_id,
+            |link| match link {
+                Link::Projectile(data) => Some(*data),
+                _ => None,
+            },
+        );
+
+        if let Some((projectile_id, options)) = maybe_projectile {
+            let (projectile_template_id, projectile_opts) = maybe_projectile.unwrap();
+
+            fire_effects.push(Effect::CreateEntity {
+                // Testing
+                // template_id: -1415, // rocket turret
+                // template_id: -1414, // laser turret
+                template_id: projectile_template_id,
+                position: forward,
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                root_transform: root_transform.0 * rot_matrix,
+            });
+
+            fire_effects.push(play_positional_sound(
+                ranged_weapon_entity_id,
+                world,
+                Some(_position.to_vec()),
+                vec![("event", "shoot")],
+            ));
+        }
+
+        let maybe_muzzle_flash = get_first_link_with_template_and_data(
+            world,
+            ranged_weapon_entity_id,
+            |link| match link {
+                Link::GunFlash(data) => Some(*data),
+                _ => None,
+            },
+        );
+
+        if let Some((muzzle_flash_template_id, muzzle_flash_options)) = maybe_muzzle_flash {
+            fire_effects.push(Effect::CreateEntity {
+                template_id: muzzle_flash_template_id,
+                position: forward,
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                root_transform: root_transform.0 * rot_matrix,
+            })
+        }
+
+        Effect::combine(fire_effects)
+    }
+}
+
+fn find_first_entity_by_template_id(world: &World, ranged_weapon: i32) -> Option<EntityId> {
+    let v_template_id = world.borrow::<View<PropTemplateId>>().unwrap();
+
+    for (entity_id, template_id) in v_template_id.iter().with_id() {
+        if template_id.template_id == ranged_weapon {
+            return Some(entity_id);
+        }
+    }
+
+    None
+}
+
+///
+/// Fire Ranged Projectile
+///
+/// Handles firing a projectile from a ranged weapon, when that weapon is own directly by the creature.
+/// Used by most creatures (robots, hybrids, midwives, etc)
+///
 pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     let maybe_projectile =
         get_first_link_with_template_and_data(world, entity_id, |link| match link {
@@ -168,7 +246,7 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     if let Some((projectile_id, options)) = maybe_projectile {
         let root_transform = v_transform.get(entity_id).unwrap();
-        let forward = vec3(0.0, 0.0, -1.0);
+        let forward = vec3(0.0, 0.0, 1.0);
         let _up = vec3(0.0, 1.0, 0.0);
 
         let creature_type = v_creature.get(entity_id).unwrap();
@@ -183,26 +261,30 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
             .copied()
             .unwrap_or(Matrix4::identity());
 
-        let transform = root_transform.0 * joint_transform;
+        let transform = root_transform.0;
+        //let transform = root_transform.0 * joint_transform;
 
         //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
         let _position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
 
-        let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
+        //let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
         // TODO: This rotation is needed for some monsters? Like the droids?
-        let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
+        //let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
 
         // panic!("creating entity: {:?}", projectile_id);
         Effect::CreateEntity {
             template_id: projectile_id,
-            position: forward * 0.75,
+            position: _position.to_vec() + forward * 1.0,
             // position: vec3(13.11, 0.382, 16.601),
             // orientation: rotation,
-            orientation: Quaternion {
-                v: vec3(0.0, 0.0, 0.0),
-                s: 1.0,
-            },
-            velocity: vec3(0.0, 0.0, 0.0),
+            // Not sure why, but it seems like the orientation of the AI models is off by 90 degrees for the bin models...
+            // so we have to corect, otherwise we get sideways lasers
+            // orientation: Quaternion::from_angle_y(Deg(180.0)),
+            // orientation: Quaternion {
+            //     s: 1.0,
+            //     v: vec3(0.0, 0.0, 0.0),
+            // },
+            orientation: Quaternion::from_angle_y(Deg(90.0)),
             // root_transform: transform * rot_matrix,
             root_transform: transform,
         }
@@ -220,4 +302,60 @@ pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     }
 
     maybe_prop_hit_points.unwrap().hit_points <= 0
+}
+
+pub fn play_positional_sound(
+    producing_entity: EntityId,
+    world: &World,
+    override_position: Option<Vector3<f32>>,
+    tags: Vec<(&str, &str)>,
+) -> Effect {
+    let v_class_tag = world.borrow::<View<PropClassTag>>().unwrap();
+    let mut class_tags = v_class_tag
+        .get(producing_entity)
+        .map(|p| p.class_tags())
+        .unwrap_or(vec![]);
+
+    let pos = match override_position {
+        None => {
+            let v_pos = world.borrow::<View<PropPosition>>().unwrap();
+            v_pos.get(producing_entity).unwrap().position
+        }
+        Some(pos) => pos,
+    };
+    let mut query = tags;
+    query.append(&mut class_tags);
+
+    Effect::PlayEnvironmentalSound {
+        audio_handle: AudioHandle::new(),
+        query: EnvSoundQuery::from_tag_values(query),
+        position: pos,
+    }
+}
+
+pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+
+    if let Ok(ent_pos) = v_current_pos.get(from_entity) {
+        let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+        let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
+        let direction = (end_point - start_point).normalize();
+        let distance = (end_point - start_point).magnitude();
+        let result = physics.ray_cast2(
+            start_point,
+            direction,
+            distance,
+            InternalCollisionGroups::WORLD,
+            Some(from_entity),
+            true,
+        );
+
+        // If we didn't hit anything - player visible!
+        // Currently, the ray cast doesn't intersect player...
+        // TODO: Check for entities, but pass-through transparent ones (ie, glass/windows)
+        return result.is_none();
+    };
+
+    false
 }
