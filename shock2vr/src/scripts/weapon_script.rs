@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad, Rotation3};
-use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
+use dark::properties::{GunFlashOptions, Link, ProjectileOptions, PropPlayerGun};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
@@ -26,20 +26,20 @@ impl WeaponScript {
 }
 
 impl Script for WeaponScript {
-    // fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
-    //     let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
+    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
 
-    //     let maybe_player_gun = v_player_gun.get(entity_id);
+        let maybe_player_gun = v_player_gun.get(entity_id);
 
-    //     if let Ok(player_gun) = maybe_player_gun {
-    //         Effect::ChangeModel {
-    //             entity_id,
-    //             model_name: player_gun.hand_model.clone(),
-    //         }
-    //     } else {
-    //         Effect::NoEffect
-    //     }
-    // }
+        if let Ok(player_gun) = maybe_player_gun {
+            Effect::ChangeModel {
+                entity_id,
+                model_name: player_gun.hand_model.clone(),
+            }
+        } else {
+            Effect::NoEffect
+        }
+    }
 
     fn handle_message(
         &mut self,
