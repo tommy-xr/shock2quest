@@ -339,12 +339,12 @@ fn create_model(
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
         // We have some sort of model, but need to refine
 
-        if v_rendertype.contains(entity_id) {
-            let render_type = v_rendertype.get(entity_id).unwrap();
-            if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
-                return None;
-            };
-        }
+        // if v_rendertype.contains(entity_id) {
+        //     let render_type = v_rendertype.get(entity_id).unwrap();
+        //     if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
+        //         return None;
+        //     };
+        // }
 
         let model_name = model.0.to_owned();
         let maybe_model = asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"));

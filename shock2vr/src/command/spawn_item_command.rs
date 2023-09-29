@@ -32,7 +32,7 @@ impl Command for SpawnItemCommand {
             // Laser: -22,
             // assault flash: -2653,
             // vent parts: -1998, -1999, -2000
-            template_id: -17,
+            template_id: -22,
             position: pos + forward,
             orientation: rot,
             velocity: vec3(0.0, 0.0, 0.0),
