@@ -263,6 +263,7 @@ pub struct ToTemplateLinkInfo {
 #[derive(Debug, Component, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Link {
     AIProjectile(AIProjectileOptions),
+    AIRangedWeapon,
     Contains(u32),
     Corpse(CorpseOptions),
     Flinderize(FlinderizeOptions),
@@ -573,6 +574,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
 ) {
     // Links
     let links = vec![
+        define_link("L$AIRangedW", |_| Link::AIRangedWeapon),
         // TODO: Why is the data not available for some of these links?
         define_link("L$Corpse", |_| {
             Link::Corpse(CorpseOptions {

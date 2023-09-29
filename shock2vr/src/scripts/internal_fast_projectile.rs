@@ -1,6 +1,6 @@
 use cgmath::{
     vec3, vec4, Deg, EuclideanSpace, Matrix4, Quaternion, Rotation3, SquareMatrix,
-    Transform, Point3,
+    Transform, Point3, Vector3, InnerSpace,
 };
 use dark::{
     properties::{Link},
@@ -28,10 +28,10 @@ use crate::{
 
 use super::{Effect, MessagePayload, Script};
 
-pub struct InternalFastProjectileScript {}
+pub struct InternalFastProjectileScript { velocity: Vector3<f32> }
 impl InternalFastProjectileScript {
-    pub fn new() -> InternalFastProjectileScript {
-        InternalFastProjectileScript {}
+    pub fn new(velocity: Vector3<f32>) -> InternalFastProjectileScript {
+        InternalFastProjectileScript { velocity}
     }
 }
 
@@ -52,7 +52,8 @@ impl Script for InternalFastProjectileScript {
         let xform = v_runtime_prop_transform.get(entity_id).unwrap().0;
 
         let current_position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-        let forward = xform.transform_vector(vec3(0.0, 0.0, -1.0));
+        // let forward = xform.transform_vector(vec3(0.0, 0.0, -1.0));
+        let forward = self.velocity.normalize();
         let start_point = vec3_to_point3(current_position) - forward * SCALE_FACTOR * 0.25;
         let maybe_hit_spot = projectile_ray_cast(start_point, forward, physics, distance, world);
 
@@ -119,7 +120,6 @@ impl Script for InternalFastProjectileScript {
                 position: hit_point.to_vec() + hit_normal * SCALE_FACTOR / 25.0,
                 orientation: get_rotation_from_forward_vector(hit_normal)
                     * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
-                velocity: vec3(0.0, 0.0, 0.0),
                 root_transform: Matrix4::identity(),
             });
 

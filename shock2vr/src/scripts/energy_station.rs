@@ -65,6 +65,7 @@ fn do_recharge(world: &World, entity_id: EntityId, with: &EntityId) -> Effect {
 
     let mut query = vec![("event", "activate")];
     query.append(&mut class_tags);
+    println!("debug!! {:?}", query);
     let sound_effect = Effect::PlayEnvironmentalSound {
         audio_handle: AudioHandle::new(),
         query: EnvSoundQuery::from_tag_values(query),

@@ -4,7 +4,7 @@ use crate::{
     creature::get_creature_definition,
     runtime_props::*,
     time::Time,
-    util::{has_refs, point3_to_vec3, vec3_to_point3},
+    util::{get_rotation_from_matrix, has_refs, point3_to_vec3, vec3_to_point3},
 };
 
 use cgmath::{
@@ -85,13 +85,7 @@ pub fn create_entity_with_position(
 
     let transformed_position = root_transform.transform_point(vec3_to_point3(position));
 
-    let forward = root_transform
-        .transform_vector(vec3(0.0, 0.0, 1.0))
-        .normalize();
-    let up = root_transform
-        .transform_vector(vec3(0.0, 1.0, 0.0))
-        .normalize();
-    let transform_rotation = Quaternion::look_at(forward, up);
+    let transform_rotation = get_rotation_from_matrix(&root_transform);
 
     // Override position, rotation props
     world.add_component(
