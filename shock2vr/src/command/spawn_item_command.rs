@@ -35,7 +35,6 @@ impl Command for SpawnItemCommand {
             template_id: -17,
             position: pos + forward,
             orientation: rot,
-            velocity: vec3(0.0, 0.0, 0.0),
             root_transform: Matrix4::identity(),
         }
     }
