@@ -57,6 +57,7 @@ pub enum VirtualHandEffect {
         entity_id: EntityId,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
+        scale: Vector3<f32>,
     },
     SpawnEntity {
         template_id: i32,
@@ -397,12 +398,18 @@ impl VirtualHand {
                     //     torque,
                     // });
 
+                    let scale = if (handedness == Handedness::Left) {
+                        vec3(1.0, 1.0, -1.0)
+                    } else {
+                        vec3(1.0, 1.0, 1.0)
+                    };
+
                     msgs.push(VirtualHandEffect::SetPositionRotation {
                         entity_id,
                         position: hand_position + offset_position,
                         rotation: hand_rotation * offset_rotation,
-                        // position: hand_position,
-                        // rotation: hand_rotation,
+                        scale, // position: hand_position,
+                               // rotation: hand_rotation,
                     });
                     // println!(
                     //     "[{entity_id:?}{maybe_model_name:?}]\n - size is: {size}\n - diff_euler is: {diff:?}\n - torque is {torque:?}\n, force is: {force:?} position is: {position:?}, setting position: {hand_position:?}"

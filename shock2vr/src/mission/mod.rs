@@ -671,6 +671,7 @@ impl Mission {
         entity_id: EntityId,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
+        scale: Vector3<f32>,
     ) {
         if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
             self.physics
@@ -678,7 +679,8 @@ impl Mission {
         } else {
             let translation_matrix = Matrix4::from_translation(position);
             let rotation_matrix = Matrix4::<f32>::from(rotation);
-            let xform = translation_matrix * rotation_matrix;
+            let scale_matrix = Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+            let xform = translation_matrix * rotation_matrix * scale_matrix;
 
             let v_entities = self.world.borrow::<EntitiesView>().unwrap();
             let mut v_transform = self
@@ -1243,7 +1245,13 @@ impl Mission {
                     rotation,
                     position,
                 } => {
-                    self.set_entity_position_rotation(entity_id, position, rotation);
+                    // TODO: plumb scale through
+                    self.set_entity_position_rotation(
+                        entity_id,
+                        position,
+                        rotation,
+                        vec3(1.0, 1.0, 1.0),
+                    );
                 }
                 Effect::SetPosition {
                     entity_id,
@@ -1587,8 +1595,9 @@ impl Mission {
                     entity_id,
                     position,
                     rotation,
+                    scale,
                 } => {
-                    self.set_entity_position_rotation(entity_id, position, rotation);
+                    self.set_entity_position_rotation(entity_id, position, rotation, scale);
                 }
                 VirtualHandEffect::SpawnEntity {
                     template_id,
