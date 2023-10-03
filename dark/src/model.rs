@@ -196,10 +196,8 @@ impl Model {
 
     pub fn vhots(&self) -> Vec<Vhot> {
         match &self.inner {
-            InnerModel::Animated(animated_model) => _animated_model.vhots.clone()
-            InnerModel::Static(static_model) => {
-                static_model.vhots.clone()
-            }
+            InnerModel::Animated(animated_model) => animated_model.vhots.clone(),
+            InnerModel::Static(static_model) => static_model.vhots.clone(),
         }
     }
 
