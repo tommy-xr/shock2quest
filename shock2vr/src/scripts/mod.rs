@@ -497,7 +497,7 @@ impl ScriptWorld {
             "energyweapon" => Box::new(NoopScript::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => Box::new(UnimplementedScript::new(&script_name)),
-            "psiampscript" => Box::new(UnimplementedScript::new(&script_name)),
+            "psiampscript" => Box::new(WeaponScript::new()),
             "stasismodify" => Box::new(UnimplementedScript::new(&script_name)),
             "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
 

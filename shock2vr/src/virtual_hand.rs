@@ -636,7 +636,7 @@ fn get_held_position_orientation(
     );
     let rotated_gun_orientation = (
         vec3(0.0, 0.0, 0.0),
-        Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)),
+        Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(-PI / 2.0)),
     );
 
     let item_orientation = (
@@ -653,6 +653,7 @@ fn get_held_position_orientation(
     if let Ok(model_name) = maybe_model_name {
         match model_name.as_ref() {
             "atek_w" => default_orientation,
+            "atek_h" => rotated_gun_orientation,
             "ar15_w" => default_orientation,
             "battery" => item_orientation,
             "batteryb" => item_orientation,
@@ -660,6 +661,8 @@ fn get_held_position_orientation(
             "gameboy" => item_orientation,
             "gamecart" => item_orientation,
             "laser" => rotated_gun_orientation,
+            "amp_h" => rotated_gun_orientation,
+            "lasehand" => rotated_gun_orientation,
             "nanocan" => item_orientation,
             "sg_w" => item_orientation,
             "wrench_w" => melee_orientation,

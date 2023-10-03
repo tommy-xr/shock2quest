@@ -65,7 +65,7 @@ use crate::{
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropProxyEntity,
-        RuntimePropTransform,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -772,19 +772,21 @@ impl Mission {
                 .get(created_entity.entity_id)
                 // Not sure why the coordinate system is different for projectile launch?
                 .map(|v| vec3(v.0.z, v.0.y, v.0.x))
+                //.map(|v| vec3(v.0.z.abs(), v.0.y.abs(), v.0.x.abs()))
                 .unwrap_or(vec3(0.0, 0.0, 0.0));
 
+            let mag = initial_velocity.magnitude();
+            let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag));
             if initial_velocity.magnitude() > 80.0 {
                 // Use raycast strategy for fast moving objects
                 script_world.add_entity2(
                     created_entity.entity_id,
-                    Box::new(InternalFastProjectileScript::new()),
+                    Box::new(InternalFastProjectileScript::new(x_velocity)),
                 );
                 // HACK: Don't use physics for these entities...
                 physics.remove(created_entity.entity_id);
             } else {
                 id_to_physics.insert(created_entity.entity_id, rigid_body);
-                let x_velocity = root_transform.transform_vector(initial_velocity);
                 physics.set_velocity(created_entity.entity_id, (x_velocity / SCALE_FACTOR) * 1.5);
             }
         };
@@ -1110,6 +1112,7 @@ impl Mission {
                         let xform = model.get_transform();
                         //drop(scene_obj);
 
+                        let ext_name = model_name.clone();
                         let orig_model =
                             asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
 
@@ -1117,9 +1120,16 @@ impl Mission {
 
                         let new_model = Model::transform(orig_model_ref, xform);
 
+                        let vhots = new_model.vhots();
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
                             .add_component(entity_id, PropModelName(model_name));
+
+                        println!(
+                            "!!debug - new_model_name: {:?} vhots: {:?}",
+                            ext_name, vhots
+                        );
+                        self.world.add_component(entity_id, RuntimePropVhots(vhots));
                     }
                 }
                 Effect::PlayEmail { deck, email, force } => {

@@ -32,6 +32,16 @@ impl Script for WeaponScript {
         let maybe_player_gun = v_player_gun.get(entity_id);
 
         if let Ok(player_gun) = maybe_player_gun {
+            // if (!player_gun.hand_model.contains("atek")
+            //     && !player_gun.hand_model.contains("sg")
+            //     && !player_gun.hand_model.contains("ar")
+            //     && !player_gun.hand_model.contains("emp")
+            //     && !player_gun.hand_model.contains("gren")
+            //     && !player_gun.hand_model.contains("sfg")
+            //     && !player_gun.hand_model.contains("amp_h"))
+            // {
+            //     panic!("Player gun: {:?}", player_gun);
+            // }
             Effect::ChangeModel {
                 entity_id,
                 model_name: player_gun.hand_model.clone(),
@@ -123,7 +133,11 @@ fn create_muzzle_flash(
     let transform = v_transform.get(entity_id).unwrap();
 
     let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
+    // let rot_matrix: Matrix4<f32> =
+    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
 
+    // let xform_matrix = Matrix4::from_translation(vhot_offset);
+    println!("debug!! vhots: {:?} vhot_offset: {:?}", vhots, vhot_offset);
     Effect::CreateEntity {
         template_id: muzzle_flash_template_id,
         position: vhot_offset,
@@ -152,11 +166,15 @@ fn create_projectile(
     let forward = vec3(0.0, 0.0, -1.0);
 
     //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
-    let rot_matrix: Matrix4<f32> =
-        Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
+    // let rot_matrix: Matrix4<f32> =
+    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
 
+    // let rot_matrix: Matrix4<f32> =
+    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
     // let rot_matrix: Matrix4<f32> = Quaternion::from_angle_y(Deg(180.0)).into();
     let projectile_rotation = Quaternion::from_angle_y(Deg(90.0));
+
+    let rot_matrix: Matrix4<f32> = Quaternion::from_angle_y(Deg(-90.0)).into();
 
     Effect::CreateEntity {
         template_id: projectile_template_id,
