@@ -178,7 +178,7 @@ pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
-    //tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt::init();
     let args = Args::parse();
     //panic!("args: {:?}", args);
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();

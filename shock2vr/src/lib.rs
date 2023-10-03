@@ -31,8 +31,9 @@ use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
+    log_property,
     motion::MotionDB,
-    properties::{AmbientSoundFlags, PropAmbientHacked, PropPosition},
+    properties::{AmbientSoundFlags, PropAmbientHacked, PropLimbModel, PropPosition},
     SCALE_FACTOR,
 };
 use engine::{
@@ -329,7 +330,7 @@ impl Game {
         // panic!();
 
         // log_property::<PropAI>(&active_mission.world);
-        // log_property::<PropInventoryDimensions>(&active_mission.world);
+        log_property::<PropLimbModel>(&active_mission.world);
 
         // log_entity(
         //     &active_mission.world,
