@@ -1618,9 +1618,18 @@ impl Mission {
                     rotation: _,
                 } => {
                     self.make_un_physical(entity_id);
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::Hold,
+                        to: entity_id,
+                    });
                 }
                 VirtualHandEffect::DropItem { entity_id } => {
                     self.make_physical(entity_id);
+
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::Drop,
+                        to: entity_id,
+                    });
                 }
             }
         }

@@ -83,10 +83,6 @@ pub enum HandState {
         // Identifiers for world / physics
         entity_id: EntityId,
         // rigid_body_handle: RigidBodyHandle,
-
-        // Offset rotation / position - what's the right orientation for the object when held?
-        offset_rotation: Quaternion<f32>,
-        offset_position: Vector3<f32>,
     },
 }
 
@@ -110,12 +106,7 @@ impl VirtualHand {
         match self.hand_state {
             // Nothing to do here!
             HandState::Empty => self.clone(),
-            HandState::Grabbing {
-                entity_id,
-                // rigid_body_handle: _,
-                offset_rotation: _,
-                offset_position: _,
-            } => {
+            HandState::Grabbing { entity_id } => {
                 if entity_id == entity_to_destroy_id {
                     VirtualHand {
                         hand_state: HandState::Empty,
@@ -157,14 +148,8 @@ impl VirtualHand {
             return self.clone();
         }
 
-        let (offset_position, offset_rotation) = get_held_position_orientation(entity_id, world);
         VirtualHand {
-            hand_state: HandState::Grabbing {
-                entity_id,
-                // rigid_body_handle: entity_rigid_body,
-                offset_rotation,
-                offset_position,
-            },
+            hand_state: HandState::Grabbing { entity_id },
             ..self.clone()
         }
     }
@@ -177,19 +162,11 @@ impl VirtualHand {
     ) -> VirtualHand {
         match self.hand_state {
             HandState::Empty => self.clone(),
-            HandState::Grabbing {
-                entity_id,
-                // rigid_body_handle: _,
-                offset_rotation,
-                offset_position,
-            } => {
+            HandState::Grabbing { entity_id } => {
                 if entity_id == old_entity_id {
                     VirtualHand {
                         hand_state: HandState::Grabbing {
                             entity_id: new_entity_id,
-                            // rigid_body_handle: new_rigid_body,
-                            offset_rotation,
-                            offset_position,
                         },
                         ..self.clone()
                     }
@@ -232,12 +209,7 @@ impl VirtualHand {
         );
 
         let (hand, mut effs) = match prev.hand_state {
-            HandState::Grabbing {
-                entity_id,
-                // rigid_body_handle,
-                offset_position,
-                offset_rotation,
-            } => {
+            HandState::Grabbing { entity_id } => {
                 // See what we're hitting
                 let mut msgs = Vec::new();
 
@@ -276,6 +248,9 @@ impl VirtualHand {
                     // let velocity = physics.get_velocity(rigid_body_handle).unwrap();
                     // let hold_position = hand_position + offset_position;
                     // let dir = hold_position - position;
+
+                    let (offset_position, offset_rotation) =
+                        get_held_position_orientation(entity_id, world);
 
                     let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
                     let _maybe_model_name = v_model_name.get(entity_id);
@@ -408,12 +383,9 @@ impl VirtualHand {
                         entity_id,
                         position: hand_position + offset_position,
                         rotation: hand_rotation * offset_rotation,
-                        scale, // position: hand_position,
-                               // rotation: hand_rotation,
+                        scale,
                     });
-                    // println!(
-                    //     "[{entity_id:?}{maybe_model_name:?}]\n - size is: {size}\n - diff_euler is: {diff:?}\n - torque is {torque:?}\n, force is: {force:?} position is: {position:?}, setting position: {hand_position:?}"
-                    // );
+
                     let updated_hand = VirtualHand {
                         position: hand_position,
                         rotation: hand_rotation,
@@ -592,15 +564,7 @@ fn handle_empty_hand_state(
                     rotation: hand_rotation,
                 });
 
-                let (offset_position, offset_rotation) =
-                    get_held_position_orientation(entity_id, world);
-
-                next_hand_state = HandState::Grabbing {
-                    entity_id,
-                    // rigid_body_handle,
-                    offset_position,
-                    offset_rotation,
-                };
+                next_hand_state = HandState::Grabbing { entity_id };
             }
         }
     }

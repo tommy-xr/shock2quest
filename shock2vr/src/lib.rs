@@ -33,7 +33,10 @@ use dark::{
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
     log_property,
     motion::MotionDB,
-    properties::{AmbientSoundFlags, PropAmbientHacked, PropLimbModel, PropPosition},
+    properties::{
+        AmbientSoundFlags, InternalPropOriginalModelName, PropAmbientHacked, PropLimbModel,
+        PropModelName, PropPosition,
+    },
     SCALE_FACTOR,
 };
 use engine::{
@@ -330,7 +333,9 @@ impl Game {
         // panic!();
 
         // log_property::<PropAI>(&active_mission.world);
-        log_property::<PropLimbModel>(&active_mission.world);
+        log_property::<PropModelName>(&active_mission.world);
+        log_property::<InternalPropOriginalModelName>(&active_mission.world);
+        // panic!();
 
         // log_entity(
         //     &active_mission.world,
