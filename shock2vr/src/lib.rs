@@ -15,6 +15,7 @@ mod scripts;
 mod systems;
 mod util;
 mod virtual_hand;
+mod vr_config;
 mod zip_asset_path;
 
 pub use mission::visibility_engine::CullingInfo;

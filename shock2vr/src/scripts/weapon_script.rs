@@ -41,7 +41,6 @@ impl Script for WeaponScript {
                 let sound_effect =
                     play_environmental_sound(world, entity_id, "shoot", vec![], AudioHandle::new());
                 //Create muzzle flash
-                // TODO:
                 let muzzle_flashes =
                     get_all_links_with_template(world, entity_id, |link| match link {
                         Link::GunFlash(data) => Some(*data),

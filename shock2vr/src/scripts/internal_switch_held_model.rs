@@ -1,25 +1,9 @@
-use std::f32::consts::PI;
-
-use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad, Rotation3};
-use dark::properties::{
-    GunFlashOptions, InternalPropOriginalModelName, Link, ProjectileOptions, PropLimbModel,
-    PropPlayerGun,
-};
-use engine::audio::AudioHandle;
+use dark::properties::{InternalPropOriginalModelName, PropLimbModel, PropPlayerGun};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    physics::PhysicsWorld,
-    runtime_props::{RuntimePropTransform, RuntimePropVhots},
-};
+use crate::{physics::PhysicsWorld, vr_config};
 
-use super::{
-    script_util::{
-        get_all_links_with_template, get_first_link_with_template_and_data,
-        play_environmental_sound,
-    },
-    Effect, MessagePayload, Script,
-};
+use super::{Effect, MessagePayload, Script};
 
 pub struct InternalSwitchHeldModelScript;
 impl InternalSwitchHeldModelScript {
@@ -29,59 +13,6 @@ impl InternalSwitchHeldModelScript {
 }
 
 impl Script for InternalSwitchHeldModelScript {
-    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
-        // // let v_player_gun = world.borrow::<View<PropLimbModel>>().unwrap();
-
-        // // let maybe_player_gun = v_player_gun.get(entity_id);
-
-        // // println!(
-        // //     "!!debug wrench - initializing melee weapon: {:?} ent id: {:?}",
-        // //     maybe_player_gun, entity_id,
-        // // );
-        // // if let Ok(player_gun) = maybe_player_gun {
-        // //     // if (!player_gun.hand_model.contains("atek")
-        // //     //     && !player_gun.hand_model.contains("sg")
-        // //     //     && !player_gun.hand_model.contains("ar")
-        // //     //     && !player_gun.hand_model.contains("emp")
-        // //     //     && !player_gun.hand_model.contains("gren")
-        // //     //     && !player_gun.hand_model.contains("sfg")
-        // //     //     && !player_gun.hand_model.contains("amp_h"))
-        // //     // {
-        // //     //     panic!("Player gun: {:?}", player_gun);
-        // //     // }
-        // //     Effect::ChangeModel {
-        // //         entity_id,
-        // //         model_name: player_gun.0.clone(),
-        // //     }
-        // // } else {
-        // //     Effect::NoEffect
-        // // }
-
-        // let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
-
-        // let maybe_player_gun = v_player_gun.get(entity_id);
-
-        // if let Ok(player_gun) = maybe_player_gun {
-        //     // if (!player_gun.hand_model.contains("atek")
-        //     //     && !player_gun.hand_model.contains("sg")
-        //     //     && !player_gun.hand_model.contains("ar")
-        //     //     && !player_gun.hand_model.contains("emp")
-        //     //     && !player_gun.hand_model.contains("gren")
-        //     //     && !player_gun.hand_model.contains("sfg")
-        //     //     && !player_gun.hand_model.contains("amp_h"))
-        //     // {
-        //     //     panic!("Player gun: {:?}", player_gun);
-        //     // }
-        //     Effect::ChangeModel {
-        //         entity_id,
-        //         model_name: player_gun.hand_model.clone(),
-        //     }
-        // } else {
-        //     Effect::NoEffect
-        // }
-        Effect::NoEffect
-    }
-
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -91,28 +22,10 @@ impl Script for InternalSwitchHeldModelScript {
     ) -> Effect {
         match msg {
             MessagePayload::Hold => {
-                let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
-                let v_melee_weapon = world.borrow::<View<PropLimbModel>>().unwrap();
-
-                if let Ok(player_gun) = v_player_gun.get(entity_id) {
-                    // if (!player_gun.hand_model.contains("atek")
-                    //     && !player_gun.hand_model.contains("sg")
-                    //     && !player_gun.hand_model.contains("ar")
-                    //     && !player_gun.hand_model.contains("emp")
-                    //     && !player_gun.hand_model.contains("gren")
-                    //     && !player_gun.hand_model.contains("sfg")
-                    //     && !player_gun.hand_model.contains("amp_h"))
-                    // {
-                    //     panic!("Player gun: {:?}", player_gun);
-                    // }
+                if let Some(view_model) = get_view_model(world, entity_id) {
                     Effect::ChangeModel {
                         entity_id,
-                        model_name: player_gun.hand_model.clone(),
-                    }
-                } else if let Ok(limb_model) = v_melee_weapon.get(entity_id) {
-                    Effect::ChangeModel {
-                        entity_id,
-                        model_name: limb_model.0.clone(),
+                        model_name: view_model,
                     }
                 } else {
                     Effect::NoEffect
@@ -120,26 +33,43 @@ impl Script for InternalSwitchHeldModelScript {
             }
 
             MessagePayload::Drop => {
-                let v_player_gun = world
-                    .borrow::<View<InternalPropOriginalModelName>>()
-                    .unwrap();
-
-                let maybe_player_gun = v_player_gun.get(entity_id);
-                println!(
-                    "atek - maybe_player_gun: ${:?} entity_id: ${:?}",
-                    maybe_player_gun, entity_id
-                );
-
-                if let Ok(player_gun) = maybe_player_gun {
+                if let Some(view_model) = get_previous_model(world, entity_id) {
                     Effect::ChangeModel {
                         entity_id,
-                        model_name: player_gun.0.clone(),
+                        model_name: view_model,
                     }
                 } else {
                     Effect::NoEffect
                 }
             }
+
             _ => Effect::NoEffect,
         }
     }
+}
+
+fn get_view_model(world: &World, entity_id: EntityId) -> Option<String> {
+    let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
+    let v_melee_weapon = world.borrow::<View<PropLimbModel>>().unwrap();
+
+    let ret = {
+        if let Ok(player_gun) = v_player_gun.get(entity_id) {
+            Some(player_gun.hand_model.clone())
+        } else if let Ok(limb_model) = v_melee_weapon.get(entity_id) {
+            Some(limb_model.0.clone())
+        } else {
+            None
+        }
+    };
+
+    ret.filter(|str| vr_config::is_allowed_hand_model(str))
+}
+
+fn get_previous_model(world: &World, entity_id: EntityId) -> Option<String> {
+    let v_player_gun = world
+        .borrow::<View<InternalPropOriginalModelName>>()
+        .unwrap();
+
+    let maybe_player_gun = v_player_gun.get(entity_id);
+    maybe_player_gun.ok().map(|player_gun| player_gun.0.clone())
 }
