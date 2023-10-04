@@ -15,11 +15,11 @@ use dark::{
     model::Model,
     motion::AnimationPlayer,
     properties::{
-        FrobFlag, Links, PhysicsModelType, PoseType, PropCollisionType, PropCreature,
-        PropCreaturePose, PropFrobInfo, PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile,
-        PropKeySrc, PropModelName, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTripFlags, RenderType,
-        TemplateLinks, WrappedEntityId,
+        FrobFlag, InternalPropOriginalModelName, Links, PhysicsModelType, PoseType,
+        PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo, PropHUDSelect,
+        PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName, PropPhysDimensions,
+        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScale, PropSymName,
+        PropTemplateId, PropTripFlags, RenderType, TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info, BitmapAnimation, SCALE_FACTOR,
 };
@@ -508,6 +508,20 @@ pub fn initialize_entity_with_props(
         if let Some(name) = obj_name_map.get(&parent_id) {
             world.add_component(entity_id, PropSymName(name.to_owned()))
         }
+    }
+    // Augment any props
+
+    let maybe_mod = {
+        let maybe_model_name = world.borrow::<View<PropModelName>>().unwrap();
+        if let Ok(model_name) = maybe_model_name.get(entity_id) {
+            Some(model_name.0.clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(model) = maybe_mod {
+        world.add_component(entity_id, InternalPropOriginalModelName(model));
     }
 }
 
