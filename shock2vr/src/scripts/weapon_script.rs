@@ -29,59 +29,6 @@ impl WeaponScript {
 }
 
 impl Script for WeaponScript {
-    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
-        // // let v_player_gun = world.borrow::<View<PropLimbModel>>().unwrap();
-
-        // // let maybe_player_gun = v_player_gun.get(entity_id);
-
-        // // println!(
-        // //     "!!debug wrench - initializing melee weapon: {:?} ent id: {:?}",
-        // //     maybe_player_gun, entity_id,
-        // // );
-        // // if let Ok(player_gun) = maybe_player_gun {
-        // //     // if (!player_gun.hand_model.contains("atek")
-        // //     //     && !player_gun.hand_model.contains("sg")
-        // //     //     && !player_gun.hand_model.contains("ar")
-        // //     //     && !player_gun.hand_model.contains("emp")
-        // //     //     && !player_gun.hand_model.contains("gren")
-        // //     //     && !player_gun.hand_model.contains("sfg")
-        // //     //     && !player_gun.hand_model.contains("amp_h"))
-        // //     // {
-        // //     //     panic!("Player gun: {:?}", player_gun);
-        // //     // }
-        // //     Effect::ChangeModel {
-        // //         entity_id,
-        // //         model_name: player_gun.0.clone(),
-        // //     }
-        // // } else {
-        // //     Effect::NoEffect
-        // // }
-
-        // let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
-
-        // let maybe_player_gun = v_player_gun.get(entity_id);
-
-        // if let Ok(player_gun) = maybe_player_gun {
-        //     // if (!player_gun.hand_model.contains("atek")
-        //     //     && !player_gun.hand_model.contains("sg")
-        //     //     && !player_gun.hand_model.contains("ar")
-        //     //     && !player_gun.hand_model.contains("emp")
-        //     //     && !player_gun.hand_model.contains("gren")
-        //     //     && !player_gun.hand_model.contains("sfg")
-        //     //     && !player_gun.hand_model.contains("amp_h"))
-        //     // {
-        //     //     panic!("Player gun: {:?}", player_gun);
-        //     // }
-        //     Effect::ChangeModel {
-        //         entity_id,
-        //         model_name: player_gun.hand_model.clone(),
-        //     }
-        // } else {
-        //     Effect::NoEffect
-        // }
-        Effect::NoEffect
-    }
-
     fn handle_message(
         &mut self,
         entity_id: EntityId,
