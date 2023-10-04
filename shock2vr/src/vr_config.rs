@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use cgmath::{vec3, Angle, Deg, Quaternion, Rotation3, Vector3};
 use once_cell::sync::Lazy;
 
-struct VRHandModelPerHandAdjustments {
+#[derive(Clone)]
+pub struct VRHandModelPerHandAdjustments {
     offset: Vector3<f32>,
     rotation: Quaternion<f32>,
     scale: Vector3<f32>,
@@ -40,6 +41,7 @@ impl VRHandModelPerHandAdjustments {
     }
 }
 
+#[derive(Clone)]
 struct VRHandModelAdjustments {
     left_hand: VRHandModelPerHandAdjustments,
     right_hand: VRHandModelPerHandAdjustments,
@@ -61,25 +63,39 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     let mut map = HashMap::new();
 
     let held_weapon_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(90.0));
-    let held_weapon_left = held_weapon_right.flip_x();
+    let held_weapon_left = held_weapon_right.clone().flip_x();
+    let held_weapon = VRHandModelAdjustments::new(held_weapon_left, held_weapon_right);
 
-    // ATEK
-    map.insert(
-        "atek_h",
-        VRHandModelAdjustments::new(held_weapon_left, held_weapon_right),
+    let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
+    let held_item = VRHandModelAdjustments::new(held_item_hand.clone(), held_item_hand);
+
+    let default = VRHandModelAdjustments::new(
+        VRHandModelPerHandAdjustments::new(),
+        VRHandModelPerHandAdjustments::new(),
     );
 
-    // AMP
-    map.insert(
-        "amp_h",
-        VRHandModelAdjustments::new(held_weapon_left, held_weapon_right),
-    );
+    // Hand model adjustments for VR
+    // Specify overrides for particular models with how they should be oriented
+    // relative ot the virtual hand
+    let items = vec![
+        // Weapons
+        ("atek_h", held_weapon.clone()),
+        ("amph_h", held_weapon.clone()),
+        ("lasehand", held_weapon.clone()),
+        ("empgun", held_weapon.clone()),
+        ("wrench_h", default.clone()),
+        ("sg_w", held_weapon.clone()),
+        // World items
+        ("battery", held_item.clone()),
+        ("batteryb", held_item.clone()),
+        ("gameboy", held_item.clone()),
+        ("gamecart", held_item.clone()),
+        ("nanocan", held_item.clone()),
+    ];
 
-    // LASEHAND
-    map.insert(
-        "lasehand",
-        VRHandModelAdjustments::new(held_weapon_left, held_weapon_right),
-    );
+    items.iter().for_each(|(name, adjustments)| {
+        map.insert(*name, adjustments.clone());
+    });
 
     map
 });
@@ -101,8 +117,8 @@ pub fn get_vr_hand_model_adjustments(
     let adjustments = maybe_adjustments.unwrap();
 
     if is_left_hand {
-        adjustments.left_hand
+        adjustments.left_hand.clone()
     } else {
-        adjustments.right_hand
+        adjustments.right_hand.clone()
     }
 }
