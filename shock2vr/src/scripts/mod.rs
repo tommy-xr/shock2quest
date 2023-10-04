@@ -16,6 +16,7 @@ mod internal_collision_type;
 pub mod internal_fast_projectile;
 mod internal_keycard_script;
 mod internal_simple_health;
+mod internal_switch_held_model;
 mod level_change_button;
 mod logdiscscript;
 mod melee_weapon;
@@ -67,6 +68,7 @@ use crate::gui::gui_script;
 
 use self::choose_service::ChooseServiceScript;
 use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
+use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::{
     base_button::BaseButton, base_elevator::BaseElevator, base_monster::BaseMonster, core_room::*,
     create_sound::*, dead_power_cell::DeadPowerCell, destroy_all_by_name::DestroyAllByName,
@@ -355,7 +357,10 @@ impl ScriptWorld {
             "lootable" => Box::new(NoopScript::new()),
 
             // Weapons
-            "weaponscript" => Box::new(WeaponScript::new()),
+            "weaponscript" => Box::new(CompositeScript::new(vec![
+                Box::new(WeaponScript::new()),
+                Box::new(InternalSwitchHeldModelScript::new()),
+            ])),
             "pistolmodify" => Box::new(NoopScript::new()),
 
             // TODO: Necessary
@@ -496,11 +501,17 @@ impl ScriptWorld {
             "riflemodify" => Box::new(NoopScript::new()),
             "stasismodify" => Box::new(NoopScript::new()),
             "shotgunmodify" => Box::new(NoopScript::new()),
-            "wrench" => Box::new(MeleeWeapon::new()),
+            "psiampscript" => Box::new(CompositeScript::new(vec![
+                Box::new(MeleeWeapon::new()),
+                Box::new(InternalSwitchHeldModelScript::new()),
+            ])),
             "energyweapon" => Box::new(NoopScript::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => Box::new(UnimplementedScript::new(&script_name)),
-            "psiampscript" => Box::new(WeaponScript::new()),
+            "psiampscript" => Box::new(CompositeScript::new(vec![
+                Box::new(WeaponScript::new()),
+                Box::new(InternalSwitchHeldModelScript::new()),
+            ])),
             "stasismodify" => Box::new(UnimplementedScript::new(&script_name)),
             "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
 
