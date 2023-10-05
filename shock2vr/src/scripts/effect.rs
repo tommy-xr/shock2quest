@@ -9,7 +9,7 @@ use shipyard::EntityId;
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
-    virtual_hand::Handedness,
+    vr_config::Handedness,
 };
 
 use super::Message;

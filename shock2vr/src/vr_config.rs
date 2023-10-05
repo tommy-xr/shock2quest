@@ -3,18 +3,24 @@ use std::collections::{HashMap, HashSet};
 use cgmath::{vec3, Angle, Deg, Quaternion, Rotation3, Vector3};
 use once_cell::sync::Lazy;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Handedness {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug)]
 pub struct VRHandModelPerHandAdjustments {
-    offset: Vector3<f32>,
-    rotation: Quaternion<f32>,
-    scale: Vector3<f32>,
+    pub offset: Vector3<f32>,
+    pub rotation: Quaternion<f32>,
+    pub scale: Vector3<f32>,
 }
 
 impl VRHandModelPerHandAdjustments {
     pub fn new() -> VRHandModelPerHandAdjustments {
         VRHandModelPerHandAdjustments {
             offset: Vector3::new(0.0, 0.0, 0.0),
-            rotation: Quaternion::new(0.0, 0.0, 0.0, 1.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             scale: Vector3::new(1.0, 1.0, 1.0),
         }
     }
@@ -62,7 +68,7 @@ impl VRHandModelAdjustments {
 static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Lazy::new(|| {
     let mut map = HashMap::new();
 
-    let held_weapon_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(90.0));
+    let held_weapon_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(-90.0));
     let held_weapon_left = held_weapon_right.clone().flip_x();
     let held_weapon = VRHandModelAdjustments::new(held_weapon_left, held_weapon_right);
 
@@ -106,7 +112,7 @@ pub fn is_allowed_hand_model(model_name: &str) -> bool {
 
 pub fn get_vr_hand_model_adjustments(
     model_name: &str,
-    is_left_hand: bool,
+    handedness: Handedness,
 ) -> VRHandModelPerHandAdjustments {
     let maybe_adjustments = HAND_MODEL_POSITIONING.get(model_name);
 
@@ -116,7 +122,7 @@ pub fn get_vr_hand_model_adjustments(
 
     let adjustments = maybe_adjustments.unwrap();
 
-    if is_left_hand {
+    if handedness == Handedness::Left {
         adjustments.left_hand.clone()
     } else {
         adjustments.right_hand.clone()

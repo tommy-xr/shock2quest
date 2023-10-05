@@ -77,8 +77,8 @@ use crate::{
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
     util::{get_email_sound_file, has_refs},
-    virtual_hand::{self, Handedness, VirtualHand, VirtualHandEffect},
-    GameOptions,
+    virtual_hand::{self, VirtualHand, VirtualHandEffect},
+    vr_config, GameOptions,
 };
 
 use self::{entity_creator::EntityCreationInfo, visibility_engine::VisibilityEngine};
@@ -227,8 +227,8 @@ impl Mission {
         let template_to_entity_id = entity_populator.populate(&entity_info, &level, &mut world);
 
         // Instantiate held items
-        let mut left_hand = VirtualHand::new(virtual_hand::Handedness::Left);
-        let mut right_hand = VirtualHand::new(virtual_hand::Handedness::Right);
+        let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
+        let mut right_hand = VirtualHand::new(vr_config::Handedness::Right);
         let (left_hand_entity, right_hand_entity, maybe_inventory_entity) =
             held_item_save_data.instantiate(&mut world);
 
@@ -935,7 +935,7 @@ impl Mission {
                     hand,
                     current_parent_id: _,
                 } => {
-                    if hand == Handedness::Left {
+                    if hand == vr_config::Handedness::Left {
                         self.left_hand = self.left_hand.grab_entity(&self.world, entity_id);
                     } else {
                         self.right_hand = self.right_hand.grab_entity(&self.world, entity_id);

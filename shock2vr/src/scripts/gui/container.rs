@@ -178,7 +178,7 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 state.clone(),
                 Effect::GrabEntity {
                     entity_id: *ent,
-                    hand: crate::virtual_hand::Handedness::Left,
+                    hand: crate::vr_config::Handedness::Left,
                     // TODO: Set this up to break link
                     current_parent_id: None,
                 },
@@ -187,7 +187,7 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 state.clone(),
                 Effect::GrabEntity {
                     entity_id: *ent,
-                    hand: crate::virtual_hand::Handedness::Right,
+                    hand: crate::vr_config::Handedness::Right,
                     // TODO: Set this up to break link
                     current_parent_id: None,
                 },

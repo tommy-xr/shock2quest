@@ -61,7 +61,7 @@ pub use effect::*;
 use shipyard::{EntityId, World};
 use tracing::{info, span, trace, warn, Level};
 
-use crate::virtual_hand::Handedness;
+use crate::vr_config::Handedness;
 use crate::{physics::PhysicsWorld, time::Time};
 
 use crate::gui::gui_script;
