@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use cgmath::{vec3, Angle, Deg, Quaternion, Rotation3, Vector3};
+use dark::properties::PropModelName;
 use once_cell::sync::Lazy;
+use shipyard::{EntityId, Get, View, World};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handedness {
@@ -110,7 +112,24 @@ pub fn is_allowed_hand_model(model_name: &str) -> bool {
     HAND_MODEL_POSITIONING.contains_key(model_name)
 }
 
-pub fn get_vr_hand_model_adjustments(
+pub fn get_vr_hand_model_adjustments_from_entity(
+    entity_id: EntityId,
+    world: &World,
+    handedness: Handedness,
+) -> VRHandModelPerHandAdjustments {
+    let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
+    let maybe_model_name = v_model_name
+        .get(entity_id)
+        .map(|sz| sz.0.to_ascii_lowercase());
+
+    if let Ok(model_name) = maybe_model_name {
+        get_vr_hand_model_adjustments_from_model(&model_name, handedness)
+    } else {
+        VRHandModelPerHandAdjustments::new()
+    }
+}
+
+pub fn get_vr_hand_model_adjustments_from_model(
     model_name: &str,
     handedness: Handedness,
 ) -> VRHandModelPerHandAdjustments {

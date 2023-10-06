@@ -484,17 +484,7 @@ fn get_held_position_orientation(
     world: &World,
     handedness: Handedness,
 ) -> vr_config::VRHandModelPerHandAdjustments {
-    // Get the model name, maybe...
-    let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
-    let maybe_model_name = v_model_name
-        .get(entity_id)
-        .map(|sz| sz.0.to_ascii_lowercase());
-
-    if let Ok(model_name) = maybe_model_name {
-        vr_config::get_vr_hand_model_adjustments(&model_name, handedness)
-    } else {
-        VRHandModelPerHandAdjustments::new()
-    }
+    vr_config::get_vr_hand_model_adjustments_from_entity(entity_id, &world, handedness)
 
     // let default_orientation = (
     //     vec3(0.0, 0.0, 0.0),

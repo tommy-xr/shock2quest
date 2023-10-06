@@ -1,6 +1,8 @@
 use std::f32::consts::PI;
 
-use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad, Rotation3};
+use cgmath::{
+    point3, vec3, Deg, EuclideanSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Transform,
+};
 use dark::properties::{
     GunFlashOptions, InternalPropOriginalModelName, Link, ProjectileOptions, PropLimbModel,
     PropPlayerGun,
@@ -11,6 +13,7 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{
     physics::PhysicsWorld,
     runtime_props::{RuntimePropTransform, RuntimePropVhots},
+    vr_config,
 };
 
 use super::{
@@ -109,7 +112,7 @@ fn create_muzzle_flash(
 
     let transform = v_transform.get(entity_id).unwrap();
 
-    let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
+    let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(0.0));
     // let rot_matrix: Matrix4<f32> =
     //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
 
@@ -136,31 +139,29 @@ fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-
     let vhot_offset = vhots.get(0).map(|v| v.point).unwrap_or(vec3(0.0, 0.0, 0.0));
 
     let transform = v_transform.get(entity_id).unwrap();
+
+    let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
+        entity_id,
+        world,
+        // TODO: I guess we don't care about handedness for now,
+        // since it only affects the flipping of the weapon... but truly we should consider it.
+        vr_config::Handedness::Left,
+    );
+
+    let rotation = adjustments.rotation;
+    let projectile_rotation = rotation;
+    let rot_matrix: Matrix4<f32> = rotation.into();
     let forward = vec3(0.0, 0.0, -1.0);
-
-    //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
-    // let rot_matrix: Matrix4<f32> =
-    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
-
-    // let rot_matrix: Matrix4<f32> =
-    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
-    // let rot_matrix: Matrix4<f32> = Quaternion::from_angle_y(Deg(180.0)).into();
-    let projectile_rotation = Quaternion::from_angle_y(Deg(90.0));
-
-    let rot_matrix: Matrix4<f32> = Quaternion::from_angle_y(Deg(-90.0)).into();
+    //let vhot_p = point3(vhot_offset.x, vhot_offset.y, vhot_offset.z);
+    //let position = rot_matrix.transform_point(vhot_p);
 
     Effect::CreateEntity {
         template_id: projectile_template_id,
-        position: vhot_offset + forward * 0.5,
+        position: forward,
         orientation: projectile_rotation,
-        // orientation: Quaternion {
-        //     v: vec3(0.0, 0.0, 0.0),
-        //     s: 1.0,
-        // },
         root_transform: transform.0 * rot_matrix,
     }
 }
