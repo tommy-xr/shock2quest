@@ -112,12 +112,13 @@ fn create_muzzle_flash(
 
     let transform = v_transform.get(entity_id).unwrap();
 
-    let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(0.0));
-    // let rot_matrix: Matrix4<f32> =
-    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)).into();
+    let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
+        entity_id,
+        world,
+        vr_config::Handedness::Left,
+    );
+    let orientation = adjustments.rotation.invert() * Quaternion::from_angle_y(Deg(90.0));
 
-    // let xform_matrix = Matrix4::from_translation(vhot_offset);
-    println!("debug!! vhots: {:?} vhot_offset: {:?}", vhots, vhot_offset);
     Effect::CreateEntity {
         template_id: muzzle_flash_template_id,
         position: vhot_offset,
@@ -155,13 +156,15 @@ fn create_projectile(
     let projectile_rotation: Matrix4<f32> =
         vr_config::get_projectile_rotation_from_entity(entity_id, world).into();
     let rot_matrix: Matrix4<f32> = rotation.into();
-    let forward = vec3(0.0, 0.0, -1.0);
-    //let vhot_p = point3(vhot_offset.x, vhot_offset.y, vhot_offset.z);
-    //let position = rot_matrix.transform_point(vhot_p);
+    let inv_rot_matrix: Matrix4<f32> = rotation.invert().into();
+    //let forward = vec3(0.0, 0.0, -1.0);
+    let forward = vec3(0.0, 0.0, 0.0);
+    let vhot_p = point3(vhot_offset.x, vhot_offset.y, vhot_offset.z);
+    let p2 = inv_rot_matrix.transform_point(vhot_p).to_vec();
 
     Effect::CreateEntity {
         template_id: projectile_template_id,
-        position: forward,
+        position: p2,
         orientation: Quaternion::from_angle_y(Deg(90.0)),
         root_transform: transform.0 * rot_matrix * projectile_rotation,
     }
