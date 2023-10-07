@@ -3,7 +3,11 @@ use cgmath::{vec3, Matrix4, Quaternion, SquareMatrix};
 use dark::SCALE_FACTOR;
 use shipyard::{UniqueView, World};
 
-use crate::{scripts::Effect, PlayerInfo};
+use crate::{
+    scripts::Effect,
+    util::{point3_to_vec3, vec3_to_point3},
+    PlayerInfo,
+};
 
 use super::Command;
 // SpawnItemCommand
@@ -22,7 +26,7 @@ impl Command for SpawnItemCommand {
     fn execute(&self, world: &World) -> Effect {
         let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
 
-        let pos = player.pos;
+        let pos = vec3_to_point3(player.pos);
         let rot = player.rotation * self.head_rotation;
 
         let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -5.0 / SCALE_FACTOR);

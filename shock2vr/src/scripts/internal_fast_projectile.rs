@@ -54,7 +54,7 @@ impl Script for InternalFastProjectileScript {
         let current_position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
         // let forward = xform.transform_vector(vec3(0.0, 0.0, -1.0));
         let forward = self.velocity.normalize();
-        let start_point = vec3_to_point3(current_position) - forward * SCALE_FACTOR * 0.25;
+        let start_point = current_position - forward * SCALE_FACTOR * 0.25;
         let maybe_hit_spot = projectile_ray_cast(start_point, forward, physics, distance, world);
 
         if let Some(RayCastResult {

@@ -275,8 +275,6 @@ impl VirtualHand {
                         scale: vec3(1.0, 1.0, 1.0), //vr_offsets.scale,
                     });
 
-                    println!("!!debug - using offsets {:?}", vr_offsets);
-
                     let updated_hand = VirtualHand {
                         position: hand_position,
                         rotation: hand_rotation,

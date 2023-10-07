@@ -1,7 +1,5 @@
-use cgmath::{
-    point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3,
-};
-use dark::{SCALE_FACTOR};
+use cgmath::{point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3};
+use dark::SCALE_FACTOR;
 
 use shipyard::{EntityId, World};
 
@@ -55,8 +53,8 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
         let whisker_angle = Deg(30.0);
         let target_offset = 8.0 / SCALE_FACTOR;
 
-        let position = point3(0.0, -height, 0.0)
-            + get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+        let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0))
+            + vec3(0.0, -height, 0.0);
 
         let mut debug_lines = vec![];
 

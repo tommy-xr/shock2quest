@@ -59,7 +59,7 @@ pub enum Effect {
     },
     CreateEntityByTemplateName {
         template_name: String,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
     },
 

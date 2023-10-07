@@ -381,7 +381,7 @@ impl PhysicsWorld {
         }
     }
 
-    pub fn get_position(&self, handle: RigidBodyHandle) -> Option<Point3<f32>> {
+    pub fn get_position(&self, handle: RigidBodyHandle) -> Option<Vector3<f32>> {
         let maybe_rigid_body = self.rigid_body_set.get(handle);
 
         maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.translation()))

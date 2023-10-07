@@ -9,7 +9,7 @@ use dark::properties::{Link, Links, PropHasRefs, PropPosition};
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
 use tracing::{info, warn};
 
-use crate::{runtime_props::RuntimePropTransform};
+use crate::runtime_props::RuntimePropTransform;
 
 /// log_property
 ///
@@ -107,7 +107,7 @@ pub fn get_position_from_transform(
     world: &World,
     entity_id: EntityId,
     offset: Vector3<f32>,
-) -> Vector3<f32> {
+) -> Point3<f32> {
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_prop_position = world.borrow::<View<PropPosition>>().unwrap();
 
@@ -115,13 +115,14 @@ pub fn get_position_from_transform(
         let point = vec3_to_point3(offset);
         let xform = transform.0;
         let point = xform.transform_point(point);
-        point3_to_vec3(point)
+        point
     } else if let Ok(position) = v_prop_position.get(entity_id) {
         warn!("no transform for entity: {:?}", entity_id);
-        position.position + (position.rotation * offset)
+        let ret = position.position + (position.rotation * offset);
+        point3(ret.x, ret.y, ret.z)
     } else {
         warn!("no transform or position for entity: {:?}", entity_id);
-        vec3(0.0, 0.0, 0.0)
+        point3(0.0, 0.0, 0.0)
     }
 }
 
@@ -161,7 +162,7 @@ pub fn get_rotation_from_transform(world: &World, entity_id: EntityId) -> Quater
 
 pub fn get_position_from_matrix(xform: &Matrix4<f32>) -> Point3<f32> {
     let p = point3(0.0, 0.0, 0.0);
-    
+
     xform.transform_point(p)
 }
 

@@ -76,7 +76,7 @@ use crate::{
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
-    util::{get_email_sound_file, has_refs},
+    util::{get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::{self, VirtualHand, VirtualHandEffect},
     vr_config, GameOptions,
 };
@@ -94,7 +94,7 @@ pub fn resource_path(str: &str) -> String {
 
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
-    pub pos: Point3<f32>,
+    pub pos: Vector3<f32>,
     pub rotation: Quaternion<f32>,
     pub entity_id: EntityId,
 
@@ -585,7 +585,7 @@ impl Mission {
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
-                    position,
+                    vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
                 );
@@ -599,7 +599,7 @@ impl Mission {
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
-                    position,
+                    vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
                 );
@@ -1082,7 +1082,7 @@ impl Mission {
                     let new_entity_info = self.create_entity_with_position(
                         asset_cache,
                         template_id,
-                        position,
+                        vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
                     );
@@ -1603,7 +1603,7 @@ impl Mission {
                     self.create_entity_with_position(
                         asset_cache,
                         template_id,
-                        position,
+                        vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
                     );
