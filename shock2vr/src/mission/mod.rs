@@ -754,8 +754,6 @@ impl Mission {
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
 
-        world.add_component(created_entity.entity_id, PropHasRefs(true));
-
         if let Some((model, maybe_animation_player)) = created_entity.model {
             id_to_model.insert(created_entity.entity_id, model);
 

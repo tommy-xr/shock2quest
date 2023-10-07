@@ -8,8 +8,8 @@ use crate::{
 };
 
 use cgmath::{
-    num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation,
-    Transform, Vector3, Zero,
+    num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform,
+    Vector3, Zero,
 };
 use dark::{
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
@@ -333,6 +333,7 @@ fn create_model(
 
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
         // We have some sort of model, but need to refine
+        // TODO: This logic keeps projectiles from rendering - why?
         if v_rendertype.contains(entity_id) {
             let render_type = v_rendertype.get(entity_id).unwrap();
             if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
