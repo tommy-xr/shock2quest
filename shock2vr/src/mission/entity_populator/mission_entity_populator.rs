@@ -49,21 +49,6 @@ impl EntityPopulator for MissionEntityPopulator {
                 entity.0,
                 &level.obj_map,
             );
-
-            // Augment any props
-
-            let maybe_mod = {
-                let maybe_model_name = world.borrow::<View<PropModelName>>().unwrap();
-                if let Ok(model_name) = maybe_model_name.get(entity.0) {
-                    Some(model_name.0.clone())
-                } else {
-                    None
-                }
-            };
-
-            if let Some(model) = maybe_mod {
-                world.add_component(entity.0, InternalPropOriginalModelName(model));
-            }
         }
 
         // Third pass - initialize links for entity

@@ -749,12 +749,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop(
             "P$InvLimbMo",
-            |s, len| {
-                let ret = read_prop_string(s, len);
-                println!("limb model: {}", ret);
-                // panic!();
-                ret
-            },
+            read_prop_string,
             PropLimbModel,
             accumulator::latest,
         ),

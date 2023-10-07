@@ -157,14 +157,16 @@ fn create_projectile(
         vr_config::get_projectile_rotation_from_entity(entity_id, world).into();
     let rot_matrix: Matrix4<f32> = rotation.into();
     let inv_rot_matrix: Matrix4<f32> = rotation.invert().into();
-    //let forward = vec3(0.0, 0.0, -1.0);
-    let forward = vec3(0.0, 0.0, 0.0);
+
+    // Adjust the vhot position to be in the same coordinate space as the weapon
     let vhot_p = point3(vhot_offset.x, vhot_offset.y, vhot_offset.z);
-    let p2 = inv_rot_matrix.transform_point(vhot_p).to_vec();
+    let position = inv_rot_matrix.transform_point(vhot_p).to_vec();
 
     Effect::CreateEntity {
         template_id: projectile_template_id,
-        position: p2,
+        position,
+        // HACK: Not sure why we need to do this, but seems projectile
+        // models are rotated 90 degrees
         orientation: Quaternion::from_angle_y(Deg(90.0)),
         root_transform: transform.0 * rot_matrix * projectile_rotation,
     }
