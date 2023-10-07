@@ -34,7 +34,7 @@ impl Command for SpawnItemCommand {
             // assault flash: -2653,
             // vent parts: -1998, -1999, -2000
             // template_id: -22,
-            template_id: -22,
+            template_id: -928,
             position: pos + forward,
             orientation: rot,
             root_transform: Matrix4::identity(),

@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 use cgmath::{vec3, Deg, Quaternion, Rotation3, Vector3};
 use dark::properties::PropModelName;
@@ -27,9 +27,23 @@ impl VRHandModelPerHandAdjustments {
         }
     }
 
+    pub fn rotate_x(self, angle: Deg<f32>) -> VRHandModelPerHandAdjustments {
+        VRHandModelPerHandAdjustments {
+            rotation: self.rotation * Quaternion::from_angle_x(angle),
+            ..self
+        }
+    }
+
     pub fn rotate_y(self, angle: Deg<f32>) -> VRHandModelPerHandAdjustments {
         VRHandModelPerHandAdjustments {
             rotation: self.rotation * Quaternion::from_angle_y(angle),
+            ..self
+        }
+    }
+
+    pub fn rotate_z(self, angle: Deg<f32>) -> VRHandModelPerHandAdjustments {
+        VRHandModelPerHandAdjustments {
+            rotation: self.rotation * Quaternion::from_angle_z(angle),
             ..self
         }
     }
@@ -81,6 +95,13 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         Quaternion::from_angle_y(Deg(0.0)),
     );
 
+    let melee_right = VRHandModelPerHandAdjustments::new()
+        .rotate_x(Deg(45.))
+        .rotate_z(Deg(-0.0));
+    let melee_left = melee_right.clone().flip_x();
+    let melee_weapon =
+        VRHandModelAdjustments::new(melee_left, melee_right, Quaternion::from_angle_y(Deg(0.0)));
+
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
     let held_item = VRHandModelAdjustments::new(
         held_item_hand.clone(),
@@ -103,7 +124,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ("amph_h", held_weapon.clone()),
         ("lasehand", held_weapon.clone()),
         ("empgun", held_weapon.clone()),
-        ("wrench_h", default.clone()),
+        ("wrench_h", melee_weapon.clone()),
         ("sg_w", held_weapon.clone()),
         // World items
         ("battery", held_item.clone()),
