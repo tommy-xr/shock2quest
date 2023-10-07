@@ -53,16 +53,19 @@ impl VRHandModelPerHandAdjustments {
 struct VRHandModelAdjustments {
     left_hand: VRHandModelPerHandAdjustments,
     right_hand: VRHandModelPerHandAdjustments,
+    projectile_rotation: Quaternion<f32>,
 }
 
 impl VRHandModelAdjustments {
     pub fn new(
         left_hand: VRHandModelPerHandAdjustments,
         right_hand: VRHandModelPerHandAdjustments,
+        projectile_rotation: Quaternion<f32>,
     ) -> VRHandModelAdjustments {
         VRHandModelAdjustments {
             left_hand,
             right_hand,
+            projectile_rotation,
         }
     }
 }
@@ -72,14 +75,23 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
 
     let held_weapon_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(-90.0));
     let held_weapon_left = held_weapon_right.clone().flip_x();
-    let held_weapon = VRHandModelAdjustments::new(held_weapon_left, held_weapon_right);
+    let held_weapon = VRHandModelAdjustments::new(
+        held_weapon_left,
+        held_weapon_right,
+        Quaternion::from_angle_y(Deg(0.0)),
+    );
 
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
-    let held_item = VRHandModelAdjustments::new(held_item_hand.clone(), held_item_hand);
+    let held_item = VRHandModelAdjustments::new(
+        held_item_hand.clone(),
+        held_item_hand,
+        Quaternion::from_angle_y(Deg(0.0)),
+    );
 
     let default = VRHandModelAdjustments::new(
         VRHandModelPerHandAdjustments::new(),
         VRHandModelPerHandAdjustments::new(),
+        Quaternion::from_angle_y(Deg(-180.0)),
     );
 
     // Hand model adjustments for VR
@@ -129,6 +141,19 @@ pub fn get_vr_hand_model_adjustments_from_entity(
     }
 }
 
+pub fn get_projectile_rotation_from_entity(entity_id: EntityId, world: &World) -> Quaternion<f32> {
+    let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
+    let maybe_model_name = v_model_name
+        .get(entity_id)
+        .map(|sz| sz.0.to_ascii_lowercase());
+
+    if let Ok(model_name) = maybe_model_name {
+        get_vr_projectile_rotation_from_model(&model_name)
+    } else {
+        Quaternion::from_angle_y(Deg(180.0))
+    }
+}
+
 pub fn get_vr_hand_model_adjustments_from_model(
     model_name: &str,
     handedness: Handedness,
@@ -146,4 +171,14 @@ pub fn get_vr_hand_model_adjustments_from_model(
     } else {
         adjustments.right_hand.clone()
     }
+}
+
+fn get_vr_projectile_rotation_from_model(model_name: &str) -> Quaternion<f32> {
+    let maybe_adjustments = HAND_MODEL_POSITIONING.get(model_name);
+
+    if maybe_adjustments.is_none() {
+        return Quaternion::from_angle_y(Deg(180.0));
+    }
+
+    maybe_adjustments.unwrap().projectile_rotation
 }

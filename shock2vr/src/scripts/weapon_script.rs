@@ -152,7 +152,8 @@ fn create_projectile(
     );
 
     let rotation = adjustments.rotation;
-    let projectile_rotation = rotation;
+    let projectile_rotation: Matrix4<f32> =
+        vr_config::get_projectile_rotation_from_entity(entity_id, world).into();
     let rot_matrix: Matrix4<f32> = rotation.into();
     let forward = vec3(0.0, 0.0, -1.0);
     //let vhot_p = point3(vhot_offset.x, vhot_offset.y, vhot_offset.z);
@@ -161,7 +162,7 @@ fn create_projectile(
     Effect::CreateEntity {
         template_id: projectile_template_id,
         position: forward,
-        orientation: projectile_rotation,
-        root_transform: transform.0 * rot_matrix,
+        orientation: Quaternion::from_angle_y(Deg(90.0)),
+        root_transform: transform.0 * rot_matrix * projectile_rotation,
     }
 }
