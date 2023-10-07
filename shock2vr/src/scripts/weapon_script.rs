@@ -108,7 +108,7 @@ fn create_muzzle_flash(
     let vhot_offset = vhots
         .get(options.vhot as usize)
         .map(|v| v.point)
-        .unwrap_or(vec3(0.0, 0.0, 0.0));
+        .unwrap_or(point3(0.0, 0.0, 0.0));
 
     let transform = v_transform.get(entity_id).unwrap();
 
@@ -140,7 +140,10 @@ fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-    let vhot_offset = vhots.get(0).map(|v| v.point).unwrap_or(vec3(0.0, 0.0, 0.0));
+    let vhot = vhots
+        .get(0)
+        .map(|v| v.point)
+        .unwrap_or(point3(0.0, 0.0, 0.0));
 
     let transform = v_transform.get(entity_id).unwrap();
 
@@ -159,8 +162,7 @@ fn create_projectile(
     let inv_rot_matrix: Matrix4<f32> = rotation.invert().into();
 
     // Adjust the vhot position to be in the same coordinate space as the weapon
-    let vhot_p = point3(vhot_offset.x, vhot_offset.y, vhot_offset.z);
-    let position = inv_rot_matrix.transform_point(vhot_p).to_vec();
+    let position = inv_rot_matrix.transform_point(vhot);
 
     Effect::CreateEntity {
         template_id: projectile_template_id,

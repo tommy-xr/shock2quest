@@ -117,7 +117,7 @@ impl Script for InternalFastProjectileScript {
             };
             effects.push(Effect::CreateEntity {
                 template_id,
-                position: hit_point.to_vec() + hit_normal * SCALE_FACTOR / 25.0,
+                position: hit_point + hit_normal * SCALE_FACTOR / 25.0,
                 orientation: get_rotation_from_forward_vector(hit_normal)
                     * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
                 root_transform: Matrix4::identity(),

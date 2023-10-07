@@ -8,7 +8,8 @@ use crate::{
 };
 
 use cgmath::{
-    num_traits::abs, vec3, InnerSpace, Matrix4, Quaternion, Rotation, Transform, Vector3, Zero,
+    num_traits::abs, vec3, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation,
+    Transform, Vector3, Zero,
 };
 use dark::{
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
@@ -45,7 +46,7 @@ pub struct EntityCreationInfo {
 
 pub fn create_entity_with_position(
     template_id: i32,
-    position: Vector3<f32>,
+    position: Point3<f32>,
     orientation: Quaternion<f32>,
     root_transform: Matrix4<f32>,
     world: &mut World,
@@ -83,7 +84,7 @@ pub fn create_entity_with_position(
         u_time.total.as_secs_f32()
     };
 
-    let transformed_position = root_transform.transform_point(vec3_to_point3(position));
+    let transformed_position = root_transform.transform_point(position);
 
     let transform_rotation = get_rotation_from_matrix(&root_transform);
 
@@ -98,7 +99,7 @@ pub fn create_entity_with_position(
     );
 
     let transform = root_transform
-        * Matrix4::from_translation(position)
+        * Matrix4::from_translation(position.to_vec())
         * Matrix4::from(orientation)
         * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
 

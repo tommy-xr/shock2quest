@@ -94,7 +94,7 @@ pub fn resource_path(str: &str) -> String {
 
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
-    pub pos: Vector3<f32>,
+    pub pos: Point3<f32>,
     pub rotation: Quaternion<f32>,
     pub entity_id: EntityId,
 
@@ -614,7 +614,7 @@ impl Mission {
         &mut self,
         asset_cache: &mut AssetCache,
         template_name: &str,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
     ) -> Option<EntityCreationInfo> {
         let template_name_lowercase = template_name.to_ascii_lowercase();
@@ -707,7 +707,7 @@ impl Mission {
         &mut self,
         asset_cache: &mut AssetCache,
         template_id: i32,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
     ) -> EntityCreationInfo {

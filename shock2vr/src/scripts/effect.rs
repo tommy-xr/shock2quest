@@ -65,7 +65,7 @@ pub enum Effect {
 
     CreateEntity {
         template_id: i32,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
     },
