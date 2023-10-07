@@ -77,7 +77,7 @@ use crate::{
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
-    virtual_hand::{self, VirtualHand, VirtualHandEffect},
+    virtual_hand::{VirtualHand, VirtualHandEffect},
     vr_config, GameOptions,
 };
 
@@ -1114,7 +1114,7 @@ impl Mission {
                         let xform = model.get_transform();
                         //drop(scene_obj);
 
-                        let ext_name = model_name.clone();
+                        let _ext_name = model_name.clone();
                         let orig_model =
                             asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
 

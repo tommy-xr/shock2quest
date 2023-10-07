@@ -1,11 +1,10 @@
-use std::f32::consts::PI;
+
 
 use cgmath::{
-    point3, vec3, Deg, EuclideanSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Transform,
+    point3, Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform,
 };
 use dark::properties::{
-    GunFlashOptions, InternalPropOriginalModelName, Link, ProjectileOptions, PropLimbModel,
-    PropPlayerGun,
+    GunFlashOptions, Link, ProjectileOptions,
 };
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};

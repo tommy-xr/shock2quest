@@ -12,10 +12,10 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 use crate::{
     creature,
     mission::PlayerInfo,
-    physics::{CollisionGroup, InternalCollisionGroups, PhysicsWorld},
+    physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
     scripts::{
-        script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
+        script_util::{get_first_link_with_template_and_data},
         Effect,
     },
     util,
@@ -172,8 +172,8 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             },
         );
 
-        if let Some((projectile_id, options)) = maybe_projectile {
-            let (projectile_template_id, projectile_opts) = maybe_projectile.unwrap();
+        if let Some((_projectile_id, _options)) = maybe_projectile {
+            let (projectile_template_id, _projectile_opts) = maybe_projectile.unwrap();
 
             fire_effects.push(Effect::CreateEntity {
                 // Testing
@@ -202,7 +202,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             },
         );
 
-        if let Some((muzzle_flash_template_id, muzzle_flash_options)) = maybe_muzzle_flash {
+        if let Some((muzzle_flash_template_id, _muzzle_flash_options)) = maybe_muzzle_flash {
             fire_effects.push(Effect::CreateEntity {
                 template_id: muzzle_flash_template_id,
                 position: point3(0.0, 0.0, 0.0) + forward,

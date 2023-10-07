@@ -1,4 +1,4 @@
-use cgmath::{point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3};
+use cgmath::{vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3};
 use dark::SCALE_FACTOR;
 
 use shipyard::{EntityId, World};

@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 
-use cgmath::{vec3, Angle, Deg, Quaternion, Rotation3, Vector3};
+use cgmath::{vec3, Deg, Quaternion, Rotation3, Vector3};
 use dark::properties::PropModelName;
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};

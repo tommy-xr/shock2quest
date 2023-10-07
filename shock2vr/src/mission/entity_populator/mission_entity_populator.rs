@@ -1,10 +1,10 @@
-use dark::properties::{InternalPropOriginalModelName, PropModelName, WrappedEntityId};
+use dark::properties::{WrappedEntityId};
 ///
 /// mission_entity_populator.rs
 ///
 /// An implementation of EntityPopulator that creates entities based on the entity data
 /// in a mission file
-use shipyard::{Get, View, World};
+use shipyard::{Get, World};
 use std::collections::HashMap;
 
 use dark::mission::SystemShock2Level;

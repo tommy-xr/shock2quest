@@ -4,11 +4,11 @@ use crate::{
     creature::get_creature_definition,
     runtime_props::*,
     time::Time,
-    util::{get_rotation_from_matrix, has_refs, point3_to_vec3, vec3_to_point3},
+    util::{get_rotation_from_matrix, has_refs, point3_to_vec3},
 };
 
 use cgmath::{
-    num_traits::abs, vec3, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation,
+    num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation,
     Transform, Vector3, Zero,
 };
 use dark::{

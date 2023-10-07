@@ -35,7 +35,7 @@ use dark::{
     log_property,
     motion::MotionDB,
     properties::{
-        AmbientSoundFlags, InternalPropOriginalModelName, PropAmbientHacked, PropLimbModel,
+        AmbientSoundFlags, InternalPropOriginalModelName, PropAmbientHacked,
         PropModelName, PropPosition,
     },
     SCALE_FACTOR,

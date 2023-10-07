@@ -114,8 +114,8 @@ pub fn get_position_from_transform(
     if let Ok(transform) = v_transform.get(entity_id) {
         let point = vec3_to_point3(offset);
         let xform = transform.0;
-        let point = xform.transform_point(point);
-        point
+        
+        xform.transform_point(point)
     } else if let Ok(position) = v_prop_position.get(entity_id) {
         warn!("no transform for entity: {:?}", entity_id);
         let ret = position.position + (position.rotation * offset);

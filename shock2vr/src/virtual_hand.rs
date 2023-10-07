@@ -1,9 +1,9 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use std::f32::consts::PI;
+
 
 use cgmath::{
-    point3, vec3, Angle, Euler, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector3,
+    point3, vec3, Angle, Euler, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Vector3,
     Zero,
 };
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
@@ -18,7 +18,7 @@ use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
     util::point3_to_vec3,
-    vr_config::{self, Handedness, VRHandModelPerHandAdjustments},
+    vr_config::{self, Handedness},
 };
 
 const HAND_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.0);
@@ -134,7 +134,7 @@ impl VirtualHand {
 
     pub fn grab_entity(
         &self,
-        world: &World,
+        _world: &World,
         entity_id: EntityId,
         // entity_rigid_body: RigidBodyHandle,
     ) -> VirtualHand {

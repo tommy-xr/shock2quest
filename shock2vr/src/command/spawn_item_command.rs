@@ -5,7 +5,7 @@ use shipyard::{UniqueView, World};
 
 use crate::{
     scripts::Effect,
-    util::{point3_to_vec3, vec3_to_point3},
+    util::{vec3_to_point3},
     PlayerInfo,
 };
 

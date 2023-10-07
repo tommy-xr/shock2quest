@@ -1,5 +1,5 @@
-use dark::properties::{PropLimbModel, PropPlayerGun};
-use shipyard::{EntityId, Get, View, World};
+
+use shipyard::{EntityId, World};
 
 use crate::physics::PhysicsWorld;
 
