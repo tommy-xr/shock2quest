@@ -1127,10 +1127,6 @@ impl Mission {
                         self.world
                             .add_component(entity_id, PropModelName(model_name));
 
-                        println!(
-                            "!!debug - new_model_name: {:?} vhots: {:?}",
-                            ext_name, vhots
-                        );
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
                     }
                 }
