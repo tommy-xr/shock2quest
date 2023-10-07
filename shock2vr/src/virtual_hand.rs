@@ -484,52 +484,7 @@ fn get_held_position_orientation(
     world: &World,
     handedness: Handedness,
 ) -> vr_config::VRHandModelPerHandAdjustments {
-    vr_config::get_vr_hand_model_adjustments_from_entity(entity_id, &world, handedness)
-
-    // let default_orientation = (
-    //     vec3(0.0, 0.0, 0.0),
-    //     Quaternion {
-    //         v: vec3(0.0, 0.0, 0.0),
-    //         s: 1.0,
-    //     },
-    // );
-    // let rotated_gun_orientation = (
-    //     vec3(0.0, 0.0, 0.0),
-    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(-PI / 2.0)),
-    // );
-
-    // let item_orientation = (
-    //     vec3(0.0, 0.0, 0.0),
-    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI)),
-    // );
-
-    // let melee_orientation = (
-    //     vec3(0.0, 0.5, 0.0),
-    //     Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0))
-    //         * Quaternion::from_axis_angle(vec3(0.0, 0.0, 1.0), Rad(PI / 2.0)),
-    // );
-
-    // if let Ok(model_name) = maybe_model_name {
-    //     match model_name.as_ref() {
-    //         "atek_w" => default_orientation,
-    //         "atek_h" => rotated_gun_orientation,
-    //         "ar15_w" => default_orientation,
-    //         "battery" => item_orientation,
-    //         "batteryb" => item_orientation,
-    //         "empgun" => rotated_gun_orientation,
-    //         "gameboy" => item_orientation,
-    //         "gamecart" => item_orientation,
-    //         "laser" => rotated_gun_orientation,
-    //         "amp_h" => rotated_gun_orientation,
-    //         "lasehand" => rotated_gun_orientation,
-    //         "nanocan" => item_orientation,
-    //         "sg_w" => item_orientation,
-    //         "wrench_w" => melee_orientation,
-    //         _ => default_orientation,
-    //     }
-    // } else {
-    //     default_orientation
-    // }
+    vr_config::get_vr_hand_model_adjustments_from_entity(entity_id, world, handedness)
 }
 
 fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
