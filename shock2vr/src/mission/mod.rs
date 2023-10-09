@@ -1618,7 +1618,6 @@ impl Mission {
                     rotation: _,
                 } => {
                     self.make_un_physical(entity_id);
-                    println!("!!debug - Holding entity: {:?}", entity_id);
                     self.script_world.dispatch(Message {
                         payload: MessagePayload::Hold,
                         to: entity_id,
