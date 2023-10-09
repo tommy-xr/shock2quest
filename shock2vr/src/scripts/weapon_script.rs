@@ -1,13 +1,18 @@
-use std::f32::consts::PI;
 
-use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad, Rotation3};
-use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
+
+use cgmath::{
+    point3, Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform,
+};
+use dark::properties::{
+    GunFlashOptions, Link, ProjectileOptions,
+};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::PhysicsWorld,
     runtime_props::{RuntimePropTransform, RuntimePropVhots},
+    vr_config,
 };
 
 use super::{
@@ -26,21 +31,6 @@ impl WeaponScript {
 }
 
 impl Script for WeaponScript {
-    // fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
-    //     let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
-
-    //     let maybe_player_gun = v_player_gun.get(entity_id);
-
-    //     if let Ok(player_gun) = maybe_player_gun {
-    //         Effect::ChangeModel {
-    //             entity_id,
-    //             model_name: player_gun.hand_model.clone(),
-    //         }
-    //     } else {
-    //         Effect::NoEffect
-    //     }
-    // }
-
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -53,7 +43,6 @@ impl Script for WeaponScript {
                 let sound_effect =
                     play_environmental_sound(world, entity_id, "shoot", vec![], AudioHandle::new());
                 //Create muzzle flash
-                // TODO:
                 let muzzle_flashes =
                     get_all_links_with_template(world, entity_id, |link| match link {
                         Link::GunFlash(data) => Some(*data),
@@ -118,11 +107,16 @@ fn create_muzzle_flash(
     let vhot_offset = vhots
         .get(options.vhot as usize)
         .map(|v| v.point)
-        .unwrap_or(vec3(0.0, 0.0, 0.0));
+        .unwrap_or(point3(0.0, 0.0, 0.0));
 
     let transform = v_transform.get(entity_id).unwrap();
 
-    let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
+    let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
+        entity_id,
+        world,
+        vr_config::Handedness::Left,
+    );
+    let orientation = adjustments.rotation.invert() * Quaternion::from_angle_y(Deg(90.0));
 
     Effect::CreateEntity {
         template_id: muzzle_flash_template_id,
@@ -145,23 +139,36 @@ fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-
-    let vhot_offset = vhots.get(0).map(|v| v.point).unwrap_or(vec3(0.0, 0.0, 0.0));
+    let vhot = vhots
+        .get(0)
+        .map(|v| v.point)
+        .unwrap_or(point3(0.0, 0.0, 0.0));
 
     let transform = v_transform.get(entity_id).unwrap();
-    let forward = vec3(0.0, 0.0, -1.0);
 
-    //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
+    let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
+        entity_id,
+        world,
+        // TODO: I guess we don't care about handedness for now,
+        // since it only affects the flipping of the weapon... but truly we should consider it.
+        vr_config::Handedness::Left,
+    );
 
-    let rot_matrix: Matrix4<f32> = Quaternion::from_angle_y(Deg(180.0)).into();
+    let rotation = adjustments.rotation;
+    let projectile_rotation: Matrix4<f32> =
+        vr_config::get_projectile_rotation_from_entity(entity_id, world).into();
+    let rot_matrix: Matrix4<f32> = rotation.into();
+    let inv_rot_matrix: Matrix4<f32> = rotation.invert().into();
+
+    // Adjust the vhot position to be in the same coordinate space as the weapon
+    let position = inv_rot_matrix.transform_point(vhot);
 
     Effect::CreateEntity {
         template_id: projectile_template_id,
-        position: vhot_offset + forward * 0.5,
-        orientation: Quaternion {
-            v: vec3(0.0, 0.0, 0.0),
-            s: 1.0,
-        },
-        root_transform: transform.0 * rot_matrix,
+        position,
+        // HACK: Not sure why we need to do this, but seems projectile
+        // models are rotated 90 degrees
+        orientation: Quaternion::from_angle_y(Deg(90.0)),
+        root_transform: transform.0 * rot_matrix * projectile_rotation,
     }
 }

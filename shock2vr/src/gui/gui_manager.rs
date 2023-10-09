@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Vector2, Vector3};
+use cgmath::{vec3, EuclideanSpace, Matrix4, Vector2, Vector3};
 
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use rapier3d::prelude::RigidBodyHandle;
@@ -71,7 +71,7 @@ impl GuiManager {
             // Create physics for this entity
             let physics_handle = physics.add_kinematic(
                 ent,
-                pos,
+                pos.to_vec(),
                 facing,
                 vec3(0.0, 0.0, 0.0),
                 vec3(world_size.x, world_size.y, 0.0),
@@ -96,7 +96,7 @@ impl GuiManager {
             instance.components = components;
             let pos = get_position_from_transform(world, parent_entity, offset);
             let facing = get_rotation_from_transform(world, parent_entity);
-            physics.set_position_rotation(instance.physics_handle, pos, facing)
+            physics.set_position_rotation(instance.physics_handle, pos.to_vec(), facing)
         }
     }
 

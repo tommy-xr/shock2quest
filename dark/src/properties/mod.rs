@@ -61,7 +61,7 @@ use std::{
 };
 
 use crate::{ss2_common::*, ss2_entity_info::new, SCALE_FACTOR};
-use cgmath::{vec3, Deg, Quaternion, Rotation3, Vector3};
+use cgmath::{vec3, Deg, Point3, Quaternion, Rotation3, Vector3};
 use shipyard::{
     Component, EntityId, Get, IntoIter, IntoWithId, TupleAddComponent, View, ViewMut, World,
 };
@@ -215,6 +215,9 @@ impl PropLocked {
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropModelName(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct InternalPropOriginalModelName(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropScale(pub Vector3<f32>);
@@ -1043,10 +1046,19 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             identity,
             accumulator::latest,
         ),
+        // Internal properties
+        // These are not properties that are provided by shock2 game,
+        // but are used internally for save/restore.
         define_prop(
             "__P$InternalTemplateId",
             |reader, _len| read_i32(reader),
             |id| PropTemplateId { template_id: id },
+            accumulator::latest,
+        ),
+        define_prop(
+            "__P$OriginalModelName",
+            read_prop_string,
+            InternalPropOriginalModelName,
             accumulator::latest,
         ),
     ];

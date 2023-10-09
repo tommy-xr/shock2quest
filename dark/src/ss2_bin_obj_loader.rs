@@ -22,8 +22,8 @@ use crate::{
     importers::TEXTURE_IMPORTER,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
-        self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_single,
-        read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
+        self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_point3,
+        read_single, read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
     },
     ss2_skeleton::{Bone, Skeleton},
     util::load_multiple_textures_for_model,
@@ -46,7 +46,7 @@ pub enum VhotType {
 #[derive(Debug, Clone)]
 pub struct Vhot {
     pub vhot_type: VhotType,
-    pub point: Vector3<f32>,
+    pub point: Point3<f32>,
 }
 
 impl Vhot {
@@ -54,7 +54,7 @@ impl Vhot {
         let vhot_type_num = read_u32(reader);
         let vhot_type = VhotType::from_u32(vhot_type_num).unwrap();
 
-        let point = read_vec3(reader) / SCALE_FACTOR;
+        let point = read_point3(reader) / SCALE_FACTOR;
         Vhot { vhot_type, point }
     }
 }
@@ -210,7 +210,7 @@ pub fn to_scene_objects(
             let material = RefCell::new(engine::scene::color_material::create(vec3(0.0, 0.0, 1.0)));
             let mut scene_obj = SceneObject::create(material, Rc::new(Box::new(geometry)));
             scene_obj.set_local_transform(
-                Matrix4::from_translation(vhot.point) * Matrix4::from_scale(0.025),
+                Matrix4::from_translation(vhot.point.to_vec()) * Matrix4::from_scale(0.025),
             );
             scene_obj
         })

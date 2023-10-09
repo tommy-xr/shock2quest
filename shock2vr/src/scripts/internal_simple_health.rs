@@ -22,10 +22,7 @@ impl Script for InternalSimpleHealth {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Damage { .. } => {
-                println!("!!debug: slaying entity with simple health");
-                Effect::SlayEntity { entity_id }
-            }
+            MessagePayload::Damage { .. } => Effect::SlayEntity { entity_id },
             _ => Effect::NoEffect,
         }
     }

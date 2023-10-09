@@ -7,7 +7,7 @@ use dark::properties::{
 };
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, ViewMut};
 
-use crate::{mission::EffectQueue, scripts::Effect, time::Time};
+use crate::{mission::EffectQueue, scripts::Effect, time::Time, util::vec3_to_point3};
 
 ///
 /// run_tweq
@@ -53,7 +53,7 @@ pub fn run_tweq(
                 tweq_state.time_since_last_event = Duration::from_secs(0);
                 effects.push(Effect::CreateEntityByTemplateName {
                     template_name: "HE Explosion".to_string(),
-                    position: position.position,
+                    position: vec3_to_point3(position.position),
                     orientation: position.rotation,
                 });
             }

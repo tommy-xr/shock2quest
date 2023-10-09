@@ -4,22 +4,23 @@ use crate::{
     creature::get_creature_definition,
     runtime_props::*,
     time::Time,
-    util::{get_rotation_from_matrix, has_refs, point3_to_vec3, vec3_to_point3},
+    util::{get_rotation_from_matrix, has_refs, point3_to_vec3},
 };
 
 use cgmath::{
-    num_traits::abs, vec3, InnerSpace, Matrix4, Quaternion, Rotation, Transform, Vector3, Zero,
+    num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform,
+    Vector3, Zero,
 };
 use dark::{
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
     model::Model,
     motion::AnimationPlayer,
     properties::{
-        FrobFlag, Links, PhysicsModelType, PoseType, PropCollisionType, PropCreature,
-        PropCreaturePose, PropFrobInfo, PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile,
-        PropKeySrc, PropModelName, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTripFlags, RenderType,
-        TemplateLinks, WrappedEntityId,
+        FrobFlag, InternalPropOriginalModelName, Links, PhysicsModelType, PoseType,
+        PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo, PropHUDSelect,
+        PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName, PropPhysDimensions,
+        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScale, PropSymName,
+        PropTemplateId, PropTripFlags, RenderType, TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info, BitmapAnimation, SCALE_FACTOR,
 };
@@ -45,7 +46,7 @@ pub struct EntityCreationInfo {
 
 pub fn create_entity_with_position(
     template_id: i32,
-    position: Vector3<f32>,
+    position: Point3<f32>,
     orientation: Quaternion<f32>,
     root_transform: Matrix4<f32>,
     world: &mut World,
@@ -83,7 +84,7 @@ pub fn create_entity_with_position(
         u_time.total.as_secs_f32()
     };
 
-    let transformed_position = root_transform.transform_point(vec3_to_point3(position));
+    let transformed_position = root_transform.transform_point(position);
 
     let transform_rotation = get_rotation_from_matrix(&root_transform);
 
@@ -98,7 +99,7 @@ pub fn create_entity_with_position(
     );
 
     let transform = root_transform
-        * Matrix4::from_translation(position)
+        * Matrix4::from_translation(position.to_vec())
         * Matrix4::from(orientation)
         * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
 
@@ -332,7 +333,7 @@ fn create_model(
 
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
         // We have some sort of model, but need to refine
-
+        // TODO: This logic keeps projectiles from rendering - why?
         if v_rendertype.contains(entity_id) {
             let render_type = v_rendertype.get(entity_id).unwrap();
             if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
@@ -508,6 +509,20 @@ pub fn initialize_entity_with_props(
         if let Some(name) = obj_name_map.get(&parent_id) {
             world.add_component(entity_id, PropSymName(name.to_owned()))
         }
+    }
+    // Augment any props
+
+    let maybe_mod = {
+        let maybe_model_name = world.borrow::<View<PropModelName>>().unwrap();
+        if let Ok(model_name) = maybe_model_name.get(entity_id) {
+            Some(model_name.0.clone())
+        } else {
+            None
+        }
+    };
+
+    if let Some(model) = maybe_mod {
+        world.add_component(entity_id, InternalPropOriginalModelName(model));
     }
 }
 
