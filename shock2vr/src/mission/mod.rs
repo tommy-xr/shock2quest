@@ -881,6 +881,7 @@ impl Mission {
                     position,
                     orientation,
                     root_transform,
+                    options: _,
                 } => {
                     self.create_entity_with_position(
                         asset_cache,

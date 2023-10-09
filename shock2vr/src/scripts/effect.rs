@@ -5,7 +5,7 @@ use dark::{
     EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
-use shipyard::EntityId;
+use shipyard::{Component, EntityId};
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
@@ -13,6 +13,19 @@ use crate::{
 };
 
 use super::Message;
+
+#[derive(Clone, Debug)]
+pub struct CreateEntityOptions {
+    pub force_visible: bool,
+}
+
+impl Default for CreateEntityOptions {
+    fn default() -> Self {
+        CreateEntityOptions {
+            force_visible: false,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum GlobalEffect {
@@ -68,6 +81,7 @@ pub enum Effect {
         position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
+        options: CreateEntityOptions,
     },
 
     DrawDebugLines {

@@ -14,10 +14,7 @@ use crate::{
     mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
-    scripts::{
-        script_util::{get_first_link_with_template_and_data},
-        Effect,
-    },
+    scripts::{script_util::get_first_link_with_template_and_data, CreateEntityOptions, Effect},
     util,
 };
 
@@ -148,6 +145,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             position,
             orientation: rotation,
             root_transform: root_transform.0,
+            options: CreateEntityOptions::default(),
         }
     } else {
         let rot_matrix: Matrix4<f32> = rotation.into();
@@ -183,6 +181,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
                 position: point3(0.0, 0.0, 0.0) + forward,
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: root_transform.0 * rot_matrix,
+                options: CreateEntityOptions::default(),
             });
 
             fire_effects.push(play_positional_sound(
@@ -208,6 +207,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
                 position: point3(0.0, 0.0, 0.0) + forward,
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: root_transform.0 * rot_matrix,
+                options: CreateEntityOptions::default(),
             })
         }
 
@@ -287,6 +287,7 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
             orientation: Quaternion::from_angle_y(Deg(90.0)),
             // root_transform: transform * rot_matrix,
             root_transform: transform,
+            options: CreateEntityOptions::default(),
         }
     } else {
         Effect::NoEffect

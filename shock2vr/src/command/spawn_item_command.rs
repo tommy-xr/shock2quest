@@ -3,7 +3,11 @@ use cgmath::{vec3, Matrix4, Quaternion, SquareMatrix};
 use dark::SCALE_FACTOR;
 use shipyard::{UniqueView, World};
 
-use crate::{scripts::Effect, util::vec3_to_point3, PlayerInfo};
+use crate::{
+    scripts::{CreateEntityOptions, Effect},
+    util::vec3_to_point3,
+    PlayerInfo,
+};
 
 use super::Command;
 // SpawnItemCommand
@@ -38,6 +42,7 @@ impl Command for SpawnItemCommand {
             position: pos + forward,
             orientation: rot,
             root_transform: Matrix4::identity(),
+            options: CreateEntityOptions::default(),
         }
     }
 }

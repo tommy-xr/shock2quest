@@ -1,11 +1,5 @@
-
-
-use cgmath::{
-    point3, Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform,
-};
-use dark::properties::{
-    GunFlashOptions, Link, ProjectileOptions,
-};
+use cgmath::{point3, Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform};
+use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
@@ -123,6 +117,7 @@ fn create_muzzle_flash(
         position: vhot_offset,
         orientation,
         root_transform: transform.0,
+        options: super::CreateEntityOptions::default(),
     }
 }
 
@@ -170,5 +165,6 @@ fn create_projectile(
         // models are rotated 90 degrees
         orientation: Quaternion::from_angle_y(Deg(90.0)),
         root_transform: transform.0 * rot_matrix * projectile_rotation,
+        options: super::CreateEntityOptions::default(),
     }
 }
