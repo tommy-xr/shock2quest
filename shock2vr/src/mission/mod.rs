@@ -32,8 +32,8 @@ use dark::{
         Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType, PropCreature,
         PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
         PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPosition, PropScripts, PropTeleported, PropTripFlags,
-        PropertyDefinition, ToLink, TripFlags, WrappedEntityId,
+        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
+        PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     BitmapAnimation, SCALE_FACTOR,
@@ -1382,6 +1382,7 @@ impl Mission {
         let _v_position = self.world.borrow::<View<PropPosition>>().unwrap();
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
+        let v_render_type = self.world.borrow::<View<PropRenderType>>().unwrap();
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
@@ -1394,6 +1395,14 @@ impl Mission {
             total_model_count += 1;
             if !has_refs(&self.world, *entity_id) {
                 continue;
+            }
+
+            if v_render_type.contains(*entity_id) {
+                let render_type = v_render_type.get(*entity_id).unwrap();
+                if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender
+                {
+                    continue;
+                };
             }
 
             if !self.visibility_engine.is_visible(*entity_id) {
