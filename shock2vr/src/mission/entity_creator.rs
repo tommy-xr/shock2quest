@@ -63,6 +63,8 @@ pub fn create_entity_with_position(
     // Add props, based on inheritance
     initialize_entity_with_props(template_id, entity_info, world, entity_id, obj_name_map);
 
+    world.add_component(entity_id, PropHasRefs(true));
+
     initialize_links_for_entity(
         template_id,
         entity_id,
@@ -334,12 +336,12 @@ fn create_model(
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
         // We have some sort of model, but need to refine
         // TODO: This logic keeps projectiles from rendering - why?
-        if v_rendertype.contains(entity_id) {
-            let render_type = v_rendertype.get(entity_id).unwrap();
-            if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
-                return None;
-            };
-        }
+        // if v_rendertype.contains(entity_id) {
+        //     let render_type = v_rendertype.get(entity_id).unwrap();
+        //     if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
+        //         return None;
+        //     };
+        // }
 
         let model_name = model.0.to_owned();
         let maybe_model = asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
