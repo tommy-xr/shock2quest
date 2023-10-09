@@ -5,7 +5,7 @@ use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureTrait};
 use shipyard::EntityId;
 
-use crate::{inventory::Inventory, virtual_hand::Handedness};
+use crate::{inventory::Inventory, vr_config::Handedness};
 
 #[derive(Clone, Debug)]
 pub enum ButtonHoverBehavior {

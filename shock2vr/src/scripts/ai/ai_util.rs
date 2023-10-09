@@ -12,10 +12,10 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 use crate::{
     creature,
     mission::PlayerInfo,
-    physics::{CollisionGroup, InternalCollisionGroups, PhysicsWorld},
+    physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
     scripts::{
-        script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
+        script_util::{get_first_link_with_template_and_data},
         Effect,
     },
     util,
@@ -135,7 +135,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
     let up_offset = 0.5 / SCALE_FACTOR;
     let right_offset = 0.5 / SCALE_FACTOR;
     let forward = vec3(right_offset, up_offset, 1.0 * forward_offset);
-    let _position =
+    let position =
         root_transform
             .0
             .transform_point(point3(right_offset, up_offset, forward_offset))
@@ -145,7 +145,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         // Let's create the proxy entity...
         Effect::CreateEntity {
             template_id: ranged_weapon,
-            position: _position.to_vec(),
+            position,
             orientation: rotation,
             root_transform: root_transform.0,
         }
@@ -154,8 +154,8 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
         let transformed_forward = root_transform.0.transform_vector(forward);
         let debug_effect = Effect::DrawDebugLines {
             lines: vec![(
-                _position,
-                _position + transformed_forward * 10.0 + vec3(0.0, -0.25, 0.0),
+                position,
+                position + transformed_forward * 10.0 + vec3(0.0, -0.25, 0.0),
                 vec4(0.0, 1.0, 1.0, 1.0),
             )],
         };
@@ -172,15 +172,15 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             },
         );
 
-        if let Some((projectile_id, options)) = maybe_projectile {
-            let (projectile_template_id, projectile_opts) = maybe_projectile.unwrap();
+        if let Some((_projectile_id, _options)) = maybe_projectile {
+            let (projectile_template_id, _projectile_opts) = maybe_projectile.unwrap();
 
             fire_effects.push(Effect::CreateEntity {
                 // Testing
                 // template_id: -1415, // rocket turret
                 // template_id: -1414, // laser turret
                 template_id: projectile_template_id,
-                position: forward,
+                position: point3(0.0, 0.0, 0.0) + forward,
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: root_transform.0 * rot_matrix,
             });
@@ -188,7 +188,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             fire_effects.push(play_positional_sound(
                 ranged_weapon_entity_id,
                 world,
-                Some(_position.to_vec()),
+                Some(position.to_vec()),
                 vec![("event", "shoot")],
             ));
         }
@@ -202,10 +202,10 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
             },
         );
 
-        if let Some((muzzle_flash_template_id, muzzle_flash_options)) = maybe_muzzle_flash {
+        if let Some((muzzle_flash_template_id, _muzzle_flash_options)) = maybe_muzzle_flash {
             fire_effects.push(Effect::CreateEntity {
                 template_id: muzzle_flash_template_id,
-                position: forward,
+                position: point3(0.0, 0.0, 0.0) + forward,
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: root_transform.0 * rot_matrix,
             })
@@ -265,7 +265,7 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
         //let transform = root_transform.0 * joint_transform;
 
         //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
-        let _position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
+        let position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
 
         //let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
         // TODO: This rotation is needed for some monsters? Like the droids?
@@ -274,7 +274,7 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
         // panic!("creating entity: {:?}", projectile_id);
         Effect::CreateEntity {
             template_id: projectile_id,
-            position: _position.to_vec() + forward * 1.0,
+            position: position + forward * 1.0,
             // position: vec3(13.11, 0.382, 16.601),
             // orientation: rotation,
             // Not sure why, but it seems like the orientation of the AI models is off by 90 degrees for the bin models...

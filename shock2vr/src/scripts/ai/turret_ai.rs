@@ -1,6 +1,6 @@
-use cgmath::{vec3, vec4, Deg, Matrix4, Quaternion, Rotation3};
-use dark::properties::PropPosition;
-use shipyard::{EntityId, Get, View, World};
+use cgmath::{vec3, Deg, Matrix4, Quaternion, Rotation3};
+
+use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
@@ -29,7 +29,7 @@ impl TurretState {
 
         match current_state {
             TurretState::Closed => {
-                if (is_player_visible) {
+                if is_player_visible {
                     (
                         TurretState::Opening { progress: 0.0 },
                         ai_util::play_positional_sound(
@@ -44,7 +44,7 @@ impl TurretState {
                 }
             }
             TurretState::Opening { progress } => {
-                if (*progress >= 1.0) {
+                if *progress >= 1.0 {
                     (TurretState::Open, Effect::NoEffect)
                 } else {
                     (
@@ -56,7 +56,7 @@ impl TurretState {
                 }
             }
             TurretState::Closing { progress } => {
-                if (*progress >= 1.0) {
+                if *progress >= 1.0 {
                     (TurretState::Closed, Effect::NoEffect)
                 } else {
                     (
@@ -68,7 +68,7 @@ impl TurretState {
                 }
             }
             TurretState::Open => {
-                if (!is_player_visible) {
+                if !is_player_visible {
                     (
                         TurretState::Closing { progress: 0.0 },
                         ai_util::play_positional_sound(
@@ -115,7 +115,7 @@ impl TurretAI {
         entity_id: EntityId,
         physics: &PhysicsWorld,
     ) -> Effect {
-        let quat = Quaternion::from_angle_x(Deg(time.total.as_secs_f32().sin() * 90.0));
+        let _quat = Quaternion::from_angle_x(Deg(time.total.as_secs_f32().sin() * 90.0));
         let fire_projectile = if self.next_fire < time.total.as_secs_f32() {
             self.next_fire = time.total.as_secs_f32() + 1.0;
             let rotation = Quaternion::from_angle_y(self.current_heading - self.initial_yaw);
@@ -190,10 +190,10 @@ impl Script for TurretAI {
 
     fn handle_message(
         &mut self,
-        entity_id: EntityId,
-        world: &World,
-        physics: &PhysicsWorld,
-        msg: &MessagePayload,
+        _entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
     }

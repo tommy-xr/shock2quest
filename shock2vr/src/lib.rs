@@ -15,10 +15,10 @@ mod scripts;
 mod systems;
 mod util;
 mod virtual_hand;
+mod vr_config;
 mod zip_asset_path;
 
 pub use mission::visibility_engine::CullingInfo;
-
 
 use std::{
     collections::{HashMap, HashSet},
@@ -27,15 +27,17 @@ use std::{
     rc::Rc,
 };
 
-use cgmath::{
-    vec3, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector2, Vector3,
-};
+use cgmath::{vec3, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector2, Vector3};
 use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
-    motion::{MotionDB},
-    properties::{AmbientSoundFlags, PropAmbientHacked, PropPosition},
+    log_property,
+    motion::MotionDB,
+    properties::{
+        AmbientSoundFlags, InternalPropOriginalModelName, PropAmbientHacked,
+        PropModelName, PropPosition,
+    },
     SCALE_FACTOR,
 };
 use engine::{
@@ -52,7 +54,6 @@ use mission::{
     SpawnLocation,
 };
 use quest_info::QuestInfo;
-
 
 use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
 use scripts::GlobalEffect;
@@ -164,6 +165,10 @@ impl Game {
     }
     pub fn init(_file_system: &Box<dyn FileSystem>, options: GameOptions) -> Game {
         let asset_paths = AssetPath::combine(vec![
+            AssetPath::folder(resource_path("res/mesh")),
+            // AssetPath::folder(resource_path("res/mesh/txt16")),
+            AssetPath::folder(resource_path("res/obj")),
+            // AssetPath::folder(resource_path("res/obj/txt16")),
             ZipAssetPath::new(resource_path("res/obj.crf")),
             ZipAssetPath::new(resource_path("res/bitmap.crf")),
             ZipAssetPath::new(resource_path("res/fam.crf")),
@@ -329,7 +334,9 @@ impl Game {
         // panic!();
 
         // log_property::<PropAI>(&active_mission.world);
-        // log_property::<PropInventoryDimensions>(&active_mission.world);
+        log_property::<PropModelName>(&active_mission.world);
+        log_property::<InternalPropOriginalModelName>(&active_mission.world);
+        // panic!();
 
         // log_entity(
         //     &active_mission.world,

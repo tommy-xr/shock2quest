@@ -9,6 +9,14 @@ pub fn nvec_to_cgmath(vec: Vector<Real>) -> Vector3<f32> {
     }
 }
 
+pub fn nvec_to_cgmath_point(vec: Vector<Real>) -> Point3<f32> {
+    Point3 {
+        x: vec.x,
+        y: vec.y,
+        z: vec.z,
+    }
+}
+
 pub fn npoint_to_cgmath(point: Point<Real>) -> Point3<f32> {
     Point3 {
         x: point.x,

@@ -2,18 +2,18 @@ extern crate glfw;
 use self::glfw::{Action, Context, Key};
 use cgmath::point3;
 use cgmath::Decomposed;
-use cgmath::Matrix4;
+
 use clap::Parser;
 
 use dark::SCALE_FACTOR;
 use engine::profile;
-use engine::util::compute_view_matrix;
+
 use engine::util::compute_view_matrix_from_render_context;
 use glfw::Modifiers;
 use shock2vr::command::MoveInventoryCommand;
-use shock2vr::command::SavePositionCommand;
+
 use shock2vr::command::SpawnItemCommand;
-use shock2vr::CullingInfo;
+
 use std::time::Instant;
 
 use shock2vr::GameOptions;
@@ -254,7 +254,7 @@ pub fn main() {
     let mut frame = 0;
     let mut last_input_state = InputState::new();
 
-    let mut mode = Mode::Gameplay;
+    let _mode = Mode::Gameplay;
     // render loop
     // -----------
     while !window.should_close() {
@@ -352,7 +352,7 @@ fn process_events(
     let _speed = 20.0;
     let head_rot_speed = 10.0;
 
-    let mut effects = Vec::new();
+    let effects = Vec::new();
 
     let _movement = cgmath::Vector3::new(0.0, 0.0, 0.0);
     let mut commands: Vec<Box<dyn Command>> = vec![];

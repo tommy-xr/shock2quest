@@ -9,7 +9,7 @@ use shipyard::EntityId;
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
-    virtual_hand::Handedness,
+    vr_config::Handedness,
 };
 
 use super::Message;
@@ -59,13 +59,13 @@ pub enum Effect {
     },
     CreateEntityByTemplateName {
         template_name: String,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
     },
 
     CreateEntity {
         template_id: i32,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
     },

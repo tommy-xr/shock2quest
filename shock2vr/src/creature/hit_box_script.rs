@@ -37,18 +37,12 @@ impl Script for HitBoxScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Damage { amount } => {
-                println!(
-                    "!!debug hitbox - took damage: {:?} | {:?}({:?})",
-                    msg, self.hit_box_type, self.hit_box_joint_idx
-                );
-                Effect::Send {
-                    msg: Message {
-                        to: self.parent_entity_id,
-                        payload: MessagePayload::Damage { amount: *amount },
-                    },
-                }
-            }
+            MessagePayload::Damage { amount } => Effect::Send {
+                msg: Message {
+                    to: self.parent_entity_id,
+                    payload: MessagePayload::Damage { amount: *amount },
+                },
+            },
             _ => Effect::NoEffect,
         }
     }

@@ -1,4 +1,4 @@
-use cgmath::{vec3, vec4, Deg, Matrix4, Quaternion, Rotation3};
+use cgmath::{Deg, Quaternion, Rotation3};
 use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
@@ -15,14 +15,14 @@ impl CameraAI {
 }
 
 impl Script for CameraAI {
-    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+    fn initialize(&mut self, _entity_id: EntityId, _world: &World) -> Effect {
         Effect::NoEffect
     }
     fn update(
         &mut self,
         entity_id: EntityId,
-        world: &World,
-        physics: &PhysicsWorld,
+        _world: &World,
+        _physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
         let quat = Quaternion::from_angle_x(Deg(time.total.as_secs_f32().sin() * 90.0));
@@ -35,10 +35,10 @@ impl Script for CameraAI {
 
     fn handle_message(
         &mut self,
-        entity_id: EntityId,
-        world: &World,
-        physics: &PhysicsWorld,
-        msg: &MessagePayload,
+        _entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
     }

@@ -65,7 +65,7 @@ use crate::{
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropProxyEntity,
-        RuntimePropTransform,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -76,9 +76,9 @@ use crate::{
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
-    util::{get_email_sound_file, has_refs},
-    virtual_hand::{self, Handedness, VirtualHand, VirtualHandEffect},
-    GameOptions,
+    util::{get_email_sound_file, has_refs, vec3_to_point3},
+    virtual_hand::{VirtualHand, VirtualHandEffect},
+    vr_config, GameOptions,
 };
 
 use self::{entity_creator::EntityCreationInfo, visibility_engine::VisibilityEngine};
@@ -227,8 +227,8 @@ impl Mission {
         let template_to_entity_id = entity_populator.populate(&entity_info, &level, &mut world);
 
         // Instantiate held items
-        let mut left_hand = VirtualHand::new(virtual_hand::Handedness::Left);
-        let mut right_hand = VirtualHand::new(virtual_hand::Handedness::Right);
+        let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
+        let mut right_hand = VirtualHand::new(vr_config::Handedness::Right);
         let (left_hand_entity, right_hand_entity, maybe_inventory_entity) =
             held_item_save_data.instantiate(&mut world);
 
@@ -585,7 +585,7 @@ impl Mission {
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
-                    position,
+                    vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
                 );
@@ -599,7 +599,7 @@ impl Mission {
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
-                    position,
+                    vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
                 );
@@ -614,7 +614,7 @@ impl Mission {
         &mut self,
         asset_cache: &mut AssetCache,
         template_name: &str,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
     ) -> Option<EntityCreationInfo> {
         let template_name_lowercase = template_name.to_ascii_lowercase();
@@ -671,6 +671,7 @@ impl Mission {
         entity_id: EntityId,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
+        scale: Vector3<f32>,
     ) {
         if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
             self.physics
@@ -678,7 +679,8 @@ impl Mission {
         } else {
             let translation_matrix = Matrix4::from_translation(position);
             let rotation_matrix = Matrix4::<f32>::from(rotation);
-            let xform = translation_matrix * rotation_matrix;
+            let scale_matrix = Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+            let xform = translation_matrix * rotation_matrix * scale_matrix;
 
             let v_entities = self.world.borrow::<EntitiesView>().unwrap();
             let mut v_transform = self
@@ -705,7 +707,7 @@ impl Mission {
         &mut self,
         asset_cache: &mut AssetCache,
         template_id: i32,
-        position: Vector3<f32>,
+        position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
     ) -> EntityCreationInfo {
@@ -931,7 +933,7 @@ impl Mission {
                     hand,
                     current_parent_id: _,
                 } => {
-                    if hand == Handedness::Left {
+                    if hand == vr_config::Handedness::Left {
                         self.left_hand = self.left_hand.grab_entity(&self.world, entity_id);
                     } else {
                         self.right_hand = self.right_hand.grab_entity(&self.world, entity_id);
@@ -1078,7 +1080,7 @@ impl Mission {
                     let new_entity_info = self.create_entity_with_position(
                         asset_cache,
                         template_id,
-                        position,
+                        vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
                     );
@@ -1110,6 +1112,7 @@ impl Mission {
                         let xform = model.get_transform();
                         //drop(scene_obj);
 
+                        let _ext_name = model_name.clone();
                         let orig_model =
                             asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
 
@@ -1117,9 +1120,12 @@ impl Mission {
 
                         let new_model = Model::transform(orig_model_ref, xform);
 
+                        let vhots = new_model.vhots();
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
                             .add_component(entity_id, PropModelName(model_name));
+
+                        self.world.add_component(entity_id, RuntimePropVhots(vhots));
                     }
                 }
                 Effect::PlayEmail { deck, email, force } => {
@@ -1233,7 +1239,13 @@ impl Mission {
                     rotation,
                     position,
                 } => {
-                    self.set_entity_position_rotation(entity_id, position, rotation);
+                    // TODO: plumb scale through
+                    self.set_entity_position_rotation(
+                        entity_id,
+                        position,
+                        rotation,
+                        vec3(1.0, 1.0, 1.0),
+                    );
                 }
                 Effect::SetPosition {
                     entity_id,
@@ -1577,8 +1589,9 @@ impl Mission {
                     entity_id,
                     position,
                     rotation,
+                    scale,
                 } => {
-                    self.set_entity_position_rotation(entity_id, position, rotation);
+                    self.set_entity_position_rotation(entity_id, position, rotation, scale);
                 }
                 VirtualHandEffect::SpawnEntity {
                     template_id,
@@ -1588,7 +1601,7 @@ impl Mission {
                     self.create_entity_with_position(
                         asset_cache,
                         template_id,
-                        position,
+                        vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
                     );
@@ -1599,9 +1612,18 @@ impl Mission {
                     rotation: _,
                 } => {
                     self.make_un_physical(entity_id);
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::Hold,
+                        to: entity_id,
+                    });
                 }
                 VirtualHandEffect::DropItem { entity_id } => {
                     self.make_physical(entity_id);
+
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::Drop,
+                        to: entity_id,
+                    });
                 }
             }
         }

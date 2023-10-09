@@ -8,7 +8,7 @@ use crate::physics::PhysicsWorld;
 
 use super::{
     script_util::{invert, send_to_all_switch_links, get_all_switch_links},
-    Effect, MessagePayload, Script, std_door::StdDoor,
+    Effect, MessagePayload, Script,
 };
 
 pub fn is_player(world: &World, entity_id: EntityId) -> bool {

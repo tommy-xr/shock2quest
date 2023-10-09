@@ -48,6 +48,7 @@ pub struct AnimatedModel {
     skeleton: Rc<Skeleton>,
     scene_objects: Vec<SceneObject>,
     hit_boxes: Rc<HashMap<u32, Aabb3<f32>>>,
+    vhots: Vec<Vhot>,
 }
 
 impl AnimatedModel {
@@ -94,6 +95,7 @@ impl AnimatedModel {
             skeleton: self.skeleton.clone(),
             scene_objects: new_scene_objects,
             hit_boxes: self.hit_boxes.clone(),
+            vhots: self.vhots.clone(),
         }
     }
 
@@ -113,6 +115,7 @@ impl AnimatedModel {
             skeleton: model.skeleton.clone(),
             scene_objects: new_scene_objects,
             hit_boxes: model.hit_boxes.clone(),
+            vhots: model.vhots.clone(),
         }
     }
 
@@ -150,6 +153,7 @@ impl Model {
                     skeleton: Rc::new(skeleton),
                     scene_objects,
                     hit_boxes: Rc::new(hit_boxes),
+                    vhots: static_mesh.vhots.clone(),
                 }),
             }
         } else {
@@ -178,6 +182,7 @@ impl Model {
                 skeleton,
                 scene_objects,
                 hit_boxes: Rc::new(hit_boxes),
+                vhots: vec![],
             }),
         }
     }
@@ -191,8 +196,7 @@ impl Model {
 
     pub fn vhots(&self) -> Vec<Vhot> {
         match &self.inner {
-            // TODO: Vhots for animated models. May need additional context, like the bone?
-            InnerModel::Animated(_animated_model) => vec![],
+            InnerModel::Animated(animated_model) => animated_model.vhots.clone(),
             InnerModel::Static(static_model) => static_model.vhots.clone(),
         }
     }
