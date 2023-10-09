@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 use cgmath::{vec3, Deg, Quaternion, Rotation3, Vector3};
 use dark::properties::PropModelName;
@@ -100,7 +100,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     let items = vec![
         // Weapons
         ("atek_h", held_weapon.clone()),
-        ("amph_h", held_weapon.clone()),
+        ("amp_h", held_weapon.clone()),
         ("lasehand", held_weapon.clone()),
         ("empgun", held_weapon.clone()),
         ("wrench_h", default.clone()),

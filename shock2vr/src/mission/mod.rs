@@ -941,6 +941,12 @@ impl Mission {
 
                     if self.right_hand.is_holding(entity_id) || self.left_hand.is_holding(entity_id)
                     {
+                        // Let the scripts know we are now holding the item..
+                        self.script_world.dispatch(Message {
+                            payload: MessagePayload::Hold,
+                            to: entity_id,
+                        });
+
                         let mut v_has_refs = self.world.borrow::<ViewMut<PropHasRefs>>().unwrap();
                         if let Ok(has_refs) = (&mut v_has_refs).get(entity_id) {
                             has_refs.0 = true;

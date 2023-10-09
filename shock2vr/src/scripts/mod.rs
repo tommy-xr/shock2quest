@@ -281,6 +281,19 @@ impl PanicOnLoadScript {
     }
 }
 
+struct PanicOnMessageScript;
+impl Script for PanicOnMessageScript {
+    fn handle_message(
+        &mut self,
+        _entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _msg: &MessagePayload,
+    ) -> Effect {
+        panic!("Panic for this script");
+    }
+}
+
 impl Script for PanicOnLoadScript {
     fn initialize(&mut self, _entity_id: EntityId, _world: &World) -> Effect {
         panic!("Unimplemented script: {}", self.name);
@@ -501,10 +514,6 @@ impl ScriptWorld {
             "riflemodify" => Box::new(NoopScript::new()),
             "stasismodify" => Box::new(NoopScript::new()),
             "shotgunmodify" => Box::new(NoopScript::new()),
-            "psiampscript" => Box::new(CompositeScript::new(vec![
-                Box::new(MeleeWeapon::new()),
-                Box::new(InternalSwitchHeldModelScript::new()),
-            ])),
             "energyweapon" => Box::new(NoopScript::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => Box::new(UnimplementedScript::new(&script_name)),
