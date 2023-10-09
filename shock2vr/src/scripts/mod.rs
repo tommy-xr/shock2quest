@@ -517,6 +517,10 @@ impl ScriptWorld {
             "energyweapon" => Box::new(NoopScript::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => Box::new(UnimplementedScript::new(&script_name)),
+            "wrench" => Box::new(CompositeScript::new(vec![
+                Box::new(MeleeWeapon::new()),
+                Box::new(InternalSwitchHeldModelScript::new()),
+            ])),
             "psiampscript" => Box::new(CompositeScript::new(vec![
                 Box::new(WeaponScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
