@@ -81,7 +81,10 @@ use crate::{
     vr_config, GameOptions,
 };
 
-use self::{entity_creator::EntityCreationInfo, visibility_engine::VisibilityEngine};
+use self::{
+    entity_creator::{CreateEntityOptions, EntityCreationInfo},
+    visibility_engine::VisibilityEngine,
+};
 #[cfg(target_os = "android")]
 const BASE_PATH: &str = "/mnt/sdcard/shock2quest";
 
@@ -290,6 +293,7 @@ impl Mission {
                 // TODO:
                 &HashMap::new(),
                 &template_to_entity_id,
+                CreateEntityOptions::default(),
             );
 
             Self::finish_instantiating_entity(
@@ -588,6 +592,7 @@ impl Mission {
                     vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
+                    CreateEntityOptions::default(),
                 );
                 //did_slay = true;
             }
@@ -602,6 +607,7 @@ impl Mission {
                     vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
+                    CreateEntityOptions::default(),
                 );
                 //did_slay = true;
             }
@@ -630,6 +636,7 @@ impl Mission {
                 position,
                 orientation,
                 Matrix4::identity(),
+                CreateEntityOptions::default(),
             ))
         } else {
             None
@@ -710,6 +717,7 @@ impl Mission {
         position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
+        additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
         let created_entity = {
             entity_creator::create_entity_with_position(
@@ -725,6 +733,7 @@ impl Mission {
                 // TODO:
                 &HashMap::new(),
                 &HashMap::new(),
+                additional_options,
             )
         };
 
@@ -881,7 +890,7 @@ impl Mission {
                     position,
                     orientation,
                     root_transform,
-                    options: _,
+                    options,
                 } => {
                     self.create_entity_with_position(
                         asset_cache,
@@ -889,6 +898,7 @@ impl Mission {
                         position,
                         orientation,
                         root_transform,
+                        options,
                     );
                 }
                 Effect::DropEntityInfo {
@@ -1090,6 +1100,7 @@ impl Mission {
                         vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
+                        CreateEntityOptions::default(),
                     );
 
                     if new_entity_info.rigid_body.is_some() {
@@ -1620,6 +1631,7 @@ impl Mission {
                         vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
+                        CreateEntityOptions::default(),
                     );
                 }
                 VirtualHandEffect::HoldItem {

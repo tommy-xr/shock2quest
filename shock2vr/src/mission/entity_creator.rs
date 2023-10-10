@@ -56,6 +56,7 @@ pub fn create_entity_with_position(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     obj_name_map: &HashMap<i32, String>, // name override map
     template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Create initial entity
     let entity_id = world.add_entity(());
@@ -63,7 +64,10 @@ pub fn create_entity_with_position(
     // Add props, based on inheritance
     initialize_entity_with_props(template_id, entity_info, world, entity_id, obj_name_map);
 
-    world.add_component(entity_id, PropHasRefs(true));
+    if additional_options.force_visible {
+        world.add_component(entity_id, PropHasRefs(true));
+        world.add_component(entity_id, PropRenderType(RenderType::Normal));
+    };
 
     initialize_links_for_entity(
         template_id,
@@ -117,6 +121,7 @@ pub fn create_entity_with_position(
         entity_info,
         template_to_entity_id,
         obj_name_map,
+        additional_options,
     )
 }
 
@@ -130,6 +135,7 @@ pub fn initialize_entity(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     obj_name_map: &HashMap<i32, String>, // name override map
     template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     let scale = {
         let v_scale = world.borrow::<View<PropScale>>().unwrap();
@@ -161,6 +167,7 @@ pub fn initialize_entity(
         entity_info,
         template_to_entity_id,
         obj_name_map,
+        additional_options,
     )
 }
 
@@ -174,6 +181,7 @@ pub fn create_entity_core(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     _template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
     obj_map: &HashMap<i32, String>,
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Add template id
     world.add_component(entity_id, PropTemplateId { template_id });
@@ -762,6 +770,19 @@ pub fn create_physics_representation(
             Some(rigid_body_handle)
         } else {
             None
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateEntityOptions {
+    pub force_visible: bool,
+}
+
+impl Default for CreateEntityOptions {
+    fn default() -> Self {
+        CreateEntityOptions {
+            force_visible: false,
         }
     }
 }

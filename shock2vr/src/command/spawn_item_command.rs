@@ -4,9 +4,7 @@ use dark::SCALE_FACTOR;
 use shipyard::{UniqueView, World};
 
 use crate::{
-    scripts::{CreateEntityOptions, Effect},
-    util::vec3_to_point3,
-    PlayerInfo,
+    mission::entity_creator::CreateEntityOptions, scripts::Effect, util::vec3_to_point3, PlayerInfo,
 };
 
 use super::Command;

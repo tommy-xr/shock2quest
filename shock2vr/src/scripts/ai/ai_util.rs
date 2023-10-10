@@ -11,10 +11,10 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
-    mission::PlayerInfo,
+    mission::{entity_creator::CreateEntityOptions, PlayerInfo},
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
-    scripts::{script_util::get_first_link_with_template_and_data, CreateEntityOptions, Effect},
+    scripts::{script_util::get_first_link_with_template_and_data, Effect},
     util,
 };
 

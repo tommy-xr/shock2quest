@@ -9,23 +9,11 @@ use shipyard::{Component, EntityId};
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
+    mission::entity_creator::CreateEntityOptions,
     vr_config::Handedness,
 };
 
 use super::Message;
-
-#[derive(Clone, Debug)]
-pub struct CreateEntityOptions {
-    pub force_visible: bool,
-}
-
-impl Default for CreateEntityOptions {
-    fn default() -> Self {
-        CreateEntityOptions {
-            force_visible: false,
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub enum GlobalEffect {

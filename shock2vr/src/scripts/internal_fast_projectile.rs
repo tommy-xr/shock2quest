@@ -22,7 +22,7 @@ use crate::{
     time::Time,
     util::{
         get_position_from_transform, get_rotation_from_forward_vector,
-    },
+    }, mission::entity_creator::CreateEntityOptions,
 };
 
 use super::{Effect, MessagePayload, Script};
@@ -120,7 +120,7 @@ impl Script for InternalFastProjectileScript {
                 orientation: get_rotation_from_forward_vector(hit_normal)
                     * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
                 root_transform: Matrix4::identity(),
-                options: super::CreateEntityOptions::default(),
+                options: CreateEntityOptions::default(),
             });
 
             Effect::combine(effects)
