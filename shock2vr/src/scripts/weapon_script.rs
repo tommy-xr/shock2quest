@@ -140,6 +140,8 @@ fn create_projectile(
         .map(|v| v.point)
         .unwrap_or(point3(0.0, 0.0, 0.0));
 
+    println!("!!debug: vhots {:?}", &vhots);
+
     let transform = v_transform.get(entity_id).unwrap();
 
     let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
