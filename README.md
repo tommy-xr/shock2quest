@@ -81,6 +81,6 @@ In addition, there were several great Rust libraries that helped bring this proj
 - [`serde`](https://serde.rs/) - Serialization / Deserialization (Load/Save)
 - [`cgmath`](https://github.com/rustgd/cgmath) - Vector math library
 - [`clap`](https://docs.rs/clap/latest/clap/) - Command line parsing
- -[`cargo-apk`](https://github.com/rust-mobile/cargo-apk) - easy cross-compiling to android
+- [`cargo-apk`](https://github.com/rust-mobile/cargo-apk) - easy cross-compiling to android
 
 Finally, thank you to [Nightdive Studios](https://www.nightdivestudios.com/) for keeping these retro games alive, as well as Le Corbeau for the NewDark patches that allowed me to revisit the SS2 universe
