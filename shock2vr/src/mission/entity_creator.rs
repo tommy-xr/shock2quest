@@ -56,12 +56,18 @@ pub fn create_entity_with_position(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     obj_name_map: &HashMap<i32, String>, // name override map
     template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Create initial entity
     let entity_id = world.add_entity(());
 
     // Add props, based on inheritance
     initialize_entity_with_props(template_id, entity_info, world, entity_id, obj_name_map);
+
+    if additional_options.force_visible {
+        world.add_component(entity_id, PropHasRefs(true));
+        world.add_component(entity_id, PropRenderType(RenderType::Normal));
+    };
 
     initialize_links_for_entity(
         template_id,
@@ -115,6 +121,7 @@ pub fn create_entity_with_position(
         entity_info,
         template_to_entity_id,
         obj_name_map,
+        additional_options,
     )
 }
 
@@ -128,6 +135,7 @@ pub fn initialize_entity(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     obj_name_map: &HashMap<i32, String>, // name override map
     template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     let scale = {
         let v_scale = world.borrow::<View<PropScale>>().unwrap();
@@ -159,6 +167,7 @@ pub fn initialize_entity(
         entity_info,
         template_to_entity_id,
         obj_name_map,
+        additional_options,
     )
 }
 
@@ -172,6 +181,7 @@ pub fn create_entity_core(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     _template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
     obj_map: &HashMap<i32, String>,
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Add template id
     world.add_component(entity_id, PropTemplateId { template_id });
@@ -332,15 +342,6 @@ fn create_model(
         .unwrap();
 
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
-        // We have some sort of model, but need to refine
-        // TODO: This logic keeps projectiles from rendering - why?
-        if v_rendertype.contains(entity_id) {
-            let render_type = v_rendertype.get(entity_id).unwrap();
-            if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender {
-                return None;
-            };
-        }
-
         let model_name = model.0.to_owned();
         let maybe_model = asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
 
@@ -760,6 +761,19 @@ pub fn create_physics_representation(
             Some(rigid_body_handle)
         } else {
             None
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateEntityOptions {
+    pub force_visible: bool,
+}
+
+impl Default for CreateEntityOptions {
+    fn default() -> Self {
+        CreateEntityOptions {
+            force_visible: false,
         }
     }
 }

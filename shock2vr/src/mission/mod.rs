@@ -32,8 +32,8 @@ use dark::{
         Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType, PropCreature,
         PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
         PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPosition, PropScripts, PropTeleported, PropTripFlags,
-        PropertyDefinition, ToLink, TripFlags, WrappedEntityId,
+        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
+        PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     BitmapAnimation, SCALE_FACTOR,
@@ -81,7 +81,10 @@ use crate::{
     vr_config, GameOptions,
 };
 
-use self::{entity_creator::EntityCreationInfo, visibility_engine::VisibilityEngine};
+use self::{
+    entity_creator::{CreateEntityOptions, EntityCreationInfo},
+    visibility_engine::VisibilityEngine,
+};
 #[cfg(target_os = "android")]
 const BASE_PATH: &str = "/mnt/sdcard/shock2quest";
 
@@ -290,6 +293,7 @@ impl Mission {
                 // TODO:
                 &HashMap::new(),
                 &template_to_entity_id,
+                CreateEntityOptions::default(),
             );
 
             Self::finish_instantiating_entity(
@@ -588,6 +592,7 @@ impl Mission {
                     vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
+                    CreateEntityOptions::default(),
                 );
                 //did_slay = true;
             }
@@ -602,6 +607,7 @@ impl Mission {
                     vec3_to_point3(position),
                     rotation,
                     Matrix4::identity(),
+                    CreateEntityOptions::default(),
                 );
                 //did_slay = true;
             }
@@ -630,6 +636,7 @@ impl Mission {
                 position,
                 orientation,
                 Matrix4::identity(),
+                CreateEntityOptions::default(),
             ))
         } else {
             None
@@ -710,6 +717,7 @@ impl Mission {
         position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
+        additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
         let created_entity = {
             entity_creator::create_entity_with_position(
@@ -725,6 +733,7 @@ impl Mission {
                 // TODO:
                 &HashMap::new(),
                 &HashMap::new(),
+                additional_options,
             )
         };
 
@@ -881,6 +890,7 @@ impl Mission {
                     position,
                     orientation,
                     root_transform,
+                    options,
                 } => {
                     self.create_entity_with_position(
                         asset_cache,
@@ -888,6 +898,7 @@ impl Mission {
                         position,
                         orientation,
                         root_transform,
+                        options,
                     );
                 }
                 Effect::DropEntityInfo {
@@ -1089,6 +1100,7 @@ impl Mission {
                         vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
+                        CreateEntityOptions::default(),
                     );
 
                     if new_entity_info.rigid_body.is_some() {
@@ -1382,6 +1394,7 @@ impl Mission {
         let _v_position = self.world.borrow::<View<PropPosition>>().unwrap();
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
+        let v_render_type = self.world.borrow::<View<PropRenderType>>().unwrap();
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
@@ -1394,6 +1407,14 @@ impl Mission {
             total_model_count += 1;
             if !has_refs(&self.world, *entity_id) {
                 continue;
+            }
+
+            if v_render_type.contains(*entity_id) {
+                let render_type = v_render_type.get(*entity_id).unwrap();
+                if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender
+                {
+                    continue;
+                };
             }
 
             if !self.visibility_engine.is_visible(*entity_id) {
@@ -1610,6 +1631,7 @@ impl Mission {
                         vec3_to_point3(position),
                         rotation,
                         Matrix4::identity(),
+                        CreateEntityOptions::default(),
                     );
                 }
                 VirtualHandEffect::HoldItem {
