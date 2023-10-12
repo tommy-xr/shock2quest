@@ -21,8 +21,6 @@ impl Script for CoreRoom {
         let v_prop_grav = world.borrow::<View<PropRoomGravity>>().unwrap();
         self.gravity_adjustment = v_prop_grav.get(entity_id).ok().cloned();
 
-        println!("!!debug - initializing room?");
-
         Effect::NoEffect
     }
     fn handle_message(
@@ -35,7 +33,6 @@ impl Script for CoreRoom {
         if self.gravity_adjustment.is_some() {
             match msg {
                 MessagePayload::SensorBeginIntersect { with } => {
-                    println!("!!debug - sesnor begin intersect? {:?} ", with);
                     let grav = self.gravity_adjustment.clone().unwrap();
 
                     match grav.0 {
