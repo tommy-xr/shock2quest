@@ -1706,6 +1706,12 @@ fn create_room_entities(
     world: &mut World,
     entities_to_initialize: &mut HashSet<(EntityId, i32)>,
 ) {
+    // HACK: The collision detection for entering / exiting rooms is different here
+    // than in Dark. We fire the edge detection events on any intersection, whereas
+    // Dark seems to use a stricter check. For now, we'll just offset the rooms
+    // to give a similar effect....
+    let vert_offset = vec3(0.0, 5.0 / SCALE_FACTOR, 0.0);
+
     for room in &room_db.rooms {
         let link = Links {
             to_links: option_to_vec(template_to_entity_id.get(&room.obj_id).map(|id| ToLink {
@@ -1718,11 +1724,7 @@ fn create_room_entities(
         let _room = world.add_entity((
             RuntimePropDoNotSerialize,
             PropPosition {
-                // HACK: The collision detection for entering / exiting rooms is different here
-                // than in Dark. We fire the edge detection events on any intersection, whereas
-                // Dark seems to use a stricter check. For now, we'll just offset the rooms
-                // to give a similar effect....
-                position: room.center + vec3(0.0, 0.25, 0.0),
+                position: room.center + vert_offset,
                 rotation: Quaternion {
                     v: Vector3::zero(),
                     s: 1.0,
@@ -1752,7 +1754,7 @@ fn create_room_entities(
                 trip_flags: TripFlags::Enter | TripFlags::Exit | TripFlags::Player,
             },
             PropPhysState {
-                position: room.center,
+                position: room.center + vert_offset,
                 velocity: Vector3::zero(),
                 rot_velocity: Vector3::zero(),
                 rotation: Quaternion {
