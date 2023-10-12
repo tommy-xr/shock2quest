@@ -68,6 +68,16 @@ impl VRHandModelAdjustments {
             projectile_rotation,
         }
     }
+
+    pub fn with_projectile_rotation(
+        self,
+        projectile_rotation: Quaternion<f32>,
+    ) -> VRHandModelAdjustments {
+        VRHandModelAdjustments {
+            projectile_rotation,
+            ..self
+        }
+    }
 }
 
 static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Lazy::new(|| {
@@ -79,7 +89,8 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         held_weapon_left,
         held_weapon_right,
         Quaternion::from_angle_y(Deg(0.0)),
-    );
+    )
+    .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.)));
 
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
     let held_item = VRHandModelAdjustments::new(
@@ -101,7 +112,12 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // Weapons
         ("atek_h", held_weapon.clone()),
         ("amp_h", held_weapon.clone()),
-        ("lasehand", held_weapon.clone()),
+        (
+            "lasehand",
+            held_weapon
+                .clone()
+                .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
+        ),
         ("empgun", held_weapon.clone()),
         ("wrench_h", default.clone()),
         ("sg_w", held_weapon.clone()),

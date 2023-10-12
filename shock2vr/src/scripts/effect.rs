@@ -5,10 +5,11 @@ use dark::{
     EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
-use shipyard::EntityId;
+use shipyard::{Component, EntityId};
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
+    mission::entity_creator::CreateEntityOptions,
     vr_config::Handedness,
 };
 
@@ -68,6 +69,7 @@ pub enum Effect {
         position: Point3<f32>,
         orientation: Quaternion<f32>,
         root_transform: Matrix4<f32>,
+        options: CreateEntityOptions,
     },
 
     DrawDebugLines {
