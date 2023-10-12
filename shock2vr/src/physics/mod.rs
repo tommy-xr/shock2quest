@@ -590,6 +590,7 @@ impl PhysicsWorld {
         //rigid_body.ccd_enabled(true);
         let player_entity_user_data = player_entity.inner() as u128;
         rigid_body.user_data = player_entity_user_data;
+        println!("!!debug - player entity: {:?}", player_entity);
         let character_handle = self.rigid_body_set.insert(rigid_body);
         let mut collider =
             ColliderBuilder::cuboid(0.8 / SCALE_FACTOR, 2.4 / SCALE_FACTOR, 0.8 / SCALE_FACTOR);
@@ -748,8 +749,11 @@ impl PhysicsWorld {
 
         let player_id = EntityId::from_inner(character_body.user_data as u64).unwrap();
         if let Some(adjusted_gravity) = self.entity_to_gravity.get(&player_id) {
+            // println!("!!debug - adjusted gravity: {}", adjusted_gravity);
             gravity *= adjusted_gravity;
         }
+
+        //println!("!!debug - GRAVITY: {}", gravity);
 
         let movement_with_gravity = desired_movement + Vector::y() * gravity;
 

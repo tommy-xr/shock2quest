@@ -6,9 +6,7 @@ use crate::{
 use cgmath::{Point3, Vector3};
 use collision::{Aabb3, Continuous, Plane};
 
-
 use std::io;
-
 
 #[derive(Debug, Clone)]
 pub struct Room {

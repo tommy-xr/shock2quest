@@ -249,15 +249,18 @@ impl Mission {
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
-        // Create rooms
-        create_room_entities(&level.room_database, &template_to_entity_id, &mut world);
-
         // Start background music
         initialize_background_music(&level, asset_cache, audio_context);
 
-        let mut position_objs = vec![];
-
         let mut entities_to_instantiate = HashSet::new();
+
+        // Create rooms
+        create_room_entities(
+            &level.room_database,
+            &template_to_entity_id,
+            &mut world,
+            &mut entities_to_instantiate,
+        );
 
         // Get the set of entities with PropPosition to be materialized
         world.run(
@@ -323,11 +326,6 @@ impl Mission {
             spawn_loc.calculate_start_position(&world, &level.entity_info, &template_to_entity_id);
 
         let player_handle = physics.create_player(start_pos, player_entity);
-
-        let mut scene_obj = vec![];
-        scene_obj.append(&mut position_objs);
-
-        scene.append(&mut scene_obj);
 
         world.add_unique(PlayerInfo {
             rotation: start_rotation,
@@ -1213,6 +1211,10 @@ impl Mission {
                     entity_id,
                     gravity_percent,
                 } => {
+                    println!(
+                        "!!debug - set gravity for {:?} to: {}",
+                        entity_id, gravity_percent
+                    );
                     self.physics.set_gravity(entity_id, gravity_percent);
                 }
                 Effect::SetPlayerPosition {
@@ -1702,6 +1704,7 @@ fn create_room_entities(
     room_db: &RoomDatabase,
     template_to_entity_id: &HashMap<i32, WrappedEntityId>,
     world: &mut World,
+    entities_to_initialize: &mut HashSet<(EntityId, i32)>,
 ) {
     for room in &room_db.rooms {
         let link = Links {
@@ -1759,6 +1762,7 @@ fn create_room_entities(
             },
             link,
         ));
+        entities_to_initialize.insert((_room, room.obj_id));
     }
 }
 
