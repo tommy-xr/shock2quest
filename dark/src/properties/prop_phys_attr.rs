@@ -23,7 +23,7 @@ pub struct PropPhysAttr {
 
 impl PropPhysAttr {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropPhysAttr {
-        let gravity_scale = read_single(reader);
+        let gravity_scale = read_single(reader) / 100.0;
         let mass = read_single(reader);
         let density = read_single(reader);
         let elasticity = read_single(reader);

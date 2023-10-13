@@ -39,6 +39,16 @@ bitflags! {
     }
 }
 
+pub struct DynamicPhysicsOptions {
+    pub gravity_scale: f32,
+}
+
+impl Default for DynamicPhysicsOptions {
+    fn default() -> DynamicPhysicsOptions {
+        DynamicPhysicsOptions { gravity_scale: 1.0 }
+    }
+}
+
 pub struct CollisionGroup(InteractionGroups);
 
 impl CollisionGroup {
@@ -445,6 +455,7 @@ impl PhysicsWorld {
         shape: PhysicsShape,
         collision_group: CollisionGroup,
         is_sensor: bool,
+        opts: DynamicPhysicsOptions,
     ) -> RigidBodyHandle {
         let nquat =
             nalgebra::geometry::Quaternion::new(facing.s, facing.v.x, facing.v.y, facing.v.z);
@@ -462,6 +473,7 @@ impl PhysicsWorld {
             .position(test)
             .build();
         rigid_body.user_data = entity_id.inner() as u128;
+        rigid_body.set_gravity_scale(opts.gravity_scale, false);
         //rigid_body.set_additional_mass(5.0, false);
         let handle = &self.rigid_body_set.insert(rigid_body);
         let mut collider = match shape {
