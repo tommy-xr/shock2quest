@@ -624,6 +624,9 @@ impl PhysicsWorld {
         });
         controller.offset = CharacterLength::Absolute(0.2 / SCALE_FACTOR);
 
+        self.entity_id_to_body
+            .insert(player_entity, character_handle);
+
         PlayerHandle {
             controller,
             character_handle,
