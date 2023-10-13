@@ -252,15 +252,18 @@ impl Mission {
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
-        // Create rooms
-        create_room_entities(&level.room_database, &template_to_entity_id, &mut world);
-
         // Start background music
         initialize_background_music(&level, asset_cache, audio_context);
 
-        let mut position_objs = vec![];
-
         let mut entities_to_instantiate = HashSet::new();
+
+        // Create rooms
+        create_room_entities(
+            &level.room_database,
+            &template_to_entity_id,
+            &mut world,
+            &mut entities_to_instantiate,
+        );
 
         // Get the set of entities with PropPosition to be materialized
         world.run(
@@ -327,11 +330,6 @@ impl Mission {
             spawn_loc.calculate_start_position(&world, &level.entity_info, &template_to_entity_id);
 
         let player_handle = physics.create_player(start_pos, player_entity);
-
-        let mut scene_obj = vec![];
-        scene_obj.append(&mut position_objs);
-
-        scene.append(&mut scene_obj);
 
         world.add_unique(PlayerInfo {
             rotation: start_rotation,
@@ -1728,7 +1726,14 @@ fn create_room_entities(
     room_db: &RoomDatabase,
     template_to_entity_id: &HashMap<i32, WrappedEntityId>,
     world: &mut World,
+    entities_to_initialize: &mut HashSet<(EntityId, i32)>,
 ) {
+    // HACK: The collision detection for entering / exiting rooms is different here
+    // than in Dark. We fire the edge detection events on any intersection, whereas
+    // Dark seems to use a stricter check. For now, we'll just offset the rooms
+    // to give a similar effect....
+    let vert_offset = vec3(0.0, 5.0 / SCALE_FACTOR, 0.0);
+
     for room in &room_db.rooms {
         let link = Links {
             to_links: option_to_vec(template_to_entity_id.get(&room.obj_id).map(|id| ToLink {
@@ -1741,11 +1746,7 @@ fn create_room_entities(
         let _room = world.add_entity((
             RuntimePropDoNotSerialize,
             PropPosition {
-                // HACK: The collision detection for entering / exiting rooms is different here
-                // than in Dark. We fire the edge detection events on any intersection, whereas
-                // Dark seems to use a stricter check. For now, we'll just offset the rooms
-                // to give a similar effect....
-                position: room.center + vec3(0.0, 0.25, 0.0),
+                position: room.center + vert_offset,
                 rotation: Quaternion {
                     v: Vector3::zero(),
                     s: 1.0,
@@ -1775,7 +1776,7 @@ fn create_room_entities(
                 trip_flags: TripFlags::Enter | TripFlags::Exit | TripFlags::Player,
             },
             PropPhysState {
-                position: room.center,
+                position: room.center + vert_offset,
                 velocity: Vector3::zero(),
                 rot_velocity: Vector3::zero(),
                 rotation: Quaternion {
@@ -1785,6 +1786,7 @@ fn create_room_entities(
             },
             link,
         ));
+        entities_to_initialize.insert((_room, room.obj_id));
     }
 }
 
