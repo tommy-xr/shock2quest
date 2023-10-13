@@ -1225,6 +1225,10 @@ impl Mission {
                     entity_id,
                     gravity_percent,
                 } => {
+                    println!(
+                        "!! debug - setting gravity: {:?} -> {}",
+                        entity_id, gravity_percent
+                    );
                     self.physics.set_gravity(entity_id, gravity_percent);
                 }
                 Effect::SetPlayerPosition {

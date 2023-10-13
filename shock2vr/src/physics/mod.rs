@@ -170,9 +170,6 @@ pub struct PhysicsWorld {
     // Sensor Intersection List
     player_sensor_intersections: HashSet<EntityId>,
 
-    // Gravity
-    entity_to_gravity: HashMap<EntityId, f32>,
-
     // Collision Events
     events: PhysicsEvents,
 }
@@ -233,7 +230,6 @@ impl PhysicsWorld {
                     rigid_body.set_next_kinematic_position(xform);
                 } else {
                     rigid_body.set_position(xform, true);
-                    rigid_body.set_gravity_scale(0.0, true);
                     rigid_body.reset_torques(true);
                     rigid_body.reset_forces(true);
                 }
@@ -266,7 +262,6 @@ impl PhysicsWorld {
                 rigid_body.set_next_kinematic_position(xform);
             } else {
                 rigid_body.set_position(xform, true);
-                rigid_body.set_gravity_scale(0.0, true);
                 rigid_body.reset_torques(true);
                 rigid_body.reset_forces(true);
             }
@@ -304,13 +299,10 @@ impl PhysicsWorld {
     }
 
     pub fn reset_gravity(&mut self, entity: EntityId) {
-        self.entity_to_gravity.remove(&entity);
+        self.set_gravity(entity, 1.0);
     }
 
     pub fn set_gravity(&mut self, entity_id: EntityId, percent: f32) {
-        // TODO: Is this still needed?
-        self.entity_to_gravity.insert(entity_id, percent);
-
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);
 
@@ -689,8 +681,6 @@ impl PhysicsWorld {
 
             player_sensor_intersections: HashSet::new(),
 
-            entity_to_gravity: HashMap::new(),
-
             events: PhysicsEvents::new(),
         }
     }
@@ -766,11 +756,11 @@ impl PhysicsWorld {
         let _character_mass = character_body.mass();
 
         let mut gravity = -0.5 / SCALE_FACTOR;
-
-        let player_id = EntityId::from_inner(character_body.user_data as u64).unwrap();
-        if let Some(adjusted_gravity) = self.entity_to_gravity.get(&player_id) {
-            gravity *= adjusted_gravity;
-        }
+        println!(
+            "!! debug: gravity scale: {}",
+            character_body.gravity_scale()
+        );
+        gravity *= character_body.gravity_scale();
 
         let movement_with_gravity = desired_movement + Vector::y() * gravity;
 
