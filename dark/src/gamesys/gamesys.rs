@@ -105,7 +105,7 @@ where
             for (id, door) in (&v_property).iter().with_id() {
                 let maybe_template_id = v_template_id.get(id);
                 let maybe_sym_name = v_symname.get(id);
-                info!("({id:?})[{maybe_template_id:?}|{maybe_sym_name:?}] prop: {door:?}")
+                println!("({id:?})[{maybe_template_id:?}|{maybe_sym_name:?}] prop: {door:?}")
             }
         },
     );

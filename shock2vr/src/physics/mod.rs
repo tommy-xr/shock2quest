@@ -297,8 +297,17 @@ impl PhysicsWorld {
         self.entity_to_gravity.remove(&entity);
     }
 
-    pub fn set_gravity(&mut self, entity: EntityId, percent: f32) {
-        self.entity_to_gravity.insert(entity, percent);
+    pub fn set_gravity(&mut self, entity_id: EntityId, percent: f32) {
+        // TODO: Is this still needed?
+        self.entity_to_gravity.insert(entity_id, percent);
+
+        if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
+            let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);
+
+            if let Some(rigid_body) = maybe_rigid_body {
+                rigid_body.set_gravity_scale(percent, true);
+            }
+        }
     }
 
     pub fn get_size(&self, handle: RigidBodyHandle) -> Option<f32> {
