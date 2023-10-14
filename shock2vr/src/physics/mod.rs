@@ -298,10 +298,6 @@ impl PhysicsWorld {
         }
     }
 
-    pub fn reset_gravity(&mut self, entity: EntityId) {
-        self.set_gravity(entity, 1.0);
-    }
-
     pub fn set_gravity(&mut self, entity_id: EntityId, percent: f32) {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);
@@ -759,10 +755,6 @@ impl PhysicsWorld {
         let _character_mass = character_body.mass();
 
         let mut gravity = -0.5 / SCALE_FACTOR;
-        println!(
-            "!! debug: gravity scale: {}",
-            character_body.gravity_scale()
-        );
         gravity *= character_body.gravity_scale();
 
         let movement_with_gravity = desired_movement + Vector::y() * gravity;
