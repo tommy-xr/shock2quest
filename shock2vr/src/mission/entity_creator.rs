@@ -2,6 +2,7 @@ use std::{collections::HashMap, rc::Rc};
 
 use crate::{
     creature::get_creature_definition,
+    physics::DynamicPhysicsOptions,
     runtime_props::*,
     time::Time,
     util::{get_rotation_from_matrix, has_refs, point3_to_vec3},
@@ -18,9 +19,9 @@ use dark::{
     properties::{
         FrobFlag, InternalPropOriginalModelName, Links, PhysicsModelType, PoseType,
         PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo, PropHUDSelect,
-        PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName, PropPhysDimensions,
-        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScale, PropSymName,
-        PropTemplateId, PropTripFlags, RenderType, TemplateLinks, WrappedEntityId,
+        PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName, PropPhysAttr,
+        PropPhysDimensions, PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScale,
+        PropSymName, PropTemplateId, PropTripFlags, RenderType, TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info, BitmapAnimation, SCALE_FACTOR,
 };
@@ -535,6 +536,7 @@ pub fn create_physics_representation(
 ) -> Option<RigidBodyHandle> {
     let (
         v_pos,
+        v_phys_attr,
         _v_phys_type,
         _v_phys_dimensions,
         v_frob_info,
@@ -544,6 +546,7 @@ pub fn create_physics_representation(
     ) = world
         .borrow::<(
             View<PropPosition>,
+            View<PropPhysAttr>,
             View<PropPhysType>,
             View<PropPhysDimensions>,
             View<PropFrobInfo>,
@@ -566,6 +569,14 @@ pub fn create_physics_representation(
         dimensions.y.abs().max(min_size_vec.y),
         dimensions.z.abs().max(min_size_vec.z),
     );
+
+    let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
+        DynamicPhysicsOptions {
+            gravity_scale: phys_attr.gravity_scale,
+        }
+    } else {
+        DynamicPhysicsOptions::default()
+    };
 
     // Frobbable item, let's see what we can do...
     if let (Ok(pos), Ok(frob_info)) = (v_pos.get(entity_id), v_frob_info.get(entity_id)) {
@@ -620,6 +631,7 @@ pub fn create_physics_representation(
                 //is_sensor,
                 CollisionGroup::entity(),
                 false,
+                dynamics_options,
             );
             physics.set_enabled_rotations(entity_id, false, false, false);
         } else if frob_info.world_action.contains(FrobFlag::Move) {
@@ -634,6 +646,7 @@ pub fn create_physics_representation(
                 //is_sensor,
                 CollisionGroup::entity(),
                 false,
+                dynamics_options,
             );
         } else {
             let mut group = CollisionGroup::entity();
@@ -746,6 +759,7 @@ pub fn create_physics_representation(
                     //size,
                     CollisionGroup::entity(),
                     is_sensor,
+                    dynamics_options,
                 )
             } else {
                 physics.add_kinematic(

@@ -39,6 +39,16 @@ bitflags! {
     }
 }
 
+pub struct DynamicPhysicsOptions {
+    pub gravity_scale: f32,
+}
+
+impl Default for DynamicPhysicsOptions {
+    fn default() -> DynamicPhysicsOptions {
+        DynamicPhysicsOptions { gravity_scale: 1.0 }
+    }
+}
+
 pub struct CollisionGroup(InteractionGroups);
 
 impl CollisionGroup {
@@ -160,9 +170,6 @@ pub struct PhysicsWorld {
     // Sensor Intersection List
     player_sensor_intersections: HashSet<EntityId>,
 
-    // Gravity
-    entity_to_gravity: HashMap<EntityId, f32>,
-
     // Collision Events
     events: PhysicsEvents,
 }
@@ -223,7 +230,6 @@ impl PhysicsWorld {
                     rigid_body.set_next_kinematic_position(xform);
                 } else {
                     rigid_body.set_position(xform, true);
-                    rigid_body.set_gravity_scale(0.0, true);
                     rigid_body.reset_torques(true);
                     rigid_body.reset_forces(true);
                 }
@@ -256,7 +262,6 @@ impl PhysicsWorld {
                 rigid_body.set_next_kinematic_position(xform);
             } else {
                 rigid_body.set_position(xform, true);
-                rigid_body.set_gravity_scale(0.0, true);
                 rigid_body.reset_torques(true);
                 rigid_body.reset_forces(true);
             }
@@ -293,12 +298,14 @@ impl PhysicsWorld {
         }
     }
 
-    pub fn reset_gravity(&mut self, entity: EntityId) {
-        self.entity_to_gravity.remove(&entity);
-    }
+    pub fn set_gravity(&mut self, entity_id: EntityId, percent: f32) {
+        if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
+            let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);
 
-    pub fn set_gravity(&mut self, entity: EntityId, percent: f32) {
-        self.entity_to_gravity.insert(entity, percent);
+            if let Some(rigid_body) = maybe_rigid_body {
+                rigid_body.set_gravity_scale(percent, true);
+            }
+        }
     }
 
     pub fn get_size(&self, handle: RigidBodyHandle) -> Option<f32> {
@@ -436,6 +443,7 @@ impl PhysicsWorld {
         shape: PhysicsShape,
         collision_group: CollisionGroup,
         is_sensor: bool,
+        opts: DynamicPhysicsOptions,
     ) -> RigidBodyHandle {
         let nquat =
             nalgebra::geometry::Quaternion::new(facing.s, facing.v.x, facing.v.y, facing.v.z);
@@ -453,6 +461,7 @@ impl PhysicsWorld {
             .position(test)
             .build();
         rigid_body.user_data = entity_id.inner() as u128;
+        rigid_body.set_gravity_scale(opts.gravity_scale, false);
         //rigid_body.set_additional_mass(5.0, false);
         let handle = &self.rigid_body_set.insert(rigid_body);
         let mut collider = match shape {
@@ -611,6 +620,9 @@ impl PhysicsWorld {
         });
         controller.offset = CharacterLength::Absolute(0.2 / SCALE_FACTOR);
 
+        self.entity_id_to_body
+            .insert(player_entity, character_handle);
+
         PlayerHandle {
             controller,
             character_handle,
@@ -667,8 +679,6 @@ impl PhysicsWorld {
             debug_pipeline,
 
             player_sensor_intersections: HashSet::new(),
-
-            entity_to_gravity: HashMap::new(),
 
             events: PhysicsEvents::new(),
         }
@@ -745,11 +755,7 @@ impl PhysicsWorld {
         let _character_mass = character_body.mass();
 
         let mut gravity = -0.5 / SCALE_FACTOR;
-
-        let player_id = EntityId::from_inner(character_body.user_data as u64).unwrap();
-        if let Some(adjusted_gravity) = self.entity_to_gravity.get(&player_id) {
-            gravity *= adjusted_gravity;
-        }
+        gravity *= character_body.gravity_scale();
 
         let movement_with_gravity = desired_movement + Vector::y() * gravity;
 

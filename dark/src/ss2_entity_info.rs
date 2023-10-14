@@ -409,7 +409,8 @@ fn read_all_properties<R: io::Read + io::Seek>(
                 let props = ent_to_props.get_mut(&obj_id).unwrap();
                 assert!(
                     expected_pos == ref_reader.stream_position().unwrap(),
-                    "len: {}, expected_pos: {}, actual_pos: {}",
+                    "prop name: {} len: {}, expected_pos: {}, actual_pos: {}",
+                    name,
                     prop_len,
                     expected_pos,
                     ref_reader.stream_position().unwrap()
