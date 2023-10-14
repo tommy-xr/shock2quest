@@ -35,7 +35,7 @@ use dark::{
     log_property,
     motion::MotionDB,
     properties::{
-        AmbientSoundFlags, InternalPropOriginalModelName, PropAmbientHacked,
+        AmbientSoundFlags, InternalPropOriginalModelName, PropAISignalResponse, PropAmbientHacked,
         PropModelName, PropPosition,
     },
     SCALE_FACTOR,
@@ -229,14 +229,12 @@ impl Game {
         // let mut atek_reader = BufReader::new(atek_file);
         // let header = ss2_bin_header::read(&mut atek_reader);
         // let obj = ss2_bin_obj_loader::read(&mut atek_reader, &header);
-        // panic!("vhots: {:?}", obj.vhots);
 
         let gamesys = gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
 
         let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
         let mut motiondb_reader = BufReader::new(motiondb_file);
         let motiondb = MotionDB::read(&mut motiondb_reader);
-        //panic!("motiondb");
 
         let mut audio_context = AudioContext::new();
 
@@ -334,9 +332,9 @@ impl Game {
         // panic!();
 
         // log_property::<PropAI>(&active_mission.world);
-        log_property::<PropModelName>(&active_mission.world);
-        log_property::<InternalPropOriginalModelName>(&active_mission.world);
-        // panic!();
+        log_property::<PropAISignalResponse>(&active_mission.world);
+        //log_property::<InternalPropOriginalModelName>(&active_mission.world);
+        panic!();
 
         // log_entity(
         //     &active_mission.world,

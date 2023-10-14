@@ -638,6 +638,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$AI_SigRsp",
+            PropAISignalResponse::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$AmbientHa",
             PropAmbientHacked::read,
             identity,
