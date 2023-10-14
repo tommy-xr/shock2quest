@@ -12,6 +12,7 @@ mod prop_hit_points;
 mod prop_key;
 mod prop_log;
 mod prop_particles;
+mod prop_phys_attr;
 mod prop_phys_initial_velocity;
 mod prop_phys_type;
 mod prop_player_gun;
@@ -36,6 +37,7 @@ pub use prop_hit_points::*;
 pub use prop_key::*;
 pub use prop_log::*;
 pub use prop_particles::*;
+pub use prop_phys_attr::*;
 pub use prop_phys_initial_velocity::*;
 pub use prop_phys_type::*;
 pub use prop_player_gun::*;
@@ -877,6 +879,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$Position",
             read_prop_position,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$PhysAttr",
+            PropPhysAttr::read,
             identity,
             accumulator::latest,
         ),

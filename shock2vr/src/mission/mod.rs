@@ -1217,7 +1217,7 @@ impl Mission {
                     self.remove_entity(entity_id);
                 }
                 Effect::ResetGravity { entity_id } => {
-                    self.physics.reset_gravity(entity_id);
+                    self.physics.set_gravity(entity_id, 1.0);
                 }
                 Effect::SetGravity {
                     entity_id,
