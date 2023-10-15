@@ -1173,31 +1173,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
-name = "hello_world_android5"
-version = "0.1.0"
-dependencies = [
- "cargo-apk",
- "cgmath",
- "dark",
- "engine",
- "gl",
- "jni 0.19.0",
- "khronos-egl",
- "lazy_static",
- "libloading",
- "libm",
- "ndk 0.7.0",
- "ndk-context",
- "ndk-glue",
- "ndk-sys 0.4.1+23.1.7779620",
- "oboe 0.5.0",
- "openxr",
- "pcx",
- "shock2vr",
- "tokio",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2546,6 +2521,31 @@ name = "shlex"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7cee0529a6d40f580e7a5e6c495c8fbfe21b7b52795ed4bb5e62cdf92bc6380"
+
+[[package]]
+name = "shock2quest"
+version = "0.1.0"
+dependencies = [
+ "cargo-apk",
+ "cgmath",
+ "dark",
+ "engine",
+ "gl",
+ "jni 0.19.0",
+ "khronos-egl",
+ "lazy_static",
+ "libloading",
+ "libm",
+ "ndk 0.7.0",
+ "ndk-context",
+ "ndk-glue",
+ "ndk-sys 0.4.1+23.1.7779620",
+ "oboe 0.5.0",
+ "openxr",
+ "pcx",
+ "shock2vr",
+ "tokio",
+]
 
 [[package]]
 name = "shock2vr"

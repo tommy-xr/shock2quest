@@ -1,5 +1,5 @@
 [package]
-name = "hello_world_android5"
+name = "shock2quest"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,13 +7,22 @@ edition = "2021"
 crate-type = ["lib", "cdylib"]
 
 [package.metadata.android]
+package = "com.tommybuilds.shock2quest"
 build_targets = ["aarch64-linux-android"]
 runtime_libs = "lib"
 assets = "./../../assets"
+resources = "./res"
 
 [package.metadata.android.sdk]
 min_sdk_version = 21
 target_sdk_version = 26
+
+[package.metadata.android.application]
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+# Virtual path your application's icon for any mipmap level.
+# If not specified, an icon will not be included in the APK.
+icon = "@mipmap/icon"
 
 [package.metadata.android.application.activity]
 theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
