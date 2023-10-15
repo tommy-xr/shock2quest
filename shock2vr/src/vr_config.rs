@@ -89,8 +89,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         held_weapon_left,
         held_weapon_right,
         Quaternion::from_angle_y(Deg(0.0)),
-    )
-    .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.)));
+    );
 
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
     let held_item = VRHandModelAdjustments::new(
