@@ -1,7 +1,8 @@
-use std::io;
+use std::{io, time::Duration};
 
 use bitflags::bitflags;
-use num_traits::ToPrimitive;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
 use shipyard::Component;
 
 use crate::ss2_common::{read_bytes, read_i32, read_string_with_size, read_u32};
@@ -18,43 +19,88 @@ pub enum AIPriority {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AIScriptedActionType {
-    Nothing,
-    Script,
-    Play, // Sound or motion?
-    Alert,
-    BecomeHostile,
-    EnableInvestigate,
-    Goto,
-    Frob,
-    Wait,
-    Mprint,
-    MetaProperty,
-    AddLink,
-    RemoveLink,
-    Face,
-    Signal,
-    DestScript,
+    Nothing,           // 0
+    Script(String),    // 1
+    Play(String),      // 2 - Sound or motion?
+    Alert,             // 3
+    BecomeHostile,     // 4
+    EnableInvestigate, // 5
+    Goto {
+        waypoint_name: String,
+        speed: String,
+    }, // 6
+    Frob(String),      // 7
+    Wait(Duration),    // 8
+    Mprint(String),    // 9
+    MetaProperty {
+        action_type: String,
+        arg1: String,
+        arg2: String,
+    }, // 10
+    AddLink {
+        link_type: String, // TODO: String to item
+        entity_name: String,
+    }, // 11
+    RemoveLink {
+        link_type: String,
+        entity_name: String,
+    }, // 12
+    Face {
+        entity_name: String,
+    }, // 13
+    Signal,            // 14
+    DestScript,        // 15
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AIScriptedAction {
     pub action_type: AIScriptedActionType,
-    pub action_data: [String; 4],
 }
 
 impl AIScriptedAction {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> AIScriptedAction {
-        let action_type = read_u32(reader);
+        let action_type_u32 = read_u32(reader);
         let sz0 = read_string_with_size(reader, 64);
         let sz1 = read_string_with_size(reader, 64);
         let sz2 = read_string_with_size(reader, 64);
         let sz3 = read_string_with_size(reader, 64);
-        let action_data = [sz0, sz1, sz2, sz3];
 
-        AIScriptedAction {
-            action_type: AIScriptedActionType::Nothing,
-            action_data,
-        }
+        let action_type = match action_type_u32 {
+            0 => AIScriptedActionType::Nothing,
+            1 => AIScriptedActionType::Script(sz0),
+            2 => AIScriptedActionType::Play(sz2),
+            4 => AIScriptedActionType::BecomeHostile,
+            6 => AIScriptedActionType::Goto {
+                waypoint_name: sz0,
+                speed: sz1,
+            },
+            7 => AIScriptedActionType::Frob(sz0),
+            8 => {
+                let milliseconds = u64::from_str_radix(&sz0, 10).unwrap();
+                AIScriptedActionType::Wait(Duration::from_millis(milliseconds))
+            }
+            9 => AIScriptedActionType::Mprint(sz0),
+            10 => AIScriptedActionType::MetaProperty {
+                action_type: sz0,
+                arg1: sz1,
+                arg2: sz2,
+            },
+            11 => AIScriptedActionType::AddLink {
+                link_type: sz0,
+                entity_name: sz1,
+            },
+            12 => AIScriptedActionType::RemoveLink {
+                link_type: sz0,
+                entity_name: sz1,
+            },
+            13 => AIScriptedActionType::Face { entity_name: sz0 },
+            _ => panic!(
+                "Unhandled action type: {} |{}|{}|{}|{}",
+                action_type_u32, &sz0, &sz1, &sz2, &sz3
+            ),
+        };
+
+        AIScriptedAction { action_type }
     }
 }
 
