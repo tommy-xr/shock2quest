@@ -331,9 +331,7 @@ impl Game {
         // });
         // panic!();
 
-        // log_property::<PropAI>(&active_mission.world);
         log_property::<PropAISignalResponse>(&active_mission.world);
-        //log_property::<InternalPropOriginalModelName>(&active_mission.world);
         panic!();
 
         // log_entity(
