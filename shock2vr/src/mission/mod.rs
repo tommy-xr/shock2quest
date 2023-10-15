@@ -525,10 +525,15 @@ impl Mission {
 
             let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
             let maybe_transform = v_transform.get(*id);
+            let curr_velocity = self
+                .physics
+                .get_velocity(*id)
+                .unwrap_or(vec3(0.0, 0.0, 0.0));
             if let Ok(transform) = maybe_transform {
-                let adj_velocity = transform
-                    .0
-                    .transform_vector(vec3(velocity.z, 0.0, -velocity.x));
+                let adj_velocity =
+                    transform
+                        .0
+                        .transform_vector(vec3(velocity.z, curr_velocity.y, -velocity.x));
                 self.physics.set_velocity(*id, adj_velocity * 1.0);
             }
 

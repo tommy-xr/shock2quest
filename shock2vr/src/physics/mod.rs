@@ -400,12 +400,16 @@ impl PhysicsWorld {
         maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.angvel()))
     }
 
-    pub fn get_velocity(&self, handle: RigidBodyHandle) -> Option<Vector3<f32>> {
-        let maybe_rigid_body = self.rigid_body_set.get(handle);
+    pub fn get_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
+        if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
+            let maybe_rigid_body = self.rigid_body_set.get(*handle);
 
-        maybe_rigid_body.map(|rigid_body| {
-            nvec_to_cgmath(rigid_body.velocity_at_point(rigid_body.center_of_mass()))
-        })
+            maybe_rigid_body.map(|rigid_body| {
+                nvec_to_cgmath(rigid_body.velocity_at_point(rigid_body.center_of_mass()))
+            })
+        } else {
+            None
+        }
     }
 
     pub fn set_velocity(&mut self, entity_id: EntityId, velocity: Vector3<f32>) {
