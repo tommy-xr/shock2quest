@@ -331,8 +331,8 @@ impl Game {
         // });
         // panic!();
 
-        log_property::<PropSignalType>(&active_mission.world);
-        panic!();
+        // log_property::<PropSignalType>(&active_mission.world);
+        // panic!();
 
         // log_entity(
         //     &active_mission.world,
