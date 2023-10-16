@@ -225,6 +225,9 @@ pub struct InternalPropOriginalModelName(pub String);
 pub struct PropScale(pub Vector3<f32>);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropSignalType(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStartLoc(pub u32);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -1034,6 +1037,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$CfgTweqMo",
             PropTweqModelConfig::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SignalTyp",
+            read_variable_length_string,
+            PropSignalType,
             accumulator::latest,
         ),
         define_prop(

@@ -36,7 +36,7 @@ use dark::{
     motion::MotionDB,
     properties::{
         AmbientSoundFlags, InternalPropOriginalModelName, PropAISignalResponse, PropAmbientHacked,
-        PropModelName, PropPosition,
+        PropModelName, PropPosition, PropSignalType,
     },
     SCALE_FACTOR,
 };
@@ -331,7 +331,7 @@ impl Game {
         // });
         // panic!();
 
-        log_property::<PropAISignalResponse>(&active_mission.world);
+        log_property::<PropSignalType>(&active_mission.world);
         panic!();
 
         // log_entity(
