@@ -40,6 +40,7 @@ mod trap_qb_neg_filter;
 mod trap_qb_set;
 mod trap_questbit_simple;
 mod trap_router;
+mod trap_signal;
 mod trap_slayer;
 mod trap_sound;
 mod trap_teleport;
@@ -69,6 +70,7 @@ use crate::gui::gui_script;
 use self::choose_service::ChooseServiceScript;
 use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
+use self::trap_signal::TrapSignal;
 use self::{
     base_button::BaseButton, base_elevator::BaseElevator, base_monster::BaseMonster, core_room::*,
     create_sound::*, dead_power_cell::DeadPowerCell, destroy_all_by_name::DestroyAllByName,
@@ -367,7 +369,7 @@ impl ScriptWorld {
             "toolconsumable" => Box::new(ToolConsumable::new()),
 
             // AI stuff
-            "trapsignal" => Box::new(NoopScript::new()),
+            "trapsignal" => Box::new(TrapSignal::new()),
             "gooegg" => Box::new(Tweqable::new()),
             "grubegg" => Box::new(Tweqable::new()),
             "swarmeregg" => Box::new(Tweqable::new()),

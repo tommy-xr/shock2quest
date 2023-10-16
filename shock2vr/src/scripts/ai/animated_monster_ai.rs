@@ -224,6 +224,9 @@ impl Script for AnimatedMonsterAI {
                     delta: -(amount.round() as i32),
                 }
             }
+            MessagePayload::Signal { name } => {
+                panic!("received signal: {:?}", name)
+            }
             MessagePayload::AnimationCompleted => {
                 if self.is_dead {
                     Effect::NoEffect
