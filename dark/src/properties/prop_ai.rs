@@ -11,10 +11,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Component, Clone, Deserialize, Serialize)]
 pub struct PropAI(pub String);
 
-// TODO
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, FromPrimitive, Clone, Serialize, Deserialize)]
 pub enum AIPriority {
-    Default,
+    None = 0,
+    VeryLow = 1,
+    Low = 2,
+    Normal = 3,
+    High = 4,
+    VeryHigh = 5,
+    Absolute = 6,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +119,8 @@ pub struct PropAISignalResponse {
 impl PropAISignalResponse {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> PropAISignalResponse {
         let signal = read_string_with_size(reader, 32);
-        let priority = read_u32(reader);
+        let priority_u32 = read_u32(reader);
+        let priority = AIPriority::from_u32(priority_u32).unwrap();
         let _unk = read_bytes(reader, 16);
 
         // There can be a variable number of actions here, but we don't know how many (up to 16)
@@ -129,13 +135,9 @@ impl PropAISignalResponse {
         for _i in 0..num_actions {
             actions.push(AIScriptedAction::read(reader));
         }
-        println!(
-            "debug!!: got to read PropAISignalResponse: {:?} priority: {}",
-            signal, priority
-        );
         PropAISignalResponse {
             signal,
-            priority: AIPriority::Default,
+            priority,
             actions,
         }
     }
