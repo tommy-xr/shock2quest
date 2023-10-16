@@ -117,6 +117,12 @@ pub enum MessagePayload {
     Damage {
         amount: f32,
     }, // damage the entity
+
+    // AI Signal
+    Signal {
+        name: String,
+    },
+
     Slay, // kill the entity
 
     // Interaction events
