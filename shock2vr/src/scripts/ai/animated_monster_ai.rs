@@ -28,6 +28,18 @@ pub struct AnimatedMonsterAI {
 }
 
 impl AnimatedMonsterAI {
+    pub fn idle() -> AnimatedMonsterAI {
+        AnimatedMonsterAI {
+            is_dead: false,
+            took_damage: false,
+            //current_behavior: Box::new(RefCell::new(MeleeAttackBehavior)),
+            //current_behavior: Box::new(RefCell::new(ChaseBehavior::new())),
+            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_heading: Deg(0.0),
+            animation_seq: 0,
+            last_hit_sensor: None,
+        }
+    }
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
