@@ -63,13 +63,11 @@ where
                 .get_components(cursor, entity_id, world, &self.state)
         };
         self.last_cursor = None;
+        let size = vec2(16.0, 16.0);
         components.push(GuiComponent::Image {
             alpha: 0.5,
             position: vec2(self.cursor.x, self.cursor.y),
-            size: vec2(
-                0.1 * config.screen_size_in_pixels.x,
-                0.1 * config.screen_size_in_pixels.y,
-            ),
+            size,
             texture: "cursor.pcx".to_owned(),
         });
         let render_components = components
