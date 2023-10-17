@@ -36,7 +36,7 @@ impl Behavior for ScriptedSequenceBehavior {
         _physics: &crate::physics::PhysicsWorld,
         _entity_id: shipyard::EntityId,
     ) -> super::NextBehavior {
-        if self.current_action_idx >= (self.actions.len() as i32) {
+        if self.current_action_idx >= ((self.actions.len() as i32) - 1) {
             println!("!!debug -next behavior, no opinion");
             super::NextBehavior::NoOpinion
         } else {
