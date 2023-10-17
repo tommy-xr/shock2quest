@@ -63,7 +63,7 @@ impl Behavior for ChaseBehavior {
     }
 
     fn next_behavior(
-        &self,
+        &mut self,
         world: &World,
         _physics: &PhysicsWorld,
         entity_id: EntityId,
