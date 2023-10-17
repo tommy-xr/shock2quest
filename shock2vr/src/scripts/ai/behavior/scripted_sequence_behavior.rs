@@ -5,7 +5,7 @@ use dark::{
     properties::{AIScriptedAction, AIScriptedActionType},
 };
 
-use super::{Behavior, WanderBehavior};
+use super::{Behavior, PlayAnimationBehavior, WanderBehavior};
 
 pub struct ScriptedSequenceBehavior {
     actions: Vec<AIScriptedAction>,
@@ -49,7 +49,9 @@ impl Behavior for ScriptedSequenceBehavior {
 
 fn get_behavior_from_action(action: &AIScriptedAction) -> Box<RefCell<dyn Behavior>> {
     let current_behavior: Box<RefCell<dyn Behavior>> = match &action.action_type {
-        AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(WanderBehavior::new())),
+        AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
+            PlayAnimationBehavior::new(action_name.clone()),
+        )),
         // "wander" => Box::new(super::WanderBehavior::new()),
         // "chase" => Box::new(super::ChaseBehavior::new()),
         // "melee" => Box::new(super::MeleeAttackBehavior::new()),
