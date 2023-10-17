@@ -5,7 +5,7 @@ use dark::{
     properties::{AIScriptedAction, AIScriptedActionType},
 };
 
-use super::{Behavior, PlayAnimationBehavior, WanderBehavior};
+use super::{Behavior, NoopBehavior, PlayAnimationBehavior, WanderBehavior};
 
 pub struct ScriptedSequenceBehavior {
     actions: Vec<AIScriptedAction>,
@@ -37,26 +37,26 @@ impl Behavior for ScriptedSequenceBehavior {
         _entity_id: shipyard::EntityId,
     ) -> super::NextBehavior {
         if self.current_action_idx >= (self.actions.len() as i32) {
+            println!("!!debug -next behavior, no opinion");
             super::NextBehavior::NoOpinion
         } else {
             self.current_action_idx += 1;
-            let behavior =
+            println!("!!debug -next behavior, now at {}", self.current_action_idx);
+            let behavior: Box<RefCell<dyn Behavior>> =
                 get_behavior_from_action(&self.actions[self.current_action_idx as usize]);
-            super::NextBehavior::Next(behavior)
+            self.current_behavior = behavior;
+            super::NextBehavior::Stay
         }
     }
 }
 
 fn get_behavior_from_action(action: &AIScriptedAction) -> Box<RefCell<dyn Behavior>> {
+    println!("!!debug - checking action: {:?}", action);
     let current_behavior: Box<RefCell<dyn Behavior>> = match &action.action_type {
         AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
             PlayAnimationBehavior::new(action_name.clone()),
         )),
-        // "wander" => Box::new(super::WanderBehavior::new()),
-        // "chase" => Box::new(super::ChaseBehavior::new()),
-        // "melee" => Box::new(super::MeleeAttackBehavior::new()),
-        // "ranged" => Box::new(super::RangedAttackBehavior::new()),
-        _ => Box::new(RefCell::new(super::NoopBehavior)),
+        _ => Box::new(RefCell::new(super::IdleBehavior)),
     };
     current_behavior
 }
