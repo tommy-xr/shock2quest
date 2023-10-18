@@ -27,10 +27,6 @@ pub trait Behavior {
         vec![]
     }
 
-    fn is_complete(&self) -> bool {
-        true
-    }
-
     ///
     /// turn_speed
     ///

@@ -1,12 +1,9 @@
 use dark::properties::{PropConsumeType, PropSymName};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
-
 use crate::physics::PhysicsWorld;
 
-use super::{
-    Effect, MessagePayload, Script,
-};
+use super::{script_util, Effect, MessagePayload, Script};
 
 pub struct DestroyAllByName {}
 impl DestroyAllByName {
@@ -27,19 +24,9 @@ impl Script for DestroyAllByName {
                 let v_prop_consume = world.borrow::<View<PropConsumeType>>().unwrap();
 
                 if let Ok(symbols_to_consume) = v_prop_consume.get(entity_id) {
-                    let mut items_to_consume = Vec::new();
-
                     let match_string = symbols_to_consume.0.to_ascii_lowercase();
 
-                    world.run(|v_prop_symyname: View<PropSymName>| {
-                        for (id, symname) in v_prop_symyname.iter().with_id() {
-                            let name_lowercase = symname.0.to_ascii_lowercase();
-
-                            if name_lowercase.contains(&match_string) {
-                                items_to_consume.push(id);
-                            }
-                        }
-                    });
+                    let items_to_consume = script_util::get_entities_by_name(world, &match_string);
 
                     let effs: Vec<Effect> = items_to_consume
                         .iter()

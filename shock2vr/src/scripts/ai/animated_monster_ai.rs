@@ -242,6 +242,7 @@ impl Script for AnimatedMonsterAI {
                     );
                     // Immediately switch to Scripted sequence Behavior
                     self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+                        world,
                         prop_sig_resp.actions.clone(),
                     )));
                     self.animation_seq += 1;
