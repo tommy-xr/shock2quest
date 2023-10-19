@@ -9,9 +9,15 @@ use crate::{
 
 use super::{Steering, SteeringOutput, SteeringStrategy};
 
-pub struct ChasePlayerSteeringStrategy;
+pub struct ChaseEntitySteeringStrategy(EntityId);
 
-impl SteeringStrategy for ChasePlayerSteeringStrategy {
+impl ChaseEntitySteeringStrategy {
+    pub fn new(entity_id: EntityId) -> ChaseEntitySteeringStrategy {
+        ChaseEntitySteeringStrategy(entity_id)
+    }
+}
+
+impl SteeringStrategy for ChaseEntitySteeringStrategy {
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,
@@ -20,15 +26,16 @@ impl SteeringStrategy for ChasePlayerSteeringStrategy {
         entity_id: EntityId,
         _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
-        let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
         let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
         // TODO: Check if player is visible?
-        if let Ok(prop_pos) = v_current_pos.get(entity_id) {
+        if let (Ok(prop_pos), Ok(to_pos)) =
+            (v_current_pos.get(entity_id), v_current_pos.get(self.0))
+        {
             return Some((
                 Steering::turn_to_point(
                     vec3_to_point3(prop_pos.position),
-                    vec3_to_point3(u_player.pos),
+                    vec3_to_point3(to_pos.position),
                 ),
                 Effect::NoEffect,
             ));
