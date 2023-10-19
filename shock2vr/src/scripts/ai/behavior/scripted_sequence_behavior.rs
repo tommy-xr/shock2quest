@@ -73,9 +73,13 @@ impl Behavior for ScriptedSequenceBehavior {
         &mut self,
         world: &shipyard::World,
         _physics: &crate::physics::PhysicsWorld,
-        _entity_id: shipyard::EntityId,
+        entity_id: shipyard::EntityId,
     ) -> super::NextBehavior {
-        if self.current_scripted_action.borrow().is_complete(world) {
+        if self
+            .current_scripted_action
+            .borrow()
+            .is_complete(entity_id, world)
+        {
             if self.current_action_idx >= ((self.actions.len() as i32) - 1) {
                 println!("!!debug -next behavior, no opinion");
                 super::NextBehavior::NoOpinion
@@ -138,7 +142,7 @@ trait ScriptedAction {
         Effect::NoEffect
     }
 
-    fn is_complete(&self, world: &World) -> bool {
+    fn is_complete(&self, entity_id: EntityId, world: &World) -> bool {
         true
     }
 
@@ -223,5 +227,29 @@ impl ScriptedAction for FrobScriptedAction {
         } else {
             Effect::NoEffect
         }
+    }
+}
+
+pub struct GotoScriptedAction {
+    target_id: Option<EntityId>,
+}
+
+impl GotoScriptedAction {
+    pub fn new(world: &World, entity_name: &str) -> GotoScriptedAction {
+        let maybe_entity = script_util::get_first_entity_by_name(world, entity_name);
+        println!("!!debug - maybe entity: {:?}", maybe_entity);
+        GotoScriptedAction {
+            target_id: maybe_entity,
+        }
+    }
+}
+
+impl ScriptedAction for GotoScriptedAction {
+    fn animation(self: &GotoScriptedAction) -> Vec<MotionQueryItem> {
+        vec![
+            MotionQueryItem::new("locomote"),
+            MotionQueryItem::new("locourgent").optional(),
+            MotionQueryItem::new("direction").optional(),
+        ]
     }
 }
