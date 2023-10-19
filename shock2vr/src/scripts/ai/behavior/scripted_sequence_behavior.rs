@@ -316,7 +316,7 @@ impl ScriptedAction for GotoScriptedAction {
                     let to = vec3(target_pos.position.x, 0.0, target_pos.position.z);
                     let distance = (from - to).magnitude();
                     println!("!!debug - distance: {}", distance);
-                    return distance < (2.5 / SCALE_FACTOR);
+                    return distance < (3.0 / SCALE_FACTOR);
                 }
             }
         }
