@@ -1,10 +1,11 @@
-use dark::properties::{WrappedEntityId};
+use cgmath::{Deg, Quaternion, Rotation3};
+use dark::properties::WrappedEntityId;
 ///
 /// mission_entity_populator.rs
 ///
 /// An implementation of EntityPopulator that creates entities based on the entity data
 /// in a mission file
-use shipyard::{Get, World};
+use shipyard::{Get, IntoIter, IntoWithId, View, ViewMut, World};
 use std::collections::HashMap;
 
 use dark::mission::SystemShock2Level;
@@ -51,6 +52,11 @@ impl EntityPopulator for MissionEntityPopulator {
             );
         }
 
+        // HACK: If the entity is an 'AI' entity, it is rotated 90 degrees to the left.
+        // This is a hack to fix that. Probably a bug somewhere else in the pipeline...
+        // hopefully we can find/fix the root cause and remove this hack.
+        hack_rotate_ai_entities(world);
+
         // Third pass - initialize links for entity
         for (template_id, entity_id) in all_entities {
             entity_creator::initialize_links_for_entity(
@@ -63,5 +69,21 @@ impl EntityPopulator for MissionEntityPopulator {
         }
 
         template_to_entity_id
+    }
+}
+
+fn hack_rotate_ai_entities(world: &mut World) {
+    let mut v_prop_pos = world
+        .borrow::<ViewMut<dark::properties::PropPosition>>()
+        .unwrap();
+    let v_prop_ai = world.borrow::<View<dark::properties::PropAI>>().unwrap();
+
+    for (prop_pos, prop_ai) in (&mut v_prop_pos, &v_prop_ai).iter() {
+        // Ignore some ai...
+        if prop_ai.0.eq_ignore_ascii_case("turret") || prop_ai.0.eq_ignore_ascii_case("camera") {
+            continue;
+        }
+        let rotation = prop_pos.rotation;
+        prop_pos.rotation = rotation * Quaternion::from_angle_y(Deg(-90.0))
     }
 }

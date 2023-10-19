@@ -100,9 +100,7 @@ pub fn get_entities_by_name(world: &World, name: &str) -> Vec<EntityId> {
     let mut entities = Vec::new();
     world.run(|v_prop_symyname: View<PropSymName>| {
         for (id, symname) in v_prop_symyname.iter().with_id() {
-            let name_lowercase = symname.0.to_ascii_lowercase();
-
-            if name_lowercase.contains(&name) {
+            if name.eq_ignore_ascii_case(&symname.0) {
                 entities.push(id);
             }
         }

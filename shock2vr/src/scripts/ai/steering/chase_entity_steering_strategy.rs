@@ -1,4 +1,4 @@
-use cgmath::Deg;
+use cgmath::{vec4, Deg};
 use dark::properties::PropPosition;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -32,12 +32,13 @@ impl SteeringStrategy for ChaseEntitySteeringStrategy {
         if let (Ok(prop_pos), Ok(to_pos)) =
             (v_current_pos.get(entity_id), v_current_pos.get(self.0))
         {
+            let from = vec3_to_point3(prop_pos.position);
+            let to = vec3_to_point3(to_pos.position);
             return Some((
-                Steering::turn_to_point(
-                    vec3_to_point3(prop_pos.position),
-                    vec3_to_point3(to_pos.position),
-                ),
-                Effect::NoEffect,
+                Steering::turn_to_point(from, to),
+                Effect::DrawDebugLines {
+                    lines: vec![(from, to, vec4(0.0, 1.0, 0.0, 1.0))],
+                },
             ));
         };
 

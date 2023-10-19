@@ -1,16 +1,20 @@
 use std::cell::RefCell;
 
-use cgmath::Deg;
+use cgmath::{vec3, Deg, InnerSpace};
 use dark::{
     motion::MotionQueryItem,
-    properties::{AIScriptedAction, AIScriptedActionType},
+    properties::{AIScriptedAction, AIScriptedActionType, PropPosition},
+    SCALE_FACTOR,
 };
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{Steering, SteeringOutput},
+        ai::steering::{
+            self, ChainedSteeringStrategy, ChaseEntitySteeringStrategy,
+            CollisionAvoidanceSteeringStrategy, Steering, SteeringOutput, SteeringStrategy,
+        },
         script_util, Effect, Message,
     },
     time::Time,
@@ -43,6 +47,11 @@ impl Behavior for ScriptedSequenceBehavior {
     fn animation(&self) -> Vec<MotionQueryItem> {
         self.current_scripted_action.borrow().animation()
     }
+
+    fn turn_speed(&self) -> Deg<f32> {
+        self.current_scripted_action.borrow().turn_speed()
+    }
+
     fn steer(
         &mut self,
         current_heading: Deg<f32>,
@@ -118,7 +127,11 @@ fn get_behavior_from_action(
         AIScriptedActionType::Frob(entity_name) => {
             Box::new(RefCell::new(FrobScriptedAction::new(world, entity_name)))
         }
-        _ => Box::new(RefCell::new(IdleScriptedAction)),
+        AIScriptedActionType::Goto {
+            waypoint_name,
+            speed,
+        } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
+        _ => Box::new(RefCell::new(NoopScriptedAction)),
     };
     current_behavior
 }
@@ -132,6 +145,10 @@ fn get_behavior_from_action(
 trait ScriptedAction {
     fn animation(&self) -> Vec<MotionQueryItem> {
         vec![]
+    }
+
+    fn turn_speed(&self) -> Deg<f32> {
+        Deg(180.0)
     }
 
     fn initial_effect(&self) -> Effect {
@@ -204,8 +221,13 @@ pub struct FrobScriptedAction(Option<EntityId>);
 
 impl FrobScriptedAction {
     pub fn new(world: &World, entity_name: &str) -> FrobScriptedAction {
+        let all_entities = script_util::get_entities_by_name(world, entity_name);
         let maybe_entity = script_util::get_first_entity_by_name(world, entity_name);
-        println!("!!debug - maybe entity: {:?}", maybe_entity);
+        println!(
+            "!!debug - maybe entity: {:?} len: {}",
+            maybe_entity,
+            all_entities.len()
+        );
         FrobScriptedAction(maybe_entity)
     }
 }
@@ -232,24 +254,73 @@ impl ScriptedAction for FrobScriptedAction {
 
 pub struct GotoScriptedAction {
     target_id: Option<EntityId>,
+    steering_strategy: Box<dyn SteeringStrategy>,
 }
 
 impl GotoScriptedAction {
     pub fn new(world: &World, entity_name: &str) -> GotoScriptedAction {
+        let all_entities = script_util::get_entities_by_name(world, entity_name);
         let maybe_entity = script_util::get_first_entity_by_name(world, entity_name);
-        println!("!!debug - maybe entity: {:?}", maybe_entity);
+        println!(
+            "!!debug - maybe entity: {:?} len: {}",
+            maybe_entity,
+            all_entities.len()
+        );
+
+        let mut steering_strategies: Vec<Box<dyn SteeringStrategy>> = vec![Box::new(
+            CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
+        )];
+
+        // let mut steering_strategies: Vec<Box<dyn SteeringStrategy>> = vec![];
+
+        if let Some(ent) = maybe_entity {
+            steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(ent)))
+        }
+
         GotoScriptedAction {
             target_id: maybe_entity,
+            steering_strategy: steering::chained(steering_strategies),
         }
     }
 }
 
 impl ScriptedAction for GotoScriptedAction {
+    fn turn_speed(&self) -> Deg<f32> {
+        Deg(540.0)
+    }
     fn animation(self: &GotoScriptedAction) -> Vec<MotionQueryItem> {
         vec![
             MotionQueryItem::new("locomote"),
             MotionQueryItem::new("locourgent").optional(),
             MotionQueryItem::new("direction").optional(),
         ]
+    }
+    fn update(
+        &mut self,
+        current_heading: Deg<f32>,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        time: &Time,
+    ) -> Option<(SteeringOutput, Effect)> {
+        self.steering_strategy
+            .steer(current_heading, world, physics, entity_id, time)
+    }
+
+    fn is_complete(&self, entity_id: EntityId, world: &World) -> bool {
+        let v_prop_pos = world.borrow::<View<PropPosition>>().unwrap();
+        if let Some(target_entity_id) = self.target_id {
+            if let Ok(target_pos) = v_prop_pos.get(target_entity_id) {
+                if let Ok(entity_pos) = v_prop_pos.get(entity_id) {
+                    let from = vec3(entity_pos.position.x, 0.0, entity_pos.position.z);
+                    let to = vec3(target_pos.position.x, 0.0, target_pos.position.z);
+                    let distance = (from - to).magnitude();
+                    println!("!!debug - distance: {}", distance);
+                    return distance < (2.5 / SCALE_FACTOR);
+                }
+            }
+        }
+
+        true
     }
 }
