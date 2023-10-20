@@ -12,15 +12,15 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            self, ChainedSteeringStrategy, ChaseEntitySteeringStrategy,
-            CollisionAvoidanceSteeringStrategy, Steering, SteeringOutput, SteeringStrategy,
+            self, ChaseEntitySteeringStrategy, CollisionAvoidanceSteeringStrategy, Steering,
+            SteeringOutput, SteeringStrategy,
         },
         script_util, Effect, Message,
     },
     time::Time,
 };
 
-use super::{Behavior, NoopBehavior, WanderBehavior};
+use super::Behavior;
 
 pub struct ScriptedSequenceBehavior {
     actions: Vec<AIScriptedAction>,
@@ -90,12 +90,10 @@ impl Behavior for ScriptedSequenceBehavior {
             .is_complete(entity_id, world)
         {
             if self.current_action_idx >= ((self.actions.len() as i32) - 1) {
-                println!("!!debug -next behavior, no opinion");
                 super::NextBehavior::NoOpinion
             } else {
                 let outgoing_effect = self.current_scripted_action.borrow().completion_effect();
                 self.current_action_idx += 1;
-                println!("!!debug -next behavior, now at {}", self.current_action_idx);
                 let behavior = get_behavior_from_action(
                     world,
                     &self.actions[self.current_action_idx as usize],
@@ -119,7 +117,6 @@ fn get_behavior_from_action(
     world: &World,
     action: &AIScriptedAction,
 ) -> Box<RefCell<dyn ScriptedAction>> {
-    println!("!!debug - checking action: {:?}", action);
     let current_behavior: Box<RefCell<dyn ScriptedAction>> = match &action.action_type {
         AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
             PlayAnimationScriptedAction::new(action_name.clone()),
@@ -129,7 +126,7 @@ fn get_behavior_from_action(
         }
         AIScriptedActionType::Goto {
             waypoint_name,
-            speed,
+            speed: _, // TODO: Incorporate speed
         } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
         _ => Box::new(RefCell::new(NoopScriptedAction)),
     };
@@ -159,7 +156,7 @@ trait ScriptedAction {
         Effect::NoEffect
     }
 
-    fn is_complete(&self, entity_id: EntityId, world: &World) -> bool {
+    fn is_complete(&self, _entity_id: EntityId, _world: &World) -> bool {
         true
     }
 
@@ -187,8 +184,6 @@ impl PlayAnimationScriptedAction {
 
 impl ScriptedAction for PlayAnimationScriptedAction {
     fn animation(self: &PlayAnimationScriptedAction) -> Vec<MotionQueryItem> {
-        println!("!!debug: playing animation: {}", self.animation_name);
-
         if let Some(index) = self.animation_name.find(' ') {
             let (motion, value_str) = self.animation_name.split_at(index);
             if let Ok(value) = value_str.trim().parse::<i32>() {
@@ -221,13 +216,7 @@ pub struct FrobScriptedAction(Option<EntityId>);
 
 impl FrobScriptedAction {
     pub fn new(world: &World, entity_name: &str) -> FrobScriptedAction {
-        let all_entities = script_util::get_entities_by_name(world, entity_name);
         let maybe_entity = script_util::get_first_entity_by_name(world, entity_name);
-        println!(
-            "!!debug - maybe entity: {:?} len: {}",
-            maybe_entity,
-            all_entities.len()
-        );
         FrobScriptedAction(maybe_entity)
     }
 }
@@ -239,7 +228,6 @@ impl ScriptedAction for FrobScriptedAction {
 
     fn completion_effect(&self) -> Effect {
         if let Some(entity_id) = self.0 {
-            println!("!!debug - sending frob to: {:?}", entity_id);
             Effect::Send {
                 msg: Message {
                     to: entity_id,
@@ -259,19 +247,11 @@ pub struct GotoScriptedAction {
 
 impl GotoScriptedAction {
     pub fn new(world: &World, entity_name: &str) -> GotoScriptedAction {
-        let all_entities = script_util::get_entities_by_name(world, entity_name);
         let maybe_entity = script_util::get_first_entity_by_name(world, entity_name);
-        println!(
-            "!!debug - maybe entity: {:?} len: {}",
-            maybe_entity,
-            all_entities.len()
-        );
 
         let mut steering_strategies: Vec<Box<dyn SteeringStrategy>> = vec![Box::new(
             CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
         )];
-
-        // let mut steering_strategies: Vec<Box<dyn SteeringStrategy>> = vec![];
 
         if let Some(ent) = maybe_entity {
             steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(ent)))
@@ -315,7 +295,9 @@ impl ScriptedAction for GotoScriptedAction {
                     let from = vec3(entity_pos.position.x, 0.0, entity_pos.position.z);
                     let to = vec3(target_pos.position.x, 0.0, target_pos.position.z);
                     let distance = (from - to).magnitude();
-                    println!("!!debug - distance: {}", distance);
+
+                    // HACK: This is an arbitrary value that I just tested with some sequences
+                    // (ie, in rec1). I'm not sure the best criteria for this step yet.
                     return distance < (3.0 / SCALE_FACTOR);
                 }
             }

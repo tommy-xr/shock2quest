@@ -236,10 +236,6 @@ impl Script for AnimatedMonsterAI {
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
                 if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
-                    println!(
-                        "!!debug - got signal {:?} with response {:?}|{:?}",
-                        name, prop_sig_resp.signal, prop_sig_resp.actions
-                    );
                     // Immediately switch to Scripted sequence Behavior
                     self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
                         world,
