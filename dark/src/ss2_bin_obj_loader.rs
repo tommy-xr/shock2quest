@@ -140,15 +140,6 @@ pub fn to_scene_objects(
                 return None;
             }
 
-            let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
-                Rc::new(Box::new(engine::scene::mesh::create(verts)))
-            } else {
-                // If not skinned, convert the vertices to non-skinned representation
-                let simpler_vertices =
-                    convert_skinned_vertices_to_static_vertices(&verts, &skeleton);
-                Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices)))
-            };
-
             let material = hashToMaterial.get(&slot).unwrap();
             let mut tex_path = material.name.to_string();
 
@@ -157,7 +148,22 @@ pub fn to_scene_objects(
                 tex_path = "soft12 .pcx".to_owned();
             }
 
-            let texture = asset_cache.get(&TEXTURE_IMPORTER, &tex_path);
+            let maybe_texture = asset_cache.get_opt(&TEXTURE_IMPORTER, &tex_path);
+
+            if (maybe_texture.is_none()) {
+                return None;
+            }
+
+            let texture = maybe_texture.unwrap();
+
+            let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
+                Rc::new(Box::new(engine::scene::mesh::create(verts)))
+            } else {
+                // If not skinned, convert the vertices to non-skinned representation
+                let simpler_vertices =
+                    convert_skinned_vertices_to_static_vertices(&verts, &skeleton);
+                Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices)))
+            };
 
             let diffuse_texture: Rc<dyn TextureTrait> = {
                 let mut animation_frames = load_multiple_textures_for_model(asset_cache, &tex_path);
