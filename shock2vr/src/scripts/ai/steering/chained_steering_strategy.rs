@@ -1,15 +1,8 @@
-use cgmath::{
-    Deg,
-};
-
+use cgmath::Deg;
 
 use shipyard::{EntityId, World};
 
-use crate::{
-    physics::{PhysicsWorld},
-    scripts::{Effect},
-    time::Time,
-};
+use crate::{physics::PhysicsWorld, scripts::Effect, time::Time};
 
 use super::{SteeringOutput, SteeringStrategy};
 

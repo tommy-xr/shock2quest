@@ -1,17 +1,14 @@
 use std::cell::RefCell;
 
-use cgmath::{Deg};
-use dark::{motion::MotionQueryItem};
+use cgmath::Deg;
+use dark::motion::MotionQueryItem;
 
 use shipyard::*;
 
 use crate::{
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{
-            ChasePlayerSteeringStrategy,
-            SteeringOutput, SteeringStrategy,
-        },
+        ai::steering::{ChasePlayerSteeringStrategy, SteeringOutput, SteeringStrategy},
         Effect,
     },
     time::Time,
@@ -42,7 +39,7 @@ impl Behavior for RangedAttackBehavior {
     }
 
     fn next_behavior(
-        &self,
+        &mut self,
         _world: &World,
         _physics: &PhysicsWorld,
         _entity_id: EntityId,

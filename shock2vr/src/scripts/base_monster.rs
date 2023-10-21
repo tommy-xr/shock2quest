@@ -43,7 +43,7 @@ impl Script for BaseMonster {
             "grub" => Box::new(NoopScript {}),
             "swarmer" => Box::new(NoopScript {}),
 
-            _ => Box::new(NoopScript {}),
+            _ => Box::new(AnimatedMonsterAI::idle()),
         };
 
         self.ai = ai;

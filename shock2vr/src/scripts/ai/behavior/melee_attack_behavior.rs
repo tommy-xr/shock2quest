@@ -9,10 +9,7 @@ use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{
-            ChasePlayerSteeringStrategy,
-            SteeringOutput, SteeringStrategy,
-        },
+        ai::steering::{ChasePlayerSteeringStrategy, SteeringOutput, SteeringStrategy},
         Effect,
     },
     time::Time,
@@ -43,7 +40,7 @@ impl Behavior for MeleeAttackBehavior {
     }
 
     fn next_behavior(
-        &self,
+        &mut self,
         world: &World,
         _physics: &PhysicsWorld,
         entity_id: EntityId,

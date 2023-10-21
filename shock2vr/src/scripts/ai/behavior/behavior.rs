@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use cgmath::*;
-use dark::{motion::MotionQueryItem};
+use dark::motion::MotionQueryItem;
 use rand::Rng;
 use shipyard::*;
 
@@ -47,7 +47,7 @@ pub trait Behavior {
     }
 
     fn next_behavior(
-        &self,
+        &mut self,
         _world: &World,
         _physics: &PhysicsWorld,
         _entity_id: EntityId,
