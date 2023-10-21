@@ -1,6 +1,7 @@
 extern crate glfw;
 use self::glfw::{Action, Context, Key};
 
+mod ffmpeg_test;
 use cgmath::point3;
 use cgmath::Decomposed;
 use cgmath::Deg;
@@ -51,6 +52,7 @@ use shock2vr::time::Time;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -141,12 +143,16 @@ fn f32_from_bool(v: bool) -> f32 {
     }
 }
 extern crate ffmpeg_next as ffmpeg;
+use ffmpeg::format::{input, Pixel};
+use ffmpeg::media::Type;
+use ffmpeg::util::frame::video::Video;
 pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
     ffmpeg::init().unwrap();
-    match ffmpeg::format::input(&"../../Data/cutscenes/INTRO.avi") {
+    let file_name = &"../../Data/cutscenes/INTRO.avi";
+    match ffmpeg::format::input(file_name) {
         Ok(context) => {
             for (k, v) in context.metadata().iter() {
                 println!("{}: {}", k, v);
@@ -223,10 +229,14 @@ pub fn main() {
                     }
                 }
             }
+
+            // Dump frames!
+            ffmpeg_test::dump_frames(file_name);
         }
 
         Err(error) => println!("error: {}", error),
     };
+
     panic!();
     tracing_subscriber::fmt::init();
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
@@ -522,3 +532,9 @@ fn process_events(
 
 //     AnimationClip::create(&motion, &motion_info, mps_motion)
 // }
+fn save_file(frame: &Video, index: usize) -> std::result::Result<(), std::io::Error> {
+    let mut file = File::create(format!("frame{}.ppm", index))?;
+    file.write_all(format!("P6\n{} {}\n255\n", frame.width(), frame.height()).as_bytes())?;
+    file.write_all(frame.data(0))?;
+    Ok(())
+}
