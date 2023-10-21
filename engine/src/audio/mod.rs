@@ -5,8 +5,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cgmath::{vec3, Vector3};
-use rodio::source::{Buffered, SineWave};
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
+use rodio::buffer::SamplesBuffer;
+use rodio::source::{Buffered, SineWave, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Sink, SpatialSink};
 
 use rand;
 use rand::Rng;
@@ -168,7 +169,7 @@ where
 
     pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) -> () {
         let sink = rodio::Sink::try_new(&self.handle).unwrap();
-        sink.append(clip.source.clone());
+        clip.add_to_sink(&sink);
         sink.set_volume(0.2);
         sink.play();
         self.environmental_sink = Some((sink, clip.clone()));
@@ -226,7 +227,7 @@ where
         for (key, (sink, clip)) in &self.ambient_sounds {
             if let Some(current_sound) = current_sound_hash.get(key) {
                 if sink.len() == 0 {
-                    sink.append(clip.source.clone())
+                    clip.add_to_spatial_sink(&sink);
                 }
 
                 sink.set_emitter_position([
@@ -286,7 +287,7 @@ where
                 .next_clip(self.next_music_cue.clone());
             if let Some(next_song) = maybe_next {
                 let sink = rodio::Sink::try_new(&self.handle).unwrap();
-                sink.append(next_song.source.clone());
+                next_song.add_to_sink(&sink);
                 sink.play();
                 self.next_music_cue = None;
                 self.background_music = Some(sink);
@@ -298,7 +299,7 @@ where
         if let Some((current_sink, clip)) = &self.environmental_sink {
             if current_sink.len() == 0 {
                 let sink = rodio::Sink::try_new(&self.handle).unwrap();
-                sink.append(clip.source.clone());
+                clip.add_to_sink(&sink);
                 sink.set_volume(0.2);
                 sink.play();
                 self.environmental_sink = Some((sink, clip.clone()));
@@ -308,15 +309,42 @@ where
 }
 
 #[derive(Clone)]
+enum SourceType {
+    Bytes(Buffered<Decoder<Cursor<Vec<u8>>>>),
+    Raw(Buffered<SamplesBuffer<i16>>),
+}
+
+#[derive(Clone)]
 pub struct AudioClip {
-    pub source: Buffered<Decoder<Cursor<Vec<u8>>>>,
+    source: SourceType,
 }
 
 impl AudioClip {
+    pub fn add_to_spatial_sink(&self, sink: &SpatialSink) -> () {
+        match &self.source {
+            SourceType::Bytes(source) => sink.append(source.clone()),
+            SourceType::Raw(source) => sink.append(source.clone()),
+        }
+    }
+    pub fn add_to_sink(&self, sink: &Sink) -> () {
+        match &self.source {
+            SourceType::Bytes(source) => sink.append(source.clone()),
+            SourceType::Raw(source) => sink.append(source.clone()),
+        }
+    }
     pub fn from_bytes(bytes: Vec<u8>) -> AudioClip {
         let buf = Cursor::new(bytes);
         let source = rodio::Decoder::new(buf).unwrap().buffered();
-        AudioClip { source }
+        AudioClip {
+            source: SourceType::Bytes(source),
+        }
+    }
+
+    pub fn from_raw(channels: u16, sample_rate: u32, data: Vec<i16>) -> AudioClip {
+        let source = rodio::buffer::SamplesBuffer::new(channels, sample_rate, data).buffered();
+        AudioClip {
+            source: SourceType::Raw(source),
+        }
     }
 }
 
@@ -391,8 +419,6 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
         }
     }
 
-    let source = audio_clip.source.clone();
-
     //let reverb = source.buffered().reverb(Duration::from_millis(40), 0.7);
     // let x = rand::thread_rng().gen_range(-1.0..1.0);
     // let y = rand::thread_rng().gen_range(-1.0..1.0);
@@ -409,7 +435,7 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     );
     let sink = rodio::SpatialSink::try_new(&context.handle, positions.0, positions.1, positions.2)
         .unwrap();
-    sink.append(source);
+    audio_clip.add_to_spatial_sink(&sink);
 
     //context.handle_to_sink.insert(handle.id, sink);
     sink

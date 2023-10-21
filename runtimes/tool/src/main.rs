@@ -26,6 +26,7 @@ use dark::ss2_skeleton;
 use dark::ss2_skeleton::Skeleton;
 use engine::assets::asset_cache::AssetCache;
 use engine::assets::asset_paths::AssetPath;
+use engine::audio::AudioContext;
 use engine::importers::FBX_IMPORTER;
 use engine::scene::mesh;
 use engine::scene::Scene;
@@ -151,7 +152,9 @@ pub fn main() {
     // ------------------------------
 
     ffmpeg::init().unwrap();
-    let file_name = &"../../Data/cutscenes/INTRO.avi";
+    let mut audio_context: AudioContext<(), String> = AudioContext::new();
+
+    let file_name = &"../../Data/cutscenes/cs2.avi";
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
             for (k, v) in context.metadata().iter() {
@@ -232,6 +235,7 @@ pub fn main() {
 
             // Dump frames!
             ffmpeg_test::dump_frames(file_name);
+            //ffmpeg_test::play_audio(file_name, &mut audio_context);
         }
 
         Err(error) => println!("error: {}", error),
