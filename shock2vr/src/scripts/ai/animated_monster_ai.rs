@@ -3,9 +3,10 @@ use std::cell::RefCell;
 use cgmath::{vec3, vec4, Deg, Quaternion, Rotation3};
 use dark::{
     motion::{MotionFlags, MotionQueryItem},
+    properties::PropAISignalResponse,
     SCALE_FACTOR,
 };
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
@@ -28,6 +29,18 @@ pub struct AnimatedMonsterAI {
 }
 
 impl AnimatedMonsterAI {
+    pub fn idle() -> AnimatedMonsterAI {
+        AnimatedMonsterAI {
+            is_dead: false,
+            took_damage: false,
+            //current_behavior: Box::new(RefCell::new(MeleeAttackBehavior)),
+            //current_behavior: Box::new(RefCell::new(ChaseBehavior::new())),
+            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_heading: Deg(0.0),
+            animation_seq: 0,
+            last_hit_sensor: None,
+        }
+    }
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
@@ -204,12 +217,40 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        {
+            self.current_behavior
+                .borrow_mut()
+                .handle_message(entity_id, world, physics, msg);
+        }
         match msg {
             MessagePayload::Damage { amount } => {
                 self.took_damage = true;
                 Effect::AdjustHitPoints {
                     entity_id,
                     delta: -(amount.round() as i32),
+                }
+            }
+            MessagePayload::Signal { name } => {
+                // Do we have a response to this signal?
+
+                let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
+
+                if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
+                    // Immediately switch to Scripted sequence Behavior
+                    self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+                        world,
+                        prop_sig_resp.actions.clone(),
+                    )));
+                    self.animation_seq += 1;
+                    Effect::QueueAnimationBySchema {
+                        entity_id,
+                        motion_query_items: self.current_behavior.borrow().animation(),
+                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
+                            self.animation_seq,
+                        ),
+                    }
+                } else {
+                    Effect::NoEffect
                 }
             }
             MessagePayload::AnimationCompleted => {
@@ -232,7 +273,7 @@ impl Script for AnimatedMonsterAI {
                 } else {
                     let next_behavior = {
                         self.current_behavior
-                            .borrow()
+                            .borrow_mut()
                             .next_behavior(world, physics, entity_id)
                     };
 

@@ -1,16 +1,16 @@
 mod chained_steering_strategy;
+mod chase_entity_steering_strategy;
 mod chase_player_steering_strategy;
 mod collision_avoidance_steering_strategy;
 mod wander_steering_strategy;
 
 pub use chained_steering_strategy::*;
+pub use chase_entity_steering_strategy::*;
 pub use chase_player_steering_strategy::*;
 pub use collision_avoidance_steering_strategy::*;
 pub use wander_steering_strategy::*;
 
-use cgmath::{
-    Deg, EuclideanSpace, Point3,
-};
+use cgmath::{Deg, EuclideanSpace, Point3};
 use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
