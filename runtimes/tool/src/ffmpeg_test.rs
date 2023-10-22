@@ -158,7 +158,7 @@ pub fn play_audio(
     //panic!("source sample rate: {}", source_sample_rate);
     let sample_rate = remapped_samples.len() / (source_bit_rate / 8);
     // panic!("sample rate? {}", sample_rate);
-    let clip = AudioClip::from_raw(2, 44100 / 2, remapped_samples);
+    let clip = AudioClip::from_raw(2, 44100 / 4, remapped_samples);
     let handle = AudioHandle::new();
     audio::test_audio(context, handle, None, Rc::new(clip));
 

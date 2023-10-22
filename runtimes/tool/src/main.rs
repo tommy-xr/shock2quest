@@ -234,14 +234,14 @@ pub fn main() {
             }
 
             // Dump frames!
-            ffmpeg_test::dump_frames(file_name);
-            //ffmpeg_test::play_audio(file_name, &mut audio_context);
+            // ffmpeg_test::dump_frames(file_name);
+            ffmpeg_test::play_audio(file_name, &mut audio_context);
         }
 
         Err(error) => println!("error: {}", error),
     };
 
-    panic!();
+    // panic!();
     tracing_subscriber::fmt::init();
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
     // TODO: Figure out ANGLE
