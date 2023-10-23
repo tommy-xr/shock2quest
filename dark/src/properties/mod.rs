@@ -272,6 +272,7 @@ pub struct ToTemplateLinkInfo {
 pub enum Link {
     AIProjectile(AIProjectileOptions),
     AIRangedWeapon,
+    AIWatchObj(AIWatchOptions),
     Contains(u32),
     Corpse(CorpseOptions),
     Flinderize(FlinderizeOptions),
@@ -431,6 +432,16 @@ impl FlinderizeOptions {
             scatter,
             offset,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AIWatchOptions {}
+
+impl AIWatchOptions {
+    pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> AIWatchOptions {
+        panic!("reading AIWatchOpts - len: {}", _len);
+        AIWatchOptions {}
     }
 }
 
@@ -601,6 +612,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
     // Links with data
     let links_with_data = vec![
         // define_link_with_data("L$Corpse", "LD$Corpse", CorpseOptions::read, Link::Corpse),
+        define_link_with_data(
+            "L$AIWatchOb",
+            "LD$AIWatchO",
+            AIWatchOptions::read,
+            Link::AIWatchObj,
+        ),
         define_link_with_data(
             "L$Contains",
             "LD$Contains",
