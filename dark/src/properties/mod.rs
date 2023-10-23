@@ -442,12 +442,13 @@ pub struct AIWatchOptions {
 
 impl AIWatchOptions {
     pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> AIWatchOptions {
-        // 2196 total ytes
-        // 29
+        // 2196 total bytes
+        // 29 * 4
         // 2056 - used for scripted actions (64 * 4 + 1 (action)) * 8
 
-        let _unk = read_bytes(reader, 15);
+        let _unk = read_bytes(reader, 60);
         let _trigger = read_u32(reader);
+        println!("trigger: {}", _trigger);
         let _awareness = read_u32(reader);
         let _ai_watch_visibility = read_u32(reader);
         let _unk2 = read_i32(reader);
@@ -462,11 +463,17 @@ impl AIWatchOptions {
         let _radius = read_i32(reader);
         let _height = read_i32(reader);
 
+        // TODO: Log bytes and figure out what is going on?
+        // Wonder why we are not finding the right stuff
         let mut scripted_actions = Vec::new();
         for _ in 0..8 {
             let action = AIScriptedAction::read(reader);
             scripted_actions.push(action);
         }
+        panic!(
+            "radius: {} height: {} actions: {:?}",
+            _radius, _height, scripted_actions
+        );
 
         AIWatchOptions { scripted_actions }
     }
