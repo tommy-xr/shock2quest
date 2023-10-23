@@ -22,7 +22,7 @@ pub enum AIPriority {
     Absolute = 6,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AIScriptedActionType {
     Nothing,           // 0
     Script(String),    // 1
@@ -57,7 +57,7 @@ pub enum AIScriptedActionType {
     DestScript,        // 15
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AIScriptedAction {
     pub action_type: AIScriptedActionType,
 }

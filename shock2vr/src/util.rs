@@ -49,7 +49,7 @@ where
 
                 for link in &links.to_links {
                     if should_log_link(&link.link) {
-                        info!(
+                        println!(
                             "({:?})[{:?}|{:?}|{:?}] link: {:?}",
                             id, maybe_template_id, maybe_sym_name, maybe_obj_name, link.link
                         );
@@ -114,7 +114,7 @@ pub fn get_position_from_transform(
     if let Ok(transform) = v_transform.get(entity_id) {
         let point = vec3_to_point3(offset);
         let xform = transform.0;
-        
+
         xform.transform_point(point)
     } else if let Ok(position) = v_prop_position.get(entity_id) {
         warn!("no transform for entity: {:?}", entity_id);

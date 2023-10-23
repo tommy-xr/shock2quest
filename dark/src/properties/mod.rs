@@ -436,12 +436,39 @@ impl FlinderizeOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AIWatchOptions {}
+pub struct AIWatchOptions {
+    scripted_actions: Vec<AIScriptedAction>,
+}
 
 impl AIWatchOptions {
     pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> AIWatchOptions {
-        panic!("reading AIWatchOpts - len: {}", _len);
-        AIWatchOptions {}
+        // 2196 total ytes
+        // 29
+        // 2056 - used for scripted actions (64 * 4 + 1 (action)) * 8
+
+        let _unk = read_bytes(reader, 15);
+        let _trigger = read_u32(reader);
+        let _awareness = read_u32(reader);
+        let _ai_watch_visibility = read_u32(reader);
+        let _unk2 = read_i32(reader);
+        let _ai_watch_kill_condition = read_u32(reader);
+        let _kill_like_links = read_bool(reader);
+        let _once_only = read_bool(reader);
+        let _reuse_time = read_i32(reader);
+        let _reset_time = read_i32(reader);
+        let _min_alertness = read_u32(reader);
+        let _max_alertness = read_u32(reader);
+        let _ai_priority = read_u32(reader);
+        let _radius = read_i32(reader);
+        let _height = read_i32(reader);
+
+        let mut scripted_actions = Vec::new();
+        for _ in 0..8 {
+            let action = AIScriptedAction::read(reader);
+            scripted_actions.push(action);
+        }
+
+        AIWatchOptions { scripted_actions }
     }
 }
 
