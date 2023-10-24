@@ -295,7 +295,6 @@ fn read_all_data_links<R1: io::Read + io::Seek>(
             };
 
             if let Some(data) = link_data.get(&link_info.id) {
-                println!("READING LINK FOR: {}", link_info.src);
                 let component_link = link.convert(data.clone(), data.len() as u32, to_link);
 
                 ent_to_links
