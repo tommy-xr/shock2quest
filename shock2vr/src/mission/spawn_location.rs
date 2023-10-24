@@ -10,6 +10,7 @@ use shipyard::{Get, IntoIter, IntoWithId, View, World};
 
 use crate::scripts::script_util::{get_all_links_of_type, get_first_link_of_type};
 
+#[derive(Clone)]
 pub enum SpawnLocation {
     MapDefault,
     Marker(u32),

@@ -82,6 +82,7 @@ pub fn resource_path(str: &str) -> String {
 
 pub struct GameOptions {
     pub mission: String,
+    pub spawn_location: SpawnLocation,
     pub save_file: Option<String>,
     pub render_particles: bool,
     pub debug_physics: bool,
@@ -94,6 +95,7 @@ impl Default for GameOptions {
     fn default() -> Self {
         Self {
             mission: "earth.mis".to_owned(),
+            spawn_location: SpawnLocation::MapDefault,
             save_file: None,
             debug_draw: false,
             debug_portals: false,
@@ -318,7 +320,7 @@ impl Game {
                     &mut asset_cache,
                     &mut audio_context,
                     &global_context,
-                    SpawnLocation::MapDefault,
+                    options.spawn_location.clone(),
                     QuestInfo::new(),
                     //Box::new(MissionEntityPopulator::create()),
                     Box::new(MissionEntityPopulator::create()),
