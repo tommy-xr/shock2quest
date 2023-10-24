@@ -13,45 +13,39 @@ pub trait Command: fmt::Debug {
     fn execute(&self, world: &World) -> Effect;
 }
 
-// SavePositionCommand
+// SaveCommand
 #[derive(Debug)]
-pub struct SavePositionCommand {}
+pub struct SaveCommand {}
 
-impl SavePositionCommand {
-    pub fn new() -> SavePositionCommand {
-        SavePositionCommand {}
+impl SaveCommand {
+    pub fn new() -> SaveCommand {
+        SaveCommand {}
     }
 }
 
-impl Command for SavePositionCommand {
+impl Command for SaveCommand {
     fn execute(&self, _world: &World) -> Effect {
-        // let (save_data, _) = save_load::to_save_data(world);
-
-        // let save_data_json = serde_json::to_string(&save_data).unwrap();
-
-        // let zip_file = OpenOptions::new()
-        //     .write(true)
-        //     .create(true)
-        //     .truncate(true)
-        //     .open("save.sav")
-        //     .unwrap();
-        // let mut zip = ZipWriter::new(zip_file);
-
-        // // Add first entry
-        // let options = FileOptions::default()
-        //     .compression_method(CompressionMethod::Deflated) // Choose your compression method
-        //     .unix_permissions(0o755); // And the permissions of the file
-
-        // zip.start_file("metadata.json", options).unwrap();
-        // zip.write_all(save_data_json.as_bytes()).unwrap();
-
-        // // Don't forget to finish the zip!
-        // zip.finish().unwrap();
         Effect::GlobalEffect(crate::scripts::GlobalEffect::Save {
             file_name: "save1.sav".to_owned(),
         })
-        // Effect::GlobalEffect(crate::scripts::GlobalEffect::TestReload)
-        //Effect::NoEffect
+    }
+}
+
+// LoadCommand
+#[derive(Debug)]
+pub struct LoadCommand {}
+
+impl LoadCommand {
+    pub fn new() -> LoadCommand {
+        LoadCommand {}
+    }
+}
+
+impl Command for LoadCommand {
+    fn execute(&self, _world: &World) -> Effect {
+        Effect::GlobalEffect(crate::scripts::GlobalEffect::Load {
+            file_name: "save1.sav".to_owned(),
+        })
     }
 }
 
