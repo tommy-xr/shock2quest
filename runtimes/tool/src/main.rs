@@ -32,7 +32,7 @@ use engine::scene::SceneObject;
 use engine::scene::TextVertex;
 use engine::texture::TextureTrait;
 use num::ToPrimitive;
-use shock2vr::command::SavePositionCommand;
+use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 use shock2vr::command::TransitionLevelCommand;
 use shock2vr::GameOptions;

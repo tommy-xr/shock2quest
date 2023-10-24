@@ -10,8 +10,10 @@ use engine::profile;
 
 use engine::util::compute_view_matrix_from_render_context;
 use glfw::Modifiers;
+use shock2vr::command::LoadCommand;
 use shock2vr::command::MoveInventoryCommand;
 
+use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 
 use std::time::Instant;
@@ -327,12 +329,16 @@ pub fn main() {
 }
 
 struct InputState {
+    quick_load_pressed: bool,
+    quick_save_pressed: bool,
     space_pressed: bool,
     is_crouching: bool,
 }
 impl InputState {
     pub fn new() -> Self {
         Self {
+            quick_load_pressed: false,
+            quick_save_pressed: false,
             space_pressed: false,
             is_crouching: false,
         }
@@ -446,19 +452,23 @@ fn process_events(
     let mut right_thumbstick_value = vec2(0.0, 0.0);
     let mut left_thumbstick_value = vec2(0.0, 0.0);
     //let mut trigger_value = 0.0;
-    if window.get_key(Key::W) == Action::Press {
+
+    let is_alt_pressed = window.get_key(Key::LeftAlt) == Action::Press
+        || window.get_key(Key::RightAlt) == Action::Press;
+
+    if window.get_key(Key::W) == Action::Press && !is_alt_pressed {
         right_thumbstick_value += vec2(0.0, 1.0);
     }
 
-    if window.get_key(Key::S) == Action::Press {
+    if window.get_key(Key::S) == Action::Press && !is_alt_pressed {
         right_thumbstick_value += vec2(0.0, -1.0);
     }
 
-    if window.get_key(Key::A) == Action::Press {
+    if window.get_key(Key::A) == Action::Press && !is_alt_pressed {
         right_thumbstick_value += vec2(1.0, 0.0);
     }
 
-    if window.get_key(Key::D) == Action::Press {
+    if window.get_key(Key::D) == Action::Press && !is_alt_pressed {
         right_thumbstick_value += vec2(-1.0, 0.0);
     }
 
@@ -517,6 +527,20 @@ fn process_events(
         if !last_input_state.space_pressed {
             // commands.push(Box::new(SavePositionCommand::new()));
             commands.push(Box::new(SpawnItemCommand::new(input_context.head.rotation)))
+        }
+    }
+
+    if window.get_key(Key::S) == Action::Press && is_alt_pressed {
+        input_state.quick_save_pressed = true;
+        if !last_input_state.quick_save_pressed {
+            commands.push(Box::new(SaveCommand::new()));
+        }
+    }
+
+    if window.get_key(Key::L) == Action::Press && is_alt_pressed {
+        input_state.quick_load_pressed = true;
+        if !last_input_state.quick_load_pressed {
+            commands.push(Box::new(LoadCommand::new()));
         }
     }
 
