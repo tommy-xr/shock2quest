@@ -22,21 +22,21 @@ pub enum AIPriority {
     Absolute = 6,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AIScriptedActionType {
-    Nothing,           // 0
-    Script(String),    // 1
-    Play(String),      // 2 - Sound or motion?
-    Alert,             // 3
-    BecomeHostile,     // 4
-    EnableInvestigate, // 5
+    Nothing,               // 0
+    ScriptMessage(String), // 1
+    Play(String),          // 2 - Sound or motion?
+    Alert,                 // 3
+    BecomeHostile,         // 4
+    EnableInvestigate,     // 5
     Goto {
         waypoint_name: String,
         speed: String,
     }, // 6
-    Frob(String),      // 7
-    Wait(Duration),    // 8
-    Mprint(String),    // 9
+    Frob(String),          // 7
+    Wait(Duration),        // 8
+    Mprint(String),        // 9
     MetaProperty {
         action_type: String,
         arg1: String,
@@ -53,11 +53,14 @@ pub enum AIScriptedActionType {
     Face {
         entity_name: String,
     }, // 13
-    Signal,            // 14
-    DestScript,        // 15
+    Signal {
+        entity_name: String,
+        signal: String,
+    }, // 14
+    DestScript,            // 15
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AIScriptedAction {
     pub action_type: AIScriptedActionType,
 }
@@ -72,7 +75,7 @@ impl AIScriptedAction {
 
         let action_type = match action_type_u32 {
             0 => AIScriptedActionType::Nothing,
-            1 => AIScriptedActionType::Script(sz0),
+            1 => AIScriptedActionType::ScriptMessage(sz0),
             2 => AIScriptedActionType::Play(sz2),
             4 => AIScriptedActionType::BecomeHostile,
             6 => AIScriptedActionType::Goto {
@@ -99,6 +102,10 @@ impl AIScriptedAction {
                 entity_name: sz1,
             },
             13 => AIScriptedActionType::Face { entity_name: sz0 },
+            14 => AIScriptedActionType::Signal {
+                signal: sz0,
+                entity_name: sz1,
+            },
             _ => panic!(
                 "Unhandled action type: {} |{}|{}|{}|{}",
                 action_type_u32, &sz0, &sz1, &sz2, &sz3
