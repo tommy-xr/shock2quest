@@ -35,8 +35,8 @@ use dark::{
     log_property,
     motion::MotionDB,
     properties::{
-        AmbientSoundFlags, InternalPropOriginalModelName, PropAISignalResponse, PropAmbientHacked,
-        PropModelName, PropPosition, PropSignalType,
+        AmbientSoundFlags, InternalPropOriginalModelName, Link, PropAISignalResponse,
+        PropAmbientHacked, PropModelName, PropPosition, PropSignalType,
     },
     SCALE_FACTOR,
 };
@@ -67,6 +67,7 @@ use zip_asset_path::ZipAssetPath;
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::{Effect, Message, MessagePayload},
+    util::log_entities_with_link,
 };
 
 #[cfg(target_os = "android")]
@@ -327,7 +328,7 @@ impl Game {
             };
 
         // log_entities_with_link(&active_mission.world, |link| {
-        //     matches!(link, Link::Contains(_))
+        //     matches!(link, Link::AIWatchObj(_))
         // });
         // panic!();
 
