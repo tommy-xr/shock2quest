@@ -442,16 +442,12 @@ pub struct AIWatchOptions {
 
 impl AIWatchOptions {
     pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> AIWatchOptions {
-        // 2196 total bytes
-        // 29 * 4
-        // 2056 - used for scripted actions (64 * 4 + 1 (action)) * 8
+        let _unknown = read_bytes(reader, 60);
 
-        let _unk = read_bytes(reader, 60);
         let _trigger = read_u32(reader);
-        println!("trigger: {}", _trigger);
         let _awareness = read_u32(reader);
         let _ai_watch_visibility = read_u32(reader);
-        let _unk2 = read_i32(reader);
+        let _unknown2 = read_i32(reader);
         let _ai_watch_kill_condition = read_u32(reader);
         let _kill_like_links = read_bool(reader);
         let _once_only = read_bool(reader);
@@ -463,8 +459,6 @@ impl AIWatchOptions {
         let _radius = read_i32(reader);
         let _height = read_i32(reader);
 
-        // TODO: Log bytes and figure out what is going on?
-        // Wonder why we are not finding the right stuff
         let mut scripted_actions = Vec::new();
         for _ in 0..8 {
             let action = AIScriptedAction::read(reader);
@@ -1478,10 +1472,6 @@ where
             if let Some(new_ent_id) = entity_id_map.get(&EntityId::from_inner(*old_ent_id).unwrap())
             {
                 let prop: ROutput = serde_json::from_value(json.clone()).unwrap();
-                println!(
-                    "-- Deserialized prop for entity {:?} - {:?}",
-                    new_ent_id, &prop
-                );
                 world.add_component(*new_ent_id, prop);
             }
         }
