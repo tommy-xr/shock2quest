@@ -327,10 +327,10 @@ impl Game {
                 (active_mission, mission_to_save_data)
             };
 
-        log_entities_with_link(&active_mission.world, |link| {
-            matches!(link, Link::AIWatchObj(_))
-        });
-        panic!();
+        // log_entities_with_link(&active_mission.world, |link| {
+        //     matches!(link, Link::AIWatchObj(_))
+        // });
+        // panic!();
 
         // log_property::<PropSignalType>(&active_mission.world);
         // panic!();

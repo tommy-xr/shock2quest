@@ -470,10 +470,6 @@ impl AIWatchOptions {
             let action = AIScriptedAction::read(reader);
             scripted_actions.push(action);
         }
-        panic!(
-            "radius: {} height: {} actions: {:?}",
-            _radius, _height, scripted_actions
-        );
 
         AIWatchOptions { scripted_actions }
     }
