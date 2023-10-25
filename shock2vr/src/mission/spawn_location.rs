@@ -13,7 +13,7 @@ use crate::scripts::script_util::{get_all_links_of_type, get_first_link_of_type}
 #[derive(Clone)]
 pub enum SpawnLocation {
     MapDefault,
-    Marker(u32),
+    Marker(i32),
     PositionRotation(Vector3<f32>, Quaternion<f32>),
 }
 

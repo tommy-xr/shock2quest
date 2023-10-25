@@ -144,7 +144,7 @@ pub struct PropConsumeType(pub String);
 pub struct PropDestLevel(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
-pub struct PropDestLoc(pub u32);
+pub struct PropDestLoc(pub i32);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropExp(pub i32);
@@ -228,7 +228,7 @@ pub struct PropScale(pub Vector3<f32>);
 pub struct PropSignalType(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
-pub struct PropStartLoc(pub u32);
+pub struct PropStartLoc(pub i32);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHasRefs(pub bool);
@@ -751,7 +751,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop(
             "P$DestLoc",
-            |reader, _len| read_u32(reader),
+            |reader, _len| read_i32(reader),
             PropDestLoc,
             accumulator::latest,
         ),
@@ -1045,7 +1045,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop(
             "P$StartLoc",
-            |reader, _len| read_u32(reader),
+            |reader, _len| read_i32(reader),
             PropStartLoc,
             accumulator::latest,
         ),

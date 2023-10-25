@@ -19,6 +19,7 @@ mod vr_config;
 mod zip_asset_path;
 
 pub use mission::visibility_engine::CullingInfo;
+pub use mission::SpawnLocation;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -49,10 +50,7 @@ use engine::{
 };
 use std::time::Instant;
 
-use mission::{
-    entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator},
-    SpawnLocation,
-};
+use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
 
 use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
@@ -240,15 +238,6 @@ impl Game {
         let motiondb = MotionDB::read(&mut motiondb_reader);
 
         let mut audio_context = AudioContext::new();
-
-        // let mut music_hash = HashMap::new();
-
-        // let audio = asset_cache.get(&AUDIO_IMPORTER, "08beg.WAV".to_owned());
-        // music_hash.insert("08beg.wav".to_owned(), audio.clone());
-
-        // let wrapped = Box::leak(Box::new(music_hash));
-        // audio_context
-        //     .set_music_callback(Box::new(|| Some(wrapped.get("08beg.wav").unwrap().clone())));
 
         let global_context = GlobalContext {
             links,
