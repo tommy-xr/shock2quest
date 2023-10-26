@@ -19,6 +19,7 @@ use shock2vr::command::SpawnItemCommand;
 use std::time::Instant;
 
 use shock2vr::GameOptions;
+use shock2vr::SpawnLocation;
 use tracing::trace;
 
 extern crate gl;
@@ -227,8 +228,12 @@ pub fn main() {
     let file_system = engine.get_storage().external_filesystem();
     let experimental_features: HashSet<String> =
         args.experimental.unwrap_or(vec![]).into_iter().collect();
+
+    let (mission, spawn_location) = parse_mission(&args.mission);
+
     let options = GameOptions {
-        mission: args.mission,
+        mission,
+        spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
         debug_physics: args.debug_physics,
@@ -326,6 +331,28 @@ pub fn main() {
         window.swap_buffers();
         glfw.poll_events();
     }
+}
+
+fn parse_mission(mission: &str) -> (String, SpawnLocation) {
+    if !mission.contains(':') {
+        return (mission.to_owned(), SpawnLocation::MapDefault);
+    }
+
+    let parts: Vec<&str> = mission.split(':').collect();
+
+    if parts.len() > 2 {
+        panic!("Unable to parse mission argument: {}", mission);
+    }
+
+    let mission = parts[0];
+    let maybe_spawn_location = parts[1];
+
+    let spawn_location = match parts[1].parse::<i32>() {
+        Ok(num) => SpawnLocation::Marker(num),
+        Err(_) => SpawnLocation::MapDefault,
+    };
+
+    return (mission.to_owned(), spawn_location);
 }
 
 struct InputState {

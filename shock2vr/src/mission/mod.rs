@@ -1,6 +1,6 @@
 pub mod entity_creator;
 pub mod entity_populator;
-pub mod spawn_location;
+mod spawn_location;
 pub mod visibility_engine;
 
 use collision::Aabb;
