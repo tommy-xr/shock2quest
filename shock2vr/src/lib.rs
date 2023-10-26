@@ -19,6 +19,7 @@ mod vr_config;
 mod zip_asset_path;
 
 pub use mission::visibility_engine::CullingInfo;
+pub use mission::SpawnLocation;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -49,10 +50,7 @@ use engine::{
 };
 use std::time::Instant;
 
-use mission::{
-    entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator},
-    SpawnLocation,
-};
+use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
 
 use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
@@ -82,6 +80,7 @@ pub fn resource_path(str: &str) -> String {
 
 pub struct GameOptions {
     pub mission: String,
+    pub spawn_location: SpawnLocation,
     pub save_file: Option<String>,
     pub render_particles: bool,
     pub debug_physics: bool,
@@ -94,6 +93,7 @@ impl Default for GameOptions {
     fn default() -> Self {
         Self {
             mission: "earth.mis".to_owned(),
+            spawn_location: SpawnLocation::MapDefault,
             save_file: None,
             debug_draw: false,
             debug_portals: false,
@@ -239,15 +239,6 @@ impl Game {
 
         let mut audio_context = AudioContext::new();
 
-        // let mut music_hash = HashMap::new();
-
-        // let audio = asset_cache.get(&AUDIO_IMPORTER, "08beg.WAV".to_owned());
-        // music_hash.insert("08beg.wav".to_owned(), audio.clone());
-
-        // let wrapped = Box::leak(Box::new(music_hash));
-        // audio_context
-        //     .set_music_callback(Box::new(|| Some(wrapped.get("08beg.wav").unwrap().clone())));
-
         let global_context = GlobalContext {
             links,
             links_with_data,
@@ -318,7 +309,7 @@ impl Game {
                     &mut asset_cache,
                     &mut audio_context,
                     &global_context,
-                    SpawnLocation::MapDefault,
+                    options.spawn_location.clone(),
                     QuestInfo::new(),
                     //Box::new(MissionEntityPopulator::create()),
                     Box::new(MissionEntityPopulator::create()),

@@ -29,7 +29,7 @@ pub enum GlobalEffect {
 
     TransitionLevel {
         level_file: String,
-        loc: Option<u32>,
+        loc: Option<i32>,
     },
 
     // Test the reload functionality (as if saving + loading)
