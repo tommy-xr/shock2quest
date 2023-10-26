@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, time::Duration};
 
 use cgmath::{vec3, Deg, InnerSpace};
 use dark::{
@@ -12,8 +12,8 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{
         ai::steering::{
-            self, ChaseEntitySteeringStrategy, CollisionAvoidanceSteeringStrategy, Steering,
-            SteeringOutput, SteeringStrategy,
+            self, ChaseEntitySteeringStrategy, ChasePlayerSteeringStrategy,
+            CollisionAvoidanceSteeringStrategy, Steering, SteeringOutput, SteeringStrategy,
         },
         script_util, Effect, Message,
     },
@@ -118,17 +118,32 @@ fn get_behavior_from_action(
     action: &AIScriptedAction,
 ) -> Box<RefCell<dyn ScriptedAction>> {
     let current_behavior: Box<RefCell<dyn ScriptedAction>> = match &action.action_type {
-        AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
-            PlayAnimationScriptedAction::new(action_name.clone()),
-        )),
+        AIScriptedActionType::Play(action_name) => {
+            println!("--- debug: playing animation: {:?}", action_name);
+            Box::new(RefCell::new(PlayAnimationScriptedAction::new(
+                action_name.clone(),
+            )))
+        }
         AIScriptedActionType::Frob(entity_name) => {
+            println!("--- debug: frob");
             Box::new(RefCell::new(FrobScriptedAction::new(world, entity_name)))
         }
         AIScriptedActionType::Goto {
             waypoint_name,
             speed: _, // TODO: Incorporate speed
-        } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
-        _ => Box::new(RefCell::new(NoopScriptedAction)),
+        } => {
+            println!("--- debug: goto: {:?}", waypoint_name);
+            Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name)))
+        }
+
+        AIScriptedActionType::Wait(duration) => {
+            println!("--- debug: wait: {:?}", duration);
+            Box::new(RefCell::new(WaitScriptedAction::new(*duration)))
+        }
+        _ => {
+            println!("--- debug: noop");
+            Box::new(RefCell::new(NoopScriptedAction))
+        }
     };
     current_behavior
 }
@@ -188,6 +203,10 @@ impl ScriptedAction for PlayAnimationScriptedAction {
             let (motion, value_str) = self.animation_name.split_at(index);
             if let Ok(value) = value_str.trim().parse::<i32>() {
                 // I'm assuming the number is an i32, adjust as needed
+                println!(
+                    "--- debug: playing animation: {:?} with value: {:?}",
+                    motion, value
+                );
                 return vec![MotionQueryItem::with_value(motion, value)];
             }
         }
@@ -209,6 +228,40 @@ pub struct NoopScriptedAction;
 impl ScriptedAction for NoopScriptedAction {
     fn animation(self: &NoopScriptedAction) -> Vec<MotionQueryItem> {
         vec![MotionQueryItem::new("__NULL_ANIMATION__")]
+    }
+}
+
+pub struct WaitScriptedAction {
+    remaining_duration_in_seconds: f32,
+}
+
+impl WaitScriptedAction {
+    pub fn new(time: Duration) -> WaitScriptedAction {
+        WaitScriptedAction {
+            remaining_duration_in_seconds: time.as_secs_f32(),
+        }
+    }
+}
+
+impl ScriptedAction for WaitScriptedAction {
+    fn animation(self: &WaitScriptedAction) -> Vec<MotionQueryItem> {
+        vec![MotionQueryItem::new("__NULL_ANIMATION__")]
+    }
+
+    fn update(
+        &mut self,
+        current_heading: Deg<f32>,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        time: &Time,
+    ) -> Option<(SteeringOutput, Effect)> {
+        self.remaining_duration_in_seconds -= time.elapsed.as_secs_f32();
+        Some((Steering::from_current(current_heading), Effect::NoEffect))
+    }
+
+    fn is_complete(&self, _entity_id: EntityId, _world: &World) -> bool {
+        self.remaining_duration_in_seconds <= 0.0
     }
 }
 
@@ -255,6 +308,7 @@ impl GotoScriptedAction {
 
         if let Some(ent) = maybe_entity {
             steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(ent)))
+            //steering_strategies.push(Box::new(ChasePlayerSteeringStrategy))
         }
 
         GotoScriptedAction {
@@ -271,8 +325,8 @@ impl ScriptedAction for GotoScriptedAction {
     fn animation(self: &GotoScriptedAction) -> Vec<MotionQueryItem> {
         vec![
             MotionQueryItem::new("locomote"),
+            MotionQueryItem::with_value("direction", 0).optional(),
             MotionQueryItem::new("locourgent").optional(),
-            MotionQueryItem::new("direction").optional(),
         ]
     }
     fn update(

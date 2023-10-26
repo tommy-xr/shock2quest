@@ -224,10 +224,36 @@ impl Script for AnimatedMonsterAI {
         }
         match msg {
             MessagePayload::Damage { amount } => {
-                self.took_damage = true;
+                //self.took_damage = true;
                 Effect::AdjustHitPoints {
                     entity_id,
                     delta: -(amount.round() as i32),
+                }
+            }
+            MessagePayload::TurnOn { from } => {
+                let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
+
+                if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
+                    // Immediately switch to Scripted sequence Behavior
+                    println!(
+                        "!!debug [{:?}] - Running scripted sequence: {:?}",
+                        entity_id,
+                        prop_sig_resp.actions.clone()
+                    );
+                    self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+                        world,
+                        prop_sig_resp.actions.clone(),
+                    )));
+                    self.animation_seq += 1;
+                    Effect::QueueAnimationBySchema {
+                        entity_id,
+                        motion_query_items: self.current_behavior.borrow().animation(),
+                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
+                            self.animation_seq,
+                        ),
+                    }
+                } else {
+                    Effect::NoEffect
                 }
             }
             MessagePayload::Signal { name } => {
