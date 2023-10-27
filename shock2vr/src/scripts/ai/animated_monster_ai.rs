@@ -235,11 +235,6 @@ impl Script for AnimatedMonsterAI {
 
                 if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
                     // Immediately switch to Scripted sequence Behavior
-                    println!(
-                        "!!debug [{:?}] - Running scripted sequence: {:?}",
-                        entity_id,
-                        prop_sig_resp.actions.clone()
-                    );
                     self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
                         world,
                         prop_sig_resp.actions.clone(),
