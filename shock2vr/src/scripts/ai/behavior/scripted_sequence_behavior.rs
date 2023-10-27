@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, time::Duration};
 
 use cgmath::{vec3, Deg, InnerSpace};
 use dark::{
@@ -11,9 +11,12 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{
-            self, ChaseEntitySteeringStrategy, CollisionAvoidanceSteeringStrategy, Steering,
-            SteeringOutput, SteeringStrategy,
+        ai::{
+            ai_util,
+            steering::{
+                self, ChaseEntitySteeringStrategy, ChasePlayerSteeringStrategy,
+                CollisionAvoidanceSteeringStrategy, Steering, SteeringOutput, SteeringStrategy,
+            },
         },
         script_util, Effect, Message,
     },
@@ -121,6 +124,9 @@ fn get_behavior_from_action(
         AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
             PlayAnimationScriptedAction::new(action_name.clone()),
         )),
+        AIScriptedActionType::Face { entity_name } => {
+            Box::new(RefCell::new(FaceScriptedAction::new(world, &entity_name)))
+        }
         AIScriptedActionType::Frob(entity_name) => {
             Box::new(RefCell::new(FrobScriptedAction::new(world, entity_name)))
         }
@@ -128,6 +134,10 @@ fn get_behavior_from_action(
             waypoint_name,
             speed: _, // TODO: Incorporate speed
         } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
+
+        AIScriptedActionType::Wait(duration) => {
+            Box::new(RefCell::new(WaitScriptedAction::new(*duration)))
+        }
         _ => Box::new(RefCell::new(NoopScriptedAction)),
     };
     current_behavior
@@ -208,7 +218,42 @@ pub struct NoopScriptedAction;
 
 impl ScriptedAction for NoopScriptedAction {
     fn animation(self: &NoopScriptedAction) -> Vec<MotionQueryItem> {
+        // vec![MotionQueryItem::with_value("cs", 2)]
         vec![MotionQueryItem::new("__NULL_ANIMATION__")]
+    }
+}
+
+pub struct WaitScriptedAction {
+    remaining_duration_in_seconds: f32,
+}
+
+impl WaitScriptedAction {
+    pub fn new(time: Duration) -> WaitScriptedAction {
+        WaitScriptedAction {
+            remaining_duration_in_seconds: time.as_secs_f32(),
+        }
+    }
+}
+
+impl ScriptedAction for WaitScriptedAction {
+    fn animation(self: &WaitScriptedAction) -> Vec<MotionQueryItem> {
+        vec![MotionQueryItem::new("__NULL_ANIMATION__")]
+    }
+
+    fn update(
+        &mut self,
+        current_heading: Deg<f32>,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        time: &Time,
+    ) -> Option<(SteeringOutput, Effect)> {
+        self.remaining_duration_in_seconds -= time.elapsed.as_secs_f32();
+        Some((Steering::from_current(current_heading), Effect::NoEffect))
+    }
+
+    fn is_complete(&self, _entity_id: EntityId, _world: &World) -> bool {
+        self.remaining_duration_in_seconds <= 0.0
     }
 }
 
@@ -255,6 +300,7 @@ impl GotoScriptedAction {
 
         if let Some(ent) = maybe_entity {
             steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(ent)))
+            //steering_strategies.push(Box::new(ChasePlayerSteeringStrategy))
         }
 
         GotoScriptedAction {
@@ -271,8 +317,8 @@ impl ScriptedAction for GotoScriptedAction {
     fn animation(self: &GotoScriptedAction) -> Vec<MotionQueryItem> {
         vec![
             MotionQueryItem::new("locomote"),
+            MotionQueryItem::with_value("direction", 0).optional(),
             MotionQueryItem::new("locourgent").optional(),
-            MotionQueryItem::new("direction").optional(),
         ]
     }
     fn update(
@@ -299,6 +345,67 @@ impl ScriptedAction for GotoScriptedAction {
                     // HACK: This is an arbitrary value that I just tested with some sequences
                     // (ie, in rec1). I'm not sure the best criteria for this step yet.
                     return distance < (3.0 / SCALE_FACTOR);
+                }
+            }
+        }
+
+        true
+    }
+}
+
+pub struct FaceScriptedAction {
+    target_id: Option<EntityId>,
+    steering_strategy: Box<dyn SteeringStrategy>,
+}
+
+impl FaceScriptedAction {
+    pub fn new(world: &World, entity_name: &str) -> FaceScriptedAction {
+        let maybe_entity = script_util::get_first_entity_by_name(world, entity_name);
+
+        let mut steering_strategies: Vec<Box<dyn SteeringStrategy>> = vec![];
+
+        if let Some(ent) = maybe_entity {
+            steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(ent)))
+        }
+
+        FaceScriptedAction {
+            target_id: maybe_entity,
+            steering_strategy: steering::chained(steering_strategies),
+        }
+    }
+}
+
+impl ScriptedAction for FaceScriptedAction {
+    fn turn_speed(&self) -> Deg<f32> {
+        Deg(180.0)
+    }
+    fn animation(self: &FaceScriptedAction) -> Vec<MotionQueryItem> {
+        vec![MotionQueryItem::new("__NULL_ACTION__")]
+    }
+    fn update(
+        &mut self,
+        current_heading: Deg<f32>,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        time: &Time,
+    ) -> Option<(SteeringOutput, Effect)> {
+        self.steering_strategy
+            .steer(current_heading, world, physics, entity_id, time)
+    }
+
+    fn is_complete(&self, entity_id: EntityId, world: &World) -> bool {
+        let v_prop_pos = world.borrow::<View<PropPosition>>().unwrap();
+        if let Some(target_entity_id) = self.target_id {
+            if let Ok(target_pos) = v_prop_pos.get(target_entity_id) {
+                if let Ok(entity_pos) = v_prop_pos.get(entity_id) {
+                    let current_yaw = ai_util::current_yaw(entity_id, world);
+                    let yaw_between_vectors =
+                        ai_util::yaw_between_vectors(entity_pos.position, target_pos.position);
+
+                    let delta = (current_yaw - yaw_between_vectors).0.abs();
+
+                    return delta < 1.0;
                 }
             }
         }
