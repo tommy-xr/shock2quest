@@ -224,6 +224,7 @@ impl Script for AnimatedMonsterAI {
         }
         match msg {
             MessagePayload::Damage { amount } => {
+                // TODO: Let behavior handle this?
                 //self.took_damage = true;
                 Effect::AdjustHitPoints {
                     entity_id,
