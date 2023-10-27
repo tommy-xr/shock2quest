@@ -121,36 +121,24 @@ fn get_behavior_from_action(
     action: &AIScriptedAction,
 ) -> Box<RefCell<dyn ScriptedAction>> {
     let current_behavior: Box<RefCell<dyn ScriptedAction>> = match &action.action_type {
-        AIScriptedActionType::Play(action_name) => {
-            println!("--- debug: playing animation: {:?}", action_name);
-            Box::new(RefCell::new(PlayAnimationScriptedAction::new(
-                action_name.clone(),
-            )))
-        }
+        AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
+            PlayAnimationScriptedAction::new(action_name.clone()),
+        )),
         AIScriptedActionType::Face { entity_name } => {
-            println!("--- debug: face: {:?}", entity_name);
             Box::new(RefCell::new(FaceScriptedAction::new(world, &entity_name)))
         }
         AIScriptedActionType::Frob(entity_name) => {
-            println!("--- debug: frob");
             Box::new(RefCell::new(FrobScriptedAction::new(world, entity_name)))
         }
         AIScriptedActionType::Goto {
             waypoint_name,
             speed: _, // TODO: Incorporate speed
-        } => {
-            println!("--- debug: goto: {:?}", waypoint_name);
-            Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name)))
-        }
+        } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
 
         AIScriptedActionType::Wait(duration) => {
-            println!("--- debug: wait: {:?}", duration);
             Box::new(RefCell::new(WaitScriptedAction::new(*duration)))
         }
-        _ => {
-            println!("--- debug: noop");
-            Box::new(RefCell::new(NoopScriptedAction))
-        }
+        _ => Box::new(RefCell::new(NoopScriptedAction)),
     };
     current_behavior
 }
@@ -210,10 +198,6 @@ impl ScriptedAction for PlayAnimationScriptedAction {
             let (motion, value_str) = self.animation_name.split_at(index);
             if let Ok(value) = value_str.trim().parse::<i32>() {
                 // I'm assuming the number is an i32, adjust as needed
-                println!(
-                    "--- debug: playing animation: {:?} with value: {:?}",
-                    motion, value
-                );
                 return vec![MotionQueryItem::with_value(motion, value)];
             }
         }
@@ -381,9 +365,7 @@ impl FaceScriptedAction {
         let mut steering_strategies: Vec<Box<dyn SteeringStrategy>> = vec![];
 
         if let Some(ent) = maybe_entity {
-            println!("!! debug - chasing entity: {:?}", ent);
             steering_strategies.push(Box::new(ChaseEntitySteeringStrategy::new(ent)))
-            //steering_strategies.push(Box::new(ChasePlayerSteeringStrategy))
         }
 
         FaceScriptedAction {
@@ -420,11 +402,6 @@ impl ScriptedAction for FaceScriptedAction {
                     let current_yaw = ai_util::current_yaw(entity_id, world);
                     let yaw_between_vectors =
                         ai_util::yaw_between_vectors(entity_pos.position, target_pos.position);
-
-                    println!(
-                        "!!debug - face - current_yaw: {:?} yaw_between_vectors: {:?}",
-                        current_yaw, yaw_between_vectors
-                    );
 
                     let delta = (current_yaw - yaw_between_vectors).0.abs();
 
