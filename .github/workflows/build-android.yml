@@ -44,10 +44,12 @@ jobs:
         run: cargo install cargo-apk
 
       # Set up Android SDK
+      - name: Check Android Home Location
+        run: echo $ANDROID_HOME
       - name: Set up Android SDK
-        run: sdkmanager "build-tools;33.0.0" "platforms;android-26" "platform-tools" "ndk;24.0.8215888"
+        run: $ANDROID_HOME/tools/bin/sdkmanager "build-tools;33.0.0" "platforms;android-26" "platform-tools" "ndk;24.0.8215888"
       - name: Update Android SDK
-        run: sdkmanager --update
+        run: $ANDROID_HOME/tools/bin/sdkmanager --update
 
       - name: Build
         run: cargo apk build
