@@ -54,7 +54,6 @@
     - Install Android SDK: https://guides.codepath.com/android/installing-android-sdk-tools
     - Install tools
       - `sdkmanager "build-tools;33.0.0"`
-      - `sdkmanager "platforms;android-26"`
       - `sdkmanager "platform-tools" "platforms;android-26"`
       - `sdkmanager "ndk;24.0.8215888"`
       - `sdkmanager --update`

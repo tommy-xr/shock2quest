@@ -42,6 +42,13 @@ jobs:
       # Actual build steps
       - name: Install Cargo APK
         run: cargo install cargo-apk
+
+      # Set up Android SDK
+      - name: Set up Android SDK
+        run: sdkmanager "build-tools;33.0.0" "platforms;android-26" "platform-tools" "ndk;24.0.8215888"
+      - name: Update Android SDK
+        run: sdkmanager --update
+
       - name: Build
         run: cargo apk build
         working-directory: runtimes/oculus_runtime
