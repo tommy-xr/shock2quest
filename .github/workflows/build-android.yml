@@ -1,0 +1,59 @@
+name: Build Android
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # Install Linux-specific dependencies
+      - name: Install ALSA (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      # Cache cargo build artifacts
+      - name: Cache cargo registry
+        uses: actions/cache@v2
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v2
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      # Set up Android SDK
+      - name: Check Android Home Location
+        run: echo $ANDROID_HOME
+      - name: Set up Android SDK
+        run: $ANDROID_HOME/tools/bin/sdkmanager "build-tools;33.0.0" "platforms;android-26" "platform-tools" "ndk;24.0.8215888"
+      - name: Update Android SDK
+        run: $ANDROID_HOME/tools/bin/sdkmanager --update
+
+      # Set up Rust build tools for Android
+      - name: Install Cargo APK
+        run: cargo install cargo-apk
+      - name: Install Rustup target
+        run: rustup target add aarch64-linux-android
+
+      # Actual build steps
+      - name: Build
+        run: cargo apk build
+        working-directory: runtimes/oculus_runtime
