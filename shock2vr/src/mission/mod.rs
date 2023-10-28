@@ -76,7 +76,7 @@ use crate::{
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
-    util::{get_email_sound_file, has_refs, vec3_to_point3},
+    util::{get_email_sound_file, has_refs, resolve_proxy_entity, vec3_to_point3},
     virtual_hand::{VirtualHand, VirtualHandEffect},
     vr_config, GameOptions,
 };
@@ -1320,9 +1320,7 @@ impl Mission {
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
-        if let Some(hit_entity) =
-            resolve_proxy_entity(&self.world, self.left_hand.get_raytraced_entity())
-        {
+        if let Some(hit_entity) = self.left_hand.get_raytraced_entity() {
             ret.extend(draw_item_outline(
                 asset_cache,
                 &self.physics,
@@ -1343,9 +1341,7 @@ impl Mission {
             ));
         };
 
-        if let Some(hit_entity) =
-            resolve_proxy_entity(&self.world, self.right_hand.get_raytraced_entity())
-        {
+        if let Some(hit_entity) = self.right_hand.get_raytraced_entity() {
             ret.extend(draw_item_outline(
                 asset_cache,
                 &self.physics,
@@ -1839,23 +1835,5 @@ fn play_environmental_sound(
             audio_file, &audio_handle, position
         );
         engine::audio::play_spatial_audio(audio_context, position, audio_handle, None, audio_clip);
-    }
-}
-
-///
-/// resolve_proxy_entity
-///
-/// Given an EntityId, if the entity is a proxy entity (like a hitbox or gui), this will return the
-/// parent proxy.
-fn resolve_proxy_entity(world: &World, maybe_entity_id: Option<EntityId>) -> Option<EntityId> {
-    let v_proxy_entity = world.borrow::<View<RuntimePropProxyEntity>>().ok()?;
-    let maybe_prop_proxy_entity = v_proxy_entity.get(maybe_entity_id?);
-
-    if let Ok(proxy_entity) = maybe_prop_proxy_entity {
-        // Proxy entity, return parent
-        Some(proxy_entity.0)
-    } else {
-        // Otherwise, return the current entity id
-        maybe_entity_id
     }
 }

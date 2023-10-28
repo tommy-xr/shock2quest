@@ -1,23 +1,20 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-
-
 use cgmath::{
-    point3, vec3, Angle, Euler, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Vector3,
-    Zero,
+    point3, vec3, Angle, Euler, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Vector3, Zero,
 };
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 use engine::scene::SceneObject;
 
-use rapier3d::prelude::RigidBodyHandle;
+use rapier3d::{parry::query::RayCast, prelude::RigidBodyHandle};
 use shipyard::{EntityId, Get, View, World};
 use tracing::{self, trace};
 
 use crate::{
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    scripts::{Message, MessagePayload},
-    util::point3_to_vec3,
+    scripts::{script_util, Message, MessagePayload},
+    util::{self, point3_to_vec3},
     vr_config::{self, Handedness},
 };
 
@@ -202,6 +199,8 @@ impl VirtualHand {
             // One for frobbing:
             //CollisionGroups::WORLD | CollisionGroups::SELECTABLE,
         );
+
+        let result = result.map(|r| resolve_hit_proxy_entity(world, r));
 
         let (hand, mut effs) = match prev.hand_state {
             HandState::Grabbing { entity_id } => {
@@ -399,6 +398,7 @@ fn handle_empty_hand_state(
         // One for frobbing:
         //CollisionGroups::WORLD | CollisionGroups::SELECTABLE,
     );
+    let result = result.map(|r| resolve_hit_proxy_entity(world, r));
     trace!("ray cast result: {:?}", &result);
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
@@ -497,4 +497,19 @@ fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     }
 
     false
+}
+
+///
+/// In the case where we hit an entity that is 'proxied' (like, a hitbox that points to a parent),
+/// resolve to the parent entity.
+///
+fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> RayCastResult {
+    let maybe_new_entity_id = ray_cast_result
+        .maybe_entity_id
+        .map(|entity_id| util::resolve_proxy_entity(world, entity_id));
+
+    RayCastResult {
+        maybe_entity_id: maybe_new_entity_id,
+        ..ray_cast_result
+    }
 }
