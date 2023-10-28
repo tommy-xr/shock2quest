@@ -1,7 +1,7 @@
 
 # shock2quest
 
-[![Build & Unit Test](https://github.com/tommybuilds/shock2quest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tommybuilds/shock2quest/actions/workflows/build.yml)
+[![Build & Unit Test](https://github.com/tommybuilds/shock2quest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tommybuilds/shock2quest/actions/workflows/build.yml) [![Build Android](https://github.com/tommybuilds/shock2quest/actions/workflows/build-android.yml/badge.svg)](https://github.com/tommybuilds/shock2quest/actions/workflows/build-android.yml)
 
 A project to experience the of System Shock 2 in virtual reality. System Shock 2 is one of my favorite games of all time, and the story and ambience would be a great for VR. 
 
