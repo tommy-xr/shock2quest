@@ -37,6 +37,8 @@ impl ScriptedSequenceBehavior {
         let current_behavior = get_behavior_from_action(world, &actions[0]);
         let initial_effect = current_behavior.borrow().initial_effect();
 
+        println!("!!debug - starting sequence: {:?}", actions);
+
         ScriptedSequenceBehavior {
             actions,
             queued_effects: vec![initial_effect],
@@ -133,7 +135,10 @@ fn get_behavior_from_action(
         AIScriptedActionType::Goto {
             waypoint_name,
             speed: _, // TODO: Incorporate speed
-        } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
+        } => {
+            println!("!!debug - going to waypoint: {:?}", waypoint_name);
+            Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name)))
+        }
 
         AIScriptedActionType::Wait(duration) => {
             Box::new(RefCell::new(WaitScriptedAction::new(*duration)))
@@ -193,7 +198,18 @@ impl PlayAnimationScriptedAction {
 }
 
 impl ScriptedAction for PlayAnimationScriptedAction {
+    fn turn_speed(&self) -> Deg<f32> {
+        Deg(0.0)
+    }
     fn animation(self: &PlayAnimationScriptedAction) -> Vec<MotionQueryItem> {
+        if self.animation_name.find(",").is_some() {
+            return vec![
+                MotionQueryItem::new("grunt"),
+                MotionQueryItem::new("shotgun"),
+                MotionQueryItem::new("rangedcombat"),
+            ];
+        }
+
         if let Some(index) = self.animation_name.find(' ') {
             let (motion, value_str) = self.animation_name.split_at(index);
             if let Ok(value) = value_str.trim().parse::<i32>() {

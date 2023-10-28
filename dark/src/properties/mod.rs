@@ -437,7 +437,7 @@ impl FlinderizeOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AIWatchOptions {
-    scripted_actions: Vec<AIScriptedAction>,
+    pub scripted_actions: Vec<AIScriptedAction>,
 }
 
 impl AIWatchOptions {

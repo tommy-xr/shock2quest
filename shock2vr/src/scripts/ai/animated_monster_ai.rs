@@ -3,13 +3,14 @@ use std::cell::RefCell;
 use cgmath::{vec3, vec4, Deg, Quaternion, Rotation3};
 use dark::{
     motion::{MotionFlags, MotionQueryItem},
-    properties::PropAISignalResponse,
+    properties::{Link, PropAISignalResponse},
     SCALE_FACTOR,
 };
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
+    scripts::script_util,
     time::Time,
 };
 
@@ -35,7 +36,7 @@ impl AnimatedMonsterAI {
             took_damage: false,
             //current_behavior: Box::new(RefCell::new(MeleeAttackBehavior)),
             //current_behavior: Box::new(RefCell::new(ChaseBehavior::new())),
-            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_behavior: Box::new(RefCell::new(NoopBehavior {})),
             current_heading: Deg(0.0),
             animation_seq: 0,
             last_hit_sensor: None,
@@ -276,7 +277,28 @@ impl Script for AnimatedMonsterAI {
                 }
             }
             MessagePayload::AnimationCompleted => {
-                if self.is_dead {
+                let maybe_ai_signal_resp =
+                    script_util::get_first_link_with_template_and_data(world, entity_id, |link| {
+                        match link {
+                            Link::AIWatchObj(data) => Some(data.clone()),
+                            _ => None,
+                        }
+                    });
+                if maybe_ai_signal_resp.is_some() && self.animation_seq == 0 {
+                    let ((_watch_entity, watch_params)) = maybe_ai_signal_resp.unwrap();
+                    self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+                        world,
+                        watch_params.scripted_actions.clone(),
+                    )));
+                    self.animation_seq += 1;
+                    Effect::QueueAnimationBySchema {
+                        entity_id,
+                        motion_query_items: self.current_behavior.borrow().animation(),
+                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
+                            self.animation_seq,
+                        ),
+                    }
+                } else if self.is_dead {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
