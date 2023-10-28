@@ -1,25 +1,19 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use cgmath::{vec3, EuclideanSpace, Matrix4};
 use collision::{Aabb, Aabb3};
-use dark::{
-    model::Model,
-    motion::{JointId},
-    properties::PropPosition,
-};
+use dark::{model::Model, motion::JointId, properties::PropPosition};
 use rapier3d::prelude::RigidBodyHandle;
-use shipyard::{
-    Component, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World,
-};
+use shipyard::{Component, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World};
 
 use crate::{
     physics::PhysicsWorld,
-    runtime_props::{RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform},
-    scripts::ScriptWorld,
-    util::{
-        get_position_from_matrix, get_rotation_from_matrix,
-        point3_to_vec3,
+    runtime_props::{
+        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropProxyEntity,
+        RuntimePropTransform,
     },
+    scripts::ScriptWorld,
+    util::{get_position_from_matrix, get_rotation_from_matrix, point3_to_vec3},
 };
 
 use super::{get_entity_creature, hit_box_script::HitBoxScript};
@@ -64,6 +58,7 @@ impl HitBoxManager {
             let v_runtime_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
             let v_runtime_joints = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
             let mut v_runtime_hitbox = world.borrow::<ViewMut<RuntimePropHitBox>>().unwrap();
+            let mut v_runtime_proxy = world.borrow::<ViewMut<RuntimePropProxyEntity>>().unwrap();
             let mut v_runtime_do_not_serialize = world
                 .borrow::<ViewMut<RuntimePropDoNotSerialize>>()
                 .unwrap();
@@ -71,17 +66,17 @@ impl HitBoxManager {
 
             let mut joint_updates = HashMap::new();
 
-            for (id, (_position, xform, joint_xforms)) in
+            for (parent_entity_id, (_position, xform, joint_xforms)) in
                 (&v_position, &v_runtime_transform, &v_runtime_joints)
                     .iter()
                     .with_id()
             {
-                let maybe_creature_type = get_entity_creature(world, id);
+                let maybe_creature_type = get_entity_creature(world, parent_entity_id);
                 if maybe_creature_type.is_none() {
                     continue;
                 }
 
-                let maybe_model = id_to_model.get(&id);
+                let maybe_model = id_to_model.get(&parent_entity_id);
                 if maybe_model.is_none() {
                     continue;
                 }
@@ -89,7 +84,7 @@ impl HitBoxManager {
                 let hit_boxes = maybe_model.unwrap().get_hit_boxes();
                 let creature_type = maybe_creature_type.unwrap();
 
-                let hit_box_map = self.hit_boxes.entry(id).or_insert_with(|| {
+                let hit_box_map = self.hit_boxes.entry(parent_entity_id).or_insert_with(|| {
                     let mut out_hit_boxes = HashMap::new();
 
                     for (joint_id, _bbox) in hit_boxes.iter() {
@@ -108,27 +103,39 @@ impl HitBoxManager {
                         //         hit_box_type: hitbox_type,
                         //     },
                         // );
-                        let hit_box_entity = v_entities.add_entity(
+                        let hit_box_entity_id = v_entities.add_entity(
                             &mut v_runtime_hitbox,
                             RuntimePropHitBox {
-                                parent_entity_id: id,
+                                parent_entity_id,
                                 hit_box_type: hitbox_type.clone(),
                             },
                         );
 
                         v_entities.add_component(
-                            hit_box_entity,
+                            hit_box_entity_id,
                             &mut v_runtime_do_not_serialize,
                             RuntimePropDoNotSerialize,
                         );
 
+                        v_entities.add_component(
+                            hit_box_entity_id,
+                            &mut v_runtime_do_not_serialize,
+                            RuntimePropDoNotSerialize,
+                        );
+
+                        v_entities.add_component(
+                            hit_box_entity_id,
+                            &mut v_runtime_proxy,
+                            RuntimePropProxyEntity(parent_entity_id),
+                        );
+
                         script_world.add_entity2(
-                            hit_box_entity,
-                            Box::new(HitBoxScript::new(hitbox_type, id, *joint_id)),
+                            hit_box_entity_id,
+                            Box::new(HitBoxScript::new(hitbox_type, parent_entity_id, *joint_id)),
                         );
 
                         //let hit_box_entity = world.add_entity(());
-                        out_hit_boxes.insert(*joint_id, hit_box_entity);
+                        out_hit_boxes.insert(*joint_id, hit_box_entity_id);
                     }
 
                     out_hit_boxes
@@ -137,7 +144,8 @@ impl HitBoxManager {
                 let mut joint_index = 0;
                 for joint_xform in joint_xforms.0 {
                     let bbox = hit_boxes
-                        .get(&joint_index).copied()
+                        .get(&joint_index)
+                        .copied()
                         .unwrap_or(Aabb3::zero());
                     let sizes = bbox.dim() * 1.0;
 
@@ -177,81 +185,12 @@ impl HitBoxManager {
                         physics.set_position_rotation2(*hit_box_entry, pos, rotation);
                     }
 
-                    // let hit_box_entity =
-                    //     world.add_component(*hit_box_entry, RuntimePropTransform(xform.0));
-
-                    //v_entities.add_component(*hit_box_entry, &mut v__mut_runtime_transform, RuntimePropTransform(xform.0));
-
                     joint_updates.insert(*hit_box_entry, joint_xform);
-
-                    // TODO: Get pos, facing from transform
-                    // let pos = crate::util::get_position_from_transform(
-                    //     world,
-                    //     parent_entity,
-                    //     offset,
-                    // );
-                    // let facing = get_rotation_from_transform(world, parent_entity);
-
-                    // TODO:
-                    // world.add_component(
-                    //     hit_box_entity,
-                    //     PropPosition {
-                    //         position: pos,
-                    //         rotation: facing,
-                    //         cell: 0,
-                    //     },
-                    // );
-                    // v_entities.add_component(
-                    //     *hit_box_entry,
-                    //     &mut v_runtime_transform,
-                    //     RuntimePropTransform(joint_xform),
-                    // );
-                    //world.add_component(*hit_box_entity, RuntimePropTransform(joint_xform));
-
-                    // Debug render stuff:
-                    // let hitbox_type = maybe_hitbox_type.unwrap();
-                    // let color = match hitbox_type {
-                    //     HitBoxType::Head => vec3(1.0, 0.0, 0.0),
-                    //     HitBoxType::Body => vec3(0.0, 1.0, 0.0),
-                    //     HitBoxType::Limb => vec3(0.0, 0.0, 1.0),
-                    //     HitBoxType::Extremity => vec3(0.0, 0.0, 0.0),
-                    //     HitBoxType::NoDamage => vec3(1.0, 1.0, 1.0),
-                    // };
-
-                    // let player_mat = engine::scene::color_material::create(color);
-                    // let mut other =
-                    //     SceneObject::new(player_mat, Box::new(engine::scene::cube::create()));
-                    // // Set joint transform
-                    // other.set_transform(
-                    //     xform.0
-                    //         * joint_xform
-                    //         * Matrix4::from_translation(bbox.center().to_vec())
-                    //         * Matrix4::from_nonuniform_scale(sizes.x, sizes.y, sizes.z),
-                    // );
-                    // scene.push(other);
 
                     joint_index += 1;
                 }
             }
 
-            // for (entity, animation_player) in id_to_animation_player {
-            //     let mut hit_boxes = HashMap::new();
-            //     if hit_boxes.contains_key(entity) {
-            //         // Update hit box positions
-            //     } else {
-            //         // Insert hitboxes
-            //         for (joint_id, _) in animation_player.skeleton.joints.iter() {
-            //             let joint_entity = world
-            //                 .try_borrow::<HashMap<JointId, EntityId>>()
-            //                 .unwrap()
-            //                 .get(&joint_id)
-            //                 .unwrap();
-            //             hit_boxes.insert(*joint_id, *joint_entity);
-            //         }
-            //         self.hit_boxes.insert(*entity, hit_boxes);
-            //     }
-            // }
-            //panic!("update hitboxes!");
             joint_updates
         };
 

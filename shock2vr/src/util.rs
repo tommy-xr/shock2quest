@@ -9,7 +9,7 @@ use dark::properties::{Link, Links, PropHasRefs, PropPosition};
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
 use tracing::{info, warn};
 
-use crate::runtime_props::RuntimePropTransform;
+use crate::runtime_props::{RuntimePropProxyEntity, RuntimePropTransform};
 
 /// log_property
 ///
@@ -253,4 +253,22 @@ where
     }
 
     (true_map, false_map)
+}
+
+///
+/// resolve_proxy_entity
+///
+/// Given an EntityId, if the entity is a proxy entity (like a hitbox or gui), this will return the
+/// parent proxy.
+pub fn resolve_proxy_entity(world: &World, maybe_entity_id: EntityId) -> EntityId {
+    let v_proxy_entity = world.borrow::<View<RuntimePropProxyEntity>>().unwrap();
+    let maybe_prop_proxy_entity = v_proxy_entity.get(maybe_entity_id);
+
+    if let Ok(proxy_entity) = maybe_prop_proxy_entity {
+        // Proxy entity, return parent
+        proxy_entity.0
+    } else {
+        // Otherwise, return the current entity id
+        maybe_entity_id
+    }
 }
