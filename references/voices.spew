@@ -1,0 +1,1089 @@
+Voice / Concept output for reference:
+ -- voice: 0 concept: sleeping tag_map: 0
+ -- voice: 0 concept: atlevelzero tag_map: 1
+ -- voice: 0 concept: atlevelone tag_map: 2
+ -- voice: 0 concept: atleveltwo tag_map: 3
+ -- voice: 0 concept: atlevelthree tag_map: 4
+ -- voice: 0 concept: tolevelone tag_map: 5
+ -- voice: 0 concept: toleveltwo tag_map: 6
+ -- voice: 0 concept: tolevelthree tag_map: 7
+ -- voice: 0 concept: spotplayer tag_map: 8
+ -- voice: 0 concept: backtozero tag_map: 9
+ -- voice: 0 concept: lostcontact tag_map: 10
+ -- voice: 0 concept: reactcharge tag_map: 11
+ -- voice: 0 concept: reactrun tag_map: 12
+ -- voice: 0 concept: reactwarn tag_map: 13
+ -- voice: 0 concept: reactalarm tag_map: 14
+ -- voice: 0 concept: reacttellrev tag_map: 15
+ -- voice: 0 concept: reacttellconf tag_map: 16
+ -- voice: 0 concept: reactshoot tag_map: 17
+ -- voice: 0 concept: foundbody tag_map: 18
+ -- voice: 0 concept: foundmissing tag_map: 19
+ -- voice: 0 concept: foundsmall tag_map: 20
+ -- voice: 0 concept: foundlarge tag_map: 21
+ -- voice: 0 concept: recentintruder tag_map: 22
+ -- voice: 0 concept: recentbody tag_map: 23
+ -- voice: 0 concept: recentmissing tag_map: 24
+ -- voice: 0 concept: recentother tag_map: 25
+ -- voice: 0 concept: comattack tag_map: 26
+ -- voice: 0 concept: comsucchit tag_map: 27
+ -- voice: 0 concept: comsuccblock tag_map: 28
+ -- voice: 0 concept: comdetblock tag_map: 29
+ -- voice: 0 concept: comblocked tag_map: 30
+ -- voice: 0 concept: comhitnodam tag_map: 31
+ -- voice: 0 concept: comhithigh tag_map: 32
+ -- voice: 0 concept: comhitlow tag_map: 33
+ -- voice: 0 concept: comhitamb tag_map: 34
+ -- voice: 0 concept: comdieloud tag_map: 35
+ -- voice: 0 concept: comdiesoft tag_map: 36
+ -- voice: 0 concept: ogshoot tag_map: 37
+ -- voice: 1 concept: sleeping tag_map: 0
+ -- voice: 1 concept: atlevelzero tag_map: 1
+ - ts1at0 [-2786] (Weight: 1)
+ -- voice: 1 concept: atlevelone tag_map: 2
+ - ts1at1 [-3861] (Weight: 1)
+ -- voice: 1 concept: atleveltwo tag_map: 3
+ - ts1at2 [-2790] (Weight: 1)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - ts1at2in [-3862] (Weight: 9)
+ -- voice: 1 concept: atlevelthree tag_map: 4
+ - ts1at3 [-2792] (Weight: 1)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - ts1at3in [-3867] (Weight: 9)
+ -- voice: 1 concept: tolevelone tag_map: 5
+ - ts1to1 [-2787] (Weight: 1)
+ -- voice: 1 concept: toleveltwo tag_map: 6
+ - ts1to2 [-2789] (Weight: 1)
+ -- voice: 1 concept: tolevelthree tag_map: 7
+ - ts1to3 [-2791] (Weight: 1)
+ -- voice: 1 concept: spotplayer tag_map: 8
+ - ts1spot [-3873] (Weight: 1)
+ -- voice: 1 concept: backtozero tag_map: 9
+ - ts1bak [-3886] (Weight: 1)
+ -- voice: 1 concept: lostcontact tag_map: 10
+ - ts1lost [-2798] (Weight: 1)
+ -- voice: 1 concept: reactcharge tag_map: 11
+ - ts1rchg [-2794] (Weight: 1)
+ -- voice: 1 concept: reactrun tag_map: 12
+ - ts1rrun [-2796] (Weight: 1)
+ -- voice: 1 concept: reactwarn tag_map: 13
+ -- voice: 1 concept: reactalarm tag_map: 14
+ - ts1ralm [-3885] (Weight: 1)
+ -- voice: 1 concept: reacttellrev tag_map: 15
+ -- voice: 1 concept: reacttellconf tag_map: 16
+ -- voice: 1 concept: reactshoot tag_map: 17
+ - ts1shoot [-3874] (Weight: 1)
+ -- voice: 1 concept: foundbody tag_map: 18
+ - ts1fbody [-3887] (Weight: 1)
+ -- voice: 1 concept: foundmissing tag_map: 19
+ -- voice: 1 concept: foundsmall tag_map: 20
+ -- voice: 1 concept: foundlarge tag_map: 21
+ -- voice: 1 concept: recentintruder tag_map: 22
+ -- voice: 1 concept: recentbody tag_map: 23
+ -- voice: 1 concept: recentmissing tag_map: 24
+ -- voice: 1 concept: recentother tag_map: 25
+ -- voice: 1 concept: comattack tag_map: 26
+ - ts1att [-2800] (Weight: 1)
+ -- voice: 1 concept: comsucchit tag_map: 27
+ - ts1suhit [-3888] (Weight: 1)
+ -- voice: 1 concept: comsuccblock tag_map: 28
+ -- voice: 1 concept: comdetblock tag_map: 29
+ -- voice: 1 concept: comblocked tag_map: 30
+ -- voice: 1 concept: comhitnodam tag_map: 31
+ - ts1hnod [-410] (Weight: 1)
+ -- voice: 1 concept: comhithigh tag_map: 32
+ - ts1hhi [-2802] (Weight: 1)
+ -- voice: 1 concept: comhitlow tag_map: 33
+ - ts1hlo [-2803] (Weight: 1)
+ -- voice: 1 concept: comhitamb tag_map: 34
+ - ts1hamb [-2804] (Weight: 1)
+ -- voice: 1 concept: comdieloud tag_map: 35
+ - ts1diec [-2805] (Weight: 1)
+ -- voice: 1 concept: comdiesoft tag_map: 36
+ - ts1diea [-3890] (Weight: 1)
+ -- voice: 1 concept: ogshoot tag_map: 37
+ -- voice: 2 concept: sleeping tag_map: 0
+ -- voice: 2 concept: atlevelzero tag_map: 1
+ - og1at0_1,og1at0_2,og1at0_3,og1at0_4,og1gr1,og1gr2,og1gr3,og1gr4,og1gr5,og1gr6,og1gr7,og1gr8,og1gr9,silenc3s,silenc9s [-3135] (Weight: 15)
+ -- voice: 2 concept: atlevelone tag_map: 2
+ - og1at0_1,og1at0_2,og1at0_3,og1at0_4,og1gr1,og1gr2,og1gr3,og1gr4,og1gr5,og1gr6,og1gr7,og1gr8,og1gr9,silenc3s,silenc9s [-2171] (Weight: 15)
+ -- voice: 2 concept: atleveltwo tag_map: 3
+ - og1gr1,og1gr2,og1gr3,og1gr4,og1gr5,og1gr6,og1gr7,og1gr8,og1gr9,silenc3s [-3391] (Weight: 10)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - og1at2_1,og1at2_2,og1at2_3,og1at2_4,og1at2_5,og1grr1,og1grr2,og1grr3,og1grr4,og1grr5 [-2639] (Weight: 990)
+ -- voice: 2 concept: atlevelthree tag_map: 4
+ - og1grr1,og1grr2,og1grr3,og1grr4,og1grr5,og1gr1,og1gr2,og1gr3,og1gr8,og1gr9,silenc3s [-3392] (Weight: 11)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - og1at3_1,og1at3_2,og1at3_3,og1at3_4,og1at3_5,og1grr1,og1grr2,og1grr3,og1grr4,og1grr5,Silenc3s [-2640] (Weight: 1089)
+ -- voice: 2 concept: tolevelone tag_map: 5
+ - og1to1_1,og1to1_2,og1to1_3,og1to1_4,og1to1_5 [-654] (Weight: 5)
+ -- voice: 2 concept: toleveltwo tag_map: 6
+ - og1to2_1,og1to2_2,og1to2_3,og1to2_4,og1to2_5 [-3172] (Weight: 5)
+ -- voice: 2 concept: tolevelthree tag_map: 7
+ - og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-655] (Weight: 5)
+ -- voice: 2 concept: spotplayer tag_map: 8
+ - og1at3_4,og1at3_5,og1chg_1,og1chg_2,og1bod_2,og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-3448] (Weight: 10)
+ -- voice: 2 concept: backtozero tag_map: 9
+ - og1bak_1,og1bak_2,og1bak_3,og1bak_4,og1bak_5 [-3399] (Weight: 5)
+ -- voice: 2 concept: lostcontact tag_map: 10
+ - og1los_1,og1los_2,og1los_3,og1los_4,og1los_5 [-3400] (Weight: 5)
+ -- voice: 2 concept: reactcharge tag_map: 11
+ - og1at3_4,og1at3_5,og1chg_1,og1chg_2,og1bod_2,og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-3448] (Weight: 10)
+ -- voice: 2 concept: reactrun tag_map: 12
+ - og1los_1,og1los_2,og1los_3,og1los_4,og1los_5 [-3400] (Weight: 5)
+ -- voice: 2 concept: reactwarn tag_map: 13
+ -- voice: 2 concept: reactalarm tag_map: 14
+ -- voice: 2 concept: reacttellrev tag_map: 15
+ -- voice: 2 concept: reacttellconf tag_map: 16
+ -- voice: 2 concept: reactshoot tag_map: 17
+ - og1at3_4,og1at3_5,og1chg_1,og1chg_2,og1bod_2,og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-3448] (Weight: 10)
+ -- voice: 2 concept: foundbody tag_map: 18
+ - og1bod_1,og1bod_2,og1bod_3,og1bod_4,og1bod_5 [-3401] (Weight: 5)
+ -- voice: 2 concept: foundmissing tag_map: 19
+ -- voice: 2 concept: foundsmall tag_map: 20
+ -- voice: 2 concept: foundlarge tag_map: 21
+ -- voice: 2 concept: recentintruder tag_map: 22
+ -- voice: 2 concept: recentbody tag_map: 23
+ -- voice: 2 concept: recentmissing tag_map: 24
+ -- voice: 2 concept: recentother tag_map: 25
+ -- voice: 2 concept: comattack tag_map: 26
+ - og1att_1,og1att_2,og1att_3,og1att_4,og1att_5,og1att_6,og1at3_4,og1chg_1,og1hit_1,og1hit_2,og1hit_3,og1hit_4,og1hit_5 [-657] (Weight: 13)
+ -- voice: 2 concept: comsucchit tag_map: 27
+ - og1hit_1,og1hit_2,og1hit_3,og1hit_4,og1hit_5 [-3402] (Weight: 5)
+ -- voice: 2 concept: comsuccblock tag_map: 28
+ -- voice: 2 concept: comdetblock tag_map: 29
+ -- voice: 2 concept: comblocked tag_map: 30
+ -- voice: 2 concept: comhitnodam tag_map: 31
+ -- voice: 2 concept: comhithigh tag_map: 32
+ - og1hhi_1,og1hhi_2,og1hhi_3 [-2777] (Weight: 3)
+ -- voice: 2 concept: comhitlow tag_map: 33
+ - og1hlo_1,og1hlo_2,og1hlo_3 [-2778] (Weight: 3)
+ -- voice: 2 concept: comhitamb tag_map: 34
+ - og1amb_1,og1amb_2,og1amb_3,og1amb_4,og1amb_5 [-3403] (Weight: 5)
+ -- voice: 2 concept: comdieloud tag_map: 35
+ - og1die_1,og1die_2,og1die_3 [-659] (Weight: 3)
+ -- voice: 2 concept: comdiesoft tag_map: 36
+ - og1die_1,og1die_2,og1die_3 [-659] (Weight: 3)
+ -- voice: 2 concept: ogshoot tag_map: 37
+ - ogchase2 [-2283] (Weight: 1)
+ -- voice: 3 concept: sleeping tag_map: 0
+ -- voice: 3 concept: atlevelzero tag_map: 1
+ -- voice: 3 concept: atlevelone tag_map: 2
+ - og1at0_1,og1at0_2,og1at0_3,og1at0_4,og1gr1,og1gr2,og1gr3,og1gr4,og1gr5,og1gr6,og1gr7,og1gr8,og1gr9,silenc3s,silenc9s [-2171] (Weight: 15)
+ -- voice: 3 concept: atleveltwo tag_map: 3
+ - og1gr1,og1gr2,og1gr3,og1gr4,og1gr5,og1gr6,og1gr7,og1gr8,og1gr9,silenc3s [-3391] (Weight: 10)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - og1at2_1,og1at2_2,og1at2_3,og1at2_4,og1at2_5,og1grr1,og1grr2,og1grr3,og1grr4,og1grr5 [-2639] (Weight: 990)
+ -- voice: 3 concept: atlevelthree tag_map: 4
+ - og1grr1,og1grr2,og1grr3,og1grr4,og1grr5,og1gr1,og1gr2,og1gr3,og1gr8,og1gr9,silenc3s [-3392] (Weight: 11)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - og1at3_1,og1at3_2,og1at3_3,og1at3_4,og1at3_5,og1grr1,og1grr2,og1grr3,og1grr4,og1grr5,Silenc3s [-2640] (Weight: 1089)
+ -- voice: 3 concept: tolevelone tag_map: 5
+ - og1to1_1,og1to1_2,og1to1_3,og1to1_4,og1to1_5 [-654] (Weight: 5)
+ -- voice: 3 concept: toleveltwo tag_map: 6
+ - og1to2_1,og1to2_2,og1to2_3,og1to2_4,og1to2_5 [-3172] (Weight: 5)
+ -- voice: 3 concept: tolevelthree tag_map: 7
+ - og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-655] (Weight: 5)
+ -- voice: 3 concept: spotplayer tag_map: 8
+ - og1at3_4,og1at3_5,og1chg_1,og1chg_2,og1bod_2,og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-3448] (Weight: 10)
+ -- voice: 3 concept: backtozero tag_map: 9
+ - og1bak_1,og1bak_2,og1bak_3,og1bak_4,og1bak_5 [-3399] (Weight: 5)
+ -- voice: 3 concept: lostcontact tag_map: 10
+ - og1los_1,og1los_2,og1los_3,og1los_4,og1los_5 [-3400] (Weight: 5)
+ -- voice: 3 concept: reactcharge tag_map: 11
+ - og1at3_4,og1at3_5,og1chg_1,og1chg_2,og1bod_2,og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-3448] (Weight: 10)
+ -- voice: 3 concept: reactrun tag_map: 12
+ - og1los_1,og1los_2,og1los_3,og1los_4,og1los_5 [-3400] (Weight: 5)
+ -- voice: 3 concept: reactwarn tag_map: 13
+ -- voice: 3 concept: reactalarm tag_map: 14
+ -- voice: 3 concept: reacttellrev tag_map: 15
+ -- voice: 3 concept: reacttellconf tag_map: 16
+ -- voice: 3 concept: reactshoot tag_map: 17
+ - og1at3_4,og1at3_5,og1chg_1,og1chg_2,og1bod_2,og1to3_1,og1to3_2,og1to3_3,og1to3_4,og1to3_5 [-3448] (Weight: 10)
+ -- voice: 3 concept: foundbody tag_map: 18
+ - og1bod_1,og1bod_2,og1bod_3,og1bod_4,og1bod_5 [-3401] (Weight: 5)
+ -- voice: 3 concept: foundmissing tag_map: 19
+ -- voice: 3 concept: foundsmall tag_map: 20
+ -- voice: 3 concept: foundlarge tag_map: 21
+ -- voice: 3 concept: recentintruder tag_map: 22
+ -- voice: 3 concept: recentbody tag_map: 23
+ -- voice: 3 concept: recentmissing tag_map: 24
+ -- voice: 3 concept: recentother tag_map: 25
+ -- voice: 3 concept: comattack tag_map: 26
+ - og1att_1,og1att_2,og1att_3,og1att_4,og1att_5,og1att_6,og1at3_4,og1chg_1,og1hit_1,og1hit_2,og1hit_3,og1hit_4,og1hit_5 [-657] (Weight: 13)
+ -- voice: 3 concept: comsucchit tag_map: 27
+ - og1hit_1,og1hit_2,og1hit_3,og1hit_4,og1hit_5 [-3402] (Weight: 5)
+ -- voice: 3 concept: comsuccblock tag_map: 28
+ -- voice: 3 concept: comdetblock tag_map: 29
+ -- voice: 3 concept: comblocked tag_map: 30
+ -- voice: 3 concept: comhitnodam tag_map: 31
+ -- voice: 3 concept: comhithigh tag_map: 32
+ - og1hhi_1,og1hhi_2,og1hhi_3 [-2777] (Weight: 3)
+ -- voice: 3 concept: comhitlow tag_map: 33
+ - og1hlo_1,og1hlo_2,og1hlo_3 [-2778] (Weight: 3)
+ -- voice: 3 concept: comhitamb tag_map: 34
+ - og1amb_1,og1amb_2,og1amb_3,og1amb_4,og1amb_5 [-3403] (Weight: 5)
+ -- voice: 3 concept: comdieloud tag_map: 35
+ - og1die_1,og1die_2,og1die_3 [-659] (Weight: 3)
+ -- voice: 3 concept: comdiesoft tag_map: 36
+ - og1die_1,og1die_2,og1die_3 [-659] (Weight: 3)
+ -- voice: 3 concept: ogshoot tag_map: 37
+ -- voice: 4 concept: sleeping tag_map: 0
+ -- voice: 4 concept: atlevelzero tag_map: 1
+ -- voice: 4 concept: atlevelone tag_map: 2
+ -- voice: 4 concept: atleveltwo tag_map: 3
+ -- voice: 4 concept: atlevelthree tag_map: 4
+ -- voice: 4 concept: tolevelone tag_map: 5
+ -- voice: 4 concept: toleveltwo tag_map: 6
+ -- voice: 4 concept: tolevelthree tag_map: 7
+ -- voice: 4 concept: spotplayer tag_map: 8
+ -- voice: 4 concept: backtozero tag_map: 9
+ -- voice: 4 concept: lostcontact tag_map: 10
+ -- voice: 4 concept: reactcharge tag_map: 11
+ -- voice: 4 concept: reactrun tag_map: 12
+ -- voice: 4 concept: reactwarn tag_map: 13
+ -- voice: 4 concept: reactalarm tag_map: 14
+ -- voice: 4 concept: reacttellrev tag_map: 15
+ -- voice: 4 concept: reacttellconf tag_map: 16
+ -- voice: 4 concept: reactshoot tag_map: 17
+ -- voice: 4 concept: foundbody tag_map: 18
+ -- voice: 4 concept: foundmissing tag_map: 19
+ -- voice: 4 concept: foundsmall tag_map: 20
+ -- voice: 4 concept: foundlarge tag_map: 21
+ -- voice: 4 concept: recentintruder tag_map: 22
+ -- voice: 4 concept: recentbody tag_map: 23
+ -- voice: 4 concept: recentmissing tag_map: 24
+ -- voice: 4 concept: recentother tag_map: 25
+ -- voice: 4 concept: comattack tag_map: 26
+ -- voice: 4 concept: comsucchit tag_map: 27
+ -- voice: 4 concept: comsuccblock tag_map: 28
+ -- voice: 4 concept: comdetblock tag_map: 29
+ -- voice: 4 concept: comblocked tag_map: 30
+ -- voice: 4 concept: comhitnodam tag_map: 31
+ -- voice: 4 concept: comhithigh tag_map: 32
+ -- voice: 4 concept: comhitlow tag_map: 33
+ -- voice: 4 concept: comhitamb tag_map: 34
+ -- voice: 4 concept: comdieloud tag_map: 35
+ -- voice: 4 concept: comdiesoft tag_map: 36
+ -- voice: 4 concept: ogshoot tag_map: 37
+ -- voice: 5 concept: sleeping tag_map: 0
+ -- voice: 5 concept: atlevelzero tag_map: 1
+ -- voice: 5 concept: atlevelone tag_map: 2
+ -- voice: 5 concept: atleveltwo tag_map: 3
+ - camat2 [-3860] (Weight: 1)
+ -- voice: 5 concept: atlevelthree tag_map: 4
+ - camat3 [-1949] (Weight: 1)
+ -- voice: 5 concept: tolevelone tag_map: 5
+ - camto1 [-3830] (Weight: 1)
+ -- voice: 5 concept: toleveltwo tag_map: 6
+ - camto2 [-1441] (Weight: 1)
+ -- voice: 5 concept: tolevelthree tag_map: 7
+ - camto3 [-1442] (Weight: 1)
+ -- voice: 5 concept: spotplayer tag_map: 8
+ -- voice: 5 concept: backtozero tag_map: 9
+ - cambak [-3853] (Weight: 1)
+ -- voice: 5 concept: lostcontact tag_map: 10
+ - camlos [-3856] (Weight: 1)
+ -- voice: 5 concept: reactcharge tag_map: 11
+ -- voice: 5 concept: reactrun tag_map: 12
+ -- voice: 5 concept: reactwarn tag_map: 13
+ -- voice: 5 concept: reactalarm tag_map: 14
+ -- voice: 5 concept: reacttellrev tag_map: 15
+ -- voice: 5 concept: reacttellconf tag_map: 16
+ -- voice: 5 concept: reactshoot tag_map: 17
+ -- voice: 5 concept: foundbody tag_map: 18
+ -- voice: 5 concept: foundmissing tag_map: 19
+ -- voice: 5 concept: foundsmall tag_map: 20
+ -- voice: 5 concept: foundlarge tag_map: 21
+ -- voice: 5 concept: recentintruder tag_map: 22
+ -- voice: 5 concept: recentbody tag_map: 23
+ -- voice: 5 concept: recentmissing tag_map: 24
+ -- voice: 5 concept: recentother tag_map: 25
+ -- voice: 5 concept: comattack tag_map: 26
+ -- voice: 5 concept: comsucchit tag_map: 27
+ -- voice: 5 concept: comsuccblock tag_map: 28
+ -- voice: 5 concept: comdetblock tag_map: 29
+ -- voice: 5 concept: comblocked tag_map: 30
+ -- voice: 5 concept: comhitnodam tag_map: 31
+ -- voice: 5 concept: comhithigh tag_map: 32
+ -- voice: 5 concept: comhitlow tag_map: 33
+ -- voice: 5 concept: comhitamb tag_map: 34
+ -- voice: 5 concept: comdieloud tag_map: 35
+ -- voice: 5 concept: comdiesoft tag_map: 36
+ -- voice: 5 concept: ogshoot tag_map: 37
+ -- voice: 6 concept: sleeping tag_map: 0
+ -- voice: 6 concept: atlevelzero tag_map: 1
+ - md1at0_1,md1at0_2,md1at0_3,md1at0_4,md1at2_2,dr1at0_1,dr1at0_2,dr1at0_3,dr1at0_4,dr1at0_5,dr1at0_6 [-2382] (Weight: 11)
+ -- voice: 6 concept: atlevelone tag_map: 2
+ - dr1at1_1,dr1at1_2,dr1at1_3,dr1at1_4,dr1at1_5,dr1at1_6,silenc9s,silenc3s [-3911] (Weight: 8)
+ -- voice: 6 concept: atleveltwo tag_map: 3
+ - dr1at2_1,dr1at2_2,dr1at2_3,dr1at2_4,dr1at2_5,dr1at2_6,dr1at2_7,dr1at2_8,silenc9s,silenc3s [-2383] (Weight: 10)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - md1at2_1,md1at2_3,md1at2_5,md1bod_5 [-2318] (Weight: 396)
+ -- voice: 6 concept: atlevelthree tag_map: 4
+ - dr1at2_1,dr1at2_2,dr1at2_3,dr1at2_4,dr1at2_5,dr1at2_6,dr1at2_7,dr1at2_8,silenc9s,silenc3s [-2383] (Weight: 10)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - md1at3_3,md1at2_1,md1at2_3,md1at2_5,Md1bod_2,Md1bod_3 [-2405] (Weight: 594)
+ -- voice: 6 concept: tolevelone tag_map: 5
+ - md1to1_1,md1to1_2,md1to1_3,md1to1_4,md1to1_5 [-2385] (Weight: 5)
+ -- voice: 6 concept: toleveltwo tag_map: 6
+ - md1to2_2,md1to2_3,md1to2_4,md1to2_5 [-2386] (Weight: 4)
+ -- voice: 6 concept: tolevelthree tag_map: 7
+ - md1to3_1,md1to3_2,md1to3_3,md1to3_4,md1to3_5,md1to2_1,md1to2_2,md1to2_3,md1to2_4,md1to2_5 [-2387] (Weight: 10)
+ -- voice: 6 concept: spotplayer tag_map: 8
+ - md1to3_1,md1to3_2,md1to3_3,md1to3_4,md1to3_5,md1to2_1,md1to2_2,md1to2_3,md1to2_4,md1to2_5 [-2387] (Weight: 10)
+ -- voice: 6 concept: backtozero tag_map: 9
+ - md1bak_1,md1bak_2,md1bak_3,md1bak_4,md1bak_5,md1at3_2 [-2388] (Weight: 6)
+ -- voice: 6 concept: lostcontact tag_map: 10
+ - md1los_1,md1los_2,md1los_3,md1los_4,md1los_5,md1at3_1,md1at3_4,md1at3_5 [-2389] (Weight: 8)
+ -- voice: 6 concept: reactcharge tag_map: 11
+ - md1chg_1,md1chg_2,md1chg_3,md1att_1,md1att_2,md1att_3,md1att_4,md1att_5 [-2390] (Weight: 8)
+ -- voice: 6 concept: reactrun tag_map: 12
+ -- voice: 6 concept: reactwarn tag_map: 13
+ -- voice: 6 concept: reactalarm tag_map: 14
+ -- voice: 6 concept: reacttellrev tag_map: 15
+ -- voice: 6 concept: reacttellconf tag_map: 16
+ -- voice: 6 concept: reactshoot tag_map: 17
+ - md1chg_1,md1chg_2,md1chg_3,md1att_1,md1att_2,md1att_3,md1att_4,md1att_5 [-2390] (Weight: 8)
+ -- voice: 6 concept: foundbody tag_map: 18
+ - md1bod_1,md1bod_4 [-2391] (Weight: 2)
+ -- voice: 6 concept: foundmissing tag_map: 19
+ -- voice: 6 concept: foundsmall tag_map: 20
+ -- voice: 6 concept: foundlarge tag_map: 21
+ -- voice: 6 concept: recentintruder tag_map: 22
+ -- voice: 6 concept: recentbody tag_map: 23
+ -- voice: 6 concept: recentmissing tag_map: 24
+ -- voice: 6 concept: recentother tag_map: 25
+ -- voice: 6 concept: comattack tag_map: 26
+ - md1att_1,md1att_2,md1att_3,md1att_4,md1att_5,md1chg_1,md1chg_2,md1chg_3 [-2392] (Weight: 8)
+ -- voice: 6 concept: comsucchit tag_map: 27
+ -- voice: 6 concept: comsuccblock tag_map: 28
+ -- voice: 6 concept: comdetblock tag_map: 29
+ -- voice: 6 concept: comblocked tag_map: 30
+ -- voice: 6 concept: comhitnodam tag_map: 31
+ - md1amb_1,md1amb_2,md1amb_3,md1amb_5 [-3912] (Weight: 4)
+ -- voice: 6 concept: comhithigh tag_map: 32
+ - md1hhi_1,md1hhi_2,md1hhi_3,md1hhi_4 [-2393] (Weight: 4)
+ -- voice: 6 concept: comhitlow tag_map: 33
+ - md1hlo_1,md1hlo_2,md1hlo_3,md1hlo_4 [-2394] (Weight: 4)
+ -- voice: 6 concept: comhitamb tag_map: 34
+ - md1amb_1,md1amb_2,md1amb_3,md1amb_4,md1amb_5 [-2395] (Weight: 5)
+ -- voice: 6 concept: comdieloud tag_map: 35
+ -- voice: 6 concept: comdiesoft tag_map: 36
+ -- voice: 6 concept: ogshoot tag_map: 37
+ -- voice: 7 concept: sleeping tag_map: 0
+ -- voice: 7 concept: atlevelzero tag_map: 1
+ - sd1at0_1,sd1at0_2,sd1at0_3,sd1at0_4,dr1at0_1,dr1at0_2,dr1at0_3,dr1at0_4,dr1at0_5,dr1at0_6 [-2368] (Weight: 10)
+ -- voice: 7 concept: atlevelone tag_map: 2
+ - dr1at1_1,dr1at1_2,dr1at1_3,dr1at1_4,dr1at1_5,dr1at1_6,silenc9s,silenc3s [-3167] (Weight: 8)
+ -- voice: 7 concept: atleveltwo tag_map: 3
+ - dr1at2_1,dr1at2_2,dr1at2_3,dr1at2_4,dr1at2_5,dr1at2_6,dr1at2_7,dr1at2_8,silenc9s,silenc3s [-2369] (Weight: 10)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - sd1at2_1,sd1at2_2,sd1at2_3,sd1at2_4,sd1at2_5 [-3905] (Weight: 495)
+ -- voice: 7 concept: atlevelthree tag_map: 4
+ - dr1at2_1,dr1at2_2,dr1at2_3,dr1at2_4,dr1at2_5,dr1at2_6,dr1at2_7,dr1at2_8,silenc9s,silenc3s [-2369] (Weight: 10)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - sd1at3_2,sd1at3_3,sd1at2_2,sd1at2_3,sd1at2_4,sd1bod_2,sd1bod_5,sd1att_3 [-3906] (Weight: 792)
+ -- voice: 7 concept: tolevelone tag_map: 5
+ - sd1to1_1,sd1to1_2,sd1to1_3,sd1to1_4,sd1to1_5 [-2371] (Weight: 5)
+ -- voice: 7 concept: toleveltwo tag_map: 6
+ - sd1to2_1,sd1to2_2,sd1to2_3,sd1to2_5 [-2372] (Weight: 4)
+ -- voice: 7 concept: tolevelthree tag_map: 7
+ - sd1to3_2,sd1to3_3,sd1to2_3,sd1to2_4,sd1to2_5 [-2373] (Weight: 5)
+ -- voice: 7 concept: spotplayer tag_map: 8
+ - sd1to3_1,sd1to3_2,sd1to3_3,sd1to3_4,sd1to3_5,sd1to2_4 [-3907] (Weight: 6)
+ -- voice: 7 concept: backtozero tag_map: 9
+ - sd1bak_1,sd1bak_2,sd1bak_3,sd1bak_4,sd1bak_5 [-2374] (Weight: 5)
+ -- voice: 7 concept: lostcontact tag_map: 10
+ - sd1los_1,sd1los_2,sd1los_3,sd1los_4,sd1los_5,sd1at3_1,sd1at3_4,sd1at3_5 [-2375] (Weight: 8)
+ -- voice: 7 concept: reactcharge tag_map: 11
+ - sd1chg_1,sd1chg_2,sd1chg_3,sd1att_1,sd1att_2,sd1att_4,sd1att_5 [-2376] (Weight: 7)
+ -- voice: 7 concept: reactrun tag_map: 12
+ -- voice: 7 concept: reactwarn tag_map: 13
+ -- voice: 7 concept: reactalarm tag_map: 14
+ -- voice: 7 concept: reacttellrev tag_map: 15
+ -- voice: 7 concept: reacttellconf tag_map: 16
+ -- voice: 7 concept: reactshoot tag_map: 17
+ - sd1chg_1,sd1chg_2,sd1chg_3,sd1att_1,sd1att_2,sd1att_4,sd1att_5 [-2376] (Weight: 7)
+ -- voice: 7 concept: foundbody tag_map: 18
+ - sd1bod_1,sd1bod_3,sd1bod_4 [-2377] (Weight: 3)
+ -- voice: 7 concept: foundmissing tag_map: 19
+ -- voice: 7 concept: foundsmall tag_map: 20
+ -- voice: 7 concept: foundlarge tag_map: 21
+ -- voice: 7 concept: recentintruder tag_map: 22
+ -- voice: 7 concept: recentbody tag_map: 23
+ -- voice: 7 concept: recentmissing tag_map: 24
+ -- voice: 7 concept: recentother tag_map: 25
+ -- voice: 7 concept: comattack tag_map: 26
+ - sd1att_1,sd1att_2,sd1att_4,sd1att_5 [-2378] (Weight: 4)
+ -- voice: 7 concept: comsucchit tag_map: 27
+ -- voice: 7 concept: comsuccblock tag_map: 28
+ -- voice: 7 concept: comdetblock tag_map: 29
+ -- voice: 7 concept: comblocked tag_map: 30
+ -- voice: 7 concept: comhitnodam tag_map: 31
+ - sd1hhi_1,sd1hhi_3,sd1hhi_4,sd1hhi_5,sd1hhi_6 [-3908] (Weight: 5)
+ -- voice: 7 concept: comhithigh tag_map: 32
+ - sd1hhi_1,sd1hhi_2,sd1hhi_3,sd1hhi_4,sd1hhi_5,sd1hhi_6 [-2379] (Weight: 6)
+ -- voice: 7 concept: comhitlow tag_map: 33
+ - sd1hlo_1,sd1hlo_2,sd1hlo_3,sd1hlo_4 [-2380] (Weight: 4)
+ -- voice: 7 concept: comhitamb tag_map: 34
+ - sd1amb_1,sd1amb_2 [-2381] (Weight: 2)
+ -- voice: 7 concept: comdieloud tag_map: 35
+ -- voice: 7 concept: comdiesoft tag_map: 36
+ -- voice: 7 concept: ogshoot tag_map: 37
+ -- voice: 8 concept: sleeping tag_map: 0
+ -- voice: 8 concept: atlevelzero tag_map: 1
+ - pd1at0_1,pd1at0_2,pd1at0_3,pd1at0_4,pd1nz0,pd1nz1,pd1nz2,pd1nz3,pd1nz4,pd1nz5,pd1nz6,pd1nz7,pd1nz8,pd1nz9 [-440] (Weight: 14)
+ -- voice: 8 concept: atlevelone tag_map: 2
+ - pd1at0_1,pd1at0_2,pd1at0_3,pd1at0_4,pd1nz0,pd1nz1,pd1nz2,pd1nz3,pd1nz4,pd1nz5,pd1nz6,pd1nz7,pd1nz8,pd1nz9 [-440] (Weight: 14)
+ -- voice: 8 concept: atleveltwo tag_map: 3
+ - pd1at0_1,pd1at0_2,pd1at0_3,pd1at0_4,pd1nz0,pd1nz1,pd1nz2,pd1nz3,pd1nz4,pd1nz5,pd1nz6,pd1nz7,pd1nz8,pd1nz9 [-440] (Weight: 14)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - pd1at2_1,pd1at2_2,pd1at2_3,pd1at2_4,pd1at2_5,pd1nz0,pd1nz1 [-203] (Weight: 693)
+ -- voice: 8 concept: atlevelthree tag_map: 4
+ - pd1at0_1,pd1at0_2,pd1at0_3,pd1at0_4,pd1nz0,pd1nz1,pd1nz2,pd1nz3,pd1nz4,pd1nz5,pd1nz6,pd1nz7,pd1nz8,pd1nz9 [-440] (Weight: 14)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - pd1at3_1,pd1at3_2,pd1at3_3,pd1at3_4,pd1at3_5,pd1nz6,pd1nz9 [-207] (Weight: 693)
+ -- voice: 8 concept: tolevelone tag_map: 5
+ - pd1to1_1,pd1to1_2,pd1to1_3,pd1to1_4,pd1to1_5 [-444] (Weight: 5)
+ -- voice: 8 concept: toleveltwo tag_map: 6
+ - pd1to2_1,pd1to2_2,pd1to2_3,pd1to2_4,pd1to2_5 [-445] (Weight: 5)
+ -- voice: 8 concept: tolevelthree tag_map: 7
+ - pd1to3_1,pd1to3_2,pd1to3_3,pd1to3_4,pd1to3_5 [-446] (Weight: 5)
+ -- voice: 8 concept: spotplayer tag_map: 8
+ - pd1to3_1,pd1to3_2,pd1to3_3,pd1to3_4,pd1to3_5 [-446] (Weight: 5)
+ -- voice: 8 concept: backtozero tag_map: 9
+ - pd1bak_1,pd1bak_2,pd1bak_3,pd1bak_4,pd1bak_5 [-529] (Weight: 5)
+ -- voice: 8 concept: lostcontact tag_map: 10
+ - pd1los_1,pd1los_2,pd1los_3,pd1los_4,pd1los_5 [-530] (Weight: 5)
+ -- voice: 8 concept: reactcharge tag_map: 11
+ - pd1chg_1,pd1chg_2,pd1chg_3,pd1chg_4,pd1chg_5 [-531] (Weight: 5)
+ -- voice: 8 concept: reactrun tag_map: 12
+ - pd1run_1,pd1run_2,pd1run_3 [-579] (Weight: 3)
+ -- voice: 8 concept: reactwarn tag_map: 13
+ -- voice: 8 concept: reactalarm tag_map: 14
+ -- voice: 8 concept: reacttellrev tag_map: 15
+ -- voice: 8 concept: reacttellconf tag_map: 16
+ -- voice: 8 concept: reactshoot tag_map: 17
+ -- voice: 8 concept: foundbody tag_map: 18
+ - pd1bod_1,pd1bod_2,pd1bod_3,pd1bod_4,pd1bod_5,pd1bod_6 [-641] (Weight: 6)
+ -- voice: 8 concept: foundmissing tag_map: 19
+ -- voice: 8 concept: foundsmall tag_map: 20
+ -- voice: 8 concept: foundlarge tag_map: 21
+ -- voice: 8 concept: recentintruder tag_map: 22
+ -- voice: 8 concept: recentbody tag_map: 23
+ -- voice: 8 concept: recentmissing tag_map: 24
+ -- voice: 8 concept: recentother tag_map: 25
+ -- voice: 8 concept: comattack tag_map: 26
+ - pd1chg_1,pd1chg_2,pd1chg_3,pd1chg_4,pd1chg_5,pd1att1,pd1att2,pd1att3,pd1att4,pd1att5,pd1att6,pd1att7,silenc1s,silenc3s [-209] (Weight: 14)
+ -- voice: 8 concept: comsucchit tag_map: 27
+ -- voice: 8 concept: comsuccblock tag_map: 28
+ -- voice: 8 concept: comdetblock tag_map: 29
+ -- voice: 8 concept: comblocked tag_map: 30
+ -- voice: 8 concept: comhitnodam tag_map: 31
+ -- voice: 8 concept: comhithigh tag_map: 32
+ - pd1hhi_1,pd1hhi_2,pd1hhi_3,pd1hhi_4,pd1hhi_5 [-642] (Weight: 5)
+ -- voice: 8 concept: comhitlow tag_map: 33
+ - pd1hlo_1,pd1hlo_2,pd1hlo_3,pd1hlo_4,pd1hlo_5 [-1229] (Weight: 5)
+ -- voice: 8 concept: comhitamb tag_map: 34
+ - pd1amb_1,pd1amb_2,pd1amb_3,pd1amb_4,pd1amb_5 [-1296] (Weight: 5)
+ -- voice: 8 concept: comdieloud tag_map: 35
+ -- voice: 8 concept: comdiesoft tag_map: 36
+ -- voice: 8 concept: ogshoot tag_map: 37
+ -- voice: 9 concept: sleeping tag_map: 0
+ -- voice: 9 concept: atlevelzero tag_map: 1
+ - mk1at0_1,mk1at0_2,mk1at0_3,mk1at0_4,mk1at0_5,mk1at0_6 [-1653] (Weight: 6)
+ -- voice: 9 concept: atlevelone tag_map: 2
+ - mk1at0_1,mk1at0_2,mk1at0_3,mk1at0_4,mk1at0_5,mk1at0_6 [-1653] (Weight: 6)
+ -- voice: 9 concept: atleveltwo tag_map: 3
+ - mk1at0_1,mk1at0_2,mk1at0_3,mk1at0_4,mk1at0_5,mk1at0_6,silenc9s [-3892] (Weight: 7)
+ -- voice: 9 concept: atlevelthree tag_map: 4
+ - mk1to3_1,mk1to3_2,mk1to3_3,mk1to3_4,mk1to3_5,mk1to3_6,mk1at0_3,mk1at0_4,mk1at0_5,mk1at0_6,silenc3s [-3893] (Weight: 11)
+ -- voice: 9 concept: tolevelone tag_map: 5
+ -- voice: 9 concept: toleveltwo tag_map: 6
+ - mk1to3_1,mk1to3_2 [-1658] (Weight: 2)
+ -- voice: 9 concept: tolevelthree tag_map: 7
+ - mk1to3_1,mk1to3_2 [-1658] (Weight: 2)
+ -- voice: 9 concept: spotplayer tag_map: 8
+ -- voice: 9 concept: backtozero tag_map: 9
+ -- voice: 9 concept: lostcontact tag_map: 10
+ -- voice: 9 concept: reactcharge tag_map: 11
+ - mk1to3_1,mk1to3_2 [-1658] (Weight: 2)
+ -- voice: 9 concept: reactrun tag_map: 12
+ -- voice: 9 concept: reactwarn tag_map: 13
+ -- voice: 9 concept: reactalarm tag_map: 14
+ -- voice: 9 concept: reacttellrev tag_map: 15
+ -- voice: 9 concept: reacttellconf tag_map: 16
+ -- voice: 9 concept: reactshoot tag_map: 17
+ - mk1att_1,mk1att_2,mk1att_3 [-1678] (Weight: 3)
+ -- voice: 9 concept: foundbody tag_map: 18
+ -- voice: 9 concept: foundmissing tag_map: 19
+ -- voice: 9 concept: foundsmall tag_map: 20
+ -- voice: 9 concept: foundlarge tag_map: 21
+ -- voice: 9 concept: recentintruder tag_map: 22
+ -- voice: 9 concept: recentbody tag_map: 23
+ -- voice: 9 concept: recentmissing tag_map: 24
+ -- voice: 9 concept: recentother tag_map: 25
+ -- voice: 9 concept: comattack tag_map: 26
+ - mk1att_1,mk1att_2,mk1att_3 [-1678] (Weight: 3)
+ -- voice: 9 concept: comsucchit tag_map: 27
+ -- voice: 9 concept: comsuccblock tag_map: 28
+ -- voice: 9 concept: comdetblock tag_map: 29
+ -- voice: 9 concept: comblocked tag_map: 30
+ -- voice: 9 concept: comhitnodam tag_map: 31
+ -- voice: 9 concept: comhithigh tag_map: 32
+ - mk1hhi_1,mk1hhi_2 [-1679] (Weight: 2)
+ -- voice: 9 concept: comhitlow tag_map: 33
+ - mk1hhi_1,mk1hhi_2 [-1679] (Weight: 2)
+ -- voice: 9 concept: comhitamb tag_map: 34
+ -- voice: 9 concept: comdieloud tag_map: 35
+ - mk1die_1 [-3894] (Weight: 1)
+ -- voice: 9 concept: comdiesoft tag_map: 36
+ - mk1die_1 [-3894] (Weight: 1)
+ -- voice: 9 concept: ogshoot tag_map: 37
+ -- voice: 10 concept: sleeping tag_map: 0
+ -- voice: 10 concept: atlevelzero tag_map: 1
+ - rm1at0_1,rm1at0_2,rm1at0_3,rm1at0_4,rm1at0_5 [-2357] (Weight: 5)
+ -- voice: 10 concept: atlevelone tag_map: 2
+ - rm1at0_1,rm1at0_2,rm1at0_3,rm1at0_4,rm1at0_5 [-2357] (Weight: 5)
+ -- voice: 10 concept: atleveltwo tag_map: 3
+ - rm1at2_1,rm1at2_2,rm1at2_3,rm1at2_4 [-2358] (Weight: 4)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - rm1at2_1,rm1at2_2,rm1at2_3,rm1at2_4,silenc3s [-4275] (Weight: 5)
+ -- voice: 10 concept: atlevelthree tag_map: 4
+ - rm1at2_1,rm1at2_2,rm1at2_3,rm1at2_4 [-2358] (Weight: 4)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - rm1at2_1,rm1at2_2,rm1at2_3,rm1at2_4,silenc3s [-4275] (Weight: 5)
+ -- voice: 10 concept: tolevelone tag_map: 5
+ - rm1to1_1,rm1to1_2 [-2360] (Weight: 2)
+ -- voice: 10 concept: toleveltwo tag_map: 6
+ - rm1to1_1,rm1to1_2 [-2360] (Weight: 2)
+ -- voice: 10 concept: tolevelthree tag_map: 7
+ - rm1to3_1,rm1to3_2 [-2361] (Weight: 2)
+ -- voice: 10 concept: spotplayer tag_map: 8
+ - rm1to3_1,rm1to3_2 [-2361] (Weight: 2)
+ -- voice: 10 concept: backtozero tag_map: 9
+ - rm1at0_1,rm1at0_2 [-2362] (Weight: 2)
+ -- voice: 10 concept: lostcontact tag_map: 10
+ - rm1at0_5 [-2363] (Weight: 1)
+ -- voice: 10 concept: reactcharge tag_map: 11
+ - rm1chg_1,rm1chg_2 [-2364] (Weight: 2)
+ -- voice: 10 concept: reactrun tag_map: 12
+ -- voice: 10 concept: reactwarn tag_map: 13
+ -- voice: 10 concept: reactalarm tag_map: 14
+ -- voice: 10 concept: reacttellrev tag_map: 15
+ -- voice: 10 concept: reacttellconf tag_map: 16
+ -- voice: 10 concept: reactshoot tag_map: 17
+ - rm1chg_1,rm1chg_2 [-2364] (Weight: 2)
+ -- voice: 10 concept: foundbody tag_map: 18
+ -- voice: 10 concept: foundmissing tag_map: 19
+ -- voice: 10 concept: foundsmall tag_map: 20
+ -- voice: 10 concept: foundlarge tag_map: 21
+ -- voice: 10 concept: recentintruder tag_map: 22
+ -- voice: 10 concept: recentbody tag_map: 23
+ -- voice: 10 concept: recentmissing tag_map: 24
+ -- voice: 10 concept: recentother tag_map: 25
+ -- voice: 10 concept: comattack tag_map: 26
+ - rm1chg_3,rm1hhi_1,rm1to3_2,rm1to3_3 [-2365] (Weight: 4)
+ -- voice: 10 concept: comsucchit tag_map: 27
+ -- voice: 10 concept: comsuccblock tag_map: 28
+ -- voice: 10 concept: comdetblock tag_map: 29
+ -- voice: 10 concept: comblocked tag_map: 30
+ -- voice: 10 concept: comhitnodam tag_map: 31
+ -- voice: 10 concept: comhithigh tag_map: 32
+ - rm1hhi_1 [-2366] (Weight: 1)
+ -- voice: 10 concept: comhitlow tag_map: 33
+ - rm1hhi_1 [-2366] (Weight: 1)
+ -- voice: 10 concept: comhitamb tag_map: 34
+ - rm1hhi_1 [-2366] (Weight: 1)
+ -- voice: 10 concept: comdieloud tag_map: 35
+ - rm1die_1,rm1die_2 [-2367] (Weight: 2)
+ -- voice: 10 concept: comdiesoft tag_map: 36
+ - rm1die_1,rm1die_2 [-2367] (Weight: 2)
+ -- voice: 10 concept: ogshoot tag_map: 37
+ -- voice: 11 concept: sleeping tag_map: 0
+ -- voice: 11 concept: atlevelzero tag_map: 1
+ - mwservo1,mwservo2,mwservo3,mwservo4,mwservo5,mwservo7,mw1at0_1,mw1at0_2,mw1at0_3,mw1at0_4,mw1at0_5,silenc3s,silenc9s [-2423] (Weight: 13)
+ -- voice: 11 concept: atlevelone tag_map: 2
+ - mwservo1,mwservo2,mwservo3,mwservo4,mwservo5,mwservo7,mw1at0_1,mw1at0_2,mw1at0_3,mw1at0_4,mw1at0_5,silenc3s,silenc9s [-2423] (Weight: 13)
+ -- voice: 11 concept: atleveltwo tag_map: 3
+ - mw1los_2,mw1los_5,mw1bak_5,mw1bod_5,mwservo1,mwservo2,mwservo3,mwservo4,mwservo5,mwservo7,silenc3s,silenc9s [-2424] (Weight: 12)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - mw1at2_1,mw1at2_2,mw1at2_3,mw1at2_4,mw1at2_5,mwservo1,mwservo2,mwservo3,mwserv6 [-2414] (Weight: 891)
+ -- voice: 11 concept: atlevelthree tag_map: 4
+ - mw1los_2,mw1los_5,mw1bak_5,mw1bod_5,mwservo1,mwservo2,mwservo3,mwservo4,mwservo5,mwservo7,silenc3s,silenc9s [-2424] (Weight: 12)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - mw1at3_1,mw1at3_2,mw1at3_3,mw1at3_4,mw1at3_5,mwservo4,mwservo5,mwservo6,mwservo7 [-2415] (Weight: 9)
+ -- voice: 11 concept: tolevelone tag_map: 5
+ - mw1to1_1,mw1to1_2,mw1to1_3,mw1to1_4,mw1to1_5 [-2426] (Weight: 5)
+ -- voice: 11 concept: toleveltwo tag_map: 6
+ - mw1to2_1,mw1to2_2,mw1to2_3,mw1to2_4,mw1to2_5 [-2427] (Weight: 5)
+ -- voice: 11 concept: tolevelthree tag_map: 7
+ - mw1to3_1,mw1to3_2,mw1to3_3,mw1to3_4,mw1to3_5,mw1chg_2,mw1chg_3,mw1chg_4,mw1chg_5,mw1hit_2,mw1bod_3 [-2428] (Weight: 11)
+ -- voice: 11 concept: spotplayer tag_map: 8
+ - mw1to3_1,mw1to3_2,mw1to3_3,mw1to3_4,mw1to3_5,mw1chg_2,mw1chg_3,mw1chg_4,mw1chg_5,mw1hit_2,mw1bod_3 [-2428] (Weight: 11)
+ -- voice: 11 concept: backtozero tag_map: 9
+ - mw1bak_1,mw1bak_2,mw1bak_3,mw1bak_4,mw1bak_5 [-2429] (Weight: 5)
+ -- voice: 11 concept: lostcontact tag_map: 10
+ - mw1los_1,mw1los_2,mw1los_3,mw1los_4,mw1los_5 [-2430] (Weight: 5)
+ -- voice: 11 concept: reactcharge tag_map: 11
+ - mw1chg_1,mw1chg_2,mw1chg_3,mw1chg_4,mw1chg_5 [-2431] (Weight: 5)
+ -- voice: 11 concept: reactrun tag_map: 12
+ -- voice: 11 concept: reactwarn tag_map: 13
+ -- voice: 11 concept: reactalarm tag_map: 14
+ -- voice: 11 concept: reacttellrev tag_map: 15
+ -- voice: 11 concept: reacttellconf tag_map: 16
+ -- voice: 11 concept: reactshoot tag_map: 17
+ - mw1chg_1,mw1chg_2,mw1chg_3,mw1chg_4,mw1chg_5 [-2431] (Weight: 5)
+ -- voice: 11 concept: foundbody tag_map: 18
+ - mw1bod_1,mw1bod_2,mw1bod_3,mw1bod_4,mw1bod_5 [-2432] (Weight: 5)
+ -- voice: 11 concept: foundmissing tag_map: 19
+ -- voice: 11 concept: foundsmall tag_map: 20
+ -- voice: 11 concept: foundlarge tag_map: 21
+ -- voice: 11 concept: recentintruder tag_map: 22
+ -- voice: 11 concept: recentbody tag_map: 23
+ -- voice: 11 concept: recentmissing tag_map: 24
+ -- voice: 11 concept: recentother tag_map: 25
+ -- voice: 11 concept: comattack tag_map: 26
+ - mw1hit_1,mw1hit_2,mw1hit_3,mw1hit_4,mw1hit_5,mw1chg_2 [-2433] (Weight: 6)
+ -- voice: 11 concept: comsucchit tag_map: 27
+ -- voice: 11 concept: comsuccblock tag_map: 28
+ -- voice: 11 concept: comdetblock tag_map: 29
+ -- voice: 11 concept: comblocked tag_map: 30
+ -- voice: 11 concept: comhitnodam tag_map: 31
+ -- voice: 11 concept: comhithigh tag_map: 32
+ - mw1hhi_1,mw1hhi_2,mw1hhi_3,mw1hhi_4,mw1hhi_5,mw1bod_1,mw1bod_2,mw1bod_4 [-2434] (Weight: 8)
+ -- voice: 11 concept: comhitlow tag_map: 33
+ - mw1hlo_1,mw1hlo_2,mw1hlo_3,mw1hlo_4 [-2435] (Weight: 4)
+ -- voice: 11 concept: comhitamb tag_map: 34
+ - mw1amb_1,mw1amb_2,mw1amb_3,mw1bod_1,mw1bod_2,mw1bod_3,mw1bod_4 [-2436] (Weight: 7)
+ -- voice: 11 concept: comdieloud tag_map: 35
+ -- voice: 11 concept: comdiesoft tag_map: 36
+ -- voice: 11 concept: ogshoot tag_map: 37
+ -- voice: 12 concept: sleeping tag_map: 0
+ -- voice: 12 concept: atlevelzero tag_map: 1
+ - sp1at0_1,sp1at0_2,sp1at0_3,sp1at0_4 [-2717] (Weight: 4)
+ -- voice: 12 concept: atlevelone tag_map: 2
+ - sp1at0_1,sp1at0_2,sp1at0_3,sp1at0_4 [-2717] (Weight: 4)
+ -- voice: 12 concept: atleveltwo tag_map: 3
+ - sp1at0_1,sp1at0_2,sp1at0_3,sp1at0_4 [-2717] (Weight: 4)
+ -- voice: 12 concept: atlevelthree tag_map: 4
+ - sp1at3_1,sp1at3_2,sp1at3_3 [-2723] (Weight: 3)
+ -- voice: 12 concept: tolevelone tag_map: 5
+ - sp1to1_1,sp1to1_2 [-2721] (Weight: 2)
+ -- voice: 12 concept: toleveltwo tag_map: 6
+ - sp1to1_1,sp1to1_2 [-2721] (Weight: 2)
+ -- voice: 12 concept: tolevelthree tag_map: 7
+ - sp1at3_1,sp1at3_2,sp1at3_3 [-2722] (Weight: 3)
+ -- voice: 12 concept: spotplayer tag_map: 8
+ - sp1at3_1,sp1at3_2,sp1at3_3 [-2722] (Weight: 3)
+ -- voice: 12 concept: backtozero tag_map: 9
+ -- voice: 12 concept: lostcontact tag_map: 10
+ -- voice: 12 concept: reactcharge tag_map: 11
+ - sp1att_1,sp1att_2,sp1att_3,sp1att_4 [-2724] (Weight: 4)
+ -- voice: 12 concept: reactrun tag_map: 12
+ -- voice: 12 concept: reactwarn tag_map: 13
+ -- voice: 12 concept: reactalarm tag_map: 14
+ -- voice: 12 concept: reacttellrev tag_map: 15
+ -- voice: 12 concept: reacttellconf tag_map: 16
+ -- voice: 12 concept: reactshoot tag_map: 17
+ -- voice: 12 concept: foundbody tag_map: 18
+ -- voice: 12 concept: foundmissing tag_map: 19
+ -- voice: 12 concept: foundsmall tag_map: 20
+ -- voice: 12 concept: foundlarge tag_map: 21
+ -- voice: 12 concept: recentintruder tag_map: 22
+ -- voice: 12 concept: recentbody tag_map: 23
+ -- voice: 12 concept: recentmissing tag_map: 24
+ -- voice: 12 concept: recentother tag_map: 25
+ -- voice: 12 concept: comattack tag_map: 26
+ - sp1att_1,sp1att_2,sp1att_3,sp1att_4 [-2724] (Weight: 4)
+ -- voice: 12 concept: comsucchit tag_map: 27
+ -- voice: 12 concept: comsuccblock tag_map: 28
+ -- voice: 12 concept: comdetblock tag_map: 29
+ -- voice: 12 concept: comblocked tag_map: 30
+ -- voice: 12 concept: comhitnodam tag_map: 31
+ -- voice: 12 concept: comhithigh tag_map: 32
+ - sp1hhi_1,sp1hhi_2,sp1hhi_3,sp1hhi_4,sp1hhi_5 [-2725] (Weight: 5)
+ -- voice: 12 concept: comhitlow tag_map: 33
+ - sp1hhi_1,sp1hhi_2,sp1hhi_3,sp1hhi_4,sp1hhi_5 [-2725] (Weight: 5)
+ -- voice: 12 concept: comhitamb tag_map: 34
+ -- voice: 12 concept: comdieloud tag_map: 35
+ - sp1die_1,sp1die_2 [-2726] (Weight: 2)
+ -- voice: 12 concept: comdiesoft tag_map: 36
+ - sp1die_1,sp1die_2 [-2726] (Weight: 2)
+ -- voice: 12 concept: ogshoot tag_map: 37
+ -- voice: 13 concept: sleeping tag_map: 0
+ -- voice: 13 concept: atlevelzero tag_map: 1
+ - gr1at0_1,gr1at0_2,gr1at0_3,gr1at0_4,gr1at0_5,gr1at0_6 [-2736] (Weight: 6)
+ -- voice: 13 concept: atlevelone tag_map: 2
+ - gr1at0_1,gr1at0_2,gr1at0_3,gr1at0_4,gr1at0_5,gr1at0_6 [-2736] (Weight: 6)
+ -- voice: 13 concept: atleveltwo tag_map: 3
+ - gr1at2_1,gr1at2_2,gr1at2_3,gr1at2_4,gr1at2_5,gr1at2_6 [-2739] (Weight: 6)
+ -- voice: 13 concept: atlevelthree tag_map: 4
+ - gr1at2_1,gr1at2_2,gr1at2_3,gr1at2_4,gr1at2_5,gr1at2_6 [-2739] (Weight: 6)
+ -- voice: 13 concept: tolevelone tag_map: 5
+ - gr1at2_2,gr1at2_4,gr1at2_5 [-2737] (Weight: 3)
+ -- voice: 13 concept: toleveltwo tag_map: 6
+ - gr1at2_2,gr1at2_4,gr1at2_5 [-2737] (Weight: 3)
+ -- voice: 13 concept: tolevelthree tag_map: 7
+ - gr1to3_1,gr1to3_2,gr1to3_3,gr1to3_4,gr1to3_5 [-2738] (Weight: 5)
+ -- voice: 13 concept: spotplayer tag_map: 8
+ - gr1to3_1,gr1to3_2,gr1to3_3,gr1to3_4,gr1to3_5 [-2738] (Weight: 5)
+ -- voice: 13 concept: backtozero tag_map: 9
+ -- voice: 13 concept: lostcontact tag_map: 10
+ -- voice: 13 concept: reactcharge tag_map: 11
+ - gr1att_1,gr1att_2,gr1att_3,gr1att_4,gr1hhi_1,gr1hhi_2,gr1hhi_3,gr1hhi_4 [-2740] (Weight: 8)
+ -- voice: 13 concept: reactrun tag_map: 12
+ -- voice: 13 concept: reactwarn tag_map: 13
+ -- voice: 13 concept: reactalarm tag_map: 14
+ -- voice: 13 concept: reacttellrev tag_map: 15
+ -- voice: 13 concept: reacttellconf tag_map: 16
+ -- voice: 13 concept: reactshoot tag_map: 17
+ - gr1att_1,gr1att_2,gr1att_3,gr1att_4,gr1hhi_1,gr1hhi_2,gr1hhi_3,gr1hhi_4 [-2740] (Weight: 8)
+ -- voice: 13 concept: foundbody tag_map: 18
+ -- voice: 13 concept: foundmissing tag_map: 19
+ -- voice: 13 concept: foundsmall tag_map: 20
+ -- voice: 13 concept: foundlarge tag_map: 21
+ -- voice: 13 concept: recentintruder tag_map: 22
+ -- voice: 13 concept: recentbody tag_map: 23
+ -- voice: 13 concept: recentmissing tag_map: 24
+ -- voice: 13 concept: recentother tag_map: 25
+ -- voice: 13 concept: comattack tag_map: 26
+ - gr1att_1,gr1att_2,gr1att_3,gr1att_4,gr1hhi_1,gr1hhi_2,gr1hhi_3,gr1hhi_4 [-2740] (Weight: 8)
+ -- voice: 13 concept: comsucchit tag_map: 27
+ -- voice: 13 concept: comsuccblock tag_map: 28
+ -- voice: 13 concept: comdetblock tag_map: 29
+ -- voice: 13 concept: comblocked tag_map: 30
+ -- voice: 13 concept: comhitnodam tag_map: 31
+ -- voice: 13 concept: comhithigh tag_map: 32
+ - gr1hhi_1,gr1hhi_2,gr1hhi_3,gr1hhi_4 [-2741] (Weight: 4)
+ -- voice: 13 concept: comhitlow tag_map: 33
+ - gr1hhi_1,gr1hhi_2,gr1hhi_3,gr1hhi_4 [-2741] (Weight: 4)
+ -- voice: 13 concept: comhitamb tag_map: 34
+ -- voice: 13 concept: comdieloud tag_map: 35
+ -- voice: 13 concept: comdiesoft tag_map: 36
+ -- voice: 13 concept: ogshoot tag_map: 37
+ -- voice: 14 concept: sleeping tag_map: 0
+ -- voice: 14 concept: atlevelzero tag_map: 1
+ -- voice: 14 concept: atlevelone tag_map: 2
+ -- voice: 14 concept: atleveltwo tag_map: 3
+ -- voice: 14 concept: atlevelthree tag_map: 4
+ - sw1at3_1,sw1at3_2,sw1at3_3 [-2762] (Weight: 3)
+ -- voice: 14 concept: tolevelone tag_map: 5
+ - sw1to1_1,sw1to1_2,sw1to1_3 [-2757] (Weight: 3)
+ -- voice: 14 concept: toleveltwo tag_map: 6
+ - sw1to1_1,sw1to1_2,sw1to1_3 [-2757] (Weight: 3)
+ -- voice: 14 concept: tolevelthree tag_map: 7
+ - sw1to1_1,sw1to1_2,sw1to1_3 [-2757] (Weight: 3)
+ -- voice: 14 concept: spotplayer tag_map: 8
+ - sw1to1_1,sw1to1_2,sw1to1_3 [-2757] (Weight: 3)
+ -- voice: 14 concept: backtozero tag_map: 9
+ -- voice: 14 concept: lostcontact tag_map: 10
+ -- voice: 14 concept: reactcharge tag_map: 11
+ -- voice: 14 concept: reactrun tag_map: 12
+ -- voice: 14 concept: reactwarn tag_map: 13
+ -- voice: 14 concept: reactalarm tag_map: 14
+ -- voice: 14 concept: reacttellrev tag_map: 15
+ -- voice: 14 concept: reacttellconf tag_map: 16
+ -- voice: 14 concept: reactshoot tag_map: 17
+ -- voice: 14 concept: foundbody tag_map: 18
+ -- voice: 14 concept: foundmissing tag_map: 19
+ -- voice: 14 concept: foundsmall tag_map: 20
+ -- voice: 14 concept: foundlarge tag_map: 21
+ -- voice: 14 concept: recentintruder tag_map: 22
+ -- voice: 14 concept: recentbody tag_map: 23
+ -- voice: 14 concept: recentmissing tag_map: 24
+ -- voice: 14 concept: recentother tag_map: 25
+ -- voice: 14 concept: comattack tag_map: 26
+ -- voice: 14 concept: comsucchit tag_map: 27
+ -- voice: 14 concept: comsuccblock tag_map: 28
+ -- voice: 14 concept: comdetblock tag_map: 29
+ -- voice: 14 concept: comblocked tag_map: 30
+ -- voice: 14 concept: comhitnodam tag_map: 31
+ -- voice: 14 concept: comhithigh tag_map: 32
+ -- voice: 14 concept: comhitlow tag_map: 33
+ -- voice: 14 concept: comhitamb tag_map: 34
+ -- voice: 14 concept: comdieloud tag_map: 35
+ -- voice: 14 concept: comdiesoft tag_map: 36
+ -- voice: 14 concept: ogshoot tag_map: 37
+ -- voice: 15 concept: sleeping tag_map: 0
+ -- voice: 15 concept: atlevelzero tag_map: 1
+ - as1at0_1,as1at0_2,as1at0_3,as1at0_4,as1at0_5,as1at0_6,as1at0_7,as1at0_8,as1at0_9,as1at0_0 [-1064] (Weight: 10)
+ -- voice: 15 concept: atlevelone tag_map: 2
+ - as1at0_1,as1at0_2,as1at0_3,as1at0_4,as1at0_5,as1at0_6,as1at0_7,as1at0_8,as1at0_9,as1at0_0 [-1064] (Weight: 10)
+ -- voice: 15 concept: atleveltwo tag_map: 3
+ - as1at0_1,as1at0_2,as1at0_3,as1at0_4,as1at0_5,as1at0_6,as1at0_7,as1at0_8,as1at0_9,as1at0_0,silenc3s,silenc9s [-3760] (Weight: 12)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - as1at3_1,as1at3_2,as1at3_3,as1at3_4,as1at3_5,as1at3_6,as1at3_7,as1at3_8,as1at3_9,as1at3_0,silenc3s [-1646] (Weight: 1089)
+ -- voice: 15 concept: atlevelthree tag_map: 4
+ - as1at0_1,as1at0_2,as1at0_3,as1at0_4,as1at0_5,as1at0_6,as1at0_7,as1at0_8,as1at0_9,as1at0_0,silenc3s,silenc9s [-3760] (Weight: 12)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - as1at3_1,as1at3_2,as1at3_3,as1at3_4,as1at3_5,as1at3_6,as1at3_7,as1at3_8,as1at3_9,as1at3_0,silenc3s [-1646] (Weight: 1089)
+ -- voice: 15 concept: tolevelone tag_map: 5
+ - as1to1_1,as1to1_2 [-1067] (Weight: 2)
+ -- voice: 15 concept: toleveltwo tag_map: 6
+ - as1to1_1,as1to1_2 [-1067] (Weight: 2)
+ -- voice: 15 concept: tolevelthree tag_map: 7
+ - as1to3_1,as1to3_2,as1to3_3 [-1637] (Weight: 3)
+ -- voice: 15 concept: spotplayer tag_map: 8
+ - as1to3_1,as1to3_2,as1to3_3 [-1637] (Weight: 3)
+ -- voice: 15 concept: backtozero tag_map: 9
+ - as1bak_1,as1bak_2,as1bak_3 [-4080] (Weight: 3)
+ -- voice: 15 concept: lostcontact tag_map: 10
+ - as1bak_1,as1bak_2,as1bak_3 [-4080] (Weight: 3)
+ -- voice: 15 concept: reactcharge tag_map: 11
+ - as1to3_1,as1to3_2,as1to3_3 [-1637] (Weight: 3)
+ -- voice: 15 concept: reactrun tag_map: 12
+ - as1bak_1,as1bak_2,as1bak_3 [-4080] (Weight: 3)
+ -- voice: 15 concept: reactwarn tag_map: 13
+ -- voice: 15 concept: reactalarm tag_map: 14
+ -- voice: 15 concept: reacttellrev tag_map: 15
+ -- voice: 15 concept: reacttellconf tag_map: 16
+ -- voice: 15 concept: reactshoot tag_map: 17
+ - as1to3_1,as1to3_2,as1to3_3 [-1637] (Weight: 3)
+ -- voice: 15 concept: foundbody tag_map: 18
+ - as1bak_1,as1bak_2,as1bak_3 [-4080] (Weight: 3)
+ -- voice: 15 concept: foundmissing tag_map: 19
+ -- voice: 15 concept: foundsmall tag_map: 20
+ -- voice: 15 concept: foundlarge tag_map: 21
+ -- voice: 15 concept: recentintruder tag_map: 22
+ -- voice: 15 concept: recentbody tag_map: 23
+ -- voice: 15 concept: recentmissing tag_map: 24
+ -- voice: 15 concept: recentother tag_map: 25
+ -- voice: 15 concept: comattack tag_map: 26
+ - as1to3_1,as1to3_2,as1to3_3 [-4081] (Weight: 3)
+ -- voice: 15 concept: comsucchit tag_map: 27
+ -- voice: 15 concept: comsuccblock tag_map: 28
+ -- voice: 15 concept: comdetblock tag_map: 29
+ -- voice: 15 concept: comblocked tag_map: 30
+ -- voice: 15 concept: comhitnodam tag_map: 31
+ -- voice: 15 concept: comhithigh tag_map: 32
+ - as1hhi_1,as1hhi_2,as1hhi_3 [-4249] (Weight: 3)
+ -- voice: 15 concept: comhitlow tag_map: 33
+ - as1hhi_1,as1hhi_2,as1hhi_3 [-4249] (Weight: 3)
+ -- voice: 15 concept: comhitamb tag_map: 34
+ - as1hhi_1,as1hhi_2,as1hhi_3 [-4249] (Weight: 3)
+ -- voice: 15 concept: comdieloud tag_map: 35
+ - as1die_1,as1die_2 [-4250] (Weight: 2)
+ -- voice: 15 concept: comdiesoft tag_map: 36
+ - as1die_1,as1die_2 [-4250] (Weight: 2)
+ -- voice: 15 concept: ogshoot tag_map: 37
+ -- voice: 16 concept: sleeping tag_map: 0
+ -- voice: 16 concept: atlevelzero tag_map: 1
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4,ov1brea1,ov1brea2,ov1brea3,ov1brea4,ov1brea5,silenc3s [-3917] (Weight: 10)
+ -- voice: 16 concept: atlevelone tag_map: 2
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4,ov1brea1,ov1brea2,ov1brea3,ov1brea4,ov1brea5,silenc3s [-3917] (Weight: 10)
+ -- voice: 16 concept: atleveltwo tag_map: 3
+ - ov1at2_1,ov1at2_2,ov1at2_3,ov1at2_4,ov1at2_5,ov1at2_6,ov1at2_7 [-3919] (Weight: 7)
+ -- voice: 16 concept: atlevelthree tag_map: 4
+ - ov1at2_1,ov1at2_2,ov1at2_3,ov1at2_4,ov1at2_5,ov1at2_6,ov1at2_7 [-3919] (Weight: 7)
+ -- voice: 16 concept: tolevelone tag_map: 5
+ - ov1to1_1 [-3918] (Weight: 1)
+ -- voice: 16 concept: toleveltwo tag_map: 6
+ - ov1to2_1,ov1to2_2 [-3926] (Weight: 2)
+ -- voice: 16 concept: tolevelthree tag_map: 7
+ - ov1to2_1,ov1to2_2 [-3926] (Weight: 2)
+ -- voice: 16 concept: spotplayer tag_map: 8
+ - ov1to2_1,ov1to2_2 [-3926] (Weight: 2)
+ -- voice: 16 concept: backtozero tag_map: 9
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4 [-4311] (Weight: 4)
+ -- voice: 16 concept: lostcontact tag_map: 10
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4 [-4311] (Weight: 4)
+ -- voice: 16 concept: reactcharge tag_map: 11
+ - ov1to2_1,ov1to2_2 [-3926] (Weight: 2)
+ -- voice: 16 concept: reactrun tag_map: 12
+ -- voice: 16 concept: reactwarn tag_map: 13
+ -- voice: 16 concept: reactalarm tag_map: 14
+ -- voice: 16 concept: reacttellrev tag_map: 15
+ -- voice: 16 concept: reacttellconf tag_map: 16
+ -- voice: 16 concept: reactshoot tag_map: 17
+ - ov1to2_1,ov1to2_2 [-3926] (Weight: 2)
+ -- voice: 16 concept: foundbody tag_map: 18
+ -- voice: 16 concept: foundmissing tag_map: 19
+ -- voice: 16 concept: foundsmall tag_map: 20
+ -- voice: 16 concept: foundlarge tag_map: 21
+ -- voice: 16 concept: recentintruder tag_map: 22
+ -- voice: 16 concept: recentbody tag_map: 23
+ -- voice: 16 concept: recentmissing tag_map: 24
+ -- voice: 16 concept: recentother tag_map: 25
+ -- voice: 16 concept: comattack tag_map: 26
+ -- voice: 16 concept: comsucchit tag_map: 27
+ -- voice: 16 concept: comsuccblock tag_map: 28
+ -- voice: 16 concept: comdetblock tag_map: 29
+ -- voice: 16 concept: comblocked tag_map: 30
+ -- voice: 16 concept: comhitnodam tag_map: 31
+ -- voice: 16 concept: comhithigh tag_map: 32
+ -- voice: 16 concept: comhitlow tag_map: 33
+ -- voice: 16 concept: comhitamb tag_map: 34
+ -- voice: 16 concept: comdieloud tag_map: 35
+ -- voice: 16 concept: comdiesoft tag_map: 36
+ -- voice: 16 concept: ogshoot tag_map: 37
+ -- voice: 17 concept: sleeping tag_map: 0
+ -- voice: 17 concept: atlevelzero tag_map: 1
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4,ov1brea1,ov1brea2,ov1brea3,ov1brea4,ov1brea5,silenc3s [-3917] (Weight: 10)
+ -- voice: 17 concept: atlevelone tag_map: 2
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4,ov1brea1,ov1brea2,ov1brea3,ov1brea4,ov1brea5,silenc3s [-3917] (Weight: 10)
+ -- voice: 17 concept: atleveltwo tag_map: 3
+ - ov1at2_5,ov1at2_6,ov1at2_7,ovkat2_1,ovkat2_2,ovkat2_3 [-4315] (Weight: 6)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - ov1at2_5,ov1at2_6,ov1at2_7,ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5 [-4316] (Weight: 8)
+ -- voice: 17 concept: atlevelthree tag_map: 4
+ - ovkat2_1,ovkat2_2,ovkat2_3,ov1at2_1,ov1at2_2,ov1at2_3,ov1at2_4,ov1at2_5,silenc9s [-4318] (Weight: 9)
+Key +sense [39] -773|-1 [#sight (251),#sound (252)]:
+   - ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5,ovklaug1,ovklaug2,ovklaug3,ovklaug4,ovklaug5,ovklaug6,ovklaug7,ovklaug8,ov1at2_1,ov1at2_2,ov1at2_3,ov1at2_4,ov1at2_5 [-4319] (Weight: 18)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5,ovklaug1,ovklaug2,ovklaug3,ovklaug4,ovklaug5,ovklaug6,ovklaug7,ovklaug8,ov1at2_1,ov1at2_2,ov1at2_3,ov1at2_4,ov1at2_5 [-4319] (Weight: 18)
+ -- voice: 17 concept: tolevelone tag_map: 5
+ - ovkto1_1 [-4314] (Weight: 1)
+ -- voice: 17 concept: toleveltwo tag_map: 6
+ - ovkto1_1 [-4314] (Weight: 1)
+ -- voice: 17 concept: tolevelthree tag_map: 7
+ - ovklaug8,ovklaug5 [-4317] (Weight: 2)
+ -- voice: 17 concept: spotplayer tag_map: 8
+ - ovklaug8,ovklaug5 [-4317] (Weight: 2)
+ -- voice: 17 concept: backtozero tag_map: 9
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4 [-4311] (Weight: 4)
+ -- voice: 17 concept: lostcontact tag_map: 10
+ - ov1at0_1,ov1at0_2,ov1at0_3,ov1at0_4 [-4311] (Weight: 4)
+ -- voice: 17 concept: reactcharge tag_map: 11
+ - ovkatt_1,ovkatt_2,ovkatt_3,ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5 [-4320] (Weight: 8)
+ -- voice: 17 concept: reactrun tag_map: 12
+ -- voice: 17 concept: reactwarn tag_map: 13
+ -- voice: 17 concept: reactalarm tag_map: 14
+ -- voice: 17 concept: reacttellrev tag_map: 15
+ -- voice: 17 concept: reacttellconf tag_map: 16
+ -- voice: 17 concept: reactshoot tag_map: 17
+ - ovkatt_1,ovkatt_2,ovkatt_3,ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5 [-4320] (Weight: 8)
+ -- voice: 17 concept: foundbody tag_map: 18
+ -- voice: 17 concept: foundmissing tag_map: 19
+ -- voice: 17 concept: foundsmall tag_map: 20
+ -- voice: 17 concept: foundlarge tag_map: 21
+ -- voice: 17 concept: recentintruder tag_map: 22
+ -- voice: 17 concept: recentbody tag_map: 23
+ -- voice: 17 concept: recentmissing tag_map: 24
+ -- voice: 17 concept: recentother tag_map: 25
+ -- voice: 17 concept: comattack tag_map: 26
+ - ovkatt_1,ovkatt_2,ovkatt_3,ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5 [-4320] (Weight: 8)
+ -- voice: 17 concept: comsucchit tag_map: 27
+ - ovkatt_1,ovkatt_2,ovkatt_3,ovkat3_1,ovkat3_2,ovkat3_3,ovkat3_4,ovkat3_5 [-4320] (Weight: 8)
+ -- voice: 17 concept: comsuccblock tag_map: 28
+ -- voice: 17 concept: comdetblock tag_map: 29
+ -- voice: 17 concept: comblocked tag_map: 30
+ -- voice: 17 concept: comhitnodam tag_map: 31
+ -- voice: 17 concept: comhithigh tag_map: 32
+ - ovkhhi_1,ovkhlo_1,ovkhlo_2,ovkto1_1 [-4321] (Weight: 4)
+ -- voice: 17 concept: comhitlow tag_map: 33
+ - ovkhlo_1,ovkhlo_2,ovkhlo_3,ovkto1_4 [-4322] (Weight: 4)
+ -- voice: 17 concept: comhitamb tag_map: 34
+ - ovkhhi_1,ovkhlo_1,ovkhlo_2,ovkto1_1 [-4321] (Weight: 4)
+ -- voice: 17 concept: comdieloud tag_map: 35
+ -- voice: 17 concept: comdiesoft tag_map: 36
+ -- voice: 17 concept: ogshoot tag_map: 37
+ -- voice: 18 concept: sleeping tag_map: 0
+ -- voice: 18 concept: atlevelzero tag_map: 1
+ - sh2bab_1,sh2bab_2,sh2bab_3,sh2bab_4,sh2bab_5 [-4302] (Weight: 5)
+ -- voice: 18 concept: atlevelone tag_map: 2
+ - sh2bab_1,sh2bab_2,sh2bab_3,sh2bab_4,sh2bab_5 [-4302] (Weight: 5)
+ -- voice: 18 concept: atleveltwo tag_map: 3
+ - sh2bab_1,sh2bab_2,sh2bab_3,sh2bab_4,sh2bab_5 [-4302] (Weight: 5)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - sh2bab_1,sh2bab_2,sh2bab_3,sh2bab_4,sh2bab_5 [-4302] (Weight: 5)
+ -- voice: 18 concept: atlevelthree tag_map: 4
+ - sh2bab_1,sh2bab_2,sh2bab_3,sh2bab_4,sh2bab_5 [-4302] (Weight: 5)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - sh2bab_1,sh2bab_2,sh2bab_3,sh2bab_4,sh2bab_5 [-4302] (Weight: 5)
+ -- voice: 18 concept: tolevelone tag_map: 5
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: toleveltwo tag_map: 6
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: tolevelthree tag_map: 7
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: spotplayer tag_map: 8
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: backtozero tag_map: 9
+ -- voice: 18 concept: lostcontact tag_map: 10
+ -- voice: 18 concept: reactcharge tag_map: 11
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: reactrun tag_map: 12
+ -- voice: 18 concept: reactwarn tag_map: 13
+ -- voice: 18 concept: reactalarm tag_map: 14
+ -- voice: 18 concept: reacttellrev tag_map: 15
+ -- voice: 18 concept: reacttellconf tag_map: 16
+ -- voice: 18 concept: reactshoot tag_map: 17
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: foundbody tag_map: 18
+ -- voice: 18 concept: foundmissing tag_map: 19
+ -- voice: 18 concept: foundsmall tag_map: 20
+ -- voice: 18 concept: foundlarge tag_map: 21
+ -- voice: 18 concept: recentintruder tag_map: 22
+ -- voice: 18 concept: recentbody tag_map: 23
+ -- voice: 18 concept: recentmissing tag_map: 24
+ -- voice: 18 concept: recentother tag_map: 25
+ -- voice: 18 concept: comattack tag_map: 26
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: comsucchit tag_map: 27
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: comsuccblock tag_map: 28
+ -- voice: 18 concept: comdetblock tag_map: 29
+ -- voice: 18 concept: comblocked tag_map: 30
+ -- voice: 18 concept: comhitnodam tag_map: 31
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4300] (Weight: 5)
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: comhithigh tag_map: 32
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4300] (Weight: 5)
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: comhitlow tag_map: 33
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4300] (Weight: 5)
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: comhitamb tag_map: 34
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4300] (Weight: 5)
+ - sh1laug1,sh1laug2,sh1laug3,sh1laug4,sh1laug5 [-4303] (Weight: 5)
+ -- voice: 18 concept: comdieloud tag_map: 35
+ -- voice: 18 concept: comdiesoft tag_map: 36
+ -- voice: 18 concept: ogshoot tag_map: 37
+ -- voice: 19 concept: sleeping tag_map: 0
+ -- voice: 19 concept: atlevelzero tag_map: 1
+ -- voice: 19 concept: atlevelone tag_map: 2
+ -- voice: 19 concept: atleveltwo tag_map: 3
+ - sh1at3_0,sh1at3_1,sh1at3_2,sh1at3_3,sh1at3_4,sh1at3_5,sh1at3_6,sh1at3_7,sh1at3_8,sh1at3_9,sh1at310,sh1at311,sh1at312,sh1at313,sh1at314,sh1at315,sh1at316,sh1at317 [-4299] (Weight: 18)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - sh1at3_0,sh1at3_1,sh1at3_2,sh1at3_3,sh1at3_4,sh1at3_5,sh1at3_6,sh1at3_7,sh1at3_8,sh1at3_9,sh1at310,sh1at311,sh1at312,sh1at313,sh1at314,sh1at315,sh1at316,sh1at317 [-4299] (Weight: 18)
+ -- voice: 19 concept: atlevelthree tag_map: 4
+ - sh1at3_0,sh1at3_1,sh1at3_2,sh1at3_3,sh1at3_4,sh1at3_5,sh1at3_6,sh1at3_7,sh1at3_8,sh1at3_9,sh1at310,sh1at311,sh1at312,sh1at313,sh1at314,sh1at315,sh1at316,sh1at317 [-4299] (Weight: 18)
+Key +investigate [42] -18|-1 [#true (238)]:
+   - sh1at3_0,sh1at3_1,sh1at3_2,sh1at3_3,sh1at3_4,sh1at3_5,sh1at3_6,sh1at3_7,sh1at3_8,sh1at3_9,sh1at310,sh1at311,sh1at312,sh1at313,sh1at314,sh1at315,sh1at316,sh1at317 [-4299] (Weight: 18)
+ -- voice: 19 concept: tolevelone tag_map: 5
+ -- voice: 19 concept: toleveltwo tag_map: 6
+ -- voice: 19 concept: tolevelthree tag_map: 7
+ -- voice: 19 concept: spotplayer tag_map: 8
+ -- voice: 19 concept: backtozero tag_map: 9
+ - sh1bak_1,sh1bak_1 [-4301] (Weight: 2)
+ -- voice: 19 concept: lostcontact tag_map: 10
+ - sh1bak_1,sh1bak_1 [-4301] (Weight: 2)
+ -- voice: 19 concept: reactcharge tag_map: 11
+ -- voice: 19 concept: reactrun tag_map: 12
+ -- voice: 19 concept: reactwarn tag_map: 13
+ -- voice: 19 concept: reactalarm tag_map: 14
+ -- voice: 19 concept: reacttellrev tag_map: 15
+ -- voice: 19 concept: reacttellconf tag_map: 16
+ -- voice: 19 concept: reactshoot tag_map: 17
+ -- voice: 19 concept: foundbody tag_map: 18
+ -- voice: 19 concept: foundmissing tag_map: 19
+ -- voice: 19 concept: foundsmall tag_map: 20
+ -- voice: 19 concept: foundlarge tag_map: 21
+ -- voice: 19 concept: recentintruder tag_map: 22
+ -- voice: 19 concept: recentbody tag_map: 23
+ -- voice: 19 concept: recentmissing tag_map: 24
+ -- voice: 19 concept: recentother tag_map: 25
+ -- voice: 19 concept: comattack tag_map: 26
+ -- voice: 19 concept: comsucchit tag_map: 27
+ -- voice: 19 concept: comsuccblock tag_map: 28
+ -- voice: 19 concept: comdetblock tag_map: 29
+ -- voice: 19 concept: comblocked tag_map: 30
+ -- voice: 19 concept: comhitnodam tag_map: 31
+ -- voice: 19 concept: comhithigh tag_map: 32
+ -- voice: 19 concept: comhitlow tag_map: 33
+ -- voice: 19 concept: comhitamb tag_map: 34
+ -- voice: 19 concept: comdieloud tag_map: 35
+ -- voice: 19 concept: comdiesoft tag_map: 36
+ -- voice: 19 concept: ogshoot tag_map: 37
