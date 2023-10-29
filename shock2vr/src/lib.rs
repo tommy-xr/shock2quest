@@ -33,7 +33,6 @@ use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
-    log_property,
     motion::MotionDB,
     properties::{
         AmbientSoundFlags, InternalPropOriginalModelName, Link, PropAISignalResponse,
