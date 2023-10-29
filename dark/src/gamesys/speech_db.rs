@@ -45,32 +45,21 @@ impl SpeechDB {
         let tag_map = NameMap::read(reader);
         let value_map = NameMap::read(reader);
 
-        println!("-- concept_map -- :\n {:#?}", concept_map);
-        //panic!();
-        // println!("-- tag_map -- :\n {:#?}", tag_map);
-        // println!("-- value_map -- :\n {:#?}", value_map);
-        // panic!("");
-
         // Read priority
         let priority_size = read_u32(reader) * 4;
-        println!("priority size: {}", priority_size);
         let _priority = read_bytes(reader, priority_size as usize);
 
         let flags_size = read_u32(reader) * 4;
-        println!("flags size: {}", flags_size);
         let _flags = read_bytes(reader, flags_size as usize);
 
         let num_voices = read_u32(reader);
-        println!("voices: {}", num_voices);
 
         let num_concepts = concept_map.count();
-        println!("num_concepts: {}", num_concepts);
 
         let mut voices = Vec::new();
         for idx in 0..num_voices {
             let voice = Voice::read(reader, num_concepts);
             voices.push(voice);
-            //println!("voice {}: {:?}", idx, voice);
         }
 
         SpeechDB {

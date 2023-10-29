@@ -154,6 +154,17 @@ impl TagDatabase {
         enum_value_to_name: &HashMap<u32, String>,
         indentation: String,
     ) {
+        for data in &self.data {
+            let maybe_data = data_to_name.get(&data.data);
+            println!(
+                "{} - {} [{}] (Weight: {})",
+                indentation,
+                maybe_data.unwrap(),
+                data.data,
+                data.weight
+            );
+        }
+
         for (key, branch) in &self.branches {
             let maybe_name = tag_to_name.get(&key.key_type);
 
@@ -174,17 +185,6 @@ impl TagDatabase {
                 key.max,
                 enum_value_string
             );
-
-            for data in &branch.data {
-                let maybe_data = data_to_name.get(&data.data);
-                println!(
-                    "{} - {} [{}] (Weight: {})",
-                    indentation,
-                    maybe_data.unwrap(),
-                    data.data,
-                    data.weight
-                );
-            }
 
             let new_indentation = indentation.to_owned() + "  ";
             branch.debug_print_helper(

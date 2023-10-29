@@ -65,6 +65,19 @@ pub fn read<T: io::Read + io::Seek>(
     let env_tag_map = EnvMap::read(&table_of_contents, reader);
     let speech_db = SpeechDB::read(&table_of_contents, reader);
 
+    // Uncomment to output debug info for voices:
+    // debug_print_voices(&sound_schema, &speech_db);
+    // panic!()
+
+    Gamesys {
+        entity_info,
+        sound_schema,
+        env_tag_map,
+        speech_db,
+    }
+}
+
+fn debug_print_voices(sound_schema: &SoundSchema, speech_db: &SpeechDB) {
     // Debug output for rendering strings:
     let mut data_to_name = HashMap::new();
     for (k, v) in &sound_schema.id_to_samples {
@@ -76,37 +89,15 @@ pub fn read<T: io::Read + io::Seek>(
         data_to_name.insert(*k, str);
     }
 
-    // println!("sound_schema;:{:#?}", sound_schema);
-    // println!("speech db: {:#?}", speech_db);
-    speech_db.voices[0].tag_maps[1].debug_print(
-        &speech_db.tag_map.index_to_name,
-        &data_to_name,
-        &speech_db.value_map.index_to_name,
-    );
-    // println!("env namemap: {:#?}", env_tag_map);
-    //panic!();
-
-    Gamesys {
-        entity_info,
-        sound_schema,
-        env_tag_map,
-        speech_db,
+    for v in 0..speech_db.voices.len() {
+        for t in 0..speech_db.voices[v].tag_maps.len() {
+            let concept = speech_db.concept_map.get_name(t as u32).unwrap();
+            println!("!! -- voice: {} concept: {} tag_map: {}", v, concept, t);
+            speech_db.voices[v].tag_maps[t].debug_print(
+                &speech_db.tag_map.index_to_name,
+                &data_to_name,
+                &speech_db.value_map.index_to_name,
+            );
+        }
     }
-}
-
-pub fn log_property<T>(world: &World)
-where
-    T: Component + fmt::Debug + Sync + Clone + Send,
-{
-    world.run(
-        |v_template_id: View<crate::properties::PropTemplateId>,
-         v_symname: View<crate::properties::PropSymName>,
-         v_property: View<T>| {
-            for (id, door) in (&v_property).iter().with_id() {
-                let maybe_template_id = v_template_id.get(id);
-                let maybe_sym_name = v_symname.get(id);
-                println!("({id:?})[{maybe_template_id:?}|{maybe_sym_name:?}] prop: {door:?}")
-            }
-        },
-    );
 }
