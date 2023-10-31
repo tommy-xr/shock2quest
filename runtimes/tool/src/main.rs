@@ -32,7 +32,10 @@ use engine::scene::mesh;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
+use engine::texture::init_from_memory2;
+use engine::texture::TextureOptions;
 use engine::texture::TextureTrait;
+use engine::texture_format::RawTextureData;
 use num::ToPrimitive;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
@@ -154,7 +157,7 @@ pub fn main() {
     ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let file_name = &"../../Data/cutscenes/cs2.avi";
+    let file_name = &"../../Data/cutscenes/cs1.avi";
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
             for (k, v) in context.metadata().iter() {
@@ -201,6 +204,7 @@ pub fn main() {
                     if let Ok(video) = codec.decoder().video() {
                         println!("\tbit_rate: {}", video.bit_rate());
                         println!("\tmax_rate: {}", video.max_bit_rate());
+                        println!("\tframe_rate: {:?}", video.frame_rate());
                         println!("\tdelay: {}", video.delay());
                         println!("\tvideo.width: {}", video.width());
                         println!("\tvideo.height: {}", video.height());
@@ -235,7 +239,8 @@ pub fn main() {
 
             // Dump frames!
             // ffmpeg_test::dump_frames(file_name);
-            ffmpeg_test::play_audio(file_name, &mut audio_context);
+            //ffmpeg_test::play_audio(file_name, &mut audio_context);
+            //panic!();
         }
 
         Err(error) => println!("error: {}", error),
@@ -415,6 +420,41 @@ pub fn main() {
         pointer_obj.set_transform(Matrix4::from_translation(
             orig_camera_position + orig_camera_forward,
         ));
+
+        let width = 16;
+        let height = 16;
+
+        let mut bytes = vec![];
+
+        for y in 0..height {
+            for x in 0..width {
+                if x % 2 == 0 {
+                    bytes.push(255);
+                    bytes.push(0);
+                    bytes.push(0);
+                } else {
+                    bytes.push(0);
+                    bytes.push(255);
+                    bytes.push(0);
+                }
+            }
+        }
+
+        let texture_data = RawTextureData {
+            width,
+            height,
+            format: engine::texture_format::PixelFormat::RGB,
+            bytes,
+        };
+        let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
+            texture_data,
+            &TextureOptions { wrap: false },
+        ));
+
+        let camera_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
+        let mut cube_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
+        cube_obj.set_transform(Matrix4::from_scale(3.0));
+        scene.push(cube_obj);
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));

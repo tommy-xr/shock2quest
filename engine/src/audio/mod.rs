@@ -180,6 +180,7 @@ where
         position: Vector3<f32>,
         current_ambient_sounds: Vec<(TAmbientKey, Vector3<f32>, Rc<AudioClip>)>,
     ) {
+        println!("!!debug - audio update");
         self.update_background_music();
         self.update_environmental_sounds();
 

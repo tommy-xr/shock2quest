@@ -140,25 +140,25 @@ pub fn play_audio(
             }
         }
     }
-    let remapped_samples: Vec<i16> = decoded_audio_samples
-        .chunks(2)
-        .filter_map(|chunk| {
-            if chunk.len() == 2 {
-                Some((chunk[0] as i16) | ((chunk[1] as i16) << 8))
-            } else {
-                // Handle the case where there's an odd number of bytes, if necessary
-                None
-            }
-        })
-        .collect();
-    // let remapped_samples = decoded_audio_samples
-    //     .iter()
-    //     .map(|&x| (x as i16 - 128) * 256)
-    //     .collect::<Vec<_>>();
+    // let remapped_samples: Vec<i16> = decoded_audio_samples
+    //     .chunks(2)
+    //     .filter_map(|chunk| {
+    //         if chunk.len() == 2 {
+    //             Some((chunk[0] as i16) | ((chunk[1] as i16) << 8))
+    //         } else {
+    //             // Handle the case where there's an odd number of bytes, if necessary
+    //             None
+    //         }
+    //     })
+    //     .collect();
+    let remapped_samples = decoded_audio_samples
+        .iter()
+        .map(|&x| (x as i16 - 128) * 256)
+        .collect::<Vec<_>>();
     //panic!("source sample rate: {}", source_sample_rate);
     let sample_rate = remapped_samples.len() / (source_bit_rate / 8);
     // panic!("sample rate? {}", sample_rate);
-    let clip = AudioClip::from_raw(2, 44100 / 4, remapped_samples);
+    let clip = AudioClip::from_raw(2, 44100 / 2, remapped_samples);
     let handle = AudioHandle::new();
     audio::test_audio(context, handle, None, Rc::new(clip));
 
