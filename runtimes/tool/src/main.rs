@@ -159,7 +159,7 @@ pub fn main() {
     ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let file_name = &"../../Data/cutscenes/starport.avi";
+    let file_name = &"../../Data/cutscenes/cs2.avi";
     let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
@@ -243,7 +243,7 @@ pub fn main() {
             // Dump frames!
             // ffmpeg_test::dump_frames(file_name);
             //ffmpeg_test::play_audio(file_name, &mut audio_context);
-            //panic!();
+            // panic!();
         }
 
         Err(error) => println!("error: {}", error),
@@ -450,7 +450,7 @@ pub fn main() {
             bytes,
         };
 
-        video_player.advance_to_frame(frame as usize);
+        video_player.advance_by_time(time.elapsed);
         let texture_data = video_player.get_current_frame();
         let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
             texture_data,

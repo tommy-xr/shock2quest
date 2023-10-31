@@ -10,11 +10,16 @@ use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::rc::Rc;
+use std::time::Duration;
 
 pub struct VideoPlayer {
     width: u32,
     height: u32,
-    current_frame_index: usize,
+
+    current_time: Duration,
+
+    duration: Duration,
+    total_frame_count: i64,
 
     frames: Vec<RawTextureData>,
     decoder: ffmpeg::decoder::Video,
@@ -50,6 +55,13 @@ impl VideoPlayer {
             decoder.height(),
             Flags::BILINEAR,
         )?;
+
+        let duration =
+            Duration::from_secs_f64(input.duration() as f64 * f64::from(input.time_base()));
+        // let duration = Duration::from_secs_f64(
+        //     (input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)) * 1000000.0,
+        // );
+        let total_frame_count = input.frames();
 
         let mut frame_index = 0;
 
@@ -112,17 +124,29 @@ impl VideoPlayer {
             height: decoder.height(),
             decoder,
             scaler,
-            current_frame_index: 0,
+            current_time: Duration::from_secs_f64(0.0),
             frames,
+            total_frame_count,
+            duration,
         })
     }
 
-    pub fn advance_to_frame(&mut self, frame: usize) {
-        self.current_frame_index = frame;
+    pub fn advance_by_time(&mut self, time: Duration) {
+        println!("adding time: {:?}", time);
+        self.current_time += time;
+        println!("new self.current_time: {:?}", self.current_time);
     }
 
     pub fn get_current_frame(&self) -> RawTextureData {
-        let idx = self.current_frame_index.max(0).min(self.frames.len() - 1);
+        let ratio = self.current_time.as_secs_f64() / self.duration.as_secs_f64();
+
+        let current_frame = (ratio * self.total_frame_count as f64) as usize;
+
+        let idx = current_frame.max(0).min(self.frames.len() - 1);
+        println!(
+            "duration: {:?} ratio: {} current_frame: {} idx: {}",
+            self.duration, ratio, current_frame, idx
+        );
 
         return self.frames[idx].clone();
     }
