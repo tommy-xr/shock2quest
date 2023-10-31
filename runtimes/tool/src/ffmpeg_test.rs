@@ -1,6 +1,7 @@
 extern crate ffmpeg_next as ffmpeg;
 
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
+use engine::texture_format::{PixelFormat, RawTextureData};
 use ffmpeg::format::{input, Pixel};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context, flag::Flags};
@@ -9,6 +10,123 @@ use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::rc::Rc;
+
+pub struct VideoPlayer {
+    width: u32,
+    height: u32,
+    current_frame_index: usize,
+
+    frames: Vec<RawTextureData>,
+    decoder: ffmpeg::decoder::Video,
+    scaler: ffmpeg::software::scaling::Context,
+}
+
+impl VideoPlayer {
+    pub fn from_filename(filename: &str) -> Result<VideoPlayer, ffmpeg::Error> {
+        let maybe_ictx = input(&filename);
+
+        if maybe_ictx.is_err() {
+            let err = maybe_ictx.err().unwrap();
+            return Err(err);
+        }
+
+        let mut ictx = maybe_ictx.unwrap();
+        let input = ictx
+            .streams()
+            .best(Type::Video)
+            .ok_or(ffmpeg::Error::StreamNotFound)?;
+        let video_stream_index = input.index();
+
+        let context_decoder =
+            ffmpeg::codec::context::Context::from_parameters(input.parameters()).unwrap();
+        let mut decoder = context_decoder.decoder().video().unwrap();
+
+        let mut scaler = Context::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            Pixel::RGB24,
+            decoder.width(),
+            decoder.height(),
+            Flags::BILINEAR,
+        )?;
+
+        let mut frame_index = 0;
+
+        let mut frames = Vec::new();
+
+        let mut receive_and_process_decoded_frames =
+            |decoder: &mut ffmpeg::decoder::Video| -> Result<(), ffmpeg::Error> {
+                let mut fail_count = 0;
+                let mut decoded = Video::empty();
+                // loop {
+                //     match decoder.receive_frame(&mut decoded) {
+                //         Ok(_) => {
+                //             println!("---receiving frame...");
+                //             let mut rgb_frame = Video::empty();
+                //             scaler.run(&decoded, &mut rgb_frame).unwrap();
+                //             save_file(&rgb_frame, frame_index).unwrap();
+                //             frame_index += 1;
+                //         }
+                //         Err(e) => {
+                //             // Handle other errors as needed
+                //             println!("received error: {:?}", e);
+                //             break;
+                //         }
+                //     }
+                // }
+                while decoder.receive_frame(&mut decoded).is_ok() {
+                    println!("---receiving frame...");
+                    let mut rgb_frame = Video::empty();
+                    scaler.run(&decoded, &mut rgb_frame).unwrap();
+                    frames.push(RawTextureData {
+                        bytes: rgb_frame.data(0).to_vec(),
+                        width: rgb_frame.width(),
+                        height: rgb_frame.height(),
+                        format: PixelFormat::RGB,
+                    });
+                    frame_index += 1;
+                }
+                Ok(())
+            };
+
+        for (stream, packet) in ictx.packets() {
+            println!(
+                "-- receiving packet: {} | {:?}",
+                stream.index(),
+                packet.pts()
+            );
+            if stream.index() == video_stream_index {
+                println!("--- got video packet...");
+                match decoder.send_packet(&packet) {
+                    Ok(()) => receive_and_process_decoded_frames(&mut decoder).unwrap(),
+                    Err(err) => println!("received err in send_packet: {:?}", err),
+                }
+            }
+        }
+        decoder.send_eof()?;
+        receive_and_process_decoded_frames(&mut decoder)?;
+
+        Ok(VideoPlayer {
+            width: decoder.width(),
+            height: decoder.height(),
+            decoder,
+            scaler,
+            current_frame_index: 0,
+            frames,
+        })
+    }
+
+    pub fn advance_to_frame(&mut self, frame: usize) {
+        self.current_frame_index = frame;
+    }
+
+    pub fn get_current_frame(&self) -> RawTextureData {
+        let idx = self.current_frame_index.max(0).min(self.frames.len() - 1);
+
+        return self.frames[idx].clone();
+    }
+}
 
 pub fn dump_frames(filename: &str) -> Result<(), ffmpeg::Error> {
     ffmpeg::init().unwrap();

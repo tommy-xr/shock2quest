@@ -1,4 +1,6 @@
 extern crate glfw;
+use crate::ffmpeg_test::VideoPlayer;
+
 use self::glfw::{Action, Context, Key};
 
 mod ffmpeg_test;
@@ -157,7 +159,8 @@ pub fn main() {
     ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let file_name = &"../../Data/cutscenes/cs1.avi";
+    let file_name = &"../../Data/cutscenes/starport.avi";
+    let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
             for (k, v) in context.metadata().iter() {
@@ -446,13 +449,16 @@ pub fn main() {
             format: engine::texture_format::PixelFormat::RGB,
             bytes,
         };
+
+        video_player.advance_to_frame(frame as usize);
+        let texture_data = video_player.get_current_frame();
         let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
             texture_data,
             &TextureOptions { wrap: false },
         ));
 
-        let camera_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
-        let mut cube_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
+        let cube_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
+        let mut cube_obj = SceneObject::new(cube_mat, Box::new(engine::scene::cube::create()));
         cube_obj.set_transform(Matrix4::from_scale(3.0));
         scene.push(cube_obj);
 
