@@ -159,7 +159,7 @@ pub fn main() {
     ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let file_name = &"../../Data/cutscenes/cs2.avi";
+    let file_name = &"../../Data/cutscenes/cs3.avi";
     let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
@@ -242,8 +242,8 @@ pub fn main() {
 
             // Dump frames!
             // ffmpeg_test::dump_frames(file_name);
-            //ffmpeg_test::play_audio(file_name, &mut audio_context);
-            // panic!();
+            ffmpeg_test::play_audio(file_name, &mut audio_context);
+            //panic!();
         }
 
         Err(error) => println!("error: {}", error),

@@ -6,11 +6,14 @@ use ffmpeg::format::{input, Pixel};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context, flag::Flags};
 use ffmpeg::util::frame::video::Video;
+use ffmpeg::ChannelLayout;
 use std::env;
 use std::fs::File;
-use std::io::prelude::*;
+use std::io::{prelude::*, BufReader};
 use std::rc::Rc;
 use std::time::Duration;
+
+use crate::resource_path;
 
 pub struct VideoPlayer {
     width: u32,
@@ -140,7 +143,7 @@ impl VideoPlayer {
     pub fn get_current_frame(&self) -> RawTextureData {
         let ratio = self.current_time.as_secs_f64() / self.duration.as_secs_f64();
 
-        let current_frame = (ratio * self.total_frame_count as f64) as usize;
+        let current_frame = (ratio * self.frames.len() as f64) as usize;
 
         let idx = current_frame.max(0).min(self.frames.len() - 1);
         println!(
@@ -246,28 +249,35 @@ pub fn play_audio(
     let context_decoder = ffmpeg::codec::context::Context::from_parameters(input.parameters())?;
     let mut audio_decoder = context_decoder.decoder().audio()?;
 
-    let source_channel_layout = audio_decoder.channel_layout();
+    // panic!(
+    //     "decoder id: {:?} decoder rate: {:?} decoder channels: {:?} channel layout: {:?}",
+    //     audio_decoder.id(),
+    //     audio_decoder.rate(),
+    //     audio_decoder.channels(),
+    //     audio_decoder.channel_layout(),
+    // );
+
+    let source_channel_layout = ChannelLayout::STEREO;
     // let source_sample_rate = audio_decoder.rate();
-    let source_bit_rate = audio_decoder.bit_rate();
     let source_sample_rate = audio_decoder.rate();
     let source_sample_fmt = audio_decoder.format();
 
-    let mono_channel_layout = ffmpeg::util::channel_layout::ChannelLayout::MONO;
     // Target audio parameters
-    let target_channel_layout = ffmpeg::util::channel_layout::ChannelLayout::STEREO;
+    let target_channel_layout = ffmpeg::util::channel_layout::ChannelLayout::MONO;
+    let target_channel_count = 1;
     let target_sample_rate = 44100; // For example, 44.1 kHz
     let target_sample_fmt = ffmpeg_next::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
 
     // Set up the resampler
-    // let mut swr = ffmpeg::software::resampler(
-    //     (source_sample_fmt, source_channel_layout, source_sample_rate),
-    //     (source_sample_fmt, target_channel_layout, source_sample_rate),
-    //     //(target_sample_fmt, target_channel_layout, target_sample_rate),
-    // )
-    // .unwrap();
+    let mut swr = ffmpeg::software::resampler(
+        (source_sample_fmt, source_channel_layout, source_sample_rate),
+        (target_sample_fmt, target_channel_layout, target_sample_rate),
+        //(target_sample_fmt, target_channel_layout, target_sample_rate),
+    )
+    .unwrap();
 
     // 5. Decode audio packets
-    let mut decoded_audio_samples: Vec<u8> = Vec::new();
+    let mut decoded_audio_samples: Vec<i16> = Vec::new();
 
     for (stream, packet) in ictx.packets() {
         if stream.index() == audio_stream_index {
@@ -276,8 +286,11 @@ pub fn play_audio(
 
             while audio_decoder.receive_frame(&mut audio_frame).is_ok() {
                 let mut decoded_audio_frame = ffmpeg_next::util::frame::audio::Audio::empty();
-                //let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
-                let data = audio_frame.data(0);
+                audio_frame.set_channel_layout(source_channel_layout);
+                let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
+
+                let plane_count = decoded_audio_frame.planes();
+                let data: &[i16] = decoded_audio_frame.plane(0);
                 decoded_audio_samples.extend_from_slice(&data);
             }
         }
@@ -293,14 +306,25 @@ pub fn play_audio(
     //         }
     //     })
     //     .collect();
-    let remapped_samples = decoded_audio_samples
-        .iter()
-        .map(|&x| (x as i16 - 128) * 256)
-        .collect::<Vec<_>>();
-    //panic!("source sample rate: {}", source_sample_rate);
-    let sample_rate = remapped_samples.len() / (source_bit_rate / 8);
-    // panic!("sample rate? {}", sample_rate);
-    let clip = AudioClip::from_raw(2, 44100 / 2, remapped_samples);
+
+    // Alternate for u8
+    // let remapped_samples = decoded_audio_samples
+    //     .iter()
+    //     .map(|&x| (x as i16 - 128) * 256)
+    //     .collect::<Vec<_>>();
+
+    let remapped_samples = decoded_audio_samples;
+
+    let extracted_wav_file = File::open(resource_path("cutscenes/test.wav")).unwrap();
+    let mut extracted_wav_reader = BufReader::new(extracted_wav_file);
+    let mut extracted_wav_bytes = vec![];
+    let _ = extracted_wav_reader
+        .read_to_end(&mut extracted_wav_bytes)
+        .unwrap();
+
+    let clip = AudioClip::from_raw(target_channel_count, target_sample_rate, remapped_samples);
+
+    //let clip = AudioClip::from_bytes(extracted_wav_bytes);
     let handle = AudioHandle::new();
     audio::test_audio(context, handle, None, Rc::new(clip));
 
