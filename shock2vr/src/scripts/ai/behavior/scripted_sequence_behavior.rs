@@ -203,11 +203,11 @@ impl ScriptedAction for PlayAnimationScriptedAction {
     }
     fn animation(self: &PlayAnimationScriptedAction) -> Vec<MotionQueryItem> {
         if self.animation_name.find(",").is_some() {
-            return vec![
-                MotionQueryItem::new("grunt"),
-                MotionQueryItem::new("shotgun"),
-                MotionQueryItem::new("rangedcombat"),
-            ];
+            return self
+                .animation_name
+                .split(",")
+                .map(|s| MotionQueryItem::new(s.to_ascii_lowercase().trim()))
+                .collect::<Vec<MotionQueryItem>>();
         }
 
         if let Some(index) = self.animation_name.find(' ') {
