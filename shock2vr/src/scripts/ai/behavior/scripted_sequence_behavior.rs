@@ -193,7 +193,18 @@ impl PlayAnimationScriptedAction {
 }
 
 impl ScriptedAction for PlayAnimationScriptedAction {
+    fn turn_speed(&self) -> Deg<f32> {
+        Deg(0.0)
+    }
     fn animation(self: &PlayAnimationScriptedAction) -> Vec<MotionQueryItem> {
+        if self.animation_name.find(",").is_some() {
+            return self
+                .animation_name
+                .split(",")
+                .map(|s| MotionQueryItem::new(s.to_ascii_lowercase().trim()))
+                .collect::<Vec<MotionQueryItem>>();
+        }
+
         if let Some(index) = self.animation_name.find(' ') {
             let (motion, value_str) = self.animation_name.split_at(index);
             if let Ok(value) = value_str.trim().parse::<i32>() {

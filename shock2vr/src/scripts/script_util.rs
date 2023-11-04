@@ -38,13 +38,15 @@ pub fn get_all_links_with_template<TData>(
     linked_entities
 }
 
-pub fn get_first_link_with_template_and_data<TData: Copy>(
+pub fn get_first_link_with_template_and_data<TData: Clone>(
     world: &World,
     producing_entity_id: EntityId,
     filter_fn: fn(&Link) -> Option<TData>,
 ) -> Option<(i32, TData)> {
     let all_links = get_all_links_with_template(world, producing_entity_id, filter_fn);
-    all_links.get(0).copied()
+    all_links
+        .get(0)
+        .map(|(template_id, data)| (*template_id, data.clone()))
 }
 
 pub fn for_each_link(

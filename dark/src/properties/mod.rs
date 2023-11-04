@@ -437,7 +437,9 @@ impl FlinderizeOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AIWatchOptions {
-    scripted_actions: Vec<AIScriptedAction>,
+    pub radius: f32,
+    pub height: f32,
+    pub scripted_actions: Vec<AIScriptedAction>,
 }
 
 impl AIWatchOptions {
@@ -456,8 +458,8 @@ impl AIWatchOptions {
         let _min_alertness = read_u32(reader);
         let _max_alertness = read_u32(reader);
         let _ai_priority = read_u32(reader);
-        let _radius = read_i32(reader);
-        let _height = read_i32(reader);
+        let radius = read_i32(reader) as f32 / SCALE_FACTOR;
+        let height = read_i32(reader) as f32 / SCALE_FACTOR;
 
         let mut scripted_actions = Vec::new();
         for _ in 0..8 {
@@ -465,7 +467,11 @@ impl AIWatchOptions {
             scripted_actions.push(action);
         }
 
-        AIWatchOptions { scripted_actions }
+        AIWatchOptions {
+            radius,
+            height,
+            scripted_actions,
+        }
     }
 }
 

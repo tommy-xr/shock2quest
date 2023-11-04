@@ -347,9 +347,21 @@ fn parse_mission(mission: &str) -> (String, SpawnLocation) {
     let mission = parts[0];
     let maybe_spawn_location = parts[1];
 
-    let spawn_location = match parts[1].parse::<i32>() {
-        Ok(num) => SpawnLocation::Marker(num),
-        Err(_) => SpawnLocation::MapDefault,
+    let spawn_location = if parts[1].contains(",") {
+        let vec_parts: Vec<&str> = parts[1].split(',').collect();
+        if vec_parts.len() != 3 {
+            panic!("Unable to parse position: {}", parts[1]);
+        }
+
+        let x = vec_parts[0].parse::<f32>().unwrap();
+        let y = vec_parts[1].parse::<f32>().unwrap();
+        let z = vec_parts[2].parse::<f32>().unwrap();
+        SpawnLocation::PositionRotation(vec3(x, y, z), Quaternion::<f32>::new(1.0, 0.0, 0.0, 0.0))
+    } else {
+        match parts[1].parse::<i32>() {
+            Ok(num) => SpawnLocation::Marker(num),
+            Err(_) => SpawnLocation::MapDefault,
+        }
     };
 
     return (mission.to_owned(), spawn_location);
