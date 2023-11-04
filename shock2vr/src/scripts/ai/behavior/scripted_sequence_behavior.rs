@@ -37,8 +37,6 @@ impl ScriptedSequenceBehavior {
         let current_behavior = get_behavior_from_action(world, &actions[0]);
         let initial_effect = current_behavior.borrow().initial_effect();
 
-        println!("!!debug - starting sequence: {:?}", actions);
-
         ScriptedSequenceBehavior {
             actions,
             queued_effects: vec![initial_effect],
@@ -135,10 +133,7 @@ fn get_behavior_from_action(
         AIScriptedActionType::Goto {
             waypoint_name,
             speed: _, // TODO: Incorporate speed
-        } => {
-            println!("!!debug - going to waypoint: {:?}", waypoint_name);
-            Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name)))
-        }
+        } => Box::new(RefCell::new(GotoScriptedAction::new(world, &waypoint_name))),
 
         AIScriptedActionType::Wait(duration) => {
             Box::new(RefCell::new(WaitScriptedAction::new(*duration)))
