@@ -1,14 +1,15 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::HashSet};
 
-use cgmath::{vec3, vec4, Deg, Quaternion, Rotation3};
+use cgmath::{vec3, vec4, Deg, MetricSpace, Quaternion, Rotation3};
 use dark::{
     motion::{MotionFlags, MotionQueryItem},
-    properties::{Link, PropAISignalResponse},
+    properties::{Link, PropAISignalResponse, PropPosition},
     SCALE_FACTOR,
 };
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
+    mission::PlayerInfo,
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::script_util,
     time::Time,
@@ -27,6 +28,8 @@ pub struct AnimatedMonsterAI {
     is_dead: bool,
     took_damage: bool,
     animation_seq: u32,
+
+    played_ai_watch_obj: HashSet<EntityId>,
 }
 
 impl AnimatedMonsterAI {
@@ -36,10 +39,12 @@ impl AnimatedMonsterAI {
             took_damage: false,
             //current_behavior: Box::new(RefCell::new(MeleeAttackBehavior)),
             //current_behavior: Box::new(RefCell::new(ChaseBehavior::new())),
-            current_behavior: Box::new(RefCell::new(NoopBehavior {})),
+            current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
             animation_seq: 0,
             last_hit_sensor: None,
+
+            played_ai_watch_obj: HashSet::new(),
         }
     }
     pub fn new() -> AnimatedMonsterAI {
@@ -52,6 +57,7 @@ impl AnimatedMonsterAI {
             current_heading: Deg(0.0),
             animation_seq: 0,
             last_hit_sensor: None,
+            played_ai_watch_obj: HashSet::new(),
         }
     }
 
@@ -187,6 +193,36 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        // Check our AIWatchObj status
+        let ai_signal_resp =
+            script_util::get_all_links_with_data(world, entity_id, |link| match link {
+                Link::AIWatchObj(data) => Some(data.clone()),
+                _ => None,
+            });
+
+        for (entity_id, watch_options) in ai_signal_resp {
+            if self.played_ai_watch_obj.contains(&entity_id) {
+                continue;
+            }
+
+            if player_is_within_watch_obj(world, entity_id, watch_options.radius) {
+                // Immediately switch to Scripted sequence Behavior
+                self.played_ai_watch_obj.insert(entity_id);
+                self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
+                    world,
+                    watch_options.scripted_actions.clone(),
+                )));
+                self.animation_seq += 1;
+                return Effect::QueueAnimationBySchema {
+                    entity_id,
+                    motion_query_items: self.current_behavior.borrow().animation(),
+                    selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
+                        self.animation_seq,
+                    ),
+                };
+            }
+        }
+
         // Temporary steering behavior
         let (steering_output, steering_effects) = self
             .current_behavior
@@ -277,28 +313,7 @@ impl Script for AnimatedMonsterAI {
                 }
             }
             MessagePayload::AnimationCompleted => {
-                let maybe_ai_signal_resp =
-                    script_util::get_first_link_with_template_and_data(world, entity_id, |link| {
-                        match link {
-                            Link::AIWatchObj(data) => Some(data.clone()),
-                            _ => None,
-                        }
-                    });
-                if maybe_ai_signal_resp.is_some() && self.animation_seq == 0 {
-                    let ((_watch_entity, watch_params)) = maybe_ai_signal_resp.unwrap();
-                    self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
-                        world,
-                        watch_params.scripted_actions.clone(),
-                    )));
-                    self.animation_seq += 1;
-                    Effect::QueueAnimationBySchema {
-                        entity_id,
-                        motion_query_items: self.current_behavior.borrow().animation(),
-                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
-                            self.animation_seq,
-                        ),
-                    }
-                } else if self.is_dead {
+                if self.is_dead {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
@@ -395,4 +410,15 @@ impl Script for AnimatedMonsterAI {
             _ => Effect::NoEffect,
         }
     }
+}
+
+fn player_is_within_watch_obj(world: &World, entity_id: EntityId, radius: f32) -> bool {
+    let u_player = world.borrow::<shipyard::UniqueView<PlayerInfo>>().unwrap();
+    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+
+    if let Ok(ent_pos) = v_current_pos.get(entity_id) {
+        return ent_pos.position.distance(u_player.pos) <= radius;
+    }
+
+    false
 }
