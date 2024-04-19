@@ -915,6 +915,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_ffmpeg"
+version = "0.0.1"
+dependencies = [
+ "byteorder",
+ "cgmath",
+ "engine",
+ "ffmpeg-next",
+]
+
+[[package]]
 name = "env_logger"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2680,6 +2690,7 @@ dependencies = [
  "cgmath",
  "dark",
  "engine",
+ "engine_ffmpeg",
  "ffmpeg-next",
  "gl",
  "glfw",

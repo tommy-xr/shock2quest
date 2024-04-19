@@ -9,6 +9,7 @@ edition = "2021"
 gl = "0.14.0"
 glfw = "0.45.0"
 engine = { path = "../../engine" }
+engine_ffmpeg = { path = "../../engine_ffmpeg" }
 dark = { path = "../../dark" }
 shock2vr = { path = "../../shock2vr" }
 cgmath = "0.18.0"
