@@ -1,25 +1,13 @@
 extern crate ffmpeg_next as ffmpeg;
 
-use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
-use engine::texture_format::{PixelFormat, RawTextureData};
-use ffmpeg::format::{input, Pixel};
+use engine::audio::AudioClip;
 use ffmpeg::media::Type;
-use ffmpeg::software::scaling::{context::Context, flag::Flags};
-use ffmpeg::util::frame::video::Video;
 use ffmpeg::ChannelLayout;
-use std::env;
-use std::fs::File;
-use std::io::{prelude::*, BufReader};
-use std::rc::Rc;
-use std::time::Duration;
 
-struct AudioPlayer;
+pub struct AudioPlayer;
 
 impl AudioPlayer {
-    pub fn from_filename(
-        filename: &str,
-        audio_context: &AudioContext,
-    ) -> Result<AudioClip, ffmpeg::Error> {
+    pub fn from_filename(filename: &str) -> Result<AudioClip, ffmpeg::Error> {
         // 2. Open the media file
         let mut ictx = ffmpeg_next::format::input(&filename).unwrap();
 
@@ -100,13 +88,7 @@ impl AudioPlayer {
 
         let remapped_samples = decoded_audio_samples;
 
-        let extracted_wav_file = File::open(resource_path("cutscenes/test.wav")).unwrap();
-        let mut extracted_wav_reader = BufReader::new(extracted_wav_file);
-        let mut extracted_wav_bytes = vec![];
-        let _ = extracted_wav_reader
-            .read_to_end(&mut extracted_wav_bytes)
-            .unwrap();
-
         let clip = AudioClip::from_raw(target_channel_count, target_sample_rate, remapped_samples);
+        Ok(clip)
     }
 }

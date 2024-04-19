@@ -1,21 +1,3 @@
-extern crate ffmpeg_next as ffmpeg;
-
-use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
-use engine::texture_format::{PixelFormat, RawTextureData};
-use engine_ffmpeg::AudioPlayer;
-use ffmpeg::format::{input, Pixel};
-use ffmpeg::media::Type;
-use ffmpeg::software::scaling::{context::Context, flag::Flags};
-use ffmpeg::util::frame::video::Video;
-use ffmpeg::ChannelLayout;
-use std::env;
-use std::fs::File;
-use std::io::{prelude::*, BufReader};
-use std::rc::Rc;
-use std::time::Duration;
-
-use crate::resource_path;
-
 // pub fn dump_frames(filename: &str) -> Result<(), ffmpeg::Error> {
 //     ffmpeg::init().unwrap();
 
@@ -93,15 +75,10 @@ use crate::resource_path;
 //     Ok(())
 // }
 
-pub fn play_audio(
-    filename: &str,
-    context: &mut AudioContext<(), String>,
-) -> Result<(), std::io::Error> {
-    let clip = AudioPlayer::from_filename(filename).unwrap();
-
-    //let clip = AudioClip::from_bytes(extracted_wav_bytes);
-    let handle = AudioHandle::new();
-    audio::test_audio(context, handle, None, Rc::new(clip));
-
-    Ok(())
-}
+// Code snippets that may be useful in the future for debugging
+// fn save_file(frame: &Video, index: usize) -> std::result::Result<(), std::io::Error> {
+//     let mut file = File::create(format!("frame{}.ppm", index))?;
+//     file.write_all(format!("P6\n{} {}\n255\n", frame.width(), frame.height()).as_bytes())?;
+//     file.write_all(frame.data(0))?;
+//     Ok(())
+// }

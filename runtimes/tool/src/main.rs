@@ -159,7 +159,7 @@ pub fn main() {
     ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let file_name = &"../../Data/cutscenes/cs3.avi";
+    let file_name = &"../../Data/cutscenes/cs2.avi";
     let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
