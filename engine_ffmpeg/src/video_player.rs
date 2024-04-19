@@ -1,19 +1,11 @@
 extern crate ffmpeg_next as ffmpeg;
 
-use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
 use engine::texture_format::{PixelFormat, RawTextureData};
 use ffmpeg::format::{input, Pixel};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context, flag::Flags};
 use ffmpeg::util::frame::video::Video;
-use ffmpeg::ChannelLayout;
-use std::env;
-use std::fs::File;
-use std::io::{prelude::*, BufReader};
-use std::rc::Rc;
 use std::time::Duration;
-
-use crate::resource_path;
 
 pub struct VideoPlayer {
     width: u32,
@@ -61,9 +53,6 @@ impl VideoPlayer {
 
         let duration =
             Duration::from_secs_f64(input.duration() as f64 * f64::from(input.time_base()));
-        // let duration = Duration::from_secs_f64(
-        //     (input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE)) * 1000000.0,
-        // );
         let total_frame_count = input.frames();
 
         let mut frame_index = 0;
@@ -72,26 +61,8 @@ impl VideoPlayer {
 
         let mut receive_and_process_decoded_frames =
             |decoder: &mut ffmpeg::decoder::Video| -> Result<(), ffmpeg::Error> {
-                let mut fail_count = 0;
                 let mut decoded = Video::empty();
-                // loop {
-                //     match decoder.receive_frame(&mut decoded) {
-                //         Ok(_) => {
-                //             println!("---receiving frame...");
-                //             let mut rgb_frame = Video::empty();
-                //             scaler.run(&decoded, &mut rgb_frame).unwrap();
-                //             save_file(&rgb_frame, frame_index).unwrap();
-                //             frame_index += 1;
-                //         }
-                //         Err(e) => {
-                //             // Handle other errors as needed
-                //             println!("received error: {:?}", e);
-                //             break;
-                //         }
-                //     }
-                // }
                 while decoder.receive_frame(&mut decoded).is_ok() {
-                    println!("---receiving frame...");
                     let mut rgb_frame = Video::empty();
                     scaler.run(&decoded, &mut rgb_frame).unwrap();
                     frames.push(RawTextureData {
@@ -106,13 +77,7 @@ impl VideoPlayer {
             };
 
         for (stream, packet) in ictx.packets() {
-            println!(
-                "-- receiving packet: {} | {:?}",
-                stream.index(),
-                packet.pts()
-            );
             if stream.index() == video_stream_index {
-                println!("--- got video packet...");
                 match decoder.send_packet(&packet) {
                     Ok(()) => receive_and_process_decoded_frames(&mut decoder).unwrap(),
                     Err(err) => println!("received err in send_packet: {:?}", err),
@@ -135,9 +100,7 @@ impl VideoPlayer {
     }
 
     pub fn advance_by_time(&mut self, time: Duration) {
-        println!("adding time: {:?}", time);
         self.current_time += time;
-        println!("new self.current_time: {:?}", self.current_time);
     }
 
     pub fn get_current_frame(&self) -> RawTextureData {
@@ -146,10 +109,6 @@ impl VideoPlayer {
         let current_frame = (ratio * self.frames.len() as f64) as usize;
 
         let idx = current_frame.max(0).min(self.frames.len() - 1);
-        println!(
-            "duration: {:?} ratio: {} current_frame: {} idx: {}",
-            self.duration, ratio, current_frame, idx
-        );
 
         return self.frames[idx].clone();
     }

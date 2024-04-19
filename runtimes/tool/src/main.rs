@@ -1,5 +1,5 @@
 extern crate glfw;
-use crate::ffmpeg_test::VideoPlayer;
+use engine_ffmpeg::VideoPlayer;
 
 use self::glfw::{Action, Context, Key};
 
