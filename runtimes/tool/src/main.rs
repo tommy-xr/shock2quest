@@ -2,13 +2,14 @@ extern crate glfw;
 use engine_ffmpeg::VideoPlayer;
 
 use self::glfw::{Action, Context, Key};
+use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
 
-mod ffmpeg_test;
 use cgmath::point3;
 use cgmath::Decomposed;
 use cgmath::Deg;
 use cgmath::Matrix4;
 use cgmath::Rad;
+use engine_ffmpeg::AudioPlayer;
 
 use cgmath::vec4;
 use dark::font;
@@ -28,7 +29,6 @@ use dark::ss2_skeleton;
 use dark::ss2_skeleton::Skeleton;
 use engine::assets::asset_cache::AssetCache;
 use engine::assets::asset_paths::AssetPath;
-use engine::audio::AudioContext;
 use engine::importers::FBX_IMPORTER;
 use engine::scene::mesh;
 use engine::scene::Scene;
@@ -242,7 +242,11 @@ pub fn main() {
 
             // Dump frames!
             // ffmpeg_test::dump_frames(file_name);
-            ffmpeg_test::play_audio(file_name, &mut audio_context);
+            let clip = AudioPlayer::from_filename(file_name).unwrap();
+
+            //let clip = AudioClip::from_bytes(extracted_wav_bytes);
+            let handle = AudioHandle::new();
+            audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
             //panic!();
         }
 
