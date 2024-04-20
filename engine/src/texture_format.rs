@@ -6,6 +6,7 @@ pub enum PixelFormat {
     RGBA,
 }
 
+#[derive(Clone)]
 pub struct RawTextureData {
     pub bytes: std::vec::Vec<u8>,
     pub width: u32,

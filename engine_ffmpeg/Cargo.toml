@@ -1,0 +1,14 @@
+[package]
+name = "engine_ffmpeg"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+name = "engine_ffmpeg"
+path = "src/lib.rs"
+
+[dependencies]
+engine = { path = "../engine" }
+cgmath = "0.18.0"
+byteorder = "1.4.3"
+ffmpeg-next = "6.0.0"
