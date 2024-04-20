@@ -1,11 +1,15 @@
 extern crate glfw;
+use engine_ffmpeg::VideoPlayer;
+
 use self::glfw::{Action, Context, Key};
+use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
 
 use cgmath::point3;
 use cgmath::Decomposed;
 use cgmath::Deg;
 use cgmath::Matrix4;
 use cgmath::Rad;
+use engine_ffmpeg::AudioPlayer;
 
 use cgmath::vec4;
 use dark::font;
@@ -30,7 +34,10 @@ use engine::scene::mesh;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
+use engine::texture::init_from_memory2;
+use engine::texture::TextureOptions;
 use engine::texture::TextureTrait;
+use engine::texture_format::RawTextureData;
 use num::ToPrimitive;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
@@ -51,6 +58,7 @@ use shock2vr::time::Time;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
+use std::io::Write;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -140,11 +148,25 @@ fn f32_from_bool(v: bool) -> f32 {
         0.0
     }
 }
-
+extern crate ffmpeg_next as ffmpeg;
+use ffmpeg::format::{input, Pixel};
+use ffmpeg::media::Type;
+use ffmpeg::util::frame::video::Video;
 pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
+    ffmpeg::init().unwrap();
+    let mut audio_context: AudioContext<(), String> = AudioContext::new();
+
+    let file_name = &"../../Data/cutscenes/cs2.avi";
+    let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
+
+    let clip = AudioPlayer::from_filename(file_name).unwrap();
+    let handle = AudioHandle::new();
+    audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
+
+    // panic!();
     tracing_subscriber::fmt::init();
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
     // TODO: Figure out ANGLE
@@ -156,6 +178,8 @@ pub fn main() {
     #[cfg(target_os = "macos")]
     glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
 
+    // println!("RES: {:?}", res);
+    // res.unwrap();
     // glfw window creation
     // --------------------
     let (mut window, events) = glfw
@@ -317,6 +341,44 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
+        let width = 16;
+        let height = 16;
+
+        let mut bytes = vec![];
+
+        for y in 0..height {
+            for x in 0..width {
+                if x % 2 == 0 {
+                    bytes.push(255);
+                    bytes.push(0);
+                    bytes.push(0);
+                } else {
+                    bytes.push(0);
+                    bytes.push(255);
+                    bytes.push(0);
+                }
+            }
+        }
+
+        let texture_data = RawTextureData {
+            width,
+            height,
+            format: engine::texture_format::PixelFormat::RGB,
+            bytes,
+        };
+
+        video_player.advance_by_time(time.elapsed);
+        let texture_data = video_player.get_current_frame();
+        let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
+            texture_data,
+            &TextureOptions { wrap: false },
+        ));
+
+        let cube_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
+        let mut cube_obj = SceneObject::new(cube_mat, Box::new(engine::scene::cube::create()));
+        cube_obj.set_transform(Matrix4::from_scale(3.0));
+        scene.push(cube_obj);
+
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
         camera_obj.set_transform(Matrix4::from_translation(orig_camera_position));
@@ -437,3 +499,9 @@ fn process_events(
 
 //     AnimationClip::create(&motion, &motion_info, mps_motion)
 // }
+fn save_file(frame: &Video, index: usize) -> std::result::Result<(), std::io::Error> {
+    let mut file = File::create(format!("frame{}.ppm", index))?;
+    file.write_all(format!("P6\n{} {}\n255\n", frame.width(), frame.height()).as_bytes())?;
+    file.write_all(frame.data(0))?;
+    Ok(())
+}
