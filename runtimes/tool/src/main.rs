@@ -150,9 +150,6 @@ fn f32_from_bool(v: bool) -> f32 {
     }
 }
 extern crate ffmpeg_next as ffmpeg;
-use ffmpeg::format::{input, Pixel};
-use ffmpeg::media::Type;
-use ffmpeg::util::frame::video::Video;
 pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
@@ -342,32 +339,6 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
-        let width = 16;
-        let height = 16;
-
-        let mut bytes = vec![];
-
-        for y in 0..height {
-            for x in 0..width {
-                if x % 2 == 0 {
-                    bytes.push(255);
-                    bytes.push(0);
-                    bytes.push(0);
-                } else {
-                    bytes.push(0);
-                    bytes.push(255);
-                    bytes.push(0);
-                }
-            }
-        }
-
-        let texture_data = RawTextureData {
-            width,
-            height,
-            format: engine::texture_format::PixelFormat::RGB,
-            bytes,
-        };
-
         video_player.advance_by_time(time.elapsed);
         let texture_data = video_player.get_current_frame();
         let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
@@ -500,9 +471,3 @@ fn process_events(
 
 //     AnimationClip::create(&motion, &motion_info, mps_motion)
 // }
-fn save_file(frame: &Video, index: usize) -> std::result::Result<(), std::io::Error> {
-    let mut file = File::create(format!("frame{}.ppm", index))?;
-    file.write_all(format!("P6\n{} {}\n255\n", frame.width(), frame.height()).as_bytes())?;
-    file.write_all(frame.data(0))?;
-    Ok(())
-}
