@@ -2587,6 +2587,7 @@ dependencies = [
  "collision",
  "dark",
  "engine",
+ "engine_ffmpeg",
  "fbxcel-dom",
  "num",
  "num-derive",
