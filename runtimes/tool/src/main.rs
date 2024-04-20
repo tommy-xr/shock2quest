@@ -161,6 +161,11 @@ pub fn main() {
 
     let file_name = &"../../Data/cutscenes/cs2.avi";
     let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
+    let clip = AudioPlayer::from_filename(file_name).unwrap();
+
+    //let clip = AudioClip::from_bytes(extracted_wav_bytes);
+    let handle = AudioHandle::new();
+    audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
     match ffmpeg::format::input(file_name) {
         Ok(context) => {
             for (k, v) in context.metadata().iter() {
@@ -242,11 +247,6 @@ pub fn main() {
 
             // Dump frames!
             // ffmpeg_test::dump_frames(file_name);
-            let clip = AudioPlayer::from_filename(file_name).unwrap();
-
-            //let clip = AudioClip::from_bytes(extracted_wav_bytes);
-            let handle = AudioHandle::new();
-            audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
             //panic!();
         }
 
