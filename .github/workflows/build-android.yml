@@ -39,13 +39,21 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
+      - uses: android-actions/setup-android@v2
+      - run: sdkmanager "build-tools;33.0.0"
+      - run: sdkmanager "platforms;android-26"
+      - run: sdkmanager "platform-tools"
+      - run: sdkmanager "ndk;24.0.8215888"
+
       # Set up Android SDK
-      - name: Check Android Home Location
+      - name: Check Android SDK location
         run: echo $ANDROID_HOME
-      - name: Set up Android SDK
-        run: $ANDROID_HOME/tools/bin/sdkmanager "build-tools;33.0.0" "platforms;android-26" "platform-tools" "ndk;24.0.8215888"
-      - name: Update Android SDK
-        run: $ANDROID_HOME/tools/bin/sdkmanager --update
+      - name: Check sdkmanager location
+        run: which sdkmanager
+      # - name: Set up Android SDK
+      #   run: $ANDROID_HOME/tools/bin/sdkmanager "build-tools;33.0.0" "platforms;android-26" "platform-tools" "ndk;24.0.8215888"
+      # - name: Update Android SDK
+      #   run: $ANDROID_HOME/tools/bin/sdkmanager --update
 
       # Set up Rust build tools for Android
       - name: Install Cargo APK
