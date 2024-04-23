@@ -2688,7 +2688,6 @@ dependencies = [
  "dark",
  "engine",
  "engine_ffmpeg",
- "ffmpeg-next",
  "gl",
  "glfw",
  "image",
