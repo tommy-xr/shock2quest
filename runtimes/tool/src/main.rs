@@ -154,7 +154,7 @@ pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
-    ffmpeg::init().unwrap();
+    engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
     let file_name = &"../../Data/cutscenes/cs2.avi";

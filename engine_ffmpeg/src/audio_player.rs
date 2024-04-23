@@ -9,7 +9,7 @@ pub struct AudioPlayer;
 impl AudioPlayer {
     pub fn from_filename(filename: &str) -> Result<AudioClip, ffmpeg::Error> {
         // 2. Open the media file
-        let mut ictx = ffmpeg_next::format::input(&filename).unwrap();
+        let mut ictx = ffmpeg::format::input(&filename).unwrap();
 
         // 3. Find the audio stream
         let input = ictx
@@ -38,8 +38,7 @@ impl AudioPlayer {
         let target_channel_layout = ffmpeg::util::channel_layout::ChannelLayout::MONO;
         let target_channel_count = 1;
         let target_sample_rate = 44100; // For example, 44.1 kHz
-        let target_sample_fmt =
-            ffmpeg_next::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
+        let target_sample_fmt = ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
 
         // Set up the resampler
         let mut swr = ffmpeg::software::resampler(
@@ -55,10 +54,10 @@ impl AudioPlayer {
         for (stream, packet) in ictx.packets() {
             if stream.index() == audio_stream_index {
                 audio_decoder.send_packet(&packet).unwrap();
-                let mut audio_frame = ffmpeg_next::util::frame::audio::Audio::empty();
+                let mut audio_frame = ffmpeg::util::frame::audio::Audio::empty();
 
                 while audio_decoder.receive_frame(&mut audio_frame).is_ok() {
-                    let mut decoded_audio_frame = ffmpeg_next::util::frame::audio::Audio::empty();
+                    let mut decoded_audio_frame = ffmpeg::util::frame::audio::Audio::empty();
                     audio_frame.set_channel_layout(source_channel_layout);
                     let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
 
