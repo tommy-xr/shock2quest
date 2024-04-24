@@ -21,7 +21,7 @@ jobs:
       # Install Linux-specific dependencies
       - name: Install ALSA (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev ffmpeg yasm
 
       # Install Windows-specific dependencies
       - name: Install CMake (Windows only)
