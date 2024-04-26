@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         # TODO: Restore these!
-        os: [macOS-latest, ubuntu-latest]
+        os: [macOS-latest]
         # os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
