@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         # TODO: Restore these!
-        os: [ubuntu-latest]
+        os: [macOS-latest, ubuntu-latest]
         # os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -24,6 +24,12 @@ jobs:
       - name: Install ALSA (Linux only)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev ffmpeg yasm
+
+      # Install macOS-specific dependencies
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg
 
       # Install Windows-specific dependencies
       - name: Install CMake (Windows only)
