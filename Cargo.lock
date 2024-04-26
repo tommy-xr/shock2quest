@@ -1025,13 +1025,13 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-the-third"
-version = "1.2.2+ffmpeg-6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "301c55f432cce71d0cc5266e8e70e69cc7a865f8aa8785c44cb56c3935a13715"
+version = "1.3.0+ffmpeg-6.1"
 dependencies = [
  "bitflags 1.3.2",
  "ffmpeg-sys-the-third",
+ "image",
  "libc",
+ "serde",
 ]
 
 [[package]]

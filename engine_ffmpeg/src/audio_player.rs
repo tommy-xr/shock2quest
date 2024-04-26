@@ -51,7 +51,7 @@ impl AudioPlayer {
         // 5. Decode audio packets
         let mut decoded_audio_samples: Vec<i16> = Vec::new();
 
-        for (stream, packet) in ictx.packets() {
+        for (stream, packet) in ictx.packets().filter_map(Result::ok) {
             if stream.index() == audio_stream_index {
                 audio_decoder.send_packet(&packet).unwrap();
                 let mut audio_frame = ffmpeg::util::frame::audio::Audio::empty();
