@@ -14,7 +14,6 @@ bitflags = "1.3.2"
 cgmath = { version = "0.18.0", features = ["serde"] }
 collision = { version = "0.20.1", git = "https://github.com/rustgd/collision-rs" }
 engine = { path = "../engine" }
-engine_ffmpeg = { path = "../engine_ffmpeg" }
 num = "0.4.0"
 num-derive = "0.3.3"
 num-traits = "0.2.15"
