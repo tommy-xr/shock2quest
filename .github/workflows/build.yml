@@ -29,7 +29,7 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install ffmpeg
+          brew install ffmpeg@6
 
       # Install Windows-specific dependencies
       - name: Install CMake (Windows only)
