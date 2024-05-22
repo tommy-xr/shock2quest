@@ -1,5 +1,6 @@
 extern crate glfw;
 use engine_ffmpeg::VideoPlayer;
+use glfw::GlfwReceiver;
 
 use self::glfw::{Action, Context, Key};
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
@@ -168,7 +169,7 @@ pub fn main() {
 
     // panic!();
     tracing_subscriber::fmt::init();
-    let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
+    let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
     // TODO: Figure out ANGLE
     // glfw.window_hint(glfw::WindowHint::ClientApi(glfw::OpenGlEs));
     glfw.window_hint(glfw::WindowHint::ContextVersion(4, 1));
@@ -426,7 +427,7 @@ fn process_events(
     //audio: &mut AudioContext,
     window: &mut glfw::Window,
     camera_context: &mut CameraContext,
-    events: &Receiver<(f64, glfw::WindowEvent)>,
+    events: &GlfwReceiver<(f64, glfw::WindowEvent)>,
     delta_time: f32,
 ) -> (InputContext, Vec<Box<dyn Command>>) {
     let _speed = 20.0;
