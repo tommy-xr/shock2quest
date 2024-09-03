@@ -9,6 +9,7 @@ use dark::SCALE_FACTOR;
 use engine::profile;
 
 use engine::util::compute_view_matrix_from_render_context;
+use glfw::GlfwReceiver;
 use glfw::Modifiers;
 use shock2vr::command::LoadCommand;
 use shock2vr::command::MoveInventoryCommand;
@@ -184,7 +185,7 @@ pub fn main() {
     //tracing_subscriber::fmt::init();
     let args = Args::parse();
     //panic!("args: {:?}", args);
-    let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
+    let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
     // TODO: Figure out ANGLE
     // glfw.window_hint(glfw::WindowHint::ClientApi(glfw::OpenGlEs));
     glfw.window_hint(glfw::WindowHint::ContextVersion(4, 1));
@@ -391,7 +392,7 @@ fn process_events(
     camera_context: &mut CameraContext,
     hand_context: &mut HandContext,
     last_input_state: &InputState,
-    events: &Receiver<(f64, glfw::WindowEvent)>,
+    events: &GlfwReceiver<(f64, glfw::WindowEvent)>,
     delta_time: f32,
 ) -> (InputContext, InputState, Vec<Box<dyn Command>>, Vec<Effect>) {
     let _speed = 20.0;
