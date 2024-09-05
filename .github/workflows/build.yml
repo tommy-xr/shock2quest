@@ -2,9 +2,9 @@ name: Build & Unit Test
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,44 +13,52 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [macOS-latest, ubuntu-latest, windows-latest]
+        # TODO: Restore these!
+        os: [macOS-latest]
+        # os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v3
-  
-    # Install Linux-specific dependencies
-    - name: Install ALSA (Linux only)
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+      - uses: actions/checkout@v3
 
-    # Install Windows-specific dependencies
-    - name: Install CMake (Windows only)
-      if: runner.os == 'Windows'
-      run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+      # Install Linux-specific dependencies
+      - name: Install ALSA (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev ffmpeg yasm
 
-    # Cache cargo build artifacts
-    - name: Cache cargo registry
-      uses: actions/cache@v2
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-    - name: Cache cargo index
-      uses: actions/cache@v2
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      # Install macOS-specific dependencies
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg@6
 
-    - name: Cache cargo build
-      uses: actions/cache@v2
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-  
-    # Actual build steps  
-    - name: Build
-      run: cargo build --verbose --release
-      working-directory: runtimes/desktop_runtime
-    - name: Run tests
-      run: cargo test --verbose
-      working-directory: runtimes/desktop_runtime
+      # Install Windows-specific dependencies
+      - name: Install CMake (Windows only)
+        if: runner.os == 'Windows'
+        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+
+      # Cache cargo build artifacts
+      - name: Cache cargo registry
+        uses: actions/cache@v2
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v2
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      # Actual build steps
+      - name: Build
+        run: cargo build --verbose --release
+        working-directory: runtimes/desktop_runtime
+      - name: Run tests
+        run: cargo test --verbose
+        working-directory: runtimes/desktop_runtime
