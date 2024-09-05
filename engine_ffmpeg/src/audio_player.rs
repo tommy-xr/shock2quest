@@ -29,7 +29,7 @@ impl AudioPlayer {
         //     audio_decoder.channel_layout(),
         // );
 
-        let source_channel_layout = ChannelLayout::STEREO;
+        // let source_channel_layout = ChannelLayout::STEREO;
         // let source_sample_rate = audio_decoder.rate();
         let source_sample_rate = audio_decoder.rate();
         let source_sample_fmt = audio_decoder.format();
@@ -41,8 +41,8 @@ impl AudioPlayer {
         let target_sample_fmt = ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
 
         // Set up the resampler
-        let mut swr = ffmpeg::software::resampler(
-            (source_sample_fmt, source_channel_layout, source_sample_rate),
+        let mut swr = ffmpeg::software::resampler2(
+            (source_sample_fmt, ChannelLayout::STEREO, source_sample_rate),
             (target_sample_fmt, target_channel_layout, target_sample_rate),
             //(target_sample_fmt, target_channel_layout, target_sample_rate),
         )
@@ -58,7 +58,7 @@ impl AudioPlayer {
 
                 while audio_decoder.receive_frame(&mut audio_frame).is_ok() {
                     let mut decoded_audio_frame = ffmpeg::util::frame::audio::Audio::empty();
-                    audio_frame.set_channel_layout(source_channel_layout);
+                    audio_frame.set_ch_layout(ChannelLayout::STEREO);
                     let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
 
                     let plane_count = decoded_audio_frame.planes();
