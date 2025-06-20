@@ -66,8 +66,11 @@
   ```sh
   keytool -genkey -v -keystore develop.keystore -alias com_tommybuilds_shock2quest  -keyalg RSA -keysize 2048 -validity 10000
   ```
+- Make sure [Developer Mode is enabled on your Quest device](https://www.reddit.com/r/OculusQuest/comments/17sa8n6/tutorial_quest_3_developer_mode_4_easy_steps/)
 - Make sure `adb` is installed and working. With Oculus connected, run `adb devices` and verify your headset shows up
 - Tweak `runtimes/oculus_runtime/set_up_android_sdk.sh` to match your paths
+- Before running for the first time, you'll need to copy over the system shock 2 data files.
+  - From the root of the repo, run: `adb push Data/ /sdcard/shock2quest`
 
 ##### Running
 

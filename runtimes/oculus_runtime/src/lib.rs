@@ -65,9 +65,9 @@ fn main() {
         println!("Name: {}", path.unwrap().path().display())
     }
 
-    println!("Trying to read file...");
-    let test = std::fs::File::open("/mnt/sdcard/shock2quest/res/obj/txt16/LOG.PCX").unwrap();
-    println!("Read file successfully!");
+    // println!("Trying to read file...");
+    // let test = std::fs::File::open("/mnt/sdcard/shock2quest/res/obj/txt16/LOG.PCX").unwrap();
+    // println!("Read file successfully!");
 
     let extensions = entry.enumerate_extensions().unwrap();
     println!("supported extensions: {:#?}", extensions);
