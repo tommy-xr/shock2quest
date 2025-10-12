@@ -1,26 +1,23 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::io::{BufReader, Cursor, Read};
+use std::io::Cursor;
 use std::rc::Rc;
-use std::time::Duration;
 
 use cgmath::{vec3, Vector3};
 use rodio::buffer::SamplesBuffer;
-use rodio::source::{Buffered, SineWave, Source};
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Sink, SpatialSink};
+use rodio::source::{Buffered, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
 use rand;
-use rand::Rng;
-use tracing::{info, trace};
+use tracing::trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use crate::assets::asset_paths::ReadableAndSeekable;
 
 #[cfg(target_os = "android")]
 const BASE_PATH: &str = "/mnt/sdcard/shock2quest";
 
 #[cfg(not(target_os = "android"))]
+#[allow(dead_code)]
 const BASE_PATH: &str = "../../Data";
 
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(0);

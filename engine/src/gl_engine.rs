@@ -2,8 +2,6 @@ extern crate gl;
 
 use crate::texture_descriptor::TextureDescriptor;
 use crate::util;
-use cgmath::prelude::*;
-use cgmath::{Matrix4, Rad};
 use std::cell::RefCell;
 use std::rc::Rc;
 

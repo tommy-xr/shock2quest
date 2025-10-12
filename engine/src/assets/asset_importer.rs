@@ -1,5 +1,5 @@
 use super::asset_cache::AssetCache;
-use super::asset_paths::{AbstractAssetPath, ReadableAndSeekable};
+use super::asset_paths::ReadableAndSeekable;
 
 pub type AssetLoader<T, TConfig> = fn(
     asset_name: String,

@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
 // Asset Paths
 

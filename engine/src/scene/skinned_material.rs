@@ -1,24 +1,18 @@
 extern crate gl;
-use std::cell::RefCell;
-use std::ffi::CStr;
 use std::ffi::CString;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader;
-use crate::shader::Shader;
 use crate::shader_program::ShaderProgram;
 
-use crate::texture::Texture;
 use crate::texture::TextureTrait;
-use crate::texture_descriptor::TextureDescriptor;
 use c_string::*;
 use cgmath::num_traits::ToPrimitive;
 use cgmath::prelude::*;
 use cgmath::Matrix4;
 
-use cgmath::vec3;
 use once_cell::sync::OnceCell;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
@@ -112,7 +106,7 @@ impl SkinnedMaterial {
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
 
             for i in 0..40 {
-                let f = i.to_f32().unwrap();
+                let _f = i.to_f32().unwrap();
                 let name = format!("bone_matrices[{i}]");
                 let c_str = CString::new(name).unwrap();
                 let loc = gl::GetUniformLocation(shader_program.gl_id, c_str.as_ptr());
@@ -127,7 +121,7 @@ impl Material for SkinnedMaterial {
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, storage: &Box<dyn crate::file_system::Storage>) {
+    fn initialize(&mut self, is_opengl_es: bool, _storage: &Box<dyn crate::file_system::Storage>) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------

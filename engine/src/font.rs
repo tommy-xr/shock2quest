@@ -1,9 +1,6 @@
 use std::rc::Rc;
 
-use crate::{
-    texture::{Texture, TextureTrait},
-    texture_descriptor::TextureDescriptor,
-};
+use crate::texture::TextureTrait;
 
 pub struct FontCharacterInfo {
     pub min_uv_x: f32,

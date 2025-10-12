@@ -1,9 +1,9 @@
-use std::{path::Path, rc::Rc};
+use std::rc::Rc;
 
 use fbxcel_dom::{
     any::AnyDocument,
     v7400::{
-        object::{model::TypedModelHandle, scene::SceneHandle, TypedObjectHandle},
+        object::{model::TypedModelHandle, TypedObjectHandle},
         Document,
     },
 };
@@ -15,9 +15,9 @@ use crate::{
 };
 
 fn load_fbx(
-    name: String,
+    _name: String,
     reader: &mut Box<dyn assets::asset_paths::ReadableAndSeekable>,
-    assets: &mut AssetCache,
+    _assets: &mut AssetCache,
     _config: &(),
 ) -> Box<Document> {
     match AnyDocument::from_seekable_reader(reader).expect("Failed to load document") {
@@ -36,7 +36,7 @@ fn load_fbx(
                 if let TypedObjectHandle::Model(TypedModelHandle::Mesh(mesh)) = obj.get_typed() {
                     let geometry_obj = mesh.geometry().unwrap();
                     // Get vertices
-                    let vertices = geometry_obj
+                    let _vertices = geometry_obj
                         .polygon_vertices()
                         .expect("Failed to get vertices");
                     //println!("Vertices: {:?}", vertices);
@@ -60,7 +60,7 @@ fn load_fbx(
 }
 
 fn process_fbx(
-    fbx_document: Box<Document>,
+    _fbx_document: Box<Document>,
     _assets: &mut AssetCache,
     _config: &(),
 ) -> Vec<SceneObject> {

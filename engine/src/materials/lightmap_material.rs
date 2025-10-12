@@ -4,13 +4,11 @@ use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 use crate::texture::Texture;
 use crate::texture::TextureTrait;
-use crate::texture_descriptor::TextureDescriptor;
 use c_string::*;
 use cgmath::prelude::*;
 
 use cgmath::Matrix4;
 use once_cell::sync::OnceCell;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
@@ -101,7 +99,7 @@ impl Material for LightmapMaterial {
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, storage: &Box<dyn crate::file_system::Storage>) {
+    fn initialize(&mut self, is_opengl_es: bool, _storage: &Box<dyn crate::file_system::Storage>) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------

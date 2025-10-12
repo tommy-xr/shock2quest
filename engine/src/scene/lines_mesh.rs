@@ -2,10 +2,8 @@ extern crate gl;
 use self::gl::types::*;
 pub use crate::scene::Geometry;
 pub use crate::scene::VertexPosition;
-use std::mem;
 use std::mem::size_of;
 use std::os::raw::c_void;
-use std::ptr;
 
 pub struct LinesMesh {
     pub vbo: GLuint,
