@@ -8,6 +8,7 @@ use std::rc::Rc;
 pub struct OpenGLEngine {
     pub is_opengl_es: bool,
     pub storage: Box<dyn crate::file_system::Storage>,
+    #[allow(dead_code)]
     texture_descriptor: Rc<RefCell<Box<dyn TextureDescriptor>>>,
 }
 

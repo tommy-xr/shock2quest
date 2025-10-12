@@ -7,6 +7,7 @@ use std::os::raw::c_void;
 use std::ptr;
 
 pub struct CubeIndexed {
+    #[allow(dead_code)]
     vbo: GLuint,
     vao: GLuint,
     ebo: GLuint,
@@ -31,15 +32,15 @@ pub fn create() -> CubeIndexed {
         1, 2, 3, // second Triangle
     ];
 
-    let (mut VBO, mut VAO, mut EBO) = (0, 0, 0);
+    let (mut vbo, mut vao, mut ebo) = (0, 0, 0);
     unsafe {
-        gl::GenVertexArrays(1, &mut VAO);
-        gl::GenBuffers(1, &mut VBO);
-        gl::GenBuffers(1, &mut EBO);
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::GenBuffers(1, &mut ebo);
         // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
-        gl::BindVertexArray(VAO);
+        gl::BindVertexArray(vao);
 
-        gl::BindBuffer(gl::ARRAY_BUFFER, VBO);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
         gl::BufferData(
             gl::ARRAY_BUFFER,
             (vertices.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
@@ -47,7 +48,7 @@ pub fn create() -> CubeIndexed {
             gl::STATIC_DRAW,
         );
 
-        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, EBO);
+        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
         gl::BufferData(
             gl::ELEMENT_ARRAY_BUFFER,
             (indices.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
@@ -86,9 +87,9 @@ pub fn create() -> CubeIndexed {
     // uncomment this call to draw in wireframe polygons.
     // gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
     CubeIndexed {
-        vao: VAO,
-        vbo: VBO,
-        ebo: EBO,
+        vao: vao,
+        vbo: vbo,
+        ebo: ebo,
     }
 }
 

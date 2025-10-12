@@ -23,7 +23,6 @@ use std::rc::Rc;
 use super::basic_material;
 use super::mesh;
 use super::quad;
-use super::Quad;
 use super::TextVertex;
 use crate::materials;
 

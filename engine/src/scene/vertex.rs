@@ -1,4 +1,4 @@
-use std::{ffi::c_void, mem::size_of};
+use std::mem::size_of;
 
 use cgmath::{Vector2, Vector3, Vector4};
 use gl::types;

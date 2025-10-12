@@ -8,7 +8,6 @@ use rodio::buffer::SamplesBuffer;
 use rodio::source::{Buffered, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
-use rand;
 use tracing::trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -99,8 +98,10 @@ where
     TCue: Clone,
     TAmbientKey: Hash + Eq + Copy,
 {
+    #[allow(dead_code)]
     stream: OutputStream,
     handle: OutputStreamHandle,
+    #[allow(dead_code)]
     sinks: Vec<Sink>,
     channel_to_last_handle: HashMap<String, u64>,
     handle_to_sink: HashMap<u64, SinkAdapter>,

@@ -2,11 +2,7 @@ extern crate gl;
 use cgmath::{vec2, vec3};
 use once_cell::sync::OnceCell;
 
-use self::gl::types::*;
 pub use crate::scene::Geometry;
-use std::mem;
-use std::os::raw::c_void;
-use std::ptr;
 
 use super::{mesh, Mesh, VertexPositionTexture};
 
