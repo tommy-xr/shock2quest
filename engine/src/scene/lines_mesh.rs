@@ -16,18 +16,18 @@ pub struct LinesMesh {
 pub fn create(raw_vertices: Vec<VertexPosition>) -> LinesMesh {
     let index_count = (raw_vertices.len()) as i32;
 
-    let (mut VBO, mut VAO, mut EBO) = (0, 0, 0);
+    let (mut vbo, mut vao, mut ebo) = (0, 0, 0);
     unsafe {
-        gl::GenVertexArrays(1, &mut VAO);
-        gl::GenBuffers(1, &mut VBO);
-        gl::GenBuffers(1, &mut EBO);
+        gl::GenVertexArrays(1, &mut vao);
+        gl::GenBuffers(1, &mut vbo);
+        gl::GenBuffers(1, &mut ebo);
         // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
-        gl::BindVertexArray(VAO);
+        gl::BindVertexArray(vao);
         let size = size_of::<VertexPosition>() as isize;
         let total_size = (raw_vertices.len() * size_of::<VertexPosition>()) as isize;
         let data = &raw_vertices[0] as *const VertexPosition as *const c_void;
 
-        gl::BindBuffer(gl::ARRAY_BUFFER, VBO);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
         gl::BufferData(gl::ARRAY_BUFFER, total_size, data, gl::STATIC_DRAW);
 
         gl::VertexAttribPointer(
@@ -51,9 +51,9 @@ pub fn create(raw_vertices: Vec<VertexPosition>) -> LinesMesh {
     // uncomment this call to draw in wireframe polygons.
     LinesMesh {
         index_count,
-        vao: VAO,
-        vbo: VBO,
-        ebo: EBO,
+        vao: vao,
+        vbo: vbo,
+        ebo: ebo,
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::texture_format::RawTextureData;
 use crate::{texture::Texture, texture_format::PixelFormat};
-use image::{GenericImage, GenericImageView, ImageBuffer, Pixel, Rgb, Rgba};
+use image::{ImageBuffer, Pixel, Rgb, Rgba};
 use std::rc::Rc;
 struct TextureAtlas<T>
 where
@@ -83,6 +83,7 @@ where
     PixelFormat: Pixel<Subpixel = u8> + image::PixelWithColorType,
 {
     atlases: Vec<TextureAtlas<PixelFormat>>,
+    #[allow(dead_code)]
     current_atlas_idx: u8,
     current_atlas_pixel_y: u32,
     current_atlas_pixel_x: u32,

@@ -1,10 +1,8 @@
 extern crate gl;
 use std::ops::Deref;
-use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
-use crate::shader;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;

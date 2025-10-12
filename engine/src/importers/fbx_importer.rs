@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use fbxcel_dom::{
     any::AnyDocument,
     v7400::{
@@ -53,7 +51,6 @@ fn load_fbx(
                 }
             }
             panic!("done");
-            return doc;
         }
         _ => panic!("FBX version unsupported by this example"),
     }

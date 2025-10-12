@@ -39,15 +39,15 @@ impl Geometry for Cube {
                 1, 2, 3, // second Triangle
             ];
 
-            let (mut VBO, mut VAO, mut EBO) = (0, 0, 0);
+            let (mut vbo, mut vao, mut ebo) = (0, 0, 0);
             unsafe {
-                gl::GenVertexArrays(1, &mut VAO);
-                gl::GenBuffers(1, &mut VBO);
-                gl::GenBuffers(1, &mut EBO);
+                gl::GenVertexArrays(1, &mut vao);
+                gl::GenBuffers(1, &mut vbo);
+                gl::GenBuffers(1, &mut ebo);
                 // bind the Vertex Array Object first, then bind and set vertex buffer(s), and then configure vertex attributes(s).
-                gl::BindVertexArray(VAO);
+                gl::BindVertexArray(vao);
 
-                gl::BindBuffer(gl::ARRAY_BUFFER, VBO);
+                gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
                 gl::BufferData(
                     gl::ARRAY_BUFFER,
                     (vertices.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
@@ -55,7 +55,7 @@ impl Geometry for Cube {
                     gl::STATIC_DRAW,
                 );
 
-                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, EBO);
+                gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
                 gl::BufferData(
                     gl::ELEMENT_ARRAY_BUFFER,
                     (indices.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
@@ -90,7 +90,7 @@ impl Geometry for Cube {
                 // VAOs requires a call to glBindVertexArray anyways so we generally don't unbind VAOs (nor VBOs) when it's not directly necessary.
                 gl::BindVertexArray(0);
             }
-            VAO
+            vao
         });
 
         unsafe {

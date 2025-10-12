@@ -1,6 +1,6 @@
-use std::{rc::Rc, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use cgmath::{vec3, Matrix4, SquareMatrix, Vector2, Vector3};
+use cgmath::{vec3, Matrix4, SquareMatrix, Vector3};
 use rand::Rng;
 
 use crate::{
@@ -8,9 +8,7 @@ use crate::{
     texture_format::RawTextureData,
 };
 
-use super::{
-    basic_material, color_material, quad, scene, BillboardMaterial, ColorMaterial, SceneObject,
-};
+use super::{quad, BillboardMaterial, SceneObject};
 
 use lazy_static::lazy_static;
 
