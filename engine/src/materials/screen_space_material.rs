@@ -1,20 +1,15 @@
 extern crate gl;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
 use crate::shader;
-use crate::shader::Shader;
 use crate::shader_program::ShaderProgram;
 
-use crate::texture::Texture;
 use crate::texture::TextureTrait;
-use crate::texture_descriptor::TextureDescriptor;
 use c_string::*;
 use cgmath::prelude::*;
 use cgmath::Matrix4;
-use cgmath::Vector3;
 use cgmath::Vector4;
 
 use once_cell::sync::OnceCell;
@@ -74,7 +69,7 @@ impl ScreenSpaceMaterial {
     pub fn draw_common(
         &self,
         render_context: &EngineRenderContext,
-        view_matrix: &Matrix4<f32>,
+        _view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
     ) {
         let (shader_program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
@@ -110,7 +105,7 @@ impl Material for ScreenSpaceMaterial {
         false
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, storage: &Box<dyn crate::file_system::Storage>) {
+    fn initialize(&mut self, is_opengl_es: bool, _storage: &Box<dyn crate::file_system::Storage>) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------
@@ -149,9 +144,9 @@ impl Material for ScreenSpaceMaterial {
 
     fn draw_opaque(
         &self,
-        render_context: &EngineRenderContext,
-        view_matrix: &Matrix4<f32>,
-        world_matrix: &Matrix4<f32>,
+        _render_context: &EngineRenderContext,
+        _view_matrix: &Matrix4<f32>,
+        _world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
     ) -> bool {
         // no-op

@@ -12,7 +12,6 @@ use cgmath::vec3;
 use cgmath::vec4;
 use cgmath::Matrix4;
 use cgmath::Vector2;
-use oddio::FilterHaving;
 
 pub use crate::scene::Geometry;
 pub use crate::scene::Material;
@@ -83,13 +82,13 @@ impl SceneObject {
         let adj_height = font_size;
 
         let mut x = in_x;
-        let mut y = in_y;
+        let y = in_y;
 
         let mut vertices = Vec::new();
         for c in str.chars() {
             let a_info = font.get_character_info(c).unwrap();
             // TODO: Get this from font (save as a field)
-            let half_pixel = 0.5 / 512.0;
+            let _half_pixel = 0.5 / 512.0;
             let min_uv_x = a_info.min_uv_x;
             let max_uv_x = a_info.max_uv_x;
 
@@ -138,7 +137,7 @@ impl SceneObject {
     }
     pub fn world_space_text(str: &str, font: Rc<Box<dyn Font>>, transparency: f32) -> SceneObject {
         let mut x = 0.0;
-        let mut y = 1.0;
+        let y = 1.0;
 
         let font_size = 0.045;
         let multiplier = font_size / font.base_height();
@@ -148,7 +147,7 @@ impl SceneObject {
         for c in str.chars() {
             let a_info = font.get_character_info(c).unwrap();
             // TODO: Get this from font (save as a field)
-            let half_pixel = 0.5 / 512.0;
+            let _half_pixel = 0.5 / 512.0;
             let min_uv_x = a_info.min_uv_x;
             let min_uv_y = a_info.min_uv_y;
             let max_uv_x = a_info.max_uv_x;
@@ -232,7 +231,7 @@ impl SceneObject {
     }
     pub fn draw_transparent(
         &self,
-        engine_context: &OpenGLEngine,
+        _engine_context: &OpenGLEngine,
         render_context: &EngineRenderContext,
         view: &Matrix4<f32>,
     ) {

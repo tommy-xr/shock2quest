@@ -24,10 +24,10 @@ pub trait TextureTrait {
 }
 
 impl TextureTrait for Texture {
-    fn bind0(&self, render_context: &EngineRenderContext) -> () {
+    fn bind0(&self, _render_context: &EngineRenderContext) -> () {
         bind0(self);
     }
-    fn bind1(&self, render_context: &EngineRenderContext) -> () {
+    fn bind1(&self, _render_context: &EngineRenderContext) -> () {
         bind1(self);
     }
 }
