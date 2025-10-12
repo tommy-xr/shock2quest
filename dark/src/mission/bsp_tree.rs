@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io, rc::Rc};
 
 use cgmath::Vector3;
-use tracing::trace;
 
 use super::{Cell, Plane};
 use crate::ss2_common::*;
@@ -58,7 +57,7 @@ impl BspTree {
         match node.as_ref() {
             BspNode::Leaf { cell_idx } => Some(*cell_idx as u32),
             BspNode::Split {
-                cell_idx,
+                cell_idx: _,
                 plane,
                 front,
                 back,
@@ -112,7 +111,7 @@ impl BspTree {
             // The first 4 byte are packed:
             // - 1 byte: flags
             // - 3 bytes: node_id
-            let node_id = node_header & 0x00FFFFFF;
+            let _node_id = node_header & 0x00FFFFFF;
             let flags = (node_header & 0xFF000000) >> 24;
             //let node_id = first_bits + flags;
             // let node_id = node_header & 0xFFFFFF00 >> 8;

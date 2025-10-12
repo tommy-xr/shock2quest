@@ -21,7 +21,7 @@ use crate::{
     },
     NameMap, TagDatabase, SCALE_FACTOR,
 };
-use cgmath::{Deg, Transform3, Vector3};
+use cgmath::{Deg, Vector3};
 
 use std::{collections::HashMap, io};
 use tracing::{info, trace};
@@ -77,7 +77,7 @@ impl MotionDB {
         trace!("motstuff_size: {motstuff_size}");
 
         let mut motion_stuffs = Vec::new();
-        for i in 0..motstuff_size {
+        for _i in 0..motstuff_size {
             let motstuff = read_motion_stuff(reader);
             motion_stuffs.push(motstuff);
         }

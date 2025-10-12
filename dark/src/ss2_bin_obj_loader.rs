@@ -247,11 +247,7 @@ fn read_material<T: Read>(reader: &mut T) -> SystemShock2MeshMaterial {
     let material_type = ss2_common::read_u8(reader);
     let slot_num = ss2_common::read_u8(reader);
 
-    let mut color = vec4(0.0, 0.0, 0.0, 0.0);
-    let mut ipal_index = 0;
-    let mut handle = 0;
-    let mut uv_scale = 1.0;
-    if material_type == 1
+    let (color, ipal_index, handle, uv_scale) = if material_type == 1
     /* MD_MAT_COLOR */
     {
         let r = ss2_common::read_u8(reader);
@@ -259,22 +255,24 @@ fn read_material<T: Read>(reader: &mut T) -> SystemShock2MeshMaterial {
         let b = ss2_common::read_u8(reader);
         let a = ss2_common::read_u8(reader);
 
-        color = vec4(
+        let color = vec4(
             r as f32 / 255.0,
             g as f32 / 255.0,
             b as f32 / 255.0,
             a as f32 / 255.0,
         );
-        ipal_index = ss2_common::read_u32(reader);
+        let ipal_index = ss2_common::read_u32(reader);
+        (color, ipal_index, 0, 1.0)
     } else if material_type == 0
     /* MD_MAT_TMAP */
     {
-        handle = ss2_common::read_u32(reader);
-        uv_scale = ss2_common::read_single(reader);
-        color = vec4(1.0, 1.0, 1.0, 1.0);
+        let handle = ss2_common::read_u32(reader);
+        let uv_scale = ss2_common::read_single(reader);
+        let color = vec4(1.0, 1.0, 1.0, 1.0);
+        (color, 0, handle, uv_scale)
     } else {
         panic!("Unknown material type: {material_type}");
-    }
+    };
 
     SystemShock2MeshMaterial {
         name,
@@ -728,7 +726,7 @@ fn convert_skinned_vertices_to_static_vertices(
 
     let bone_transform = skeleton.get_transforms()[0];
     for vertex in vertices {
-        let bone_indices = vertex.bone_indices;
+        let _bone_indices = vertex.bone_indices;
         let position = bone_transform
             .transform_point(point3(
                 vertex.position.x,

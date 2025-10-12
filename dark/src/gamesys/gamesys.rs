@@ -1,9 +1,7 @@
-use core::fmt;
 use std::{collections::HashMap, io};
 
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
-use shipyard::{Component, Get, IntoIter, IntoWithId, View, World};
-use tracing::info;
+use shipyard::{Get, IntoIter};
 
 use crate::{
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},

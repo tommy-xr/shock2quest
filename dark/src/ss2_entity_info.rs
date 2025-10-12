@@ -1,10 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, SeekFrom},
     rc::Rc,
 };
 
-use shipyard::{Contains, EntityId, World};
+use shipyard::{EntityId, World};
 use tracing::trace;
 
 use crate::{
