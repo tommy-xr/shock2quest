@@ -259,7 +259,7 @@ pub fn main() {
     let mut last_time = glfw.get_time() as f32;
     let start_time = last_time;
 
-    let mut frame = 0;
+    let mut _frame = 0;
     let mut last_input_state = InputState::new();
 
     let _mode = Mode::Gameplay;
@@ -321,7 +321,7 @@ pub fn main() {
 
         game.finish_render(view, projection_matrix, screen_size);
 
-        frame += 1;
+        _frame += 1;
 
         scene.extend(per_eye_scene);
 
@@ -346,7 +346,6 @@ fn parse_mission(mission: &str) -> (String, SpawnLocation) {
     }
 
     let mission = parts[0];
-    let maybe_spawn_location = parts[1];
 
     let spawn_location = if parts[1].contains(",") {
         let vec_parts: Vec<&str> = parts[1].split(',').collect();
