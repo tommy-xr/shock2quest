@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{point3, vec3, Angle, Euler, Matrix4, Quaternion, Rad, Rotation, Vector3, Zero};
+use cgmath::{point3, vec3, Matrix4, Quaternion, Rotation, Vector3, Zero};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 use engine::scene::SceneObject;
 
@@ -38,6 +38,8 @@ pub enum VirtualHandEffect {
     OutMessage {
         message: Message,
     },
+    // Keeping to allow for debugging
+    #[allow(dead_code)]
     ApplyForce {
         entity_id: EntityId,
         force: Vector3<f32>,
@@ -49,6 +51,8 @@ pub enum VirtualHandEffect {
         rotation: Quaternion<f32>,
         scale: Vector3<f32>,
     },
+    // Keeping to allow for debugging
+    #[allow(dead_code)]
     SpawnEntity {
         template_id: i32,
         position: Vector3<f32>,
@@ -56,8 +60,6 @@ pub enum VirtualHandEffect {
     },
     HoldItem {
         entity_id: EntityId,
-        position: Vector3<f32>,
-        rotation: Quaternion<f32>,
     },
     DropItem {
         entity_id: EntityId,
@@ -437,11 +439,7 @@ fn handle_empty_hand_state(
             if can_grab_item(world, entity_id) {
                 let position = &physics.get_position(rigid_body_handle).unwrap();
                 let _dir = hand_position - position;
-                msgs.push(VirtualHandEffect::HoldItem {
-                    entity_id,
-                    position: hand_position,
-                    rotation: hand_rotation,
-                });
+                msgs.push(VirtualHandEffect::HoldItem { entity_id });
 
                 next_hand_state = HandState::Grabbing { entity_id };
             }

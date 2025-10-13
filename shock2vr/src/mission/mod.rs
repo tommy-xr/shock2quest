@@ -63,8 +63,8 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms,
-        RuntimePropTransform, RuntimePropVhots,
+        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform,
+        RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -1632,11 +1632,7 @@ impl Mission {
                         CreateEntityOptions::default(),
                     );
                 }
-                VirtualHandEffect::HoldItem {
-                    entity_id,
-                    position: _,
-                    rotation: _,
-                } => {
+                VirtualHandEffect::HoldItem { entity_id } => {
                     self.make_un_physical(entity_id);
                     self.script_world.dispatch(Message {
                         payload: MessagePayload::Hold,
