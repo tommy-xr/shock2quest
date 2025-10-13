@@ -13,13 +13,11 @@ pub use bsp_tree::*;
 pub use cell::*;
 pub use cell_portal::*;
 pub use plane::*;
-use tracing::trace;
 
 use crate::properties::LinkDefinitionWithData;
 
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
 use crate::ss2_common::read_bytes;
-use crate::ss2_common::read_plane;
 use crate::Gamesys;
 use crate::SCALE_FACTOR;
 use render_params::*;
@@ -57,7 +55,6 @@ use std::io;
 use std::io::SeekFrom;
 
 use crate::ss2_common::read_string_with_size;
-use crate::ss2_common::read_vec3;
 
 #[derive(Clone)]
 pub struct SystemShock2Geometry {
@@ -134,13 +131,9 @@ pub fn read<T: io::Read + io::Seek>(
 ) -> SystemShock2Level {
     let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(reader);
 
-    let mut wr_offset = 0;
-    let mut wr_ext = false; // Extended representation
-    let mut wr_rgb = false; // RGB representation
+    let wr_ext = table_of_contents.has_chunk("WREXT".to_string()); // Extended representation
+    let wr_rgb = table_of_contents.has_chunk("WRRGB".to_string()); // RGB representation
     let mut light_size = 1;
-
-    wr_ext = table_of_contents.has_chunk("WREXT".to_string());
-    wr_rgb = table_of_contents.has_chunk("WRRGB".to_string());
 
     let mut world_chunk_name = "WREXT";
     if wr_rgb {
@@ -150,7 +143,7 @@ pub fn read<T: io::Read + io::Seek>(
         .get_chunk(world_chunk_name.to_string())
         .unwrap();
 
-    wr_offset = wr_chunk.offset;
+    let wr_offset = wr_chunk.offset;
 
     if wr_rgb {
         light_size = 2

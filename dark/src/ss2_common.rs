@@ -9,7 +9,6 @@ use cgmath::InnerSpace;
 use cgmath::Point3;
 use cgmath::Quaternion;
 use cgmath::Rotation;
-use cgmath::SquareMatrix;
 
 use cgmath::Vector2;
 use cgmath::Vector3;

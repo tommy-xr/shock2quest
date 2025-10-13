@@ -57,7 +57,7 @@ impl SpeechDB {
         let num_concepts = concept_map.count();
 
         let mut voices = Vec::new();
-        for idx in 0..num_voices {
+        for _idx in 0..num_voices {
             let voice = Voice::read(reader, num_concepts);
             voices.push(voice);
         }

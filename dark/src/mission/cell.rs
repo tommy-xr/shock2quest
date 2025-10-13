@@ -1,6 +1,4 @@
 use cgmath::point3;
-use cgmath::InnerSpace;
-use collision::Sphere;
 use engine::scene::SceneObject;
 use engine::scene::VertexPosition;
 ///
@@ -13,7 +11,6 @@ use byteorder::ReadBytesExt;
 use cgmath::{vec3, Vector3};
 use engine::texture_atlas::TexturePacker;
 
-use std::cell;
 use std::f32;
 use std::io;
 
@@ -157,7 +154,6 @@ impl Cell {
                 // );
             }
 
-            let mut inner_idx = 1;
             for inner_idx in 1..(poly.count - 1) {
                 if inner_idx + 1 >= poly.count {
                     break;
@@ -294,26 +290,23 @@ fn read_polygon_texturing<T: io::Read>(reader: &mut T, is_extended_rep: bool) ->
     let axis_u = read_vec3(reader);
     let axis_v = read_vec3(reader);
 
-    let mut u: f32 = 0.0;
-    let mut v: f32 = 0.0;
-    let mut texture_num: u16 = 0;
-    let mut origin_vertex: u16 = 0;
-    let mut cached_surface: u16 = 0;
-
-    if is_extended_rep {
-        u = reader.read_f32::<byteorder::LittleEndian>().unwrap() * 4096.0;
-        v = reader.read_f32::<byteorder::LittleEndian>().unwrap() * 4096.0;
-        texture_num = reader.read_u16::<byteorder::LittleEndian>().unwrap();
-        origin_vertex = reader.read_u16::<byteorder::LittleEndian>().unwrap();
-        cached_surface = 0;
+    let (u, v, texture_num, origin_vertex, cached_surface) = if is_extended_rep {
+        (
+            reader.read_f32::<byteorder::LittleEndian>().unwrap() * 4096.0,
+            reader.read_f32::<byteorder::LittleEndian>().unwrap() * 4096.0,
+            reader.read_u16::<byteorder::LittleEndian>().unwrap(),
+            reader.read_u16::<byteorder::LittleEndian>().unwrap(),
+            0,
+        )
     } else {
-        u = f32::from(reader.read_u16::<byteorder::LittleEndian>().unwrap());
-        v = f32::from(reader.read_u16::<byteorder::LittleEndian>().unwrap());
-
-        texture_num = reader.read_u8().unwrap() as u16;
-        origin_vertex = reader.read_u8().unwrap() as u16;
-        cached_surface = reader.read_u16::<byteorder::LittleEndian>().unwrap();
-    }
+        (
+            f32::from(reader.read_u16::<byteorder::LittleEndian>().unwrap()),
+            f32::from(reader.read_u16::<byteorder::LittleEndian>().unwrap()),
+            reader.read_u8().unwrap() as u16,
+            reader.read_u8().unwrap() as u16,
+            reader.read_u16::<byteorder::LittleEndian>().unwrap(),
+        )
+    };
 
     let scale = reader.read_f32::<byteorder::LittleEndian>().unwrap();
     let center = read_vec3(reader);

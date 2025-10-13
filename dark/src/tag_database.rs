@@ -1,9 +1,6 @@
 use std::{collections::HashMap, io, rc::Rc};
 
-use crate::{
-    properties::PropertyDefinition,
-    ss2_common::{read_i32, read_single, read_u32},
-};
+use crate::ss2_common::{read_i32, read_single, read_u32};
 
 #[derive(Debug, Clone)]
 pub struct TagDatabase {
