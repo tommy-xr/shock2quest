@@ -17,7 +17,6 @@ use shock2vr::command::MoveInventoryCommand;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 
-use std::time::Instant;
 
 use shock2vr::GameOptions;
 use shock2vr::SpawnLocation;
@@ -34,7 +33,6 @@ use glfw::MouseButton;
 use shock2vr::input_context::InputContext;
 use shock2vr::time::Time;
 use std::collections::HashSet;
-use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 // settings
