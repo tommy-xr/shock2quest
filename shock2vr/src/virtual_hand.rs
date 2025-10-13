@@ -363,14 +363,6 @@ impl VirtualHand {
     }
 }
 
-fn normalize_euler(euler: Euler<Rad<f32>>) -> Euler<Rad<f32>> {
-    // Euler::new(euler.x.normalize_signed(), euler.y.normalize_signed(), euler.z.normalize_signed())
-    Euler::new(
-        euler.x.normalize(),
-        euler.y.normalize(),
-        euler.z.normalize(),
-    )
-}
 fn handle_empty_hand_state(
     handedness: Handedness,
     hand_position: Vector3<f32>,
