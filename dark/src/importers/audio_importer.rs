@@ -14,7 +14,7 @@ fn load_audio(
     _config: &(),
 ) -> AudioClip {
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf);
+    let _ = reader.read_to_end(&mut buf);
 
     AudioClip::from_bytes(buf)
 }

@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 bitflags! {
     #[derive(Deserialize, Serialize)]
     pub struct PoseType: u32 {
-        const Tag = 0;
-        const MotionName = 1;
-        const Invalid = 2;
+        const TAG = 0;
+        const MOTION_NAME = 1;
+        const INVALID = 2;
         //const Default = Self::Invalid;
     }
 }
@@ -35,7 +35,7 @@ impl PropCreaturePose {
         let ballistic = read_bool(reader);
 
         PropCreaturePose {
-            pose_type: PoseType::from_bits(pose_type_bits).unwrap_or(PoseType::Invalid),
+            pose_type: PoseType::from_bits(pose_type_bits).unwrap_or(PoseType::INVALID),
             motion_or_tag_name: motion_name,
             scale,
             ballistic,

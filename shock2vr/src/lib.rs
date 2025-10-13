@@ -419,11 +419,11 @@ impl Game {
                     let dist_squared = (position.position - v_player_position.pos).magnitude2();
 
                     if dist_squared < ambient_sound.radius_squared {
-                        if ambient_sound.sound_flags.contains(AmbientSoundFlags::Music) {
+                        if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
                             new_cue = Some(ambient_sound.schema.to_owned());
                         } else if ambient_sound
                             .sound_flags
-                            .contains(AmbientSoundFlags::Environmental)
+                            .contains(AmbientSoundFlags::ENVIRONMENTAL)
                         {
                             let schema_val = self.resolve_schema(&ambient_sound.schema);
                             next_env_sound = Some(schema_val)

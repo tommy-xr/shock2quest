@@ -20,7 +20,7 @@ impl MotionClip {
         let joint_offsets = read_array_u32(reader, num_joints);
         let num_frames = mps_motion.frame_count.floor() as u32;
 
-        reader.seek(SeekFrom::Start(joint_offsets[0] as u64));
+        let _ = reader.seek(SeekFrom::Start(joint_offsets[0] as u64));
         // Read transforms for root joint
         let mut animation = Vec::new();
         let mut transforms = Vec::new();
@@ -32,7 +32,7 @@ impl MotionClip {
 
         // animation for each joint
         for joint in 1..num_joints {
-            reader.seek(SeekFrom::Start(joint_offsets[joint as usize] as u64));
+            let _ = reader.seek(SeekFrom::Start(joint_offsets[joint as usize] as u64));
             let mut frame_rotations = Vec::new();
             for _frame in 0..num_frames {
                 let quat = read_quat(reader);

@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 bitflags! {
     #[derive(Serialize, Deserialize)]
     pub struct PhysicsModelType: u32 {
-        const OrientedBoundingBox = 0;
-        const Sphere = 1;
-        const Unknown = 2;
-        const None = 3;
+        const ORIENTED_BOUNDING_BOX = 0;
+        const SPHERE = 1;
+        const UNKNOWN = 2;
+        const NONE = 3;
     }
 }
 
@@ -34,7 +34,7 @@ impl PropPhysType {
 
         PropPhysType {
             phys_type: PhysicsModelType::from_bits(phys_type_bits)
-                .unwrap_or(PhysicsModelType::OrientedBoundingBox),
+                .unwrap_or(PhysicsModelType::ORIENTED_BOUNDING_BOX),
             num_submodels,
             remove_on_sleep,
             is_special,

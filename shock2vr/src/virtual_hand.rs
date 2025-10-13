@@ -1,8 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{
-    point3, vec3, Angle, Euler, Matrix4, Quaternion, Rad, Rotation, Vector3, Zero,
-};
+use cgmath::{point3, vec3, Angle, Euler, Matrix4, Quaternion, Rad, Rotation, Vector3, Zero};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 use engine::scene::SceneObject;
 
@@ -489,8 +487,8 @@ fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     let v_prop_frobinfo = world.borrow::<View<PropFrobInfo>>().unwrap();
 
     if let Ok(frob_info) = v_prop_frobinfo.get(entity_id) {
-        if frob_info.world_action.contains(FrobFlag::Move)
-            || frob_info.world_action.contains(FrobFlag::UseAmmo)
+        if frob_info.world_action.contains(FrobFlag::MOVE)
+            || frob_info.world_action.contains(FrobFlag::USE_AMMO)
         {
             return true;
         }

@@ -1,11 +1,10 @@
 use std::{io, time::Duration};
 
-use bitflags::bitflags;
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use shipyard::Component;
 
-use crate::ss2_common::{read_bytes, read_i32, read_string_with_size, read_u32};
+use crate::ss2_common::{read_bytes, read_string_with_size, read_u32};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Component, Clone, Deserialize, Serialize)]

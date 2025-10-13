@@ -6,12 +6,12 @@ use std::{
     time::Duration,
 };
 
-use cgmath::{point3, prelude::*, Vector3};
+use cgmath::{prelude::*};
 use cgmath::{Point3, Vector2};
 use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{self, SceneObject, VertexPositionTextureSkinned},
+    scene::{SceneObject, VertexPositionTextureSkinned},
     texture::{AnimatedTexture, TextureTrait},
 };
 use tracing::trace;
@@ -116,14 +116,14 @@ pub fn read<T: Read + Seek>(
 ) -> SystemShock2AIMesh {
     let header = read_header(reader);
 
-    reader.seek(SeekFrom::Start(header.offset_joint_remap as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_joint_remap as u64));
 
     let _joints_in = read_bytes(reader, header.num_joints as usize);
     let _joints_out = read_bytes(reader, header.num_joints as usize);
 
     // Read joint map
     let mut joint_map = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_mappers as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_mappers as u64));
 
     for _ in 0..header.num_mappers {
         let joint_map_entry = read_joint_map_entry(reader);
@@ -132,7 +132,7 @@ pub fn read<T: Read + Seek>(
 
     // Read materials
     let mut materials = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_mats as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_mats as u64));
 
     for _ in 0..header.num_mats {
         let material = read_material(reader, common_header.version);
@@ -141,7 +141,7 @@ pub fn read<T: Read + Seek>(
 
     // Read joints
     let mut joints = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_joints as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_joints as u64));
     for _ in 0..header.num_joints {
         let joint = read_joint(reader);
         joints.push(joint);
@@ -149,7 +149,7 @@ pub fn read<T: Read + Seek>(
 
     // Read triangles
     let mut triangles = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_triangles as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_triangles as u64));
 
     for _ in 0..header.num_triangles {
         let triangle = read_triangle(reader);
@@ -158,7 +158,7 @@ pub fn read<T: Read + Seek>(
 
     // Read vertices
     let mut vertices = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_vertices as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_vertices as u64));
 
     for _ in 0..header.num_vertices {
         let vert = read_point3(reader) / SCALE_FACTOR;
@@ -167,7 +167,7 @@ pub fn read<T: Read + Seek>(
 
     // Read uvs
     let mut uvs = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_uvs as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_uvs as u64));
 
     for _ in 0..header.num_vertices {
         let uv = read_uv(reader);
@@ -176,7 +176,7 @@ pub fn read<T: Read + Seek>(
 
     // Read normals
     let mut normals = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_normals as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_normals as u64));
 
     for _ in 0..header.num_triangles {
         let normal = read_vec3(reader);
@@ -185,7 +185,7 @@ pub fn read<T: Read + Seek>(
 
     // Read weights
     let mut weights = Vec::new();
-    reader.seek(SeekFrom::Start(header.offset_weights as u64));
+    let _ = reader.seek(SeekFrom::Start(header.offset_weights as u64));
     for _ in 0..header.num_weights {
         let weight = read_single(reader);
         weights.push(weight);

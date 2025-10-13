@@ -2,9 +2,9 @@
 // Helper class to work with skeletons in AI meshes
 
 use rpds as immutable;
-use std::{collections::HashMap, ops::Deref, rc::Rc};
+use std::collections::HashMap;
 
-use cgmath::{vec3, Deg, Matrix4, SquareMatrix};
+use cgmath::{Deg, Matrix4, SquareMatrix};
 
 use crate::{
     motion::{AnimationClip, JointId},

@@ -1765,11 +1765,11 @@ fn create_room_entities(
             PropPhysType {
                 is_special: false,
                 num_submodels: 1,
-                phys_type: PhysicsModelType::OrientedBoundingBox,
+                phys_type: PhysicsModelType::ORIENTED_BOUNDING_BOX,
                 remove_on_sleep: false,
             },
             PropTripFlags {
-                trip_flags: TripFlags::Enter | TripFlags::Exit | TripFlags::Player,
+                trip_flags: TripFlags::ENTER | TripFlags::EXIT | TripFlags::PLAYER,
             },
             PropPhysState {
                 position: room.center + vert_offset,

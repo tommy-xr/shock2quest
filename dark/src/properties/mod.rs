@@ -62,8 +62,8 @@ use std::{
     time::Duration,
 };
 
-use crate::{ss2_common::*, ss2_entity_info::new, SCALE_FACTOR};
-use cgmath::{vec3, Deg, Point3, Quaternion, Rotation3, Vector3};
+use crate::{ss2_common::*, SCALE_FACTOR};
+use cgmath::{vec3, Deg, Quaternion, Rotation3, Vector3};
 use shipyard::{
     Component, EntityId, Get, IntoIter, IntoWithId, TupleAddComponent, View, ViewMut, World,
 };
