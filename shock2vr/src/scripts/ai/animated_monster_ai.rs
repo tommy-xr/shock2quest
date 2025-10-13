@@ -268,7 +268,7 @@ impl Script for AnimatedMonsterAI {
                     delta: -(amount.round() as i32),
                 }
             }
-            MessagePayload::TurnOn { from } => {
+            MessagePayload::TurnOn { from: _ } => {
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
                 if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
@@ -289,7 +289,7 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 }
             }
-            MessagePayload::Signal { name } => {
+            MessagePayload::Signal { name: _ } => {
                 // Do we have a response to this signal?
 
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();

@@ -48,7 +48,6 @@ use engine::{
 use physics::PhysicsWorld;
 use rapier3d::prelude::RigidBodyHandle;
 use scripts::ScriptWorld;
-use std::time::Instant;
 
 use shipyard::*;
 use shipyard::{self, View, World};
@@ -64,7 +63,7 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropProxyEntity,
+        RuntimePropDoNotSerialize, RuntimePropJointTransforms,
         RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
@@ -206,7 +205,7 @@ impl Mission {
             links_with_data,
             properties,
         );
-        let mut scene = dark::mission::to_scene(&level, asset_cache);
+        let scene = dark::mission::to_scene(&level, asset_cache);
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 

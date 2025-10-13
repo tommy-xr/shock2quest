@@ -5,18 +5,15 @@ mod util;
 use collision::Aabb3;
 use engine::profile;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 use util::*;
 
 use bitflags::bitflags;
-use cgmath::{point3, InnerSpace, Matrix4, Point3, Quaternion, SquareMatrix, Vector3};
+use cgmath::{point3, InnerSpace, Matrix4, Point3, Quaternion, Vector3};
 use dark::{mission::SystemShock2Level, SCALE_FACTOR};
 use engine::scene::SceneObject;
-use ordered_float::*;
 use rapier3d::{
     control::{CharacterAutostep, CharacterLength, KinematicCharacterController},
     na::UnitQuaternion,
-    parry::query::RayCast,
     prelude::*,
 };
 use shipyard::EntityId;

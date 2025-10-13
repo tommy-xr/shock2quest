@@ -182,7 +182,7 @@ pub fn create_entity_core(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     _template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
     obj_map: &HashMap<i32, String>,
-    additional_options: CreateEntityOptions,
+    _additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Add template id
     world.add_component(entity_id, PropTemplateId { template_id });
@@ -326,7 +326,7 @@ fn create_model(
         v_prop_model,
         v_creature_pose,
         _v_hasrefs,
-        v_rendertype,
+        _v_rendertype,
         v_scale,
         mut rv_vhots,
     ) = world

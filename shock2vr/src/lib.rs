@@ -24,7 +24,7 @@ pub use mission::SpawnLocation;
 use std::{
     collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
-    io::{BufReader, Read},
+    io::BufReader,
     rc::Rc,
 };
 
@@ -35,8 +35,8 @@ use dark::{
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
     motion::MotionDB,
     properties::{
-        AmbientSoundFlags, InternalPropOriginalModelName, Link, PropAISignalResponse,
-        PropAmbientHacked, PropModelName, PropPosition, PropSignalType,
+        AmbientSoundFlags,
+        PropAmbientHacked, PropPosition,
     },
     SCALE_FACTOR,
 };
@@ -47,7 +47,6 @@ use engine::{
     profile,
     scene::SceneObject,
 };
-use std::time::Instant;
 
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
@@ -64,7 +63,6 @@ use zip_asset_path::ZipAssetPath;
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::{Effect, Message, MessagePayload},
-    util::log_entities_with_link,
 };
 
 #[cfg(target_os = "android")]

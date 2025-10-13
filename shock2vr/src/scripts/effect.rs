@@ -5,7 +5,7 @@ use dark::{
     EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
-use shipyard::{Component, EntityId};
+use shipyard::EntityId;
 
 use crate::{
     gui::{GuiComponentRenderInfo, GuiHandle},
