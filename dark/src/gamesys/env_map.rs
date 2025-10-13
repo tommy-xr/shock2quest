@@ -1,7 +1,6 @@
 use std::{io};
 
 
-use shipyard::{IntoIter};
 use tracing::trace;
 
 use crate::{
@@ -18,7 +17,7 @@ impl EnvMap {
     ) -> TagDatabase {
         let test = table_of_contents.get_chunk("ENV_SOUND".to_owned()).unwrap();
 
-        reader.seek(io::SeekFrom::Start(test.offset));
+        let _ = reader.seek(io::SeekFrom::Start(test.offset));
         let local_required_size = read_u32(reader);
 
         trace!("local required size: {}", &local_required_size);

@@ -10,16 +10,16 @@ use serde::{Deserialize, Serialize};
 bitflags! {
     #[derive(Serialize, Deserialize)]
     pub struct AmbientSoundFlags: u32 {
-        const Environmental = 1 << 0; //1
-        const NoSharpCurve = 1 << 1; //2
-        const TurnedOff = 1 << 2; // 4
-        const RemoveProp = 1 << 3; //8
-        const Music = 1 << 4; //16
-        const Synch = 1 << 5; //32
-        const NoFade = 1 << 6;
-        const DestroyObject = 1 << 7;
-        const DoAutoOff  = 1 << 8;
-        const Default = 0;
+        const ENVIRONMENTAL = 1 << 0; //1
+        const NO_SHARP_CURVE = 1 << 1; //2
+        const TURNED_OFF = 1 << 2; // 4
+        const REMOVE_PROP = 1 << 3; //8
+        const MUSIC = 1 << 4; //16
+        const SYNCH = 1 << 5; //32
+        const NO_FADE = 1 << 6;
+        const DESTROY_OBJECT = 1 << 7;
+        const DO_AUTO_OFF  = 1 << 8;
+        const DEFAULT = 0;
     }
 }
 

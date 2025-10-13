@@ -78,7 +78,7 @@ pub fn run_tweq(
 
             if time_since_last_event > tweq_config.rate {
                 match tweq_config.halt {
-                    TweqHalt::SLAY_OBJ => effects.push(Effect::SlayEntity { entity_id: id }),
+                    TweqHalt::SlayObj => effects.push(Effect::SlayEntity { entity_id: id }),
                     _ => effects.push(Effect::DestroyEntity { entity_id: id }),
                 }
             }

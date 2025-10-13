@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io};
 
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
-use shipyard::{Get, IntoIter};
 
 use crate::{
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},

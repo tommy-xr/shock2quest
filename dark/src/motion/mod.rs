@@ -67,7 +67,7 @@ impl MotionDB {
 
         let mot_chunk = table_of_contents.get_chunk("MotDBase".to_owned()).unwrap();
 
-        reader.seek(io::SeekFrom::Start(mot_chunk.offset));
+        let _ = reader.seek(io::SeekFrom::Start(mot_chunk.offset));
 
         // Load Namemap
         let (animation_name_to_index, index_to_animation_name) = load_name_map(reader);

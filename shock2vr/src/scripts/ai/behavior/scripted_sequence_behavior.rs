@@ -254,9 +254,9 @@ impl ScriptedAction for WaitScriptedAction {
     fn update(
         &mut self,
         current_heading: Deg<f32>,
-        world: &World,
-        physics: &PhysicsWorld,
-        entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        _entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
         self.remaining_duration_in_seconds -= time.elapsed.as_secs_f32();

@@ -13,7 +13,6 @@ use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinned},
     texture::{AnimatedTexture, TextureTrait},
-    texture_format::TextureFormat,
 };
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
@@ -113,13 +112,13 @@ pub fn to_scene_objects(
     mesh: &SystemShock2ObjectMesh,
     asset_cache: &mut AssetCache,
 ) -> (Vec<SceneObject>, Skeleton) {
-    let mut hashToMaterial = HashMap::new();
+    let mut hash_to_material = HashMap::new();
 
     let material_len = mesh.materials.len();
     for idx in 0..material_len {
         let temp_material = &mesh.materials[idx];
 
-        hashToMaterial.insert(temp_material.slot_num as u16, temp_material.clone());
+        hash_to_material.insert(temp_material.slot_num as u16, temp_material.clone());
     }
 
     let slot_to_vertices = to_vertices(mesh);
@@ -140,7 +139,7 @@ pub fn to_scene_objects(
                 return None;
             }
 
-            let material = hashToMaterial.get(&slot).unwrap();
+            let material = hash_to_material.get(&slot).unwrap();
             let mut tex_path = material.name.to_string();
 
             // HACK... for broken texture name
@@ -150,7 +149,7 @@ pub fn to_scene_objects(
 
             let maybe_texture = asset_cache.get_opt(&TEXTURE_IMPORTER, &tex_path);
 
-            if (maybe_texture.is_none()) {
+            if maybe_texture.is_none() {
                 return None;
             }
 
@@ -325,7 +324,7 @@ pub fn to_vertices(
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
 
-    let mut hashMap = HashMap::new();
+    let mut hash_map = HashMap::new();
 
     for poly in polygons {
         let indices = &poly.vertex_indices;
@@ -333,9 +332,9 @@ pub fn to_vertices(
         let slot = poly.slot_index;
 
         let vec = Vec::new();
-        hashMap.entry(slot).or_insert(vec);
+        hash_map.entry(slot).or_insert(vec);
 
-        let verts = hashMap.get_mut(&slot).unwrap();
+        let verts = hash_map.get_mut(&slot).unwrap();
 
         let len = indices.len();
         let uv_len = uv_indices.len();
@@ -361,7 +360,7 @@ pub fn to_vertices(
         }
     }
 
-    hashMap
+    hash_map
 }
 
 fn get_bone_index_for_point(header: &SystemShock2ObjectMesh, usize: u16) -> u32 {

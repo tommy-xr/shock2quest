@@ -10,15 +10,15 @@ use serde::{Deserialize, Serialize};
 bitflags! {
     #[derive(Deserialize, Serialize)]
     pub struct FrobFlag: u32 {
-        const Move = 1 << 0;
-        const Script = 1 << 1;
-        const Delete = 1 << 2;
-        const Ignore = 1 << 3;
-        const Focus = 1 << 4;
-        const Tool = 1 << 5;
-        const UseAmmo = 1 << 6;
-        const Default = 1 << 7;
-        const Deselect  = 1 << 8;
+        const MOVE = 1 << 0;
+        const SCRIPT = 1 << 1;
+        const DELETE = 1 << 2;
+        const IGNORE = 1 << 3;
+        const FOCUS = 1 << 4;
+        const TOOL = 1 << 5;
+        const USE_AMMO = 1 << 6;
+        const DEFAULT = 1 << 7;
+        const DESELECT  = 1 << 8;
     }
 }
 

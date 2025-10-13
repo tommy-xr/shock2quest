@@ -24,7 +24,7 @@ pub use mission::SpawnLocation;
 use std::{
     collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
-    io::{BufReader, Read},
+    io::BufReader,
     rc::Rc,
 };
 
@@ -35,8 +35,8 @@ use dark::{
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
     motion::MotionDB,
     properties::{
-        AmbientSoundFlags, InternalPropOriginalModelName, Link, PropAISignalResponse,
-        PropAmbientHacked, PropModelName, PropPosition, PropSignalType,
+        AmbientSoundFlags,
+        PropAmbientHacked, PropPosition,
     },
     SCALE_FACTOR,
 };
@@ -47,7 +47,6 @@ use engine::{
     profile,
     scene::SceneObject,
 };
-use std::time::Instant;
 
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
@@ -64,7 +63,6 @@ use zip_asset_path::ZipAssetPath;
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::{Effect, Message, MessagePayload},
-    util::log_entities_with_link,
 };
 
 #[cfg(target_os = "android")]
@@ -421,11 +419,11 @@ impl Game {
                     let dist_squared = (position.position - v_player_position.pos).magnitude2();
 
                     if dist_squared < ambient_sound.radius_squared {
-                        if ambient_sound.sound_flags.contains(AmbientSoundFlags::Music) {
+                        if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
                             new_cue = Some(ambient_sound.schema.to_owned());
                         } else if ambient_sound
                             .sound_flags
-                            .contains(AmbientSoundFlags::Environmental)
+                            .contains(AmbientSoundFlags::ENVIRONMENTAL)
                         {
                             let schema_val = self.resolve_schema(&ambient_sound.schema);
                             next_env_sound = Some(schema_val)

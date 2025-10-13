@@ -48,7 +48,6 @@ use engine::{
 use physics::PhysicsWorld;
 use rapier3d::prelude::RigidBodyHandle;
 use scripts::ScriptWorld;
-use std::time::Instant;
 
 use shipyard::*;
 use shipyard::{self, View, World};
@@ -64,7 +63,7 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropProxyEntity,
+        RuntimePropDoNotSerialize, RuntimePropJointTransforms,
         RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
@@ -206,7 +205,7 @@ impl Mission {
             links_with_data,
             properties,
         );
-        let mut scene = dark::mission::to_scene(&level, asset_cache);
+        let scene = dark::mission::to_scene(&level, asset_cache);
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 
@@ -1766,11 +1765,11 @@ fn create_room_entities(
             PropPhysType {
                 is_special: false,
                 num_submodels: 1,
-                phys_type: PhysicsModelType::OrientedBoundingBox,
+                phys_type: PhysicsModelType::ORIENTED_BOUNDING_BOX,
                 remove_on_sleep: false,
             },
             PropTripFlags {
-                trip_flags: TripFlags::Enter | TripFlags::Exit | TripFlags::Player,
+                trip_flags: TripFlags::ENTER | TripFlags::EXIT | TripFlags::PLAYER,
             },
             PropPhysState {
                 position: room.center + vert_offset,

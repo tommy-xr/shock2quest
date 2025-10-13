@@ -31,7 +31,7 @@ pub struct TrapNewTripwire {
 impl TrapNewTripwire {
     pub fn new() -> TrapNewTripwire {
         TrapNewTripwire {
-            trip_flags: TripFlags::Default,
+            trip_flags: TripFlags::DEFAULT,
             has_activated: false,
             entity_in_trap: HashSet::new(),
             //entity_to_time: HashMap::new(),
@@ -40,7 +40,7 @@ impl TrapNewTripwire {
     }
 
     fn handle_invert(&self, msg: MessagePayload) -> MessagePayload {
-        if self.trip_flags.contains(TripFlags::Invert) {
+        if self.trip_flags.contains(TripFlags::INVERT) {
             invert(msg)
         } else {
             msg
@@ -60,11 +60,11 @@ impl TrapNewTripwire {
         // Zap
         // EasterEgg
 
-        let is_once = trip_flags.contains(TripFlags::Once);
+        let is_once = trip_flags.contains(TripFlags::ONCE);
 
         if is_once && self.has_activated {
             false
-        } else if trip_flags.contains(TripFlags::Player) {
+        } else if trip_flags.contains(TripFlags::PLAYER) {
 
             // TODO: TripFlags::Player
             // I'm not sure what the TripFlags::Player is actually used for.
@@ -128,7 +128,7 @@ impl Script for TrapNewTripwire {
                     }
 
                     if was_empty
-                        && self.trip_flags.contains(TripFlags::Enter)
+                        && self.trip_flags.contains(TripFlags::ENTER)
                         && !did_entity_just_teleport
                     {
                         send_to_all_switch_links(
@@ -166,7 +166,7 @@ impl Script for TrapNewTripwire {
                 if !did_teleport
                     && !has_keys_now
                     && had_keys_before
-                    && self.trip_flags.contains(TripFlags::Exit)
+                    && self.trip_flags.contains(TripFlags::EXIT)
                 {
                     send_to_all_switch_links(
                         world,

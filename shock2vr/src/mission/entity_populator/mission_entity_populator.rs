@@ -5,7 +5,7 @@ use dark::properties::WrappedEntityId;
 ///
 /// An implementation of EntityPopulator that creates entities based on the entity data
 /// in a mission file
-use shipyard::{Get, IntoIter, IntoWithId, View, ViewMut, World};
+use shipyard::{IntoIter, View, ViewMut, World};
 use std::collections::HashMap;
 
 use dark::mission::SystemShock2Level;
