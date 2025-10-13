@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io};
 
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
-use shipyard::{Get, IntoIter, View, World};
+use shipyard::{Get, View, World};
 use tracing::trace;
 
 use crate::{
@@ -47,7 +47,7 @@ impl SoundSchema {
         // Read SchSamp chunk
         let schema_chunk = table_of_contents.get_chunk("SchSamp".to_owned()).unwrap();
         let end = schema_chunk.offset + schema_chunk.length;
-        reader.seek(io::SeekFrom::Start(schema_chunk.offset));
+        let _ = reader.seek(io::SeekFrom::Start(schema_chunk.offset));
 
         trace!("starting at: {}", schema_chunk.offset);
 

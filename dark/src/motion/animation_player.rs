@@ -1,7 +1,6 @@
 use std::{rc::Rc, time::Duration};
 
 use cgmath::{vec3, Deg, Matrix4, Vector3};
-use num::complex::ComplexFloat;
 use rpds as immutable;
 
 use crate::ss2_skeleton::{self, AnimationInfo, Skeleton};

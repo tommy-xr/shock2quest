@@ -39,7 +39,7 @@ impl SpeechDB {
         // Read SchSamp chunk
         let schema_chunk = table_of_contents.get_chunk("Speech_DB".to_owned()).unwrap();
         let _end = schema_chunk.offset + schema_chunk.length;
-        reader.seek(io::SeekFrom::Start(schema_chunk.offset));
+        let _ = reader.seek(io::SeekFrom::Start(schema_chunk.offset));
 
         let concept_map = NameMap::read(reader);
         let tag_map = NameMap::read(reader);

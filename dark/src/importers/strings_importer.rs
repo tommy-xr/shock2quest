@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
-    rc::Rc,
 };
 
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};

@@ -182,7 +182,7 @@ pub fn create_entity_core(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     _template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
     obj_map: &HashMap<i32, String>,
-    additional_options: CreateEntityOptions,
+    _additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Add template id
     world.add_component(entity_id, PropTemplateId { template_id });
@@ -326,7 +326,7 @@ fn create_model(
         v_prop_model,
         v_creature_pose,
         _v_hasrefs,
-        v_rendertype,
+        _v_rendertype,
         v_scale,
         mut rv_vhots,
     ) = world
@@ -379,7 +379,7 @@ fn create_model(
             if let Ok(creature_pose) = v_creature_pose.get(entity_id) {
                 // let motion_db = { asset_cache.get(&MOTIONDB_IMPORTER, "motiondb.bin".to_owned()) };
                 // TODO: We can only handle motion name props at the moment..
-                if creature_pose.pose_type.contains(PoseType::MotionName) {
+                if creature_pose.pose_type.contains(PoseType::MOTION_NAME) {
                     let motion_name = creature_pose.motion_or_tag_name.to_owned();
                     let animation_clip =
                         asset_cache.get(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", motion_name));
@@ -634,7 +634,7 @@ pub fn create_physics_representation(
                 dynamics_options,
             );
             physics.set_enabled_rotations(entity_id, false, false, false);
-        } else if frob_info.world_action.contains(FrobFlag::Move) {
+        } else if frob_info.world_action.contains(FrobFlag::MOVE) {
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
@@ -737,8 +737,8 @@ pub fn create_physics_representation(
             );
 
             let shape = match phys_type.phys_type {
-                PhysicsModelType::OrientedBoundingBox => PhysicsShape::Cuboid(size),
-                PhysicsModelType::Sphere => {
+                PhysicsModelType::ORIENTED_BOUNDING_BOX => PhysicsShape::Cuboid(size),
+                PhysicsModelType::SPHERE => {
                     PhysicsShape::Sphere(dimensions.radius0.abs().max(dimensions.radius1.abs()))
                 }
                 _ => {
@@ -747,7 +747,7 @@ pub fn create_physics_representation(
                 }
             };
 
-            let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::Sphere
+            let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
             {
                 println!("-- hitbox - creating dynamic entity");
                 physics.add_dynamic(

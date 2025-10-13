@@ -32,11 +32,11 @@ bitflags! {
 
 #[derive(FromPrimitive, Clone, Debug, Deserialize, Serialize)]
 pub enum TweqHalt {
-    DESTROY_OBJECT = 0,
-    REMOVE_PROP = 1,
-    STOP_TWEQ = 2,
-    CONTINUE = 3,
-    SLAY_OBJ = 4,
+    DestroyObject = 0,
+    RemoveProp = 1,
+    StopTweq = 2,
+    Continue = 3,
+    SlayObj = 4,
 }
 
 #[derive(Debug, Component, Clone, Deserialize, Serialize)]
