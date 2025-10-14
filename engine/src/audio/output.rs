@@ -11,6 +11,7 @@ use std::result;
 
 use symphonia::core::audio::{AudioBufferRef, SignalSpec};
 use symphonia::core::units::Duration;
+use crate::audio_log;
 
 pub trait AudioOutput {
     fn write(&mut self, decoded: AudioBufferRef<'_>) -> Result<()>;
@@ -59,7 +60,7 @@ mod cpal {
             let device = match host.default_output_device() {
                 Some(device) => device,
                 _ => {
-                    println!("failed to get default audio output device");
+                    audio_log!(ERROR, "Failed to get default audio output device");
                     return Err(AudioOutputError::OpenStreamError);
                 }
             };
@@ -67,7 +68,7 @@ mod cpal {
             let config = match device.default_output_config() {
                 Ok(config) => config,
                 Err(err) => {
-                    println!("failed to get default audio output device config: {}", err);
+                    audio_log!(ERROR, "Failed to get default audio output device config: {}", err);
                     return Err(AudioOutputError::OpenStreamError);
                 }
             };
@@ -126,11 +127,11 @@ mod cpal {
                     // Mute any remaining samples.
                     data[written..].iter_mut().for_each(|s| *s = T::MID);
                 },
-                move |err| println!("audio output error: {}", err),
+                move |err| audio_log!(ERROR, "Audio output error: {}", err),
             );
 
             if let Err(err) = stream_result {
-                println!("audio output stream open error: {}", err);
+                audio_log!(ERROR, "Audio output stream open error: {}", err);
 
                 return Err(AudioOutputError::OpenStreamError);
             }
@@ -139,7 +140,7 @@ mod cpal {
 
             // Start the output stream.
             if let Err(err) = stream.play() {
-                println!("audio output stream play error: {}", err);
+                audio_log!(ERROR, "Audio output stream play error: {}", err);
 
                 return Err(AudioOutputError::PlayStreamError);
             }

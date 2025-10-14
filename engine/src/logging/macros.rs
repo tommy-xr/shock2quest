@@ -5,8 +5,8 @@
 macro_rules! scoped_log {
     ($level:ident, $scope:expr, $($arg:tt)*) => {
         let log_config = $crate::logging::get_log_config();
-        if log_config.should_log($scope, $crate::logging::Level::$level) {
-            tracing::$level!(scope = $scope, $($arg)*);
+        if log_config.should_log($scope, tracing::Level::$level) {
+            tracing::event!(tracing::Level::$level, scope = $scope, $($arg)*);
         }
     };
 }
