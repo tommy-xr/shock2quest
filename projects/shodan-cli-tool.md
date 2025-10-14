@@ -248,6 +248,47 @@ Shodan implements multiple layers of security to prevent prompt injection attack
 - **Medium Risk**: Code changes, refactoring, build improvements
 - **High Risk**: System changes, major architectural modifications
 
+## Technical Architecture
+
+### Claude Code Integration Flow
+```mermaid
+graph TD
+    A[Prompt Selection] --> B[Session Creation]
+    B --> C[Context Generation]
+    C --> D[JSON Input Preparation]
+    D --> E[Claude Code Subprocess]
+    E --> F[Output Collection]
+    F --> G[JSON Parsing]
+    G --> H[Result Processing]
+    H --> I[Session Cleanup]
+```
+
+### Session Management
+- **Unique Session IDs**: `shodan-{timestamp}-{random}` format
+- **State Tracking**: Starting → Running → Completed/Failed/TimedOut/Cancelled
+- **Timeout Protection**: Configurable via `max_session_time` (default: 4h)
+- **Process Cleanup**: Automatic termination and resource cleanup
+- **Concurrent Support**: Multiple sessions can run simultaneously
+
+### Safety Context Injection
+Every Claude Code execution automatically receives:
+```yaml
+Safety Guidelines:
+  - Only make incremental, safe improvements
+  - Do not modify core VR functionality without thorough understanding
+  - Focus on documentation, testing, and minor improvements
+  - Always test changes before committing
+
+Project Context:
+  - VR port of System Shock 2 for Oculus Quest
+  - Written in Rust with OpenGL rendering
+  - Performance is critical for VR (90+ FPS)
+  - Follow existing code patterns and conventions
+
+Repository State:
+  - Current branch, clean status, open PRs
+```
+
 ## Dependencies
 
 Key Rust crates used:
@@ -279,6 +320,8 @@ cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Ex
 - **Repository Owner Filtering**: Only PRs from repository owner are considered (prevents prompt injection attacks)
 - **Prompt Validation**: Security checks for dangerous patterns and injection attempts
 - **Risk Assessment**: Each prompt classified as Low/Medium/High risk with safety guidelines
+- **Automated Context Injection**: Safety guidelines and project constraints added to every Claude Code execution
+- **Session Isolation**: Each execution gets unique session ID with proper cleanup
 
 **Git Operations Working:**
 - Branch detection and switching
@@ -296,6 +339,15 @@ cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Ex
 - **Content Validation**: Automatic detection of dangerous patterns
 - **Formatted Output**: Clean formatting for Claude Code execution
 
+**Claude Code Integration:**
+- **JSON I/O Communication**: Structured input/output with `--input-format=json --output-format=json`
+- **Session Management**: Complete lifecycle tracking (Starting → Running → Completed/Failed/TimedOut)
+- **Timeout Protection**: Configurable timeouts with graceful termination (4h default)
+- **Rich Output Tracking**: Files created/modified, Git changes, PR creation detection
+- **Process Management**: Safe subprocess execution with proper cleanup
+- **Context Generation**: Automatic safety guidelines and project context injection
+- **Error Handling**: Comprehensive error capture with fallback to plain text output
+
 **Configuration System:**
 - TOML-based configuration with duration parsing ("1h", "30m", "5s")
 - Environment variable support and logging configuration
@@ -308,12 +360,16 @@ cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Ex
 - Found 1 active Claude Code session with proper detection
 - All 5 prompts loaded successfully with proper metadata parsing
 - Random selection working with weighted probability distribution
+- **Claude Code execution tested** with dry-run and actual execution modes
+- **7 tests passing** including new Claude Code integration tests
+- **Session ID generation** working with unique identifiers
+- **Complete orchestration cycle** tested via `run --once` command
 
 ### 🚧 Next Implementation Steps
 
-**Phase 4:** Claude Code subprocess integration with JSON I/O
 **Phase 5:** PR monitoring and CI status checking
 **Phase 6:** Main orchestration loop with scheduling
+**Phase 7:** Error handling and polish
 
 ## Success Criteria
 
