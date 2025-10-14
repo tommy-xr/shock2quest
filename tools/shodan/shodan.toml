@@ -1,0 +1,23 @@
+[shodan]
+# Scheduling
+interval = "1h"              # How often to run orchestration cycles
+max_session_time = "4h"      # Maximum time for a Claude Code session
+
+# Git settings
+main_branch = "main"         # Name of the main branch
+sync_command = "gt sync"     # Command to sync to latest good state
+
+# GitHub settings
+check_interval = "5m"        # How often to check PR status
+max_ci_wait_time = "30m"     # Maximum time to wait for CI completion
+
+# Prompt settings
+prompt_dir = "prompts"       # Directory containing prompt files (relative to tools/shodan/)
+
+# Prompt weights for random selection (higher = more likely)
+[shodan.prompt_weights]
+"iterate-on-projects.md" = 3
+"iterate-on-issues.md" = 2
+"check-pr-state.md" = 1
+"improve-documentation.md" = 2
+"optimize-performance.md" = 2
