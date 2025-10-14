@@ -68,7 +68,7 @@ This is a Rust-based VR port of System Shock 2. Key components:
 ### 1. Research Phase
 
 - Read relevant source files and understand data flow
-- Check `.notes/` folder for architectural context
+- Check `docs/` folder for architectural context
 - Review `references/` for technical specifications
 - Understand existing patterns and conventions
 
@@ -77,7 +77,10 @@ This is a Rust-based VR port of System Shock 2. Key components:
 - Break the change into 2-3 small, logical steps maximum
 - Identify which files need modification
 - Plan testing approach for each increment
-- Consider VR performance implications (see `.notes/vr-considerations.md`)
+- Consider VR performance implications:
+  - Quest hardware constraints require efficient code
+  - Analyze rendering paths for frame rate optimization
+  - Review memory usage patterns
 
 ### 3. Implementation Phase
 
@@ -91,7 +94,7 @@ This is a Rust-based VR port of System Shock 2. Key components:
 - Run `cargo check` and `cargo clippy`
 - Test core functionality on desktop
 - Verify VR compatibility if changes affect rendering
-- Update documentation in `.notes/` if architectural changes were made
+- Update documentation in `docs/` if architectural changes were made
 
 ## Common Change Categories
 
@@ -118,7 +121,7 @@ This is a Rust-based VR port of System Shock 2. Key components:
 
 ## Notes and Documentation
 
-- Update `.notes/` folder when making architectural decisions
+- Update `docs/` folder when making architectural decisions
 - Document complex VR interactions and performance considerations
 - Keep `CLAUDE.md` updated with new workflow discoveries
 - Add new reference materials to appropriate folders
@@ -128,8 +131,12 @@ This is a Rust-based VR port of System Shock 2. Key components:
 ## Getting Help
 
 - Check existing code for similar patterns
-- Review `.notes/development-workflow.md` for step-by-step guidance
-- Consult `.notes/vr-considerations.md` for VR-specific requirements
+- Follow the incremental development process outlined above
+- Focus on code analysis tasks:
+  - Performance bottleneck identification
+  - Code pattern consistency
+  - Memory usage optimization
+  - Rendering pipeline efficiency
 - Use desktop runtime for rapid iteration and debugging
 - It may be necessary to create one-off CLI tools to exercise functionality - feel free to add these as part of the PR. This is especially useful when a change may require understanding the games metadata (ie, the .gam or .mis files) - using our existing parsing tools to query the data can help with understanding the format.
 
