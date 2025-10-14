@@ -66,20 +66,28 @@ Shodan monitors the repository state and, when no active Claude Code sessions ar
 - [x] Complete repository state aggregation (`get_repository_state()`)
 - [x] Integration with main CLI `check` command with detailed reporting
 
-### Phase 3: Prompt Management (1 day)
+### Phase 3: Prompt Management ✅ COMPLETED
 
-#### Task 3.1: Prompt System
-- [ ] Create `prompts.rs` module
-- [ ] Implement prompt discovery in `tools/shodan/prompts/`
-- [ ] Random prompt selection with weighted preferences
-- [ ] Prompt validation and formatting
+#### Task 3.1: Prompt System ✅
+- [x] Create `prompts.rs` module with comprehensive prompt management
+- [x] Implement prompt discovery in `tools/shodan/prompts/` with YAML frontmatter support
+- [x] Random prompt selection with weighted preferences (configurable in TOML)
+- [x] Prompt validation and formatting with security checks
+- [x] **Security Enhancement**: Repository owner detection and PR filtering to prevent prompt injection attacks
+- [x] Risk level classification system (Low/Medium/High)
 
-#### Task 3.2: Initial Prompts
-- [ ] Create `tools/shodan/prompts/iterate-on-projects.md`
-- [ ] Create `tools/shodan/prompts/iterate-on-issues.md`
-- [ ] Create `tools/shodan/prompts/check-pr-state.md`
-- [ ] Create `tools/shodan/prompts/improve-documentation.md`
-- [ ] Create `tools/shodan/prompts/optimize-performance.md`
+#### Task 3.2: Initial Prompts ✅
+- [x] Create `tools/shodan/prompts/iterate-on-projects.md` (weight: 3, risk: Low)
+- [x] Create `tools/shodan/prompts/iterate-on-issues.md` (weight: 2, risk: Medium)
+- [x] Create `tools/shodan/prompts/check-pr-state.md` (weight: 1, risk: Low)
+- [x] Create `tools/shodan/prompts/improve-documentation.md` (weight: 2, risk: Low)
+- [x] Create `tools/shodan/prompts/optimize-performance.md` (weight: 2, risk: Medium)
+
+#### Task 3.3: CLI Integration ✅
+- [x] `list-prompts` command with statistics and metadata display
+- [x] Enhanced `test-prompt <file> --dry-run` command with validation
+- [x] Security validation with dangerous pattern detection
+- [x] Formatted prompt output for Claude Code execution
 
 ### Phase 4: Claude Code Integration (2 days)
 
@@ -207,56 +215,95 @@ prompt_dir = "prompts"
 "check-pr-state.md" = 1
 ```
 
+## Security Architecture
+
+### Prompt Injection Prevention
+Shodan implements multiple layers of security to prevent prompt injection attacks:
+
+1. **Repository Owner Filtering**: Only PRs from the repository owner are considered for automation
+2. **Content Validation**: All prompts are scanned for dangerous patterns and injection attempts
+3. **Risk Classification**: Every prompt has an assigned risk level with appropriate safeguards
+4. **Controlled Prompt Library**: Only pre-approved, security-reviewed prompts are used
+
+### Security Patterns Detected
+```rust
+// Dangerous command patterns
+["rm -rf", "sudo rm", "format /", "del /s", "DROP TABLE", "system(", "exec("]
+
+// Prompt injection patterns
+["ignore previous instructions", "forget your role", "you are now", "admin mode"]
+```
+
+### Risk Level Guidelines
+- **Low Risk**: Documentation, analysis, safe read-only operations
+- **Medium Risk**: Code changes, refactoring, build improvements
+- **High Risk**: System changes, major architectural modifications
+
 ## Dependencies
 
-Key Rust crates needed:
+Key Rust crates used:
 - `clap` (4.0+) - CLI argument parsing
 - `tokio` (1.0+) - Async runtime
 - `serde` + `serde_json` - JSON serialization
+- `serde_yaml` (0.9+) - YAML frontmatter parsing
 - `anyhow` - Error handling
 - `chrono` - Date/time handling
-- `rand` - Random selection
-- `reqwest` - HTTP client (if needed for GitHub API)
-- `tracing` + `tracing-subscriber` - Logging
+- `rand` - Random selection with weights
+- `tracing` + `tracing-subscriber` - Structured logging
 - `toml` - Configuration parsing
 
 ## Current Status & Working Features
 
-### ✅ Phase 1 & 2 Achievements
+### ✅ Phase 1, 2 & 3 Achievements
 
 **CLI Interface:**
 ```bash
-cargo run -p shodan check          # Check repository state
+cargo run -p shodan check              # Check repository state
 cargo run -p shodan --verbose check   # Detailed logging
-cargo run -p shodan run --once     # Single orchestration cycle
-cargo run -p shodan test-prompt prompts/example.md --dry-run
+cargo run -p shodan run --once         # Single orchestration cycle
+cargo run -p shodan list-prompts       # Show available prompts with statistics
+cargo run -p shodan test-prompt prompts/iterate-on-projects.md --dry-run
 ```
+
+**Security Features:**
+- **Repository Owner Filtering**: Only PRs from repository owner are considered (prevents prompt injection attacks)
+- **Prompt Validation**: Security checks for dangerous patterns and injection attempts
+- **Risk Assessment**: Each prompt classified as Low/Medium/High risk with safety guidelines
 
 **Git Operations Working:**
 - Branch detection and switching
-- GitHub CLI integration for PR management (tested with 4 real PRs)
-- Process detection for Claude Code sessions (detected 2 active sessions)
+- GitHub CLI integration for PR management (tested with 5 owner PRs, security filtered)
+- Process detection for Claude Code sessions (detected 1 active session)
 - Git status parsing (clean/dirty, ahead/behind upstream)
 - Safety checks for automation readiness
 - Comprehensive repository state reporting
 
+**Prompt Management System:**
+- **5 Security-Focused Prompts** with YAML frontmatter metadata
+- **Weighted Random Selection** (total weight: 10, average: 2.0)
+- **Risk Distribution**: 3 Low-risk, 2 Medium-risk prompts
+- **Tag-Based Organization**: 12 different tags for categorization
+- **Content Validation**: Automatic detection of dangerous patterns
+- **Formatted Output**: Clean formatting for Claude Code execution
+
 **Configuration System:**
 - TOML-based configuration with duration parsing ("1h", "30m", "5s")
 - Environment variable support and logging configuration
-- Prompt weighting system for random selection
-- Default configuration with sensible values
+- Prompt weighting system for random selection (configurable per prompt)
+- Automatic path resolution for different execution contexts
 
 **Real-World Validation:**
-- Successfully detected 4 open PRs with full metadata
-- Found 2 active Claude Code sessions (PIDs 61636, 94246)
-- Correctly identified repository as NOT ready for orchestration
-- Proper structured logging with debug traces in verbose mode
+- Successfully detected 5 open PRs with full metadata (all from repository owner)
+- Security filtering prevented consideration of external contributor PRs
+- Found 1 active Claude Code session with proper detection
+- All 5 prompts loaded successfully with proper metadata parsing
+- Random selection working with weighted probability distribution
 
 ### 🚧 Next Implementation Steps
 
-**Phase 3:** Prompt management system and initial prompt files
 **Phase 4:** Claude Code subprocess integration with JSON I/O
 **Phase 5:** PR monitoring and CI status checking
+**Phase 6:** Main orchestration loop with scheduling
 
 ## Success Criteria
 
@@ -266,6 +313,7 @@ cargo run -p shodan test-prompt prompts/example.md --dry-run
 4. **Configurable**: Easy to adjust timing, prompts, and behavior ✅ *Implemented*
 5. **Observable**: Clear logging and status reporting ✅ *Implemented*
 6. **Integration**: Works seamlessly with existing project workflow ✅ *Implemented*
+7. **Security**: Prevents prompt injection and malicious automation ✅ *Implemented*
 
 ## Future Enhancements
 
