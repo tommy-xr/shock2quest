@@ -5,6 +5,7 @@ pub mod file_system;
 mod font;
 mod gl_engine;
 pub mod importers;
+pub mod logging;
 pub mod macros;
 pub mod materials;
 pub mod scene;
