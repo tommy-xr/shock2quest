@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 mod config;
+mod git;
 
 use config::Config;
 
@@ -125,13 +126,56 @@ async fn run_loop(config: &Config, interval: &str) -> Result<()> {
 async fn check_state(config: &Config) -> Result<()> {
     info!("Checking current repository and system state");
 
-    // TODO: Implement state checking
-    // 1. Git status
-    // 2. Open PRs
-    // 3. Claude Code sessions
-    // 4. CI status
+    // Get complete repository state
+    let repo_state = git::get_repository_state().await?;
 
-    warn!("State checking not yet implemented");
+    // Display Git status
+    info!("Git Status:");
+    info!("  Current branch: {}", repo_state.git_status.current_branch);
+    info!("  Is clean: {}", repo_state.git_status.is_clean);
+    info!("  Uncommitted changes: {}", repo_state.git_status.has_uncommitted_changes);
+    info!("  Untracked files: {}", repo_state.git_status.has_untracked_files);
+    info!("  Ahead of upstream: {}", repo_state.git_status.ahead_of_upstream);
+    info!("  Behind upstream: {}", repo_state.git_status.behind_upstream);
+
+    // Display open PRs
+    info!("Open Pull Requests: {}", repo_state.open_prs.len());
+    for pr in &repo_state.open_prs {
+        info!("  PR #{}: {} ({})", pr.number, pr.title, pr.state);
+        info!("    {} -> {}", pr.head_ref, pr.base_ref);
+        info!("    URL: {}", pr.url);
+    }
+
+    // Display active Claude Code sessions
+    if repo_state.active_claude_sessions.is_empty() {
+        info!("Active Claude Code sessions: None");
+    } else {
+        info!("Active Claude Code sessions: {}", repo_state.active_claude_sessions.len());
+        for session in &repo_state.active_claude_sessions {
+            info!("  {}", session);
+        }
+    }
+
+    // Check if ready for orchestration
+    let ready_for_orchestration = repo_state.git_status.is_clean
+        && repo_state.active_claude_sessions.is_empty()
+        && repo_state.git_status.current_branch == config.shodan.main_branch;
+
+    if ready_for_orchestration {
+        info!("✅ Repository is ready for Shodan orchestration");
+    } else {
+        warn!("⚠️  Repository is NOT ready for Shodan orchestration");
+        if !repo_state.git_status.is_clean {
+            warn!("   - Repository has uncommitted changes or untracked files");
+        }
+        if !repo_state.active_claude_sessions.is_empty() {
+            warn!("   - Active Claude Code sessions detected");
+        }
+        if repo_state.git_status.current_branch != config.shodan.main_branch {
+            warn!("   - Not on main branch ({})", config.shodan.main_branch);
+        }
+    }
+
     Ok(())
 }
 
