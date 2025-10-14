@@ -289,6 +289,7 @@ impl PanicOnLoadScript {
     }
 }
 
+#[allow(dead_code)]
 struct PanicOnMessageScript;
 impl Script for PanicOnMessageScript {
     fn handle_message(

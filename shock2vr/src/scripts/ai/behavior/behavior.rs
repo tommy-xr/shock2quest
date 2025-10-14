@@ -66,6 +66,7 @@ pub trait Behavior {
     }
 }
 
+#[allow(dead_code)]
 pub fn random_behavior() -> Box<RefCell<dyn Behavior>> {
     let mut potential_behaviors: Vec<Box<RefCell<dyn Behavior>>> = vec![
         // Rc::new(MeleeAttackBehavior),
