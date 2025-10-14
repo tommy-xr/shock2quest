@@ -7,6 +7,7 @@ mod config;
 mod git;
 mod prompts;
 mod claude_code;
+mod github;
 
 use config::Config;
 
