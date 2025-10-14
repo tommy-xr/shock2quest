@@ -85,6 +85,7 @@ This is a Rust-based VR port of System Shock 2. Key components:
 ### 3. Implementation Phase
 
 - Make minimal changes to achieve one specific goal
+- If there are issues found, like a bug or potential refactoring, that are outside of the scope of the current goal, you _MAY_ open an issue with enough details to make it actionable in a separate pass.
 - Follow existing code patterns and naming conventions
 - Test on desktop runtime first
 - Validate each step before proceeding
