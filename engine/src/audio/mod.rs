@@ -9,6 +9,7 @@ use rodio::source::{Buffered, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
 use tracing::trace;
+use crate::audio_log;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -178,7 +179,7 @@ where
         position: Vector3<f32>,
         current_ambient_sounds: Vec<(TAmbientKey, Vector3<f32>, Rc<AudioClip>)>,
     ) {
-        println!("!!debug - audio update");
+        audio_log!(DEBUG, "Audio system update started");
         self.update_background_music();
         self.update_environmental_sounds();
 
