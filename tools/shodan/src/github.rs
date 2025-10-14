@@ -93,6 +93,51 @@ impl PRMonitor {
         }
     }
 
+    /// Extract run ID from GitHub URL (e.g., https://github.com/owner/repo/actions/runs/18468560103/job/52616505217)
+    fn extract_run_id_from_url(&self, url: &str) -> Option<String> {
+        if let Some(runs_pos) = url.find("/actions/runs/") {
+            let start = runs_pos + "/actions/runs/".len();
+            if let Some(end) = url[start..].find('/') {
+                return Some(url[start..start + end].to_string());
+            }
+        }
+        None
+    }
+
+    /// Get repository owner and name from git remote configuration
+    async fn get_repository_info(&self) -> Result<(String, String)> {
+        // Use gh api to get current repository info
+        let output = TokioCommand::new("gh")
+            .args(["repo", "view", "--json", "owner,name"])
+            .output()
+            .await
+            .context("Failed to execute gh repo view command")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to get repository info: {}", stderr));
+        }
+
+        let stdout = String::from_utf8(output.stdout)
+            .context("Invalid UTF-8 in gh repo view output")?;
+
+        let json: serde_json::Value = serde_json::from_str(&stdout)
+            .context("Failed to parse repository info JSON")?;
+
+        let owner = json["owner"]["login"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No owner found in repository info"))?
+            .to_string();
+
+        let name = json["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No name found in repository info"))?
+            .to_string();
+
+        debug!("Detected repository: {}/{}", owner, name);
+        Ok((owner, name))
+    }
+
     /// Start monitoring a specific PR
     pub async fn start_monitoring(&mut self, pr_number: u32) -> Result<()> {
         info!("Starting monitoring for PR #{}", pr_number);
@@ -216,8 +261,9 @@ impl PRMonitor {
     async fn get_pr_checks_via_api(&self, pr_number: u32) -> Result<Vec<CheckStatus>> {
         debug!("Getting PR checks via GitHub API for PR #{}", pr_number);
 
+        let (owner, repo) = self.get_repository_info().await?;
         let output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/:owner/:repo/pulls/{}/commits", pr_number)])
+            .args(["api", &format!("repos/{}/{}/pulls/{}/commits", owner, repo, pr_number)])
             .output()
             .await
             .context("Failed to get PR commits via API")?;
@@ -242,7 +288,7 @@ impl PRMonitor {
 
         // Get check runs for the latest commit
         let output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/:owner/:repo/commits/{}/check-runs", commit_sha)])
+            .args(["api", &format!("repos/{}/{}/commits/{}/check-runs", owner, repo, commit_sha)])
             .output()
             .await
             .context("Failed to get check runs via API")?;
@@ -399,20 +445,50 @@ impl PRMonitor {
             .collect();
 
         let mut error_logs = Vec::new();
-        let mut suggested_fixes = Vec::new();
 
         // Get detailed logs for failed checks
         for check in &failed_checks {
-            if let Some(_details_url) = &check.details_url {
-                // Try to get more detailed error information
-                if let Ok(logs) = self.get_check_logs(pr_number, &check.name).await {
-                    error_logs.extend(logs);
+            if let Some(details_url) = &check.details_url {
+                // Extract run ID from details URL (format: https://github.com/owner/repo/actions/runs/18468560103/job/52616505217)
+                if let Some(run_id) = self.extract_run_id_from_url(details_url) {
+                    debug!("Extracted run ID {} from check '{}'", run_id, check.name);
+
+                    match self.get_logs_via_rest_api(&run_id).await {
+                        Ok(logs) => {
+                            if !logs.is_empty() {
+                                // Save raw logs to a temporary file for LLM access
+                                let temp_dir = std::env::temp_dir();
+                                let log_file = temp_dir.join(format!("shodan_logs_pr{}_{}_run{}.txt", pr_number, check.name, run_id));
+
+                                match std::fs::write(&log_file, logs.join("\n")) {
+                                    Ok(_) => {
+                                        error_logs.push(format!("✅ Retrieved detailed build logs for check '{}' (run ID: {})", check.name, run_id));
+                                        error_logs.push(format!("📁 Raw logs saved to: {}", log_file.display()));
+                                        error_logs.push(format!("📊 Log contains {} lines of build output including error details", logs.len()));
+                                        error_logs.push("🔍 The raw logs contain the complete build failure information that Claude can analyze.".to_string());
+                                        info!("Successfully saved {} log lines for check '{}' to {}", logs.len(), check.name, log_file.display());
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to save logs to file: {}", e);
+                                        // Fall back to including logs directly
+                                        error_logs.push(format!("=== Logs for check: {} ===", check.name));
+                                        error_logs.extend(logs);
+                                        error_logs.push("=== End of logs ===".to_string());
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to get logs for check '{}': {}", check.name, e);
+                            error_logs.push(format!("❌ Could not retrieve logs for check '{}': {}", check.name, e));
+                        }
+                    }
+                } else {
+                    debug!("Could not extract run ID from details URL: {}", details_url);
                 }
             }
 
-            // Generate suggested fixes based on check name and failure type
-            let fixes = self.generate_fix_suggestions(&check.name, check);
-            suggested_fixes.extend(fixes);
+            // Skip generating generic suggested fixes since actual logs are available
         }
 
         // Determine if retry is recommended
@@ -426,7 +502,7 @@ impl PRMonitor {
             pr_number,
             failed_checks,
             error_logs,
-            suggested_fixes,
+            suggested_fixes: Vec::new(), // No generic suggestions when we have actual logs
             retry_recommended,
         };
 
@@ -440,117 +516,735 @@ impl PRMonitor {
     async fn get_check_logs(&self, pr_number: u32, check_name: &str) -> Result<Vec<String>> {
         debug!("Getting logs for check '{}' on PR #{}", check_name, pr_number);
 
-        // First, get the PR's head commit SHA
+        // Try multiple approaches to get failure logs
+
+        // Approach 1: Get recent failed runs regardless of commit
+        let recent_runs = self.get_recent_failed_runs(check_name).await?;
+        if !recent_runs.is_empty() {
+            return Ok(recent_runs);
+        }
+
+        // Approach 2: Try to get PR head commit and find runs for that commit
         let pr_output = TokioCommand::new("gh")
             .args(["pr", "view", &pr_number.to_string(), "--json", "headRefOid"])
             .output()
-            .await
-            .context("Failed to get PR head commit")?;
+            .await;
 
-        if !pr_output.status.success() {
-            return Ok(vec!["Could not get PR information".to_string()]);
-        }
-
-        let pr_stdout = String::from_utf8_lossy(&pr_output.stdout);
-        let pr_data: serde_json::Value = serde_json::from_str(&pr_stdout)
-            .context("Failed to parse PR JSON")?;
-
-        let head_sha = match pr_data["headRefOid"].as_str() {
-            Some(sha) => sha,
-            None => return Ok(vec!["No head commit SHA found".to_string()]),
-        };
-
-        // Get workflow runs for this commit
-        let runs_output = TokioCommand::new("gh")
-            .args([
-                "run", "list",
-                "--commit", head_sha,
-                "--json", "databaseId,name,status,conclusion,workflowName",
-                "--limit", "20"
-            ])
-            .output()
-            .await
-            .context("Failed to get workflow runs")?;
-
-        if !runs_output.status.success() {
-            return Ok(vec!["Could not get workflow runs".to_string()]);
-        }
-
-        let runs_stdout = String::from_utf8_lossy(&runs_output.stdout);
-        let runs: Vec<serde_json::Value> = serde_json::from_str(&runs_stdout)
-            .context("Failed to parse workflow runs JSON")?;
-
-        // Find the run that matches our check name
-        for run in runs {
-            let run_name = run["name"].as_str().unwrap_or("");
-            let workflow_name = run["workflowName"].as_str().unwrap_or("");
-
-            // Match by check name or workflow name
-            if run_name.contains(check_name) || workflow_name.contains(check_name) || check_name.contains(run_name) {
-                if run["conclusion"].as_str() == Some("failure") {
-                    if let Some(run_id) = run["databaseId"].as_u64() {
-                        return self.get_run_failure_logs(&run_id.to_string()).await;
+        if let Ok(output) = pr_output {
+            if output.status.success() {
+                let pr_stdout = String::from_utf8_lossy(&output.stdout);
+                if let Ok(pr_data) = serde_json::from_str::<serde_json::Value>(&pr_stdout) {
+                    if let Some(head_sha) = pr_data["headRefOid"].as_str() {
+                        let commit_runs = self.get_runs_for_commit(head_sha, check_name).await?;
+                        if !commit_runs.is_empty() {
+                            return Ok(commit_runs);
+                        }
                     }
                 }
             }
         }
 
-        Ok(vec![format!("No matching failed workflow run found for check: {}", check_name)])
+        // Approach 3: Try to get status information from PR status checks
+        let status_info = self.get_pr_status_details(pr_number, check_name).await?;
+        if !status_info.is_empty() {
+            return Ok(status_info);
+        }
+
+        Ok(vec![format!("Unable to retrieve detailed logs for check '{}' on PR #{}", check_name, pr_number)])
+    }
+
+    /// Get recent failed workflow runs matching the check name
+    async fn get_recent_failed_runs(&self, check_name: &str) -> Result<Vec<String>> {
+        debug!("Getting recent failed runs for check: {}", check_name);
+
+        // First try with JSON format to get more details including workflow names
+        let json_output = TokioCommand::new("gh")
+            .args([
+                "run", "list",
+                "--json", "databaseId,name,workflowName,conclusion,headBranch",
+                "--limit", "50"  // Get more runs since we'll filter for failures
+            ])
+            .output()
+            .await;
+
+        if let Ok(output) = json_output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Ok(runs) = serde_json::from_str::<Vec<serde_json::Value>>(&stdout) {
+                    for run in runs {
+                        let run_name = run["name"].as_str().unwrap_or("");
+                        let workflow_name = run["workflowName"].as_str().unwrap_or("");
+                        let head_branch = run["headBranch"].as_str().unwrap_or("");
+                        let conclusion = run["conclusion"].as_str().unwrap_or("");
+
+                        // Only look at failed runs
+                        if conclusion != "failure" {
+                            continue;
+                        }
+
+                        // Check if this run matches our criteria
+                        let matches = run_name.to_lowercase().contains(&check_name.to_lowercase()) ||
+                                    workflow_name.to_lowercase().contains(&check_name.to_lowercase()) ||
+                                    (check_name.to_lowercase().contains("build") &&
+                                     (run_name.to_lowercase().contains("build") ||
+                                      workflow_name.to_lowercase().contains("build")));
+
+                        if matches {
+                            if let Some(run_id) = run["databaseId"].as_u64() {
+                                debug!("Found matching failed run: '{}' from workflow '{}' on branch '{}'",
+                                       run_name, workflow_name, head_branch);
+
+                                let mut logs = self.get_run_failure_logs(&run_id.to_string()).await?;
+                                if !logs.is_empty() {
+                                    // Prepend context about which workflow this is from
+                                    logs.insert(0, format!("=== Failure from workflow: {} ===", workflow_name));
+                                    logs.insert(1, format!("=== Job/Run name: {} ===", run_name));
+                                    logs.insert(2, format!("=== Branch: {} ===", head_branch));
+                                    logs.insert(3, "=== Error Details ===".to_string());
+                                    return Ok(logs);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to text-based approach
+        let output = TokioCommand::new("gh")
+            .args([
+                "run", "list",
+                "--status", "failure",
+                "--limit", "10"
+            ])
+            .output()
+            .await
+            .context("Failed to get recent failed runs")?;
+
+        if !output.status.success() {
+            debug!("Failed to get recent runs: {}", String::from_utf8_lossy(&output.stderr));
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse text output to find matching runs
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("STATUS") {
+                continue;
+            }
+
+            // Look for lines containing our check name
+            if line.to_lowercase().contains(&check_name.to_lowercase()) ||
+               check_name.to_lowercase().contains("build") && line.to_lowercase().contains("build") {
+
+                // Extract run ID from the line (usually the last part)
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(run_id) = parts.last() {
+                    if run_id.chars().all(|c| c.is_ascii_digit()) {
+                        debug!("Found matching failed run ID: {}", run_id);
+                        let mut logs = self.get_run_failure_logs(run_id).await?;
+                        if !logs.is_empty() {
+                            logs.insert(0, format!("=== Failure from run ID: {} ===", run_id));
+                            return Ok(logs);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Get workflow runs for a specific commit
+    async fn get_runs_for_commit(&self, commit_sha: &str, check_name: &str) -> Result<Vec<String>> {
+        debug!("Getting runs for commit {} and check {}", commit_sha, check_name);
+
+        let output = TokioCommand::new("gh")
+            .args([
+                "run", "list",
+                "--commit", commit_sha,
+                "--limit", "20"
+            ])
+            .output()
+            .await
+            .context("Failed to get runs for commit")?;
+
+        if !output.status.success() {
+            debug!("Failed to get runs for commit: {}", String::from_utf8_lossy(&output.stderr));
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse text output to find matching failed runs
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("STATUS") {
+                continue;
+            }
+
+            // Look for failed runs that match our check
+            if line.contains("failure") &&
+               (line.to_lowercase().contains(&check_name.to_lowercase()) ||
+                check_name.to_lowercase().contains("build") && line.to_lowercase().contains("build")) {
+
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(run_id) = parts.last() {
+                    if run_id.chars().all(|c| c.is_ascii_digit()) {
+                        debug!("Found matching failed run ID for commit: {}", run_id);
+                        return self.get_run_failure_logs(run_id).await;
+                    }
+                }
+            }
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Get PR status check details as fallback
+    async fn get_pr_status_details(&self, pr_number: u32, check_name: &str) -> Result<Vec<String>> {
+        debug!("Getting PR status details for check: {}", check_name);
+
+        // Try to get more detailed status information
+        let output = TokioCommand::new("gh")
+            .args(["pr", "view", &pr_number.to_string()])
+            .output()
+            .await
+            .context("Failed to get PR details")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut relevant_lines = Vec::new();
+        let mut in_checks_section = false;
+
+        for line in stdout.lines() {
+            let line = line.trim();
+
+            if line.to_lowercase().contains("check") || line.to_lowercase().contains("status") {
+                in_checks_section = true;
+            }
+
+            if in_checks_section && (line.to_lowercase().contains(&check_name.to_lowercase()) ||
+                                   line.contains("❌") || line.contains("✗") || line.contains("FAILED")) {
+                relevant_lines.push(format!("PR Status: {}", line));
+            }
+
+            // Stop after checks section
+            if in_checks_section && line.is_empty() {
+                break;
+            }
+        }
+
+        if relevant_lines.is_empty() {
+            relevant_lines.push(format!("Check '{}' failed but detailed logs are not available through GitHub CLI", check_name));
+            relevant_lines.push("This could be due to:".to_string());
+            relevant_lines.push("- Build script failures (check build.rs files)".to_string());
+            relevant_lines.push("- Missing system dependencies".to_string());
+            relevant_lines.push("- Cross-compilation configuration issues".to_string());
+            relevant_lines.push("- Environment variable configuration".to_string());
+        }
+
+        Ok(relevant_lines)
     }
 
     /// Get failure logs from a specific workflow run
     async fn get_run_failure_logs(&self, run_id: &str) -> Result<Vec<String>> {
         debug!("Getting failure logs for run ID: {}", run_id);
 
-        // Get the run logs
-        let output = TokioCommand::new("gh")
-            .args(["run", "view", run_id, "--log-failed"])
-            .output()
-            .await
-            .context("Failed to get run logs")?;
+        // Try multiple approaches to get the logs
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Ok(vec![format!("Failed to get logs: {}", stderr)]);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Parse the logs to extract meaningful error messages
-        let mut error_lines = Vec::new();
-        let mut in_error_section = false;
-
-        for line in stdout.lines() {
-            let line = line.trim();
-
-            // Look for common error patterns
-            if line.contains("ERROR") || line.contains("FAILED") || line.contains("error:") {
-                error_lines.push(line.to_string());
-                in_error_section = true;
-            } else if line.contains("FAIL:") || line.contains("assertion failed") {
-                error_lines.push(line.to_string());
-                in_error_section = true;
-            } else if line.contains("Build failed") || line.contains("compilation failed") {
-                error_lines.push(line.to_string());
-                in_error_section = true;
-            } else if in_error_section && !line.is_empty() && !line.starts_with("##") {
-                // Continue collecting context lines after an error
-                error_lines.push(line.to_string());
-                if error_lines.len() > 50 {
-                    break; // Limit output size
-                }
-            } else if line.starts_with("##") {
-                // New section, stop collecting
-                in_error_section = false;
+        // Approach 1: Use GitHub REST API to get logs (most reliable)
+        if let Ok(api_logs) = self.get_logs_via_rest_api(run_id).await {
+            if !api_logs.is_empty() {
+                return Ok(api_logs);
             }
         }
 
-        if error_lines.is_empty() {
-            error_lines.push("No specific error messages found in logs".to_string());
+        // Approach 2: Get failed logs specifically
+        let failed_output = TokioCommand::new("gh")
+            .args(["run", "view", run_id, "--log-failed"])
+            .output()
+            .await;
+
+        if let Ok(output) = failed_output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    let parsed_logs = self.parse_failure_logs(&stdout);
+                    if !parsed_logs.is_empty() {
+                        return Ok(parsed_logs);
+                    }
+                }
+            }
         }
 
-        debug!("Extracted {} error lines from run logs", error_lines.len());
-        Ok(error_lines)
+        // Approach 3: Get all logs and filter for errors
+        let all_output = TokioCommand::new("gh")
+            .args(["run", "view", run_id, "--log"])
+            .output()
+            .await;
+
+        if let Ok(output) = all_output {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    let parsed_logs = self.parse_failure_logs(&stdout);
+                    if !parsed_logs.is_empty() {
+                        return Ok(parsed_logs);
+                    }
+                }
+            }
+        }
+
+        // Approach 4: Try to download logs directly
+        let download_output = TokioCommand::new("gh")
+            .args(["run", "download", run_id, "--dir", "/tmp/shodan-logs"])
+            .output()
+            .await;
+
+        if let Ok(output) = download_output {
+            if output.status.success() {
+                // Try to read downloaded log files
+                if let Ok(downloaded_logs) = self.read_downloaded_logs("/tmp/shodan-logs").await {
+                    if !downloaded_logs.is_empty() {
+                        return Ok(downloaded_logs);
+                    }
+                }
+            }
+        }
+
+        // Approach 5: Get basic run information as fallback
+        let view_output = TokioCommand::new("gh")
+            .args(["run", "view", run_id])
+            .output()
+            .await
+            .context("Failed to get run view")?;
+
+        if !view_output.status.success() {
+            let stderr = String::from_utf8_lossy(&view_output.stderr);
+            return Ok(vec![format!("Failed to get any logs for run {}: {}", run_id, stderr)]);
+        }
+
+        let stdout = String::from_utf8_lossy(&view_output.stdout);
+        let basic_info = self.parse_basic_run_info(&stdout);
+
+        Ok(basic_info)
+    }
+
+    /// Get logs via GitHub REST API using gh api command
+    async fn get_logs_via_rest_api(&self, run_id: &str) -> Result<Vec<String>> {
+        debug!("Getting logs via REST API for run ID: {}", run_id);
+
+        let (owner, repo) = self.get_repository_info().await?;
+
+        // Step 1: Get the workflow run details to find jobs
+        let run_info_output = TokioCommand::new("gh")
+            .args(["api", &format!("repos/{}/{}/actions/runs/{}", owner, repo, run_id)])
+            .output()
+            .await
+            .context("Failed to get run info via API")?;
+
+        if !run_info_output.status.success() {
+            debug!("Failed to get run info: {}", String::from_utf8_lossy(&run_info_output.stderr));
+            return Err(anyhow::anyhow!("Failed to get run info via API"));
+        }
+
+        let run_info_json: serde_json::Value = serde_json::from_slice(&run_info_output.stdout)
+            .context("Failed to parse run info JSON")?;
+
+        let workflow_name = run_info_json["name"].as_str().unwrap_or("Unknown");
+        let conclusion = run_info_json["conclusion"].as_str().unwrap_or("unknown");
+
+        // Step 2: Get jobs for this run
+        let jobs_output = TokioCommand::new("gh")
+            .args(["api", &format!("repos/{}/{}/actions/runs/{}/jobs", owner, repo, run_id)])
+            .output()
+            .await
+            .context("Failed to get jobs via API")?;
+
+        if !jobs_output.status.success() {
+            debug!("Failed to get jobs: {}", String::from_utf8_lossy(&jobs_output.stderr));
+            return Err(anyhow::anyhow!("Failed to get jobs via API"));
+        }
+
+        let jobs_json: serde_json::Value = serde_json::from_slice(&jobs_output.stdout)
+            .context("Failed to parse jobs JSON")?;
+
+        let mut all_logs = Vec::new();
+        all_logs.push(format!("=== Workflow: {} (Conclusion: {}) ===", workflow_name, conclusion));
+
+        // Step 3: Get logs for each failed job
+        if let Some(jobs) = jobs_json["jobs"].as_array() {
+            for job in jobs {
+                let job_name = job["name"].as_str().unwrap_or("Unknown Job");
+                let job_conclusion = job["conclusion"].as_str().unwrap_or("unknown");
+                let job_id = job["id"].as_u64().unwrap_or(0);
+
+                if job_conclusion == "failure" || job_conclusion == "cancelled" {
+                    all_logs.push(format!("=== Job: {} (ID: {}, Conclusion: {}) ===", job_name, job_id, job_conclusion));
+
+                    // Get logs for this specific job
+                    let job_logs = self.get_job_logs_via_api(job_id).await?;
+                    all_logs.extend(job_logs);
+                    all_logs.push("".to_string()); // Add separator
+                }
+            }
+        }
+
+        // If we couldn't get logs via individual job API, try downloading the full ZIP
+        if all_logs.len() <= 1 { // Only header, no actual logs
+            debug!("No logs retrieved via job API, trying ZIP download for run {}", run_id);
+            match self.download_and_extract_logs(run_id).await {
+                Ok(zip_logs) => {
+                    info!("Successfully retrieved {} log lines from ZIP download", zip_logs.len());
+                    all_logs.push("=== Downloaded Raw Logs ===".to_string());
+                    all_logs.extend(zip_logs);
+                }
+                Err(e) => {
+                    warn!("Failed to download logs via ZIP: {}", e);
+                    return Err(anyhow::anyhow!("No logs retrieved via job API or ZIP download"));
+                }
+            }
+        }
+
+        if all_logs.len() > 1 { // More than just the header
+            Ok(all_logs)
+        } else {
+            Err(anyhow::anyhow!("No failed jobs found"))
+        }
+    }
+
+    /// Get logs for a specific job via REST API
+    async fn get_job_logs_via_api(&self, job_id: u64) -> Result<Vec<String>> {
+        debug!("Getting job logs via REST API for job ID: {}", job_id);
+
+        let (owner, repo) = self.get_repository_info().await?;
+
+        // Use gh api to get logs - this will return the raw log content
+        let logs_output = TokioCommand::new("gh")
+            .args(["api", &format!("repos/{}/{}/actions/jobs/{}/logs", owner, repo, job_id)])
+            .output()
+            .await
+            .context("Failed to get job logs via API")?;
+
+        if !logs_output.status.success() {
+            let stderr = String::from_utf8_lossy(&logs_output.stderr);
+            debug!("Failed to get job logs: {}", stderr);
+            return Ok(vec![format!("Failed to get logs for job {}: {}", job_id, stderr)]);
+        }
+
+        let log_content = String::from_utf8_lossy(&logs_output.stdout);
+
+        // Parse the raw logs and extract error information
+        let parsed_logs = self.parse_failure_logs(&log_content);
+
+        if parsed_logs.is_empty() {
+            // If no specific errors found, return a sample of the logs
+            let lines: Vec<&str> = log_content.lines().collect();
+            let total_lines = lines.len();
+
+            if total_lines > 50 {
+                let mut result = Vec::new();
+                result.push(format!("Full log has {} lines. Showing last 50 lines:", total_lines));
+                result.extend(lines.iter().skip(total_lines - 50).map(|s| s.to_string()));
+                Ok(result)
+            } else {
+                Ok(lines.iter().map(|s| s.to_string()).collect())
+            }
+        } else {
+            Ok(parsed_logs)
+        }
+    }
+
+    /// Download raw logs as ZIP file and extract them
+    async fn download_and_extract_logs(&self, run_id: &str) -> Result<Vec<String>> {
+        debug!("Downloading and extracting raw logs for run ID: {}", run_id);
+
+        let (owner, repo) = self.get_repository_info().await?;
+
+        // Use gh api to download the logs zip file
+        let logs_output = TokioCommand::new("gh")
+            .args(["api", &format!("repos/{}/{}/actions/runs/{}/logs", owner, repo, run_id), "--paginate"])
+            .output()
+            .await
+            .context("Failed to download logs via API")?;
+
+        if !logs_output.status.success() {
+            let stderr = String::from_utf8_lossy(&logs_output.stderr);
+            debug!("Failed to download logs: {}", stderr);
+            return Err(anyhow::anyhow!("Failed to download logs: {}", stderr));
+        }
+
+        // The logs endpoint returns a ZIP file as binary data
+        let zip_data = logs_output.stdout;
+
+        // Create a temporary directory for extracting logs
+        let temp_dir = std::env::temp_dir().join(format!("shodan_logs_{}", run_id));
+        std::fs::create_dir_all(&temp_dir)
+            .context("Failed to create temporary directory for logs")?;
+
+        // Write ZIP data to a temporary file
+        let zip_path = temp_dir.join("logs.zip");
+        std::fs::write(&zip_path, &zip_data)
+            .context("Failed to write ZIP file")?;
+
+        // Extract the ZIP file
+        let extract_output = TokioCommand::new("unzip")
+            .args(["-o", zip_path.to_str().unwrap(), "-d", temp_dir.to_str().unwrap()])
+            .output()
+            .await;
+
+        match extract_output {
+            Ok(output) if output.status.success() => {
+                debug!("Successfully extracted logs to {:?}", temp_dir);
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                warn!("unzip command failed: {}", stderr);
+                // Try to fall back to reading the logs directly from the API response
+                return self.parse_raw_logs_from_zip_data(&zip_data);
+            }
+            Err(e) => {
+                warn!("unzip command not available: {}", e);
+                // Try to fall back to reading the logs directly from the API response
+                return self.parse_raw_logs_from_zip_data(&zip_data);
+            }
+        }
+
+        // Read all .txt files in the extracted directory
+        let mut all_logs = Vec::new();
+
+        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "txt") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        all_logs.push(format!("=== {} ===", path.file_name().unwrap().to_string_lossy()));
+                        all_logs.extend(content.lines().map(String::from));
+                        all_logs.push(String::new()); // Add separator
+                    }
+                }
+            }
+        }
+
+        // Clean up temporary directory
+        std::fs::remove_dir_all(&temp_dir).ok();
+
+        if all_logs.is_empty() {
+            return Err(anyhow::anyhow!("No log files found in extracted ZIP"));
+        }
+
+        info!("Successfully extracted and parsed {} log lines from ZIP", all_logs.len());
+        Ok(all_logs)
+    }
+
+    /// Parse raw logs directly from ZIP data (fallback when unzip is not available)
+    fn parse_raw_logs_from_zip_data(&self, zip_data: &[u8]) -> Result<Vec<String>> {
+        // This is a simple fallback - in a real implementation, you might want to use
+        // a ZIP library like 'zip' crate to properly parse the ZIP file
+        warn!("Falling back to basic ZIP data parsing");
+
+        // Convert ZIP data to string and look for text content
+        if let Ok(text_data) = String::from_utf8(zip_data.to_vec()) {
+            let lines: Vec<String> = text_data.lines()
+                .filter(|line| !line.is_empty() && line.len() > 10) // Filter out binary data
+                .map(String::from)
+                .collect();
+
+            if !lines.is_empty() {
+                return Ok(lines);
+            }
+        }
+
+        Err(anyhow::anyhow!("Could not parse ZIP data as text"))
+    }
+
+    /// Parse failure logs from raw log output
+    fn parse_failure_logs(&self, log_content: &str) -> Vec<String> {
+        let mut error_lines = Vec::new();
+        let mut in_error_section = false;
+        let mut collecting_stacktrace = false;
+        let mut collecting_cargo_output = false;
+
+        for line in log_content.lines() {
+            let line = line.trim();
+
+            // Skip empty lines unless we're in an error section
+            if line.is_empty() && !in_error_section {
+                continue;
+            }
+
+            // Look for build system failures
+            if line.contains("failed to run custom build command") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+                collecting_cargo_output = true;
+            }
+            // Look for cargo compilation errors
+            else if line.contains("Caused by:") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for process failures
+            else if line.contains("process didn't exit successfully:") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for panic messages
+            else if line.contains("thread '") && line.contains("panicked at") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+                collecting_stacktrace = true;
+            }
+            // Look for unwrap/expect failures
+            else if line.contains("called `Result::unwrap()` on an `Err` value:") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for pkg-config errors
+            else if line.contains("pkg-config") && (line.contains("error") || line.contains("not been configured")) {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for cross-compilation errors
+            else if line.contains("cross-compilation") || (line.contains("TARGET_") && line.contains("not found")) {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for dependency resolution errors
+            else if line.contains("couldn't resolve") || (line.contains("dependency") && line.contains("failed")) {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for standard error patterns
+            else if line.contains("ERROR") || line.contains("FAILED") || line.contains("error:") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for test failures
+            else if line.contains("FAIL:") || line.contains("assertion failed") || line.contains("test result: FAILED") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Look for build failures
+            else if line.contains("Build failed") || line.contains("compilation failed") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+            }
+            // Collect stdout/stderr sections
+            else if line.contains("--- stdout") || line.contains("--- stderr") {
+                error_lines.push(line.to_string());
+                in_error_section = true;
+                collecting_cargo_output = true;
+            }
+            // Continue collecting if we're in an error section
+            else if in_error_section {
+                // Stop collecting at certain boundaries
+                if line.starts_with("##") && !collecting_cargo_output {
+                    in_error_section = false;
+                    collecting_stacktrace = false;
+                } else if !line.is_empty() {
+                    // Include the line if it looks relevant
+                    if collecting_stacktrace || collecting_cargo_output ||
+                       line.contains("at ") ||  // stack trace lines
+                       line.contains("cargo:") ||  // cargo build script output
+                       line.contains("PKG_CONFIG") ||  // environment variable issues
+                       line.contains("LIBAV") ||  // ffmpeg specific
+                       line.contains("note:") ||  // compiler notes
+                       line.contains("help:") ||  // compiler help
+                       line.contains("-->") ||  // code location indicators
+                       line.contains("exit status:") ||  // exit codes
+                       line.starts_with("  ") {  // indented context lines
+                        error_lines.push(line.to_string());
+                    }
+                }
+
+                // Stop collecting cargo output after certain markers
+                if collecting_cargo_output && (line.starts_with("##") || line.contains("=== End")) {
+                    collecting_cargo_output = false;
+                }
+
+                // Limit output size but be more generous for build errors
+                if error_lines.len() > 100 {
+                    error_lines.push("... (truncated for brevity, see full logs for complete output)".to_string());
+                    break;
+                }
+            }
+        }
+
+        error_lines
+    }
+
+    /// Read downloaded log files from a directory
+    async fn read_downloaded_logs(&self, log_dir: &str) -> Result<Vec<String>> {
+        use tokio::fs;
+
+        let mut all_logs = Vec::new();
+
+        // Try to read the log directory
+        let mut entries = fs::read_dir(log_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(filename) = path.file_name() {
+                    if let Some(filename_str) = filename.to_str() {
+                        if filename_str.ends_with(".txt") || filename_str.contains("log") {
+                            match fs::read_to_string(&path).await {
+                                Ok(content) => {
+                                    all_logs.push(format!("=== {} ===", filename_str));
+                                    all_logs.extend(self.parse_failure_logs(&content));
+                                }
+                                Err(e) => {
+                                    debug!("Failed to read log file {}: {}", path.display(), e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(all_logs)
+    }
+
+    /// Parse basic run information as fallback
+    fn parse_basic_run_info(&self, run_view: &str) -> Vec<String> {
+        let mut info = Vec::new();
+        let mut in_jobs_section = false;
+
+        for line in run_view.lines() {
+            let line = line.trim();
+
+            if line.contains("JOBS") || line.contains("Jobs") {
+                in_jobs_section = true;
+            }
+
+            if in_jobs_section {
+                if line.contains("✗") || line.contains("❌") || line.contains("FAILED") {
+                    info.push(format!("Failed job: {}", line));
+                }
+                if line.contains("Conclusion:") {
+                    info.push(line.to_string());
+                }
+            }
+
+            // Look for error indicators
+            if line.contains("error") || line.contains("failed") || line.contains("Error") {
+                info.push(line.to_string());
+            }
+        }
+
+        if info.is_empty() {
+            info.push("Run failed but no detailed error information available".to_string());
+            info.push("Try checking the GitHub Actions web interface for complete logs".to_string());
+        }
+
+        info
     }
 
     /// Generate fix suggestions based on check failures
@@ -562,26 +1256,59 @@ impl PRMonitor {
                 if check_name.contains("test") {
                     suggestions.push("Review test failures and fix failing tests".to_string());
                     suggestions.push("Check for recent changes that might have broken tests".to_string());
+                    suggestions.push("Run `cargo test` locally to reproduce the issue".to_string());
                 } else if check_name.contains("build") || check_name.contains("compile") {
-                    suggestions.push("Fix compilation errors".to_string());
-                    suggestions.push("Check for missing dependencies or build configuration issues".to_string());
+                    suggestions.push("Fix compilation errors - check the build logs for specific error messages".to_string());
+                    suggestions.push("Common build issues to check:".to_string());
+                    suggestions.push("  • Missing system dependencies (check build.rs files)".to_string());
+                    suggestions.push("  • Cross-compilation configuration (Android NDK, pkg-config)".to_string());
+                    suggestions.push("  • Environment variables (PKG_CONFIG_*, TARGET_*, LIBAV*, etc.)".to_string());
+                    suggestions.push("  • Native library dependencies (ffmpeg, openssl, etc.)".to_string());
+
+                    // Add specific suggestions based on common patterns
+                    if check_name.to_lowercase().contains("android") {
+                        suggestions.push("Android-specific build issues:".to_string());
+                        suggestions.push("  • Check Android NDK setup and environment variables".to_string());
+                        suggestions.push("  • Verify cross-compilation toolchain configuration".to_string());
+                        suggestions.push("  • Check for missing aarch64-linux-android target".to_string());
+                        suggestions.push("  • Review pkg-config cross-compilation settings".to_string());
+                    }
+
+                    suggestions.push("Try local reproduction:".to_string());
+                    suggestions.push("  • Run `cargo check` to identify compilation issues".to_string());
+                    suggestions.push("  • Run `cargo build` to test the build process".to_string());
+                    if check_name.to_lowercase().contains("android") {
+                        suggestions.push("  • Set up Android development environment locally".to_string());
+                        suggestions.push("  • Test with `cargo apk build` if using Android target".to_string());
+                    }
                 } else if check_name.contains("lint") || check_name.contains("format") {
                     suggestions.push("Run cargo fmt to fix formatting issues".to_string());
                     suggestions.push("Run cargo clippy and fix linting warnings".to_string());
+                    suggestions.push("Check for code style violations in the diff".to_string());
                 } else if check_name.contains("security") {
                     suggestions.push("Review security scan results and address vulnerabilities".to_string());
+                    suggestions.push("Check for unsafe code patterns or dependency vulnerabilities".to_string());
                 } else {
                     suggestions.push(format!("Investigate and fix issues in '{}'", check_name));
+                    suggestions.push("Check the workflow logs for specific error messages".to_string());
+                    suggestions.push("Look for patterns like 'error:', 'failed:', 'panic:', or 'unwrap()'".to_string());
                 }
             }
             Some(CheckConclusion::TimedOut) => {
                 suggestions.push("Check for performance issues or infinite loops".to_string());
                 suggestions.push("Consider splitting large tests into smaller chunks".to_string());
                 suggestions.push("Retry the check as it may have been a temporary issue".to_string());
+                if check_name.contains("build") {
+                    suggestions.push("Build timeouts can be caused by:".to_string());
+                    suggestions.push("  • Large dependency downloads".to_string());
+                    suggestions.push("  • Slow native library compilation".to_string());
+                    suggestions.push("  • Insufficient build resources".to_string());
+                }
             }
             Some(CheckConclusion::Cancelled) => {
                 suggestions.push("Check why the workflow was cancelled".to_string());
                 suggestions.push("Retry the workflow if it was cancelled due to resource constraints".to_string());
+                suggestions.push("Look for workflow configuration issues or dependency conflicts".to_string());
             }
             _ => {}
         }
