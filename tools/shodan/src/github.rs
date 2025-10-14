@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::process::Command as TokioCommand;
 use tokio::time::sleep;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
-use crate::git::{PullRequest, RepositoryInfo};
+use crate::git::PullRequest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequestStatus {
@@ -138,7 +138,7 @@ impl PRMonitor {
             checks,
             merge_status,
             is_ready,
-            blocking_issues,
+            blocking_issues: blocking_issues.clone(),
             last_updated: std::time::SystemTime::now(),
         };
 
@@ -152,37 +152,58 @@ impl PRMonitor {
     async fn get_pr_checks(&self, pr_number: u32) -> Result<Vec<CheckStatus>> {
         debug!("Getting CI checks for PR #{}", pr_number);
 
+        // Use gh pr checks without JSON - parse text output instead
         let output = TokioCommand::new("gh")
-            .args(["pr", "checks", &pr_number.to_string(), "--json", "name,status,conclusion,url,startedAt,completedAt,detailsUrl"])
+            .args(["pr", "checks", &pr_number.to_string()])
             .output()
             .await
             .context("Failed to execute gh pr checks command")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("gh pr checks failed: {}", stderr));
+            debug!("gh pr checks failed, trying alternative approach: {}", stderr);
+
+            // Try to get status via GitHub API using gh api
+            return self.get_pr_checks_via_api(pr_number).await;
         }
 
         let stdout = String::from_utf8(output.stdout)
             .context("Invalid UTF-8 in gh output")?;
 
         if stdout.trim().is_empty() {
-            return Ok(Vec::new());
+            debug!("No checks output, trying API approach");
+            return self.get_pr_checks_via_api(pr_number).await;
         }
 
-        let checks_json: Vec<serde_json::Value> = serde_json::from_str(&stdout)
-            .context("Failed to parse gh pr checks JSON output")?;
-
+        // Parse text output from gh pr checks
         let mut checks = Vec::new();
-        for check_json in checks_json {
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("Some checks") || line.starts_with("All checks") {
+                continue;
+            }
+
+            // Parse lines like: "✓ Check Name"  or "✗ Check Name" or "- Check Name"
+            let (status, conclusion, name) = if line.starts_with("✓") {
+                (CheckState::Completed, Some(CheckConclusion::Success), line[2..].trim())
+            } else if line.starts_with("✗") {
+                (CheckState::Completed, Some(CheckConclusion::Failure), line[2..].trim())
+            } else if line.starts_with("◯") {
+                (CheckState::Pending, None, line[2..].trim())
+            } else if line.starts_with("-") {
+                (CheckState::InProgress, None, line[2..].trim())
+            } else {
+                continue;
+            };
+
             let check = CheckStatus {
-                name: check_json["name"].as_str().unwrap_or("").to_string(),
-                status: parse_check_state(check_json["status"].as_str().unwrap_or("")),
-                conclusion: check_json["conclusion"].as_str().map(parse_check_conclusion),
-                url: check_json["url"].as_str().map(|s| s.to_string()),
-                started_at: check_json["startedAt"].as_str().map(|s| s.to_string()),
-                completed_at: check_json["completedAt"].as_str().map(|s| s.to_string()),
-                details_url: check_json["detailsUrl"].as_str().map(|s| s.to_string()),
+                name: name.to_string(),
+                status,
+                conclusion,
+                url: None,
+                started_at: None,
+                completed_at: None,
+                details_url: None,
             };
             checks.push(check);
         }
@@ -191,12 +212,80 @@ impl PRMonitor {
         Ok(checks)
     }
 
+    /// Alternative method to get PR checks via GitHub API
+    async fn get_pr_checks_via_api(&self, pr_number: u32) -> Result<Vec<CheckStatus>> {
+        debug!("Getting PR checks via GitHub API for PR #{}", pr_number);
+
+        let output = TokioCommand::new("gh")
+            .args(["api", &format!("repos/:owner/:repo/pulls/{}/commits", pr_number)])
+            .output()
+            .await
+            .context("Failed to get PR commits via API")?;
+
+        if !output.status.success() {
+            debug!("GitHub API call failed, returning empty checks list");
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let commits: Vec<serde_json::Value> = serde_json::from_str(&stdout)
+            .context("Failed to parse commits JSON")?;
+
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get the latest commit SHA
+        let latest_commit = &commits[commits.len() - 1];
+        let commit_sha = latest_commit["sha"].as_str()
+            .ok_or_else(|| anyhow::anyhow!("No commit SHA found"))?;
+
+        // Get check runs for the latest commit
+        let output = TokioCommand::new("gh")
+            .args(["api", &format!("repos/:owner/:repo/commits/{}/check-runs", commit_sha)])
+            .output()
+            .await
+            .context("Failed to get check runs via API")?;
+
+        if !output.status.success() {
+            debug!("Failed to get check runs, returning empty list");
+            return Ok(Vec::new());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let response: serde_json::Value = serde_json::from_str(&stdout)
+            .context("Failed to parse check runs JSON")?;
+
+        let mut checks = Vec::new();
+        if let Some(check_runs) = response["check_runs"].as_array() {
+            for run in check_runs {
+                let name = run["name"].as_str().unwrap_or("Unknown").to_string();
+                let status = parse_check_state(run["status"].as_str().unwrap_or("unknown"));
+                let conclusion = run["conclusion"].as_str().map(parse_check_conclusion);
+
+                let check = CheckStatus {
+                    name,
+                    status,
+                    conclusion,
+                    url: run["html_url"].as_str().map(|s| s.to_string()),
+                    started_at: run["started_at"].as_str().map(|s| s.to_string()),
+                    completed_at: run["completed_at"].as_str().map(|s| s.to_string()),
+                    details_url: run["details_url"].as_str().map(|s| s.to_string()),
+                };
+                checks.push(check);
+            }
+        }
+
+        debug!("Found {} check runs via API for PR #{}", checks.len(), pr_number);
+        Ok(checks)
+    }
+
     /// Get merge status for a PR
     async fn get_merge_status(&self, pr_number: u32) -> Result<MergeStatus> {
         debug!("Getting merge status for PR #{}", pr_number);
 
         let output = TokioCommand::new("gh")
-            .args(["pr", "view", &pr_number.to_string(), "--json", "mergeable,mergeableState,mergeStateStatus"])
+            .args(["pr", "view", &pr_number.to_string(), "--json", "mergeable,mergeStateStatus"])
             .output()
             .await
             .context("Failed to execute gh pr view command")?;
@@ -213,10 +302,10 @@ impl PRMonitor {
             .context("Failed to parse gh pr view JSON output")?;
 
         let mergeable = merge_json["mergeable"].as_bool();
-        let mergeable_state = merge_json["mergeableState"].as_str().unwrap_or("unknown").to_string();
         let merge_state_status = merge_json["mergeStateStatus"].as_str().unwrap_or("unknown").to_string();
+        let mergeable_state = merge_state_status.clone(); // Use mergeStateStatus for both
 
-        let has_conflicts = mergeable_state == "dirty" || merge_state_status == "dirty";
+        let has_conflicts = merge_state_status == "dirty";
         let required_checks_passing = merge_state_status == "clean" || merge_state_status == "unstable";
 
         let merge_status = MergeStatus {
@@ -314,7 +403,7 @@ impl PRMonitor {
 
         // Get detailed logs for failed checks
         for check in &failed_checks {
-            if let Some(details_url) = &check.details_url {
+            if let Some(_details_url) = &check.details_url {
                 // Try to get more detailed error information
                 if let Ok(logs) = self.get_check_logs(pr_number, &check.name).await {
                     error_logs.extend(logs);

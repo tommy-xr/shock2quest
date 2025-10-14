@@ -13,17 +13,17 @@ Shodan monitors the repository state and, when no active Claude Code sessions ar
 
 ## Progress Status
 
-**Overall Progress: 4/7 Phases Complete (57%)**
+**Overall Progress: 5/7 Phases Complete (71%)**
 
 - ✅ **Phase 1: Core Infrastructure** - CLI, configuration, logging
 - ✅ **Phase 2: Git Operations** - Repository state management, PR detection
 - ✅ **Phase 3: Prompt Management** - Security-focused prompt system with owner-only PR filtering
 - ✅ **Phase 4: Claude Code Integration** - Subprocess management with JSON I/O and session tracking
-- 🚧 **Phase 5: PR Monitoring** - *Next to implement*
-- ⏳ **Phase 6: Main Orchestration Loop** - *Pending*
+- ✅ **Phase 5: PR Monitoring** - Advanced CI/CD monitoring with failure analysis and retry logic
+- 🚧 **Phase 6: Main Orchestration Loop** - *Next to implement*
 - ⏳ **Phase 7: Error Handling & Polish** - *Pending*
 
-**Current Status:** Ready to begin Phase 5 (PR Monitoring)
+**Current Status:** Ready to begin Phase 6 (Main Orchestration Loop)
 
 ## Implementation Plan
 
@@ -111,20 +111,30 @@ Shodan monitors the repository state and, when no active Claude Code sessions ar
 - [x] Detailed output reporting (session info, execution time, file changes)
 - [x] Repository state validation before execution
 
-### Phase 5: PR Monitoring (1-2 days)
+### Phase 5: PR Monitoring ✅ COMPLETED
 
-#### Task 5.1: GitHub Integration
-- [ ] Create `github.rs` module using GitHub CLI (`gh`)
-- [ ] Functions to:
+#### Task 5.1: GitHub Integration ✅
+- [x] Create `github.rs` module using GitHub CLI (`gh`)
+- [x] Functions to:
   - Check PR status (draft, open, merged, closed)
   - Get CI/CD status (GitHub Actions, etc.)
   - Retrieve PR details and metadata
-  - Get failing test logs
+  - Get failing test logs with intelligent parsing
+- [x] **Advanced Features**:
+  - Comprehensive `PRMonitor` struct for managing multiple PR monitoring sessions
+  - Detailed `PullRequestStatus` with CI check information and merge readiness assessment
+  - Fallback mechanisms using GitHub API when CLI commands fail
+  - Security-aware PR filtering (repository owner only)
 
-#### Task 5.2: CI Status Monitoring
-- [ ] Parse CI failure logs
-- [ ] Format failure information for Claude Code input
-- [ ] Implement retry logic for CI monitoring
+#### Task 5.2: CI Status Monitoring ✅
+- [x] Parse CI failure logs with pattern-based error extraction
+- [x] Format failure information for Claude Code input with contextual suggestions
+- [x] Implement retry logic for CI monitoring with configurable timeouts
+- [x] **Enhanced Features**:
+  - Intelligent failure analysis with specific suggestions based on check types
+  - Real-time status tracking with periodic updates
+  - Comprehensive blocking issue identification
+  - Integration with orchestration cycle for automatic PR monitoring
 
 ### Phase 6: Main Orchestration Loop (1 day)
 
@@ -304,7 +314,7 @@ Key Rust crates used:
 
 ## Current Status & Working Features
 
-### ✅ Phase 1, 2, 3 & 4 Achievements
+### ✅ Phase 1, 2, 3, 4 & 5 Achievements
 
 **CLI Interface:**
 ```bash
@@ -312,6 +322,9 @@ cargo run -p shodan check              # Check repository state
 cargo run -p shodan --verbose check   # Detailed logging
 cargo run -p shodan run --once         # Complete orchestration cycle with Claude Code
 cargo run -p shodan list-prompts       # Show available prompts with statistics
+cargo run -p shodan check-pr 55        # Check detailed PR status
+cargo run -p shodan check-pr 55 --analyze-failures  # Detailed failure analysis
+cargo run -p shodan monitor-pr 55 --timeout 1h      # Monitor PR until ready
 cargo run -p shodan test-prompt prompts/iterate-on-projects.md --dry-run    # Validate
 cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Execute
 ```
@@ -348,6 +361,15 @@ cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Ex
 - **Context Generation**: Automatic safety guidelines and project context injection
 - **Error Handling**: Comprehensive error capture with fallback to plain text output
 
+**Advanced PR Monitoring (Phase 5):**
+- **Real-time CI/CD Monitoring**: Track GitHub Actions, checks, and workflow status
+- **Intelligent Failure Analysis**: Pattern-based error log extraction with contextual suggestions
+- **Merge Readiness Assessment**: Comprehensive evaluation of PR status, conflicts, and requirements
+- **Automated Integration**: Seamless integration with orchestration cycle for hands-off monitoring
+- **Multi-source Data**: Fallback from GitHub CLI to API for robust data collection
+- **Configurable Timeouts**: Flexible monitoring periods with early termination on success
+- **Detailed Reporting**: Visual status indicators, blocking issue identification, and fix recommendations
+
 **Configuration System:**
 - TOML-based configuration with duration parsing ("1h", "30m", "5s")
 - Environment variable support and logging configuration
@@ -364,12 +386,14 @@ cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Ex
 - **7 tests passing** including new Claude Code integration tests
 - **Session ID generation** working with unique identifiers
 - **Complete orchestration cycle** tested via `run --once` command
+- **PR monitoring system** fully implemented with real-world testing on PR #55
+- **Failure analysis** working with intelligent error parsing and fix suggestions
+- **Automated monitoring integration** seamlessly integrated with orchestration cycle
 
 ### 🚧 Next Implementation Steps
 
-**Phase 5:** PR monitoring and CI status checking
-**Phase 6:** Main orchestration loop with scheduling
-**Phase 7:** Error handling and polish
+**Phase 6:** Main orchestration loop with scheduling and state persistence
+**Phase 7:** Error handling, configuration improvements, and final polish
 
 ## Success Criteria
 

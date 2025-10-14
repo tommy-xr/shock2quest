@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -53,6 +53,24 @@ enum Commands {
     },
     /// List available prompts and show statistics
     ListPrompts,
+    /// Monitor a specific PR until it's ready
+    MonitorPr {
+        /// PR number to monitor
+        pr_number: u32,
+
+        /// Maximum time to wait (e.g., "30m", "2h")
+        #[arg(long, default_value = "30m")]
+        timeout: String,
+    },
+    /// Check detailed status of a PR
+    CheckPr {
+        /// PR number to check
+        pr_number: u32,
+
+        /// Show detailed failure analysis
+        #[arg(long)]
+        analyze_failures: bool,
+    },
 }
 
 #[tokio::main]
@@ -89,6 +107,14 @@ async fn main() -> Result<()> {
         Commands::ListPrompts => {
             info!("Listing available prompts");
             list_prompts(&config).await?;
+        }
+        Commands::MonitorPr { pr_number, timeout } => {
+            info!("Monitoring PR #{} with timeout: {}", pr_number, timeout);
+            monitor_pr(&config, pr_number, &timeout).await?;
+        }
+        Commands::CheckPr { pr_number, analyze_failures } => {
+            info!("Checking status of PR #{}", pr_number);
+            check_pr(&config, pr_number, analyze_failures).await?;
         }
     }
 
@@ -150,8 +176,42 @@ async fn run_once(config: &Config) -> Result<()> {
     if let Some(git_changes) = &output.git_changes {
         if let Some(pr_number) = git_changes.pr_created {
             info!("   PR created: #{}", pr_number);
-            info!("   Monitoring will be handled in Phase 5 implementation");
-            // TODO: Monitor PR status (Phase 5)
+            info!("   Starting PR monitoring...");
+
+            // Start monitoring the created PR
+            let mut monitor = github::PRMonitor::new(config.clone());
+            match monitor.start_monitoring(pr_number).await {
+                Ok(()) => {
+                    info!("   ✅ PR monitoring started for PR #{}", pr_number);
+
+                    // Wait for PR to become ready with configured timeout
+                    let ci_wait_time = std::time::Duration::from_secs(
+                        config.parse_ci_wait_time().unwrap_or(1800) // Default 30 minutes
+                    );
+
+                    match monitor.wait_for_pr_ready(pr_number, ci_wait_time).await {
+                        Ok(_) => {
+                            info!("   🎉 PR #{} is ready for merge!", pr_number);
+                        }
+                        Err(e) => {
+                            warn!("   ⚠️  PR #{} not ready within timeout: {}", pr_number, e);
+
+                            // Provide failure analysis
+                            if let Ok(analysis) = monitor.analyze_pr_failures(pr_number).await {
+                                if !analysis.suggested_fixes.is_empty() {
+                                    info!("   Suggested fixes:");
+                                    for fix in analysis.suggested_fixes.iter().take(3) {
+                                        info!("     💡 {}", fix);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("   ❌ Failed to start PR monitoring: {}", e);
+                }
+            }
         }
     }
 
@@ -361,6 +421,149 @@ async fn list_prompts(config: &Config) -> Result<()> {
         // Show a random selection example
         let selected = prompts::select_random_prompt(&prompts)?;
         info!("🎲 Random selection example: {} (weight: {})", selected.name, selected.weight);
+    }
+
+    Ok(())
+}
+
+async fn monitor_pr(config: &Config, pr_number: u32, timeout_str: &str) -> Result<()> {
+    info!("Starting PR monitoring for PR #{}", pr_number);
+
+    // Parse timeout
+    let timeout_seconds = config.parse_interval(timeout_str)
+        .context("Failed to parse timeout duration")?;
+    let timeout_duration = std::time::Duration::from_secs(timeout_seconds);
+
+    // Create PR monitor
+    let mut monitor = github::PRMonitor::new(config.clone());
+
+    // Start monitoring
+    monitor.start_monitoring(pr_number).await?;
+    info!("✅ Monitoring started for PR #{}", pr_number);
+
+    // Wait for PR to become ready
+    match monitor.wait_for_pr_ready(pr_number, timeout_duration).await {
+        Ok(final_status) => {
+            info!("🎉 PR #{} is ready for merge!", pr_number);
+            info!("   Final status: ready={}", final_status.is_ready);
+            info!("   Checks passed: {}/{}",
+                  final_status.checks.iter().filter(|c| matches!(c.conclusion, Some(github::CheckConclusion::Success))).count(),
+                  final_status.checks.len());
+
+            if let Some(true) = final_status.merge_status.mergeable {
+                info!("   ✅ PR is mergeable with no conflicts");
+            }
+        }
+        Err(e) => {
+            warn!("❌ PR monitoring failed or timed out: {}", e);
+
+            // Get final status for reporting
+            if let Ok(status) = monitor.check_pr_detailed_status(pr_number).await {
+                warn!("Final status:");
+                warn!("  Ready: {}", status.is_ready);
+                warn!("  Blocking issues: {}", status.blocking_issues.len());
+                for issue in &status.blocking_issues {
+                    warn!("    - {}", issue);
+                }
+            }
+
+            return Err(e);
+        }
+    }
+
+    Ok(())
+}
+
+async fn check_pr(config: &Config, pr_number: u32, analyze_failures: bool) -> Result<()> {
+    info!("Checking detailed status for PR #{}", pr_number);
+
+    let monitor = github::PRMonitor::new(config.clone());
+    let status = monitor.check_pr_detailed_status(pr_number).await?;
+
+    // Display PR information
+    info!("PR #{}: {}", status.pr.number, status.pr.title);
+    info!("  Author: {}", status.pr.author);
+    info!("  State: {}", status.pr.state);
+    info!("  Branch: {} -> {}", status.pr.head_ref, status.pr.base_ref);
+    info!("  URL: {}", status.pr.url);
+
+    // Display readiness status
+    if status.is_ready {
+        info!("✅ PR is ready for merge");
+    } else {
+        warn!("❌ PR is NOT ready for merge");
+    }
+
+    // Display merge status
+    info!("Merge Status:");
+    info!("  Mergeable: {:?}", status.merge_status.mergeable);
+    info!("  State: {}", status.merge_status.mergeable_state);
+    info!("  Has conflicts: {}", status.merge_status.has_conflicts);
+    info!("  Required checks passing: {}", status.merge_status.required_checks_passing);
+
+    // Display CI checks
+    info!("CI Checks ({}):", status.checks.len());
+    for check in &status.checks {
+        let status_icon = match (&check.status, &check.conclusion) {
+            (github::CheckState::Completed, Some(github::CheckConclusion::Success)) => "✅",
+            (github::CheckState::Completed, Some(github::CheckConclusion::Failure)) => "❌",
+            (github::CheckState::Completed, Some(github::CheckConclusion::Cancelled)) => "🚫",
+            (github::CheckState::InProgress, _) => "🔄",
+            (github::CheckState::Queued | github::CheckState::Pending, _) => "⏳",
+            _ => "❓",
+        };
+
+        info!("  {} {} ({:?})", status_icon, check.name, check.status);
+        if let Some(conclusion) = &check.conclusion {
+            info!("     Conclusion: {:?}", conclusion);
+        }
+    }
+
+    // Display blocking issues
+    if !status.blocking_issues.is_empty() {
+        warn!("Blocking Issues:");
+        for issue in &status.blocking_issues {
+            warn!("  - {}", issue);
+        }
+    }
+
+    // Perform failure analysis if requested
+    if analyze_failures {
+        info!("Performing failure analysis...");
+        match monitor.analyze_pr_failures(pr_number).await {
+            Ok(analysis) => {
+                if !analysis.failed_checks.is_empty() {
+                    warn!("Failed Checks Analysis:");
+                    for check in &analysis.failed_checks {
+                        warn!("  ❌ {}: {:?}", check.name, check.conclusion);
+                    }
+                }
+
+                if !analysis.error_logs.is_empty() {
+                    warn!("Error Logs:");
+                    for (i, log) in analysis.error_logs.iter().enumerate().take(10) {
+                        warn!("  {}: {}", i + 1, log);
+                    }
+                    if analysis.error_logs.len() > 10 {
+                        warn!("  ... and {} more error lines", analysis.error_logs.len() - 10);
+                    }
+                }
+
+                if !analysis.suggested_fixes.is_empty() {
+                    info!("Suggested Fixes:");
+                    for fix in &analysis.suggested_fixes {
+                        info!("  💡 {}", fix);
+                    }
+                }
+
+                if analysis.retry_recommended {
+                    info!("🔄 Retry is recommended for this PR");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to analyze failures: {}", e);
+            }
+        }
     }
 
     Ok(())
