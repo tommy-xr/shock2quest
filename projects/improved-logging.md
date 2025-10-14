@@ -89,10 +89,10 @@ Create `engine/src/logging/mod.rs` with:
 - ✅ Update profile! macro with scope-aware functionality
 - ✅ Add scope-aware logging utilities and convenience macros
 
-**Phase 2: High-Impact Areas**
+**Phase 2: High-Impact Areas - IN PROGRESS**
 - Migrate performance-critical rendering code
 - Update physics logging
-- Replace audio debug prints
+- ✅ Replace audio debug prints
 
 **Phase 3: Systematic Migration**
 - Update remaining subsystems one by one
@@ -230,7 +230,41 @@ SHOCK2_LOG=warn,physics=debug,render=trace cargo run
 SHOCK2_LOG=trace cargo run
 ```
 
-**Ready for Phase 2**: The core infrastructure is now in place to begin migrating high-impact areas like physics and rendering to use the new scoped logging system.
+### Phase 2: Audio System Migration - COMPLETED ✅
+
+**Completed in branch `feat/logging-phase2-audio-migration`:**
+
+**Audio System Updates:**
+- `engine/src/audio/mod.rs`:
+  - Replaced noisy `println!("!!debug - audio update")` with `audio_log!(DEBUG, "Audio system update started")`
+  - Added proper import for `audio_log!` macro
+- `engine/src/audio/output.rs`:
+  - Migrated 5 error handling `println!` statements to use `audio_log!(ERROR, ...)`
+  - Improved error messages with proper capitalization and context
+
+**Benefits Achieved:**
+- **Eliminated Noisy Debug Output**: The frequent "!!debug - audio update" print that appeared every frame is now controlled by log levels
+- **Consistent Error Reporting**: Audio subsystem errors now use structured logging with proper scope attribution
+- **Configurable Verbosity**: Audio logs can be controlled via `SHOCK2_LOG=audio=level` environment variable
+- **Better Debugging**: Audio issues can now be isolated with `SHOCK2_LOG=warn,audio=debug`
+
+**Fixed Issue in scoped_log Macro:**
+- Updated `engine/src/logging/macros.rs` to use `tracing::event!` instead of `tracing::$level!` for proper level handling
+- Ensures all scoped logging macros work correctly with Level constants
+
+**Usage Examples:**
+```bash
+# Silent audio (only errors)
+SHOCK2_LOG=error cargo run
+
+# Audio debugging enabled
+SHOCK2_LOG=warn,audio=debug cargo run
+
+# Everything audio-related
+SHOCK2_LOG=warn,audio=trace cargo run
+```
+
+**Ready for Next Phase 2 Tasks**: Physics logging migration and rendering code updates.
 
 ## Files to Modify
 
