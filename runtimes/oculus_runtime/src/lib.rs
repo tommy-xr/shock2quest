@@ -22,6 +22,7 @@ use std::io::BufReader;
 use std::rc::Rc;
 
 use ndk::asset::{Asset, AssetManager};
+use tracing;
 
 mod android_permissions;
 

@@ -84,10 +84,10 @@ Create `engine/src/logging/mod.rs` with:
 
 ### 6. Migration Strategy
 
-**Phase 1: Core Infrastructure**
-- Implement logging configuration module
-- Update profile! macro
-- Add scope-aware logging utilities
+**Phase 1: Core Infrastructure ✅ COMPLETED**
+- ✅ Implement logging configuration module (`engine/src/logging/`)
+- ✅ Update profile! macro with scope-aware functionality
+- ✅ Add scope-aware logging utilities and convenience macros
 
 **Phase 2: High-Impact Areas**
 - Migrate performance-critical rendering code
@@ -176,6 +176,61 @@ THIEF_LOG=debug cargo run --bin thief
 ```
 
 This strategy provides a comprehensive solution to the current logging noise while maintaining debugging capabilities and adding powerful filtering options.
+
+## Implementation Status
+
+### Phase 1: Core Infrastructure - COMPLETED ✅
+
+**Implemented Files:**
+- `engine/src/logging/mod.rs` - Main logging module with static configuration management
+- `engine/src/logging/config.rs` - Configuration parsing and log level management
+- `engine/src/logging/macros.rs` - Scoped logging convenience macros
+- `engine/src/macros.rs` - Enhanced profile! macro with backwards compatibility
+- `engine/Cargo.toml` - Added tracing-subscriber dependency
+- `engine/src/lib.rs` - Exported logging module
+
+**Features Delivered:**
+1. **LogConfig System**: Configurable logging with global and per-scope levels
+2. **Environment Variable Support**: Parse logging configuration from environment variables like `SHOCK2_LOG=warn,physics=debug`
+3. **Enhanced profile! Macro**:
+   - New: `profile!(scope: "physics", level: debug, "description", { code })`
+   - Backwards compatible: `profile!("description", { code })` (uses "performance" scope, DEBUG level)
+4. **Convenience Macros**: `physics_log!`, `audio_log!`, `render_log!`, etc. for common scopes
+5. **Thread-Safe Configuration**: Uses `OnceLock` for global config with lazy defaults
+
+**Usage Examples:**
+```rust
+// Initialize in runtime (e.g., main.rs)
+engine::logging::init_logging("SHOCK2_LOG");
+
+// Enhanced profile macro
+profile!(scope: "physics", level: debug, "collision_detection", {
+    // expensive physics computation
+});
+
+// Backwards compatible
+profile!("render_frame", {
+    // rendering code - uses "performance" scope, DEBUG level
+});
+
+// Scoped logging
+physics_log!(warn, "Physics simulation unstable: dt={}", dt);
+audio_log!(info, "Loading audio file: {}", filename);
+```
+
+**Environment Variable Examples:**
+```bash
+# Only warnings and errors
+SHOCK2_LOG=warn cargo run
+
+# Debug physics, trace rendering, warn everything else
+SHOCK2_LOG=warn,physics=debug,render=trace cargo run
+
+# Trace everything (very verbose)
+SHOCK2_LOG=trace cargo run
+```
+
+**Ready for Phase 2**: The core infrastructure is now in place to begin migrating high-impact areas like physics and rendering to use the new scoped logging system.
 
 ## Files to Modify
 
