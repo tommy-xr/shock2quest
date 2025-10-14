@@ -33,3 +33,4 @@ rand = "0.8.5"
 rb = "0.4.1"
 rodio = { git = "https://github.com/RustAudio/rodio", version = "0.17.1", features=["symphonia-all"], default-features=false }
 tracing = "0.1.37"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
