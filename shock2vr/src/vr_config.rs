@@ -40,13 +40,6 @@ impl VRHandModelPerHandAdjustments {
             ..self
         }
     }
-
-    pub fn flip_z(self) -> VRHandModelPerHandAdjustments {
-        VRHandModelPerHandAdjustments {
-            scale: vec3(self.scale.x, self.scale.y, -self.scale.z),
-            ..self
-        }
-    }
 }
 
 #[derive(Clone)]
