@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 mod config;
 mod git;
+mod prompts;
 
 use config::Config;
 
@@ -48,6 +49,8 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// List available prompts and show statistics
+    ListPrompts,
 }
 
 #[tokio::main]
@@ -80,6 +83,10 @@ async fn main() -> Result<()> {
         Commands::TestPrompt { prompt_file, dry_run } => {
             info!("Testing prompt: {}", prompt_file.display());
             test_prompt(&config, &prompt_file, dry_run).await?;
+        }
+        Commands::ListPrompts => {
+            info!("Listing available prompts");
+            list_prompts(&config).await?;
         }
     }
 
@@ -141,7 +148,7 @@ async fn check_state(config: &Config) -> Result<()> {
     // Display open PRs
     info!("Open Pull Requests: {}", repo_state.open_prs.len());
     for pr in &repo_state.open_prs {
-        info!("  PR #{}: {} ({})", pr.number, pr.title, pr.state);
+        info!("  PR #{}: {} ({}) - by {}", pr.number, pr.title, pr.state, pr.author);
         info!("    {} -> {}", pr.head_ref, pr.base_ref);
         info!("    URL: {}", pr.url);
     }
@@ -182,15 +189,91 @@ async fn check_state(config: &Config) -> Result<()> {
 async fn test_prompt(config: &Config, prompt_file: &PathBuf, dry_run: bool) -> Result<()> {
     info!("Testing prompt file: {}", prompt_file.display());
 
-    if dry_run {
-        info!("Dry run mode - validating prompt without execution");
+    // Load and validate the specific prompt
+    let prompt = prompts::load_prompt(prompt_file, config).await?;
+    info!("✅ Prompt loaded successfully: {}", prompt.name);
+    info!("   Weight: {}", prompt.weight);
+    info!("   Risk Level: {:?}", prompt.metadata.risk_level);
+
+    if let Some(title) = &prompt.metadata.title {
+        info!("   Title: {}", title);
     }
 
-    // TODO: Implement prompt testing
-    // 1. Validate prompt file exists and is readable
-    // 2. Parse prompt content
-    // 3. If not dry run, execute with Claude Code
+    if let Some(description) = &prompt.metadata.description {
+        info!("   Description: {}", description);
+    }
 
-    warn!("Prompt testing not yet implemented");
+    if !prompt.metadata.tags.is_empty() {
+        info!("   Tags: {}", prompt.metadata.tags.join(", "));
+    }
+
+    // Show formatted content
+    info!("Formatted prompt content:");
+    println!("---");
+    println!("{}", prompts::format_prompt_for_execution(&prompt));
+    println!("---");
+
+    if dry_run {
+        info!("✅ Dry run mode - prompt validation completed successfully");
+        return Ok(());
+    }
+
+    // TODO: Execute with Claude Code
+    warn!("Claude Code execution not yet implemented");
+    Ok(())
+}
+
+async fn list_prompts(config: &Config) -> Result<()> {
+    info!("Discovering available prompts");
+
+    let prompts = prompts::discover_prompts(config).await?;
+    let stats = prompts::get_prompt_stats(&prompts);
+
+    // Display statistics
+    info!("Prompt Statistics:");
+    info!("  Total prompts: {}", stats.total_prompts);
+    info!("  Total weight: {}", stats.total_weight);
+    info!("  Average weight: {:.1}", stats.average_weight);
+
+    // Display risk distribution
+    if !stats.risk_distribution.is_empty() {
+        info!("  Risk level distribution:");
+        for (risk_level, count) in &stats.risk_distribution {
+            info!("    {}: {}", risk_level, count);
+        }
+    }
+
+    // Display tag distribution
+    if !stats.tag_distribution.is_empty() {
+        info!("  Tag distribution:");
+        for (tag, count) in &stats.tag_distribution {
+            info!("    {}: {}", tag, count);
+        }
+    }
+
+    // List individual prompts
+    info!("Available Prompts:");
+    for prompt in &prompts {
+        info!("  📄 {} (weight: {})", prompt.name, prompt.weight);
+        if let Some(title) = &prompt.metadata.title {
+            info!("     Title: {}", title);
+        }
+        if let Some(description) = &prompt.metadata.description {
+            info!("     Description: {}", description);
+        }
+        info!("     Risk: {:?}", prompt.metadata.risk_level);
+        if !prompt.metadata.tags.is_empty() {
+            info!("     Tags: {}", prompt.metadata.tags.join(", "));
+        }
+        info!("     Path: {}", prompt.file_path.display());
+        println!();
+    }
+
+    if !prompts.is_empty() {
+        // Show a random selection example
+        let selected = prompts::select_random_prompt(&prompts)?;
+        info!("🎲 Random selection example: {} (weight: {})", selected.name, selected.weight);
+    }
+
     Ok(())
 }

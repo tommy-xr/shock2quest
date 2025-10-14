@@ -13,6 +13,14 @@ pub struct PullRequest {
     pub url: String,
     pub head_ref: String,
     pub base_ref: String,
+    pub author: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepositoryInfo {
+    pub owner: String,
+    pub name: String,
+    pub full_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -107,12 +115,46 @@ pub async fn run_gt_sync(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Get list of open pull requests using GitHub CLI
+/// Get repository information using GitHub CLI
+pub async fn get_repository_info() -> Result<RepositoryInfo> {
+    debug!("Getting repository information via gh CLI");
+
+    let output = TokioCommand::new("gh")
+        .args(["repo", "view", "--json", "owner,name,nameWithOwner"])
+        .output()
+        .await
+        .context("Failed to execute gh repo view command")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("gh repo view failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .context("Invalid UTF-8 in gh output")?;
+
+    let repo_json: serde_json::Value = serde_json::from_str(&stdout)
+        .context("Failed to parse gh repo view JSON output")?;
+
+    let repo_info = RepositoryInfo {
+        owner: repo_json["owner"]["login"].as_str().unwrap_or("").to_string(),
+        name: repo_json["name"].as_str().unwrap_or("").to_string(),
+        full_name: repo_json["nameWithOwner"].as_str().unwrap_or("").to_string(),
+    };
+
+    debug!("Repository: {} (owner: {})", repo_info.full_name, repo_info.owner);
+    Ok(repo_info)
+}
+
+/// Get list of open pull requests using GitHub CLI, filtered by repository owner for security
 pub async fn get_open_prs() -> Result<Vec<PullRequest>> {
     debug!("Getting open pull requests via gh CLI");
 
+    // First get repository info to determine the owner
+    let repo_info = get_repository_info().await?;
+
     let output = TokioCommand::new("gh")
-        .args(["pr", "list", "--json", "number,title,state,url,headRefName,baseRefName"])
+        .args(["pr", "list", "--json", "number,title,state,url,headRefName,baseRefName,author"])
         .output()
         .await
         .context("Failed to execute gh pr list command. Make sure GitHub CLI (gh) is installed and authenticated.")?;
@@ -130,7 +172,19 @@ pub async fn get_open_prs() -> Result<Vec<PullRequest>> {
         .context("Failed to parse gh pr list JSON output")?;
 
     let mut prs = Vec::new();
+    let mut filtered_count = 0;
+
     for pr_json in gh_prs {
+        let author = pr_json["author"]["login"].as_str().unwrap_or("").to_string();
+
+        // Security filter: Only include PRs from repository owner
+        if author != repo_info.owner {
+            filtered_count += 1;
+            debug!("Filtering out PR #{} from non-owner author: {}",
+                   pr_json["number"].as_u64().unwrap_or(0), author);
+            continue;
+        }
+
         let pr = PullRequest {
             number: pr_json["number"].as_u64().unwrap_or(0) as u32,
             title: pr_json["title"].as_str().unwrap_or("").to_string(),
@@ -138,20 +192,24 @@ pub async fn get_open_prs() -> Result<Vec<PullRequest>> {
             url: pr_json["url"].as_str().unwrap_or("").to_string(),
             head_ref: pr_json["headRefName"].as_str().unwrap_or("").to_string(),
             base_ref: pr_json["baseRefName"].as_str().unwrap_or("").to_string(),
+            author,
         };
         prs.push(pr);
     }
 
-    debug!("Found {} open PRs", prs.len());
+    if filtered_count > 0 {
+        info!("Security: Filtered out {} PRs from non-owner authors", filtered_count);
+    }
+    debug!("Found {} owner PRs (repo owner: {})", prs.len(), repo_info.owner);
     Ok(prs)
 }
 
-/// Check the status of a specific pull request
+/// Check the status of a specific pull request with security validation
 pub async fn check_pr_status(pr_number: u32) -> Result<PullRequest> {
     debug!("Checking status of PR #{}", pr_number);
 
     let output = TokioCommand::new("gh")
-        .args(["pr", "view", &pr_number.to_string(), "--json", "number,title,state,url,headRefName,baseRefName"])
+        .args(["pr", "view", &pr_number.to_string(), "--json", "number,title,state,url,headRefName,baseRefName,author"])
         .output()
         .await
         .context("Failed to execute gh pr view command")?;
@@ -167,6 +225,17 @@ pub async fn check_pr_status(pr_number: u32) -> Result<PullRequest> {
     let pr_json: serde_json::Value = serde_json::from_str(&stdout)
         .context("Failed to parse gh pr view JSON output")?;
 
+    let author = pr_json["author"]["login"].as_str().unwrap_or("").to_string();
+
+    // Security check: Verify this PR is from repository owner
+    let repo_info = get_repository_info().await?;
+    if author != repo_info.owner {
+        return Err(anyhow::anyhow!(
+            "Security: PR #{} is from non-owner author '{}' (repo owner: '{}')",
+            pr_number, author, repo_info.owner
+        ));
+    }
+
     let pr = PullRequest {
         number: pr_json["number"].as_u64().unwrap_or(0) as u32,
         title: pr_json["title"].as_str().unwrap_or("").to_string(),
@@ -174,9 +243,10 @@ pub async fn check_pr_status(pr_number: u32) -> Result<PullRequest> {
         url: pr_json["url"].as_str().unwrap_or("").to_string(),
         head_ref: pr_json["headRefName"].as_str().unwrap_or("").to_string(),
         base_ref: pr_json["baseRefName"].as_str().unwrap_or("").to_string(),
+        author,
     };
 
-    debug!("PR #{} status: {}", pr_number, pr.state);
+    debug!("PR #{} status: {} (owner: {})", pr_number, pr.state, pr.author);
     Ok(pr)
 }
 
