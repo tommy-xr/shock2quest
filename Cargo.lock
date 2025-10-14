@@ -2601,6 +2601,7 @@ dependencies = [
  "pcx",
  "shock2vr",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
