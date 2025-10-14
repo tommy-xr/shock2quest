@@ -10,4 +10,5 @@ members = [
     "engine_ffmpeg",
     "shock2vr",
     "dark",
+    "tools/shodan",
 ]

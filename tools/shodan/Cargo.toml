@@ -1,0 +1,21 @@
+[package]
+name = "shodan"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "shodan"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+# reqwest = { version = "0.11.20", features = ["json"] }  # Commented out due to rustc version conflicts
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.8"
