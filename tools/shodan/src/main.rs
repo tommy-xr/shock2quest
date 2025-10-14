@@ -6,6 +6,7 @@ use tracing::{info, warn};
 mod config;
 mod git;
 mod prompts;
+mod claude_code;
 
 use config::Config;
 
@@ -109,18 +110,54 @@ fn init_logging(verbose: bool) -> Result<()> {
 async fn run_once(config: &Config) -> Result<()> {
     info!("Executing single orchestration cycle");
 
-    // TODO: Implement single run cycle
-    // 1. Check if Claude Code is active
-    // 2. Ensure clean git state
-    // 3. Select random prompt
-    // 4. Execute Claude Code
-    // 5. Monitor PR
+    // 1. Check if Claude Code is active and ensure clean git state
+    info!("Checking repository state...");
+    let repo_state = git::get_repository_state().await?;
 
-    warn!("Single run cycle not yet implemented");
+    if !repo_state.active_claude_sessions.is_empty() {
+        warn!("Active Claude Code sessions detected, aborting cycle");
+        return Ok(());
+    }
+
+    if !repo_state.git_status.is_clean {
+        warn!("Repository is not clean, ensuring clean state...");
+        git::ensure_clean_working_directory(config).await?;
+    }
+
+    // 2. Select random prompt
+    info!("Selecting random prompt...");
+    let prompts = prompts::discover_prompts(config).await?;
+    if prompts.is_empty() {
+        warn!("No prompts available for execution");
+        return Ok(());
+    }
+
+    let selected_prompt = prompts::select_random_prompt(&prompts)?;
+    info!("Selected prompt: {} (weight: {}, risk: {:?})",
+          selected_prompt.name, selected_prompt.weight, selected_prompt.metadata.risk_level);
+
+    // 3. Execute Claude Code
+    info!("Executing prompt with Claude Code...");
+    let output = claude_code::execute_prompt(config, selected_prompt).await?;
+
+    info!("✅ Orchestration cycle completed");
+    info!("   Session: {}", output.session_id);
+    info!("   Success: {}", output.success);
+    info!("   Duration: {:.2}s", output.execution_time_seconds);
+
+    // 4. Check for PR creation and monitor if needed
+    if let Some(git_changes) = &output.git_changes {
+        if let Some(pr_number) = git_changes.pr_created {
+            info!("   PR created: #{}", pr_number);
+            info!("   Monitoring will be handled in Phase 5 implementation");
+            // TODO: Monitor PR status (Phase 5)
+        }
+    }
+
     Ok(())
 }
 
-async fn run_loop(config: &Config, interval: &str) -> Result<()> {
+async fn run_loop(_config: &Config, interval: &str) -> Result<()> {
     info!("Starting continuous orchestration loop with interval: {}", interval);
 
     // TODO: Implement continuous loop
@@ -218,8 +255,58 @@ async fn test_prompt(config: &Config, prompt_file: &PathBuf, dry_run: bool) -> R
         return Ok(());
     }
 
-    // TODO: Execute with Claude Code
-    warn!("Claude Code execution not yet implemented");
+    // Execute with Claude Code
+    info!("🚀 Executing prompt with Claude Code...");
+    match claude_code::execute_prompt(config, &prompt).await {
+        Ok(output) => {
+            info!("✅ Claude Code execution completed");
+            info!("   Session ID: {}", output.session_id);
+            info!("   Success: {}", output.success);
+            info!("   Execution time: {:.2}s", output.execution_time_seconds);
+
+            if !output.files_created.is_empty() {
+                info!("   Files created: {}", output.files_created.len());
+                for file in &output.files_created {
+                    info!("     + {}", file.display());
+                }
+            }
+
+            if !output.files_modified.is_empty() {
+                info!("   Files modified: {}", output.files_modified.len());
+                for file in &output.files_modified {
+                    info!("     ~ {}", file.display());
+                }
+            }
+
+            if let Some(git_changes) = &output.git_changes {
+                if let Some(branch) = &git_changes.branch_created {
+                    info!("   Branch created: {}", branch);
+                }
+                if !git_changes.commits.is_empty() {
+                    info!("   Commits: {}", git_changes.commits.len());
+                }
+                if let Some(pr) = git_changes.pr_created {
+                    info!("   PR created: #{}", pr);
+                }
+            }
+
+            if let Some(error) = &output.error {
+                warn!("   Error: {}", error);
+            }
+
+            if !output.output.is_empty() {
+                info!("Claude Code output:");
+                println!("---");
+                println!("{}", output.output);
+                println!("---");
+            }
+        }
+        Err(e) => {
+            warn!("❌ Claude Code execution failed: {}", e);
+            return Err(e);
+        }
+    }
+
     Ok(())
 }
 
