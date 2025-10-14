@@ -13,17 +13,17 @@ Shodan monitors the repository state and, when no active Claude Code sessions ar
 
 ## Progress Status
 
-**Overall Progress: 3/7 Phases Complete (43%)**
+**Overall Progress: 4/7 Phases Complete (57%)**
 
 - ✅ **Phase 1: Core Infrastructure** - CLI, configuration, logging
 - ✅ **Phase 2: Git Operations** - Repository state management, PR detection
 - ✅ **Phase 3: Prompt Management** - Security-focused prompt system with owner-only PR filtering
-- 🚧 **Phase 4: Claude Code Integration** - *Next to implement*
-- ⏳ **Phase 5: PR Monitoring** - *Pending*
+- ✅ **Phase 4: Claude Code Integration** - Subprocess management with JSON I/O and session tracking
+- 🚧 **Phase 5: PR Monitoring** - *Next to implement*
 - ⏳ **Phase 6: Main Orchestration Loop** - *Pending*
 - ⏳ **Phase 7: Error Handling & Polish** - *Pending*
 
-**Current Status:** Ready to begin Phase 4 (Claude Code Integration)
+**Current Status:** Ready to begin Phase 5 (PR Monitoring)
 
 ## Implementation Plan
 
@@ -89,18 +89,27 @@ Shodan monitors the repository state and, when no active Claude Code sessions ar
 - [x] Security validation with dangerous pattern detection
 - [x] Formatted prompt output for Claude Code execution
 
-### Phase 4: Claude Code Integration (2 days)
+### Phase 4: Claude Code Integration ✅ COMPLETED
 
-#### Task 4.1: Claude Code Orchestration
-- [ ] Create `claude_code.rs` module
-- [ ] Implement Claude Code subprocess management
-- [ ] JSON input/output handling for `--input-format=json` and `--output-format=json`
-- [ ] Session state tracking
+#### Task 4.1: Claude Code Orchestration ✅
+- [x] Create `claude_code.rs` module with comprehensive subprocess management
+- [x] Implement Claude Code subprocess execution with JSON I/O (`--input-format=json --output-format=json`)
+- [x] Session state tracking with unique session IDs and lifecycle management
+- [x] **ClaudeCodeManager**: Multi-session management with concurrent execution support
+- [x] **Context Generation**: Automatic safety guidelines and project context injection
 
-#### Task 4.2: Claude Code Communication
-- [ ] Parse Claude Code JSON responses
-- [ ] Handle Claude Code errors and retries
-- [ ] Implement timeout handling for long-running sessions
+#### Task 4.2: Claude Code Communication ✅
+- [x] Parse Claude Code JSON responses with fallback to plain text
+- [x] Handle Claude Code errors, retries, and graceful degradation
+- [x] Implement timeout handling for long-running sessions (configurable via `max_session_time`)
+- [x] **Rich Output Tracking**: Files created/modified, Git changes, PR creation detection
+- [x] **Process Management**: Safe subprocess execution with proper cleanup and termination
+
+#### Task 4.3: CLI Integration ✅
+- [x] Enhanced `test-prompt` command with actual Claude Code execution
+- [x] Updated `run --once` command for complete orchestration cycles
+- [x] Detailed output reporting (session info, execution time, file changes)
+- [x] Repository state validation before execution
 
 ### Phase 5: PR Monitoring (1-2 days)
 
@@ -239,6 +248,47 @@ Shodan implements multiple layers of security to prevent prompt injection attack
 - **Medium Risk**: Code changes, refactoring, build improvements
 - **High Risk**: System changes, major architectural modifications
 
+## Technical Architecture
+
+### Claude Code Integration Flow
+```mermaid
+graph TD
+    A[Prompt Selection] --> B[Session Creation]
+    B --> C[Context Generation]
+    C --> D[JSON Input Preparation]
+    D --> E[Claude Code Subprocess]
+    E --> F[Output Collection]
+    F --> G[JSON Parsing]
+    G --> H[Result Processing]
+    H --> I[Session Cleanup]
+```
+
+### Session Management
+- **Unique Session IDs**: `shodan-{timestamp}-{random}` format
+- **State Tracking**: Starting → Running → Completed/Failed/TimedOut/Cancelled
+- **Timeout Protection**: Configurable via `max_session_time` (default: 4h)
+- **Process Cleanup**: Automatic termination and resource cleanup
+- **Concurrent Support**: Multiple sessions can run simultaneously
+
+### Safety Context Injection
+Every Claude Code execution automatically receives:
+```yaml
+Safety Guidelines:
+  - Only make incremental, safe improvements
+  - Do not modify core VR functionality without thorough understanding
+  - Focus on documentation, testing, and minor improvements
+  - Always test changes before committing
+
+Project Context:
+  - VR port of System Shock 2 for Oculus Quest
+  - Written in Rust with OpenGL rendering
+  - Performance is critical for VR (90+ FPS)
+  - Follow existing code patterns and conventions
+
+Repository State:
+  - Current branch, clean status, open PRs
+```
+
 ## Dependencies
 
 Key Rust crates used:
@@ -254,21 +304,24 @@ Key Rust crates used:
 
 ## Current Status & Working Features
 
-### ✅ Phase 1, 2 & 3 Achievements
+### ✅ Phase 1, 2, 3 & 4 Achievements
 
 **CLI Interface:**
 ```bash
 cargo run -p shodan check              # Check repository state
 cargo run -p shodan --verbose check   # Detailed logging
-cargo run -p shodan run --once         # Single orchestration cycle
+cargo run -p shodan run --once         # Complete orchestration cycle with Claude Code
 cargo run -p shodan list-prompts       # Show available prompts with statistics
-cargo run -p shodan test-prompt prompts/iterate-on-projects.md --dry-run
+cargo run -p shodan test-prompt prompts/iterate-on-projects.md --dry-run    # Validate
+cargo run -p shodan test-prompt prompts/check-pr-state.md                   # Execute
 ```
 
 **Security Features:**
 - **Repository Owner Filtering**: Only PRs from repository owner are considered (prevents prompt injection attacks)
 - **Prompt Validation**: Security checks for dangerous patterns and injection attempts
 - **Risk Assessment**: Each prompt classified as Low/Medium/High risk with safety guidelines
+- **Automated Context Injection**: Safety guidelines and project constraints added to every Claude Code execution
+- **Session Isolation**: Each execution gets unique session ID with proper cleanup
 
 **Git Operations Working:**
 - Branch detection and switching
@@ -286,6 +339,15 @@ cargo run -p shodan test-prompt prompts/iterate-on-projects.md --dry-run
 - **Content Validation**: Automatic detection of dangerous patterns
 - **Formatted Output**: Clean formatting for Claude Code execution
 
+**Claude Code Integration:**
+- **JSON I/O Communication**: Structured input/output with `--input-format=json --output-format=json`
+- **Session Management**: Complete lifecycle tracking (Starting → Running → Completed/Failed/TimedOut)
+- **Timeout Protection**: Configurable timeouts with graceful termination (4h default)
+- **Rich Output Tracking**: Files created/modified, Git changes, PR creation detection
+- **Process Management**: Safe subprocess execution with proper cleanup
+- **Context Generation**: Automatic safety guidelines and project context injection
+- **Error Handling**: Comprehensive error capture with fallback to plain text output
+
 **Configuration System:**
 - TOML-based configuration with duration parsing ("1h", "30m", "5s")
 - Environment variable support and logging configuration
@@ -298,12 +360,16 @@ cargo run -p shodan test-prompt prompts/iterate-on-projects.md --dry-run
 - Found 1 active Claude Code session with proper detection
 - All 5 prompts loaded successfully with proper metadata parsing
 - Random selection working with weighted probability distribution
+- **Claude Code execution tested** with dry-run and actual execution modes
+- **7 tests passing** including new Claude Code integration tests
+- **Session ID generation** working with unique identifiers
+- **Complete orchestration cycle** tested via `run --once` command
 
 ### 🚧 Next Implementation Steps
 
-**Phase 4:** Claude Code subprocess integration with JSON I/O
 **Phase 5:** PR monitoring and CI status checking
 **Phase 6:** Main orchestration loop with scheduling
+**Phase 7:** Error handling and polish
 
 ## Success Criteria
 
