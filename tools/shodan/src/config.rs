@@ -114,8 +114,14 @@ impl Config {
         if Path::new(prompt_dir).is_absolute() {
             PathBuf::from(prompt_dir)
         } else {
-            // Make it relative to tools/shodan/
-            PathBuf::from("tools/shodan").join(prompt_dir)
+            // Try current directory first, then tools/shodan/
+            let current_dir_path = PathBuf::from(prompt_dir);
+            if current_dir_path.exists() {
+                current_dir_path
+            } else {
+                // Fallback to tools/shodan/ relative path
+                PathBuf::from("tools/shodan").join(prompt_dir)
+            }
         }
     }
 
