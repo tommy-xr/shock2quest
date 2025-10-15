@@ -169,7 +169,7 @@ impl ClaudeCodeManager {
 
         // Start Claude Code process
         let mut process = TokioCommand::new("claude")
-            .args(["--input-format=json", "--output-format=json"])
+            .args(["--print", "--output-format=json"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
