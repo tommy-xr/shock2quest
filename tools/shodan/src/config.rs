@@ -144,6 +144,16 @@ impl Config {
     pub fn parse_ci_wait_time(&self) -> Result<u64> {
         parse_duration(&self.shodan.max_ci_wait_time)
     }
+
+    /// Parse the orchestration interval from config
+    pub fn parse_orchestration_interval(&self) -> Result<u64> {
+        parse_duration(&self.shodan.interval)
+    }
+
+    /// Get the prompt directory path
+    pub fn prompt_dir(&self) -> PathBuf {
+        PathBuf::from(&self.shodan.prompt_dir)
+    }
 }
 
 /// Parse duration strings like "1h", "30m", "45s" into seconds
