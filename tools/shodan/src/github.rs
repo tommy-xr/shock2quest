@@ -81,7 +81,6 @@ pub struct FailureAnalysis {
     pub pr_number: u32,
     pub failed_checks: Vec<CheckStatus>,
     pub error_logs: Vec<String>,
-    pub suggested_fixes: Vec<String>,
     pub retry_recommended: bool,
 }
 
@@ -502,56 +501,15 @@ impl PRMonitor {
             pr_number,
             failed_checks,
             error_logs,
-            suggested_fixes: Vec::new(), // No generic suggestions when we have actual logs
             retry_recommended,
         };
 
-        info!("Failure analysis for PR #{}: {} failed checks, {} suggestions",
-              pr_number, analysis.failed_checks.len(), analysis.suggested_fixes.len());
+        info!("Failure analysis for PR #{}: {} failed checks",
+              pr_number, analysis.failed_checks.len());
 
         Ok(analysis)
     }
 
-    /// Get detailed logs for a specific check
-    async fn get_check_logs(&self, pr_number: u32, check_name: &str) -> Result<Vec<String>> {
-        debug!("Getting logs for check '{}' on PR #{}", check_name, pr_number);
-
-        // Try multiple approaches to get failure logs
-
-        // Approach 1: Get recent failed runs regardless of commit
-        let recent_runs = self.get_recent_failed_runs(check_name).await?;
-        if !recent_runs.is_empty() {
-            return Ok(recent_runs);
-        }
-
-        // Approach 2: Try to get PR head commit and find runs for that commit
-        let pr_output = TokioCommand::new("gh")
-            .args(["pr", "view", &pr_number.to_string(), "--json", "headRefOid"])
-            .output()
-            .await;
-
-        if let Ok(output) = pr_output {
-            if output.status.success() {
-                let pr_stdout = String::from_utf8_lossy(&output.stdout);
-                if let Ok(pr_data) = serde_json::from_str::<serde_json::Value>(&pr_stdout) {
-                    if let Some(head_sha) = pr_data["headRefOid"].as_str() {
-                        let commit_runs = self.get_runs_for_commit(head_sha, check_name).await?;
-                        if !commit_runs.is_empty() {
-                            return Ok(commit_runs);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Approach 3: Try to get status information from PR status checks
-        let status_info = self.get_pr_status_details(pr_number, check_name).await?;
-        if !status_info.is_empty() {
-            return Ok(status_info);
-        }
-
-        Ok(vec![format!("Unable to retrieve detailed logs for check '{}' on PR #{}", check_name, pr_number)])
-    }
 
     /// Get recent failed workflow runs matching the check name
     async fn get_recent_failed_runs(&self, check_name: &str) -> Result<Vec<String>> {
@@ -1360,11 +1318,8 @@ impl PRMonitor {
             if has_failures {
                 warn!("PR #{} has failing checks, analyzing...", pr_number);
                 if let Ok(analysis) = self.analyze_pr_failures(pr_number).await {
-                    if !analysis.suggested_fixes.is_empty() {
-                        info!("Suggested fixes for PR #{}:", pr_number);
-                        for fix in &analysis.suggested_fixes {
-                            info!("  - {}", fix);
-                        }
+                    if !analysis.error_logs.is_empty() {
+                        info!("Error logs available for analysis of PR #{}", pr_number);
                     }
                 }
             }
@@ -1376,33 +1331,6 @@ impl PRMonitor {
         warn!("Timeout waiting for PR #{} to become ready", pr_number);
         Err(anyhow::anyhow!("Timeout waiting for PR to become ready"))
     }
-
-    /// Get monitoring statistics
-    pub fn get_monitoring_stats(&self) -> HashMap<u32, MonitoringStats> {
-        let mut stats = HashMap::new();
-
-        for (pr_number, state) in &self.monitored_prs {
-            let stat = MonitoringStats {
-                pr_number: *pr_number,
-                monitoring_duration: state.start_time.elapsed(),
-                last_check_age: state.last_check.elapsed(),
-                status_updates: state.status_history.len(),
-                failure_count: state.failure_count,
-            };
-            stats.insert(*pr_number, stat);
-        }
-
-        stats
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MonitoringStats {
-    pub pr_number: u32,
-    pub monitoring_duration: Duration,
-    pub last_check_age: Duration,
-    pub status_updates: usize,
-    pub failure_count: u32,
 }
 
 /// Parse GitHub check state string to enum

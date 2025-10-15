@@ -198,11 +198,8 @@ async fn run_once(config: &Config) -> Result<()> {
 
                             // Provide failure analysis
                             if let Ok(analysis) = monitor.analyze_pr_failures(pr_number).await {
-                                if !analysis.suggested_fixes.is_empty() {
-                                    info!("   Suggested fixes:");
-                                    for fix in analysis.suggested_fixes.iter().take(3) {
-                                        info!("     💡 {}", fix);
-                                    }
+                                if !analysis.error_logs.is_empty() {
+                                    info!("   Error logs available for analysis");
                                 }
                             }
                         }
@@ -549,12 +546,7 @@ async fn check_pr(config: &Config, pr_number: u32, analyze_failures: bool) -> Re
                     }
                 }
 
-                if !analysis.suggested_fixes.is_empty() {
-                    info!("Suggested Fixes:");
-                    for fix in &analysis.suggested_fixes {
-                        info!("  💡 {}", fix);
-                    }
-                }
+                // Suggested fixes removed - actual error logs are provided instead
 
                 if analysis.retry_recommended {
                     info!("🔄 Retry is recommended for this PR");
