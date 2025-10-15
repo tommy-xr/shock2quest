@@ -91,7 +91,7 @@ Create `engine/src/logging/mod.rs` with:
 
 **Phase 2: High-Impact Areas - IN PROGRESS**
 - Migrate performance-critical rendering code
-- Update physics logging
+- ✅ Update physics logging (completed: 4 profile! macros migrated to scoped system)
 - ✅ Replace audio debug prints
 
 **Phase 3: Systematic Migration**
