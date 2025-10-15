@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 mod config;
+mod error;
 mod git;
 mod prompts;
 mod claude_code;

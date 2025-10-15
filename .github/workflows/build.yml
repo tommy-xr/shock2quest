@@ -47,10 +47,16 @@ jobs:
         path: target
         key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
   
-    # Actual build steps  
-    - name: Build
+    # Actual build steps
+    - name: Build Desktop Runtime
       run: cargo build --verbose --release
       working-directory: runtimes/desktop_runtime
-    - name: Run tests
+    - name: Run Desktop Runtime tests
       run: cargo test --verbose
       working-directory: runtimes/desktop_runtime
+
+    # Build and test Shodan CLI tool
+    - name: Build Shodan CLI
+      run: cargo build --verbose --release -p shodan
+    - name: Run Shodan CLI tests
+      run: cargo test --verbose -p shodan

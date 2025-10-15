@@ -69,10 +69,7 @@ pub struct PRMonitor {
 
 #[derive(Debug, Clone)]
 struct PRMonitorState {
-    pr_number: u32,
-    start_time: Instant,
     last_check: Instant,
-    failure_count: u32,
     status_history: Vec<PullRequestStatus>,
 }
 
@@ -145,10 +142,7 @@ impl PRMonitor {
         let pr = crate::git::check_pr_status(pr_number).await?;
 
         let monitor_state = PRMonitorState {
-            pr_number,
-            start_time: Instant::now(),
             last_check: Instant::now(),
-            failure_count: 0,
             status_history: Vec::new(),
         };
 
