@@ -161,15 +161,21 @@ impl ClaudeCodeManager {
 
     /// Execute Claude Code as a subprocess
     async fn execute_claude_code(&self, input: &ClaudeCodeInput) -> Result<Child> {
-        debug!("Executing Claude Code with JSON I/O");
+        debug!("Executing Claude Code with text input and JSON output");
 
-        // Serialize input to JSON
-        let input_json = serde_json::to_string_pretty(input)
-            .context("Failed to serialize Claude Code input")?;
+        // Prepare text input (Claude Code expects text, not JSON when using --print)
+        let input_text = format!("{}\n\n{}",
+            input.context.as_deref().unwrap_or(""),
+            input.prompt
+        );
 
-        // Start Claude Code process
+        // Start Claude Code process with permission mode to allow tool use
         let mut process = TokioCommand::new("claude")
-            .args(["--print", "--output-format=json"])
+            .args([
+                "--print",
+                "--output-format=json",
+                "--permission-mode=acceptEdits"
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -178,7 +184,7 @@ impl ClaudeCodeManager {
 
         // Send input to Claude Code
         if let Some(mut stdin) = process.stdin.take() {
-            stdin.write_all(input_json.as_bytes()).await
+            stdin.write_all(input_text.as_bytes()).await
                 .context("Failed to write input to Claude Code")?;
             stdin.shutdown().await
                 .context("Failed to close stdin")?;
@@ -249,6 +255,11 @@ impl ClaudeCodeManager {
                     let mut output = String::new();
                     let mut line = String::new();
                     while reader.read_line(&mut line).await? > 0 {
+                        // Stream output in real-time
+                        print!("{}", line);
+                        use std::io::Write;
+                        std::io::stdout().flush().unwrap();
+
                         output.push_str(&line);
                         line.clear();
                     }
@@ -262,6 +273,11 @@ impl ClaudeCodeManager {
                     let mut output = String::new();
                     let mut line = String::new();
                     while reader.read_line(&mut line).await? > 0 {
+                        // Stream stderr in real-time with prefix
+                        eprint!("[Claude stderr] {}", line);
+                        use std::io::Write;
+                        std::io::stderr().flush().unwrap();
+
                         output.push_str(&line);
                         line.clear();
                     }
