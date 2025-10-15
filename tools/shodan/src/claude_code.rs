@@ -158,7 +158,9 @@ impl ClaudeCodeManager {
         context.push_str("  - Otherwise, based your new branch on main\n");
         context
             .push_str("  - Use 'gt track' once the branch is created so graphite is aware of it\n");
-        context.push_str("  - When the atom of work is complete, make sure to update the issue, project description, docs, etc as well as part of the change.\n");
+        context.push_str("  - When the atom of work is complete:, make sure to update the issue, project description, docs, etc as well as part of the change.\n");
+        context.push_str("  - make sure to update the issue, project description, docs, etc as well as part of the change.\n");
+        context.push_str("  - Push a PR up with all of the changes - make sure the base is relative to the branch you worked off of\n");
 
         // Add current repository state
         if let Ok(repo_state) = crate::git::get_repository_state().await {
