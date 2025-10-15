@@ -29,6 +29,7 @@ pub struct ShodanConfig {
 
     // Claude Code settings
     pub permission_mode: String,
+    pub show_claude_output: bool,
 }
 
 impl Default for ShodanConfig {
@@ -50,6 +51,7 @@ impl Default for ShodanConfig {
             prompt_dir: "prompts".to_string(),
             prompt_weights,
             permission_mode: "bypassPermissions".to_string(),
+            show_claude_output: true,
         }
     }
 }

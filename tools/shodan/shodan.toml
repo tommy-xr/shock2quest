@@ -16,6 +16,7 @@ prompt_dir = "prompts"       # Directory containing prompt files (relative to to
 
 # Claude Code settings
 permission_mode = "bypassPermissions"  # Permission mode: "acceptEdits", "sandboxBashMode", "bypassPermissions", "default", "plan"
+show_claude_output = true              # Show Claude's real-time output (true = text output for visibility, false = JSON for parsing)
 
 # Prompt weights for random selection (higher = more likely)
 [shodan.prompt_weights]
