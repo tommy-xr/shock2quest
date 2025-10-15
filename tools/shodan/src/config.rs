@@ -26,6 +26,9 @@ pub struct ShodanConfig {
     // Prompt settings
     pub prompt_dir: String,
     pub prompt_weights: HashMap<String, u32>,
+
+    // Claude Code settings
+    pub permission_mode: String,
 }
 
 impl Default for ShodanConfig {
@@ -46,6 +49,7 @@ impl Default for ShodanConfig {
             max_ci_wait_time: "30m".to_string(),
             prompt_dir: "prompts".to_string(),
             prompt_weights,
+            permission_mode: "bypassPermissions".to_string(),
         }
     }
 }

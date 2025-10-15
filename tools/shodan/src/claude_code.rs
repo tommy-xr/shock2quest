@@ -162,6 +162,7 @@ impl ClaudeCodeManager {
     /// Execute Claude Code as a subprocess
     async fn execute_claude_code(&self, input: &ClaudeCodeInput) -> Result<Child> {
         debug!("Executing Claude Code with text input and JSON output");
+        info!("Claude Code command: claude --print --output-format=json --permission-mode={}", self.config.shodan.permission_mode);
 
         // Prepare text input (Claude Code expects text, not JSON when using --print)
         let input_text = format!("{}\n\n{}",
@@ -169,12 +170,13 @@ impl ClaudeCodeManager {
             input.prompt
         );
 
-        // Start Claude Code process with permission mode to allow tool use
+        // Start Claude Code process with configurable permission mode
+        let permission_arg = format!("--permission-mode={}", self.config.shodan.permission_mode);
         let mut process = TokioCommand::new("claude")
             .args([
                 "--print",
                 "--output-format=json",
-                "--permission-mode=acceptEdits"
+                &permission_arg
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
