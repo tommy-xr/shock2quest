@@ -8,8 +8,10 @@ mod git;
 mod prompts;
 mod claude_code;
 mod github;
+mod orchestrator;
 
 use config::Config;
+use orchestrator::Orchestrator;
 
 #[derive(Parser)]
 #[command(name = "shodan")]
@@ -135,93 +137,47 @@ fn init_logging(verbose: bool) -> Result<()> {
 }
 
 async fn run_once(config: &Config) -> Result<()> {
-    info!("Executing single orchestration cycle");
+    info!("🎯 Executing single orchestration cycle");
 
-    // 1. Check if Claude Code is active and ensure clean git state
-    info!("Checking repository state...");
-    let repo_state = git::get_repository_state().await?;
+    let mut orchestrator = Orchestrator::new(config.clone()).await
+        .context("Failed to create orchestrator")?;
 
-    if !repo_state.active_claude_sessions.is_empty() {
-        warn!("Active Claude Code sessions detected, aborting cycle");
-        return Ok(());
+    let cycle = orchestrator.run_once().await
+        .context("Orchestration cycle failed")?;
+
+    info!("✅ Orchestration cycle completed: {}", cycle.id);
+    info!("   Prompt: {}", cycle.selected_prompt);
+    info!("   Phase: {:?}", cycle.phase);
+    info!("   Duration: {:.2}s", cycle.start_time.elapsed().as_secs_f64());
+
+    if let Some(pr_number) = cycle.created_pr_number {
+        info!("   PR created: #{}", pr_number);
     }
 
-    if !repo_state.git_status.is_clean {
-        warn!("Repository is not clean, ensuring clean state...");
-        git::ensure_clean_working_directory(config).await?;
-    }
-
-    // 2. Select random prompt
-    info!("Selecting random prompt...");
-    let prompts = prompts::discover_prompts(config).await?;
-    if prompts.is_empty() {
-        warn!("No prompts available for execution");
-        return Ok(());
-    }
-
-    let selected_prompt = prompts::select_random_prompt(&prompts)?;
-    info!("Selected prompt: {} (weight: {}, risk: {:?})",
-          selected_prompt.name, selected_prompt.weight, selected_prompt.metadata.risk_level);
-
-    // 3. Execute Claude Code
-    info!("Executing prompt with Claude Code...");
-    let output = claude_code::execute_prompt(config, selected_prompt).await?;
-
-    info!("✅ Orchestration cycle completed");
-    info!("   Session: {}", output.session_id);
-    info!("   Success: {}", output.success);
-    info!("   Duration: {:.2}s", output.execution_time_seconds);
-
-    // 4. Check for PR creation and monitor if needed
-    if let Some(git_changes) = &output.git_changes {
-        if let Some(pr_number) = git_changes.pr_created {
-            info!("   PR created: #{}", pr_number);
-            info!("   Starting PR monitoring...");
-
-            // Start monitoring the created PR
-            let mut monitor = github::PRMonitor::new(config.clone());
-            match monitor.start_monitoring(pr_number).await {
-                Ok(()) => {
-                    info!("   ✅ PR monitoring started for PR #{}", pr_number);
-
-                    // Wait for PR to become ready with configured timeout
-                    let ci_wait_time = std::time::Duration::from_secs(
-                        config.parse_ci_wait_time().unwrap_or(1800) // Default 30 minutes
-                    );
-
-                    match monitor.wait_for_pr_ready(pr_number, ci_wait_time).await {
-                        Ok(_) => {
-                            info!("   🎉 PR #{} is ready for merge!", pr_number);
-                        }
-                        Err(e) => {
-                            warn!("   ⚠️  PR #{} not ready within timeout: {}", pr_number, e);
-
-                            // Provide failure analysis
-                            if let Ok(analysis) = monitor.analyze_pr_failures(pr_number).await {
-                                if !analysis.error_logs.is_empty() {
-                                    info!("   Error logs available for analysis");
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("   ❌ Failed to start PR monitoring: {}", e);
-                }
-            }
+    // Show execution log
+    if !cycle.execution_log.is_empty() {
+        info!("Execution log:");
+        for log_entry in &cycle.execution_log {
+            info!("  {}", log_entry);
         }
     }
 
     Ok(())
 }
 
-async fn run_loop(_config: &Config, interval: &str) -> Result<()> {
-    info!("Starting continuous orchestration loop with interval: {}", interval);
+async fn run_loop(config: &Config, interval: &str) -> Result<()> {
+    info!("🔄 Starting continuous orchestration loop with interval: {}", interval);
 
-    // TODO: Implement continuous loop
-    // Parse interval and run orchestration cycles
+    // Override config interval if provided
+    let mut config = config.clone();
+    config.shodan.interval = interval.to_string();
 
-    warn!("Continuous loop not yet implemented");
+    let mut orchestrator = Orchestrator::new(config).await
+        .context("Failed to create orchestrator")?;
+
+    orchestrator.start_orchestration().await
+        .context("Orchestration loop failed")?;
+
     Ok(())
 }
 
