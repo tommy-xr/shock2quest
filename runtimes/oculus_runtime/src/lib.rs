@@ -954,9 +954,10 @@ fn render_swapchain(
         // gl::ClearColor(r, g, b, 1.0);
         // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
+        let scene_for_render = Scene::from_objects(all_scene_objs);
         profile!(
             "[oculus.engine.render]",
-            engine.render(&render_context, &all_scene_objs)
+            engine.render(&render_context, &scene_for_render)
         );
 
         // GL(glViewport(0, 0, frameBuffer->Width, frameBuffer->Height));

@@ -7,6 +7,7 @@ use clap::Parser;
 
 use dark::SCALE_FACTOR;
 use engine::profile;
+use engine::scene::Scene;
 
 use engine::util::compute_view_matrix_from_render_context;
 use glfw::GlfwReceiver;
@@ -323,7 +324,8 @@ pub fn main() {
 
         scene.extend(per_eye_scene);
 
-        profile!("engine.render", engine.render(&render_context, &scene));
+        let scene_for_render = Scene::from_objects(scene);
+        profile!("engine.render", engine.render(&render_context, &scene_for_render));
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
