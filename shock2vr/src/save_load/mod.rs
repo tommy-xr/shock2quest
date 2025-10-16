@@ -113,8 +113,8 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         }
     }
 
-    let mut world_serialized_properties = HashMap::new();
-    let mut held_serialized_properties = HashMap::new();
+    let mut world_serialized_properties = FxHashMap::default();
+    let mut held_serialized_properties = FxHashMap::default();
     for prop in all_properties {
         let raw_serialized = prop.serialize(world);
 
@@ -129,8 +129,8 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         held_serialized_properties.insert(prop.name(), held_serialized);
     }
 
-    let mut world_serialized_links = HashMap::new();
-    let mut held_serialized_links = HashMap::new();
+    let mut world_serialized_links = FxHashMap::default();
+    let mut held_serialized_links = FxHashMap::default();
     for (entity_id, links) in v_links.iter().with_id() {
         let serialized = serde_json::to_value(links).unwrap();
 

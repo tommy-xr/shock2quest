@@ -752,10 +752,10 @@ impl Mission {
     }
 
     fn finish_instantiating_entity(
-        id_to_model: &mut HashMap<EntityId, Model>,
-        id_to_bitmap: &mut HashMap<EntityId, Rc<BitmapAnimation>>,
-        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
-        id_to_animation_player: &mut HashMap<EntityId, AnimationPlayer>,
+        id_to_model: &mut FxHashMap<EntityId, Model>,
+        id_to_bitmap: &mut FxHashMap<EntityId, Rc<BitmapAnimation>>,
+        id_to_physics: &mut FxHashMap<EntityId, RigidBodyHandle>,
+        id_to_animation_player: &mut FxHashMap<EntityId, AnimationPlayer>,
         physics: &mut PhysicsWorld,
         world: &mut World,
         script_world: &mut ScriptWorld,
@@ -1715,7 +1715,7 @@ fn initialize_background_music(
 
 fn create_room_entities(
     room_db: &RoomDatabase,
-    template_to_entity_id: &HashMap<i32, WrappedEntityId>,
+    template_to_entity_id: &FxHashMap<i32, WrappedEntityId>,
     world: &mut World,
     entities_to_initialize: &mut HashSet<(EntityId, i32)>,
 ) {

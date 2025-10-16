@@ -1,4 +1,5 @@
 use std::{collections::HashMap, rc::Rc};
+use rustc_hash::FxHashMap;
 
 use crate::{
     creature::get_creature_definition,
@@ -55,8 +56,8 @@ pub fn create_entity_with_position(
     asset_cache: &mut AssetCache,
     script_world: &mut ScriptWorld,
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
-    obj_name_map: &HashMap<i32, String>, // name override map
-    template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
+    obj_name_map: &FxHashMap<i32, String>, // name override map
+    template_to_entity_id: &FxHashMap<i32, WrappedEntityId>, // realized entities from level start
     additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Create initial entity
@@ -134,8 +135,8 @@ pub fn initialize_entity(
     asset_cache: &mut AssetCache,
     script_world: &mut ScriptWorld,
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
-    obj_name_map: &HashMap<i32, String>, // name override map
-    template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
+    obj_name_map: &FxHashMap<i32, String>, // name override map
+    template_to_entity_id: &FxHashMap<i32, WrappedEntityId>, // realized entities from level start
     additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     let scale = {
@@ -451,7 +452,7 @@ pub fn initialize_links_for_entity(
     template_id: i32,
     entity_id: EntityId,
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
-    template_to_entity_id: &HashMap<i32, WrappedEntityId>,
+    template_to_entity_id: &FxHashMap<i32, WrappedEntityId>,
     world: &mut World,
 ) {
     let hierarchy = ss2_entity_info::get_hierarchy(entity_info);

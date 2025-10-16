@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use cgmath::{Quaternion, Vector3};
 use dark::{
@@ -22,7 +23,7 @@ impl SpawnLocation {
         &self,
         world: &World,
         entity_info: &SystemShock2EntityInfo,
-        template_to_entity_id: &HashMap<i32, WrappedEntityId>,
+        template_to_entity_id: &FxHashMap<i32, WrappedEntityId>,
     ) -> (Vector3<f32>, Quaternion<f32>) {
         let mut start_pos = Vector3::zero();
         let mut start_rotation = Quaternion {

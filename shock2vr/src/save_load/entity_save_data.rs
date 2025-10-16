@@ -50,7 +50,9 @@ impl EntitySaveData {
             let name = prop.name();
             if let Some(prop_info) = self.properties.get(&name) {
                 println!("deserializing: {}", name);
-                prop.deserialize(prop_info, world, &old_entity_id_to_new_entity_id);
+                // Convert FxHashMap to HashMap for deserialize method
+                let std_map: HashMap<u64, serde_json::Value> = prop_info.iter().map(|(k, v)| (*k, v.clone())).collect();
+                prop.deserialize(&std_map, world, &old_entity_id_to_new_entity_id);
             }
         }
 
