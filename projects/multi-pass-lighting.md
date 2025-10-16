@@ -12,11 +12,26 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
 
 ## Implementation Plan (Incremental Steps)
 
-### Step 1: Core Light Data Structure
-- Add `Light` trait with common properties (position, color, intensity)
-- Implement `SpotLight` struct with direction, inner/outer cone angles
-- Design for future extensibility: `PointLight`, `DirectionalLight`
-- Add light management to `Scene` type
+### Step 1: Core Light Data Structure ✅ COMPLETED
+- ✅ Add `Light` trait with common properties (position, color, intensity)
+- ✅ Implement `SpotLight` struct with direction, inner/outer cone angles
+- ✅ Design for future extensibility: `PointLight`, `DirectionalLight`
+- ✅ Add light management to `Scene` type
+
+**Implementation Details:**
+- **Files Created:**
+  - `engine/src/scene/light.rs` - Core Light trait and SpotLight implementation
+  - `engine/src/scene/light_system.rs` - LightSystem container for managing multiple lights
+- **Files Modified:**
+  - `engine/src/scene/scene.rs` - Enhanced Scene struct with integrated LightSystem
+  - `engine/src/scene/mod.rs` - Module exports for new lighting components
+- **Features Delivered:**
+  - `Light` trait with position, color/intensity, and light type identification
+  - `SpotLight` implementation with cone angles, range, and attenuation calculations
+  - `LightSystem` container with light management, culling, and querying capabilities
+  - Enhanced `Scene` struct with backwards compatibility via Deref trait
+  - Comprehensive test coverage (8 passing tests)
+  - Foundation for portal-based light culling integration
 
 ### Step 2: Multi-Pass Rendering Foundation
 - Modify `gl_engine.rs` render loop to support multiple light passes
