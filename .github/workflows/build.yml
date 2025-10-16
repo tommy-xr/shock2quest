@@ -13,9 +13,7 @@ jobs:
   build:
     strategy:
       matrix:
-        # TODO: Restore these!
-        os: [macOS-latest]
-        # os: [macOS-latest, ubuntu-latest, windows-latest]
+        os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
@@ -36,29 +34,29 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
 
-    # Cache cargo build artifacts
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-    - name: Cache cargo index
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      # Cache cargo build artifacts
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Cache cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-  
-    # Actual build steps  
-    - name: Build
-      run: cargo build --verbose --release
-      working-directory: runtimes/desktop_runtime
-    - name: Run tests
-      run: cargo test --verbose
-      working-directory: runtimes/desktop_runtime
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      # Actual build steps
+      - name: Build
+        run: cargo build --verbose --release
+        working-directory: runtimes/desktop_runtime
+      - name: Run tests
+        run: cargo test --verbose
+        working-directory: runtimes/desktop_runtime
