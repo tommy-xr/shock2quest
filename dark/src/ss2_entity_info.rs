@@ -23,10 +23,13 @@ pub struct SystemShock2EntityInfo {
     pub entity_to_properties: HashMap<i32, Vec<Rc<Box<dyn Property>>>>,
     pub template_to_links: HashMap<i32, TemplateLinks>,
 
-    // TODO: Create dictionary for these?
-    // Or create a HashMap entity_to_links?
+    // Vec storage for backward compatibility
     pub link_playerfactories: Vec<Link>,
     link_metaprops: Vec<Link>,
+
+    // HashMap lookups for O(1) access by source template ID
+    src_to_playerfactory_links: HashMap<i32, Vec<Link>>,
+    src_to_metaprop_links: HashMap<i32, Vec<Link>>,
 
     // For each template id, store a list of ancestor template ids
     hierarchy: HashMap<i32, Vec<i32>>,
@@ -80,6 +83,16 @@ impl SystemShock2EntityInfo {
             }
         }
         template_to_entity_id
+    }
+
+    /// Get all links from a given source template ID (O(1) lookup)
+    pub fn get_playerfactory_links_by_src(&self, src_id: i32) -> Option<&Vec<Link>> {
+        self.src_to_playerfactory_links.get(&src_id)
+    }
+
+    /// Get all metaprop links from a given source template ID (O(1) lookup)
+    pub fn get_metaprop_links_by_src(&self, src_id: i32) -> Option<&Vec<Link>> {
+        self.src_to_metaprop_links.get(&src_id)
     }
 }
 
@@ -136,6 +149,9 @@ pub fn merge_with_gamesys(
     );
     let hierarchy = calculate_hierarchy(&link_metaprops);
 
+    let src_to_playerfactory_links = build_src_to_links_map(&map_info.link_playerfactories);
+    let src_to_metaprop_links = build_src_to_links_map(&link_metaprops);
+
     SystemShock2EntityInfo {
         entity_to_properties,
         link_metaprops,
@@ -144,7 +160,18 @@ pub fn merge_with_gamesys(
         // TODO: Does this need to be merged?
         template_to_links,
         hierarchy,
+        src_to_playerfactory_links,
+        src_to_metaprop_links,
     }
+}
+
+/// Helper function to build a HashMap from source ID to links for O(1) lookup
+fn build_src_to_links_map(links: &[Link]) -> HashMap<i32, Vec<Link>> {
+    let mut src_to_links = HashMap::new();
+    for link in links {
+        src_to_links.entry(link.src).or_insert_with(Vec::new).push(link.clone());
+    }
+    src_to_links
 }
 
 /* Create a map from entity template id -> parent template ids */
@@ -224,12 +251,17 @@ pub fn new<R: io::Read + io::Seek>(
 
     let hierarchy = calculate_hierarchy(&link_metaprops);
 
+    let src_to_playerfactory_links = build_src_to_links_map(&link_playerfactories);
+    let src_to_metaprop_links = build_src_to_links_map(&link_metaprops);
+
     SystemShock2EntityInfo {
         template_to_links,
         link_playerfactories,
         entity_to_properties,
         link_metaprops,
         hierarchy,
+        src_to_playerfactory_links,
+        src_to_metaprop_links,
     }
 }
 #[derive(Debug, Clone)]
@@ -423,4 +455,43 @@ fn read_all_properties<R: io::Read + io::Seek>(
         }
     }
     ent_to_props
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_link_dictionary_lookup() {
+        // Create some test links
+        let links = vec![
+            Link { id: 1, src: 10, dest: 20, flavor: 0, name: "test1".to_string() },
+            Link { id: 2, src: 30, dest: 40, flavor: 1, name: "test2".to_string() },
+            Link { id: 3, src: 10, dest: 50, flavor: 0, name: "test3".to_string() },
+        ];
+
+        // Test current Vec-based approach - linear search would be O(n)
+        let src_to_find = 10;
+        let found_links: Vec<_> = links.iter().filter(|link| link.src == src_to_find).collect();
+        assert_eq!(found_links.len(), 2);
+        assert!(found_links.iter().any(|link| link.id == 1));
+        assert!(found_links.iter().any(|link| link.id == 3));
+
+        // Test new HashMap-based approach - O(1) average case lookup
+        let src_to_links_map = build_src_to_links_map(&links);
+
+        // Should find the same links but with O(1) lookup
+        let hashmap_found_links = src_to_links_map.get(&src_to_find).unwrap();
+        assert_eq!(hashmap_found_links.len(), 2);
+        assert!(hashmap_found_links.iter().any(|link| link.id == 1));
+        assert!(hashmap_found_links.iter().any(|link| link.id == 3));
+
+        // Test lookup for non-existent source ID
+        assert!(src_to_links_map.get(&999).is_none());
+
+        // Test lookup for existing single link
+        let single_link = src_to_links_map.get(&30).unwrap();
+        assert_eq!(single_link.len(), 1);
+        assert_eq!(single_link[0].id, 2);
+    }
 }
