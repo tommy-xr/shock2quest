@@ -7,25 +7,26 @@ risk_level: "Low"
 
 Review the current state of open pull requests and help address any issues preventing them from being merged. Focus on:
 
-1. **CI/CD Status**: Check for failing builds or tests:
+1. **Feedback**: Review feedback and comments on PR issues
+
+   - If there is open feedback (a comment on the PR) without a response, it should be acted on. Choose one piece of actionable feedback per session.
+   - Always respond to the specific piece of feedback. If there is a code change required to address the feedback, please make that change and push up the change.
+   - Consider if a change to a prompt is required in response to the PR comment. If so, make the prompt change in tools/shodan/prompts or in CLAUDE.md
+   - If the feedback is clearly and unambiguously resolved, you may resolve the comment. Otherwise, leave it open for the submitter to respond to.
+
+2. **CI/CD Status**: Check for failing builds or tests:
 
    - Analyze build logs for compilation errors
    - Review test failures and their causes
    - Check for linting or formatting issues
    - Verify that all required checks are passing
 
-2. **PR Quality Review**: Ensure PRs meet quality standards:
+3. **PR Quality Review**: Ensure PRs meet quality standards:
 
    - Review commit messages for clarity
    - Check for proper documentation of changes
    - Verify that changes align with PR description
    - Ensure code follows project conventions
-
-3. **Feedback**: Review feedback and comments on PR issues
-
-   - If there is open feedback (a comment on the PR), choose one to act on.
-   - Always respond to the specific piece of feedback. If there is a code change required to address the feedback, please make that change and push up the change.
-   - Consider if a change to a prompt is required in response to the PR comment. If so, make the prompt change in tools/shodan/prompts or in CLAUDE.md
 
 4. **Merge Readiness**: Assess whether PRs are ready to merge:
 
