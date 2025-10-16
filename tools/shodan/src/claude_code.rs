@@ -168,14 +168,12 @@ impl ClaudeCodeManager {
             "      - Start a new file in projects to document the project (large task)\n",
         );
 
-        context.push_str(
-            "## Summarization & Continuous Improvement\n",
-        );
+        context.push_str("## Summarization & Continuous Improvement\n");
         context.push_str(
             "Once the workstream is complete, append a journal entry to .notes/journal.md, containing:\n",
         );
         context.push_str("- A single sentence describing the work done.\n");
-        context.push_str("- A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.\n"):
+        context.push_str("- A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.\n");
 
         // Add current repository state
         if let Ok(repo_state) = crate::git::get_repository_state().await {
