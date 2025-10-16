@@ -1,9 +1,13 @@
 pub mod entity_creator;
 pub mod entity_populator;
+pub mod mission_manager;
+pub mod mission_trait;
 mod spawn_location;
 pub mod visibility_engine;
 
 use collision::Aabb;
+pub use mission_manager::*;
+pub use mission_trait::*;
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
