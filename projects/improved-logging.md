@@ -370,7 +370,47 @@ The script and game scopes now cover:
 - Rendering performance metrics
 - Cell/level navigation warnings
 
-**Ready for Phase 4**: Continue systematic migration of remaining subsystems with `println!` statements.
+### Phase 4: Save/Load System Migration - IN PROGRESS ⚡
+
+**Started in branch `feat/logging-phase4-systematic-migration`:**
+
+**Save/Load System Updates:**
+- `shock2vr/src/save_load/entity_save_data.rs`:
+  - Migrated property deserialization debug print: `println!("deserializing: {}")` → `game_log!(DEBUG, "Deserializing property: {}", name)`
+  - Added proper import for `game_log` macro
+- `shock2vr/src/lib.rs`:
+  - Migrated entity count logging: `println!("ALL ENTITIES: {}")` → `game_log!(DEBUG, "Saving {} entities to save data", count)`
+  - Enhanced message for better context and clarity
+- `engine_ffmpeg/src/video_player.rs`:
+  - Migrated video decoder error: `println!("received err in send_packet: {:?}", err)` → `render_log!(ERROR, "Video decoder send_packet error: {:?}", err)`
+  - Properly categorized as render scope error for FFmpeg integration
+
+**Benefits Achieved:**
+- **Save/Load Debugging Control**: Save/load operations can now be debugged with `SHOCK2_LOG=game=debug`
+- **Video System Integration**: FFmpeg video decoder errors properly categorized in render scope
+- **Consistent Message Format**: All logging now follows structured format with clear context
+- **Reduced Console Noise**: Debug-level logs only appear when explicitly requested
+
+**Usage Examples:**
+```bash
+# Debug save/load operations only
+SHOCK2_LOG=game=debug cargo run
+
+# Debug video/render issues
+SHOCK2_LOG=render=debug cargo run
+
+# Combined save/load and video debugging
+SHOCK2_LOG=warn,game=debug,render=debug cargo run
+```
+
+**Phase 4 Scope Coverage:**
+The game and render scopes now additionally cover:
+- Entity save/load serialization debugging
+- Property deserialization tracking
+- Save data entity count logging
+- FFmpeg video decoder error handling
+
+**Next Phase 4 Tasks**: Continue systematic migration of remaining subsystems with `println!` statements.
 
 ## Files to Modify
 
