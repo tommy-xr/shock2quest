@@ -1,6 +1,6 @@
 extern crate ffmpeg_next as ffmpeg;
 
-use engine::texture_format::{PixelFormat, RawTextureData};
+use engine::{render_log, texture_format::{PixelFormat, RawTextureData}};
 use ffmpeg::format::{input, Pixel};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context, flag::Flags};
@@ -80,7 +80,7 @@ impl VideoPlayer {
             if stream.index() == video_stream_index {
                 match decoder.send_packet(&packet) {
                     Ok(()) => receive_and_process_decoded_frames(&mut decoder).unwrap(),
-                    Err(err) => println!("received err in send_packet: {:?}", err),
+                    Err(err) => render_log!(ERROR, "Video decoder send_packet error: {:?}", err),
                 }
             }
         }
