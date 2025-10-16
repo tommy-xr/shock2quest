@@ -74,6 +74,15 @@ enum Commands {
         #[arg(long)]
         analyze_failures: bool,
     },
+    /// Run a specific prompt by name (searches in prompts directory)
+    RunPrompt {
+        /// Name of the prompt (without .md extension)
+        prompt_name: String,
+
+        /// Don't actually run Claude Code, just validate
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -118,6 +127,10 @@ async fn main() -> Result<()> {
         Commands::CheckPr { pr_number, analyze_failures } => {
             info!("Checking status of PR #{}", pr_number);
             check_pr(&config, pr_number, analyze_failures).await?;
+        }
+        Commands::RunPrompt { prompt_name, dry_run } => {
+            info!("Running prompt: {}", prompt_name);
+            run_prompt(&config, &prompt_name, dry_run).await?;
         }
     }
 
@@ -516,4 +529,19 @@ async fn check_pr(config: &Config, pr_number: u32, analyze_failures: bool) -> Re
     }
 
     Ok(())
+}
+
+async fn run_prompt(config: &Config, prompt_name: &str, dry_run: bool) -> Result<()> {
+    info!("Looking for prompt: {}", prompt_name);
+
+    // Find the prompt file
+    let prompts_dir = config.prompts_dir();
+    let prompt_file = prompts_dir.join(format!("{}.md", prompt_name));
+
+    if !prompt_file.exists() {
+        return Err(anyhow::anyhow!("Prompt file not found: {}", prompt_file.display()));
+    }
+
+    // Delegate to existing test_prompt function
+    test_prompt(config, &prompt_file, dry_run).await
 }
