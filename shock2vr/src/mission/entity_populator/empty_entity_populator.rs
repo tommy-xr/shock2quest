@@ -3,7 +3,7 @@
 ///
 /// An implementation of EntityPopulator that doesn't populate any entities
 use shipyard::World;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use dark::mission::SystemShock2Level;
 use dark::properties::WrappedEntityId;
@@ -25,7 +25,7 @@ impl EntityPopulator for EmptyEntityPopulator {
         _gamesys_entity_info: &SystemShock2EntityInfo,
         _level: &SystemShock2Level,
         _world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId> {
-        HashMap::new()
+    ) -> FxHashMap<i32, WrappedEntityId> {
+        FxHashMap::default()
     }
 }

@@ -7,7 +7,7 @@ pub use held_item_save_data::*;
 pub use save_data::*;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
 };
 use rustc_hash::FxHashMap;

@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::{collections::HashMap, fs::File};
 use rustc_hash::FxHashMap;
 
 use dark::properties::{Links, WrappedEntityId};
@@ -26,10 +26,10 @@ impl EntitySaveData {
     pub fn instantiate(
         &self,
         world: &mut World,
-    ) -> (FxHashMap<i32, WrappedEntityId>, FxHashMap<EntityId, EntityId>) {
+    ) -> (FxHashMap<i32, WrappedEntityId>, HashMap<EntityId, EntityId>) {
         let original_template_to_entity_id = self.template_id_to_entity_id.clone();
 
-        let mut old_entity_id_to_new_entity_id = FxHashMap::default();
+        let mut old_entity_id_to_new_entity_id = HashMap::new();
 
         for entity_id_inner in self.all_entities.iter() {
             let new_entity = world.add_entity(());

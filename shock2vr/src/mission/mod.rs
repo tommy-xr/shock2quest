@@ -8,7 +8,7 @@ pub use spawn_location::*;
 pub use visibility_engine::*;
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
     io::BufReader,
     rc::Rc,
