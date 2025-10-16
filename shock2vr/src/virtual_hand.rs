@@ -2,6 +2,7 @@
 
 use cgmath::{point3, vec3, Matrix4, Quaternion, Rotation, Vector3, Zero};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
+use engine::script_log;
 use engine::scene::SceneObject;
 
 use rapier3d::prelude::RigidBodyHandle;
@@ -258,7 +259,7 @@ impl VirtualHand {
                     }
 
                     if prev.trigger_value > 0.5 && input_hand.trigger_value < 0.5 {
-                        println!("releasing!");
+                        script_log!(DEBUG, "Hand releasing trigger");
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
                                 to: entity_id,
