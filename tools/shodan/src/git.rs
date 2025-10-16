@@ -4,6 +4,7 @@ use tokio::process::Command as TokioCommand;
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
+use crate::error::{ShodanError, ShodanResult, RetryConfig, retry_operation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
@@ -40,28 +41,52 @@ pub struct RepositoryState {
     pub active_claude_sessions: Vec<String>,
 }
 
-/// Get the current Git branch name
-pub async fn get_current_branch() -> Result<String> {
-    debug!("Getting current Git branch");
+/// Helper function for robust git command execution
+async fn execute_git_command(args: &[&str], operation: &str) -> ShodanResult<String> {
+    debug!("Executing git command: {}", args.join(" "));
 
     let output = TokioCommand::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .args(args)
         .output()
         .await
-        .context("Failed to execute git rev-parse command")?;
+        .map_err(|e| ShodanError::from_io_error(&format!("git {}", args.join(" ")), e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("Git command failed: {}", stderr));
+        return Err(ShodanError::from_git_failure(operation, output.status, &stderr));
     }
 
-    let branch = String::from_utf8(output.stdout)
-        .context("Invalid UTF-8 in git output")?
-        .trim()
-        .to_string();
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 
-    debug!("Current branch: {}", branch);
-    Ok(branch)
+/// Get the current Git branch name with retry logic
+pub async fn get_current_branch() -> Result<String> {
+    debug!("Getting current Git branch");
+
+    let retry_config = RetryConfig {
+        max_attempts: 2,
+        initial_delay: std::time::Duration::from_secs(1),
+        ..Default::default()
+    };
+
+    let result = retry_operation(
+        "get_current_branch",
+        &retry_config,
+        || async {
+            execute_git_command(&["rev-parse", "--abbrev-ref", "HEAD"], "get current branch").await
+        },
+    ).await;
+
+    match result {
+        Ok(branch) => {
+            debug!("Current branch: {}", branch);
+            Ok(branch)
+        }
+        Err(e) => {
+            warn!("Failed to get current branch: {}", e);
+            Err(anyhow::anyhow!("Git operation failed: {}", e))
+        }
+    }
 }
 
 /// Checkout the main branch
