@@ -252,8 +252,44 @@ impl Orchestrator {
         Ok(())
     }
 
-    /// Select a random prompt for execution
+    /// Select a random prompt for execution, prioritizing check-pr-state if PRs have unaddressed comments
     async fn select_prompt(&mut self, cycle: &mut OrchestrationCycle) -> Result<Prompt> {
+        cycle.log("🔍 Checking for PRs with unaddressed comments");
+
+        // Check if any open PRs have unaddressed comments
+        match self.pr_monitor.check_all_prs_for_comments().await {
+            Ok(prs_with_comments) => {
+                if !prs_with_comments.is_empty() {
+                    cycle.log(&format!("📢 Found {} PRs with unaddressed feedback", prs_with_comments.len()));
+
+                    // Log details about the PRs with comments
+                    for pr_comments in &prs_with_comments {
+                        cycle.log(&format!("  PR #{}: {} unresolved comments",
+                                          pr_comments.pr_number,
+                                          pr_comments.unresolved_comments.len()));
+                    }
+
+                    // Try to find the check-pr-state prompt
+                    if let Some(check_pr_prompt) = self.available_prompts.iter()
+                        .find(|p| p.name == "check-pr-state.md") {
+                        cycle.selected_prompt = check_pr_prompt.name.clone();
+                        cycle.log(&format!("🎯 Prioritizing check-pr-state prompt due to unaddressed PR feedback"));
+                        info!("🎯 Selected check-pr-state prompt due to unaddressed PR feedback");
+                        return Ok(check_pr_prompt.clone());
+                    } else {
+                        cycle.log("⚠️  check-pr-state.md prompt not found, falling back to random selection");
+                    }
+                } else {
+                    cycle.log("✅ No PRs with unaddressed feedback found");
+                }
+            }
+            Err(e) => {
+                cycle.log(&format!("⚠️  Failed to check PRs for comments: {}", e));
+                // Continue with normal prompt selection on error
+            }
+        }
+
+        // Default to random selection
         let selected = select_random_prompt(&self.available_prompts)?;
 
         cycle.selected_prompt = selected.name.clone();

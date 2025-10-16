@@ -81,6 +81,24 @@ pub struct FailureAnalysis {
     pub retry_recommended: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PRComment {
+    pub id: u64,
+    pub body: String,
+    pub author: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_resolved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PRCommentsStatus {
+    pub pr_number: u32,
+    pub comments: Vec<PRComment>,
+    pub unresolved_comments: Vec<PRComment>,
+    pub has_unaddressed_feedback: bool,
+}
+
 impl PRMonitor {
     pub fn new(config: Config) -> Self {
         Self {
@@ -1324,6 +1342,123 @@ impl PRMonitor {
 
         warn!("Timeout waiting for PR #{} to become ready", pr_number);
         Err(anyhow::anyhow!("Timeout waiting for PR to become ready"))
+    }
+
+    /// Check if a PR has unaddressed comments/feedback
+    pub async fn check_pr_comments(&self, pr_number: u32) -> Result<PRCommentsStatus> {
+        debug!("Checking comments for PR #{}", pr_number);
+
+        // Get PR comments using gh CLI
+        let output = TokioCommand::new("gh")
+            .args(["pr", "view", &pr_number.to_string(), "--json", "comments"])
+            .output()
+            .await
+            .context("Failed to execute gh pr view command")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("Failed to get PR comments: {}", stderr));
+        }
+
+        let stdout = String::from_utf8(output.stdout)
+            .context("Invalid UTF-8 in gh pr view output")?;
+
+        let json: serde_json::Value = serde_json::from_str(&stdout)
+            .context("Failed to parse PR comments JSON")?;
+
+        let mut comments = Vec::new();
+        let mut unresolved_comments = Vec::new();
+
+        if let Some(comments_array) = json["comments"].as_array() {
+            for comment_json in comments_array {
+                let comment = PRComment {
+                    id: comment_json["id"].as_u64().unwrap_or(0),
+                    body: comment_json["body"].as_str().unwrap_or("").to_string(),
+                    author: comment_json["author"]["login"].as_str().unwrap_or("unknown").to_string(),
+                    created_at: comment_json["createdAt"].as_str().unwrap_or("").to_string(),
+                    updated_at: comment_json["updatedAt"].as_str().unwrap_or("").to_string(),
+                    is_resolved: false, // GitHub API doesn't easily provide resolution status for general comments
+                };
+
+                // Consider a comment "unresolved" if it contains certain keywords or is from a reviewer
+                let is_actionable = self.is_actionable_feedback(&comment.body);
+
+                comments.push(comment.clone());
+                if is_actionable {
+                    unresolved_comments.push(comment);
+                }
+            }
+        }
+
+        let has_unaddressed_feedback = !unresolved_comments.is_empty();
+
+        Ok(PRCommentsStatus {
+            pr_number,
+            comments,
+            unresolved_comments,
+            has_unaddressed_feedback,
+        })
+    }
+
+    /// Check if all open PRs have unaddressed comments
+    pub async fn check_all_prs_for_comments(&self) -> Result<Vec<PRCommentsStatus>> {
+        debug!("Checking all open PRs for unaddressed comments");
+
+        // Get list of open PRs
+        let open_prs = crate::git::get_open_prs().await?;
+        let mut results = Vec::new();
+
+        for pr in &open_prs {
+            match self.check_pr_comments(pr.number).await {
+                Ok(comments_status) => {
+                    if comments_status.has_unaddressed_feedback {
+                        info!("PR #{} has unaddressed feedback ({} comments)",
+                              pr.number, comments_status.unresolved_comments.len());
+                        results.push(comments_status);
+                    } else {
+                        debug!("PR #{} has no unaddressed feedback", pr.number);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to check comments for PR #{}: {}", pr.number, e);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Determine if a comment contains actionable feedback
+    fn is_actionable_feedback(&self, comment_body: &str) -> bool {
+        let body_lower = comment_body.to_lowercase();
+
+        // Keywords that indicate actionable feedback
+        let actionable_keywords = [
+            "please", "could you", "can you", "would you", "should",
+            "need to", "needs to", "missing", "incorrect", "wrong",
+            "fix", "update", "change", "modify", "add", "remove",
+            "consider", "suggest", "recommend", "might want to",
+            "question:", "?", "todo", "fixme", "hack",
+        ];
+
+        // Check if the comment contains actionable language
+        for keyword in &actionable_keywords {
+            if body_lower.contains(keyword) {
+                return true;
+            }
+        }
+
+        // Comments that end with questions are likely actionable
+        if body_lower.trim().ends_with('?') {
+            return true;
+        }
+
+        // Comments that are longer than typical acknowledgments are likely actionable
+        if comment_body.trim().len() > 50 {
+            return true;
+        }
+
+        false
     }
 }
 

@@ -1,6 +1,6 @@
 [shodan]
 # Scheduling
-interval = "15m"              # How often to run orchestration cycles
+interval = "4h"              # How often to run orchestration cycles
 max_session_time = "4h"      # Maximum time for a Claude Code session
 
 # Git settings
