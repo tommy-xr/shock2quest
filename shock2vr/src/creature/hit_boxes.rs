@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use cgmath::{vec3, EuclideanSpace, Matrix4};
 use collision::{Aabb, Aabb3};
@@ -35,13 +35,13 @@ pub enum HitBoxType {
 
 pub struct HitBoxManager {
     // Map entity to all the corresponding entities for their joints
-    pub hit_boxes: HashMap<EntityId, HashMap<JointId, EntityId>>,
+    pub hit_boxes: FxHashMap<EntityId, FxHashMap<JointId, EntityId>>,
 }
 
 impl HitBoxManager {
     pub fn new() -> HitBoxManager {
         HitBoxManager {
-            hit_boxes: HashMap::new(),
+            hit_boxes: FxHashMap::default(),
         }
     }
 
@@ -50,8 +50,8 @@ impl HitBoxManager {
         world: &mut World,
         physics: &mut PhysicsWorld,
         script_world: &mut ScriptWorld,
-        id_to_model: &HashMap<EntityId, Model>,
-        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+        id_to_model: &FxHashMap<EntityId, Model>,
+        id_to_physics: &mut FxHashMap<EntityId, RigidBodyHandle>,
     ) {
         let joint_updates = {
             let v_position = world.borrow::<View<PropPosition>>().unwrap();
@@ -64,7 +64,7 @@ impl HitBoxManager {
                 .unwrap();
             let mut v_entities = world.borrow::<EntitiesViewMut>().unwrap();
 
-            let mut joint_updates = HashMap::new();
+            let mut joint_updates = FxHashMap::default();
 
             for (parent_entity_id, (_position, xform, joint_xforms)) in
                 (&v_position, &v_runtime_transform, &v_runtime_joints)
@@ -85,7 +85,7 @@ impl HitBoxManager {
                 let creature_type = maybe_creature_type.unwrap();
 
                 let hit_box_map = self.hit_boxes.entry(parent_entity_id).or_insert_with(|| {
-                    let mut out_hit_boxes = HashMap::new();
+                    let mut out_hit_boxes = FxHashMap::default();
 
                     for (joint_id, _bbox) in hit_boxes.iter() {
                         let maybe_hitbox_type = creature_type.get_hitbox_type(*joint_id);
@@ -213,7 +213,7 @@ impl HitBoxManager {
         world: &mut World,
         script_world: &mut ScriptWorld,
         physics: &mut PhysicsWorld,
-        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+        id_to_physics: &mut FxHashMap<EntityId, RigidBodyHandle>,
     ) {
         if let Some(hitboxes) = self.hit_boxes.remove(&entity_id) {
             for (_, hitbox) in hitboxes {

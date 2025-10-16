@@ -1,6 +1,5 @@
-use std::{
-    collections::{HashMap, HashSet},
-};
+use std::collections::HashSet;
+use rustc_hash::FxHashMap;
 
 use engine::render_log;
 
@@ -33,9 +32,9 @@ pub struct PortalVisibilityEngine {
     /// Cache of the cell that each entity is in
     ///
     /// If the position hasn't changed, no need to recompute the cell position
-    entity_cell_cache: HashMap<EntityId, (Vector3<f32>, Option<u32>)>,
+    entity_cell_cache: FxHashMap<EntityId, (Vector3<f32>, Option<u32>)>,
 
-    is_visible: HashMap<EntityId, bool>,
+    is_visible: FxHashMap<EntityId, bool>,
 
     debug_portals: Vec<PortalDebugInfo>,
     is_debug: bool,
@@ -66,8 +65,8 @@ const MAX_DEPTH: u32 = 128;
 impl PortalVisibilityEngine {
     pub fn new() -> Self {
         PortalVisibilityEngine {
-            entity_cell_cache: HashMap::new(),
-            is_visible: HashMap::new(),
+            entity_cell_cache: FxHashMap::default(),
+            is_visible: FxHashMap::default(),
             debug_portals: Vec::new(),
             is_debug: false,
         }
@@ -80,7 +79,7 @@ impl PortalVisibilityEngine {
         frustum: &Frustum<f32>,
         level: &SystemShock2Level,
         visible_cells: &mut HashSet<u32>,
-        visited_cells: &mut HashMap<u32, Aabb2<f32>>,
+        visited_cells: &mut FxHashMap<u32, Aabb2<f32>>,
         debug_cells: &mut Vec<PortalDebugInfo>,
         current_cell: &Cell,
         depth: u32,
@@ -239,7 +238,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
         let frustum = maybe_frustum.unwrap();
 
         let mut visible_cells = HashSet::new();
-        let mut visited_cells = HashMap::new();
+        let mut visited_cells = FxHashMap::default();
 
         let camera_cell = maybe_camera_cell.unwrap();
         let screen_portal = Aabb2::new(

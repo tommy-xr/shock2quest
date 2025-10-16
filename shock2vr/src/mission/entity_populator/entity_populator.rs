@@ -1,6 +1,6 @@
 use dark::properties::WrappedEntityId;
 use shipyard::World;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use dark::mission::SystemShock2Level;
 use dark::ss2_entity_info::SystemShock2EntityInfo;
@@ -10,5 +10,5 @@ pub trait EntityPopulator {
         gamesys_entity_info: &SystemShock2EntityInfo,
         level: &SystemShock2Level,
         world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId>;
+    ) -> FxHashMap<i32, WrappedEntityId>;
 }

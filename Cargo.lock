@@ -928,6 +928,7 @@ dependencies = [
  "rand",
  "rb",
  "rodio",
+ "rustc-hash",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2679,6 +2680,7 @@ dependencies = [
  "pcx",
  "rand",
  "rapier3d",
+ "rustc-hash",
  "serde",
  "serde_json",
  "shipyard",

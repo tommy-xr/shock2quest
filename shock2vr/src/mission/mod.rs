@@ -8,12 +8,13 @@ pub use spawn_location::*;
 pub use visibility_engine::*;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fs::File,
     io::BufReader,
     rc::Rc,
     time::{Duration, SystemTime},
 };
+use rustc_hash::FxHashMap;
 
 use cgmath::{
     num_traits::ToPrimitive, vec3, InnerSpace, Matrix4, Point3, Quaternion, Rotation3,
@@ -126,10 +127,10 @@ pub struct EntityMetadata {
 }
 
 #[derive(Unique, Clone)]
-pub struct GlobalEntityMetadata(pub HashMap<String, EntityMetadata>);
+pub struct GlobalEntityMetadata(pub FxHashMap<String, EntityMetadata>);
 
 #[derive(Unique, Clone)]
-pub struct GlobalTemplateIdMap(pub HashMap<i32, WrappedEntityId>);
+pub struct GlobalTemplateIdMap(pub FxHashMap<i32, WrappedEntityId>);
 
 impl EffectQueue {
     pub fn push(&mut self, effect: Effect) {
@@ -137,9 +138,7 @@ impl EffectQueue {
     }
 
     pub fn flush(&mut self) -> Vec<Effect> {
-        let prev = self.effects.clone();
-        self.effects = vec![];
-        prev
+        std::mem::take(&mut self.effects)
     }
 }
 
@@ -152,13 +151,13 @@ pub struct Mission {
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
     pub scene_objects: Vec<SceneObject>,
-    pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
-    pub id_to_model: HashMap<EntityId, Model>,
-    pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
-    pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
-    pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
-    pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
-    pub template_name_to_template_id: HashMap<String, EntityMetadata>,
+    pub id_to_animation_player: FxHashMap<EntityId, AnimationPlayer>,
+    pub id_to_model: FxHashMap<EntityId, Model>,
+    pub id_to_bitmap: FxHashMap<EntityId, Rc<BitmapAnimation>>,
+    pub id_to_physics: FxHashMap<EntityId, RigidBodyHandle>,
+    pub id_to_particle_system: FxHashMap<EntityId, ParticleSystem>,
+    pub template_to_entity_id: FxHashMap<i32, WrappedEntityId>,
+    pub template_name_to_template_id: FxHashMap<String, EntityMetadata>,
     pub world: World,
     pub player_handle: PlayerHandle,
     pub level: SystemShock2Level,

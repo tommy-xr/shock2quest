@@ -7,9 +7,10 @@ pub use held_item_save_data::*;
 pub use save_data::*;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fs::File,
 };
+use rustc_hash::FxHashMap;
 
 use dark::properties::{Link, Links};
 use serde::Serialize;
@@ -149,7 +150,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
 
     let held_entity_data = EntitySaveData {
         all_entities: all_held_entities,
-        template_id_to_entity_id: HashMap::new(),
+        template_id_to_entity_id: FxHashMap::default(),
         links: held_serialized_links,
         properties: held_serialized_properties,
     };

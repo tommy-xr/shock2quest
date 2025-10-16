@@ -6,7 +6,7 @@ use dark::properties::WrappedEntityId;
 /// An implementation of EntityPopulator that creates entities based on the entity data
 /// in a mission file
 use shipyard::{IntoIter, View, ViewMut, World};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use dark::mission::SystemShock2Level;
 use dark::ss2_entity_info::SystemShock2EntityInfo;
@@ -29,8 +29,8 @@ impl EntityPopulator for MissionEntityPopulator {
         gamesys_entity_info: &SystemShock2EntityInfo,
         level: &SystemShock2Level,
         world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId> {
-        let mut template_to_entity_id = HashMap::new();
+    ) -> FxHashMap<i32, WrappedEntityId> {
+        let mut template_to_entity_id = FxHashMap::default();
         let mut all_entities = Vec::new();
         for (template_id, _props) in &level.entity_info.entity_to_properties {
             // Create the entity

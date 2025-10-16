@@ -6,7 +6,7 @@
  */
 use dark::properties::WrappedEntityId;
 use shipyard::World;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use dark::mission::SystemShock2Level;
 use dark::ss2_entity_info::SystemShock2EntityInfo;
@@ -32,7 +32,7 @@ impl EntityPopulator for SaveFileEntityPopulator {
         _gamesys_entity_info: &SystemShock2EntityInfo,
         _level: &SystemShock2Level,
         world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId> {
+    ) -> FxHashMap<i32, WrappedEntityId> {
         // panic!("todo: implement save file entity populator");
 
         let world_entity_data = &self.save_data;

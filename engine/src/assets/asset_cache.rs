@@ -1,16 +1,17 @@
 use std::{
     any::{Any, TypeId},
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     rc::Rc,
 };
+use rustc_hash::FxHashMap;
 use tracing::{self, debug, info};
 
 use super::{asset_importer::AssetImporter, asset_paths::AbstractAssetPath};
 
 pub struct AssetCache {
     base_path: String,
-    importer_to_assets: HashMap<TypeId, HashMap<u64, HashMap<String, Option<Rc<dyn Any>>>>>,
+    importer_to_assets: FxHashMap<TypeId, FxHashMap<u64, FxHashMap<String, Option<Rc<dyn Any>>>>>,
     path: Rc<Box<dyn AbstractAssetPath>>,
 }
 
@@ -19,7 +20,7 @@ impl AssetCache {
         AssetCache {
             base_path,
             path: Rc::new(path),
-            importer_to_assets: HashMap::new(),
+            importer_to_assets: FxHashMap::default(),
         }
     }
 
@@ -81,17 +82,17 @@ impl AssetCache {
         let mut temp_cache = AssetCache {
             base_path: self.base_path.clone(),
             path: self.path.clone(),
-            importer_to_assets: self.importer_to_assets.clone(),
+            importer_to_assets: FxHashMap::default(),
         };
 
         let config_to_reader = self
             .importer_to_assets
             .entry(type_id)
-            .or_insert_with(|| HashMap::new());
+            .or_insert_with(|| FxHashMap::default());
 
         let name_to_reader = config_to_reader
             .entry(config_hash)
-            .or_insert_with(|| HashMap::new());
+            .or_insert_with(|| FxHashMap::default());
 
         let asset = name_to_reader.entry(asset_name.clone()).or_insert_with(|| {
             info!(
@@ -121,10 +122,7 @@ impl AssetCache {
         });
 
         match asset {
-            Some(v) => {
-                let a = v.clone();
-                Some(a.downcast::<TOutput>().unwrap())
-            }
+            Some(v) => Some(v.clone().downcast::<TOutput>().unwrap()),
             None => None,
         }
     }

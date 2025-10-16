@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use cgmath::{vec3, EuclideanSpace, Matrix4, Vector2, Vector3};
 
@@ -25,8 +25,8 @@ pub struct GuiInstanceInfo {
 }
 
 pub struct GuiManager {
-    handle_to_instance: HashMap<GuiHandle, GuiInstanceInfo>,
-    entity_id_to_proxy_entity_id: HashMap<EntityId, EntityId>,
+    handle_to_instance: FxHashMap<GuiHandle, GuiInstanceInfo>,
+    entity_id_to_proxy_entity_id: FxHashMap<EntityId, EntityId>,
 }
 
 #[derive(Component)]
@@ -37,8 +37,8 @@ pub struct GuiPropProxyEntity {
 impl GuiManager {
     pub fn new() -> GuiManager {
         GuiManager {
-            handle_to_instance: HashMap::new(),
-            entity_id_to_proxy_entity_id: HashMap::new(),
+            handle_to_instance: FxHashMap::default(),
+            entity_id_to_proxy_entity_id: FxHashMap::default(),
         }
     }
 
@@ -47,7 +47,7 @@ impl GuiManager {
         world: &mut World,
         physics: &mut PhysicsWorld,
         scripts: &mut ScriptWorld,
-        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+        id_to_physics: &mut FxHashMap<EntityId, RigidBodyHandle>,
         handle: GuiHandle,
         parent_entity: EntityId,
         world_size: Vector2<f32>,
