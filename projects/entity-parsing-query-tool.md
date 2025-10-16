@@ -4,9 +4,57 @@
 
 This project aims to improve the entity system implementation and create powerful debugging/analysis tools for System Shock 2's complex entity relationships. The work is divided into three main areas: critical fixes, tooling improvements, and enhanced debugging capabilities.
 
-## Phase 1: Critical Entity System Fixes
+## Implementation Status
 
-### 1.1 MetaProp Link Implementation Review
+### Phase 1: Core CLI Tool Architecture - ✅ COMPLETED
+
+**Implemented Features:**
+- ✅ **CLI Tool Structure**: Created `tools/entity_inspector/` with complete command-line interface
+- ✅ **Database Module**: Entity loading from gamesys (.gam) and mission (.mis) files
+- ✅ **Command Framework**: All planned commands implemented with proper error handling
+- ✅ **Export Functionality**: JSON, CSV, and debug export formats
+- ✅ **File Auto-Detection**: Automatic gamesys discovery for mission files
+
+**Files Created:**
+- `tools/entity_inspector/src/main.rs` - CLI entry point and command routing
+- `tools/entity_inspector/src/database.rs` - Entity data loading and management
+- `tools/entity_inspector/src/commands.rs` - Command implementations
+- `tools/entity_inspector/src/error.rs` - Comprehensive error handling
+- `tools/entity_inspector/src/query.rs` - Query engine foundation
+- `tools/entity_inspector/src/formatters.rs` - Output formatting utilities
+- `tools/entity_inspector/Cargo.toml` - Project configuration
+
+**CLI Commands Available:**
+```bash
+# Basic entity inspection
+entity_inspector inspect --file shock2.gam --template 1234
+entity_inspector inspect --file medsci1.mis --name "Security Camera"
+
+# Hierarchy analysis (basic implementation)
+entity_inspector hierarchy --file shock2.gam --template 1234
+
+# Entity queries (template range filtering)
+entity_inspector query --file shock2.gam --template-range "1000..2000"
+
+# Data export in multiple formats
+entity_inspector export --file shock2.gam --format json --output entities.json
+entity_inspector export --file shock2.gam --format csv --properties
+
+# Basic validation
+entity_inspector validate --file shock2.gam
+```
+
+## Remaining Work
+
+### Phase 1 Enhancements (Future Development):
+- **Property Inspection**: Full property parsing and display (currently shows count only)
+- **Hierarchy Traversal**: Complete inheritance tree visualization
+- **Name-Based Search**: Entity lookup by PropSymName property
+- **Advanced Queries**: Property-based filtering and regex matching
+
+### Phase 2: Critical Entity System Fixes (Moved from Phase 1)
+
+### 2.1 MetaProp Link Implementation Review
 
 **Issue**: Current inheritance system may have incorrect traversal order and multiple inheritance handling.
 

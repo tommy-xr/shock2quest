@@ -11,4 +11,5 @@ members = [
     "shock2vr",
     "dark",
     "tools/shodan",
+    "tools/entity_inspector",
 ]
