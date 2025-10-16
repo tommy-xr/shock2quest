@@ -312,7 +312,65 @@ The render scope now covers:
 - Rendering performance profiling
 - Visual debugging output
 
-**Ready for Phase 3**: Systematic migration of remaining subsystems with println! statements.
+### Phase 3: Script & Mission System Migration - COMPLETED ✅
+
+**Completed in branch `feat/logging-phase3-systematic-migration`:**
+
+**Script System Updates:**
+- `shock2vr/src/scripts/use_sound.rs`:
+  - Migrated `println!("Playing - Turn on message")` to `script_log!(DEBUG, "Playing turn on sound for entity")`
+  - Updated commented debug print to use scoped logging format
+- `shock2vr/src/scripts/energy_station.rs`:
+  - Migrated `println!("debug!! {:?}", query)` to `script_log!(DEBUG, "Energy station activate query: {:?}", query)`
+  - Improved debug message clarity and context
+- `shock2vr/src/virtual_hand.rs`:
+  - Migrated `println!("releasing!")` to `script_log!(DEBUG, "Hand releasing trigger")`
+  - More descriptive logging for VR interaction debugging
+
+**Mission System Updates:**
+- `shock2vr/src/mission/mod.rs`:
+  - Migrated animation direction change logging: `println!("!! animation direction changed: {:?}", ang)` → `game_log!(DEBUG, "Animation direction changed: {:?}", ang)`
+  - Migrated animation loading warnings: `println!("WARN!! Unable to load/find animation...")` → `game_log!(WARN, ...)`
+  - Migrated unhandled effect logging: `println!("Unhandled effect...")` → `game_log!(WARN, "Unhandled effect: {effect:?}")`
+  - Migrated render model count logging: `println!("rendered models: {} total models: {}")` → `game_log!(TRACE, "Rendered models: {} / {} total")`
+  - Migrated cell position warnings: `println!("unable to find cell at position...")` → `game_log!(WARN, "Unable to find cell at position: {:?}", player_pos)`
+
+**Benefits Achieved:**
+- **Script Debugging Control**: Script behavior can now be debugged with `SHOCK2_LOG=script=debug`
+- **Mission System Monitoring**: Game logic and mission system behavior controlled via `SHOCK2_LOG=game=level`
+- **Better Error Categorization**: Warnings and debug messages properly categorized by importance level
+- **Reduced Console Noise**: High-frequency logs (render counts) moved to TRACE level
+- **Enhanced VR Debugging**: Hand interaction logging can be enabled for VR troubleshooting
+
+**Usage Examples:**
+```bash
+# Script debugging only
+SHOCK2_LOG=script=debug cargo run
+
+# Mission system warnings and errors
+SHOCK2_LOG=game=warn cargo run
+
+# Everything game and script related
+SHOCK2_LOG=warn,game=debug,script=debug cargo run
+
+# Performance monitoring with render counts
+SHOCK2_LOG=warn,game=trace cargo run
+
+# VR interaction debugging
+SHOCK2_LOG=warn,script=debug cargo run
+```
+
+**Phase 3 Scope Coverage:**
+The script and game scopes now cover:
+- Entity script interactions and debugging
+- VR hand/controller interactions
+- Mission system state changes
+- Animation system debugging
+- Effect handling and validation
+- Rendering performance metrics
+- Cell/level navigation warnings
+
+**Ready for Phase 4**: Continue systematic migration of remaining subsystems with `println!` statements.
 
 ## Files to Modify
 

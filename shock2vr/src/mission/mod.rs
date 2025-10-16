@@ -41,6 +41,7 @@ use dark::{
 use engine::{
     assets::asset_cache::AssetCache,
     audio::{AudioChannel, AudioContext, AudioHandle},
+    game_log,
     profile,
     scene::{quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition},
     texture::TextureTrait,
@@ -552,7 +553,7 @@ impl Mission {
                         payload: MessagePayload::AnimationCompleted,
                     }),
                     AnimationEvent::DirectionChanged(ang) => {
-                        println!("!! animation direction changed: {:?}", ang);
+                        game_log!(DEBUG, "Animation direction changed: {:?}", ang);
                         let maybe_current_rotation = self.physics.get_rotation2(*id);
                         if let Some(current_rotation) = maybe_current_rotation {
                             let new_rotation =
@@ -1035,13 +1036,14 @@ impl Mission {
                                 if let Some(clip) = maybe_clip {
                                     *player = AnimationPlayer::queue_animation(player, clip);
                                 } else {
-                                    println!(
-                                        "WARN!! Unable to load animation clip: {:?}_.mc",
+                                    game_log!(
+                                        WARN,
+                                        "Unable to load animation clip: {:?}_.mc",
                                         next_animation
                                     );
                                 }
                             } else {
-                                println!("WARN!! Unable to find animation for query: {:?}", &query);
+                                game_log!(WARN, "Unable to find animation for query: {:?}", &query);
                                 // If we couldn't find an animation... just stop the current one
                                 self.script_world.dispatch(Message {
                                     payload: MessagePayload::AnimationCompleted,
@@ -1305,7 +1307,9 @@ impl Mission {
                     self.world.run_with_data(turn_on_tweqs, entity_id);
                 }
                 Effect::GlobalEffect(global_effect) => global_effects.push(global_effect),
-                _ => println!("Unhandled effect: {effect:?}"),
+                _ => {
+                    game_log!(WARN, "Unhandled effect: {effect:?}");
+                },
             }
         }
 
@@ -1437,8 +1441,9 @@ impl Mission {
                 }
             }
         }
-        println!(
-            "rendered models: {} total models: {}",
+        game_log!(
+            TRACE,
+            "Rendered models: {} / {} total",
             rendered_model_count, total_model_count
         );
         // Render bitmap_animation
@@ -1561,7 +1566,7 @@ impl Mission {
                 // );
                 scene.extend(cell.debug_render());
             } else {
-                println!("unable to find cell at position: {:?}", player_pos);
+                game_log!(WARN, "Unable to find cell at position: {:?}", player_pos);
             }
         }
 
