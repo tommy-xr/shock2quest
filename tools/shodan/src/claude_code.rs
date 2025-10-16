@@ -83,8 +83,9 @@ impl ClaudeCodeManager {
 
         // Get timeout from config
         let timeout_duration = Duration::from_secs(
-            self.config.parse_session_time()
-                .context("Failed to parse session timeout")?
+            self.config
+                .parse_session_time()
+                .context("Failed to parse session timeout")?,
         );
 
         let session = ClaudeCodeSession {
@@ -134,12 +135,16 @@ impl ClaudeCodeManager {
         let mut context = String::new();
 
         context.push_str("# Shodan Automation Context\n\n");
-        context.push_str("This session is running under Shodan automation with the following constraints:\n\n");
+        context.push_str(
+            "This session is running under Shodan automation with the following constraints:\n\n",
+        );
         context.push_str("## Safety Guidelines\n");
         context.push_str("- Only make incremental, safe improvements\n");
         context.push_str("- Do not modify core VR functionality without thorough understanding\n");
         context.push_str("- Focus on documentation, testing, and minor improvements\n");
-        context.push_str("- Always test changes before committing\n\n");
+        context.push_str("- Always test changes before committing\n");
+        context.push_str("- Because this is automation, bias towards making decisions without user intervention.\n");
+        context.push_str("- Keep changes as simple as possible.\n");
 
         context.push_str("## Project Context\n");
         context.push_str("- This is a VR port of System Shock 2 for Oculus Quest\n");
@@ -147,10 +152,23 @@ impl ClaudeCodeManager {
         context.push_str("- Performance is critical for VR (90+ FPS)\n");
         context.push_str("- Follow existing code patterns and conventions\n\n");
 
+        context.push_str("## Workflow\n");
+        context.push_str("- Once you have decided on a work item, create a new branch with git\n");
+        context.push_str("  - If there is pending work in a PR that you are working off of, use that latest branch\n");
+        context.push_str("  - Otherwise, based your new branch on main\n");
+        context
+            .push_str("  - Use 'gt track' once the branch is created so graphite is aware of it\n");
+        context.push_str("  - When the atom of work is complete:, make sure to update the issue, project description, docs, etc as well as part of the change.\n");
+        context.push_str("  - make sure to update the issue, project description, docs, etc as well as part of the change.\n");
+        context.push_str("  - Push a PR up with all of the changes - make sure the base is relative to the branch you worked off of\n");
+
         // Add current repository state
         if let Ok(repo_state) = crate::git::get_repository_state().await {
             context.push_str(&format!("## Current Repository State\n"));
-            context.push_str(&format!("- Branch: {}\n", repo_state.git_status.current_branch));
+            context.push_str(&format!(
+                "- Branch: {}\n",
+                repo_state.git_status.current_branch
+            ));
             context.push_str(&format!("- Clean: {}\n", repo_state.git_status.is_clean));
             context.push_str(&format!("- Open PRs: {}\n", repo_state.open_prs.len()));
             context.push_str("\n");
@@ -161,15 +179,35 @@ impl ClaudeCodeManager {
 
     /// Execute Claude Code as a subprocess
     async fn execute_claude_code(&self, input: &ClaudeCodeInput) -> Result<Child> {
-        debug!("Executing Claude Code with JSON I/O");
+        debug!("Executing Claude Code with text input and JSON output");
+        let output_format = if self.config.shodan.show_claude_output {
+            "text"
+        } else {
+            "json"
+        };
+        info!(
+            "Claude Code command: claude --print --output-format={} --permission-mode={}",
+            output_format, self.config.shodan.permission_mode
+        );
 
-        // Serialize input to JSON
-        let input_json = serde_json::to_string_pretty(input)
-            .context("Failed to serialize Claude Code input")?;
+        // Prepare text input (Claude Code expects text, not JSON when using --print)
+        let input_text = format!(
+            "{}\n\n{}",
+            input.context.as_deref().unwrap_or(""),
+            input.prompt
+        );
 
-        // Start Claude Code process
+        // Start Claude Code process with configurable permission mode
+        let permission_arg = format!("--permission-mode={}", self.config.shodan.permission_mode);
+        let mut args = vec!["--print", &permission_arg];
+
+        // Use JSON output for parsing, or text output for visibility
+        if !self.config.shodan.show_claude_output {
+            args.push("--output-format=json");
+        }
+
         let mut process = TokioCommand::new("claude")
-            .args(["--input-format=json", "--output-format=json"])
+            .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -178,10 +216,11 @@ impl ClaudeCodeManager {
 
         // Send input to Claude Code
         if let Some(mut stdin) = process.stdin.take() {
-            stdin.write_all(input_json.as_bytes()).await
+            stdin
+                .write_all(input_text.as_bytes())
+                .await
                 .context("Failed to write input to Claude Code")?;
-            stdin.shutdown().await
-                .context("Failed to close stdin")?;
+            stdin.shutdown().await.context("Failed to close stdin")?;
         }
 
         debug!("Claude Code process started successfully");
@@ -208,7 +247,11 @@ impl ClaudeCodeManager {
                         info!("Claude Code session {} completed successfully", session_id);
                     } else {
                         session.status = SessionStatus::Failed;
-                        warn!("Claude Code session {} failed with exit code: {:?}", session_id, exit_status.code());
+                        warn!(
+                            "Claude Code session {} failed with exit code: {:?}",
+                            session_id,
+                            exit_status.code()
+                        );
                     }
                 }
                 Ok(None) => {
@@ -232,7 +275,10 @@ impl ClaudeCodeManager {
             (session.timeout, session.start_time)
         };
 
-        info!("Waiting for Claude Code session {} to complete (timeout: {:?})", session_id, timeout_duration);
+        info!(
+            "Waiting for Claude Code session {} to complete (timeout: {:?})",
+            session_id, timeout_duration
+        );
 
         // Extract process from session
         let process = {
@@ -249,6 +295,11 @@ impl ClaudeCodeManager {
                     let mut output = String::new();
                     let mut line = String::new();
                     while reader.read_line(&mut line).await? > 0 {
+                        // Stream output in real-time
+                        print!("{}", line);
+                        use std::io::Write;
+                        std::io::stdout().flush().unwrap();
+
                         output.push_str(&line);
                         line.clear();
                     }
@@ -262,6 +313,11 @@ impl ClaudeCodeManager {
                     let mut output = String::new();
                     let mut line = String::new();
                     while reader.read_line(&mut line).await? > 0 {
+                        // Stream stderr in real-time with prefix
+                        eprint!("[Claude stderr] {}", line);
+                        use std::io::Write;
+                        std::io::stderr().flush().unwrap();
+
                         output.push_str(&line);
                         line.clear();
                     }
@@ -274,7 +330,9 @@ impl ClaudeCodeManager {
                 let exit_status = process.wait().await?;
 
                 Ok::<(String, String, bool), anyhow::Error>((stdout, stderr, exit_status.success()))
-            }).await {
+            })
+            .await
+            {
                 Ok(result) => result?,
                 Err(_) => {
                     // Timeout occurred
@@ -294,7 +352,10 @@ impl ClaudeCodeManager {
                 }
             }
         } else {
-            return Err(anyhow::anyhow!("No process found for session: {}", session_id));
+            return Err(anyhow::anyhow!(
+                "No process found for session: {}",
+                session_id
+            ));
         };
 
         let execution_time = start_time.elapsed();
@@ -302,13 +363,18 @@ impl ClaudeCodeManager {
 
         // Parse Claude Code JSON output
         let claude_output = if success && !output.0.is_empty() {
-            self.parse_claude_output(&output.0, session_id, execution_time).await?
+            self.parse_claude_output(&output.0, session_id, execution_time)
+                .await?
         } else {
             ClaudeCodeOutput {
                 success: false,
                 session_id: session_id.to_string(),
                 output: output.0,
-                error: if output.1.is_empty() { None } else { Some(output.1) },
+                error: if output.1.is_empty() {
+                    None
+                } else {
+                    Some(output.1)
+                },
                 execution_time_seconds: execution_time.as_secs_f64(),
                 files_created: Vec::new(),
                 files_modified: Vec::new(),
@@ -318,23 +384,39 @@ impl ClaudeCodeManager {
 
         // Update session status
         let session = self.find_session_mut(session_id)?;
-        session.status = if success { SessionStatus::Completed } else { SessionStatus::Failed };
+        session.status = if success {
+            SessionStatus::Completed
+        } else {
+            SessionStatus::Failed
+        };
 
-        info!("Claude Code session {} finished in {:.2}s (success: {})",
-              session_id, execution_time.as_secs_f64(), success);
+        info!(
+            "Claude Code session {} finished in {:.2}s (success: {})",
+            session_id,
+            execution_time.as_secs_f64(),
+            success
+        );
 
         Ok(claude_output)
     }
 
     /// Parse Claude Code JSON output
-    async fn parse_claude_output(&self, output: &str, session_id: &str, execution_time: Duration) -> Result<ClaudeCodeOutput> {
+    async fn parse_claude_output(
+        &self,
+        output: &str,
+        session_id: &str,
+        execution_time: Duration,
+    ) -> Result<ClaudeCodeOutput> {
         // Try to parse as JSON first
         if let Ok(parsed) = serde_json::from_str::<ClaudeCodeOutput>(output) {
             return Ok(parsed);
         }
 
         // If JSON parsing fails, create a basic output structure
-        warn!("Failed to parse Claude Code output as JSON for session: {}", session_id);
+        warn!(
+            "Failed to parse Claude Code output as JSON for session: {}",
+            session_id
+        );
 
         Ok(ClaudeCodeOutput {
             success: true, // Assume success if we got output
@@ -354,7 +436,10 @@ impl ClaudeCodeManager {
 
         if let Some(mut process) = session.process.take() {
             info!("Terminating Claude Code session: {}", session_id);
-            process.kill().await.context("Failed to kill Claude Code process")?;
+            process
+                .kill()
+                .await
+                .context("Failed to kill Claude Code process")?;
         }
 
         session.status = SessionStatus::Cancelled;
@@ -369,13 +454,20 @@ impl ClaudeCodeManager {
     /// Clean up completed sessions
     pub fn cleanup_completed_sessions(&mut self) {
         self.active_sessions.retain(|session| {
-            !matches!(session.status, SessionStatus::Completed | SessionStatus::Failed | SessionStatus::TimedOut | SessionStatus::Cancelled)
+            !matches!(
+                session.status,
+                SessionStatus::Completed
+                    | SessionStatus::Failed
+                    | SessionStatus::TimedOut
+                    | SessionStatus::Cancelled
+            )
         });
     }
 
     /// Find a session by ID
     fn find_session_mut(&mut self, session_id: &str) -> Result<&mut ClaudeCodeSession> {
-        self.active_sessions.iter_mut()
+        self.active_sessions
+            .iter_mut()
             .find(|s| s.id == session_id)
             .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))
     }
@@ -426,7 +518,10 @@ mod tests {
             metadata: PromptMetadata::default(),
         };
 
-        let input = manager.prepare_input(&prompt, "test-session").await.unwrap();
+        let input = manager
+            .prepare_input(&prompt, "test-session")
+            .await
+            .unwrap();
 
         assert!(input.prompt.contains("Test prompt content"));
         assert!(input.context.is_some());
