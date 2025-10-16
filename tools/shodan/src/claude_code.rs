@@ -161,6 +161,19 @@ impl ClaudeCodeManager {
         context.push_str("  - When the atom of work is complete:, make sure to update the issue, project description, docs, etc as well as part of the change.\n");
         context.push_str("  - make sure to update the issue, project description, docs, etc as well as part of the change.\n");
         context.push_str("  - Push a PR up with all of the changes - make sure the base is relative to the branch you worked off of\n");
+        context.push_str("  - If you identify an issue or project that is outside the scope of the current work stream, avoid scope creep, but you may do one of the following:\n");
+        context.push_str("      - Add a TODO item in the codebase (small tasks)\n");
+        context.push_str("      - Open an issue against the codebase (medium task) - provide as much context as possible\n");
+        context.push_str(
+            "      - Start a new file in projects to document the project (large task)\n",
+        );
+
+        context.push_str("## Summarization & Continuous Improvement\n");
+        context.push_str(
+            "Once the workstream is complete, append a journal entry to .notes/journal.md, containing:\n",
+        );
+        context.push_str("- A single sentence describing the work done.\n");
+        context.push_str("- A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.\n");
 
         // Add current repository state
         if let Ok(repo_state) = crate::git::get_repository_state().await {
