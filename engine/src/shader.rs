@@ -2,6 +2,7 @@ use gl::types;
 use gl::types::*;
 use std::ffi::CString;
 use std::ptr;
+use crate::render_log;
 
 pub struct Shader {
     pub gl_id: types::GLuint,
@@ -9,7 +10,7 @@ pub struct Shader {
 
 impl Drop for Shader {
     fn drop(&mut self) {
-        println!("Deleting shader: {}", self.gl_id);
+        render_log!(DEBUG, "Deleting shader: {}", self.gl_id);
         unsafe { gl::DeleteShader(self.gl_id) }
     }
 }
@@ -31,8 +32,7 @@ pub fn build(shader_contents: &str, shader_type: ShaderType, is_es: bool) -> Sha
         let converted_fragment = convert(shader_contents, is_es).expect("Error compiling shader.");
         shader = gl::CreateShader(gl_shader_type);
         let c_str_frag = CString::new(converted_fragment.as_bytes()).unwrap();
-        let mut info_log = Vec::with_capacity(512);
-        info_log.set_len(512 - 1); // subtract 1 to skip the trailing null character
+        let mut info_log = vec![0u8; 512 - 1]; // Initialize with zeros
         gl::ShaderSource(shader, 1, &c_str_frag.as_ptr(), ptr::null());
         gl::CompileShader(shader);
         // check for shader compile errors
@@ -44,8 +44,9 @@ pub fn build(shader_contents: &str, shader_type: ShaderType, is_es: bool) -> Sha
                 ptr::null_mut(),
                 info_log.as_mut_ptr() as *mut GLchar,
             );
-            println!(
-                "ERROR::SHADER::{}::COMPILATION_FAILED\n{}",
+            render_log!(
+                ERROR,
+                "Shader compilation failed for {}: {}",
                 gl_shader_description,
                 String::from_utf8_lossy(&info_log)
             );

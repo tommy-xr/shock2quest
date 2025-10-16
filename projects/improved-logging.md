@@ -89,10 +89,10 @@ Create `engine/src/logging/mod.rs` with:
 - ✅ Update profile! macro with scope-aware functionality
 - ✅ Add scope-aware logging utilities and convenience macros
 
-**Phase 2: High-Impact Areas - IN PROGRESS**
-- Migrate performance-critical rendering code
+**Phase 2: High-Impact Areas - COMPLETED ✅**
+- ✅ Migrate performance-critical rendering code (completed: shader compilation errors, scene object debug prints, visibility engine logging)
 - ✅ Update physics logging (completed: 4 profile! macros migrated to scoped system)
-- ✅ Replace audio debug prints
+- ✅ Replace audio debug prints (completed: replaced noisy debug prints with scoped logging)
 
 **Phase 3: Systematic Migration**
 - Update remaining subsystems one by one
@@ -264,7 +264,55 @@ SHOCK2_LOG=warn,audio=debug cargo run
 SHOCK2_LOG=warn,audio=trace cargo run
 ```
 
-**Ready for Next Phase 2 Tasks**: Physics logging migration and rendering code updates.
+**Phase 2 Render System Migration - COMPLETED ✅**
+
+**Completed in branch `feat/logging-phase2-render-migration`:**
+
+**Render System Updates:**
+- `engine/src/shader.rs`:
+  - Migrated shader compilation error logging from `println!` to `render_log!(ERROR, ...)` for proper scoped error reporting
+  - Migrated shader deletion debug prints to use `render_log!(DEBUG, ...)`
+  - Fixed clippy warning about uninitialized vector for shader compilation error logs
+- `engine/src/scene/scene_object.rs`:
+  - Migrated screen-space text debug prints to use `render_log!(DEBUG, ...)` instead of noisy `println!` statements
+- `shock2vr/src/mission/visibility_engine/portal_visibility_engine.rs`:
+  - Migrated visibility engine debug prints to use `render_log!(DEBUG, ...)` for portal culling information
+  - Replaced frequent cell visibility logging with controlled scoped logging
+- `shock2vr/src/mission/mod.rs`:
+  - Updated old-style `profile!` macros to use new scoped versions
+  - Script world updates now use `profile!(scope: "game", level: DEBUG, ...)`
+  - Visibility engine preparation now uses `profile!(scope: "render", level: DEBUG, ...)`
+
+**Benefits Achieved:**
+- **Controlled Render Debugging**: Shader compilation errors and scene rendering logs can now be controlled via `SHOCK2_LOG=render=level`
+- **Reduced Noise**: Debug prints that appeared every frame are now controlled by log levels
+- **Better Error Reporting**: Shader compilation failures now use structured logging with proper scope attribution
+- **Performance Monitoring**: Rendering performance can be isolated with `SHOCK2_LOG=warn,render=trace`
+
+**Usage Examples:**
+```bash
+# Silent rendering (only errors)
+SHOCK2_LOG=error cargo run
+
+# Render debugging enabled
+SHOCK2_LOG=warn,render=debug cargo run
+
+# Everything render-related including performance traces
+SHOCK2_LOG=warn,render=trace cargo run
+
+# Game logic debugging with render errors only
+SHOCK2_LOG=render=error,game=debug cargo run
+```
+
+**Render Scope Coverage:**
+The render scope now covers:
+- Shader compilation and management
+- Scene object creation and debugging
+- Portal-based visibility culling
+- Rendering performance profiling
+- Visual debugging output
+
+**Ready for Phase 3**: Systematic migration of remaining subsystems with println! statements.
 
 ## Files to Modify
 
