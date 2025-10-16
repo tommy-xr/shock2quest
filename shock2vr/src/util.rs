@@ -6,6 +6,7 @@ use cgmath::{
 };
 
 use dark::properties::{Link, Links, PropHasRefs, PropPosition};
+use engine::game_log;
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
 use tracing::{info, warn};
 
@@ -27,7 +28,7 @@ where
                 let maybe_template_id = v_template_id.get(id);
                 let maybe_sym_name = v_symname.get(id);
                 let maybe_obj_name = v_objname.get(id);
-                println!("({id:?})[{maybe_template_id:?}|{maybe_sym_name:?}|{maybe_obj_name:?}] prop: {door:?}")
+                game_log!(DEBUG, "Entity {id:?} [{maybe_template_id:?}|{maybe_sym_name:?}|{maybe_obj_name:?}] prop: {door:?}");
             }
         },
     );
@@ -49,8 +50,9 @@ where
 
                 for link in &links.to_links {
                     if should_log_link(&link.link) {
-                        println!(
-                            "({:?})[{:?}|{:?}|{:?}] link: {:?}",
+                        game_log!(
+                            DEBUG,
+                            "Entity {:?} [{:?}|{:?}|{:?}] link: {:?}",
                             id, maybe_template_id, maybe_sym_name, maybe_obj_name, link.link
                         );
                     }
@@ -74,7 +76,7 @@ pub fn log_entity(world: &World, id: EntityId) {
             let maybe_obj_short_name = v_objshortname.get(id);
             let maybe_links = v_links.get(id);
             let maybe_scripts = v_scripts.get(id);
-            println!("logging entity: {id:?}\n -- template id: {maybe_template_id:?}\n -- symname: {maybe_sym_name:?}\n -- objname: {maybe_obj_name:?}\n -- objshortname: {maybe_obj_short_name:?}\n -- links: {maybe_links:?}\n -- scripts: {maybe_scripts:?}")
+            game_log!(DEBUG, "Entity {id:?}:\n  template: {maybe_template_id:?}\n  symname: {maybe_sym_name:?}\n  objname: {maybe_obj_name:?}\n  objshortname: {maybe_obj_short_name:?}\n  links: {maybe_links:?}\n  scripts: {maybe_scripts:?}");
         },
     );
 }
