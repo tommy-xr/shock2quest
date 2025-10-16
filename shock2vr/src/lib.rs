@@ -44,6 +44,7 @@ use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AssetPath},
     audio::{AudioClip, AudioContext},
     file_system::FileSystem,
+    game_log,
     profile,
     scene::SceneObject,
 };
@@ -129,7 +130,7 @@ impl Game {
             .clone();
 
         let (current_save_data, held_data) = save_load::to_save_data(&self.active_mission.world);
-        println!("ALL ENTITIES: {}", &current_save_data.all_entities.len());
+        game_log!(DEBUG, "Saving {} entities to save data", current_save_data.all_entities.len());
 
         self.mission_to_save_data.insert(
             self.active_mission.level_name.to_ascii_lowercase(),

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs::File};
 
 use dark::properties::{Links, WrappedEntityId};
+use engine::game_log;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, IntoIter, World};
 
@@ -48,7 +49,7 @@ impl EntitySaveData {
         for prop in all_properties {
             let name = prop.name();
             if let Some(prop_info) = self.properties.get(&name) {
-                println!("deserializing: {}", name);
+                game_log!(DEBUG, "Deserializing property: {}", name);
                 prop.deserialize(prop_info, world, &old_entity_id_to_new_entity_id);
             }
         }
