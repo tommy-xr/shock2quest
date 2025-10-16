@@ -5,7 +5,7 @@ max_session_time = "4h"      # Maximum time for a Claude Code session
 
 # Git settings
 main_branch = "main"         # Name of the main branch
-sync_command = "gt sync"     # Command to sync to latest good state
+sync_command = "gt sync --no-interactive"     # Command to sync to latest good state (non-interactive)
 
 # GitHub settings
 check_interval = "5m"        # How often to check PR status
