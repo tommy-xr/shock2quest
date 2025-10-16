@@ -89,7 +89,7 @@ enum Commands {
         file: PathBuf,
 
         /// Output format
-        #[arg(short, long, default_value = "json")]
+        #[arg(long, default_value = "json")]
         format: ExportFormat,
 
         /// Output file
