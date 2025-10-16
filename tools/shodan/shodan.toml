@@ -21,6 +21,7 @@ show_claude_output = true              # Show Claude's real-time output (true = 
 # Prompt weights for random selection (higher = more likely)
 [shodan.prompt_weights]
 "iterate-on-projects.md" = 10
+"fix-todos.md" = 5
 "check-pr-state.md" = 5
 "improve-documentation.md" = 1
 "optimize-performance.md" = 1
