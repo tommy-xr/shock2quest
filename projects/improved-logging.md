@@ -370,9 +370,9 @@ The script and game scopes now cover:
 - Rendering performance metrics
 - Cell/level navigation warnings
 
-### Phase 4: Save/Load System Migration - IN PROGRESS ⚡
+### Phase 4: Save/Load System Migration - COMPLETED ✅
 
-**Started in branch `feat/logging-phase4-systematic-migration`:**
+**Completed in branches `feat/logging-phase4-systematic-migration` and `feat/logging-phase4-continue`:**
 
 **Save/Load System Updates:**
 - `shock2vr/src/save_load/entity_save_data.rs`:
@@ -384,6 +384,23 @@ The script and game scopes now cover:
 - `engine_ffmpeg/src/video_player.rs`:
   - Migrated video decoder error: `println!("received err in send_packet: {:?}", err)` → `render_log!(ERROR, "Video decoder send_packet error: {:?}", err)`
   - Properly categorized as render scope error for FFmpeg integration
+
+**Additional System Updates:**
+- `dark/src/ss2_entity_info.rs`:
+  - Migrated entity initialization debug prints to `tracing::debug!` calls
+  - Improved entity skipping and player factory logging
+- `dark/src/gamesys/gamesys.rs`:
+  - Migrated speech database debug print: `println!("!! -- voice: {} concept: {} tag_map: {}", ...)` → `tracing::debug!("Voice {} concept '{}' tag_map {}", ...)`
+- `shock2vr/src/mission/entity_creator.rs`:
+  - Migrated physics debug print: `println!("-- hitbox - creating dynamic entity")` → `physics_log!(debug, "Creating dynamic hitbox entity")`
+- `shock2vr/src/util.rs`:
+  - Migrated entity debugging prints to use `game_log!(debug, ...)` for consistent scoped logging
+- `dark/src/tag_database.rs`:
+  - Migrated tag database debug prints to `tracing::debug!` calls
+- `dark/src/mission/mod.rs`:
+  - Migrated mission lighting info: `println!("static_lights: {:?} dynamic_lights {:?}", ...)` → `tracing::debug!("Mission lights - static: {} dynamic: {}", ...)`
+- `runtimes/oculus_runtime/src/android_permissions.rs`:
+  - Migrated Android permission debug prints to proper tracing calls
 
 **Benefits Achieved:**
 - **Save/Load Debugging Control**: Save/load operations can now be debugged with `SHOCK2_LOG=game=debug`
@@ -410,7 +427,7 @@ The game and render scopes now additionally cover:
 - Save data entity count logging
 - FFmpeg video decoder error handling
 
-**Next Phase 4 Tasks**: Continue systematic migration of remaining subsystems with `println!` statements.
+**Phase 4 Completion Status:** All major active `println!` statements have been migrated to scoped or structured logging. The project logging infrastructure is now fully implemented and operational.
 
 ## Files to Modify
 

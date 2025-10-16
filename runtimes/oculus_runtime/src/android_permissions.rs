@@ -59,8 +59,8 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
         &[READ_PERMISSION.into()],
     )?;
 
-    println!(
-        "result of permission check: {:?} granted is: {:?} denied is: {:?}",
+    tracing::debug!(
+        "Permission check result: {:?} (granted={:?}, denied={:?})",
         ret, permission_granted, permission_denied
     );
 
@@ -78,7 +78,7 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
     jnienv.set_object_array_element(array_permissions, 0, READ_PERMISSION);
     jnienv.set_object_array_element(array_permissions, 1, WRITE_PERMISSION);
     let class_activity = jnienv.find_class("android/app/Activity")?;
-    println!("trying to request permissions...");
+    tracing::info!("Requesting Android permissions...");
     let method_request_permissions = jnienv.get_method_id(
         class_activity,
         "requestPermissions",

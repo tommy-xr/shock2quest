@@ -185,8 +185,8 @@ pub fn read<T: io::Read + io::Seek>(
 
     let num_static_lights = read_u32(reader);
     let num_dynamic_lights = read_u32(reader);
-    println!(
-        "static_lights: {:?} dynamic_lights {:?}",
+    tracing::debug!(
+        "Mission lights - static: {} dynamic: {}",
         num_static_lights, num_dynamic_lights
     );
 

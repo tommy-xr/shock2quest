@@ -153,7 +153,7 @@ impl TagDatabase {
     ) {
         for data in &self.data {
             let maybe_data = data_to_name.get(&data.data);
-            println!(
+            tracing::debug!(
                 "{} - {} [{}] (Weight: {})",
                 indentation,
                 maybe_data.unwrap(),
@@ -173,7 +173,7 @@ impl TagDatabase {
             }
             let enum_value_string = enum_value_strings.join(",#");
 
-            println!(
+            tracing::debug!(
                 "{}Key +{} [{}] {}|{} [#{}]:",
                 indentation,
                 maybe_name.unwrap(),

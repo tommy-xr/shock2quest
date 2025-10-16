@@ -89,7 +89,7 @@ fn debug_print_voices(sound_schema: &SoundSchema, speech_db: &SpeechDB) {
     for v in 0..speech_db.voices.len() {
         for t in 0..speech_db.voices[v].tag_maps.len() {
             let concept = speech_db.concept_map.get_name(t as u32).unwrap();
-            println!("!! -- voice: {} concept: {} tag_map: {}", v, concept, t);
+            tracing::debug!("Voice {} concept '{}' tag_map {}", v, concept, t);
             speech_db.voices[v].tag_maps[t].debug_print(
                 &speech_db.tag_map.index_to_name,
                 &data_to_name,

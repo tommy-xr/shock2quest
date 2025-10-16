@@ -1,5 +1,6 @@
 use std::{collections::HashMap, rc::Rc};
 
+use engine::physics_log;
 use crate::{
     creature::get_creature_definition,
     physics::DynamicPhysicsOptions,
@@ -749,7 +750,7 @@ pub fn create_physics_representation(
 
             let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
             {
-                println!("-- hitbox - creating dynamic entity");
+                physics_log!(DEBUG, "Creating dynamic hitbox entity");
                 physics.add_dynamic(
                     entity_id,
                     pos.position,
