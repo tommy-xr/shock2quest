@@ -216,6 +216,7 @@ impl Game {
         let mut asset_cache = AssetCache::new(BASE_PATH.to_owned(), asset_paths);
 
         // TODO: Start ffmpeg stuff
+        #[cfg(feature = "ffmpeg")]
         engine_ffmpeg::init().unwrap();
 
         let (properties, links, links_with_data) = dark::properties::get();

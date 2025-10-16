@@ -1,4 +1,5 @@
 extern crate glfw;
+#[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::VideoPlayer;
 use glfw::GlfwReceiver;
 
@@ -10,6 +11,7 @@ use cgmath::Decomposed;
 use cgmath::Deg;
 use cgmath::Matrix4;
 use cgmath::Rad;
+#[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::AudioPlayer;
 
 use cgmath::vec4;
@@ -153,15 +155,21 @@ pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
+    #[cfg(feature = "ffmpeg")]
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
+    #[cfg(feature = "ffmpeg")]
     let file_name = &"../../Data/cutscenes/cs2.avi";
+    #[cfg(feature = "ffmpeg")]
     let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
 
-    let clip = AudioPlayer::from_filename(file_name).unwrap();
-    let handle = AudioHandle::new();
-    audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
+    #[cfg(feature = "ffmpeg")]
+    {
+        let clip = AudioPlayer::from_filename(file_name).unwrap();
+        let handle = AudioHandle::new();
+        audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
+    }
 
     // panic!();
     tracing_subscriber::fmt::init();
