@@ -4,11 +4,11 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
+use crate::claude_code::{ClaudeCodeManager, ClaudeCodeOutput};
 use crate::config::Config;
 use crate::git::{detect_active_claude_code_sessions, ensure_clean_working_directory};
-use crate::prompts::{Prompt, discover_prompts, select_random_prompt};
-use crate::claude_code::{ClaudeCodeManager, ClaudeCodeOutput};
 use crate::github::PRMonitor;
+use crate::prompts::{discover_prompts, select_random_prompt, Prompt};
 
 /// Main orchestrator that manages the autonomous Claude Code execution cycle
 pub struct Orchestrator {
@@ -69,7 +69,10 @@ impl Orchestrator {
         };
 
         let available_prompts = discover_prompts(&config).await?;
-        info!("Loaded {} prompts for orchestration", available_prompts.len());
+        info!(
+            "Loaded {} prompts for orchestration",
+            available_prompts.len()
+        );
 
         Ok(Self {
             config,
@@ -93,8 +96,9 @@ impl Orchestrator {
 
         // Parse interval from config
         let interval = Duration::from_secs(
-            self.config.parse_orchestration_interval()
-                .context("Failed to parse orchestration interval")?
+            self.config
+                .parse_orchestration_interval()
+                .context("Failed to parse orchestration interval")?,
         );
 
         info!("📅 Orchestration interval: {:?}", interval);
@@ -108,7 +112,10 @@ impl Orchestrator {
                 match self.run_orchestration_cycle().await {
                     Ok(_) => {
                         self.state.cycles_completed += 1;
-                        info!("✅ Orchestration cycle #{} completed successfully", self.state.cycles_completed);
+                        info!(
+                            "✅ Orchestration cycle #{} completed successfully",
+                            self.state.cycles_completed
+                        );
                     }
                     Err(e) => {
                         error!("❌ Orchestration cycle failed: {}", e);
@@ -154,7 +161,7 @@ impl Orchestrator {
     fn should_run_cycle(&self) -> bool {
         if let Some(last_run) = self.state.last_run {
             let interval = Duration::from_secs(
-                self.config.parse_orchestration_interval().unwrap_or(3600) // Default to 1 hour
+                self.config.parse_orchestration_interval().unwrap_or(3600), // Default to 1 hour
             );
             last_run.elapsed() >= interval
         } else {
@@ -206,8 +213,13 @@ impl Orchestrator {
 
         // Phase 3: Execute Claude Code
         cycle.phase = CyclePhase::ExecutingClaude;
-        cycle.log(&format!("🤖 Executing Claude Code with prompt: {}", selected_prompt.name));
-        let claude_output = self.execute_claude_code(&mut cycle, &selected_prompt).await?;
+        cycle.log(&format!(
+            "🤖 Executing Claude Code with prompt: {}",
+            selected_prompt.name
+        ));
+        let claude_output = self
+            .execute_claude_code(&mut cycle, &selected_prompt)
+            .await?;
 
         // Phase 4: Monitor for PR creation
         cycle.phase = CyclePhase::MonitoringPR;
@@ -224,7 +236,10 @@ impl Orchestrator {
         }
 
         cycle.phase = CyclePhase::Completed;
-        cycle.log(&format!("✅ Orchestration cycle completed in {:.2}s", cycle.start_time.elapsed().as_secs_f64()));
+        cycle.log(&format!(
+            "✅ Orchestration cycle completed in {:.2}s",
+            cycle.start_time.elapsed().as_secs_f64()
+        ));
 
         info!("✅ Orchestration cycle {} completed successfully", cycle.id);
         Ok(cycle)
@@ -237,7 +252,10 @@ impl Orchestrator {
         // Check if Claude Code is already running
         let active_sessions = detect_active_claude_code_sessions().await?;
         if !active_sessions.is_empty() {
-            let msg = format!("Found {} active Claude Code sessions - waiting", active_sessions.len());
+            let msg = format!(
+                "Found {} active Claude Code sessions - waiting",
+                active_sessions.len()
+            );
             cycle.log(&msg);
             return Err(anyhow::anyhow!("Claude Code is already active"));
         }
@@ -245,7 +263,8 @@ impl Orchestrator {
         cycle.log("🧹 Ensuring clean git state");
 
         // Ensure clean git state
-        ensure_clean_working_directory(&self.config).await
+        ensure_clean_working_directory(&self.config)
+            .await
             .context("Working directory is not clean")?;
 
         cycle.log("✅ Prerequisites satisfied");
@@ -257,83 +276,108 @@ impl Orchestrator {
         cycle.log("🔍 Checking for PRs with unaddressed comments");
 
         // Check if any open PRs have unaddressed comments
-        match self.pr_monitor.check_all_prs_for_comments().await {
-            Ok(prs_with_comments) => {
-                if !prs_with_comments.is_empty() {
-                    cycle.log(&format!("📢 Found {} PRs with unaddressed feedback", prs_with_comments.len()));
+        // match self.pr_monitor.check_all_prs_for_comments().await {
+        //     Ok(prs_with_comments) => {
+        //         if !prs_with_comments.is_empty() {
+        //             cycle.log(&format!("📢 Found {} PRs with unaddressed feedback", prs_with_comments.len()));
 
-                    // Log details about the PRs with comments
-                    for pr_comments in &prs_with_comments {
-                        cycle.log(&format!("  PR #{}: {} unresolved comments",
-                                          pr_comments.pr_number,
-                                          pr_comments.unresolved_comments.len()));
-                    }
+        //             // Log details about the PRs with comments
+        //             for pr_comments in &prs_with_comments {
+        //                 cycle.log(&format!("  PR #{}: {} unresolved comments",
+        //                                   pr_comments.pr_number,
+        //                                   pr_comments.unresolved_comments.len()));
+        //             }
 
-                    // Try to find the check-pr-state prompt
-                    if let Some(check_pr_prompt) = self.available_prompts.iter()
-                        .find(|p| p.name == "check-pr-state.md") {
-                        cycle.selected_prompt = check_pr_prompt.name.clone();
-                        cycle.log(&format!("🎯 Prioritizing check-pr-state prompt due to unaddressed PR feedback"));
-                        info!("🎯 Selected check-pr-state prompt due to unaddressed PR feedback");
-                        return Ok(check_pr_prompt.clone());
-                    } else {
-                        cycle.log("⚠️  check-pr-state.md prompt not found, falling back to random selection");
-                    }
-                } else {
-                    cycle.log("✅ No PRs with unaddressed feedback found");
-                }
-            }
-            Err(e) => {
-                cycle.log(&format!("⚠️  Failed to check PRs for comments: {}", e));
-                // Continue with normal prompt selection on error
-            }
-        }
+        //             // Try to find the check-pr-state prompt
+        //             if let Some(check_pr_prompt) = self.available_prompts.iter()
+        //                 .find(|p| p.name == "check-pr-state.md") {
+        //                 cycle.selected_prompt = check_pr_prompt.name.clone();
+        //                 cycle.log(&format!("🎯 Prioritizing check-pr-state prompt due to unaddressed PR feedback"));
+        //                 info!("🎯 Selected check-pr-state prompt due to unaddressed PR feedback");
+        //                 return Ok(check_pr_prompt.clone());
+        //             } else {
+        //                 cycle.log("⚠️  check-pr-state.md prompt not found, falling back to random selection");
+        //             }
+        //         } else {
+        //             cycle.log("✅ No PRs with unaddressed feedback found");
+        //         }
+        //     }
+        //     Err(e) => {
+        //         cycle.log(&format!("⚠️  Failed to check PRs for comments: {}", e));
+        //         // Continue with normal prompt selection on error
+        //     }
+        // }
 
         // Default to random selection
         let selected = select_random_prompt(&self.available_prompts)?;
 
         cycle.selected_prompt = selected.name.clone();
-        cycle.log(&format!("🎯 Selected prompt: {} (weight: {}, risk: {:?})",
-                           selected.name, selected.weight, selected.metadata.risk_level));
+        cycle.log(&format!(
+            "🎯 Selected prompt: {} (weight: {}, risk: {:?})",
+            selected.name, selected.weight, selected.metadata.risk_level
+        ));
 
         info!("🎯 Selected prompt: {}", selected.name);
         Ok(selected.clone())
     }
 
     /// Execute Claude Code with the selected prompt
-    async fn execute_claude_code(&mut self, cycle: &mut OrchestrationCycle, prompt: &Prompt) -> Result<ClaudeCodeOutput> {
+    async fn execute_claude_code(
+        &mut self,
+        cycle: &mut OrchestrationCycle,
+        prompt: &Prompt,
+    ) -> Result<ClaudeCodeOutput> {
         cycle.log("🤖 Starting Claude Code session");
 
-        let session_id = self.claude_manager.start_session(prompt).await
+        let session_id = self
+            .claude_manager
+            .start_session(prompt)
+            .await
             .context("Failed to start Claude Code session")?;
 
         cycle.claude_session_id = Some(session_id.clone());
         cycle.log(&format!("📝 Claude Code session ID: {}", session_id));
 
         cycle.log("⏳ Waiting for Claude Code to complete");
-        let output = self.claude_manager.wait_for_completion(&session_id).await
+        let output = self
+            .claude_manager
+            .wait_for_completion(&session_id)
+            .await
             .context("Claude Code session failed or timed out")?;
 
         if output.success {
-            cycle.log(&format!("✅ Claude Code completed successfully in {:.2}s", output.execution_time_seconds));
+            cycle.log(&format!(
+                "✅ Claude Code completed successfully in {:.2}s",
+                output.execution_time_seconds
+            ));
 
             if !output.files_created.is_empty() {
                 cycle.log(&format!("📁 Created {} files", output.files_created.len()));
             }
             if !output.files_modified.is_empty() {
-                cycle.log(&format!("✏️  Modified {} files", output.files_modified.len()));
+                cycle.log(&format!(
+                    "✏️  Modified {} files",
+                    output.files_modified.len()
+                ));
             }
         } else {
             let error_msg = output.error.unwrap_or_else(|| "Unknown error".to_string());
             cycle.log(&format!("❌ Claude Code failed: {}", error_msg));
-            return Err(anyhow::anyhow!("Claude Code execution failed: {}", error_msg));
+            return Err(anyhow::anyhow!(
+                "Claude Code execution failed: {}",
+                error_msg
+            ));
         }
 
         Ok(output)
     }
 
     /// Detect if a PR was created from the Claude Code execution
-    async fn detect_pr_creation(&mut self, cycle: &mut OrchestrationCycle, output: &ClaudeCodeOutput) -> Result<Option<u32>> {
+    async fn detect_pr_creation(
+        &mut self,
+        cycle: &mut OrchestrationCycle,
+        output: &ClaudeCodeOutput,
+    ) -> Result<Option<u32>> {
         cycle.log("🔍 Checking for PR creation");
 
         // Check if git changes indicate PR creation
@@ -355,31 +399,39 @@ impl Orchestrator {
     }
 
     /// Wait for PR to become ready (CI passes)
-    async fn wait_for_pr_ready(&mut self, cycle: &mut OrchestrationCycle, pr_number: u32) -> Result<()> {
+    async fn wait_for_pr_ready(
+        &mut self,
+        cycle: &mut OrchestrationCycle,
+        pr_number: u32,
+    ) -> Result<()> {
         cycle.log(&format!("⏳ Starting to monitor PR #{}", pr_number));
 
         let timeout = Duration::from_secs(
-            self.config.parse_ci_wait_time().unwrap_or(1800) // Default 30 minutes
+            self.config.parse_ci_wait_time().unwrap_or(1800), // Default 30 minutes
         );
 
         match self.pr_monitor.wait_for_pr_ready(pr_number, timeout).await {
-            Ok(status) => {
-                match status.merge_status {
-                    _ if status.merge_status.required_checks_passing => {
-                        cycle.log(&format!("✅ PR #{} is ready for merge", pr_number));
-                    }
-                    _ => {
-                        cycle.log(&format!("⚠️  PR #{} completed but not ready for merge", pr_number));
-                    }
+            Ok(status) => match status.merge_status {
+                _ if status.merge_status.required_checks_passing => {
+                    cycle.log(&format!("✅ PR #{} is ready for merge", pr_number));
                 }
-            }
+                _ => {
+                    cycle.log(&format!(
+                        "⚠️  PR #{} completed but not ready for merge",
+                        pr_number
+                    ));
+                }
+            },
             Err(e) => {
                 cycle.log(&format!("⚠️  PR #{} monitoring ended: {}", pr_number, e));
 
                 // Get failure analysis if available
                 if let Ok(analysis) = self.pr_monitor.analyze_pr_failures(pr_number).await {
                     if !analysis.error_logs.is_empty() {
-                        cycle.log(&format!("📋 Failure analysis available with {} log entries", analysis.error_logs.len()));
+                        cycle.log(&format!(
+                            "📋 Failure analysis available with {} log entries",
+                            analysis.error_logs.len()
+                        ));
                     }
                 }
             }
