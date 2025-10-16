@@ -305,3 +305,46 @@ See `references/entities.md` for comprehensive documentation of:
 ## Testing
 
 - Make sure, when adding a test that exercises code in a PR, to do a _negative_ test first - it should fail without the necessary change. Then, validate the code change makes it green
+
+## Entity Inspector CLI Tool
+
+The entity inspector tool allows you to examine and debug entity data from System Shock 2 files.
+
+### Usage Examples
+
+**Inspect gamesys entities:**
+```bash
+cd tools/entity_inspector
+cargo run -- inspect --file ../../Data/shock2.gam
+```
+
+**Export entity data to JSON:**
+```bash
+cargo run -- inspect --file ../../Data/shock2.gam --format json > entities.json
+```
+
+**Query specific template ranges:**
+```bash
+cargo run -- inspect --file ../../Data/shock2.gam --filter --template-range -3000..-2000
+```
+
+**Inspect mission entities:**
+```bash
+cargo run -- inspect --file ../../Data/medsci1.mis
+```
+
+**View property counts for entities:**
+```bash
+cargo run -- inspect --file ../../Data/shock2.gam | grep "properties:"
+```
+
+### Common Debugging Scenarios
+
+- **Entity inheritance issues**: Use template range filtering to examine specific entity hierarchies
+- **Property validation**: Export to JSON to examine property data structure
+- **Mission vs gamesys comparison**: Compare entities between mission files and shock2.gam
+- **Template ID lookup**: Find entities by their template ID for script debugging
+
+### Asset Availability
+
+Game files (shock2.gam, mission .mis files) are available locally in the `Data/` directory. Always check for local asset availability before assuming files are missing. The entity inspector can work with actual game data for debugging and testing.

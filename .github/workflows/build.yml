@@ -60,3 +60,9 @@ jobs:
       run: cargo build --verbose --release -p shodan
     - name: Run Shodan CLI tests
       run: cargo test --verbose -p shodan
+
+    # Build and test Entity Inspector tool
+    - name: Build Entity Inspector
+      run: cargo build --verbose --release -p entity_inspector
+    - name: Run Entity Inspector tests
+      run: cargo test --verbose -p entity_inspector
