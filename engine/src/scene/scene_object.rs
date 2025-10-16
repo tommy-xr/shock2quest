@@ -1,4 +1,5 @@
 use crate::Font;
+use crate::render_log;
 // pub trait SceneObject {
 //     fn init(&self) -> ();
 //     fn draw(&self) -> ();
@@ -76,7 +77,7 @@ impl SceneObject {
         in_x: f32,
         in_y: f32,
     ) -> SceneObject {
-        println!("screen-space-text: |{}|{}", str, str.len());
+        render_log!(DEBUG, "screen-space-text: |{}|{}", str, str.len());
         let multiplier = font_size / font.base_height();
         let adj_height = font_size;
 

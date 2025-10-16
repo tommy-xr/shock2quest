@@ -411,7 +411,7 @@ impl Mission {
 
         // Update scripts
         let mut script_effects = profile!(
-            "game.mission.script_world.update",
+            scope: "game", level: DEBUG, "script_world.update",
             self.script_world.update(&self.world, &self.physics, time)
         );
         effects.append(&mut script_effects);
@@ -1378,7 +1378,7 @@ impl Mission {
             screen_size,
         };
         profile!(
-            "game.mission.visibility_engine.prepare",
+            scope: "render", level: DEBUG, "visibility_engine.prepare",
             self.visibility_engine
                 .prepare(&self.level, &self.world, &culling_info)
         );
