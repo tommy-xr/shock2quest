@@ -9,15 +9,19 @@ sync_command = "gt sync"     # Command to sync to latest good state
 
 # GitHub settings
 check_interval = "5m"        # How often to check PR status
-max_ci_wait_time = "30m"     # Maximum time to wait for CI completion
+max_ci_wait_time = "60m"     # Maximum time to wait for CI completion
 
 # Prompt settings
 prompt_dir = "prompts"       # Directory containing prompt files (relative to tools/shodan/)
 
+# Claude Code settings
+permission_mode = "bypassPermissions"  # Permission mode: "acceptEdits", "sandboxBashMode", "bypassPermissions", "default", "plan"
+show_claude_output = true              # Show Claude's real-time output (true = text output for visibility, false = JSON for parsing)
+
 # Prompt weights for random selection (higher = more likely)
 [shodan.prompt_weights]
-"iterate-on-projects.md" = 3
-"iterate-on-issues.md" = 2
-"check-pr-state.md" = 1
-"improve-documentation.md" = 2
-"optimize-performance.md" = 2
+"iterate-on-projects.md" = 10
+"check-pr-state.md" = 5
+"improve-documentation.md" = 1
+"optimize-performance.md" = 1
+"iterate-on-issues.md" = 1
