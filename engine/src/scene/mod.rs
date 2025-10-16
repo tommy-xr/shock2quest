@@ -1,5 +1,11 @@
 pub mod scene;
-pub use scene::Scene;
+pub use scene::{Scene, LegacyScene};
+
+pub mod light;
+pub use light::{Light, LightType, SpotLight};
+
+pub mod light_system;
+pub use light_system::LightSystem;
 
 mod skinned_material;
 pub use skinned_material::*;
