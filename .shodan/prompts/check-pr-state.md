@@ -11,7 +11,7 @@ Review the current state of open pull requests and help address any issues preve
 
    - If there is open feedback (a comment on the PR) without a response, it should be acted on. Choose one piece of actionable feedback per session.
    - Always respond to the specific piece of feedback. If there is a code change required to address the feedback, please make that change and push up the change.
-   - Consider if a change to a prompt is required in response to the PR comment. If so, make the prompt change in tools/shodan/prompts or in CLAUDE.md
+   - Consider if a change to a prompt is required in response to the PR comment. If so, make the prompt change in .shodan/prompts or in CLAUDE.md
    - If the feedback is clearly and unambiguously resolved, you may resolve the comment. Otherwise, leave it open for the submitter to respond to.
 
 2. **CI/CD Status**: Check for failing builds or tests:
