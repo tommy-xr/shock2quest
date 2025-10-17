@@ -92,9 +92,15 @@ fn create_random_particle(system: &ParticleSystem) -> Particle {
     let scale = randf(system.particle_size.0, system.particle_size.1);
     Particle {
         remaining_life_in_seconds: lifetime,
-        position: position,
-        velocity: velocity,
+        position,
+        velocity,
         scale,
+    }
+}
+
+impl Default for ParticleSystem {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -139,7 +145,7 @@ impl ParticleSystem {
 
     pub fn with_acceleration(self, acceleration: Vector3<f32>) -> ParticleSystem {
         ParticleSystem {
-            acceleration: acceleration,
+            acceleration,
             ..self
         }
     }

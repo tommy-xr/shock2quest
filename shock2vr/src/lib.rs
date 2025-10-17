@@ -165,7 +165,7 @@ impl Game {
         );
         self.active_mission = active_mission;
     }
-    pub fn init(_file_system: &Box<dyn FileSystem>, options: GameOptions) -> Game {
+    pub fn init(_file_system: &dyn FileSystem, options: GameOptions) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
             // AssetPath::folder(resource_path("res/mesh/txt16")),

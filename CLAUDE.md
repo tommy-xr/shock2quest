@@ -85,12 +85,14 @@ Runtime:
 #### Debugging Entity Issues
 
 1. **Find entity by name**:
+
 ```bash
 # Use grep to find entities with specific names in .gam/.mis files
 rg "EntityName" Data/
 ```
 
 2. **Trace entity inheritance**:
+
 ```rust
 // In your debugging code
 let ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
@@ -98,6 +100,7 @@ println!("Template {} inherits from: {:?}", template_id, ancestors);
 ```
 
 3. **List entity properties**:
+
 ```rust
 // Check what properties an entity has
 for (template_id, props) in &entity_info.entity_to_properties {
@@ -108,16 +111,19 @@ for (template_id, props) in &entity_info.entity_to_properties {
 #### Working with Properties
 
 1. **Add new property type**:
+
    - Define in `dark/src/properties/mod.rs`
    - Add parsing logic following existing patterns
    - Update property registration in `get()` function
 
 2. **Debug property inheritance**:
+
    - Properties are resolved during entity creation
    - Child properties override parent properties
    - Some properties (Scripts) use merge logic instead
 
 3. **Runtime property access**:
+
 ```rust
 // Query entities by property
 world.run(|v_model: View<PropModelName>| {
@@ -130,12 +136,14 @@ world.run(|v_model: View<PropModelName>| {
 #### Analyzing Links
 
 1. **MetaProp links** (inheritance):
+
 ```rust
 // These define template inheritance: child -> parent
 Link { src: child_template, dest: parent_template, ... }
 ```
 
 2. **Behavioral links** (Contains, Flinderize, etc.):
+
 ```rust
 // Find what an entity contains
 if let Ok(links) = v_links.get(entity_id) {
@@ -185,6 +193,7 @@ for (template_id, entity_id) in &template_to_entity_id {
 When working with entity data, you may need to examine raw game files:
 
 1. **Parse specific chunks**:
+
 ```bash
 # Create small CLI tools to examine file structure
 cargo run --bin tool -- inspect-gamesys shock2.gam
@@ -192,6 +201,7 @@ cargo run --bin tool -- list-entities medsci1.mis
 ```
 
 2. **Compare gamesys vs mission data**:
+
    - Gamesys contains base templates and common definitions
    - Mission files override/extend gamesys data for level-specific needs
    - The `merge_with_gamesys()` function combines both sources
@@ -204,6 +214,7 @@ cargo run --bin tool -- list-entities medsci1.mis
 ### Entity System Reference
 
 See `references/entities.md` for comprehensive documentation of:
+
 - Template inheritance mechanisms
 - Property types and data formats
 - Link types and their purposes
@@ -237,6 +248,7 @@ The project supports experimental flags for gating in-progress features during d
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:
+
    ```rust
    if options.experimental_features.contains("feature_name") {
        // Enable feature logic
@@ -244,6 +256,7 @@ The project supports experimental flags for gating in-progress features during d
    ```
 
 2. **Initialize with conditional logic**:
+
    ```rust
    let feature_system = if options.experimental_features.contains("feature_name") {
        FeatureSystem::enabled()
@@ -255,6 +268,7 @@ The project supports experimental flags for gating in-progress features during d
 3. **Update this documentation** to list the new experimental feature
 
 This approach allows:
+
 - Safe iteration on experimental features without affecting stable gameplay
 - Easy enabling/disabling of features for testing
 - Gradual rollout and user testing
@@ -266,6 +280,44 @@ This approach allows:
 - Format code: `cargo fmt`
 - Lint code: `cargo clippy`
 - Run tests: `cargo test`
+
+### Build Validation
+
+**MANDATORY: Both runtimes must compile before committing any changes.**
+
+#### Desktop Runtime Validation
+
+```bash
+cd runtimes/desktop_runtime
+cargo build
+```
+
+#### Oculus Runtime Validation
+
+```bash
+cd runtimes/oculus_runtime
+# REQUIRED: Set up Android SDK environment
+source ./set_up_android_sdk.sh
+cargo apk check
+```
+
+**Note**: The oculus runtime requires Android SDK setup and will fail to compile on macOS/Linux without proper Android cross-compilation environment. Always run `source ./set_up_android_sdk.sh` first.
+
+#### Build Validation Workflow
+
+1. Make changes to core crates (`shock2vr`, `dark`, `engine`)
+2. **Immediately** validate both runtimes compile:
+
+   ```bash
+   # Test desktop runtime
+   cd runtimes/desktop_runtime && cargo build
+
+   # Test oculus runtime
+   cd ../oculus_runtime && source ./set_up_android_sdk.sh && cargo apk check
+   ```
+
+3. Fix any compilation errors before proceeding
+4. Only commit when both runtimes compile successfully
 
 ## Incremental Change Process
 
@@ -291,12 +343,22 @@ This approach allows:
 - Make minimal changes to achieve one specific goal
 - If there are issues found, like a bug or potential refactoring, that are outside of the scope of the current goal, you _MAY_ open an issue with enough details to make it actionable in a separate pass.
 - Follow existing code patterns and naming conventions
+- **CRITICAL: Run `cargo check` after each logical group of changes**
+  - Especially important for trait/interface changes that affect multiple files
+  - Validate compilation before moving to next step
+  - See "Build Validation" section for mandatory runtime checks
 - Test on desktop runtime first
 - Validate each step before proceeding
 
 ### 4. Validation Phase
 
-- Run `cargo check` and `cargo clippy`
+- **MANDATORY: Ensure code compiles before committing**
+  - Run `cargo check` and `cargo clippy`
+  - Fix all compilation errors - never commit broken code
+  - For trait changes: verify ALL implementations are updated
+- **CRITICAL: Run `cargo check` after each logical group of changes**
+  - Especially important for trait/interface changes that affect multiple files
+  - Validate compilation before moving to next step
 - Test core functionality on desktop
 - Verify VR compatibility if changes affect rendering
 - Update documentation in `docs/` if architectural changes were made
@@ -332,6 +394,18 @@ This approach allows:
 - Add new reference materials to appropriate folders
 
 **Remember: Small, frequent, well-tested changes are always preferred over large, complex modifications.**
+
+## Special Considerations for Trait/Interface Changes
+
+When modifying trait definitions or function signatures:
+
+1. **Change the trait definition first**
+2. **Immediately run `cargo check` to identify ALL affected implementations**
+3. **Fix each implementation before proceeding**
+4. **Re-run `cargo check` after each fix to ensure progress**
+5. **Only commit when compilation is successful**
+
+This pattern prevents leaving the codebase in a broken state and ensures all implementations stay in sync.
 
 ## Getting Help
 

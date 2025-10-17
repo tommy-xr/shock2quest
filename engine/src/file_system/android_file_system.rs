@@ -1,6 +1,5 @@
 pub use crate::file_system::FileSystem;
 use std::ffi::CString;
-use std::path::Path;
 
 pub struct AndroidFileSystem {
     ctx: ndk_context::AndroidContext,
@@ -8,7 +7,7 @@ pub struct AndroidFileSystem {
 }
 
 impl FileSystem for AndroidFileSystem {
-    fn open_dir(&self, path: &String) -> Vec<String> {
+    fn open_dir(&self, path: &str) -> Vec<String> {
         let vm = unsafe { jni::JavaVM::from_raw(self.ctx.vm().cast()) }.unwrap();
         let env = vm.attach_current_thread().unwrap();
         let asset_manager = env
@@ -44,17 +43,17 @@ impl FileSystem for AndroidFileSystem {
         out
     }
 
-    fn open_file(&self, path: &String) -> Vec<u8> {
+    fn open_file(&self, path: &str) -> Vec<u8> {
         let mut asset = self
             .asset_manager
-            .open(&CString::new(path.to_string()).unwrap())
+            .open(&CString::new(path).unwrap())
             .expect("Could not open path");
         let data = asset.get_buffer().unwrap();
         data.to_vec()
     }
 }
 
-use ndk::asset::{Asset, AssetManager};
+use ndk::asset::AssetManager;
 
 pub fn init() -> AndroidFileSystem {
     let ctx = ndk_context::android_context();
@@ -62,7 +61,7 @@ pub fn init() -> AndroidFileSystem {
     let env = vm.attach_current_thread().unwrap();
 
     // Query the global Audio Service
-    let class_ctxt = env.find_class("android/content/Context").unwrap();
+    let _class_ctxt = env.find_class("android/content/Context").unwrap();
     let jni_asset_manager = env
         .call_method(
             ctx.context().cast(),
