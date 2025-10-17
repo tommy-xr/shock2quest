@@ -217,6 +217,49 @@ See `references/entities.md` for comprehensive documentation of:
 - Desktop: `cd runtimes/desktop_runtime && cargo run --release`
 - Quest VR: `cd runtimes/oculus_runtime && source ./set_up_android_sdk.sh && cargo apk run --release`
 
+### Experimental Features
+
+The project supports experimental flags for gating in-progress features during development:
+
+#### Using Experimental Flags
+
+- Add `--experimental` flag followed by feature names when running desktop runtime
+- Example: `cargo run -- --experimental teleport`
+- Multiple features: `cargo run -- --experimental teleport,feature2`
+
+#### Available Experimental Features
+
+- **`teleport`**: VR teleport movement system
+  - Enables point-and-teleport locomotion for VR comfort
+  - Alternative to smooth movement that can cause motion sickness
+  - Triggered via controller trigger button
+
+#### Adding New Experimental Features
+
+1. **Gate the feature in code**:
+   ```rust
+   if options.experimental_features.contains("feature_name") {
+       // Enable feature logic
+   }
+   ```
+
+2. **Initialize with conditional logic**:
+   ```rust
+   let feature_system = if options.experimental_features.contains("feature_name") {
+       FeatureSystem::enabled()
+   } else {
+       FeatureSystem::disabled()
+   };
+   ```
+
+3. **Update this documentation** to list the new experimental feature
+
+This approach allows:
+- Safe iteration on experimental features without affecting stable gameplay
+- Easy enabling/disabling of features for testing
+- Gradual rollout and user testing
+- Clean separation between stable and experimental code paths
+
 ### Code Quality
 
 - Check code: `cargo check`
