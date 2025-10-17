@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs::File};
 use dark::properties::{Links, WrappedEntityId};
 use engine::game_log;
 use serde::{Deserialize, Serialize};
-use shipyard::{EntityId, IntoIter, World};
+use shipyard::{EntityId, World};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct EntitySaveData {

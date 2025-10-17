@@ -5,9 +5,6 @@ pub mod mission_trait;
 mod spawn_location;
 pub mod visibility_engine;
 
-use collision::Aabb;
-pub use mission_manager::*;
-pub use mission_trait::*;
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
@@ -80,7 +77,7 @@ use crate::{
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
-    util::{get_email_sound_file, has_refs, resolve_proxy_entity, vec3_to_point3},
+    util::{get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::{VirtualHand, VirtualHandEffect},
     vr_config, GameOptions,
 };

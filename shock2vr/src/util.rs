@@ -8,7 +8,7 @@ use cgmath::{
 use dark::properties::{Link, Links, PropHasRefs, PropPosition};
 use engine::game_log;
 use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::runtime_props::{RuntimePropProxyEntity, RuntimePropTransform};
 

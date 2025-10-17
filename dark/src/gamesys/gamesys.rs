@@ -74,27 +74,3 @@ pub fn read<T: io::Read + io::Seek>(
     }
 }
 
-fn debug_print_voices(sound_schema: &SoundSchema, speech_db: &SpeechDB) {
-    // Debug output for rendering strings:
-    let mut data_to_name = HashMap::new();
-    for (k, v) in &sound_schema.id_to_samples {
-        let str = v
-            .into_iter()
-            .map(|sample| sample.sample_name.to_owned())
-            .collect::<Vec<String>>()
-            .join(",");
-        data_to_name.insert(*k, str);
-    }
-
-    for v in 0..speech_db.voices.len() {
-        for t in 0..speech_db.voices[v].tag_maps.len() {
-            let concept = speech_db.concept_map.get_name(t as u32).unwrap();
-            tracing::debug!("Voice {} concept '{}' tag_map {}", v, concept, t);
-            speech_db.voices[v].tag_maps[t].debug_print(
-                &speech_db.tag_map.index_to_name,
-                &data_to_name,
-                &speech_db.value_map.index_to_name,
-            );
-        }
-    }
-}

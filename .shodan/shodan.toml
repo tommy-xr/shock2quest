@@ -22,6 +22,7 @@ show_claude_output = true              # Show Claude's real-time output (true = 
 [shodan.prompt_weights]
 "iterate-on-projects.md" = 10
 "fix-todos.md" = 5
+"iterate-on-todo-list.md" = 5
 "check-pr-state.md" = 5
 "improve-documentation.md" = 1
 "iterate-on-issues.md" = 1
