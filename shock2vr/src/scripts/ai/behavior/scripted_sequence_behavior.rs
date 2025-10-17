@@ -14,7 +14,7 @@ use crate::{
         ai::{
             ai_util,
             steering::{
-                self, ChaseEntitySteeringStrategy, ChasePlayerSteeringStrategy,
+                self, ChaseEntitySteeringStrategy,
                 CollisionAvoidanceSteeringStrategy, Steering, SteeringOutput, SteeringStrategy,
             },
         },

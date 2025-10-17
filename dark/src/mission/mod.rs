@@ -102,7 +102,6 @@ pub struct TextureSize {
 
 const LIGHTMAP_SIZE: u32 = 4096;
 
-type TextureDimensionProvider = fn(&SystemShock2Texture) -> TextureSize;
 
 pub struct UVCalculationInfo {
     origin: Vector3<f32>,
