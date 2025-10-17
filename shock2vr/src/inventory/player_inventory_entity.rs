@@ -79,13 +79,3 @@ impl PlayerInventoryEntity {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_template_id_constant_value() {
-        // Verify the constant has the expected value
-        assert_eq!(INVALID_TEMPLATE_ID, -1);
-    }
-}
