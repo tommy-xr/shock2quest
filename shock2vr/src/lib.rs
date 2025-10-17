@@ -2,6 +2,7 @@ pub mod command;
 pub mod input_context;
 pub mod inventory;
 pub mod save_load;
+pub mod teleport;
 pub mod time;
 
 mod creature;
@@ -64,6 +65,7 @@ use zip_asset_path::ZipAssetPath;
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::{Effect, Message, MessagePayload},
+    teleport::{TeleportSystem, TeleportConfig, TeleportButton},
 };
 
 #[cfg(target_os = "android")]
@@ -116,6 +118,7 @@ pub struct Game {
     //world: World,
     last_music_cue: Option<String>,
     last_env_sound: Option<String>,
+    teleport_system: TeleportSystem,
 
     mission_to_save_data: HashMap<String, EntitySaveData>,
 }
@@ -330,6 +333,24 @@ impl Game {
         // );
         // panic!();
 
+        // Initialize teleport system with default configuration (gated behind experimental flag)
+        let teleport_system = if options.experimental_features.contains("teleport") {
+            let teleport_config = TeleportConfig {
+                enabled: true,
+                button_mapping: TeleportButton::Trigger,
+                trigger_threshold: 0.5,
+                max_distance: 20.0,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        } else {
+            let teleport_config = TeleportConfig {
+                enabled: false,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        };
+
         Game {
             asset_cache,
             audio_context,
@@ -337,6 +358,7 @@ impl Game {
             global_context,
             last_music_cue: None,
             last_env_sound: None,
+            teleport_system,
             options,
             mission_to_save_data,
         }
@@ -357,6 +379,12 @@ impl Game {
         for command in commands {
             let eff = command.execute(&self.active_mission.world);
             command_effects.push(eff);
+        }
+
+        // Update teleport system and add effects (only if experimental flag enabled)
+        if self.options.experimental_features.contains("teleport") {
+            let teleport_effects = self.teleport_system.update(input_context);
+            command_effects.extend(teleport_effects);
         }
 
         let player = &self
