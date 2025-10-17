@@ -167,9 +167,9 @@ impl GameplayMissionWrapper {
 impl Mission for GameplayMissionWrapper {
     fn update(
         &mut self,
-        time: &Time,
-        asset_cache: &mut AssetCache,
-        input_context: &InputContext,
+        _time: &Time,
+        _asset_cache: &mut AssetCache,
+        _input_context: &InputContext,
     ) -> Vec<Effect> {
         // Delegate to the existing Mission's update method
         // Note: We'll need to adjust this once we examine the existing Mission's update signature
@@ -179,8 +179,8 @@ impl Mission for GameplayMissionWrapper {
 
     fn render(
         &mut self,
-        asset_cache: &mut AssetCache,
-        options: &GameOptions,
+        _asset_cache: &mut AssetCache,
+        _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         // Delegate to the existing Mission's render method
         warn!("GameplayMissionWrapper::render - using temporary implementation");
@@ -189,11 +189,11 @@ impl Mission for GameplayMissionWrapper {
 
     fn handle_effects(
         &mut self,
-        effects: Vec<Effect>,
-        global_context: &GlobalContext,
-        game_options: &GameOptions,
-        asset_cache: &mut AssetCache,
-        audio_context: &mut AudioContext<EntityId, String>,
+        _effects: Vec<Effect>,
+        _global_context: &GlobalContext,
+        _game_options: &GameOptions,
+        _asset_cache: &mut AssetCache,
+        _audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
         // Delegate to the existing Mission's handle_effects method
         warn!("GameplayMissionWrapper::handle_effects - using temporary implementation");
@@ -202,10 +202,10 @@ impl Mission for GameplayMissionWrapper {
 
     fn render_per_eye(
         &mut self,
-        asset_cache: &mut AssetCache,
-        view: Matrix4<f32>,
-        projection: Matrix4<f32>,
-        screen_size: Vector2<f32>,
+        _asset_cache: &mut AssetCache,
+        _view: Matrix4<f32>,
+        _projection: Matrix4<f32>,
+        _screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
         // Delegate to the existing Mission's render_per_eye method
         warn!("GameplayMissionWrapper::render_per_eye - using temporary implementation");
@@ -214,10 +214,10 @@ impl Mission for GameplayMissionWrapper {
 
     fn finish_render(
         &mut self,
-        asset_cache: &mut AssetCache,
-        view: Matrix4<f32>,
-        projection: Matrix4<f32>,
-        screen_size: Vector2<f32>,
+        _asset_cache: &mut AssetCache,
+        _view: Matrix4<f32>,
+        _projection: Matrix4<f32>,
+        _screen_size: Vector2<f32>,
     ) {
         // Delegate to the existing Mission's finish_render method
         warn!("GameplayMissionWrapper::finish_render - using temporary implementation");

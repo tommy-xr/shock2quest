@@ -248,8 +248,10 @@ pub type JointId = u32;
 
 #[derive(Debug)]
 pub struct MotionComponent {
+    #[allow(dead_code)]
     motion_type: i32,
     joint_id: JointId,
+    #[allow(dead_code)]
     handle: u32,
 }
 

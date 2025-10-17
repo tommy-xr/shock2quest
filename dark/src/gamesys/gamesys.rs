@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io};
+use std::{io};
 
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 
