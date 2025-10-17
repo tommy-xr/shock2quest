@@ -333,15 +333,23 @@ impl Game {
         // );
         // panic!();
 
-        // Initialize teleport system with default configuration
-        let teleport_config = TeleportConfig {
-            enabled: true,
-            button_mapping: TeleportButton::Trigger,
-            trigger_threshold: 0.5,
-            max_distance: 20.0,
-            ..Default::default()
+        // Initialize teleport system with default configuration (gated behind experimental flag)
+        let teleport_system = if options.experimental_features.contains("teleport") {
+            let teleport_config = TeleportConfig {
+                enabled: true,
+                button_mapping: TeleportButton::Trigger,
+                trigger_threshold: 0.5,
+                max_distance: 20.0,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        } else {
+            let teleport_config = TeleportConfig {
+                enabled: false,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
         };
-        let teleport_system = TeleportSystem::new(teleport_config);
 
         Game {
             asset_cache,
@@ -373,9 +381,11 @@ impl Game {
             command_effects.push(eff);
         }
 
-        // Update teleport system and add effects
-        let teleport_effects = self.teleport_system.update(input_context);
-        command_effects.extend(teleport_effects);
+        // Update teleport system and add effects (only if experimental flag enabled)
+        if self.options.experimental_features.contains("teleport") {
+            let teleport_effects = self.teleport_system.update(input_context);
+            command_effects.extend(teleport_effects);
+        }
 
         let player = &self
             .active_mission

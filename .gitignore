@@ -2,6 +2,7 @@
 .*.md
 Data/
 PRIVATE.md
+TODO.md
 .notes/
 target/
 *.log
