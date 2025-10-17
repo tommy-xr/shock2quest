@@ -24,5 +24,4 @@ show_claude_output = true              # Show Claude's real-time output (true = 
 "fix-todos.md" = 5
 "check-pr-state.md" = 5
 "improve-documentation.md" = 1
-"optimize-performance.md" = 1
 "iterate-on-issues.md" = 1
