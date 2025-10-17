@@ -33,21 +33,31 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
   - Comprehensive test coverage (8 passing tests)
   - Foundation for portal-based light culling integration
 
-### Step 2: Multi-Pass Rendering Foundation
-- Modify `gl_engine.rs` render loop to support multiple light passes
-- Implement additive blending for light accumulation after base pass
-- Add depth buffer management for light passes (read-only depth testing)
-- Structure for future shadow map integration
+### Step 2: Multi-Pass Rendering Foundation ✅ COMPLETED
+- ✅ Modify `gl_engine.rs` render loop to support multiple light passes
+- ✅ Implement additive blending for light accumulation after base pass
+- ✅ Add depth buffer management for light passes (read-only depth testing)
+- ✅ Structure for future shadow map integration
+
+**Implementation Details:**
+- **Files Modified:**
+  - `engine/src/gl_engine.rs` - Enhanced render loop with 3-pass system (base → lighting → transparent)
+  - `engine/src/scene/material.rs` - Added `draw_light_pass()` method to Material trait
+  - `engine/src/scene/scene_object.rs` - Added `draw_light_pass()` and `get_world_position()` methods
+- **Features Delivered:**
+  - Three-pass rendering system: base opaque pass, per-light additive passes, transparent pass
+  - Proper OpenGL state management: additive blending (GL_ONE, GL_ONE) for light accumulation
+  - Read-only depth testing (GL_EQUAL) prevents overdraw during light passes
+  - Light culling: only render objects affected by each light using `affects_position()`
+  - Future-ready shadow map parameter in `draw_light_pass()` interface
+  - Backwards compatibility: default `draw_light_pass()` implementation returns false (no-op)
 
 ### Step 3: Extended Material System
-- Add `draw_light_pass()` method to base `Material` trait
-- Signature supports future features: `draw_light_pass(context, matrices, light, shadow_map: Option<&ShadowMap>)`
 - Implement lighting in each material type:
   - `BasicMaterial`: Standard Phong/Blinn-Phong lighting
   - `SkinnedMaterial`: Phong lighting with bone transformations
   - `LightmapMaterial`: Combine dynamic lights with existing lightmaps
   - `BillboardMaterial`: Simple diffuse or skip light passes
-- Default implementation returns `false` (no-op) for backwards compatibility
 
 ### Step 4: Portal-Based Light Culling
 - Integrate with existing `PortalVisibilityEngine`
