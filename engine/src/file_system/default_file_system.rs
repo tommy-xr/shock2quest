@@ -6,7 +6,7 @@ pub struct DefaultFileSystem<'a> {
 }
 
 impl FileSystem for DefaultFileSystem<'_> {
-    fn open_dir(&self, path: &String) -> Vec<String> {
+    fn open_dir(&self, path: &str) -> Vec<String> {
         let full_path = self.root_path.join(path);
         let read_dir_result = std::fs::read_dir(full_path).unwrap();
         
@@ -22,7 +22,7 @@ impl FileSystem for DefaultFileSystem<'_> {
             .collect::<Vec<String>>()
     }
 
-    fn open_file(&self, path: &String) -> Vec<u8> {
+    fn open_file(&self, path: &str) -> Vec<u8> {
         let full_path = self.root_path.join(path);
         println!("open_file: {full_path:?}");
         
