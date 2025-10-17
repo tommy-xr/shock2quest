@@ -130,6 +130,14 @@ impl VirtualHand {
         self.get_held_entity() == Some(entity_id)
     }
 
+    pub fn get_position(&self) -> Vector3<f32> {
+        self.position
+    }
+
+    pub fn get_rotation(&self) -> Quaternion<f32> {
+        self.rotation
+    }
+
     pub fn grab_entity(
         &self,
         _world: &World,

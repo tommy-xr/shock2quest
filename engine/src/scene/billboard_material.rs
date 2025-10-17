@@ -3,6 +3,7 @@ use std::ops::Deref;
 
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
+use crate::scene::light::Light;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;
@@ -210,5 +211,19 @@ where
         } else {
             false
         }
+    }
+
+    fn draw_light_pass(
+        &self,
+        _render_context: &EngineRenderContext,
+        _view_matrix: &Matrix4<f32>,
+        _world_matrix: &Matrix4<f32>,
+        _skinning_data: &[Matrix4<f32>],
+        _light: &dyn Light,
+        _shadow_map: Option<&()>,
+    ) -> bool {
+        // Billboard materials typically don't participate in dynamic lighting
+        // They're often used for UI elements, particles, or emissive effects
+        false
     }
 }

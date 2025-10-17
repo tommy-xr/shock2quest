@@ -1553,6 +1553,38 @@ impl Mission {
             scene.extend(guis);
         }
 
+        // Add hand spotlights for testing enhanced lighting (experimental feature)
+        if options.experimental_features.contains("enhanced_lighting") {
+            // Create spotlight visualization on both hands
+            let spotlight_material = engine::scene::color_material::create(Vector3::new(1.0, 1.0, 0.8));
+
+            // Right hand spotlight
+            let right_hand_pos = self.right_hand.get_position();
+            let right_hand_rot = self.right_hand.get_rotation();
+            let spotlight_transform = Matrix4::from_translation(right_hand_pos)
+                * Matrix4::from(right_hand_rot)
+                * Matrix4::from_scale(0.05);
+            let mut right_spotlight = SceneObject::new(
+                spotlight_material.clone(),
+                Box::new(engine::scene::cube::create())
+            );
+            right_spotlight.set_transform(spotlight_transform);
+            scene.push(right_spotlight);
+
+            // Left hand spotlight
+            let left_hand_pos = self.left_hand.get_position();
+            let left_hand_rot = self.left_hand.get_rotation();
+            let spotlight_transform = Matrix4::from_translation(left_hand_pos)
+                * Matrix4::from(left_hand_rot)
+                * Matrix4::from_scale(0.05);
+            let mut left_spotlight = SceneObject::new(
+                spotlight_material,
+                Box::new(engine::scene::cube::create())
+            );
+            left_spotlight.set_transform(spotlight_transform);
+            scene.push(left_spotlight);
+        }
+
         if options.debug_portals {
             let (player_pos, _player_rot) = {
                 let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
