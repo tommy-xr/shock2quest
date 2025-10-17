@@ -1,3 +1,4 @@
+pub mod asset_validation_mission;
 pub mod entity_creator;
 pub mod entity_populator;
 pub mod mission_manager;
@@ -6,6 +7,7 @@ mod spawn_location;
 pub mod visibility_engine;
 
 use collision::Aabb;
+pub use asset_validation_mission::*;
 pub use mission_manager::*;
 pub use mission_trait::*;
 pub use spawn_location::*;
