@@ -12,7 +12,7 @@ check_interval = "5m"        # How often to check PR status
 max_ci_wait_time = "60m"     # Maximum time to wait for CI completion
 
 # Prompt settings
-prompt_dir = "prompts"       # Directory containing prompt files (relative to tools/shodan/)
+prompt_dir = "prompts"       # Directory containing prompt files (relative to .shodan/)
 
 # Claude Code settings
 permission_mode = "bypassPermissions"  # Permission mode: "acceptEdits", "sandboxBashMode", "bypassPermissions", "default", "plan"

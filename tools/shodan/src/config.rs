@@ -72,6 +72,7 @@ impl Config {
         } else {
             // Try to load from default locations
             let default_paths = [
+                ".shodan/shodan.toml",
                 "shodan.toml",
                 "tools/shodan/shodan.toml",
                 ".shodan.toml",
@@ -195,13 +196,13 @@ impl Config {
         if Path::new(prompt_dir).is_absolute() {
             PathBuf::from(prompt_dir)
         } else {
-            // Try current directory first, then tools/shodan/
+            // Try current directory first, then .shodan/
             let current_dir_path = PathBuf::from(prompt_dir);
             if current_dir_path.exists() {
                 current_dir_path
             } else {
-                // Fallback to tools/shodan/ relative path
-                PathBuf::from("tools/shodan").join(prompt_dir)
+                // Fallback to .shodan/ relative path
+                PathBuf::from(".shodan").join(prompt_dir)
             }
         }
     }
