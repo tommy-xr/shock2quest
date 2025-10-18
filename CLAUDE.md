@@ -1,5 +1,7 @@
 # Claude Development Guidelines
 
+For a concise contributor checklist, see `AGENTS.md`. This document serves as the extended reference for workflows and engine internals.
+
 ## Core Principles
 
 ### 1. Small, Incremental Changes
