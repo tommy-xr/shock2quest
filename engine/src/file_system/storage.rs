@@ -1,8 +1,8 @@
 use crate::file_system::FileSystem;
 
 pub trait Storage {
-    fn external_filesystem(&self) -> &Box<dyn FileSystem>;
-    fn bundle_filesystem(&self) -> &Box<dyn FileSystem>;
+    fn external_filesystem(&self) -> &dyn FileSystem;
+    fn bundle_filesystem(&self) -> &dyn FileSystem;
 }
 
 pub struct StorageImpl {
@@ -11,12 +11,12 @@ pub struct StorageImpl {
 }
 
 impl Storage for StorageImpl {
-    fn external_filesystem(&self) -> &Box<dyn FileSystem> {
-        &self.external_filesystem
+    fn external_filesystem(&self) -> &dyn FileSystem {
+        &*self.external_filesystem
     }
 
-    fn bundle_filesystem(&self) -> &Box<dyn FileSystem> {
-        &self.bundle_filesystem
+    fn bundle_filesystem(&self) -> &dyn FileSystem {
+        &*self.bundle_filesystem
     }
 }
 

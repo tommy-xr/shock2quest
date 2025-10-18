@@ -5,7 +5,18 @@ tags: ["pr", "ci", "review"]
 risk_level: "Low"
 ---
 
-Review the current state of open pull requests and help address any issues preventing them from being merged. Focus on:
+Review the current state of open pull requests and help address any issues preventing them from being merged.
+
+## Branch Verification (Critical First Step)
+
+Before making any changes to fix PR issues:
+
+1. **Verify the PR branch**: Use `gh pr view <PR_NUMBER> --json headRefName` to confirm the exact branch name
+2. **Check current branch**: Use `git branch --show-current` to verify you're on the correct branch
+3. **Switch if needed**: Use `git checkout <correct-branch-name>` if there's a mismatch
+4. **Confirm alignment**: Ensure your local branch matches the PR's head branch before proceeding
+
+## Focus Areas
 
 ## Branch Verification (Critical First Step)
 

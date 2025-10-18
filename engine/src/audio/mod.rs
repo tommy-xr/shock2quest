@@ -29,6 +29,12 @@ pub struct AudioHandle {
     id: u64,
 }
 
+impl Default for AudioHandle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioHandle {
     pub fn new() -> AudioHandle {
         let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::SeqCst);
@@ -122,6 +128,16 @@ where
     ambient_sounds: HashMap<TAmbientKey, (SpatialSink, Rc<AudioClip>)>,
 }
 
+impl<TAmbientKey, TCue> Default for AudioContext<TAmbientKey, TCue>
+where
+    TAmbientKey: Hash + Eq + Copy,
+    TCue: Clone,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<TAmbientKey, TCue> AudioContext<TAmbientKey, TCue>
 where
     TAmbientKey: Hash + Eq + Copy,
@@ -212,7 +228,7 @@ where
 
         self.handle_to_sink.retain(|_, sink| !sink.empty());
         // Update positional sounds
-        for (_, sink) in &mut self.handle_to_sink {
+        for sink in self.handle_to_sink.values_mut() {
             sink.update_listener_position(left_ear_position, right_ear_position);
         }
 
@@ -227,7 +243,7 @@ where
         for (key, (sink, clip)) in &self.ambient_sounds {
             if let Some(current_sound) = current_sound_hash.get(key) {
                 if sink.len() == 0 {
-                    clip.add_to_spatial_sink(&sink);
+                    clip.add_to_spatial_sink(sink);
                 }
 
                 sink.set_emitter_position([
@@ -367,7 +383,7 @@ pub fn test_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 ) {
     let position = (context.last_left_ear_position + context.last_right_ear_position) / 2.0;
 
-    let id = handle.id.clone();
+    let id = handle.id;
     let sink = play_audio_core(context, position, handle, maybe_channel, audio_clip);
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
@@ -380,7 +396,7 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
 ) {
-    let id = handle.id.clone();
+    let id = handle.id;
     let scaled_position = position / SOUND_SCALE_FACTOR;
     let sink = play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
 

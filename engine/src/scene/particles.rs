@@ -98,6 +98,12 @@ fn create_random_particle(system: &ParticleSystem) -> Particle {
     }
 }
 
+impl Default for ParticleSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParticleSystem {
     pub fn new() -> ParticleSystem {
         ParticleSystem {

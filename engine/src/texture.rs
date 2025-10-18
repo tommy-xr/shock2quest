@@ -183,7 +183,7 @@ pub fn init<T: crate::texture_format::TextureFormat>(
     init_from_memory(raw_texture_data)
 }
 
-pub fn init2(buffer: &std::vec::Vec<u8>, format: &Box<dyn TextureFormat>) -> Texture {
+pub fn init2(buffer: &[u8], format: &dyn TextureFormat) -> Texture {
     // TODO:
     //let img = image::load_from_memory_with_format(&buffer, format).expect("Failed to load texture");
 
