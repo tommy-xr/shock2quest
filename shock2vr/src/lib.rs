@@ -701,6 +701,11 @@ impl Game {
         }
     }
 
+    /// Get hand spotlights for enhanced lighting when experimental flag is enabled
+    pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
+        self.active_mission.get_hand_spotlights(&self.options)
+    }
+
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let (scene, pos, rot) = self
             .active_mission

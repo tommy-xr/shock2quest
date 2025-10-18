@@ -44,7 +44,7 @@ use engine::{
     audio::{AudioChannel, AudioContext, AudioHandle},
     game_log,
     profile,
-    scene::{quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition},
+    scene::{quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight},
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
@@ -1553,6 +1553,9 @@ impl Mission {
             scene.extend(guis);
         }
 
+        // Note: Hand spotlights for enhanced lighting are now handled in the runtime
+        // via get_hand_spotlights() method - they're added to the Scene's lighting system
+
         if options.debug_portals {
             let (player_pos, _player_rot) = {
                 let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -1572,6 +1575,50 @@ impl Mission {
         }
 
         (scene, player.pos, player.rotation)
+    }
+
+    /// Get hand spotlights for testing enhanced lighting system
+    /// Returns a vector of SpotLight objects positioned at the player's hands
+    pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+        let mut lights = Vec::new();
+
+        if options.experimental_features.contains("enhanced_lighting") {
+            // Right hand spotlight
+            let right_hand_pos = self.right_hand.get_position();
+            let right_hand_rot = self.right_hand.get_rotation();
+
+            // Convert quaternion to direction vector (forward direction)
+            let right_direction = right_hand_rot * Vector3::new(0.0, 0.0, -1.0);
+
+            let right_spotlight = SpotLight {
+                position: right_hand_pos,
+                direction: right_direction.normalize(),
+                color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
+                inner_cone_angle: 15.0_f32.to_radians(), // 15 degree inner cone
+                outer_cone_angle: 30.0_f32.to_radians(), // 30 degree outer cone
+                range: 10.0, // 10 meter range
+            };
+            lights.push(right_spotlight);
+
+            // Left hand spotlight
+            let left_hand_pos = self.left_hand.get_position();
+            let left_hand_rot = self.left_hand.get_rotation();
+
+            // Convert quaternion to direction vector (forward direction)
+            let left_direction = left_hand_rot * Vector3::new(0.0, 0.0, -1.0);
+
+            let left_spotlight = SpotLight {
+                position: left_hand_pos,
+                direction: left_direction.normalize(),
+                color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
+                inner_cone_angle: 15.0_f32.to_radians(), // 15 degree inner cone
+                outer_cone_angle: 30.0_f32.to_radians(), // 30 degree outer cone
+                range: 10.0, // 10 meter range
+            };
+            lights.push(left_spotlight);
+        }
+
+        lights
     }
 
     fn update_avatar_hands(

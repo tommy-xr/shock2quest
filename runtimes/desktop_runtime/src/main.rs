@@ -324,7 +324,14 @@ pub fn main() {
 
         scene.extend(per_eye_scene);
 
-        let scene_for_render = Scene::from_objects(scene);
+        let mut scene_for_render = Scene::from_objects(scene);
+
+        // Add hand spotlights for enhanced lighting testing (experimental feature)
+        let hand_spotlights = game.get_hand_spotlights();
+        for spotlight in hand_spotlights {
+            scene_for_render.lights_mut().add_spotlight(spotlight);
+        }
+
         profile!("engine.render", engine.render(&render_context, &scene_for_render));
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)

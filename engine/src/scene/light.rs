@@ -1,5 +1,14 @@
 use cgmath::{Vector3, Vector4, InnerSpace};
 
+/// Spotlight-specific parameters for shader uniforms
+#[derive(Debug, Clone, Copy)]
+pub struct SpotlightParams {
+    pub direction: Vector3<f32>,
+    pub inner_cone_angle: f32,
+    pub outer_cone_angle: f32,
+    pub range: f32,
+}
+
 /// Base trait for all light types in the multi-pass lighting system
 pub trait Light: std::fmt::Debug {
     /// Get the light's position in world space
@@ -14,6 +23,12 @@ pub trait Light: std::fmt::Debug {
     /// Check if this light affects a given world position
     /// Used for optimization to skip lights that don't affect geometry
     fn affects_position(&self, world_pos: Vector3<f32>) -> bool;
+
+    /// Get spotlight parameters if this is a spotlight
+    /// Returns None for other light types
+    fn spotlight_params(&self) -> Option<SpotlightParams> {
+        None
+    }
 }
 
 /// Light type enumeration for shader dispatch
@@ -77,6 +92,15 @@ impl Light for SpotLight {
             // Position is exactly at light source
             true
         }
+    }
+
+    fn spotlight_params(&self) -> Option<SpotlightParams> {
+        Some(SpotlightParams {
+            direction: self.direction,
+            inner_cone_angle: self.inner_cone_angle,
+            outer_cone_angle: self.outer_cone_angle,
+            range: self.range,
+        })
     }
 }
 

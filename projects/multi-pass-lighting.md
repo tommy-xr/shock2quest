@@ -52,12 +52,28 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
   - Future-ready shadow map parameter in `draw_light_pass()` interface
   - Backwards compatibility: default `draw_light_pass()` implementation returns false (no-op)
 
-### Step 3: Extended Material System
-- Implement lighting in each material type:
-  - `BasicMaterial`: Standard Phong/Blinn-Phong lighting
-  - `SkinnedMaterial`: Phong lighting with bone transformations
-  - `LightmapMaterial`: Combine dynamic lights with existing lightmaps
-  - `BillboardMaterial`: Simple diffuse or skip light passes
+### Step 3: Extended Material System ✅ COMPLETED
+- ✅ Implement lighting in each material type:
+  - ✅ `BasicMaterial`: Standard Phong/Blinn-Phong lighting with spotlight support
+  - ✅ `SkinnedMaterial`: Phong lighting with bone transformations and spotlight support
+  - ✅ `LightmapMaterial`: Combine dynamic lights with existing lightmaps
+  - ✅ `BillboardMaterial`: Skip light passes (appropriate for UI/particle effects)
+
+**Implementation Details:**
+- **Files Modified:**
+  - `engine/src/scene/basic_material.rs` - Added lighting vertex/fragment shaders and draw_light_pass implementation
+  - `engine/src/scene/skinned_material.rs` - Added lighting shaders with bone transformation support
+  - `engine/src/materials/lightmap_material.rs` - Added lighting support that combines with existing lightmaps
+  - `engine/src/scene/billboard_material.rs` - Added stub implementation (no lighting support by design)
+  - `engine/src/scene/light.rs` - Enhanced Light trait with spotlight_params() method for shader uniforms
+- **Features Delivered:**
+  - **Spotlight-only Support**: All materials support spotlight lighting with proper cone attenuation
+  - **Shader Compilation**: Each material initializes both base and lighting shader programs
+  - **Uniform Management**: Proper OpenGL uniform setup for light parameters (position, color, direction, cone angles, range)
+  - **Backwards Compatibility**: Existing draw_opaque/draw_transparent methods unchanged
+  - **Performance Optimization**: Early discard in shaders for fragments outside light influence
+  - **Bone Animation Support**: SkinnedMaterial lighting respects bone transformations
+  - **Lightmap Integration**: LightmapMaterial adds dynamic lights on top of baked lighting
 
 ### Step 4: Portal-Based Light Culling
 - Integrate with existing `PortalVisibilityEngine`
