@@ -418,6 +418,7 @@ fn build_skeleton_for_obj_mesh(
 #[derive(Debug, Clone)]
 pub struct SystemShock2ObjectPolygon {
     pub vertex_indices: Vec<u16>,
+    pub normal_indices: Vec<u16>,
     pub uv_indices: Vec<u16>,
     pub slot_index: u16,
 }
@@ -441,7 +442,7 @@ fn read_polygon<T: Read>(
     let vertex_indices = read_array_u16(reader, num_verts as u32);
 
     // Read normal indices
-    let _normal_indices = read_array_u16(reader, num_verts as u32);
+    let normal_indices = read_array_u16(reader, num_verts as u32);
 
     // Read uv indices, maybe
     let mut uvs = vec![];
@@ -455,6 +456,7 @@ fn read_polygon<T: Read>(
 
     SystemShock2ObjectPolygon {
         vertex_indices,
+        normal_indices,
         uv_indices: uvs,
         slot_index,
     }

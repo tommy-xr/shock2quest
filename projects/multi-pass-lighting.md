@@ -75,8 +75,8 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
   - **Bone Animation Support**: SkinnedMaterial lighting respects bone transformations
   - **Lightmap Integration**: LightmapMaterial adds dynamic lights on top of baked lighting
 
-### Step 4: Normal Vector Support (CRITICAL FOR LIGHTING QUALITY)
-**Status**: 🔴 **REQUIRED** - Current lighting uses hardcoded upward normals causing flat, unrealistic lighting
+### Step 4: Normal Vector Support (CRITICAL FOR LIGHTING QUALITY) 🔄 **IN PROGRESS**
+**Status**: 🔄 **PARTIAL IMPLEMENTATION** - Shaders updated for normal support, data loading in progress
 
 **Problem Identified**: All materials use `vec3(0.0, 1.0, 0.0)` placeholder normals, causing:
 - Blocky, unrealistic lighting appearance
@@ -88,29 +88,55 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
 - **AI meshes**: Packed vertex normals ignored (`ss2_bin_ai_loader.rs:412`)
 - **World geometry**: No normal processing in mission loading
 
-**Implementation Required**:
+**Implementation Status**:
+
+**Completed ✅**:
 1. **Vertex Structure Updates** (`engine/src/scene/vertex.rs`):
-   - Add `VertexPositionTextureNormal` for basic models
-   - Add `VertexPositionTextureLightmapAtlasNormal` for world geometry
-   - Add `VertexPositionTextureSkinnedNormal` for character models
+   - ✅ Added `VertexPositionTextureNormal` for basic models with location 0,1,2 layout
+   - ✅ Added `VertexPositionTextureLightmapAtlasNormal` for world geometry with location 0,1,2,3,4 layout
+   - ✅ Added `VertexPositionTextureSkinnedNormal` for character models with location 0,1,2,3 layout
+   - ✅ Full Vertex trait implementations with proper attribute layouts
 
-2. **Shader Updates** (all material files):
-   - Add normal input: `layout (location = N) in vec3 inNormal;`
-   - Transform normals to world space: `worldNormal = normalize(mat3(world) * inNormal);`
-   - Replace hardcoded `vec3(0.0, 1.0, 0.0)` with actual vertex normals
+**Completed ✅**:
+2. **Debug Normal Visualization** (`engine/src/scene/debug_normal_material.rs`):
+   - ✅ Debug material that renders normals as RGB colors (Red=X, Green=Y, Blue=Z)
+   - ✅ Proper Material trait implementation with initialization and draw methods
+   - ✅ Expects normals at location 2 for basic models
+   - ✅ Can be used to validate normal data correctness: smooth gradients = good normals
 
-3. **Data Loading Updates**:
+**In Progress 🔄**:
+3. **Shader Updates** (Updated to use real normals):
+   - ✅ `BasicMaterial` lighting shaders now expect normals at location 2 and use actual vertex normals
+   - ✅ `SkinnedMaterial` lighting shaders expect normals at location 3 and transform them through bone matrices
+   - ✅ `LightmapMaterial` lighting shaders expect normals at location 4 and combine with dynamic lighting
+   - 🔄 **COMPATIBILITY ISSUE**: Current vertex data lacks normals, causing runtime shader attribute binding failures
+
+**Still Required 🔴**:
+4. **Data Loading Updates** (Convert existing vertex data to include normals):
    - **Object models**: Unignore normal indices and implement normal loading
    - **AI meshes**: Implement packed normal decoding (reference SystemShock2VR project)
    - **World geometry**: Add normal calculation from geometry if not in files
 
-4. **Normal Visualization Debug Mode**:
-   - Add debug shader that renders normals as RGB colors (`normal.xyz * 0.5 + 0.5`)
-   - Include `debug_normals` experimental feature flag
-   - Add debug material that replaces lighting calculations with normal visualization
-   - Essential for validating normal data correctness before lighting implementation
-   - Red=X, Green=Y, Blue=Z components of normal vectors
-   - Should show smooth color gradients on curved surfaces, distinct colors on edges
+**Immediate Next Steps**:
+
+5. **Solve Compatibility Issue** (Choose one approach):
+   - **Option A**: Create backward-compatible shaders that use computed normals when vertex normals unavailable
+   - **Option B**: Update data loaders to generate normals from existing geometry (triangle face normals)
+   - **Option C**: Implement full normal data loading from .bin/.mis files (larger scope)
+
+6. **Object File Normal Loading** (`dark/src/ss2_bin_obj_loader.rs`):
+   - ✅ **Started**: Normal indices no longer discarded, added to `SystemShock2ObjectPolygon` struct
+   - 🔄 **In Progress**: Need to update vertex generation to use normal indices
+   - 🔴 **Blocked**: Requires converting from non-normal vertex structures to normal-enabled ones
+
+**Current Compatibility Issue**:
+The materials now expect vertex attributes with normals, but existing data loaders create vertices without normals:
+- `VertexPositionTexture` → should become `VertexPositionTextureNormal`
+- `VertexPositionTextureSkinned` → should become `VertexPositionTextureSkinnedNormal`
+- `VertexPositionTextureLightmapAtlas` → should become `VertexPositionTextureLightmapAtlasNormal`
+
+**Debug Normal Visualization Ready**:
+Once compatibility is resolved, `debug_normal_material::create()` can be used to validate normals.
 
 **Files to Modify**:
 - `engine/src/scene/vertex.rs` - New vertex structures with normals

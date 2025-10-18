@@ -58,11 +58,29 @@ pub struct VertexPositionTexture {
 
 #[derive(Debug, Clone)]
 #[repr(C)]
+pub struct VertexPositionTextureNormal {
+    pub position: Vector3<f32>,
+    pub uv: Vector2<f32>,
+    pub normal: Vector3<f32>,
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
 pub struct VertexPositionTextureLightmapAtlas {
     pub position: Vector3<f32>,
     pub uv: Vector2<f32>,
     pub lightmap_uv: Vector2<f32>,
     pub lightmap_atlas: Vector4<f32>,
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct VertexPositionTextureLightmapAtlasNormal {
+    pub position: Vector3<f32>,
+    pub uv: Vector2<f32>,
+    pub lightmap_uv: Vector2<f32>,
+    pub lightmap_atlas: Vector4<f32>,
+    pub normal: Vector3<f32>,
 }
 
 impl Vertex for VertexPositionTextureLightmapAtlas {
@@ -102,6 +120,15 @@ pub struct VertexPositionTextureSkinned {
     pub position: Vector3<f32>,
     pub uv: Vector2<f32>,
     pub bone_indices: [u32; 4],
+}
+
+#[derive(Debug, Clone)]
+#[repr(C)]
+pub struct VertexPositionTextureSkinnedNormal {
+    pub position: Vector3<f32>,
+    pub uv: Vector2<f32>,
+    pub bone_indices: [u32; 4],
+    pub normal: Vector3<f32>,
 }
 
 impl Vertex for VertexPositionTextureSkinned {
@@ -163,6 +190,99 @@ impl Vertex for VertexPositionTexture {
                 attribute_type: VertexAttributeType::Float,
                 offset: offset_of!(VertexPositionTexture, uv),
                 size: 2,
+            },
+        ]
+    }
+}
+
+impl Vertex for VertexPositionTextureNormal {
+    fn get_total_size() -> isize {
+        size_of::<VertexPositionTextureNormal>() as isize
+    }
+
+    fn get_vertex_attributes() -> Vec<VertexAttribute> {
+        vec![
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureNormal, position),
+                size: 3,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureNormal, uv),
+                size: 2,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureNormal, normal),
+                size: 3,
+            },
+        ]
+    }
+}
+
+impl Vertex for VertexPositionTextureLightmapAtlasNormal {
+    fn get_total_size() -> isize {
+        size_of::<VertexPositionTextureLightmapAtlasNormal>() as isize
+    }
+
+    fn get_vertex_attributes() -> Vec<VertexAttribute> {
+        vec![
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureLightmapAtlasNormal, position),
+                size: 3,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureLightmapAtlasNormal, uv),
+                size: 2,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureLightmapAtlasNormal, lightmap_uv),
+                size: 2,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureLightmapAtlasNormal, lightmap_atlas),
+                size: 4,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureLightmapAtlasNormal, normal),
+                size: 3,
+            },
+        ]
+    }
+}
+
+impl Vertex for VertexPositionTextureSkinnedNormal {
+    fn get_total_size() -> isize {
+        size_of::<VertexPositionTextureSkinnedNormal>() as isize
+    }
+
+    fn get_vertex_attributes() -> Vec<VertexAttribute> {
+        vec![
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureSkinnedNormal, position),
+                size: 3,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureSkinnedNormal, uv),
+                size: 2,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Int,
+                offset: offset_of!(VertexPositionTextureSkinnedNormal, bone_indices),
+                size: 4,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureSkinnedNormal, normal),
+                size: 3,
             },
         ]
     }
