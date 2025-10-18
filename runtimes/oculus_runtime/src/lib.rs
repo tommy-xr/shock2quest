@@ -954,7 +954,14 @@ fn render_swapchain(
         // gl::ClearColor(r, g, b, 1.0);
         // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
-        let scene_for_render = Scene::from_objects(all_scene_objs);
+        let mut scene_for_render = Scene::from_objects(all_scene_objs);
+
+        // Add hand spotlights for enhanced lighting testing (experimental feature)
+        let hand_spotlights = game.get_hand_spotlights();
+        for spotlight in hand_spotlights {
+            scene_for_render.lights_mut().add_spotlight(spotlight);
+        }
+
         profile!(
             "[oculus.engine.render]",
             engine.render(&render_context, &scene_for_render)
