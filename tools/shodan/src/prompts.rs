@@ -46,16 +46,25 @@ impl Default for PromptMetadata {
 /// Discover and load all prompts from the prompts directory
 pub async fn discover_prompts(config: &Config) -> Result<Vec<Prompt>> {
     let prompts_dir = config.prompts_dir();
-    debug!("Discovering prompts in directory: {}", prompts_dir.display());
+    debug!(
+        "Discovering prompts in directory: {}",
+        prompts_dir.display()
+    );
 
     if !prompts_dir.exists() {
-        warn!("Prompts directory does not exist: {}", prompts_dir.display());
+        warn!(
+            "Prompts directory does not exist: {}",
+            prompts_dir.display()
+        );
         return Ok(Vec::new());
     }
 
-    let mut entries = fs::read_dir(&prompts_dir)
-        .await
-        .with_context(|| format!("Failed to read prompts directory: {}", prompts_dir.display()))?;
+    let mut entries = fs::read_dir(&prompts_dir).await.with_context(|| {
+        format!(
+            "Failed to read prompts directory: {}",
+            prompts_dir.display()
+        )
+    })?;
 
     let mut prompts = Vec::new();
 
@@ -128,8 +137,8 @@ fn parse_prompt_content(content: &str) -> Result<(PromptMetadata, String)> {
             let frontmatter = lines[1..end_index + 1].join("\n");
             let prompt_content = lines[end_index + 2..].join("\n").trim().to_string();
 
-            let metadata: PromptMetadata = serde_yaml::from_str(&frontmatter)
-                .unwrap_or_else(|_| PromptMetadata::default());
+            let metadata: PromptMetadata =
+                serde_yaml::from_str(&frontmatter).unwrap_or_else(|_| PromptMetadata::default());
 
             return Ok((metadata, prompt_content));
         }
@@ -227,7 +236,9 @@ pub fn select_random_prompt(prompts: &[Prompt]) -> Result<&Prompt> {
     }
 
     // Fallback to last prompt (shouldn't happen)
-    prompts.last().ok_or_else(|| anyhow::anyhow!("No prompts available"))
+    prompts
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("No prompts available"))
 }
 
 /// Get prompt statistics
@@ -252,7 +263,11 @@ pub fn get_prompt_stats(prompts: &[Prompt]) -> PromptStats {
         total_weight,
         risk_distribution: risk_counts,
         tag_distribution: tag_counts,
-        average_weight: if prompts.is_empty() { 0.0 } else { total_weight as f64 / prompts.len() as f64 },
+        average_weight: if prompts.is_empty() {
+            0.0
+        } else {
+            total_weight as f64 / prompts.len() as f64
+        },
     }
 }
 
@@ -282,7 +297,10 @@ pub fn format_prompt_for_execution(prompt: &Prompt) -> String {
         formatted.push_str(&format!("## Tags\n{}\n\n", prompt.metadata.tags.join(", ")));
     }
 
-    formatted.push_str(&format!("## Risk Level\n{:?}\n\n", prompt.metadata.risk_level));
+    formatted.push_str(&format!(
+        "## Risk Level\n{:?}\n\n",
+        prompt.metadata.risk_level
+    ));
 
     // Add the actual prompt content
     formatted.push_str("## Task\n");

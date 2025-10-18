@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::time::timeout;
@@ -10,6 +13,43 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::prompts::Prompt;
+
+const DEFAULT_SYSTEM_PROMPT: &str = r#"# Shodan Automation Context
+
+This session is running under Shodan automation with the following constraints:
+
+## Safety Guidelines
+- Only make incremental, safe improvements
+- Do not modify core VR functionality without thorough understanding
+- Focus on documentation, testing, and minor improvements
+- Always test changes before committing
+- Because this is automation, bias towards making decisions without user intervention.
+- Keep changes as simple as possible.
+
+## Project Context
+- This is a VR port of System Shock 2 for Oculus Quest
+- Written in Rust with OpenGL rendering
+- Performance is critical for VR (90+ FPS)
+- Follow existing code patterns and conventions
+
+## Workflow
+- Once you have decided on a work item, create a new branch with git
+  - If there is pending work in a PR that you are working off of, use that latest branch
+  - Otherwise, based your new branch on main
+  - Use 'gt track' once the branch is created so graphite is aware of it
+  - When the atom of work is complete:, make sure to update the issue, project description, docs, etc as well as part of the change.
+  - make sure to update the issue, project description, docs, etc as well as part of the change.
+  - Push a PR up with all of the changes - make sure the base is relative to the branch you worked off of
+  - If you identify an issue or project that is outside the scope of the current work stream, avoid scope creep, but you may do one of the following:
+      - Add a TODO item in the codebase (small tasks)
+      - Open an issue against the codebase (medium task) - provide as much context as possible
+      - Start a new file in projects to document the project (large task)
+
+## Summarization & Continuous Improvement
+Once the workstream is complete, append a journal entry to .notes/journal.md, containing:
+- A single sentence describing the work done.
+- A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.
+"#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodeInput {
@@ -132,48 +172,11 @@ impl ClaudeCodeManager {
 
     /// Generate context information for Claude Code
     async fn generate_context(&self) -> Result<String> {
-        let mut context = String::new();
+        let mut context = self.load_system_prompt().await;
 
-        context.push_str("# Shodan Automation Context\n\n");
-        context.push_str(
-            "This session is running under Shodan automation with the following constraints:\n\n",
-        );
-        context.push_str("## Safety Guidelines\n");
-        context.push_str("- Only make incremental, safe improvements\n");
-        context.push_str("- Do not modify core VR functionality without thorough understanding\n");
-        context.push_str("- Focus on documentation, testing, and minor improvements\n");
-        context.push_str("- Always test changes before committing\n");
-        context.push_str("- Because this is automation, bias towards making decisions without user intervention.\n");
-        context.push_str("- Keep changes as simple as possible.\n");
-
-        context.push_str("## Project Context\n");
-        context.push_str("- This is a VR port of System Shock 2 for Oculus Quest\n");
-        context.push_str("- Written in Rust with OpenGL rendering\n");
-        context.push_str("- Performance is critical for VR (90+ FPS)\n");
-        context.push_str("- Follow existing code patterns and conventions\n\n");
-
-        context.push_str("## Workflow\n");
-        context.push_str("- Once you have decided on a work item, create a new branch with git\n");
-        context.push_str("  - If there is pending work in a PR that you are working off of, use that latest branch\n");
-        context.push_str("  - Otherwise, based your new branch on main\n");
-        context
-            .push_str("  - Use 'gt track' once the branch is created so graphite is aware of it\n");
-        context.push_str("  - When the atom of work is complete:, make sure to update the issue, project description, docs, etc as well as part of the change.\n");
-        context.push_str("  - make sure to update the issue, project description, docs, etc as well as part of the change.\n");
-        context.push_str("  - Push a PR up with all of the changes - make sure the base is relative to the branch you worked off of\n");
-        context.push_str("  - If you identify an issue or project that is outside the scope of the current work stream, avoid scope creep, but you may do one of the following:\n");
-        context.push_str("      - Add a TODO item in the codebase (small tasks)\n");
-        context.push_str("      - Open an issue against the codebase (medium task) - provide as much context as possible\n");
-        context.push_str(
-            "      - Start a new file in projects to document the project (large task)\n",
-        );
-
-        context.push_str("## Summarization & Continuous Improvement\n");
-        context.push_str(
-            "Once the workstream is complete, append a journal entry to .notes/journal.md, containing:\n",
-        );
-        context.push_str("- A single sentence describing the work done.\n");
-        context.push_str("- A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.\n");
+        if !context.ends_with('\n') {
+            context.push('\n');
+        }
 
         // Add current repository state
         if let Ok(repo_state) = crate::git::get_repository_state().await {
@@ -188,6 +191,56 @@ impl ClaudeCodeManager {
         }
 
         Ok(context)
+    }
+
+    async fn load_system_prompt(&self) -> String {
+        let mut candidates = Vec::new();
+
+        if let Some(root) = find_repo_root() {
+            candidates.push(root.join(".shodan").join("system_prompt.md"));
+        }
+
+        if let Ok(current_dir) = std::env::current_dir() {
+            candidates.push(current_dir.join(".shodan").join("system_prompt.md"));
+            candidates.push(current_dir.join("system_prompt.md"));
+        }
+
+        let mut seen = HashSet::new();
+        for candidate in candidates
+            .into_iter()
+            .filter(|path| seen.insert(path.clone()))
+        {
+            match fs::read_to_string(&candidate).await {
+                Ok(content) => {
+                    if content.trim().is_empty() {
+                        warn!(
+                            "System prompt file at {} is empty; using default fallback",
+                            candidate.display()
+                        );
+                    } else {
+                        debug!("Loaded system prompt from {}", candidate.display());
+                        return content;
+                    }
+                }
+                Err(err) => {
+                    if err.kind() != ErrorKind::NotFound {
+                        warn!(
+                            "Failed to read system prompt from {}: {}",
+                            candidate.display(),
+                            err
+                        );
+                    } else {
+                        debug!(
+                            "System prompt not found at {}; continuing to next candidate",
+                            candidate.display()
+                        );
+                    }
+                }
+            }
+        }
+
+        debug!("Using default embedded system prompt");
+        DEFAULT_SYSTEM_PROMPT.to_string()
     }
 
     /// Execute Claude Code as a subprocess
@@ -501,6 +554,18 @@ pub async fn execute_prompt(config: &Config, prompt: &Prompt) -> Result<ClaudeCo
     let mut manager = ClaudeCodeManager::new(config.clone());
     let session_id = manager.start_session(prompt).await?;
     manager.wait_for_completion(&session_id).await
+}
+
+fn find_repo_root() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if dir.join(".git").is_dir() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
 }
 
 #[cfg(test)]

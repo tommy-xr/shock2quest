@@ -132,11 +132,11 @@ impl PRMonitor {
             return Err(anyhow::anyhow!("Failed to get repository info: {}", stderr));
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("Invalid UTF-8 in gh repo view output")?;
+        let stdout =
+            String::from_utf8(output.stdout).context("Invalid UTF-8 in gh repo view output")?;
 
-        let json: serde_json::Value = serde_json::from_str(&stdout)
-            .context("Failed to parse repository info JSON")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout).context("Failed to parse repository info JSON")?;
 
         let owner = json["owner"]["login"]
             .as_str()
@@ -198,8 +198,12 @@ impl PRMonitor {
             last_updated: std::time::SystemTime::now(),
         };
 
-        debug!("PR #{} status: ready={}, blocking_issues={}",
-               pr_number, is_ready, blocking_issues.len());
+        debug!(
+            "PR #{} status: ready={}, blocking_issues={}",
+            pr_number,
+            is_ready,
+            blocking_issues.len()
+        );
 
         Ok(status)
     }
@@ -217,14 +221,16 @@ impl PRMonitor {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            debug!("gh pr checks failed, trying alternative approach: {}", stderr);
+            debug!(
+                "gh pr checks failed, trying alternative approach: {}",
+                stderr
+            );
 
             // Try to get status via GitHub API using gh api
             return self.get_pr_checks_via_api(pr_number).await;
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("Invalid UTF-8 in gh output")?;
+        let stdout = String::from_utf8(output.stdout).context("Invalid UTF-8 in gh output")?;
 
         if stdout.trim().is_empty() {
             debug!("No checks output, trying API approach");
@@ -235,15 +241,24 @@ impl PRMonitor {
         let mut checks = Vec::new();
         for line in stdout.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with("Some checks") || line.starts_with("All checks") {
+            if line.is_empty() || line.starts_with("Some checks") || line.starts_with("All checks")
+            {
                 continue;
             }
 
             // Parse lines like: "✓ Check Name"  or "✗ Check Name" or "- Check Name"
             let (status, conclusion, name) = if line.starts_with("✓") {
-                (CheckState::Completed, Some(CheckConclusion::Success), line[2..].trim())
+                (
+                    CheckState::Completed,
+                    Some(CheckConclusion::Success),
+                    line[2..].trim(),
+                )
             } else if line.starts_with("✗") {
-                (CheckState::Completed, Some(CheckConclusion::Failure), line[2..].trim())
+                (
+                    CheckState::Completed,
+                    Some(CheckConclusion::Failure),
+                    line[2..].trim(),
+                )
             } else if line.starts_with("◯") {
                 (CheckState::Pending, None, line[2..].trim())
             } else if line.starts_with("-") {
@@ -274,7 +289,10 @@ impl PRMonitor {
 
         let (owner, repo) = self.get_repository_info().await?;
         let output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/{}/{}/pulls/{}/commits", owner, repo, pr_number)])
+            .args([
+                "api",
+                &format!("repos/{}/{}/pulls/{}/commits", owner, repo, pr_number),
+            ])
             .output()
             .await
             .context("Failed to get PR commits via API")?;
@@ -285,8 +303,8 @@ impl PRMonitor {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let commits: Vec<serde_json::Value> = serde_json::from_str(&stdout)
-            .context("Failed to parse commits JSON")?;
+        let commits: Vec<serde_json::Value> =
+            serde_json::from_str(&stdout).context("Failed to parse commits JSON")?;
 
         if commits.is_empty() {
             return Ok(Vec::new());
@@ -294,12 +312,16 @@ impl PRMonitor {
 
         // Get the latest commit SHA
         let latest_commit = &commits[commits.len() - 1];
-        let commit_sha = latest_commit["sha"].as_str()
+        let commit_sha = latest_commit["sha"]
+            .as_str()
             .ok_or_else(|| anyhow::anyhow!("No commit SHA found"))?;
 
         // Get check runs for the latest commit
         let output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/{}/{}/commits/{}/check-runs", owner, repo, commit_sha)])
+            .args([
+                "api",
+                &format!("repos/{}/{}/commits/{}/check-runs", owner, repo, commit_sha),
+            ])
             .output()
             .await
             .context("Failed to get check runs via API")?;
@@ -310,8 +332,8 @@ impl PRMonitor {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let response: serde_json::Value = serde_json::from_str(&stdout)
-            .context("Failed to parse check runs JSON")?;
+        let response: serde_json::Value =
+            serde_json::from_str(&stdout).context("Failed to parse check runs JSON")?;
 
         let mut checks = Vec::new();
         if let Some(check_runs) = response["check_runs"].as_array() {
@@ -333,7 +355,11 @@ impl PRMonitor {
             }
         }
 
-        debug!("Found {} check runs via API for PR #{}", checks.len(), pr_number);
+        debug!(
+            "Found {} check runs via API for PR #{}",
+            checks.len(),
+            pr_number
+        );
         Ok(checks)
     }
 
@@ -342,7 +368,13 @@ impl PRMonitor {
         debug!("Getting merge status for PR #{}", pr_number);
 
         let output = TokioCommand::new("gh")
-            .args(["pr", "view", &pr_number.to_string(), "--json", "mergeable,mergeStateStatus"])
+            .args([
+                "pr",
+                "view",
+                &pr_number.to_string(),
+                "--json",
+                "mergeable,mergeStateStatus",
+            ])
             .output()
             .await
             .context("Failed to execute gh pr view command")?;
@@ -352,18 +384,21 @@ impl PRMonitor {
             return Err(anyhow::anyhow!("gh pr view failed: {}", stderr));
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("Invalid UTF-8 in gh output")?;
+        let stdout = String::from_utf8(output.stdout).context("Invalid UTF-8 in gh output")?;
 
-        let merge_json: serde_json::Value = serde_json::from_str(&stdout)
-            .context("Failed to parse gh pr view JSON output")?;
+        let merge_json: serde_json::Value =
+            serde_json::from_str(&stdout).context("Failed to parse gh pr view JSON output")?;
 
         let mergeable = merge_json["mergeable"].as_bool();
-        let merge_state_status = merge_json["mergeStateStatus"].as_str().unwrap_or("unknown").to_string();
+        let merge_state_status = merge_json["mergeStateStatus"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
         let mergeable_state = merge_state_status.clone(); // Use mergeStateStatus for both
 
         let has_conflicts = merge_state_status == "dirty";
-        let required_checks_passing = merge_state_status == "clean" || merge_state_status == "unstable";
+        let required_checks_passing =
+            merge_state_status == "clean" || merge_state_status == "unstable";
 
         let merge_status = MergeStatus {
             mergeable,
@@ -373,8 +408,10 @@ impl PRMonitor {
             required_checks_passing,
         };
 
-        debug!("PR #{} merge status: mergeable={:?}, conflicts={}",
-               pr_number, mergeable, has_conflicts);
+        debug!(
+            "PR #{} merge status: mergeable={:?}, conflicts={}",
+            pr_number, mergeable, has_conflicts
+        );
 
         Ok(merge_status)
     }
@@ -383,8 +420,13 @@ impl PRMonitor {
     fn assess_pr_readiness(&self, checks: &[CheckStatus], merge_status: &MergeStatus) -> bool {
         // Check if all required checks are passing
         let all_checks_passing = checks.iter().all(|check| {
-            check.status == CheckState::Completed &&
-            matches!(check.conclusion, Some(CheckConclusion::Success) | Some(CheckConclusion::Neutral) | Some(CheckConclusion::Skipped))
+            check.status == CheckState::Completed
+                && matches!(
+                    check.conclusion,
+                    Some(CheckConclusion::Success)
+                        | Some(CheckConclusion::Neutral)
+                        | Some(CheckConclusion::Skipped)
+                )
         });
 
         // Check merge status
@@ -396,7 +438,11 @@ impl PRMonitor {
     }
 
     /// Identify blocking issues preventing merge
-    fn identify_blocking_issues(&self, checks: &[CheckStatus], merge_status: &MergeStatus) -> Vec<String> {
+    fn identify_blocking_issues(
+        &self,
+        checks: &[CheckStatus],
+        merge_status: &MergeStatus,
+    ) -> Vec<String> {
         let mut issues = Vec::new();
 
         // Check for failing CI checks
@@ -419,8 +465,14 @@ impl PRMonitor {
                         _ => {}
                     }
                 }
-            } else if matches!(check.status, CheckState::Waiting | CheckState::Pending | CheckState::Queued) {
-                issues.push(format!("Check '{}' is still {:#?}", check.name, check.status));
+            } else if matches!(
+                check.status,
+                CheckState::Waiting | CheckState::Pending | CheckState::Queued
+            ) {
+                issues.push(format!(
+                    "Check '{}' is still {:#?}",
+                    check.name, check.status
+                ));
             }
         }
 
@@ -448,9 +500,14 @@ impl PRMonitor {
 
         let status = self.check_pr_detailed_status(pr_number).await?;
 
-        let failed_checks: Vec<CheckStatus> = status.checks.iter()
+        let failed_checks: Vec<CheckStatus> = status
+            .checks
+            .iter()
             .filter(|check| {
-                matches!(check.conclusion, Some(CheckConclusion::Failure) | Some(CheckConclusion::TimedOut))
+                matches!(
+                    check.conclusion,
+                    Some(CheckConclusion::Failure) | Some(CheckConclusion::TimedOut)
+                )
             })
             .cloned()
             .collect();
@@ -469,20 +526,34 @@ impl PRMonitor {
                             if !logs.is_empty() {
                                 // Save raw logs to a temporary file for LLM access
                                 let temp_dir = std::env::temp_dir();
-                                let log_file = temp_dir.join(format!("shodan_logs_pr{}_{}_run{}.txt", pr_number, check.name, run_id));
+                                let log_file = temp_dir.join(format!(
+                                    "shodan_logs_pr{}_{}_run{}.txt",
+                                    pr_number, check.name, run_id
+                                ));
 
                                 match std::fs::write(&log_file, logs.join("\n")) {
                                     Ok(_) => {
                                         error_logs.push(format!("✅ Retrieved detailed build logs for check '{}' (run ID: {})", check.name, run_id));
-                                        error_logs.push(format!("📁 Raw logs saved to: {}", log_file.display()));
+                                        error_logs.push(format!(
+                                            "📁 Raw logs saved to: {}",
+                                            log_file.display()
+                                        ));
                                         error_logs.push(format!("📊 Log contains {} lines of build output including error details", logs.len()));
                                         error_logs.push("🔍 The raw logs contain the complete build failure information that Claude can analyze.".to_string());
-                                        info!("Successfully saved {} log lines for check '{}' to {}", logs.len(), check.name, log_file.display());
+                                        info!(
+                                            "Successfully saved {} log lines for check '{}' to {}",
+                                            logs.len(),
+                                            check.name,
+                                            log_file.display()
+                                        );
                                     }
                                     Err(e) => {
                                         warn!("Failed to save logs to file: {}", e);
                                         // Fall back to including logs directly
-                                        error_logs.push(format!("=== Logs for check: {} ===", check.name));
+                                        error_logs.push(format!(
+                                            "=== Logs for check: {} ===",
+                                            check.name
+                                        ));
                                         error_logs.extend(logs);
                                         error_logs.push("=== End of logs ===".to_string());
                                     }
@@ -491,7 +562,10 @@ impl PRMonitor {
                         }
                         Err(e) => {
                             warn!("Failed to get logs for check '{}': {}", check.name, e);
-                            error_logs.push(format!("❌ Could not retrieve logs for check '{}': {}", check.name, e));
+                            error_logs.push(format!(
+                                "❌ Could not retrieve logs for check '{}': {}",
+                                check.name, e
+                            ));
                         }
                     }
                 } else {
@@ -504,9 +578,9 @@ impl PRMonitor {
 
         // Determine if retry is recommended
         let retry_recommended = failed_checks.iter().any(|check| {
-            matches!(check.conclusion, Some(CheckConclusion::TimedOut)) ||
-            check.name.contains("flaky") ||
-            check.name.contains("network")
+            matches!(check.conclusion, Some(CheckConclusion::TimedOut))
+                || check.name.contains("flaky")
+                || check.name.contains("network")
         });
 
         let analysis = FailureAnalysis {
@@ -516,12 +590,14 @@ impl PRMonitor {
             retry_recommended,
         };
 
-        info!("Failure analysis for PR #{}: {} failed checks",
-              pr_number, analysis.failed_checks.len());
+        info!(
+            "Failure analysis for PR #{}: {} failed checks",
+            pr_number,
+            analysis.failed_checks.len()
+        );
 
         Ok(analysis)
     }
-
 
     /// Get recent failed workflow runs matching the check name
     async fn get_recent_failed_runs(&self, check_name: &str) -> Result<Vec<String>> {
@@ -530,9 +606,12 @@ impl PRMonitor {
         // First try with JSON format to get more details including workflow names
         let json_output = TokioCommand::new("gh")
             .args([
-                "run", "list",
-                "--json", "databaseId,name,workflowName,conclusion,headBranch",
-                "--limit", "50"  // Get more runs since we'll filter for failures
+                "run",
+                "list",
+                "--json",
+                "databaseId,name,workflowName,conclusion,headBranch",
+                "--limit",
+                "50", // Get more runs since we'll filter for failures
             ])
             .output()
             .await;
@@ -553,21 +632,27 @@ impl PRMonitor {
                         }
 
                         // Check if this run matches our criteria
-                        let matches = run_name.to_lowercase().contains(&check_name.to_lowercase()) ||
-                                    workflow_name.to_lowercase().contains(&check_name.to_lowercase()) ||
-                                    (check_name.to_lowercase().contains("build") &&
-                                     (run_name.to_lowercase().contains("build") ||
-                                      workflow_name.to_lowercase().contains("build")));
+                        let matches = run_name.to_lowercase().contains(&check_name.to_lowercase())
+                            || workflow_name
+                                .to_lowercase()
+                                .contains(&check_name.to_lowercase())
+                            || (check_name.to_lowercase().contains("build")
+                                && (run_name.to_lowercase().contains("build")
+                                    || workflow_name.to_lowercase().contains("build")));
 
                         if matches {
                             if let Some(run_id) = run["databaseId"].as_u64() {
                                 debug!("Found matching failed run: '{}' from workflow '{}' on branch '{}'",
                                        run_name, workflow_name, head_branch);
 
-                                let mut logs = self.get_run_failure_logs(&run_id.to_string()).await?;
+                                let mut logs =
+                                    self.get_run_failure_logs(&run_id.to_string()).await?;
                                 if !logs.is_empty() {
                                     // Prepend context about which workflow this is from
-                                    logs.insert(0, format!("=== Failure from workflow: {} ===", workflow_name));
+                                    logs.insert(
+                                        0,
+                                        format!("=== Failure from workflow: {} ===", workflow_name),
+                                    );
                                     logs.insert(1, format!("=== Job/Run name: {} ===", run_name));
                                     logs.insert(2, format!("=== Branch: {} ===", head_branch));
                                     logs.insert(3, "=== Error Details ===".to_string());
@@ -582,17 +667,16 @@ impl PRMonitor {
 
         // Fallback to text-based approach
         let output = TokioCommand::new("gh")
-            .args([
-                "run", "list",
-                "--status", "failure",
-                "--limit", "10"
-            ])
+            .args(["run", "list", "--status", "failure", "--limit", "10"])
             .output()
             .await
             .context("Failed to get recent failed runs")?;
 
         if !output.status.success() {
-            debug!("Failed to get recent runs: {}", String::from_utf8_lossy(&output.stderr));
+            debug!(
+                "Failed to get recent runs: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             return Ok(Vec::new());
         }
 
@@ -606,9 +690,10 @@ impl PRMonitor {
             }
 
             // Look for lines containing our check name
-            if line.to_lowercase().contains(&check_name.to_lowercase()) ||
-               check_name.to_lowercase().contains("build") && line.to_lowercase().contains("build") {
-
+            if line.to_lowercase().contains(&check_name.to_lowercase())
+                || check_name.to_lowercase().contains("build")
+                    && line.to_lowercase().contains("build")
+            {
                 // Extract run ID from the line (usually the last part)
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if let Some(run_id) = parts.last() {
@@ -629,20 +714,22 @@ impl PRMonitor {
 
     /// Get workflow runs for a specific commit
     async fn get_runs_for_commit(&self, commit_sha: &str, check_name: &str) -> Result<Vec<String>> {
-        debug!("Getting runs for commit {} and check {}", commit_sha, check_name);
+        debug!(
+            "Getting runs for commit {} and check {}",
+            commit_sha, check_name
+        );
 
         let output = TokioCommand::new("gh")
-            .args([
-                "run", "list",
-                "--commit", commit_sha,
-                "--limit", "20"
-            ])
+            .args(["run", "list", "--commit", commit_sha, "--limit", "20"])
             .output()
             .await
             .context("Failed to get runs for commit")?;
 
         if !output.status.success() {
-            debug!("Failed to get runs for commit: {}", String::from_utf8_lossy(&output.stderr));
+            debug!(
+                "Failed to get runs for commit: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             return Ok(Vec::new());
         }
 
@@ -656,10 +743,11 @@ impl PRMonitor {
             }
 
             // Look for failed runs that match our check
-            if line.contains("failure") &&
-               (line.to_lowercase().contains(&check_name.to_lowercase()) ||
-                check_name.to_lowercase().contains("build") && line.to_lowercase().contains("build")) {
-
+            if line.contains("failure")
+                && (line.to_lowercase().contains(&check_name.to_lowercase())
+                    || check_name.to_lowercase().contains("build")
+                        && line.to_lowercase().contains("build"))
+            {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if let Some(run_id) = parts.last() {
                     if run_id.chars().all(|c| c.is_ascii_digit()) {
@@ -699,8 +787,12 @@ impl PRMonitor {
                 in_checks_section = true;
             }
 
-            if in_checks_section && (line.to_lowercase().contains(&check_name.to_lowercase()) ||
-                                   line.contains("❌") || line.contains("✗") || line.contains("FAILED")) {
+            if in_checks_section
+                && (line.to_lowercase().contains(&check_name.to_lowercase())
+                    || line.contains("❌")
+                    || line.contains("✗")
+                    || line.contains("FAILED"))
+            {
                 relevant_lines.push(format!("PR Status: {}", line));
             }
 
@@ -711,7 +803,10 @@ impl PRMonitor {
         }
 
         if relevant_lines.is_empty() {
-            relevant_lines.push(format!("Check '{}' failed but detailed logs are not available through GitHub CLI", check_name));
+            relevant_lines.push(format!(
+                "Check '{}' failed but detailed logs are not available through GitHub CLI",
+                check_name
+            ));
             relevant_lines.push("This could be due to:".to_string());
             relevant_lines.push("- Build script failures (check build.rs files)".to_string());
             relevant_lines.push("- Missing system dependencies".to_string());
@@ -797,7 +892,10 @@ impl PRMonitor {
 
         if !view_output.status.success() {
             let stderr = String::from_utf8_lossy(&view_output.stderr);
-            return Ok(vec![format!("Failed to get any logs for run {}: {}", run_id, stderr)]);
+            return Ok(vec![format!(
+                "Failed to get any logs for run {}: {}",
+                run_id, stderr
+            )]);
         }
 
         let stdout = String::from_utf8_lossy(&view_output.stdout);
@@ -814,13 +912,19 @@ impl PRMonitor {
 
         // Step 1: Get the workflow run details to find jobs
         let run_info_output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/{}/{}/actions/runs/{}", owner, repo, run_id)])
+            .args([
+                "api",
+                &format!("repos/{}/{}/actions/runs/{}", owner, repo, run_id),
+            ])
             .output()
             .await
             .context("Failed to get run info via API")?;
 
         if !run_info_output.status.success() {
-            debug!("Failed to get run info: {}", String::from_utf8_lossy(&run_info_output.stderr));
+            debug!(
+                "Failed to get run info: {}",
+                String::from_utf8_lossy(&run_info_output.stderr)
+            );
             return Err(anyhow::anyhow!("Failed to get run info via API"));
         }
 
@@ -832,21 +936,30 @@ impl PRMonitor {
 
         // Step 2: Get jobs for this run
         let jobs_output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/{}/{}/actions/runs/{}/jobs", owner, repo, run_id)])
+            .args([
+                "api",
+                &format!("repos/{}/{}/actions/runs/{}/jobs", owner, repo, run_id),
+            ])
             .output()
             .await
             .context("Failed to get jobs via API")?;
 
         if !jobs_output.status.success() {
-            debug!("Failed to get jobs: {}", String::from_utf8_lossy(&jobs_output.stderr));
+            debug!(
+                "Failed to get jobs: {}",
+                String::from_utf8_lossy(&jobs_output.stderr)
+            );
             return Err(anyhow::anyhow!("Failed to get jobs via API"));
         }
 
-        let jobs_json: serde_json::Value = serde_json::from_slice(&jobs_output.stdout)
-            .context("Failed to parse jobs JSON")?;
+        let jobs_json: serde_json::Value =
+            serde_json::from_slice(&jobs_output.stdout).context("Failed to parse jobs JSON")?;
 
         let mut all_logs = Vec::new();
-        all_logs.push(format!("=== Workflow: {} (Conclusion: {}) ===", workflow_name, conclusion));
+        all_logs.push(format!(
+            "=== Workflow: {} (Conclusion: {}) ===",
+            workflow_name, conclusion
+        ));
 
         // Step 3: Get logs for each failed job
         if let Some(jobs) = jobs_json["jobs"].as_array() {
@@ -856,7 +969,10 @@ impl PRMonitor {
                 let job_id = job["id"].as_u64().unwrap_or(0);
 
                 if job_conclusion == "failure" || job_conclusion == "cancelled" {
-                    all_logs.push(format!("=== Job: {} (ID: {}, Conclusion: {}) ===", job_name, job_id, job_conclusion));
+                    all_logs.push(format!(
+                        "=== Job: {} (ID: {}, Conclusion: {}) ===",
+                        job_name, job_id, job_conclusion
+                    ));
 
                     // Get logs for this specific job
                     let job_logs = self.get_job_logs_via_api(job_id).await?;
@@ -867,22 +983,32 @@ impl PRMonitor {
         }
 
         // If we couldn't get logs via individual job API, try downloading the full ZIP
-        if all_logs.len() <= 1 { // Only header, no actual logs
-            debug!("No logs retrieved via job API, trying ZIP download for run {}", run_id);
+        if all_logs.len() <= 1 {
+            // Only header, no actual logs
+            debug!(
+                "No logs retrieved via job API, trying ZIP download for run {}",
+                run_id
+            );
             match self.download_and_extract_logs(run_id).await {
                 Ok(zip_logs) => {
-                    info!("Successfully retrieved {} log lines from ZIP download", zip_logs.len());
+                    info!(
+                        "Successfully retrieved {} log lines from ZIP download",
+                        zip_logs.len()
+                    );
                     all_logs.push("=== Downloaded Raw Logs ===".to_string());
                     all_logs.extend(zip_logs);
                 }
                 Err(e) => {
                     warn!("Failed to download logs via ZIP: {}", e);
-                    return Err(anyhow::anyhow!("No logs retrieved via job API or ZIP download"));
+                    return Err(anyhow::anyhow!(
+                        "No logs retrieved via job API or ZIP download"
+                    ));
                 }
             }
         }
 
-        if all_logs.len() > 1 { // More than just the header
+        if all_logs.len() > 1 {
+            // More than just the header
             Ok(all_logs)
         } else {
             Err(anyhow::anyhow!("No failed jobs found"))
@@ -897,7 +1023,10 @@ impl PRMonitor {
 
         // Use gh api to get logs - this will return the raw log content
         let logs_output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/{}/{}/actions/jobs/{}/logs", owner, repo, job_id)])
+            .args([
+                "api",
+                &format!("repos/{}/{}/actions/jobs/{}/logs", owner, repo, job_id),
+            ])
             .output()
             .await
             .context("Failed to get job logs via API")?;
@@ -905,7 +1034,10 @@ impl PRMonitor {
         if !logs_output.status.success() {
             let stderr = String::from_utf8_lossy(&logs_output.stderr);
             debug!("Failed to get job logs: {}", stderr);
-            return Ok(vec![format!("Failed to get logs for job {}: {}", job_id, stderr)]);
+            return Ok(vec![format!(
+                "Failed to get logs for job {}: {}",
+                job_id, stderr
+            )]);
         }
 
         let log_content = String::from_utf8_lossy(&logs_output.stdout);
@@ -920,7 +1052,10 @@ impl PRMonitor {
 
             if total_lines > 50 {
                 let mut result = Vec::new();
-                result.push(format!("Full log has {} lines. Showing last 50 lines:", total_lines));
+                result.push(format!(
+                    "Full log has {} lines. Showing last 50 lines:",
+                    total_lines
+                ));
                 result.extend(lines.iter().skip(total_lines - 50).map(|s| s.to_string()));
                 Ok(result)
             } else {
@@ -939,7 +1074,11 @@ impl PRMonitor {
 
         // Use gh api to download the logs zip file
         let logs_output = TokioCommand::new("gh")
-            .args(["api", &format!("repos/{}/{}/actions/runs/{}/logs", owner, repo, run_id), "--paginate"])
+            .args([
+                "api",
+                &format!("repos/{}/{}/actions/runs/{}/logs", owner, repo, run_id),
+                "--paginate",
+            ])
             .output()
             .await
             .context("Failed to download logs via API")?;
@@ -960,12 +1099,16 @@ impl PRMonitor {
 
         // Write ZIP data to a temporary file
         let zip_path = temp_dir.join("logs.zip");
-        std::fs::write(&zip_path, &zip_data)
-            .context("Failed to write ZIP file")?;
+        std::fs::write(&zip_path, &zip_data).context("Failed to write ZIP file")?;
 
         // Extract the ZIP file
         let extract_output = TokioCommand::new("unzip")
-            .args(["-o", zip_path.to_str().unwrap(), "-d", temp_dir.to_str().unwrap()])
+            .args([
+                "-o",
+                zip_path.to_str().unwrap(),
+                "-d",
+                temp_dir.to_str().unwrap(),
+            ])
             .output()
             .await;
 
@@ -994,7 +1137,10 @@ impl PRMonitor {
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "txt") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        all_logs.push(format!("=== {} ===", path.file_name().unwrap().to_string_lossy()));
+                        all_logs.push(format!(
+                            "=== {} ===",
+                            path.file_name().unwrap().to_string_lossy()
+                        ));
                         all_logs.extend(content.lines().map(String::from));
                         all_logs.push(String::new()); // Add separator
                     }
@@ -1009,7 +1155,10 @@ impl PRMonitor {
             return Err(anyhow::anyhow!("No log files found in extracted ZIP"));
         }
 
-        info!("Successfully extracted and parsed {} log lines from ZIP", all_logs.len());
+        info!(
+            "Successfully extracted and parsed {} log lines from ZIP",
+            all_logs.len()
+        );
         Ok(all_logs)
     }
 
@@ -1021,7 +1170,8 @@ impl PRMonitor {
 
         // Convert ZIP data to string and look for text content
         if let Ok(text_data) = String::from_utf8(zip_data.to_vec()) {
-            let lines: Vec<String> = text_data.lines()
+            let lines: Vec<String> = text_data
+                .lines()
                 .filter(|line| !line.is_empty() && line.len() > 10) // Filter out binary data
                 .map(String::from)
                 .collect();
@@ -1077,17 +1227,23 @@ impl PRMonitor {
                 in_error_section = true;
             }
             // Look for pkg-config errors
-            else if line.contains("pkg-config") && (line.contains("error") || line.contains("not been configured")) {
+            else if line.contains("pkg-config")
+                && (line.contains("error") || line.contains("not been configured"))
+            {
                 error_lines.push(line.to_string());
                 in_error_section = true;
             }
             // Look for cross-compilation errors
-            else if line.contains("cross-compilation") || (line.contains("TARGET_") && line.contains("not found")) {
+            else if line.contains("cross-compilation")
+                || (line.contains("TARGET_") && line.contains("not found"))
+            {
                 error_lines.push(line.to_string());
                 in_error_section = true;
             }
             // Look for dependency resolution errors
-            else if line.contains("couldn't resolve") || (line.contains("dependency") && line.contains("failed")) {
+            else if line.contains("couldn't resolve")
+                || (line.contains("dependency") && line.contains("failed"))
+            {
                 error_lines.push(line.to_string());
                 in_error_section = true;
             }
@@ -1097,7 +1253,10 @@ impl PRMonitor {
                 in_error_section = true;
             }
             // Look for test failures
-            else if line.contains("FAIL:") || line.contains("assertion failed") || line.contains("test result: FAILED") {
+            else if line.contains("FAIL:")
+                || line.contains("assertion failed")
+                || line.contains("test result: FAILED")
+            {
                 error_lines.push(line.to_string());
                 in_error_section = true;
             }
@@ -1129,7 +1288,9 @@ impl PRMonitor {
                        line.contains("help:") ||  // compiler help
                        line.contains("-->") ||  // code location indicators
                        line.contains("exit status:") ||  // exit codes
-                       line.starts_with("  ") {  // indented context lines
+                       line.starts_with("  ")
+                    {
+                        // indented context lines
                         error_lines.push(line.to_string());
                     }
                 }
@@ -1141,7 +1302,10 @@ impl PRMonitor {
 
                 // Limit output size but be more generous for build errors
                 if error_lines.len() > 100 {
-                    error_lines.push("... (truncated for brevity, see full logs for complete output)".to_string());
+                    error_lines.push(
+                        "... (truncated for brevity, see full logs for complete output)"
+                            .to_string(),
+                    );
                     break;
                 }
             }
@@ -1211,7 +1375,9 @@ impl PRMonitor {
 
         if info.is_empty() {
             info.push("Run failed but no detailed error information available".to_string());
-            info.push("Try checking the GitHub Actions web interface for complete logs".to_string());
+            info.push(
+                "Try checking the GitHub Actions web interface for complete logs".to_string(),
+            );
         }
 
         info
@@ -1225,49 +1391,80 @@ impl PRMonitor {
             Some(CheckConclusion::Failure) => {
                 if check_name.contains("test") {
                     suggestions.push("Review test failures and fix failing tests".to_string());
-                    suggestions.push("Check for recent changes that might have broken tests".to_string());
+                    suggestions
+                        .push("Check for recent changes that might have broken tests".to_string());
                     suggestions.push("Run `cargo test` locally to reproduce the issue".to_string());
                 } else if check_name.contains("build") || check_name.contains("compile") {
-                    suggestions.push("Fix compilation errors - check the build logs for specific error messages".to_string());
+                    suggestions.push(
+                        "Fix compilation errors - check the build logs for specific error messages"
+                            .to_string(),
+                    );
                     suggestions.push("Common build issues to check:".to_string());
-                    suggestions.push("  • Missing system dependencies (check build.rs files)".to_string());
-                    suggestions.push("  • Cross-compilation configuration (Android NDK, pkg-config)".to_string());
-                    suggestions.push("  • Environment variables (PKG_CONFIG_*, TARGET_*, LIBAV*, etc.)".to_string());
-                    suggestions.push("  • Native library dependencies (ffmpeg, openssl, etc.)".to_string());
+                    suggestions
+                        .push("  • Missing system dependencies (check build.rs files)".to_string());
+                    suggestions.push(
+                        "  • Cross-compilation configuration (Android NDK, pkg-config)".to_string(),
+                    );
+                    suggestions.push(
+                        "  • Environment variables (PKG_CONFIG_*, TARGET_*, LIBAV*, etc.)"
+                            .to_string(),
+                    );
+                    suggestions.push(
+                        "  • Native library dependencies (ffmpeg, openssl, etc.)".to_string(),
+                    );
 
                     // Add specific suggestions based on common patterns
                     if check_name.to_lowercase().contains("android") {
                         suggestions.push("Android-specific build issues:".to_string());
-                        suggestions.push("  • Check Android NDK setup and environment variables".to_string());
-                        suggestions.push("  • Verify cross-compilation toolchain configuration".to_string());
-                        suggestions.push("  • Check for missing aarch64-linux-android target".to_string());
-                        suggestions.push("  • Review pkg-config cross-compilation settings".to_string());
+                        suggestions.push(
+                            "  • Check Android NDK setup and environment variables".to_string(),
+                        );
+                        suggestions.push(
+                            "  • Verify cross-compilation toolchain configuration".to_string(),
+                        );
+                        suggestions
+                            .push("  • Check for missing aarch64-linux-android target".to_string());
+                        suggestions
+                            .push("  • Review pkg-config cross-compilation settings".to_string());
                     }
 
                     suggestions.push("Try local reproduction:".to_string());
-                    suggestions.push("  • Run `cargo check` to identify compilation issues".to_string());
+                    suggestions
+                        .push("  • Run `cargo check` to identify compilation issues".to_string());
                     suggestions.push("  • Run `cargo build` to test the build process".to_string());
                     if check_name.to_lowercase().contains("android") {
-                        suggestions.push("  • Set up Android development environment locally".to_string());
-                        suggestions.push("  • Test with `cargo apk build` if using Android target".to_string());
+                        suggestions
+                            .push("  • Set up Android development environment locally".to_string());
+                        suggestions.push(
+                            "  • Test with `cargo apk build` if using Android target".to_string(),
+                        );
                     }
                 } else if check_name.contains("lint") || check_name.contains("format") {
                     suggestions.push("Run cargo fmt to fix formatting issues".to_string());
                     suggestions.push("Run cargo clippy and fix linting warnings".to_string());
                     suggestions.push("Check for code style violations in the diff".to_string());
                 } else if check_name.contains("security") {
-                    suggestions.push("Review security scan results and address vulnerabilities".to_string());
-                    suggestions.push("Check for unsafe code patterns or dependency vulnerabilities".to_string());
+                    suggestions.push(
+                        "Review security scan results and address vulnerabilities".to_string(),
+                    );
+                    suggestions.push(
+                        "Check for unsafe code patterns or dependency vulnerabilities".to_string(),
+                    );
                 } else {
                     suggestions.push(format!("Investigate and fix issues in '{}'", check_name));
-                    suggestions.push("Check the workflow logs for specific error messages".to_string());
-                    suggestions.push("Look for patterns like 'error:', 'failed:', 'panic:', or 'unwrap()'".to_string());
+                    suggestions
+                        .push("Check the workflow logs for specific error messages".to_string());
+                    suggestions.push(
+                        "Look for patterns like 'error:', 'failed:', 'panic:', or 'unwrap()'"
+                            .to_string(),
+                    );
                 }
             }
             Some(CheckConclusion::TimedOut) => {
                 suggestions.push("Check for performance issues or infinite loops".to_string());
                 suggestions.push("Consider splitting large tests into smaller chunks".to_string());
-                suggestions.push("Retry the check as it may have been a temporary issue".to_string());
+                suggestions
+                    .push("Retry the check as it may have been a temporary issue".to_string());
                 if check_name.contains("build") {
                     suggestions.push("Build timeouts can be caused by:".to_string());
                     suggestions.push("  • Large dependency downloads".to_string());
@@ -1277,8 +1474,13 @@ impl PRMonitor {
             }
             Some(CheckConclusion::Cancelled) => {
                 suggestions.push("Check why the workflow was cancelled".to_string());
-                suggestions.push("Retry the workflow if it was cancelled due to resource constraints".to_string());
-                suggestions.push("Look for workflow configuration issues or dependency conflicts".to_string());
+                suggestions.push(
+                    "Retry the workflow if it was cancelled due to resource constraints"
+                        .to_string(),
+                );
+                suggestions.push(
+                    "Look for workflow configuration issues or dependency conflicts".to_string(),
+                );
             }
             _ => {}
         }
@@ -1287,13 +1489,19 @@ impl PRMonitor {
     }
 
     /// Wait for PR to become ready with timeout and periodic checks
-    pub async fn wait_for_pr_ready(&mut self, pr_number: u32, timeout: Duration) -> Result<PullRequestStatus> {
-        info!("Waiting for PR #{} to become ready (timeout: {:?})", pr_number, timeout);
+    pub async fn wait_for_pr_ready(
+        &mut self,
+        pr_number: u32,
+        timeout: Duration,
+    ) -> Result<PullRequestStatus> {
+        info!(
+            "Waiting for PR #{} to become ready (timeout: {:?})",
+            pr_number, timeout
+        );
 
         let start_time = Instant::now();
         let check_interval = Duration::from_secs(
-            self.config.parse_check_interval()
-                .unwrap_or(300) // Default to 5 minutes
+            self.config.parse_check_interval().unwrap_or(300), // Default to 5 minutes
         );
 
         while start_time.elapsed() < timeout {
@@ -1323,9 +1531,10 @@ impl PRMonitor {
             }
 
             // Check if we should analyze failures
-            let has_failures = status.checks.iter().any(|check| {
-                matches!(check.conclusion, Some(CheckConclusion::Failure))
-            });
+            let has_failures = status
+                .checks
+                .iter()
+                .any(|check| matches!(check.conclusion, Some(CheckConclusion::Failure)));
 
             if has_failures {
                 warn!("PR #{} has failing checks, analyzing...", pr_number);
@@ -1336,7 +1545,10 @@ impl PRMonitor {
                 }
             }
 
-            info!("Waiting {} seconds before next check...", check_interval.as_secs());
+            info!(
+                "Waiting {} seconds before next check...",
+                check_interval.as_secs()
+            );
             sleep(check_interval).await;
         }
 
@@ -1360,11 +1572,11 @@ impl PRMonitor {
             return Err(anyhow::anyhow!("Failed to get PR comments: {}", stderr));
         }
 
-        let stdout = String::from_utf8(output.stdout)
-            .context("Invalid UTF-8 in gh pr view output")?;
+        let stdout =
+            String::from_utf8(output.stdout).context("Invalid UTF-8 in gh pr view output")?;
 
-        let json: serde_json::Value = serde_json::from_str(&stdout)
-            .context("Failed to parse PR comments JSON")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout).context("Failed to parse PR comments JSON")?;
 
         let mut comments = Vec::new();
         let mut unresolved_comments = Vec::new();
@@ -1374,7 +1586,10 @@ impl PRMonitor {
                 let comment = PRComment {
                     id: comment_json["id"].as_u64().unwrap_or(0),
                     body: comment_json["body"].as_str().unwrap_or("").to_string(),
-                    author: comment_json["author"]["login"].as_str().unwrap_or("unknown").to_string(),
+                    author: comment_json["author"]["login"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
                     created_at: comment_json["createdAt"].as_str().unwrap_or("").to_string(),
                     updated_at: comment_json["updatedAt"].as_str().unwrap_or("").to_string(),
                     is_resolved: false, // GitHub API doesn't easily provide resolution status for general comments
@@ -1412,8 +1627,11 @@ impl PRMonitor {
             match self.check_pr_comments(pr.number).await {
                 Ok(comments_status) => {
                     if comments_status.has_unaddressed_feedback {
-                        info!("PR #{} has unaddressed feedback ({} comments)",
-                              pr.number, comments_status.unresolved_comments.len());
+                        info!(
+                            "PR #{} has unaddressed feedback ({} comments)",
+                            pr.number,
+                            comments_status.unresolved_comments.len()
+                        );
                         results.push(comments_status);
                     } else {
                         debug!("PR #{} has no unaddressed feedback", pr.number);
@@ -1434,11 +1652,31 @@ impl PRMonitor {
 
         // Keywords that indicate actionable feedback
         let actionable_keywords = [
-            "please", "could you", "can you", "would you", "should",
-            "need to", "needs to", "missing", "incorrect", "wrong",
-            "fix", "update", "change", "modify", "add", "remove",
-            "consider", "suggest", "recommend", "might want to",
-            "question:", "?", "todo", "fixme", "hack",
+            "please",
+            "could you",
+            "can you",
+            "would you",
+            "should",
+            "need to",
+            "needs to",
+            "missing",
+            "incorrect",
+            "wrong",
+            "fix",
+            "update",
+            "change",
+            "modify",
+            "add",
+            "remove",
+            "consider",
+            "suggest",
+            "recommend",
+            "might want to",
+            "question:",
+            "?",
+            "todo",
+            "fixme",
+            "hack",
         ];
 
         // Check if the comment contains actionable language
@@ -1506,7 +1744,10 @@ mod tests {
     fn test_parse_check_conclusion() {
         assert_eq!(parse_check_conclusion("success"), CheckConclusion::Success);
         assert_eq!(parse_check_conclusion("failure"), CheckConclusion::Failure);
-        assert_eq!(parse_check_conclusion("timed_out"), CheckConclusion::TimedOut);
+        assert_eq!(
+            parse_check_conclusion("timed_out"),
+            CheckConclusion::TimedOut
+        );
         assert_eq!(parse_check_conclusion("unknown"), CheckConclusion::Neutral);
     }
 
@@ -1515,17 +1756,15 @@ mod tests {
         let config = crate::config::Config::default();
         let monitor = PRMonitor::new(config);
 
-        let passing_checks = vec![
-            CheckStatus {
-                name: "test".to_string(),
-                status: CheckState::Completed,
-                conclusion: Some(CheckConclusion::Success),
-                url: None,
-                started_at: None,
-                completed_at: None,
-                details_url: None,
-            }
-        ];
+        let passing_checks = vec![CheckStatus {
+            name: "test".to_string(),
+            status: CheckState::Completed,
+            conclusion: Some(CheckConclusion::Success),
+            url: None,
+            started_at: None,
+            completed_at: None,
+            details_url: None,
+        }];
 
         let merge_status = MergeStatus {
             mergeable: Some(true),
