@@ -15,8 +15,6 @@ pub enum AgentKind {
 }
 
 impl AgentKind {
-    pub const VARIANTS: &'static [&'static str] = &["claude", "codex"];
-
     pub fn as_str(&self) -> &'static str {
         match self {
             AgentKind::Claude => "claude",
@@ -90,8 +88,6 @@ pub enum SessionStatus {
 
 #[async_trait]
 pub trait AutomationAgent: Send {
-    fn kind(&self) -> AgentKind;
-
     fn display_name(&self) -> &'static str;
 
     fn process_identifier(&self) -> &'static str;
@@ -99,11 +95,6 @@ pub trait AutomationAgent: Send {
     async fn start_session(&mut self, prompt: &Prompt) -> Result<String>;
 
     async fn wait_for_completion(&mut self, session_id: &str) -> Result<AgentOutput>;
-
-    async fn terminate_session(&mut self, session_id: &str) -> Result<()> {
-        let _ = session_id;
-        Ok(())
-    }
 
     fn cleanup_completed_sessions(&mut self) {}
 }

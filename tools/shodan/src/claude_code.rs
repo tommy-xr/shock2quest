@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use async_trait::async_trait;
 
-use crate::agent::{AgentKind, AgentOutput, AutomationAgent, SessionStatus};
+use crate::agent::{AgentOutput, AutomationAgent, SessionStatus};
 use crate::config::Config;
 use crate::prompts::Prompt;
 
@@ -546,16 +546,12 @@ fn find_repo_root() -> Option<PathBuf> {
 
 #[async_trait]
 impl AutomationAgent for ClaudeCodeManager {
-    fn kind(&self) -> AgentKind {
-        AgentKind::Claude
-    }
-
     fn display_name(&self) -> &'static str {
         "Claude Code"
     }
 
     fn process_identifier(&self) -> &'static str {
-        "claude"
+        PROCESS_IDENTIFIER
     }
 
     async fn start_session(&mut self, prompt: &Prompt) -> Result<String> {
@@ -564,10 +560,6 @@ impl AutomationAgent for ClaudeCodeManager {
 
     async fn wait_for_completion(&mut self, session_id: &str) -> Result<AgentOutput> {
         ClaudeCodeManager::wait_for_completion(self, session_id).await
-    }
-
-    async fn terminate_session(&mut self, session_id: &str) -> Result<()> {
-        ClaudeCodeManager::terminate_session(self, session_id).await
     }
 
     fn cleanup_completed_sessions(&mut self) {

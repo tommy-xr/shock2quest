@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use async_trait::async_trait;
 
-use crate::agent::{AgentKind, AgentOutput, AutomationAgent, SessionStatus};
+use crate::agent::{AgentOutput, AutomationAgent, SessionStatus};
 use crate::config::Config;
 use crate::prompts::Prompt;
 
@@ -53,6 +53,8 @@ Once the workstream is complete, append a journal entry to .notes/journal.md, co
 - A single sentence describing the work done.
 - A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.
 "#;
+
+const PROCESS_IDENTIFIER: &str = "codex";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexCodeInput {
@@ -153,7 +155,7 @@ impl CodexCodeManager {
         }
 
         // Add current repository state
-        if let Ok(repo_state) = crate::git::get_repository_state().await {
+        if let Ok(repo_state) = crate::git::get_repository_state(PROCESS_IDENTIFIER).await {
             context.push_str(&format!("## Current Repository State\n"));
             context.push_str(&format!(
                 "- Branch: {}\n",
@@ -220,7 +222,7 @@ impl CodexCodeManager {
     /// Execute Codex Code as a subprocess
     async fn execute_codex_code(&self, input: &CodexCodeInput) -> Result<Child> {
         debug!("Executing Codex Code with text input and JSON output");
-        let output_format = if self.config.shodan.show_codex_output {
+        let output_format = if self.config.shodan.show_claude_output {
             "text"
         } else {
             "json"
@@ -242,7 +244,7 @@ impl CodexCodeManager {
         let mut args = vec!["--print", &permission_arg];
 
         // Use JSON output for parsing, or text output for visibility
-        if !self.config.shodan.show_codex_output {
+        if !self.config.shodan.show_claude_output {
             args.push("--output-format=json");
         }
 
@@ -544,16 +546,12 @@ fn find_repo_root() -> Option<PathBuf> {
 
 #[async_trait]
 impl AutomationAgent for CodexCodeManager {
-    fn kind(&self) -> AgentKind {
-        AgentKind::Codex
-    }
-
     fn display_name(&self) -> &'static str {
         "Codex Code"
     }
 
     fn process_identifier(&self) -> &'static str {
-        "codex"
+        PROCESS_IDENTIFIER
     }
 
     async fn start_session(&mut self, prompt: &Prompt) -> Result<String> {
@@ -562,10 +560,6 @@ impl AutomationAgent for CodexCodeManager {
 
     async fn wait_for_completion(&mut self, session_id: &str) -> Result<AgentOutput> {
         CodexCodeManager::wait_for_completion(self, session_id).await
-    }
-
-    async fn terminate_session(&mut self, session_id: &str) -> Result<()> {
-        CodexCodeManager::terminate_session(self, session_id).await
     }
 
     fn cleanup_completed_sessions(&mut self) {

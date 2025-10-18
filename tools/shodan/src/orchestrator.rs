@@ -15,7 +15,6 @@ use crate::prompts::{discover_prompts, select_random_prompt, Prompt};
 /// Main orchestrator that manages the autonomous agent execution cycle
 pub struct Orchestrator {
     config: Config,
-    agent_kind: AgentKind,
     agent: Box<dyn AutomationAgent>,
     pr_monitor: PRMonitor,
     state: OrchestrationState,
@@ -84,7 +83,6 @@ impl Orchestrator {
 
         Ok(Self {
             config,
-            agent_kind,
             agent,
             pr_monitor,
             state,
@@ -383,6 +381,8 @@ impl Orchestrator {
                 error_msg
             ));
         }
+
+        self.agent.cleanup_completed_sessions();
 
         Ok(output)
     }
