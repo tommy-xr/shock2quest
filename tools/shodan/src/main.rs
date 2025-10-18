@@ -3,13 +3,13 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
+mod claude_code;
 mod config;
 mod error;
 mod git;
-mod prompts;
-mod claude_code;
 mod github;
 mod orchestrator;
+mod prompts;
 
 use config::Config;
 use orchestrator::Orchestrator;
@@ -112,7 +112,10 @@ async fn main() -> Result<()> {
             info!("Checking repository state");
             check_state(&config).await?;
         }
-        Commands::TestPrompt { prompt_file, dry_run } => {
+        Commands::TestPrompt {
+            prompt_file,
+            dry_run,
+        } => {
             info!("Testing prompt: {}", prompt_file.display());
             test_prompt(&config, &prompt_file, dry_run).await?;
         }
@@ -124,11 +127,17 @@ async fn main() -> Result<()> {
             info!("Monitoring PR #{} with timeout: {}", pr_number, timeout);
             monitor_pr(&config, pr_number, &timeout).await?;
         }
-        Commands::CheckPr { pr_number, analyze_failures } => {
+        Commands::CheckPr {
+            pr_number,
+            analyze_failures,
+        } => {
             info!("Checking status of PR #{}", pr_number);
             check_pr(&config, pr_number, analyze_failures).await?;
         }
-        Commands::RunPrompt { prompt_name, dry_run } => {
+        Commands::RunPrompt {
+            prompt_name,
+            dry_run,
+        } => {
             info!("Running prompt: {}", prompt_name);
             run_prompt(&config, &prompt_name, dry_run).await?;
         }
@@ -143,7 +152,7 @@ fn init_logging(verbose: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level)),
         )
         .init();
 
@@ -153,16 +162,22 @@ fn init_logging(verbose: bool) -> Result<()> {
 async fn run_once(config: &Config) -> Result<()> {
     info!("🎯 Executing single orchestration cycle");
 
-    let mut orchestrator = Orchestrator::new(config.clone()).await
+    let mut orchestrator = Orchestrator::new(config.clone())
+        .await
         .context("Failed to create orchestrator")?;
 
-    let cycle = orchestrator.run_once().await
+    let cycle = orchestrator
+        .run_once()
+        .await
         .context("Orchestration cycle failed")?;
 
     info!("✅ Orchestration cycle completed: {}", cycle.id);
     info!("   Prompt: {}", cycle.selected_prompt);
     info!("   Phase: {:?}", cycle.phase);
-    info!("   Duration: {:.2}s", cycle.start_time.elapsed().as_secs_f64());
+    info!(
+        "   Duration: {:.2}s",
+        cycle.start_time.elapsed().as_secs_f64()
+    );
 
     if let Some(pr_number) = cycle.created_pr_number {
         info!("   PR created: #{}", pr_number);
@@ -180,16 +195,22 @@ async fn run_once(config: &Config) -> Result<()> {
 }
 
 async fn run_loop(config: &Config, interval: &str) -> Result<()> {
-    info!("🔄 Starting continuous orchestration loop with interval: {}", interval);
+    info!(
+        "🔄 Starting continuous orchestration loop with interval: {}",
+        interval
+    );
 
     // Override config interval if provided
     let mut config = config.clone();
     config.shodan.interval = interval.to_string();
 
-    let mut orchestrator = Orchestrator::new(config).await
+    let mut orchestrator = Orchestrator::new(config)
+        .await
         .context("Failed to create orchestrator")?;
 
-    orchestrator.start_orchestration().await
+    orchestrator
+        .start_orchestration()
+        .await
         .context("Orchestration loop failed")?;
 
     Ok(())
@@ -205,15 +226,30 @@ async fn check_state(config: &Config) -> Result<()> {
     info!("Git Status:");
     info!("  Current branch: {}", repo_state.git_status.current_branch);
     info!("  Is clean: {}", repo_state.git_status.is_clean);
-    info!("  Uncommitted changes: {}", repo_state.git_status.has_uncommitted_changes);
-    info!("  Untracked files: {}", repo_state.git_status.has_untracked_files);
-    info!("  Ahead of upstream: {}", repo_state.git_status.ahead_of_upstream);
-    info!("  Behind upstream: {}", repo_state.git_status.behind_upstream);
+    info!(
+        "  Uncommitted changes: {}",
+        repo_state.git_status.has_uncommitted_changes
+    );
+    info!(
+        "  Untracked files: {}",
+        repo_state.git_status.has_untracked_files
+    );
+    info!(
+        "  Ahead of upstream: {}",
+        repo_state.git_status.ahead_of_upstream
+    );
+    info!(
+        "  Behind upstream: {}",
+        repo_state.git_status.behind_upstream
+    );
 
     // Display open PRs
     info!("Open Pull Requests: {}", repo_state.open_prs.len());
     for pr in &repo_state.open_prs {
-        info!("  PR #{}: {} ({}) - by {}", pr.number, pr.title, pr.state, pr.author);
+        info!(
+            "  PR #{}: {} ({}) - by {}",
+            pr.number, pr.title, pr.state, pr.author
+        );
         info!("    {} -> {}", pr.head_ref, pr.base_ref);
         info!("    URL: {}", pr.url);
     }
@@ -222,7 +258,10 @@ async fn check_state(config: &Config) -> Result<()> {
     if repo_state.active_claude_sessions.is_empty() {
         info!("Active Claude Code sessions: None");
     } else {
-        info!("Active Claude Code sessions: {}", repo_state.active_claude_sessions.len());
+        info!(
+            "Active Claude Code sessions: {}",
+            repo_state.active_claude_sessions.len()
+        );
         for session in &repo_state.active_claude_sessions {
             info!("  {}", session);
         }
@@ -387,7 +426,10 @@ async fn list_prompts(config: &Config) -> Result<()> {
     if !prompts.is_empty() {
         // Show a random selection example
         let selected = prompts::select_random_prompt(&prompts)?;
-        info!("🎲 Random selection example: {} (weight: {})", selected.name, selected.weight);
+        info!(
+            "🎲 Random selection example: {} (weight: {})",
+            selected.name, selected.weight
+        );
     }
 
     Ok(())
@@ -397,7 +439,8 @@ async fn monitor_pr(config: &Config, pr_number: u32, timeout_str: &str) -> Resul
     info!("Starting PR monitoring for PR #{}", pr_number);
 
     // Parse timeout
-    let timeout_seconds = config.parse_interval(timeout_str)
+    let timeout_seconds = config
+        .parse_interval(timeout_str)
         .context("Failed to parse timeout duration")?;
     let timeout_duration = std::time::Duration::from_secs(timeout_seconds);
 
@@ -413,9 +456,15 @@ async fn monitor_pr(config: &Config, pr_number: u32, timeout_str: &str) -> Resul
         Ok(final_status) => {
             info!("🎉 PR #{} is ready for merge!", pr_number);
             info!("   Final status: ready={}", final_status.is_ready);
-            info!("   Checks passed: {}/{}",
-                  final_status.checks.iter().filter(|c| matches!(c.conclusion, Some(github::CheckConclusion::Success))).count(),
-                  final_status.checks.len());
+            info!(
+                "   Checks passed: {}/{}",
+                final_status
+                    .checks
+                    .iter()
+                    .filter(|c| matches!(c.conclusion, Some(github::CheckConclusion::Success)))
+                    .count(),
+                final_status.checks.len()
+            );
 
             if let Some(true) = final_status.merge_status.mergeable {
                 info!("   ✅ PR is mergeable with no conflicts");
@@ -466,7 +515,10 @@ async fn check_pr(config: &Config, pr_number: u32, analyze_failures: bool) -> Re
     info!("  Mergeable: {:?}", status.merge_status.mergeable);
     info!("  State: {}", status.merge_status.mergeable_state);
     info!("  Has conflicts: {}", status.merge_status.has_conflicts);
-    info!("  Required checks passing: {}", status.merge_status.required_checks_passing);
+    info!(
+        "  Required checks passing: {}",
+        status.merge_status.required_checks_passing
+    );
 
     // Display CI checks
     info!("CI Checks ({}):", status.checks.len());
@@ -512,7 +564,10 @@ async fn check_pr(config: &Config, pr_number: u32, analyze_failures: bool) -> Re
                         warn!("  {}: {}", i + 1, log);
                     }
                     if analysis.error_logs.len() > 10 {
-                        warn!("  ... and {} more error lines", analysis.error_logs.len() - 10);
+                        warn!(
+                            "  ... and {} more error lines",
+                            analysis.error_logs.len() - 10
+                        );
                     }
                 }
 
@@ -539,7 +594,10 @@ async fn run_prompt(config: &Config, prompt_name: &str, dry_run: bool) -> Result
     let prompt_file = prompts_dir.join(format!("{}.md", prompt_name));
 
     if !prompt_file.exists() {
-        return Err(anyhow::anyhow!("Prompt file not found: {}", prompt_file.display()));
+        return Err(anyhow::anyhow!(
+            "Prompt file not found: {}",
+            prompt_file.display()
+        ));
     }
 
     // Delegate to existing test_prompt function

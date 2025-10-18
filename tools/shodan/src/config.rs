@@ -131,8 +131,12 @@ impl Config {
             self.shodan.permission_mode = val;
         }
         if let Ok(val) = std::env::var("SHODAN_SHOW_CLAUDE_OUTPUT") {
-            self.shodan.show_claude_output = val.parse()
-                .with_context(|| format!("Invalid boolean value for SHODAN_SHOW_CLAUDE_OUTPUT: {}", val))?;
+            self.shodan.show_claude_output = val.parse().with_context(|| {
+                format!(
+                    "Invalid boolean value for SHODAN_SHOW_CLAUDE_OUTPUT: {}",
+                    val
+                )
+            })?;
         }
 
         // Prompt weights overrides (format: "file1=weight1,file2=weight2")
@@ -145,7 +149,8 @@ impl Config {
                     if parts.len() != 2 {
                         return Err(anyhow::anyhow!("Invalid prompt weight format: {}", pair));
                     }
-                    let weight = parts[1].parse::<u32>()
+                    let weight = parts[1]
+                        .parse::<u32>()
                         .with_context(|| format!("Invalid weight value: {}", parts[1]))?;
                     Ok((parts[0].to_string(), weight))
                 })
@@ -178,8 +183,7 @@ impl Config {
 
     /// Save configuration to file
     pub async fn save(&self, path: &Path) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         fs::write(path, content)
             .await
@@ -246,14 +250,16 @@ fn parse_duration(duration_str: &str) -> Result<u64> {
         return Err(anyhow::anyhow!("Empty duration string"));
     }
 
-    let (number_part, unit_part) = if let Some(pos) = duration_str.find(|c: char| c.is_alphabetic()) {
+    let (number_part, unit_part) = if let Some(pos) = duration_str.find(|c: char| c.is_alphabetic())
+    {
         (&duration_str[..pos], &duration_str[pos..])
     } else {
         // If no unit, assume seconds
         (duration_str, "s")
     };
 
-    let number: u64 = number_part.parse()
+    let number: u64 = number_part
+        .parse()
         .with_context(|| format!("Invalid number in duration: {}", number_part))?;
 
     let multiplier = match unit_part.to_lowercase().as_str() {
@@ -285,6 +291,9 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.shodan.interval, "1h");
         assert_eq!(config.shodan.main_branch, "main");
-        assert!(config.shodan.prompt_weights.contains_key("iterate-on-projects.md"));
+        assert!(config
+            .shodan
+            .prompt_weights
+            .contains_key("iterate-on-projects.md"));
     }
 }

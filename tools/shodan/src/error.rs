@@ -42,10 +42,7 @@ pub enum ShodanError {
     },
 
     /// Prompt related errors
-    Prompt {
-        prompt_file: String,
-        issue: String,
-    },
+    Prompt { prompt_file: String, issue: String },
 
     /// PR monitoring failures
     PrMonitoring {
@@ -75,10 +72,7 @@ pub enum ShodanError {
     },
 
     /// Validation failures
-    Validation {
-        item: String,
-        reason: String,
-    },
+    Validation { item: String, reason: String },
 }
 
 impl fmt::Display for ShodanError {
@@ -87,7 +81,11 @@ impl fmt::Display for ShodanError {
             ShodanError::Config { context, .. } => {
                 write!(f, "Configuration error: {}", context)
             }
-            ShodanError::Git { operation, exit_code, stderr } => {
+            ShodanError::Git {
+                operation,
+                exit_code,
+                stderr,
+            } => {
                 write!(f, "Git operation '{}' failed", operation)?;
                 if let Some(code) = exit_code {
                     write!(f, " (exit code: {})", code)?;
@@ -97,31 +95,56 @@ impl fmt::Display for ShodanError {
                 }
                 Ok(())
             }
-            ShodanError::GitHub { operation, retry_possible, .. } => {
+            ShodanError::GitHub {
+                operation,
+                retry_possible,
+                ..
+            } => {
                 write!(f, "GitHub operation '{}' failed", operation)?;
                 if *retry_possible {
                     write!(f, " (retry possible)")?;
                 }
                 Ok(())
             }
-            ShodanError::Network { operation, retry_after, .. } => {
+            ShodanError::Network {
+                operation,
+                retry_after,
+                ..
+            } => {
                 write!(f, "Network error during '{}'", operation)?;
                 if let Some(duration) = retry_after {
                     write!(f, " (retry after {:?})", duration)?;
                 }
                 Ok(())
             }
-            ShodanError::ClaudeCode { session_id, phase, timeout, .. } => {
+            ShodanError::ClaudeCode {
+                session_id,
+                phase,
+                timeout,
+                ..
+            } => {
                 if *timeout {
-                    write!(f, "Claude Code session '{}' timed out during phase '{}'", session_id, phase)
+                    write!(
+                        f,
+                        "Claude Code session '{}' timed out during phase '{}'",
+                        session_id, phase
+                    )
                 } else {
-                    write!(f, "Claude Code session '{}' failed during phase '{}'", session_id, phase)
+                    write!(
+                        f,
+                        "Claude Code session '{}' failed during phase '{}'",
+                        session_id, phase
+                    )
                 }
             }
             ShodanError::Prompt { prompt_file, issue } => {
                 write!(f, "Prompt error in '{}': {}", prompt_file, issue)
             }
-            ShodanError::PrMonitoring { pr_number, issue, recoverable } => {
+            ShodanError::PrMonitoring {
+                pr_number,
+                issue,
+                recoverable,
+            } => {
                 write!(f, "PR #{} monitoring failed: {}", pr_number, issue)?;
                 if *recoverable {
                     write!(f, " (recoverable)")?;
@@ -131,15 +154,31 @@ impl fmt::Display for ShodanError {
             ShodanError::Io { operation, source } => {
                 write!(f, "I/O error during '{}': {}", operation, source)
             }
-            ShodanError::Orchestration { cycle_id, phase, should_retry, .. } => {
-                write!(f, "Orchestration cycle '{}' failed during phase '{}'", cycle_id, phase)?;
+            ShodanError::Orchestration {
+                cycle_id,
+                phase,
+                should_retry,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Orchestration cycle '{}' failed during phase '{}'",
+                    cycle_id, phase
+                )?;
                 if *should_retry {
                     write!(f, " (will retry)")?;
                 }
                 Ok(())
             }
-            ShodanError::Timeout { operation, duration } => {
-                write!(f, "Operation '{}' timed out after {:?}", operation, duration)
+            ShodanError::Timeout {
+                operation,
+                duration,
+            } => {
+                write!(
+                    f,
+                    "Operation '{}' timed out after {:?}",
+                    operation, duration
+                )
             }
             ShodanError::Validation { item, reason } => {
                 write!(f, "Validation failed for '{}': {}", item, reason)
@@ -152,7 +191,10 @@ impl std::error::Error for ShodanError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ShodanError::Config { source, .. } => Some(source.as_ref()),
-            ShodanError::Network { source: Some(source), .. } => Some(source.as_ref()),
+            ShodanError::Network {
+                source: Some(source),
+                ..
+            } => Some(source.as_ref()),
             ShodanError::ClaudeCode { source, .. } => Some(source.as_ref()),
             ShodanError::Io { source, .. } => Some(source),
             ShodanError::Orchestration { source, .. } => Some(source.as_ref()),
@@ -172,7 +214,10 @@ impl ShodanError {
             ShodanError::Timeout { .. } => true,
             ShodanError::Io { source, .. } => {
                 // Some I/O errors are retryable (e.g., temporary file locks)
-                matches!(source.kind(), io::ErrorKind::Interrupted | io::ErrorKind::TimedOut)
+                matches!(
+                    source.kind(),
+                    io::ErrorKind::Interrupted | io::ErrorKind::TimedOut
+                )
             }
             _ => false,
         }
@@ -289,7 +334,8 @@ where
                     "Operation failed, will retry"
                 );
 
-                let delay = error.retry_delay()
+                let delay = error
+                    .retry_delay()
                     .unwrap_or_else(|| config.delay_for_attempt(attempt));
 
                 tokio::time::sleep(delay).await;
