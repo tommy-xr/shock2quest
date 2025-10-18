@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+use crate::agent::AgentKind;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub shodan: ShodanConfig,
@@ -14,6 +16,8 @@ pub struct ShodanConfig {
     // Scheduling
     pub interval: String,
     pub max_session_time: String,
+    #[serde(default)]
+    pub default_agent: AgentKind,
 
     // Git settings
     pub main_branch: String,
@@ -44,6 +48,7 @@ impl Default for ShodanConfig {
         Self {
             interval: "1h".to_string(),
             max_session_time: "4h".to_string(),
+            default_agent: AgentKind::Claude,
             main_branch: "main".to_string(),
             sync_command: "gt sync".to_string(),
             check_interval: "5m".to_string(),
@@ -103,6 +108,11 @@ impl Config {
         }
         if let Ok(val) = std::env::var("SHODAN_MAX_SESSION_TIME") {
             self.shodan.max_session_time = val;
+        }
+        if let Ok(val) = std::env::var("SHODAN_AGENT") {
+            self.shodan.default_agent = val
+                .parse()
+                .with_context(|| format!("Invalid SHODAN_AGENT value: {}", val))?;
         }
 
         // Git overrides

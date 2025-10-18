@@ -38,7 +38,7 @@ pub struct GitStatus {
 pub struct RepositoryState {
     pub git_status: GitStatus,
     pub open_prs: Vec<PullRequest>,
-    pub active_claude_sessions: Vec<String>,
+    pub active_sessions: Vec<String>,
 }
 
 /// Helper function for robust git command execution
@@ -309,13 +309,15 @@ pub async fn check_pr_status(pr_number: u32) -> Result<PullRequest> {
     Ok(pr)
 }
 
-/// Detect active Claude Code sessions by checking for running processes
-pub async fn detect_active_claude_code_sessions() -> Result<Vec<String>> {
-    debug!("Detecting active Claude Code sessions");
+/// Detect active agent sessions by checking for running processes
+pub async fn detect_active_sessions(process_identifier: &str) -> Result<Vec<String>> {
+    debug!(
+        "Detecting active sessions for process identifier: {}",
+        process_identifier
+    );
 
-    // Look for claude processes
     let output = TokioCommand::new("pgrep")
-        .args(["-f", "claude"])
+        .args(["-f", process_identifier])
         .output()
         .await;
 
@@ -335,9 +337,16 @@ pub async fn detect_active_claude_code_sessions() -> Result<Vec<String>> {
     };
 
     if sessions.is_empty() {
-        debug!("No active Claude Code sessions detected");
+        debug!(
+            "No active sessions detected for identifier: {}",
+            process_identifier
+        );
     } else {
-        debug!("Found {} active Claude Code sessions", sessions.len());
+        debug!(
+            "Found {} active sessions for identifier: {}",
+            sessions.len(),
+            process_identifier
+        );
     }
 
     Ok(sessions)
@@ -419,7 +428,10 @@ async fn get_upstream_comparison() -> Result<(u32, u32)> {
 }
 
 /// Ensure working directory is clean and safe for automation
-pub async fn ensure_clean_working_directory(config: &Config) -> Result<()> {
+pub async fn ensure_clean_working_directory(
+    config: &Config,
+    process_identifier: &str,
+) -> Result<()> {
     info!("Ensuring clean working directory");
 
     let git_status = check_uncommitted_changes().await?;
@@ -434,12 +446,12 @@ pub async fn ensure_clean_working_directory(config: &Config) -> Result<()> {
         warn!("Repository has untracked files, but continuing anyway");
     }
 
-    // Check for active Claude Code sessions
-    let active_sessions = detect_active_claude_code_sessions().await?;
+    // Check for active automation sessions
+    let active_sessions = detect_active_sessions(process_identifier).await?;
     if !active_sessions.is_empty() {
         return Err(anyhow::anyhow!(
-            "Active Claude Code sessions detected: {:?}. Please close them before running Shodan.",
-            active_sessions
+            "Active sessions detected for identifier '{}': {:?}. Please close them before running Shodan.",
+            process_identifier, active_sessions
         ));
     }
 
@@ -460,17 +472,17 @@ pub async fn ensure_clean_working_directory(config: &Config) -> Result<()> {
 }
 
 /// Get complete repository state
-pub async fn get_repository_state() -> Result<RepositoryState> {
+pub async fn get_repository_state(process_identifier: &str) -> Result<RepositoryState> {
     debug!("Getting complete repository state");
 
     let git_status = check_uncommitted_changes().await?;
     let open_prs = get_open_prs().await?;
-    let active_claude_sessions = detect_active_claude_code_sessions().await?;
+    let active_sessions = detect_active_sessions(process_identifier).await?;
 
     let state = RepositoryState {
         git_status,
         open_prs,
-        active_claude_sessions,
+        active_sessions,
     };
 
     debug!("Repository state retrieved successfully");

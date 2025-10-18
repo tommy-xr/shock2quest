@@ -1,4 +1,6 @@
+pub mod agent;
 pub mod claude_code;
+pub mod codex;
 pub mod config;
 pub mod error;
 pub mod git;
@@ -6,7 +8,9 @@ pub mod github;
 pub mod orchestrator;
 pub mod prompts;
 
-pub use claude_code::{ClaudeCodeManager, ClaudeCodeOutput, SessionStatus};
+pub use agent::{AgentKind, AgentOutput, AutomationAgent, GitChanges, SessionStatus};
+pub use claude_code::ClaudeCodeManager;
+pub use codex::CodexCodeManager;
 pub use config::Config;
 pub use error::{retry_operation, RetryConfig, ShodanError, ShodanResult};
 pub use git::{GitStatus, PullRequest, RepositoryState};
