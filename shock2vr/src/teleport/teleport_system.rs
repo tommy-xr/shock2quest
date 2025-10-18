@@ -6,6 +6,8 @@ use crate::{
     vr_config::Handedness,
 };
 
+use super::trajectory::ArcTrajectory;
+
 /// Configuration for the teleport system
 #[derive(Clone, Debug)]
 pub struct TeleportConfig {
@@ -14,6 +16,9 @@ pub struct TeleportConfig {
     pub arc_gravity: f32,
     pub button_mapping: TeleportButton,
     pub trigger_threshold: f32,
+    pub initial_velocity: f32,
+    pub arc_segments: usize,
+    pub ground_height: f32,
 }
 
 impl Default for TeleportConfig {
@@ -24,6 +29,9 @@ impl Default for TeleportConfig {
             arc_gravity: 9.8,
             button_mapping: TeleportButton::Trigger,
             trigger_threshold: 0.5,
+            initial_velocity: 12.0,
+            arc_segments: 30,
+            ground_height: 0.0,
         }
     }
 }
@@ -43,6 +51,7 @@ pub struct TeleportHandState {
     pub was_button_pressed: bool,
     pub target_position: Option<Vector3<f32>>,
     pub is_valid_target: bool,
+    pub current_trajectory: Option<ArcTrajectory>,
 }
 
 impl Default for TeleportHandState {
@@ -52,6 +61,7 @@ impl Default for TeleportHandState {
             was_button_pressed: false,
             target_position: None,
             is_valid_target: false,
+            current_trajectory: None,
         }
     }
 }
@@ -139,6 +149,7 @@ impl TeleportSystem {
             hand_state.is_active = true;
             hand_state.target_position = None;
             hand_state.is_valid_target = false;
+            hand_state.current_trajectory = None;
         }
 
         // Handle teleport execution on button release
@@ -161,6 +172,7 @@ impl TeleportSystem {
             // Clear state if no valid teleport
             hand_state.target_position = None;
             hand_state.is_valid_target = false;
+            hand_state.current_trajectory = None;
         }
 
         // Update arc trajectory and target while active
@@ -173,18 +185,26 @@ impl TeleportSystem {
 
     /// Update trajectory calculation and target validation
     fn update_teleport_trajectory_static(config: &TeleportConfig, hand: &Hand, hand_state: &mut TeleportHandState) {
-        // For Phase 1, we'll implement a simple forward ray casting
-        // Future phases will implement proper arc physics
+        // Phase 2: Calculate proper parabolic arc trajectory
 
         // Calculate forward direction from hand rotation
         let forward = hand.rotation * Vector3::new(0.0, 0.0, -1.0);
 
-        // Simple ray casting for now - will be replaced with arc physics in Phase 2
-        let target_position = hand.position + forward * config.max_distance;
+        // Calculate arc trajectory using physics
+        let trajectory = ArcTrajectory::calculate(
+            hand.position,
+            forward,
+            config.initial_velocity,
+            config.arc_gravity,
+            config.max_distance,
+            config.arc_segments,
+            config.ground_height,
+        );
 
-        // For Phase 1, assume all positions are valid - Phase 2 will add collision detection
-        hand_state.target_position = Some(target_position);
-        hand_state.is_valid_target = true;
+        // Update hand state with trajectory results
+        hand_state.current_trajectory = Some(trajectory.clone());
+        hand_state.target_position = trajectory.landing_position;
+        hand_state.is_valid_target = trajectory.is_valid;
     }
 
     /// Get current teleport state for rendering/UI

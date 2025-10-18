@@ -5,5 +5,7 @@
 // using smooth locomotion.
 
 pub mod teleport_system;
+pub mod trajectory;
 
-pub use teleport_system::{TeleportSystem, TeleportConfig, TeleportButton};
+pub use teleport_system::{TeleportSystem, TeleportConfig, TeleportButton, TeleportHandState};
+pub use trajectory::ArcTrajectory;
