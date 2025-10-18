@@ -8,6 +8,7 @@ use shipyard::EntityId;
 use std::path::{Path, PathBuf};
 
 use crate::{
+    gui::{GuiComponent, ButtonHoverBehavior},
     input_context::InputContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
@@ -19,6 +20,17 @@ use super::{
     GlobalContext,
 };
 
+/// Events that can be triggered by asset validation UI components
+#[derive(Debug, Clone)]
+pub enum AssetValidationEvent {
+    /// User clicked continue button (transition to main menu)
+    Continue,
+    /// User requested validation retry
+    Retry,
+    /// User requested help/instructions
+    ShowHelp,
+}
+
 /// Asset validation mission that checks for required game files and guides user setup.
 /// This mission runs at startup to ensure all necessary assets are available before
 /// allowing the user to proceed to the main menu or gameplay.
@@ -26,7 +38,7 @@ pub struct AssetValidationMission {
     /// Current state of the validation process
     validation_state: AssetValidationState,
     /// UI elements to display validation progress and instructions
-    ui_elements: Vec<GuiElement>,
+    ui_elements: Vec<GuiComponent<AssetValidationEvent>>,
     /// Background scene objects for visual appeal
     background_scene: Vec<SceneObject>,
     /// Configuration for which assets to check
@@ -85,35 +97,6 @@ struct AssetRequirement {
     min_size: Option<u64>,
 }
 
-/// UI element for displaying validation information
-#[derive(Debug, Clone)]
-struct GuiElement {
-    /// Type of UI element
-    element_type: GuiElementType,
-    /// Position in 3D space
-    position: Vector3<f32>,
-    /// Text content (if applicable)
-    text: String,
-    /// Color (RGBA)
-    color: [f32; 4],
-}
-
-/// Types of GUI elements
-#[derive(Debug, Clone)]
-enum GuiElementType {
-    /// Title text
-    Title,
-    /// Status message
-    Status,
-    /// Progress indicator
-    Progress { current: f32, total: f32 },
-    /// Error message
-    Error,
-    /// Instruction text
-    Instruction,
-    /// Continue button (when validation successful)
-    ContinueButton,
-}
 
 impl AssetValidationMission {
     /// Create a new asset validation mission with default configuration
@@ -209,100 +192,110 @@ impl AssetValidationMission {
     fn update_ui_elements(&mut self) {
         self.ui_elements.clear();
 
-        // Title
-        self.ui_elements.push(GuiElement {
-            element_type: GuiElementType::Title,
-            position: Vector3::new(0.0, 1.5, 0.0),
+        // Title text
+        self.ui_elements.push(GuiComponent::Text {
+            position: Vector2::new(0.0, 0.8),
+            size: Vector2::new(0.8, 0.1),
+            font: "default_font".to_string(),
             text: "System Shock 2 VR - Asset Validation".to_string(),
-            color: [1.0, 1.0, 1.0, 1.0],
+            alpha: 1.0,
         });
 
         match &self.validation_state {
             AssetValidationState::Checking { progress } => {
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Status,
-                    position: Vector3::new(0.0, 0.5, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.5),
+                    size: Vector2::new(0.6, 0.08),
+                    font: "default_font".to_string(),
                     text: "Checking game assets...".to_string(),
-                    color: [0.8, 0.8, 1.0, 1.0],
+                    alpha: 1.0,
                 });
 
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Progress {
-                        current: *progress,
-                        total: 1.0,
-                    },
-                    position: Vector3::new(0.0, 0.0, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.3),
+                    size: Vector2::new(0.4, 0.06),
+                    font: "default_font".to_string(),
                     text: format!("Progress: {:.0}%", progress * 100.0),
-                    color: [0.0, 1.0, 0.0, 1.0],
+                    alpha: 1.0,
                 });
             }
 
             AssetValidationState::MissingAssets { missing_files } => {
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Error,
-                    position: Vector3::new(0.0, 0.5, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.6),
+                    size: Vector2::new(0.6, 0.08),
+                    font: "default_font".to_string(),
                     text: "Missing Required Assets".to_string(),
-                    color: [1.0, 0.3, 0.3, 1.0],
+                    alpha: 1.0,
                 });
 
                 let required_missing: Vec<_> = missing_files.iter().filter(|asset| asset.required).collect();
                 if !required_missing.is_empty() {
-                    self.ui_elements.push(GuiElement {
-                        element_type: GuiElementType::Instruction,
-                        position: Vector3::new(0.0, 0.0, 0.0),
+                    self.ui_elements.push(GuiComponent::Text {
+                        position: Vector2::new(0.0, 0.4),
+                        size: Vector2::new(0.8, 0.06),
+                        font: "default_font".to_string(),
                         text: "Please ensure the following files are in your game directory:".to_string(),
-                        color: [1.0, 1.0, 1.0, 1.0],
+                        alpha: 1.0,
                     });
 
                     for (i, asset) in required_missing.iter().enumerate() {
-                        self.ui_elements.push(GuiElement {
-                            element_type: GuiElementType::Instruction,
-                            position: Vector3::new(0.0, -0.5 - (i as f32 * 0.3), 0.0),
+                        self.ui_elements.push(GuiComponent::Text {
+                            position: Vector2::new(0.0, 0.2 - (i as f32 * 0.08)),
+                            size: Vector2::new(0.9, 0.05),
+                            font: "default_font".to_string(),
                             text: format!("• {} ({})", asset.path.display(), asset.description),
-                            color: [1.0, 0.8, 0.8, 1.0],
+                            alpha: 1.0,
                         });
                     }
                 }
             }
 
             AssetValidationState::Valid => {
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Status,
-                    position: Vector3::new(0.0, 0.5, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.5),
+                    size: Vector2::new(0.7, 0.08),
+                    font: "default_font".to_string(),
                     text: "All assets validated successfully!".to_string(),
-                    color: [0.3, 1.0, 0.3, 1.0],
+                    alpha: 1.0,
                 });
 
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::ContinueButton,
-                    position: Vector3::new(0.0, -0.5, 0.0),
-                    text: "Press trigger to continue".to_string(),
-                    color: [0.8, 1.0, 0.8, 1.0],
+                self.ui_elements.push(GuiComponent::Button {
+                    position: Vector2::new(0.0, 0.2),
+                    size: Vector2::new(0.4, 0.1),
+                    texture: "button_texture".to_string(),
+                    on_click: Some(AssetValidationEvent::Continue),
+                    on_grab: None,
+                    hover: ButtonHoverBehavior::None,
+                    alpha: 1.0,
                 });
             }
 
             AssetValidationState::Error { message } => {
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Error,
-                    position: Vector3::new(0.0, 0.5, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.6),
+                    size: Vector2::new(0.5, 0.08),
+                    font: "default_font".to_string(),
                     text: "Validation Error".to_string(),
-                    color: [1.0, 0.3, 0.3, 1.0],
+                    alpha: 1.0,
                 });
 
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Instruction,
-                    position: Vector3::new(0.0, 0.0, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.4),
+                    size: Vector2::new(0.8, 0.06),
+                    font: "default_font".to_string(),
                     text: message.clone(),
-                    color: [1.0, 0.8, 0.8, 1.0],
+                    alpha: 1.0,
                 });
             }
 
             AssetValidationState::TransitionRequested => {
-                self.ui_elements.push(GuiElement {
-                    element_type: GuiElementType::Status,
-                    position: Vector3::new(0.0, 0.0, 0.0),
+                self.ui_elements.push(GuiComponent::Text {
+                    position: Vector2::new(0.0, 0.5),
+                    size: Vector2::new(0.6, 0.08),
+                    font: "default_font".to_string(),
                     text: "Transitioning to main menu...".to_string(),
-                    color: [1.0, 1.0, 1.0, 1.0],
+                    alpha: 1.0,
                 });
             }
         }
@@ -386,9 +379,9 @@ impl Mission for AssetValidationMission {
         _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         // Convert UI elements to scene objects
-        let mut scene_objects = self.background_scene.clone();
+        let scene_objects = self.background_scene.clone();
 
-        // TODO: Convert GuiElement to SceneObject using existing GUI system
+        // UI elements are now using the existing GuiComponent system
         // This will be implemented when integrating with the actual GUI rendering system
 
         (scene_objects, self.camera_position, self.camera_rotation)
@@ -490,9 +483,9 @@ mod tests {
         mission.update_ui_elements();
         assert!(!mission.ui_elements.is_empty());
 
-        // Should have title element
+        // Should have title element (text component with title text)
         assert!(mission.ui_elements.iter().any(|element| {
-            matches!(element.element_type, GuiElementType::Title)
+            matches!(element, GuiComponent::Text { text, .. } if text.contains("System Shock 2 VR"))
         }));
     }
 
