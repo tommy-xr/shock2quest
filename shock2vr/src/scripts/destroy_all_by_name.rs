@@ -1,5 +1,5 @@
-use dark::properties::{PropConsumeType, PropSymName};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
+use dark::properties::PropConsumeType;
+use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 

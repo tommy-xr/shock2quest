@@ -111,9 +111,9 @@ pub fn create<T: Vertex>(raw_vertices: Vec<T>) -> Mesh {
     // uncomment this call to draw in wireframe polygons.
     Mesh {
         triangle_count,
-        vao: vao,
-        vbo: vbo,
-        ebo: ebo,
+        vao,
+        vbo,
+        ebo,
     }
 }
 

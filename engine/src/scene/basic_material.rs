@@ -88,7 +88,7 @@ where
         world_matrix: &Matrix4<f32>,
     ) {
         let (shader_program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
-        self.diffuse_texture.bind0(&render_context);
+        self.diffuse_texture.bind0(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
 
@@ -110,7 +110,7 @@ where
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &Box<dyn crate::file_system::Storage>) {
+    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------

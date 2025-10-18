@@ -35,7 +35,7 @@ impl AbstractAssetPath for MultipleAssetPaths {
             }
         }
 
-        return false;
+        false
     }
 
     fn get_reader(
@@ -55,7 +55,7 @@ impl AbstractAssetPath for MultipleAssetPaths {
                 return reader;
             }
         }
-        return None;
+        None
     }
 }
 

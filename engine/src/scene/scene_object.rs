@@ -217,7 +217,7 @@ impl SceneObject {
         if !self.material.borrow().has_initialized() {
             self.material
                 .borrow_mut()
-                .initialize(engine_context.is_opengl_es, &engine_context.storage);
+                .initialize(engine_context.is_opengl_es, &*engine_context.storage);
         }
 
         let xform = self.transform * self.local_transform;
@@ -258,7 +258,7 @@ impl SceneObject {
         if !self.material.borrow().has_initialized() {
             self.material
                 .borrow_mut()
-                .initialize(engine_context.is_opengl_es, &engine_context.storage);
+                .initialize(engine_context.is_opengl_es, &*engine_context.storage);
         }
 
         let xform = self.transform * self.local_transform;
@@ -315,7 +315,7 @@ impl SceneObject {
             geometry: self.geometry.clone(),
             transform: self.transform,
             local_transform: self.local_transform,
-            skinning_data: self.skinning_data.clone(),
+            skinning_data: self.skinning_data,
         }
     }
 }

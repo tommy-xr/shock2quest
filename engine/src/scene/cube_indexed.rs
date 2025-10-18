@@ -87,9 +87,9 @@ pub fn create() -> CubeIndexed {
     // uncomment this call to draw in wireframe polygons.
     // gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
     CubeIndexed {
-        vao: vao,
-        vbo: vbo,
-        ebo: ebo,
+        vao,
+        vbo,
+        ebo,
     }
 }
 

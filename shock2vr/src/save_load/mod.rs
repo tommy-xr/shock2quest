@@ -12,7 +12,6 @@ use std::{
 };
 
 use dark::properties::{Link, Links};
-use serde::Serialize;
 use shipyard::{EntitiesView, EntityId, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{

@@ -1,10 +1,10 @@
 use cgmath::{vec4, Deg};
 use dark::properties::PropPosition;
 
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
-    mission::PlayerInfo, physics::PhysicsWorld, scripts::Effect, time::Time, util::vec3_to_point3,
+    physics::PhysicsWorld, scripts::Effect, time::Time, util::vec3_to_point3,
 };
 
 use super::{Steering, SteeringOutput, SteeringStrategy};

@@ -5,6 +5,9 @@ use shipyard::{Component, EntityId, IntoIter, View, ViewMut, World};
 
 use crate::runtime_props::RuntimePropTransform;
 
+/// Invalid/null template ID used when no valid template is assigned
+const INVALID_TEMPLATE_ID: i32 = -1;
+
 #[derive(Component, Clone, Debug, PartialEq)]
 pub struct PlayerInventoryEntity {}
 
@@ -17,7 +20,7 @@ impl PlayerInventoryEntity {
                 scripts: vec!["internal_inventory".to_owned()],
                 inherits: true,
             },
-            PropTemplateId { template_id: 0 }, // TODO: What is a good 'null' template id?
+            PropTemplateId { template_id: INVALID_TEMPLATE_ID },
             PropPosition {
                 position: Vector3::new(0.0, 1.0, 0.0),
                 rotation: cgmath::Quaternion {
@@ -75,3 +78,4 @@ impl PlayerInventoryEntity {
         }
     }
 }
+

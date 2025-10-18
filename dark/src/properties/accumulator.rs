@@ -9,6 +9,3 @@ pub fn latest<T>(_ancestor_value: T, new_value: T) -> T {
     new_value
 }
 
-pub fn oldest<T>(ancestor_value: T, _new_value: T) -> T {
-    ancestor_value
-}

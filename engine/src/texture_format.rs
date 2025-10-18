@@ -15,7 +15,7 @@ pub struct RawTextureData {
 }
 
 pub trait TextureFormat {
-    fn load(&self, buffer: &std::vec::Vec<u8>) -> RawTextureData;
+    fn load(&self, buffer: &[u8]) -> RawTextureData;
 }
 
 pub struct FormatUsingImageCrate {
@@ -23,7 +23,7 @@ pub struct FormatUsingImageCrate {
 }
 
 impl TextureFormat for FormatUsingImageCrate {
-    fn load(&self, buffer: &std::vec::Vec<u8>) -> RawTextureData {
+    fn load(&self, buffer: &[u8]) -> RawTextureData {
         let img = image::load_from_memory_with_format(buffer, self.image_format)
             .expect("Failed to load texture");
         let mut data = img.to_rgba8().into_raw();
@@ -38,7 +38,7 @@ impl TextureFormat for FormatUsingImageCrate {
     }
 }
 
-fn apply_color_key(pixels: &mut Vec<u8>, width: u32, height: u32) {
+fn apply_color_key(pixels: &mut [u8], width: u32, height: u32) {
     for x in 0..width {
         for y in 0..height {
             let pos = (((y * width) + x) * 4u32) as usize;
@@ -61,8 +61,8 @@ fn apply_color_key(pixels: &mut Vec<u8>, width: u32, height: u32) {
 pub struct PcxFormat {}
 
 impl TextureFormat for PcxFormat {
-    fn load(&self, buffer: &std::vec::Vec<u8>) -> RawTextureData {
-        let mut pcx = pcx::Reader::new(buffer.as_slice()).unwrap();
+    fn load(&self, buffer: &[u8]) -> RawTextureData {
+        let mut pcx = pcx::Reader::new(buffer).unwrap();
         let width = pcx.width() as u32;
         let height = pcx.height() as u32;
         trace!(
