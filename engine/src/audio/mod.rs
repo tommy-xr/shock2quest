@@ -152,21 +152,21 @@ where
     pub fn set_background_music(
         &mut self,
         background_music_player: Box<dyn BackgroundMusic<TCue>>,
-    ) -> () {
+    ) {
         self.background_music_player = Some(background_music_player);
         self.next_music_cue = None;
     }
 
-    pub fn stop_background_music(&mut self) -> () {
+    pub fn stop_background_music(&mut self) {
         self.background_music_player = None;
         self.next_music_cue = None;
     }
 
-    pub fn set_background_music_cue(&mut self, cue: TCue) -> () {
+    pub fn set_background_music_cue(&mut self, cue: TCue) {
         self.next_music_cue = Some(cue)
     }
 
-    pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) -> () {
+    pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) {
         let sink = rodio::Sink::try_new(&self.handle).unwrap();
         clip.add_to_sink(&sink);
         sink.set_volume(0.2);
@@ -320,13 +320,13 @@ pub struct AudioClip {
 }
 
 impl AudioClip {
-    pub fn add_to_spatial_sink(&self, sink: &SpatialSink) -> () {
+    pub fn add_to_spatial_sink(&self, sink: &SpatialSink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
             SourceType::Raw(source) => sink.append(source.clone()),
         }
     }
-    pub fn add_to_sink(&self, sink: &Sink) -> () {
+    pub fn add_to_sink(&self, sink: &Sink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
             SourceType::Raw(source) => sink.append(source.clone()),
@@ -351,7 +351,7 @@ impl AudioClip {
 pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
     handle: AudioHandle,
-) -> () {
+) {
     let maybe_sink = context.handle_to_sink.remove(&handle.id);
 
     if let Some(sink) = maybe_sink {
