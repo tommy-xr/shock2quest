@@ -221,35 +221,61 @@ impl CodexCodeManager {
 
     /// Execute Codex Code as a subprocess
     async fn execute_codex_code(&self, input: &CodexCodeInput) -> Result<Child> {
-        debug!("Executing Codex Code with text input and JSON output");
-        let output_format = if self.config.shodan.show_claude_output {
-            "text"
-        } else {
-            "json"
-        };
-        info!(
-            "Codex Code command: codex --print --output-format={} --permission-mode={}",
-            output_format, self.config.shodan.permission_mode
-        );
+        debug!("Executing Codex Code in non-interactive mode");
 
-        // Prepare text input (Codex Code expects text, not JSON when using --print)
+        // Prepare text input that includes context and the prompt payload
         let input_text = format!(
             "{}\n\n{}",
             input.context.as_deref().unwrap_or(""),
             input.prompt
         );
 
-        // Start Codex Code process with configurable permission mode
-        let permission_arg = format!("--permission-mode={}", self.config.shodan.permission_mode);
-        let mut args = vec!["--print", &permission_arg];
+        let mut args: Vec<String> = vec!["exec".to_string()];
 
-        // Use JSON output for parsing, or text output for visibility
-        if !self.config.shodan.show_claude_output {
-            args.push("--output-format=json");
+        match self.config.shodan.permission_mode.as_str() {
+            "bypassPermissions" => {
+                args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            }
+            "requireApproval" => {
+                args.push("-a".to_string());
+                args.push("untrusted".to_string());
+                args.push("--sandbox".to_string());
+                args.push("workspace-write".to_string());
+            }
+            "onRequest" => {
+                args.push("-a".to_string());
+                args.push("on-request".to_string());
+                args.push("--sandbox".to_string());
+                args.push("workspace-write".to_string());
+            }
+            "never" => {
+                args.push("-a".to_string());
+                args.push("never".to_string());
+                args.push("--sandbox".to_string());
+                args.push("workspace-write".to_string());
+            }
+            _ => {
+                args.push("--full-auto".to_string());
+            }
         }
 
-        let mut process = TokioCommand::new("codex")
-            .args(&args)
+        if let Some(dir) = &input.working_directory {
+            let dir_string = dir.to_string_lossy().to_string();
+            args.push("--cd".to_string());
+            args.push(dir_string);
+        }
+
+        // Provide the prompt through stdin by using "-".
+        args.push("-".to_string());
+
+        info!("Codex Code command: codex {}", args.join(" "));
+
+        let mut command = TokioCommand::new("codex");
+        for arg in &args {
+            command.arg(arg);
+        }
+
+        let mut process = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
