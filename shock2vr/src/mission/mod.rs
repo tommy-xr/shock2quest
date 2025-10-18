@@ -1555,9 +1555,6 @@ impl Mission {
 
         // Add hand spotlights for testing enhanced lighting (experimental feature)
         if options.experimental_features.contains("enhanced_lighting") {
-            // Create spotlight visualization on both hands
-            let spotlight_material = engine::scene::color_material::create(Vector3::new(1.0, 1.0, 0.8));
-
             // Right hand spotlight
             let right_hand_pos = self.right_hand.get_position();
             let right_hand_rot = self.right_hand.get_rotation();
@@ -1565,7 +1562,7 @@ impl Mission {
                 * Matrix4::from(right_hand_rot)
                 * Matrix4::from_scale(0.05);
             let mut right_spotlight = SceneObject::new(
-                spotlight_material.clone(),
+                engine::scene::color_material::create(Vector3::new(1.0, 1.0, 0.8)),
                 Box::new(engine::scene::cube::create())
             );
             right_spotlight.set_transform(spotlight_transform);
@@ -1578,7 +1575,7 @@ impl Mission {
                 * Matrix4::from(left_hand_rot)
                 * Matrix4::from_scale(0.05);
             let mut left_spotlight = SceneObject::new(
-                spotlight_material,
+                engine::scene::color_material::create(Vector3::new(1.0, 1.0, 0.8)),
                 Box::new(engine::scene::cube::create())
             );
             left_spotlight.set_transform(spotlight_transform);
