@@ -40,7 +40,7 @@ Before making any changes to fix PR issues:
 
 **Step 1: List all open PRs and identify those needing attention**
 ```bash
-gh pr list --json number,title,headRefName,state,statusCheckRollup
+gh pr list --json number,title,headRefName,state,statusCheckRollup,mergeable,mergeStateStatus
 ```
 
 **Step 2: For each PR, check for actionable comments using GitHub API**
@@ -127,15 +127,42 @@ gh pr comment 79 --body "✅ You're right, analyzed scope: substantial refactor 
 4. **Merge Readiness**: Assess whether PRs are ready to merge:
 
    - All CI checks passing
-   - No merge conflicts
+   - No merge conflicts (check `mergeable` and `mergeStateStatus` fields)
    - Proper review approvals
    - Documentation updated if needed
+
+### Merge Conflict Detection and Resolution
+
+**Critical Check**: Always verify merge status when listing PRs:
+```bash
+gh pr list --json number,title,mergeable,mergeStateStatus
+```
+
+**Merge Status Values:**
+- `"mergeable": "MERGEABLE"` + `"mergeStateStatus": "CLEAN"` = Ready to merge
+- `"mergeable": "CONFLICTING"` + `"mergeStateStatus": "DIRTY"` = **Has merge conflicts**
+- `"mergeable": "UNKNOWN"` = GitHub still calculating, check again
+
+**When Conflicts Found:**
+1. **Switch to PR branch**: `git checkout <branch-name>`
+2. **Update from remote**: `git pull origin <branch-name>`
+3. **Merge base branch**: `git merge origin/main` (or appropriate base)
+4. **Resolve conflicts**: Edit conflicted files, remove conflict markers
+5. **Test build**: Ensure `cargo build` still works after resolution
+6. **Commit resolution**: `git add . && git commit -m "resolve merge conflicts"`
+7. **Push resolution**: `git push`
 
 5. **Issue Resolution**: Help resolve common PR problems:
    - Fix minor formatting or linting issues
    - Update documentation to match code changes
-   - Resolve simple merge conflicts
+   - **Resolve merge conflicts** (critical blocker)
    - Add missing tests for new functionality
+
+### Priority Order for PR Issues:
+1. **Merge conflicts** (blocks all merging)
+2. **CI build failures** (prevents validation)
+3. **Actionable code review feedback** (blocks approval)
+4. **Documentation/style issues** (quality improvements)
 
 ## After Making Changes
 
