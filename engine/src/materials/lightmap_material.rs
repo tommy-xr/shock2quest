@@ -197,8 +197,7 @@ impl Material for LightmapMaterial {
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &Box<dyn crate::file_system::Storage>) {
-        // Initialize base shader program
+    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------

@@ -422,7 +422,7 @@ fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(&file_system, options);
+    let mut game = shock2vr::Game::init(file_system, options);
 
     let mut camera_pos = vec3(0.0, 5.0, 10.0);
 

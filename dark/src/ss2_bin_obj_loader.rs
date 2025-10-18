@@ -381,7 +381,7 @@ fn build_skeleton_for_obj_mesh(
     sub_object_idx: i32,
     current_parent: Option<u32>,
     bones: &mut Vec<Bone>,
-) -> () {
+) {
     if sub_object_idx == -1 {
         return;
     }

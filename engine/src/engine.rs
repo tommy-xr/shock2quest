@@ -18,5 +18,5 @@ use crate::scene::scene::Scene;
 pub trait Engine {
     fn render(&self, render_context: &EngineRenderContext, scene: &Scene);
 
-    fn get_storage(&self) -> &Box<dyn Storage>;
+    fn get_storage(&self) -> &dyn Storage;
 }

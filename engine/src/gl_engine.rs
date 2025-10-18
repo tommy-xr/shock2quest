@@ -33,8 +33,8 @@ use crate::engine::EngineRenderContext;
 use crate::scene::scene::Scene;
 
 impl Engine for OpenGLEngine {
-    fn get_storage(&self) -> &Box<dyn crate::file_system::Storage> {
-        &self.storage
+    fn get_storage(&self) -> &dyn crate::file_system::Storage {
+        &*self.storage
     }
 
     fn render(&self, render_context: &EngineRenderContext, scene: &Scene) {
@@ -71,7 +71,7 @@ impl Engine for OpenGLEngine {
 
             // let view = head * camera;
 
-            let view = util::compute_view_matrix_from_render_context(&render_context);
+            let view = util::compute_view_matrix_from_render_context(render_context);
 
             //let view = camera_translation * camera_rotation * head_rotation;
 
