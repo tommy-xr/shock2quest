@@ -234,7 +234,10 @@ impl Mission {
         let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
         let mut right_hand = VirtualHand::new(vr_config::Handedness::Right);
         let (left_hand_entity, right_hand_entity, maybe_inventory_entity) =
-            held_item_save_data.instantiate(&mut world);
+            held_item_save_data.instantiate(&mut world).unwrap_or_else(|err| {
+                warn!("Failed to instantiate held items: {}", err);
+                (None, None, None)
+            });
 
         // Instantiate inventory
         // TODO: This should be move into the held_item_save_data
