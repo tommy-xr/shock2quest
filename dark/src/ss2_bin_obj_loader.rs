@@ -348,22 +348,44 @@ pub fn to_vertices(
         if len > 1 && uv_len > 1 {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
+
+                // Get normals with bounds checking and fallback
+                let normal_idx_0 = normal_indices[idx] as usize;
+                let normal_idx_1 = normal_indices[idx + 1] as usize;
+                let normal_idx_2 = normal_indices[0] as usize;
+
+                let normal_0 = if normal_idx_0 < normals.len() {
+                    normals[normal_idx_0]
+                } else {
+                    Vector3::new(0.0, 1.0, 0.0) // Fallback to up normal
+                };
+                let normal_1 = if normal_idx_1 < normals.len() {
+                    normals[normal_idx_1]
+                } else {
+                    Vector3::new(0.0, 1.0, 0.0) // Fallback to up normal
+                };
+                let normal_2 = if normal_idx_2 < normals.len() {
+                    normals[normal_idx_2]
+                } else {
+                    Vector3::new(0.0, 1.0, 0.0) // Fallback to up normal
+                };
+
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
                     uvs[uv_indices[idx] as usize],
-                    normals[normal_indices[idx] as usize],
+                    normal_0,
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[idx + 1] as usize],
                     uvs[uv_indices[idx + 1_usize] as usize],
-                    normals[normal_indices[idx + 1] as usize],
+                    normal_1,
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[0] as usize],
                     uvs[uv_indices[0] as usize],
-                    normals[normal_indices[0] as usize],
+                    normal_2,
                     bone_idx,
                 ));
             }

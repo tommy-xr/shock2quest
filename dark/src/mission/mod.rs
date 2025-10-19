@@ -357,7 +357,7 @@ fn build_vertex(
     vec: Vector3<f32>,
     uv_calc_info: &UVCalculationInfo,
     atlas_info: &TexturePackResult,
-) -> VertexPositionTextureLightmapAtlas {
+) -> VertexPositionTextureLightmapAtlasNormal {
     let lightmap_u;
     let lightmap_v;
     let tex_u;
