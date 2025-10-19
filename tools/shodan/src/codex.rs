@@ -54,10 +54,10 @@ Once the workstream is complete, append a journal entry to .notes/journal.md, co
 - A single sentence for continuous improvement - a piece of data that you learned that would've been useful, a suggestion for prompt improvement, or a tool that could've assisted.
 "#;
 
-const PROCESS_IDENTIFIER: &str = "claude";
+const PROCESS_IDENTIFIER: &str = "codex";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaudeCodeInput {
+pub struct CodexCodeInput {
     pub prompt: String,
     pub context: Option<String>,
     pub working_directory: Option<PathBuf>,
@@ -66,7 +66,7 @@ pub struct ClaudeCodeInput {
 }
 
 #[derive(Debug)]
-pub struct ClaudeCodeSession {
+pub struct CodexCodeSession {
     pub id: String,
     pub start_time: Instant,
     pub prompt: Prompt,
@@ -76,12 +76,12 @@ pub struct ClaudeCodeSession {
     pub timeout: Duration,
 }
 
-pub struct ClaudeCodeManager {
+pub struct CodexCodeManager {
     config: Config,
-    active_sessions: Vec<ClaudeCodeSession>,
+    active_sessions: Vec<CodexCodeSession>,
 }
 
-impl ClaudeCodeManager {
+impl CodexCodeManager {
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -89,13 +89,13 @@ impl ClaudeCodeManager {
         }
     }
 
-    /// Start a new Claude Code session with a prompt
+    /// Start a new Codex Code session with a prompt
     pub async fn start_session(&mut self, prompt: &Prompt) -> Result<String> {
         let session_id = generate_session_id();
-        info!("Starting Claude Code session: {}", session_id);
+        info!("Starting Codex Code session: {}", session_id);
 
-        // Prepare the input for Claude Code
-        let claude_input = self.prepare_input(prompt, &session_id).await?;
+        // Prepare the input for Codex Code
+        let codex_input = self.prepare_input(prompt, &session_id).await?;
 
         // Get timeout from config
         let timeout_duration = Duration::from_secs(
@@ -104,7 +104,7 @@ impl ClaudeCodeManager {
                 .context("Failed to parse session timeout")?,
         );
 
-        let session = ClaudeCodeSession {
+        let session = CodexCodeSession {
             id: session_id.clone(),
             start_time: Instant::now(),
             prompt: prompt.clone(),
@@ -114,27 +114,27 @@ impl ClaudeCodeManager {
             timeout: timeout_duration,
         };
 
-        // Execute Claude Code
-        let process = self.execute_claude_code(&claude_input).await?;
+        // Execute Codex Code
+        let process = self.execute_codex_code(&codex_input).await?;
 
         let mut session = session;
         session.process = Some(process);
         session.status = SessionStatus::Running;
 
         self.active_sessions.push(session);
-        info!("Claude Code session {} started successfully", session_id);
+        info!("Codex Code session {} started successfully", session_id);
 
         Ok(session_id)
     }
 
-    /// Prepare the JSON input for Claude Code
-    async fn prepare_input(&self, prompt: &Prompt, session_id: &str) -> Result<ClaudeCodeInput> {
+    /// Prepare the JSON input for Codex Code
+    async fn prepare_input(&self, prompt: &Prompt, session_id: &str) -> Result<CodexCodeInput> {
         let formatted_prompt = crate::prompts::format_prompt_for_execution(prompt);
 
         // Add context about the repository and current state
         let context = self.generate_context().await?;
 
-        let input = ClaudeCodeInput {
+        let input = CodexCodeInput {
             prompt: formatted_prompt,
             context: Some(context),
             working_directory: Some(std::env::current_dir()?),
@@ -142,11 +142,11 @@ impl ClaudeCodeManager {
             session_id: Some(session_id.to_string()),
         };
 
-        debug!("Prepared Claude Code input for session: {}", session_id);
+        debug!("Prepared Codex Code input for session: {}", session_id);
         Ok(input)
     }
 
-    /// Generate context information for Claude Code
+    /// Generate context information for Codex Code
     async fn generate_context(&self) -> Result<String> {
         let mut context = self.load_system_prompt().await;
 
@@ -219,53 +219,79 @@ impl ClaudeCodeManager {
         DEFAULT_SYSTEM_PROMPT.to_string()
     }
 
-    /// Execute Claude Code as a subprocess
-    async fn execute_claude_code(&self, input: &ClaudeCodeInput) -> Result<Child> {
-        debug!("Executing Claude Code with text input and JSON output");
-        let output_format = if self.config.shodan.show_claude_output {
-            "text"
-        } else {
-            "json"
-        };
-        info!(
-            "Claude Code command: claude --print --output-format={} --permission-mode={}",
-            output_format, self.config.shodan.permission_mode
-        );
+    /// Execute Codex Code as a subprocess
+    async fn execute_codex_code(&self, input: &CodexCodeInput) -> Result<Child> {
+        debug!("Executing Codex Code in non-interactive mode");
 
-        // Prepare text input (Claude Code expects text, not JSON when using --print)
+        // Prepare text input that includes context and the prompt payload
         let input_text = format!(
             "{}\n\n{}",
             input.context.as_deref().unwrap_or(""),
             input.prompt
         );
 
-        // Start Claude Code process with configurable permission mode
-        let permission_arg = format!("--permission-mode={}", self.config.shodan.permission_mode);
-        let mut args = vec!["--print", &permission_arg];
+        let mut args: Vec<String> = vec!["exec".to_string()];
 
-        // Use JSON output for parsing, or text output for visibility
-        if !self.config.shodan.show_claude_output {
-            args.push("--output-format=json");
+        match self.config.shodan.permission_mode.as_str() {
+            "bypassPermissions" => {
+                args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            }
+            "requireApproval" => {
+                args.push("-a".to_string());
+                args.push("untrusted".to_string());
+                args.push("--sandbox".to_string());
+                args.push("workspace-write".to_string());
+            }
+            "onRequest" => {
+                args.push("-a".to_string());
+                args.push("on-request".to_string());
+                args.push("--sandbox".to_string());
+                args.push("workspace-write".to_string());
+            }
+            "never" => {
+                args.push("-a".to_string());
+                args.push("never".to_string());
+                args.push("--sandbox".to_string());
+                args.push("workspace-write".to_string());
+            }
+            _ => {
+                args.push("--full-auto".to_string());
+            }
         }
 
-        let mut process = TokioCommand::new("claude")
-            .args(&args)
+        if let Some(dir) = &input.working_directory {
+            let dir_string = dir.to_string_lossy().to_string();
+            args.push("--cd".to_string());
+            args.push(dir_string);
+        }
+
+        // Provide the prompt through stdin by using "-".
+        args.push("-".to_string());
+
+        info!("Codex Code command: codex {}", args.join(" "));
+
+        let mut command = TokioCommand::new("codex");
+        for arg in &args {
+            command.arg(arg);
+        }
+
+        let mut process = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("Failed to start Claude Code process. Make sure 'claude' command is available in PATH.")?;
+            .context("Failed to start Codex Code process. Make sure 'codex' command is available in PATH.")?;
 
-        // Send input to Claude Code
+        // Send input to Codex Code
         if let Some(mut stdin) = process.stdin.take() {
             stdin
                 .write_all(input_text.as_bytes())
                 .await
-                .context("Failed to write input to Claude Code")?;
+                .context("Failed to write input to Codex Code")?;
             stdin.shutdown().await.context("Failed to close stdin")?;
         }
 
-        debug!("Claude Code process started successfully");
+        debug!("Codex Code process started successfully");
         Ok(process)
     }
 
@@ -286,11 +312,11 @@ impl ClaudeCodeManager {
                 Ok(Some(exit_status)) => {
                     if exit_status.success() {
                         session.status = SessionStatus::Completed;
-                        info!("Claude Code session {} completed successfully", session_id);
+                        info!("Codex Code session {} completed successfully", session_id);
                     } else {
                         session.status = SessionStatus::Failed;
                         warn!(
-                            "Claude Code session {} failed with exit code: {:?}",
+                            "Codex Code session {} failed with exit code: {:?}",
                             session_id,
                             exit_status.code()
                         );
@@ -301,7 +327,7 @@ impl ClaudeCodeManager {
                     session.status = SessionStatus::Running;
                 }
                 Err(e) => {
-                    error!("Error checking Claude Code process: {}", e);
+                    error!("Error checking Codex Code process: {}", e);
                     session.status = SessionStatus::Failed;
                 }
             }
@@ -318,7 +344,7 @@ impl ClaudeCodeManager {
         };
 
         info!(
-            "Waiting for Claude Code session {} to complete (timeout: {:?})",
+            "Waiting for Codex Code session {} to complete (timeout: {:?})",
             session_id, timeout_duration
         );
 
@@ -356,7 +382,7 @@ impl ClaudeCodeManager {
                     let mut line = String::new();
                     while reader.read_line(&mut line).await? > 0 {
                         // Stream stderr in real-time with prefix
-                        eprint!("[Claude stderr] {}", line);
+                        eprint!("[Codex stderr] {}", line);
                         use std::io::Write;
                         std::io::stderr().flush().unwrap();
 
@@ -403,9 +429,9 @@ impl ClaudeCodeManager {
         let execution_time = start_time.elapsed();
         let success = output.2;
 
-        // Parse Claude Code JSON output
-        let claude_output = if success && !output.0.is_empty() {
-            self.parse_claude_output(&output.0, session_id, execution_time)
+        // Parse Codex Code JSON output
+        let codex_output = if success && !output.0.is_empty() {
+            self.parse_codex_output(&output.0, session_id, execution_time)
                 .await?
         } else {
             AgentOutput {
@@ -433,17 +459,17 @@ impl ClaudeCodeManager {
         };
 
         info!(
-            "Claude Code session {} finished in {:.2}s (success: {})",
+            "Codex Code session {} finished in {:.2}s (success: {})",
             session_id,
             execution_time.as_secs_f64(),
             success
         );
 
-        Ok(claude_output)
+        Ok(codex_output)
     }
 
-    /// Parse Claude Code JSON output
-    async fn parse_claude_output(
+    /// Parse Codex Code JSON output
+    async fn parse_codex_output(
         &self,
         output: &str,
         session_id: &str,
@@ -456,7 +482,7 @@ impl ClaudeCodeManager {
 
         // If JSON parsing fails, create a basic output structure
         warn!(
-            "Failed to parse Claude Code output as JSON for session: {}",
+            "Failed to parse Codex Code output as JSON for session: {}",
             session_id
         );
 
@@ -477,11 +503,11 @@ impl ClaudeCodeManager {
         let session = self.find_session_mut(session_id)?;
 
         if let Some(mut process) = session.process.take() {
-            info!("Terminating Claude Code session: {}", session_id);
+            info!("Terminating Codex Code session: {}", session_id);
             process
                 .kill()
                 .await
-                .context("Failed to kill Claude Code process")?;
+                .context("Failed to kill Codex Code process")?;
         }
 
         session.status = SessionStatus::Cancelled;
@@ -489,7 +515,7 @@ impl ClaudeCodeManager {
     }
 
     /// Get all active sessions
-    pub fn get_active_sessions(&self) -> Vec<&ClaudeCodeSession> {
+    pub fn get_active_sessions(&self) -> Vec<&CodexCodeSession> {
         self.active_sessions.iter().collect()
     }
 
@@ -507,7 +533,7 @@ impl ClaudeCodeManager {
     }
 
     /// Find a session by ID
-    fn find_session_mut(&mut self, session_id: &str) -> Result<&mut ClaudeCodeSession> {
+    fn find_session_mut(&mut self, session_id: &str) -> Result<&mut CodexCodeSession> {
         self.active_sessions
             .iter_mut()
             .find(|s| s.id == session_id)
@@ -525,9 +551,9 @@ fn generate_session_id() -> String {
     format!("shodan-{}-{:04x}", timestamp, rand::random::<u16>())
 }
 
-/// Execute a prompt with Claude Code (convenience function)
+/// Execute a prompt with Codex Code (convenience function)
 pub async fn execute_prompt(config: &Config, prompt: &Prompt) -> Result<AgentOutput> {
-    let mut manager = ClaudeCodeManager::new(config.clone());
+    let mut manager = CodexCodeManager::new(config.clone());
     let session_id = manager.start_session(prompt).await?;
     manager.wait_for_completion(&session_id).await
 }
@@ -545,9 +571,9 @@ fn find_repo_root() -> Option<PathBuf> {
 }
 
 #[async_trait]
-impl AutomationAgent for ClaudeCodeManager {
+impl AutomationAgent for CodexCodeManager {
     fn display_name(&self) -> &'static str {
-        "Claude Code"
+        "Codex Code"
     }
 
     fn process_identifier(&self) -> &'static str {
@@ -555,15 +581,15 @@ impl AutomationAgent for ClaudeCodeManager {
     }
 
     async fn start_session(&mut self, prompt: &Prompt) -> Result<String> {
-        ClaudeCodeManager::start_session(self, prompt).await
+        CodexCodeManager::start_session(self, prompt).await
     }
 
     async fn wait_for_completion(&mut self, session_id: &str) -> Result<AgentOutput> {
-        ClaudeCodeManager::wait_for_completion(self, session_id).await
+        CodexCodeManager::wait_for_completion(self, session_id).await
     }
 
     fn cleanup_completed_sessions(&mut self) {
-        ClaudeCodeManager::cleanup_completed_sessions(self);
+        CodexCodeManager::cleanup_completed_sessions(self);
     }
 }
 
@@ -585,7 +611,7 @@ mod tests {
     #[tokio::test]
     async fn test_prepare_input() {
         let config = crate::config::Config::default();
-        let manager = ClaudeCodeManager::new(config);
+        let manager = CodexCodeManager::new(config);
 
         let prompt = Prompt {
             name: "test.md".to_string(),

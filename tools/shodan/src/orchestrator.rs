@@ -4,16 +4,18 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
-use crate::claude_code::{ClaudeCodeManager, ClaudeCodeOutput};
+use crate::agent::{AgentKind, AgentOutput, AutomationAgent};
+use crate::claude_code::ClaudeCodeManager;
+use crate::codex::CodexCodeManager;
 use crate::config::Config;
-use crate::git::{detect_active_claude_code_sessions, ensure_clean_working_directory};
+use crate::git::{detect_active_sessions, ensure_clean_working_directory};
 use crate::github::PRMonitor;
 use crate::prompts::{discover_prompts, select_random_prompt, Prompt};
 
-/// Main orchestrator that manages the autonomous Claude Code execution cycle
+/// Main orchestrator that manages the autonomous agent execution cycle
 pub struct Orchestrator {
     config: Config,
-    claude_manager: ClaudeCodeManager,
+    agent: Box<dyn AutomationAgent>,
     pr_monitor: PRMonitor,
     state: OrchestrationState,
     available_prompts: Vec<Prompt>,
@@ -35,7 +37,7 @@ pub struct OrchestrationCycle {
     pub id: String,
     pub start_time: Instant,
     pub selected_prompt: String,
-    pub claude_session_id: Option<String>,
+    pub agent_session_id: Option<String>,
     pub created_pr_number: Option<u32>,
     pub phase: CyclePhase,
     pub execution_log: Vec<String>,
@@ -47,7 +49,7 @@ pub enum CyclePhase {
     Initializing,
     CheckingPrerequisites,
     SelectingPrompt,
-    ExecutingClaude,
+    ExecutingAgent,
     MonitoringPR,
     WaitingForCI,
     Completed,
@@ -56,9 +58,14 @@ pub enum CyclePhase {
 
 impl Orchestrator {
     /// Create a new orchestrator instance
-    pub async fn new(config: Config) -> Result<Self> {
-        let claude_manager = ClaudeCodeManager::new(config.clone());
+    pub async fn new(config: Config, agent_kind: AgentKind) -> Result<Self> {
+        let agent_config = config.clone();
         let pr_monitor = PRMonitor::new(config.clone());
+
+        let agent: Box<dyn AutomationAgent> = match agent_kind {
+            AgentKind::Claude => Box::new(ClaudeCodeManager::new(agent_config)),
+            AgentKind::Codex => Box::new(CodexCodeManager::new(agent_config)),
+        };
 
         let state = OrchestrationState {
             last_run: None,
@@ -76,7 +83,7 @@ impl Orchestrator {
 
         Ok(Self {
             config,
-            claude_manager,
+            agent,
             pr_monitor,
             state,
             available_prompts,
@@ -93,6 +100,8 @@ impl Orchestrator {
 
         self.state.is_running = true;
         self.state.should_stop = false;
+
+        info!("🤖 Using agent: {}", self.agent.display_name());
 
         // Parse interval from config
         let interval = Duration::from_secs(
@@ -192,7 +201,7 @@ impl Orchestrator {
             id: cycle_id.clone(),
             start_time: Instant::now(),
             selected_prompt: String::new(),
-            claude_session_id: None,
+            agent_session_id: None,
             created_pr_number: None,
             phase: CyclePhase::Initializing,
             execution_log: Vec::new(),
@@ -211,20 +220,19 @@ impl Orchestrator {
         cycle.log("🎲 Selecting random prompt");
         let selected_prompt = self.select_prompt(&mut cycle).await?;
 
-        // Phase 3: Execute Claude Code
-        cycle.phase = CyclePhase::ExecutingClaude;
+        // Phase 3: Execute agent
+        cycle.phase = CyclePhase::ExecutingAgent;
+        let agent_name = self.agent.display_name();
         cycle.log(&format!(
-            "🤖 Executing Claude Code with prompt: {}",
-            selected_prompt.name
+            "🤖 Executing {} with prompt: {}",
+            agent_name, selected_prompt.name
         ));
-        let claude_output = self
-            .execute_claude_code(&mut cycle, &selected_prompt)
-            .await?;
+        let agent_output = self.execute_agent(&mut cycle, &selected_prompt).await?;
 
         // Phase 4: Monitor for PR creation
         cycle.phase = CyclePhase::MonitoringPR;
         cycle.log("👀 Monitoring for PR creation");
-        if let Some(pr_number) = self.detect_pr_creation(&mut cycle, &claude_output).await? {
+        if let Some(pr_number) = self.detect_pr_creation(&mut cycle, &agent_output).await? {
             cycle.created_pr_number = Some(pr_number);
 
             // Phase 5: Wait for CI to pass
@@ -247,23 +255,26 @@ impl Orchestrator {
 
     /// Check prerequisites before starting the cycle
     async fn check_prerequisites(&mut self, cycle: &mut OrchestrationCycle) -> Result<()> {
-        cycle.log("🔍 Checking for active Claude Code sessions");
+        let agent_name = self.agent.display_name();
+        let process_identifier = self.agent.process_identifier();
+        cycle.log(&format!("🔍 Checking for active {} sessions", agent_name));
 
-        // Check if Claude Code is already running
-        let active_sessions = detect_active_claude_code_sessions().await?;
+        // Check if the agent is already running
+        let active_sessions = detect_active_sessions(process_identifier).await?;
         if !active_sessions.is_empty() {
             let msg = format!(
-                "Found {} active Claude Code sessions - waiting",
-                active_sessions.len()
+                "Found {} active {} sessions - waiting",
+                active_sessions.len(),
+                agent_name
             );
             cycle.log(&msg);
-            return Err(anyhow::anyhow!("Claude Code is already active"));
+            return Err(anyhow::anyhow!("{} is already active", agent_name));
         }
 
         cycle.log("🧹 Ensuring clean git state");
 
         // Ensure clean git state
-        ensure_clean_working_directory(&self.config)
+        ensure_clean_working_directory(&self.config, process_identifier)
             .await
             .context("Working directory is not clean")?;
 
@@ -321,34 +332,35 @@ impl Orchestrator {
         Ok(selected.clone())
     }
 
-    /// Execute Claude Code with the selected prompt
-    async fn execute_claude_code(
+    /// Execute the selected automation agent with the provided prompt
+    async fn execute_agent(
         &mut self,
         cycle: &mut OrchestrationCycle,
         prompt: &Prompt,
-    ) -> Result<ClaudeCodeOutput> {
-        cycle.log("🤖 Starting Claude Code session");
+    ) -> Result<AgentOutput> {
+        let agent_name = self.agent.display_name();
+        cycle.log(&format!("🤖 Starting {} session", agent_name));
 
         let session_id = self
-            .claude_manager
+            .agent
             .start_session(prompt)
             .await
-            .context("Failed to start Claude Code session")?;
+            .with_context(|| format!("Failed to start {} session", agent_name))?;
 
-        cycle.claude_session_id = Some(session_id.clone());
-        cycle.log(&format!("📝 Claude Code session ID: {}", session_id));
+        cycle.agent_session_id = Some(session_id.clone());
+        cycle.log(&format!("📝 {} session ID: {}", agent_name, session_id));
 
-        cycle.log("⏳ Waiting for Claude Code to complete");
+        cycle.log(&format!("⏳ Waiting for {} to complete", agent_name));
         let output = self
-            .claude_manager
+            .agent
             .wait_for_completion(&session_id)
             .await
-            .context("Claude Code session failed or timed out")?;
+            .with_context(|| format!("{} session failed or timed out", agent_name))?;
 
         if output.success {
             cycle.log(&format!(
-                "✅ Claude Code completed successfully in {:.2}s",
-                output.execution_time_seconds
+                "✅ {} completed successfully in {:.2}s",
+                agent_name, output.execution_time_seconds
             ));
 
             if !output.files_created.is_empty() {
@@ -362,21 +374,24 @@ impl Orchestrator {
             }
         } else {
             let error_msg = output.error.unwrap_or_else(|| "Unknown error".to_string());
-            cycle.log(&format!("❌ Claude Code failed: {}", error_msg));
+            cycle.log(&format!("❌ {} failed: {}", agent_name, error_msg));
             return Err(anyhow::anyhow!(
-                "Claude Code execution failed: {}",
+                "{} execution failed: {}",
+                agent_name,
                 error_msg
             ));
         }
 
+        self.agent.cleanup_completed_sessions();
+
         Ok(output)
     }
 
-    /// Detect if a PR was created from the Claude Code execution
+    /// Detect if a PR was created from the agent execution
     async fn detect_pr_creation(
         &mut self,
         cycle: &mut OrchestrationCycle,
-        output: &ClaudeCodeOutput,
+        output: &AgentOutput,
     ) -> Result<Option<u32>> {
         cycle.log("🔍 Checking for PR creation");
 
@@ -394,7 +409,7 @@ impl Orchestrator {
             }
         }
 
-        cycle.log("ℹ️  No PR detected from Claude Code output");
+        cycle.log("ℹ️  No PR detected from agent output");
         Ok(None)
     }
 

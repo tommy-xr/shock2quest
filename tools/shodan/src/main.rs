@@ -3,7 +3,9 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, warn};
 
+mod agent;
 mod claude_code;
+mod codex;
 mod config;
 mod error;
 mod git;
@@ -11,12 +13,13 @@ mod github;
 mod orchestrator;
 mod prompts;
 
+use agent::AgentKind;
 use config::Config;
 use orchestrator::Orchestrator;
 
 #[derive(Parser)]
 #[command(name = "shodan")]
-#[command(about = "Claude Code orchestrator for automated project development")]
+#[command(about = "Automation orchestrator for project development")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -29,6 +32,10 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
+
+    /// Automation agent to use (claude or codex)
+    #[arg(long, value_name = "AGENT")]
+    agent: Option<AgentKind>,
 }
 
 #[derive(Subcommand)]
@@ -50,7 +57,7 @@ enum Commands {
         /// Path to the prompt file
         prompt_file: PathBuf,
 
-        /// Don't actually run Claude Code, just validate
+        /// Don't run the automation agent, just validate
         #[arg(long)]
         dry_run: bool,
     },
@@ -79,7 +86,7 @@ enum Commands {
         /// Name of the prompt (without .md extension)
         prompt_name: String,
 
-        /// Don't actually run Claude Code, just validate
+        /// Don't run the automation agent, just validate
         #[arg(long)]
         dry_run: bool,
     },
@@ -96,28 +103,31 @@ async fn main() -> Result<()> {
     let config = Config::load(cli.config.as_deref()).await?;
     info!("Loaded configuration");
 
+    let agent_kind = cli.agent.unwrap_or(config.shodan.default_agent);
+    info!("Using agent: {}", agent_kind);
+
     match cli.command {
         Commands::Run { interval, once } => {
             info!("Starting Shodan orchestration loop");
             if once {
                 info!("Running once and exiting");
-                run_once(&config).await?;
+                run_once(&config, agent_kind).await?;
             } else {
                 let interval = interval.unwrap_or_else(|| config.shodan.interval.clone());
                 info!("Running with interval: {}", interval);
-                run_loop(&config, &interval).await?;
+                run_loop(&config, &interval, agent_kind).await?;
             }
         }
         Commands::Check => {
             info!("Checking repository state");
-            check_state(&config).await?;
+            check_state(&config, agent_kind).await?;
         }
         Commands::TestPrompt {
             prompt_file,
             dry_run,
         } => {
             info!("Testing prompt: {}", prompt_file.display());
-            test_prompt(&config, &prompt_file, dry_run).await?;
+            test_prompt(&config, &prompt_file, dry_run, agent_kind).await?;
         }
         Commands::ListPrompts => {
             info!("Listing available prompts");
@@ -139,7 +149,7 @@ async fn main() -> Result<()> {
             dry_run,
         } => {
             info!("Running prompt: {}", prompt_name);
-            run_prompt(&config, &prompt_name, dry_run).await?;
+            run_prompt(&config, &prompt_name, dry_run, agent_kind).await?;
         }
     }
 
@@ -159,10 +169,10 @@ fn init_logging(verbose: bool) -> Result<()> {
     Ok(())
 }
 
-async fn run_once(config: &Config) -> Result<()> {
+async fn run_once(config: &Config, agent_kind: AgentKind) -> Result<()> {
     info!("🎯 Executing single orchestration cycle");
 
-    let mut orchestrator = Orchestrator::new(config.clone())
+    let mut orchestrator = Orchestrator::new(config.clone(), agent_kind)
         .await
         .context("Failed to create orchestrator")?;
 
@@ -194,7 +204,7 @@ async fn run_once(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn run_loop(config: &Config, interval: &str) -> Result<()> {
+async fn run_loop(config: &Config, interval: &str, agent_kind: AgentKind) -> Result<()> {
     info!(
         "🔄 Starting continuous orchestration loop with interval: {}",
         interval
@@ -204,7 +214,7 @@ async fn run_loop(config: &Config, interval: &str) -> Result<()> {
     let mut config = config.clone();
     config.shodan.interval = interval.to_string();
 
-    let mut orchestrator = Orchestrator::new(config)
+    let mut orchestrator = Orchestrator::new(config, agent_kind)
         .await
         .context("Failed to create orchestrator")?;
 
@@ -216,11 +226,13 @@ async fn run_loop(config: &Config, interval: &str) -> Result<()> {
     Ok(())
 }
 
-async fn check_state(config: &Config) -> Result<()> {
+async fn check_state(config: &Config, agent_kind: AgentKind) -> Result<()> {
     info!("Checking current repository and system state");
 
+    let agent_label = agent_kind.as_str();
+
     // Get complete repository state
-    let repo_state = git::get_repository_state().await?;
+    let repo_state = git::get_repository_state(agent_label).await?;
 
     // Display Git status
     info!("Git Status:");
@@ -254,22 +266,23 @@ async fn check_state(config: &Config) -> Result<()> {
         info!("    URL: {}", pr.url);
     }
 
-    // Display active Claude Code sessions
-    if repo_state.active_claude_sessions.is_empty() {
-        info!("Active Claude Code sessions: None");
+    // Display active agent sessions
+    if repo_state.active_sessions.is_empty() {
+        info!("Active {} sessions: None", agent_label);
     } else {
         info!(
-            "Active Claude Code sessions: {}",
-            repo_state.active_claude_sessions.len()
+            "Active {} sessions: {}",
+            agent_label,
+            repo_state.active_sessions.len()
         );
-        for session in &repo_state.active_claude_sessions {
+        for session in &repo_state.active_sessions {
             info!("  {}", session);
         }
     }
 
     // Check if ready for orchestration
     let ready_for_orchestration = repo_state.git_status.is_clean
-        && repo_state.active_claude_sessions.is_empty()
+        && repo_state.active_sessions.is_empty()
         && repo_state.git_status.current_branch == config.shodan.main_branch;
 
     if ready_for_orchestration {
@@ -279,8 +292,8 @@ async fn check_state(config: &Config) -> Result<()> {
         if !repo_state.git_status.is_clean {
             warn!("   - Repository has uncommitted changes or untracked files");
         }
-        if !repo_state.active_claude_sessions.is_empty() {
-            warn!("   - Active Claude Code sessions detected");
+        if !repo_state.active_sessions.is_empty() {
+            warn!("   - Active {} sessions detected", agent_label);
         }
         if repo_state.git_status.current_branch != config.shodan.main_branch {
             warn!("   - Not on main branch ({})", config.shodan.main_branch);
@@ -290,7 +303,12 @@ async fn check_state(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn test_prompt(config: &Config, prompt_file: &PathBuf, dry_run: bool) -> Result<()> {
+async fn test_prompt(
+    config: &Config,
+    prompt_file: &PathBuf,
+    dry_run: bool,
+    agent_kind: AgentKind,
+) -> Result<()> {
     info!("Testing prompt file: {}", prompt_file.display());
 
     // Load and validate the specific prompt
@@ -322,11 +340,17 @@ async fn test_prompt(config: &Config, prompt_file: &PathBuf, dry_run: bool) -> R
         return Ok(());
     }
 
-    // Execute with Claude Code
-    info!("🚀 Executing prompt with Claude Code...");
-    match claude_code::execute_prompt(config, &prompt).await {
+    let agent_name = agent_kind.display_name();
+
+    info!("🚀 Executing prompt with {}...", agent_name);
+    let execution_result = match agent_kind {
+        AgentKind::Claude => claude_code::execute_prompt(config, &prompt).await,
+        AgentKind::Codex => codex::execute_prompt(config, &prompt).await,
+    };
+
+    match execution_result {
         Ok(output) => {
-            info!("✅ Claude Code execution completed");
+            info!("✅ {} execution completed", agent_name);
             info!("   Session ID: {}", output.session_id);
             info!("   Success: {}", output.success);
             info!("   Execution time: {:.2}s", output.execution_time_seconds);
@@ -362,14 +386,14 @@ async fn test_prompt(config: &Config, prompt_file: &PathBuf, dry_run: bool) -> R
             }
 
             if !output.output.is_empty() {
-                info!("Claude Code output:");
+                info!("{} output:", agent_name);
                 println!("---");
                 println!("{}", output.output);
                 println!("---");
             }
         }
         Err(e) => {
-            warn!("❌ Claude Code execution failed: {}", e);
+            warn!("❌ {} execution failed: {}", agent_name, e);
             return Err(e);
         }
     }
@@ -586,7 +610,12 @@ async fn check_pr(config: &Config, pr_number: u32, analyze_failures: bool) -> Re
     Ok(())
 }
 
-async fn run_prompt(config: &Config, prompt_name: &str, dry_run: bool) -> Result<()> {
+async fn run_prompt(
+    config: &Config,
+    prompt_name: &str,
+    dry_run: bool,
+    agent_kind: AgentKind,
+) -> Result<()> {
     info!("Looking for prompt: {}", prompt_name);
 
     // Find the prompt file
@@ -601,5 +630,5 @@ async fn run_prompt(config: &Config, prompt_name: &str, dry_run: bool) -> Result
     }
 
     // Delegate to existing test_prompt function
-    test_prompt(config, &prompt_file, dry_run).await
+    test_prompt(config, &prompt_file, dry_run, agent_kind).await
 }
