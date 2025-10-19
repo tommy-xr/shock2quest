@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
 
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTextureLightmapAtlas},
+    scene::{SceneObject, VertexPositionTextureLightmapAtlasNormal},
     texture::{AnimatedTexture, Texture, TextureTrait},
 };
 
@@ -19,7 +19,7 @@ pub fn to_scene(
     let lightmap_texture = tex.clone();
 
     let all_geometry = &level.all_geometry;
-    let mut texture_to_vertices: HashMap<&u16, Vec<VertexPositionTextureLightmapAtlas>> =
+    let mut texture_to_vertices: HashMap<&u16, Vec<VertexPositionTextureLightmapAtlasNormal>> =
         HashMap::new();
     for geometry in all_geometry {
         let texture_id = &geometry.texture_idx;
