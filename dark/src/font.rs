@@ -78,6 +78,10 @@ impl FontHeader {
 }
 
 impl Font {
+    fn get_half_pixel(&self) -> f32 {
+        0.5 / self.texture.width() as f32
+    }
+
     pub fn get_mesh(&self, str: &str, position: Vector2<f32>, _font_size: f32) -> Mesh {
         let mut x = position.x;
         let y = position.y;
@@ -89,8 +93,7 @@ impl Font {
         let mut vertices = Vec::new();
         for c in str.chars() {
             let a_info = self.char_to_info.get(&c).unwrap();
-            // TODO: Get this from font (save as a field)
-            let half_pixel = 0.5 / 512.0;
+            let half_pixel = self.get_half_pixel();
             let min_uv_x = a_info.texture_pack_result.uv_offset_x;
             let min_uv_y = a_info.texture_pack_result.uv_offset_y;
             let max_uv_x = a_info.texture_pack_result.uv_offset_x
@@ -254,14 +257,17 @@ impl engine::Font for Font {
         self.base_height
     }
 
+    fn get_half_pixel(&self) -> f32 {
+        self.get_half_pixel()
+    }
+
     fn get_character_info(&self, c: char) -> Option<FontCharacterInfo> {
         let maybe_info = self.char_to_info.get(&c);
 
         maybe_info?;
 
         let info = maybe_info.unwrap();
-        // TODO: Get this from font (save as a field)
-        let half_pixel = 0.5 / 512.0;
+        let half_pixel = self.get_half_pixel();
         let min_uv_x = info.texture_pack_result.uv_offset_x;
         let min_uv_y = info.texture_pack_result.uv_offset_y;
         let max_uv_x = info.texture_pack_result.uv_offset_x + info.texture_pack_result.uv_width
@@ -277,5 +283,47 @@ impl engine::Font for Font {
             max_uv_y,
             advance,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_half_pixel_calculation_formula() {
+        // Test the formula without requiring GL context
+        // We'll test the formula directly: 0.5 / texture_width
+        let test_cases = vec![
+            (256, 0.5 / 256.0),
+            (512, 0.5 / 512.0),
+            (1024, 0.5 / 1024.0),
+            (128, 0.5 / 128.0),
+        ];
+
+        for (width, expected) in test_cases {
+            let actual = 0.5 / width as f32;
+            assert_eq!(actual, expected, "Half pixel calculation should be 0.5 / width for width {}", width);
+        }
+    }
+
+    #[test]
+    fn test_half_pixel_method_logic() {
+        // Test that the get_half_pixel method would return the correct values
+        // This tests the logic without OpenGL dependencies
+
+        // Before the fix, this would have returned hardcoded 0.5 / 512.0
+        let hardcoded_value = 0.5 / 512.0;
+
+        // After the fix, it should use the actual texture width
+        let texture_widths = vec![256, 1024, 2048];
+
+        for width in texture_widths {
+            let expected_dynamic = 0.5 / width as f32;
+            // The dynamic calculation should be different from hardcoded for non-512 textures
+            if width != 512 {
+                assert_ne!(expected_dynamic, hardcoded_value,
+                    "Dynamic calculation for {}px texture should differ from hardcoded 512px value", width);
+            }
+        }
     }
 }

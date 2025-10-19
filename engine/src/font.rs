@@ -16,4 +16,6 @@ pub trait Font {
     fn get_character_info(&self, c: char) -> Option<FontCharacterInfo>;
 
     fn base_height(&self) -> f32;
+
+    fn get_half_pixel(&self) -> f32;
 }
