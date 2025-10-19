@@ -121,7 +121,9 @@ mod tests {
     fn test_should_log() {
         let mut config = LogConfig::new();
         config.global_level = Level::WARN;
-        config.scope_levels.insert("physics".to_string(), Level::DEBUG);
+        config
+            .scope_levels
+            .insert("physics".to_string(), Level::DEBUG);
 
         // Global level filtering
         assert!(config.should_log("unknown", Level::ERROR));

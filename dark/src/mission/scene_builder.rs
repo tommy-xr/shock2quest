@@ -1,8 +1,10 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
+use std::{cell::RefCell, collections::HashMap, env, rc::Rc, time::Duration};
 
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTextureLightmapAtlasNormal},
+    scene::{
+        SceneObject, VertexPositionTextureLightmapAtlasNormal, VertexPositionTextureNormal,
+    },
     texture::{AnimatedTexture, Texture, TextureTrait},
 };
 
@@ -17,6 +19,7 @@ pub fn to_scene(
     let lightmap_textures = level.lightmap_atlas.generate_textures();
     let tex = lightmap_textures.get(0).unwrap();
     let lightmap_texture = tex.clone();
+    let debug_normals_enabled = env::var_os("SS2_DEBUG_NORMALS").is_some();
 
     let all_geometry = &level.all_geometry;
     let mut texture_to_vertices: HashMap<&u16, Vec<VertexPositionTextureLightmapAtlasNormal>> =
@@ -42,6 +45,28 @@ pub fn to_scene(
 
     let mut scene_objects = Vec::new();
     for (texture_id, vertices) in texture_to_vertices {
+        if debug_normals_enabled {
+            let simple_vertices: Vec<VertexPositionTextureNormal> = vertices
+                .into_iter()
+                .map(|v| VertexPositionTextureNormal {
+                    position: v.position,
+                    uv: v.uv,
+                    normal: v.normal,
+                })
+                .collect();
+
+            let geometry: Rc<Box<dyn engine::scene::Geometry>> =
+                Rc::new(Box::new(engine::scene::mesh::create(simple_vertices)));
+
+            let material =
+                RefCell::new(engine::scene::debug_normal_material::create());
+
+            let scene_object =
+                engine::scene::scene_object::SceneObject::create(material, geometry);
+            scene_objects.push(scene_object);
+            continue;
+        }
+
         let tex_info = &level.textures.0[*texture_id as usize];
         let initial_texture: &Rc<Texture> = {
             &asset_cache

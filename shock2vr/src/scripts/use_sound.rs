@@ -1,11 +1,8 @@
-
-
-use engine::audio::{AudioHandle};
+use engine::audio::AudioHandle;
 use engine::script_log;
 use shipyard::{EntityId, World};
 
-
-use crate::{physics::PhysicsWorld};
+use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script};
 

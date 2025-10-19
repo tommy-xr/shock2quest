@@ -1,12 +1,9 @@
 use dark::properties::{PropQuestBitName, PropQuestBitValue, QuestBitValue};
 use shipyard::{EntityId, Get, View, World};
 
+use crate::physics::PhysicsWorld;
 
-use crate::{physics::PhysicsWorld};
-
-use super::{
-    Effect, MessagePayload, Script,
-};
+use super::{Effect, MessagePayload, Script};
 
 pub struct FrobQB {}
 impl FrobQB {

@@ -1,6 +1,5 @@
 use shipyard::{EntityId, World};
 
-
 use crate::physics::PhysicsWorld;
 
 use super::{script_util::get_all_switch_links, Effect, MessagePayload, Script};

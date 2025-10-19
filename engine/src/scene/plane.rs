@@ -79,11 +79,7 @@ pub fn create() -> Plane {
 
     // uncomment this call to draw in wireframe polygons.
     // gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-    Plane {
-        vao,
-        vbo,
-        ebo,
-    }
+    Plane { vao, vbo, ebo }
 }
 
 impl Geometry for Plane {

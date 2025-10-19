@@ -2,15 +2,9 @@ use dark::properties::{PropConsumeType, PropSymName};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    physics::PhysicsWorld,
-    scripts::script_util::play_environmental_sound,
-};
+use crate::{physics::PhysicsWorld, scripts::script_util::play_environmental_sound};
 
-use super::{
-    script_util::{send_to_all_switch_links_and_self},
-    Effect, MessagePayload, Script,
-};
+use super::{script_util::send_to_all_switch_links_and_self, Effect, MessagePayload, Script};
 
 pub struct ObjConsumeButton;
 impl ObjConsumeButton {

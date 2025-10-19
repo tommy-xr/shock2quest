@@ -1,9 +1,6 @@
-
-
-use dark::properties::{PropKeySrc};
+use dark::properties::PropKeySrc;
 
 use shipyard::{EntityId, Get, View, World};
-
 
 use crate::physics::PhysicsWorld;
 

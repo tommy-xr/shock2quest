@@ -1,4 +1,4 @@
-use std::{io};
+use std::io;
 
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 
@@ -73,4 +73,3 @@ pub fn read<T: io::Read + io::Seek>(
         speech_db,
     }
 }
-

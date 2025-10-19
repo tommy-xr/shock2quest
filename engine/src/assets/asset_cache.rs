@@ -86,14 +86,9 @@ impl AssetCache {
             importer_to_assets: self.importer_to_assets.clone(),
         };
 
-        let config_to_reader = self
-            .importer_to_assets
-            .entry(type_id)
-            .or_default();
+        let config_to_reader = self.importer_to_assets.entry(type_id).or_default();
 
-        let name_to_reader = config_to_reader
-            .entry(config_hash)
-            .or_default();
+        let name_to_reader = config_to_reader.entry(config_hash).or_default();
 
         let asset = name_to_reader.entry(asset_name.clone()).or_insert_with(|| {
             info!(

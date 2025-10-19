@@ -1,7 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
 use engine::{
-    assets::asset_cache::{AssetCache},
+    assets::asset_cache::AssetCache,
     audio::{AudioClip, BackgroundMusic},
 };
 use tracing::info;
@@ -54,7 +54,8 @@ impl BackgroundMusic<String> for SongPlayer {
 
         let maybe_audio_clip = self
             .name_to_clip
-            .get(&clip_name.to_ascii_lowercase()).cloned();
+            .get(&clip_name.to_ascii_lowercase())
+            .cloned();
         info!(
             "searching for next clip - used cue {:?}, next clip is {:?}",
             cue, next_state

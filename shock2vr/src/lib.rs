@@ -35,18 +35,14 @@ use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
     motion::MotionDB,
-    properties::{
-        AmbientSoundFlags,
-        PropAmbientHacked, PropPosition,
-    },
+    properties::{AmbientSoundFlags, PropAmbientHacked, PropPosition},
     SCALE_FACTOR,
 };
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AssetPath},
     audio::{AudioClip, AudioContext},
     file_system::FileSystem,
-    game_log,
-    profile,
+    game_log, profile,
     scene::SceneObject,
 };
 
@@ -65,7 +61,7 @@ use zip_asset_path::ZipAssetPath;
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::{Effect, Message, MessagePayload},
-    teleport::{TeleportSystem, TeleportConfig, TeleportButton},
+    teleport::{TeleportButton, TeleportConfig, TeleportSystem},
 };
 
 #[cfg(target_os = "android")]
@@ -133,7 +129,11 @@ impl Game {
             .clone();
 
         let (current_save_data, held_data) = save_load::to_save_data(&self.active_mission.world);
-        game_log!(DEBUG, "Saving {} entities to save data", current_save_data.all_entities.len());
+        game_log!(
+            DEBUG,
+            "Saving {} entities to save data",
+            current_save_data.all_entities.len()
+        );
 
         self.mission_to_save_data.insert(
             self.active_mission.level_name.to_ascii_lowercase(),

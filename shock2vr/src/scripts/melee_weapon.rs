@@ -1,4 +1,3 @@
-
 use shipyard::{EntityId, World};
 
 use crate::physics::PhysicsWorld;

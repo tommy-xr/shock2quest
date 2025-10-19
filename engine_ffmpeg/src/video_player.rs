@@ -1,6 +1,9 @@
 extern crate ffmpeg_next as ffmpeg;
 
-use engine::{render_log, texture_format::{PixelFormat, RawTextureData}};
+use engine::{
+    render_log,
+    texture_format::{PixelFormat, RawTextureData},
+};
 use ffmpeg::format::{input, Pixel};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context, flag::Flags};

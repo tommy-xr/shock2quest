@@ -1,5 +1,5 @@
-use crate::Font;
 use crate::render_log;
+use crate::Font;
 // pub trait SceneObject {
 //     fn init(&self) -> ();
 //     fn draw(&self) -> ();

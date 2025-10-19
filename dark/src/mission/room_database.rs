@@ -1,9 +1,5 @@
-use crate::{
-    mission::room::Room,
-    ss2_chunk_file_reader::ChunkFileTableOfContents,
-};
+use crate::{mission::room::Room, ss2_chunk_file_reader::ChunkFileTableOfContents};
 use byteorder::ReadBytesExt;
-
 
 use tracing::trace;
 

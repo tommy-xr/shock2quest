@@ -102,7 +102,6 @@ pub struct TextureSize {
 
 const LIGHTMAP_SIZE: u32 = 4096;
 
-
 pub struct UVCalculationInfo {
     origin: Vector3<f32>,
     axis_u: Vector3<f32>,
@@ -186,7 +185,8 @@ pub fn read<T: io::Read + io::Seek>(
     let num_dynamic_lights = read_u32(reader);
     tracing::debug!(
         "Mission lights - static: {} dynamic: {}",
-        num_static_lights, num_dynamic_lights
+        num_static_lights,
+        num_dynamic_lights
     );
 
     let (obj_map, obj_texture_families) = read_obj_map(&table_of_contents, reader);

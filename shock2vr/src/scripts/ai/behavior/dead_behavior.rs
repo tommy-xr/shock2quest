@@ -5,9 +5,7 @@ use shipyard::{EntityId, World};
 use crate::{
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{
-            Steering, SteeringOutput,
-        },
+        ai::steering::{Steering, SteeringOutput},
         Effect,
     },
     time::Time,

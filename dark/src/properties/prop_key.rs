@@ -5,7 +5,6 @@ use shipyard::Component;
 
 use crate::ss2_common::*;
 
-
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct KeyCard {
     pub is_master: bool,

@@ -1,36 +1,31 @@
 use cgmath::{
-    vec3, vec4, Deg, Matrix4, Quaternion, Rotation3, SquareMatrix, Point3, Vector3, InnerSpace,
+    vec3, vec4, Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3,
 };
-use dark::{
-    properties::{Link},
-    SCALE_FACTOR,
-};
+use dark::{properties::Link, SCALE_FACTOR};
 
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     creature::RuntimePropHitBox,
+    mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::RuntimePropTransform,
     scripts::{
-        ai::ai_util::does_entity_have_hitboxes,
-        script_util::{
-            get_first_link_with_template_and_data,
-        },
+        ai::ai_util::does_entity_have_hitboxes, script_util::get_first_link_with_template_and_data,
         Message,
     },
     time::Time,
-    util::{
-        get_position_from_transform, get_rotation_from_forward_vector,
-    }, mission::entity_creator::CreateEntityOptions,
+    util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
 use super::{Effect, MessagePayload, Script};
 
-pub struct InternalFastProjectileScript { velocity: Vector3<f32> }
+pub struct InternalFastProjectileScript {
+    velocity: Vector3<f32>,
+}
 impl InternalFastProjectileScript {
     pub fn new(velocity: Vector3<f32>) -> InternalFastProjectileScript {
-        InternalFastProjectileScript { velocity}
+        InternalFastProjectileScript { velocity }
     }
 }
 
@@ -148,8 +143,15 @@ impl Script for InternalFastProjectileScript {
     }
 }
 
-fn projectile_ray_cast(start_point: Point3<f32>, forward: cgmath::Vector3<f32>, physics: &PhysicsWorld, distance: f32, world: &World) -> Option<RayCastResult> {
-     let mut maybe_hit_spot = physics.ray_cast( start_point,
+fn projectile_ray_cast(
+    start_point: Point3<f32>,
+    forward: cgmath::Vector3<f32>,
+    physics: &PhysicsWorld,
+    distance: f32,
+    world: &World,
+) -> Option<RayCastResult> {
+    let mut maybe_hit_spot = physics.ray_cast(
+        start_point,
         forward * distance,
         InternalCollisionGroups::ENTITY
             // Sometimes, the hitbox can stick out past the bounding box...

@@ -4,10 +4,7 @@ use tracing::info;
 
 use crate::{physics::PhysicsWorld, quest_info::QuestInfo, time::Time};
 
-use super::{
-    script_util::{send_to_all_switch_links},
-    Effect, MessagePayload, Script,
-};
+use super::{script_util::send_to_all_switch_links, Effect, MessagePayload, Script};
 
 pub struct TrapQuestbitSimple {
     qb_name: String,

@@ -1,11 +1,11 @@
 pub mod config;
 pub mod macros;
 
-pub use config::{LogConfig, init_logging};
-pub use tracing::{Level, debug, info, warn, error, trace};
+pub use config::{init_logging, LogConfig};
+pub use tracing::{debug, error, info, trace, warn, Level};
 
-use std::sync::OnceLock;
 use once_cell::sync::Lazy;
+use std::sync::OnceLock;
 
 static LOG_CONFIG: OnceLock<LogConfig> = OnceLock::new();
 static DEFAULT_CONFIG: Lazy<LogConfig> = Lazy::new(LogConfig::default);

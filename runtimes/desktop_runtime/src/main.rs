@@ -18,7 +18,6 @@ use shock2vr::command::MoveInventoryCommand;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 
-
 use shock2vr::GameOptions;
 use shock2vr::SpawnLocation;
 use tracing::trace;
@@ -332,7 +331,10 @@ pub fn main() {
             scene_for_render.lights_mut().add_spotlight(spotlight);
         }
 
-        profile!("engine.render", engine.render(&render_context, &scene_for_render));
+        profile!(
+            "engine.render",
+            engine.render(&render_context, &scene_for_render)
+        );
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------

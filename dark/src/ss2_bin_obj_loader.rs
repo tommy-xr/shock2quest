@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    env,
     io::{prelude::*, SeekFrom},
     rc::Rc,
     time::Duration,
@@ -11,7 +12,7 @@ use cgmath::{vec4, Matrix4, Vector2, Vector3, Vector4};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinnedNormal},
+    scene::{SceneObject, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -176,17 +177,24 @@ pub fn to_scene_objects(
                 Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices)))
             };
 
-            let diffuse_texture: Rc<dyn TextureTrait> = {
+            let debug_normals_enabled = env::var_os("SS2_DEBUG_NORMALS").is_some();
+
+            let diffuse_texture: Option<Rc<dyn TextureTrait>> = if debug_normals_enabled
+                && !is_skinned
+            {
+                None
+            } else {
                 let mut animation_frames = load_multiple_textures_for_model(asset_cache, &tex_path);
-                if !animation_frames.is_empty() {
-                    animation_frames.insert(0, texture);
+                let texture = if !animation_frames.is_empty() {
+                    animation_frames.insert(0, texture.clone());
                     Rc::new(AnimatedTexture::new(
                         animation_frames,
                         Duration::from_millis(200),
-                    ))
+                    )) as Rc<dyn TextureTrait>
                 } else {
-                    texture
-                }
+                    texture.clone()
+                };
+                Some(texture)
             };
 
             let mut transparency = material.transparency;
@@ -196,15 +204,27 @@ pub fn to_scene_objects(
                 transparency = 0.8
             }
 
-            let mat = if is_skinned {
+            let mat: Box<dyn engine::scene::Material> = if debug_normals_enabled {
+                if is_skinned {
+                    engine::scene::debug_normal_material::create_skinned()
+                } else {
+                    engine::scene::debug_normal_material::create()
+                }
+            } else if is_skinned {
                 engine::scene::SkinnedMaterial::create(
-                    diffuse_texture,
+                    diffuse_texture
+                        .as_ref()
+                        .expect("diffuse texture should exist when debug normals disabled")
+                        .clone(),
                     material.emissivity,
                     transparency,
                 )
             } else {
                 engine::scene::basic_material::create(
-                    diffuse_texture,
+                    diffuse_texture
+                        .as_ref()
+                        .expect("diffuse texture should exist when debug normals disabled")
+                        .clone(),
                     material.emissivity,
                     transparency,
                 )
@@ -344,6 +364,7 @@ pub fn to_vertices(
     for poly in polygons {
         let indices = &poly.vertex_indices;
         let uv_indices = &poly.uv_indices;
+        let normal_indices = &poly.normal_indices;
         let slot = poly.slot_index;
 
         let vec = Vec::new();
@@ -353,26 +374,34 @@ pub fn to_vertices(
 
         let len = indices.len();
         let uv_len = uv_indices.len();
-        if len > 1 && uv_len > 1 {
+
+        let normal_for_corner = |corner: usize| -> Vector3<f32> {
+            normals
+                .get(normal_indices[corner] as usize)
+                .copied()
+                .unwrap()
+        };
+
+        if len >= 3 && uv_len >= len {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
 
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
                     uvs[uv_indices[idx] as usize],
-                    normals[indices[idx] as usize],
+                    normal_for_corner(idx),
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[idx + 1] as usize],
                     uvs[uv_indices[idx + 1_usize] as usize],
-                    normals[indices[idx] as usize],
+                    normal_for_corner(idx + 1),
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[0] as usize],
                     uvs[uv_indices[0] as usize],
-                    normals[indices[0] as usize],
+                    normal_for_corner(0),
                     bone_idx,
                 ));
             }
@@ -785,7 +814,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
 fn convert_skinned_vertices_to_static_vertices(
     vertices: &Vec<VertexPositionTextureSkinnedNormal>,
     skeleton: &Skeleton,
-) -> Vec<VertexPositionTexture> {
+) -> Vec<VertexPositionTextureNormal> {
     let mut v = Vec::new();
 
     let bone_transform = skeleton.get_transforms()[0];
@@ -798,9 +827,14 @@ fn convert_skinned_vertices_to_static_vertices(
                 vertex.position.z,
             ))
             .to_vec();
-        v.push(VertexPositionTexture {
+        let mut normal = bone_transform.transform_vector(vertex.normal);
+        if normal.magnitude2() > f32::EPSILON {
+            normal = normal.normalize();
+        }
+        v.push(VertexPositionTextureNormal {
             position,
             uv: vertex.uv,
+            normal,
         });
     }
 

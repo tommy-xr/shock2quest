@@ -2,8 +2,8 @@ extern crate gl;
 use std::ops::Deref;
 
 use crate::engine::EngineRenderContext;
-use crate::scene::Material;
 use crate::scene::light::Light;
+use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;

@@ -1,8 +1,8 @@
+use crate::render_log;
 use gl::types;
 use gl::types::*;
 use std::ffi::CString;
 use std::ptr;
-use crate::render_log;
 
 pub struct Shader {
     pub gl_id: types::GLuint,

@@ -1,7 +1,5 @@
-use cgmath::{num_traits::ToPrimitive};
-use dark::properties::{
-    PropBitmapAnimation, PropFrameAnimConfig, PropFrameAnimState,
-};
+use cgmath::num_traits::ToPrimitive;
+use dark::properties::{PropBitmapAnimation, PropFrameAnimConfig, PropFrameAnimState};
 use shipyard::{Get, IntoIter, IntoWithId, UniqueView, UniqueViewMut, View, ViewMut};
 
 use crate::{

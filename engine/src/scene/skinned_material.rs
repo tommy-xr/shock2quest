@@ -3,8 +3,8 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
-use crate::scene::Material;
 use crate::scene::light::{Light, LightType};
+use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;
@@ -290,13 +290,34 @@ impl Material for SkinnedMaterial {
                 let uniforms = LightingUniforms {
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
-                    projection_loc: gl::GetUniformLocation(shader.gl_id, c_str!("projection").as_ptr()),
-                    light_pos_loc: gl::GetUniformLocation(shader.gl_id, c_str!("lightPos").as_ptr()),
-                    light_color_intensity_loc: gl::GetUniformLocation(shader.gl_id, c_str!("lightColorIntensity").as_ptr()),
-                    light_direction_loc: gl::GetUniformLocation(shader.gl_id, c_str!("lightDirection").as_ptr()),
-                    light_inner_cone_angle_loc: gl::GetUniformLocation(shader.gl_id, c_str!("lightInnerConeAngle").as_ptr()),
-                    light_outer_cone_angle_loc: gl::GetUniformLocation(shader.gl_id, c_str!("lightOuterConeAngle").as_ptr()),
-                    light_range_loc: gl::GetUniformLocation(shader.gl_id, c_str!("lightRange").as_ptr()),
+                    projection_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("projection").as_ptr(),
+                    ),
+                    light_pos_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightPos").as_ptr(),
+                    ),
+                    light_color_intensity_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightColorIntensity").as_ptr(),
+                    ),
+                    light_direction_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightDirection").as_ptr(),
+                    ),
+                    light_inner_cone_angle_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightInnerConeAngle").as_ptr(),
+                    ),
+                    light_outer_cone_angle_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightOuterConeAngle").as_ptr(),
+                    ),
+                    light_range_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightRange").as_ptr(),
+                    ),
                 };
                 (shader, uniforms)
             }
@@ -354,7 +375,9 @@ impl Material for SkinnedMaterial {
             return false;
         }
 
-        let (shader_program, uniforms) = LIGHTING_SHADER_PROGRAM.get().expect("lighting shader not compiled");
+        let (shader_program, uniforms) = LIGHTING_SHADER_PROGRAM
+            .get()
+            .expect("lighting shader not compiled");
         self.diffuse_texture.bind0(&render_context);
 
         unsafe {
@@ -380,7 +403,12 @@ impl Material for SkinnedMaterial {
             // Set light parameters
             let light_pos = light.position();
             let light_color_intensity = light.color_intensity();
-            gl::Uniform3f(uniforms.light_pos_loc, light_pos.x, light_pos.y, light_pos.z);
+            gl::Uniform3f(
+                uniforms.light_pos_loc,
+                light_pos.x,
+                light_pos.y,
+                light_pos.z,
+            );
             gl::Uniform4f(
                 uniforms.light_color_intensity_loc,
                 light_color_intensity.x,
@@ -397,8 +425,14 @@ impl Material for SkinnedMaterial {
                     spotlight_params.direction.y,
                     spotlight_params.direction.z,
                 );
-                gl::Uniform1f(uniforms.light_inner_cone_angle_loc, spotlight_params.inner_cone_angle);
-                gl::Uniform1f(uniforms.light_outer_cone_angle_loc, spotlight_params.outer_cone_angle);
+                gl::Uniform1f(
+                    uniforms.light_inner_cone_angle_loc,
+                    spotlight_params.inner_cone_angle,
+                );
+                gl::Uniform1f(
+                    uniforms.light_outer_cone_angle_loc,
+                    spotlight_params.outer_cone_angle,
+                );
                 gl::Uniform1f(uniforms.light_range_loc, spotlight_params.range);
             }
         }

@@ -1,9 +1,5 @@
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::SceneObject,
-};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use shipyard::EntityId;
 
 use crate::{
@@ -99,12 +95,12 @@ pub enum MissionTransition {
     /// Transition to gameplay with specific level and optional save data
     ToGameplay {
         level: String,
-        save_data: Option<String>
+        save_data: Option<String>,
     },
     /// Transition to cutscene playback, with next mission to transition to after completion
     ToCutscene {
         video_path: String,
-        next_mission: Box<MissionTransition>
+        next_mission: Box<MissionTransition>,
     },
     /// Transition to asset validation (typically on error or first launch)
     ToAssetValidation,
@@ -135,7 +131,10 @@ impl std::fmt::Display for MissionTransition {
                     write!(f, "To Gameplay: {}", level)
                 }
             }
-            MissionTransition::ToCutscene { video_path, next_mission } => {
+            MissionTransition::ToCutscene {
+                video_path,
+                next_mission,
+            } => {
                 write!(f, "To Cutscene: {} -> {}", video_path, next_mission)
             }
             MissionTransition::ToAssetValidation => write!(f, "To Asset Validation"),
