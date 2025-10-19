@@ -51,3 +51,6 @@ pub use basic_material::BasicMaterial;
 
 pub mod color_material;
 pub use color_material::ColorMaterial;
+
+pub mod debug_normal_material;
+pub use debug_normal_material::*;

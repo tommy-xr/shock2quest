@@ -68,6 +68,7 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
+        layout (location = 3) in vec3 inNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -76,16 +77,19 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
 
         out vec2 texCoord;
         out vec3 worldPos;
+        out vec3 worldNormal;
 
         void main() {
             texCoord = inTex;
 
-            // Apply bone transformations
+            // Apply bone transformations to position and normal
             vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
+            vec3 mod_normal = mat3(bone_matrices[bone_ids.x]) * inNormal;
 
             // Transform to world space
             vec4 worldPosition = world * mod_position;
             worldPos = worldPosition.xyz;
+            worldNormal = normalize(mat3(world) * mod_normal);
 
             gl_Position = projection * view * worldPosition;
         }
@@ -96,6 +100,7 @@ const LIGHTING_FRAGMENT_SHADER_SOURCE: &str = r#"
 
         in vec2 texCoord;
         in vec3 worldPos;
+        in vec3 worldNormal;
 
         // texture sampler
         uniform sampler2D texture1;
@@ -140,8 +145,8 @@ const LIGHTING_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Distance attenuation
             float distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
 
-            // Simple diffuse lighting (assume normal pointing up for now)
-            vec3 normal = vec3(0.0, 1.0, 0.0);
+            // Diffuse lighting using actual vertex normals
+            vec3 normal = normalize(worldNormal);
             float lambertian = max(dot(normal, lightDir), 0.0);
 
             // Combine all factors

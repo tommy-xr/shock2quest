@@ -72,6 +72,7 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in vec2 inLightMapTex;
         layout (location = 3) in vec4 inAtlas;
+        layout (location = 4) in vec3 inNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -79,11 +80,13 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
 
         out vec2 texCoord;
         out vec3 worldPos;
+        out vec3 worldNormal;
 
         void main() {
             texCoord = inTex;
             vec4 worldPosition = world * vec4(inPos, 1.0);
             worldPos = worldPosition.xyz;
+            worldNormal = normalize(mat3(world) * inNormal);
             gl_Position = projection * view * worldPosition;
         }
 "#;
@@ -93,6 +96,7 @@ const LIGHTING_FRAGMENT_SHADER_SOURCE: &str = r#"
 
         in vec2 texCoord;
         in vec3 worldPos;
+        in vec3 worldNormal;
 
         // texture sampler
         uniform sampler2D texture2; // diffuse texture
@@ -137,8 +141,8 @@ const LIGHTING_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Distance attenuation
             float distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
 
-            // Simple diffuse lighting (assume normal pointing up for now)
-            vec3 normal = vec3(0.0, 1.0, 0.0);
+            // Diffuse lighting using actual vertex normals
+            vec3 normal = normalize(worldNormal);
             float lambertian = max(dot(normal, lightDir), 0.0);
 
             // Combine all factors - dynamic light adds to existing lightmap
