@@ -39,6 +39,18 @@ jobs:
           echo "CPPFLAGS=-I$(brew --prefix ffmpeg@6)/include" >> $GITHUB_ENV
           echo "LDFLAGS=-L$(brew --prefix ffmpeg@6)/lib" >> $GITHUB_ENV
 
+      # Install Windows-specific dependencies
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: |
+          # Use choco to install FFmpeg and pkg-config
+          choco install ffmpeg pkgconfiglite -y
+          # Refresh environment variables
+          refreshenv
+          # Set environment variables for FFmpeg
+          echo "FFMPEG_DIR=C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=C:\ProgramData\chocolatey\lib\pkgconfiglite\tools\pkg-config\lib" >> $env:GITHUB_ENV
+
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
