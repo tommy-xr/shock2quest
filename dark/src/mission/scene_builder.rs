@@ -2,9 +2,7 @@ use std::{cell::RefCell, collections::HashMap, env, rc::Rc, time::Duration};
 
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{
-        SceneObject, VertexPositionTextureLightmapAtlasNormal, VertexPositionTextureNormal,
-    },
+    scene::{SceneObject, VertexPositionTextureLightmapAtlasNormal, VertexPositionTextureNormal},
     texture::{AnimatedTexture, Texture, TextureTrait},
 };
 
@@ -58,11 +56,9 @@ pub fn to_scene(
             let geometry: Rc<Box<dyn engine::scene::Geometry>> =
                 Rc::new(Box::new(engine::scene::mesh::create(simple_vertices)));
 
-            let material =
-                RefCell::new(engine::scene::debug_normal_material::create());
+            let material = RefCell::new(engine::scene::debug_normal_material::create());
 
-            let scene_object =
-                engine::scene::scene_object::SceneObject::create(material, geometry);
+            let scene_object = engine::scene::scene_object::SceneObject::create(material, geometry);
             scene_objects.push(scene_object);
             continue;
         }
