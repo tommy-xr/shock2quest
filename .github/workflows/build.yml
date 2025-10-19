@@ -45,15 +45,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Download and extract FFmpeg development libraries
-          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+          # Download FFmpeg 6.0 which still includes avfft.h
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2023-06-18-12-55/ffmpeg-n6.0-latest-win64-gpl-shared.zip"
           Invoke-WebRequest -Uri $ffmpegUrl -OutFile "ffmpeg.zip"
           Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\"
           $ffmpegDir = Get-ChildItem -Path "C:\ffmpeg-*" -Directory | Select-Object -First 1
-          # Set environment variables
+          Write-Host "FFmpeg installed to: $($ffmpegDir.FullName)"
+
+          # Set multiple environment variables for different build systems
           echo "FFMPEG_DIR=$($ffmpegDir.FullName)" >> $env:GITHUB_ENV
+          echo "FFMPEG_INCLUDE_DIR=$($ffmpegDir.FullName)\include" >> $env:GITHUB_ENV
+          echo "FFMPEG_LIB_DIR=$($ffmpegDir.FullName)\lib" >> $env:GITHUB_ENV
           echo "CPATH=$($ffmpegDir.FullName)\include" >> $env:GITHUB_ENV
           echo "LIBRARY_PATH=$($ffmpegDir.FullName)\lib" >> $env:GITHUB_ENV
+          echo "LIB=$($ffmpegDir.FullName)\lib;$env:LIB" >> $env:GITHUB_ENV
+          echo "INCLUDE=$($ffmpegDir.FullName)\include;$env:INCLUDE" >> $env:GITHUB_ENV
           echo "PATH=$($ffmpegDir.FullName)\bin;$env:PATH" >> $env:GITHUB_ENV
 
       - name: Cache cargo build
