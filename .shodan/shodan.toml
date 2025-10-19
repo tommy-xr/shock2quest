@@ -1,0 +1,28 @@
+[shodan]
+# Scheduling
+interval = "4h"              # How often to run orchestration cycles
+max_session_time = "4h"      # Maximum time for a Claude Code session
+
+# Git settings
+main_branch = "main"         # Name of the main branch
+sync_command = "gt sync --no-interactive"     # Command to sync to latest good state (non-interactive)
+
+# GitHub settings
+check_interval = "5m"        # How often to check PR status
+max_ci_wait_time = "60m"     # Maximum time to wait for CI completion
+
+# Prompt settings
+prompt_dir = "prompts"       # Directory containing prompt files (relative to .shodan/)
+
+# Claude Code settings
+permission_mode = "bypassPermissions"  # Permission mode: "acceptEdits", "sandboxBashMode", "bypassPermissions", "default", "plan"
+show_claude_output = true              # Show Claude's real-time output (true = text output for visibility, false = JSON for parsing)
+
+# Prompt weights for random selection (higher = more likely)
+[shodan.prompt_weights]
+"iterate-on-projects.md" = 10
+"fix-todos.md" = 5
+"iterate-on-todo-list.md" = 5
+"check-pr-state.md" = 5
+"improve-documentation.md" = 1
+"iterate-on-issues.md" = 1

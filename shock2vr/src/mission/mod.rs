@@ -1,9 +1,10 @@
 pub mod entity_creator;
 pub mod entity_populator;
+pub mod mission_manager;
+pub mod mission_trait;
 mod spawn_location;
 pub mod visibility_engine;
 
-use collision::Aabb;
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
@@ -41,8 +42,9 @@ use dark::{
 use engine::{
     assets::asset_cache::AssetCache,
     audio::{AudioChannel, AudioContext, AudioHandle},
+    game_log,
     profile,
-    scene::{quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition},
+    scene::{quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight},
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
@@ -75,7 +77,7 @@ use crate::{
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     time::Time,
-    util::{get_email_sound_file, has_refs, resolve_proxy_entity, vec3_to_point3},
+    util::{get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::{VirtualHand, VirtualHandEffect},
     vr_config, GameOptions,
 };
@@ -411,7 +413,7 @@ impl Mission {
 
         // Update scripts
         let mut script_effects = profile!(
-            "game.mission.script_world.update",
+            scope: "game", level: DEBUG, "script_world.update",
             self.script_world.update(&self.world, &self.physics, time)
         );
         effects.append(&mut script_effects);
@@ -552,7 +554,7 @@ impl Mission {
                         payload: MessagePayload::AnimationCompleted,
                     }),
                     AnimationEvent::DirectionChanged(ang) => {
-                        println!("!! animation direction changed: {:?}", ang);
+                        game_log!(DEBUG, "Animation direction changed: {:?}", ang);
                         let maybe_current_rotation = self.physics.get_rotation2(*id);
                         if let Some(current_rotation) = maybe_current_rotation {
                             let new_rotation =
@@ -1035,13 +1037,14 @@ impl Mission {
                                 if let Some(clip) = maybe_clip {
                                     *player = AnimationPlayer::queue_animation(player, clip);
                                 } else {
-                                    println!(
-                                        "WARN!! Unable to load animation clip: {:?}_.mc",
+                                    game_log!(
+                                        WARN,
+                                        "Unable to load animation clip: {:?}_.mc",
                                         next_animation
                                     );
                                 }
                             } else {
-                                println!("WARN!! Unable to find animation for query: {:?}", &query);
+                                game_log!(WARN, "Unable to find animation for query: {:?}", &query);
                                 // If we couldn't find an animation... just stop the current one
                                 self.script_world.dispatch(Message {
                                     payload: MessagePayload::AnimationCompleted,
@@ -1305,7 +1308,9 @@ impl Mission {
                     self.world.run_with_data(turn_on_tweqs, entity_id);
                 }
                 Effect::GlobalEffect(global_effect) => global_effects.push(global_effect),
-                _ => println!("Unhandled effect: {effect:?}"),
+                _ => {
+                    game_log!(WARN, "Unhandled effect: {effect:?}");
+                },
             }
         }
 
@@ -1378,7 +1383,7 @@ impl Mission {
             screen_size,
         };
         profile!(
-            "game.mission.visibility_engine.prepare",
+            scope: "render", level: DEBUG, "visibility_engine.prepare",
             self.visibility_engine
                 .prepare(&self.level, &self.world, &culling_info)
         );
@@ -1437,8 +1442,9 @@ impl Mission {
                 }
             }
         }
-        println!(
-            "rendered models: {} total models: {}",
+        game_log!(
+            TRACE,
+            "Rendered models: {} / {} total",
             rendered_model_count, total_model_count
         );
         // Render bitmap_animation
@@ -1547,6 +1553,9 @@ impl Mission {
             scene.extend(guis);
         }
 
+        // Note: Hand spotlights for enhanced lighting are now handled in the runtime
+        // via get_hand_spotlights() method - they're added to the Scene's lighting system
+
         if options.debug_portals {
             let (player_pos, _player_rot) = {
                 let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -1561,11 +1570,55 @@ impl Mission {
                 // );
                 scene.extend(cell.debug_render());
             } else {
-                println!("unable to find cell at position: {:?}", player_pos);
+                game_log!(WARN, "Unable to find cell at position: {:?}", player_pos);
             }
         }
 
         (scene, player.pos, player.rotation)
+    }
+
+    /// Get hand spotlights for testing enhanced lighting system
+    /// Returns a vector of SpotLight objects positioned at the player's hands
+    pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+        let mut lights = Vec::new();
+
+        if options.experimental_features.contains("enhanced_lighting") {
+            // Right hand spotlight
+            let right_hand_pos = self.right_hand.get_position();
+            let right_hand_rot = self.right_hand.get_rotation();
+
+            // Convert quaternion to direction vector (forward direction)
+            let right_direction = right_hand_rot * Vector3::new(0.0, 0.0, -1.0);
+
+            let right_spotlight = SpotLight {
+                position: right_hand_pos,
+                direction: right_direction.normalize(),
+                color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
+                inner_cone_angle: 15.0_f32.to_radians(), // 15 degree inner cone
+                outer_cone_angle: 30.0_f32.to_radians(), // 30 degree outer cone
+                range: 10.0, // 10 meter range
+            };
+            lights.push(right_spotlight);
+
+            // Left hand spotlight
+            let left_hand_pos = self.left_hand.get_position();
+            let left_hand_rot = self.left_hand.get_rotation();
+
+            // Convert quaternion to direction vector (forward direction)
+            let left_direction = left_hand_rot * Vector3::new(0.0, 0.0, -1.0);
+
+            let left_spotlight = SpotLight {
+                position: left_hand_pos,
+                direction: left_direction.normalize(),
+                color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
+                inner_cone_angle: 15.0_f32.to_radians(), // 15 degree inner cone
+                outer_cone_angle: 30.0_f32.to_radians(), // 30 degree outer cone
+                range: 10.0, // 10 meter range
+            };
+            lights.push(left_spotlight);
+        }
+
+        lights
     }
 
     fn update_avatar_hands(

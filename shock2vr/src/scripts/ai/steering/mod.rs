@@ -8,7 +8,6 @@ pub use chained_steering_strategy::*;
 pub use chase_entity_steering_strategy::*;
 pub use chase_player_steering_strategy::*;
 pub use collision_avoidance_steering_strategy::*;
-pub use wander_steering_strategy::*;
 
 use cgmath::{Deg, EuclideanSpace, Point3};
 use shipyard::{EntityId, World};

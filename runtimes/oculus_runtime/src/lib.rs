@@ -422,7 +422,7 @@ fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(&file_system, options);
+    let mut game = shock2vr::Game::init(file_system, options);
 
     let mut camera_pos = vec3(0.0, 5.0, 10.0);
 
@@ -954,9 +954,17 @@ fn render_swapchain(
         // gl::ClearColor(r, g, b, 1.0);
         // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
+        let mut scene_for_render = Scene::from_objects(all_scene_objs);
+
+        // Add hand spotlights for enhanced lighting testing (experimental feature)
+        let hand_spotlights = game.get_hand_spotlights();
+        for spotlight in hand_spotlights {
+            scene_for_render.lights_mut().add_spotlight(spotlight);
+        }
+
         profile!(
             "[oculus.engine.render]",
-            engine.render(&render_context, &all_scene_objs)
+            engine.render(&render_context, &scene_for_render)
         );
 
         // GL(glViewport(0, 0, frameBuffer->Width, frameBuffer->Height));

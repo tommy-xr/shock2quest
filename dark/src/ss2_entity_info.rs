@@ -45,10 +45,10 @@ impl SystemShock2EntityInfo {
         let mut name_to_template_id = HashMap::new();
         for (id, _props) in &self.entity_to_properties {
             if !fn_should_initialize(*id) {
-                println!("skipping entity: {}", id);
+                tracing::debug!("Skipping entity initialization: {}", id);
                 continue;
             }
-            println!("initializing entity: {}", id);
+            tracing::debug!("Initializing entity: {}", id);
 
             // Create the entity
             let entity = world.add_entity(());
@@ -217,7 +217,7 @@ pub fn new<R: io::Read + io::Seek>(
     let link_metaprops = read_link("L$MetaProp", reader, toc);
 
     let link_playerfactories = read_link("L$PlayerFac", reader, toc);
-    println!("player factory? {link_playerfactories:#?}");
+    tracing::debug!("Player factory links: {link_playerfactories:#?}");
 
     let mut template_to_links = read_all_links(toc, links, reader);
     read_all_data_links(toc, &mut template_to_links, links_with_data, reader);

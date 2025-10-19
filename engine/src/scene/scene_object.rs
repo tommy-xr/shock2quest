@@ -1,4 +1,5 @@
 use crate::Font;
+use crate::render_log;
 // pub trait SceneObject {
 //     fn init(&self) -> ();
 //     fn draw(&self) -> ();
@@ -76,7 +77,7 @@ impl SceneObject {
         in_x: f32,
         in_y: f32,
     ) -> SceneObject {
-        println!("screen-space-text: |{}|{}", str, str.len());
+        render_log!(DEBUG, "screen-space-text: |{}|{}", str, str.len());
         let multiplier = font_size / font.base_height();
         let adj_height = font_size;
 
@@ -216,7 +217,7 @@ impl SceneObject {
         if !self.material.borrow().has_initialized() {
             self.material
                 .borrow_mut()
-                .initialize(engine_context.is_opengl_es, &engine_context.storage);
+                .initialize(engine_context.is_opengl_es, &*engine_context.storage);
         }
 
         let xform = self.transform * self.local_transform;
@@ -243,6 +244,44 @@ impl SceneObject {
         ) {
             self.geometry.draw();
         }
+    }
+
+    /// Draw the scene object with a specific light for multi-pass lighting
+    pub fn draw_light_pass(
+        &self,
+        engine_context: &OpenGLEngine,
+        render_context: &EngineRenderContext,
+        view: &Matrix4<f32>,
+        light: &dyn crate::scene::light::Light,
+        shadow_map: Option<&()>,
+    ) {
+        if !self.material.borrow().has_initialized() {
+            self.material
+                .borrow_mut()
+                .initialize(engine_context.is_opengl_es, &*engine_context.storage);
+        }
+
+        let xform = self.transform * self.local_transform;
+        if self.material.borrow().draw_light_pass(
+            render_context,
+            view,
+            &xform,
+            &self.skinning_data,
+            light,
+            shadow_map,
+        ) {
+            self.geometry.draw();
+        }
+    }
+
+    /// Get the world position of this scene object from its transform matrix
+    pub fn get_world_position(&self) -> cgmath::Vector3<f32> {
+        let final_transform = self.transform * self.local_transform;
+        cgmath::Vector3::new(
+            final_transform[3][0],
+            final_transform[3][1],
+            final_transform[3][2],
+        )
     }
     pub fn set_transform(&mut self, transform: Matrix4<f32>) {
         self.transform = transform;
@@ -276,7 +315,7 @@ impl SceneObject {
             geometry: self.geometry.clone(),
             transform: self.transform,
             local_transform: self.local_transform,
-            skinning_data: self.skinning_data.clone(),
+            skinning_data: self.skinning_data,
         }
     }
 }

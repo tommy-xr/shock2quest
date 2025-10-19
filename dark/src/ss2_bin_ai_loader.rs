@@ -209,7 +209,9 @@ pub fn read<T: Read + Seek>(
 #[derive(Debug, Clone)]
 pub struct AIJointMapEntry {
     pub joint: i8,
+    #[allow(dead_code)]
     num_of_material_segments: i8,
+    #[allow(dead_code)]
     map_start: i8,
     // en1: i8, // what is this for?
     // jother: i8,
@@ -241,22 +243,35 @@ pub fn read_joint_map_entry<T: Read + Seek>(reader: &mut T) -> AIJointMapEntry {
 pub struct AIMaterial {
     name: String,
 
+    #[allow(dead_code)]
     dw_caps: u32,
+    #[allow(dead_code)]
     transparency: f32,
+    #[allow(dead_code)]
     illumination: f32,
+    #[allow(dead_code)]
     dw_for_rent: u32,
 
+    #[allow(dead_code)]
     handle: u32,
+    #[allow(dead_code)]
     uv: f32,
+    #[allow(dead_code)]
     material_type: u8,
+    #[allow(dead_code)]
     smatsegs: u8,
+    #[allow(dead_code)]
     map_start: u8,
+    #[allow(dead_code)]
     flags: u8,
 
     polygons: u16,
     polygon_start: u16,
+    #[allow(dead_code)]
     vertices: u16,
+    #[allow(dead_code)]
     vertices_start: u16,
+    #[allow(dead_code)]
     weight_start: u16,
 }
 
@@ -316,11 +331,15 @@ pub fn read_material<T: Read + Seek>(reader: &mut T, version: u32) -> AIMaterial
 
 #[derive(Debug, Clone)]
 pub struct AIJointInfo {
+    #[allow(dead_code)]
     num_polys: i16,
+    #[allow(dead_code)]
     start_poly: i16,
     num_vertices: i16,
     start_vertex: i16,
+    #[allow(dead_code)]
     weight_index: u16,
+    #[allow(dead_code)]
     flag: i16,
     mapper_id: i16,
 }
@@ -351,9 +370,13 @@ pub struct AITriangle {
     vert_index0: u16,
     vert_index1: u16,
     vert_index2: u16,
+    #[allow(dead_code)]
     material_id: u16,
+    #[allow(dead_code)]
     plane_coefficient: f32,
+    #[allow(dead_code)]
     normal_index: u16,
+    #[allow(dead_code)]
     flags: u16,
 }
 

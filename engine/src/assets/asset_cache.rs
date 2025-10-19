@@ -8,9 +8,11 @@ use tracing::{self, debug, info};
 
 use super::{asset_importer::AssetImporter, asset_paths::AbstractAssetPath};
 
+type ImporterAssetMap = HashMap<TypeId, HashMap<u64, HashMap<String, Option<Rc<dyn Any>>>>>;
+
 pub struct AssetCache {
     base_path: String,
-    importer_to_assets: HashMap<TypeId, HashMap<u64, HashMap<String, Option<Rc<dyn Any>>>>>,
+    importer_to_assets: ImporterAssetMap,
     path: Rc<Box<dyn AbstractAssetPath>>,
 }
 
@@ -87,11 +89,11 @@ impl AssetCache {
         let config_to_reader = self
             .importer_to_assets
             .entry(type_id)
-            .or_insert_with(|| HashMap::new());
+            .or_default();
 
         let name_to_reader = config_to_reader
             .entry(config_hash)
-            .or_insert_with(|| HashMap::new());
+            .or_default();
 
         let asset = name_to_reader.entry(asset_name.clone()).or_insert_with(|| {
             info!(
@@ -108,9 +110,9 @@ impl AssetCache {
                     asset_name.clone(),
                     &mut reader.borrow_mut(),
                     &mut temp_cache,
-                    &config,
+                    config,
                 );
-                let processed_asset = (importer.processor)(read_asset, &mut temp_cache, &config);
+                let processed_asset = (importer.processor)(read_asset, &mut temp_cache, config);
                 // TODO: Cache any assets produced by the processor
                 Some(Rc::new(processed_asset))
             } else {

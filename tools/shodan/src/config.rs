@@ -65,28 +65,109 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load configuration from file or use defaults
+    /// Load configuration from file or use defaults, with environment variable overrides
     pub async fn load(config_path: Option<&Path>) -> Result<Self> {
-        if let Some(path) = config_path {
-            Self::load_from_file(path).await
+        let mut config = if let Some(path) = config_path {
+            Self::load_from_file(path).await?
         } else {
             // Try to load from default locations
             let default_paths = [
+                ".shodan/shodan.toml",
                 "shodan.toml",
                 "tools/shodan/shodan.toml",
                 ".shodan.toml",
             ];
 
+            let mut found_config = None;
             for path in &default_paths {
                 let path = Path::new(path);
                 if path.exists() {
-                    return Self::load_from_file(path).await;
+                    found_config = Some(Self::load_from_file(path).await?);
+                    break;
                 }
             }
 
-            // No config file found, use defaults
-            Ok(Self::default())
+            found_config.unwrap_or_else(|| Self::default())
+        };
+
+        // Apply environment variable overrides
+        config.apply_env_overrides()?;
+        Ok(config)
+    }
+
+    /// Apply environment variable overrides to configuration
+    fn apply_env_overrides(&mut self) -> Result<()> {
+        // Scheduling overrides
+        if let Ok(val) = std::env::var("SHODAN_INTERVAL") {
+            self.shodan.interval = val;
         }
+        if let Ok(val) = std::env::var("SHODAN_MAX_SESSION_TIME") {
+            self.shodan.max_session_time = val;
+        }
+
+        // Git overrides
+        if let Ok(val) = std::env::var("SHODAN_MAIN_BRANCH") {
+            self.shodan.main_branch = val;
+        }
+        if let Ok(val) = std::env::var("SHODAN_SYNC_COMMAND") {
+            self.shodan.sync_command = val;
+        }
+
+        // GitHub overrides
+        if let Ok(val) = std::env::var("SHODAN_CHECK_INTERVAL") {
+            self.shodan.check_interval = val;
+        }
+        if let Ok(val) = std::env::var("SHODAN_MAX_CI_WAIT_TIME") {
+            self.shodan.max_ci_wait_time = val;
+        }
+
+        // Prompt overrides
+        if let Ok(val) = std::env::var("SHODAN_PROMPT_DIR") {
+            self.shodan.prompt_dir = val;
+        }
+
+        // Claude Code overrides
+        if let Ok(val) = std::env::var("SHODAN_PERMISSION_MODE") {
+            self.shodan.permission_mode = val;
+        }
+        if let Ok(val) = std::env::var("SHODAN_SHOW_CLAUDE_OUTPUT") {
+            self.shodan.show_claude_output = val.parse().with_context(|| {
+                format!(
+                    "Invalid boolean value for SHODAN_SHOW_CLAUDE_OUTPUT: {}",
+                    val
+                )
+            })?;
+        }
+
+        // Prompt weights overrides (format: "file1=weight1,file2=weight2")
+        if let Ok(val) = std::env::var("SHODAN_PROMPT_WEIGHTS") {
+            let weights: Result<HashMap<String, u32>, _> = val
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|pair| {
+                    let parts: Vec<&str> = pair.split('=').collect();
+                    if parts.len() != 2 {
+                        return Err(anyhow::anyhow!("Invalid prompt weight format: {}", pair));
+                    }
+                    let weight = parts[1]
+                        .parse::<u32>()
+                        .with_context(|| format!("Invalid weight value: {}", parts[1]))?;
+                    Ok((parts[0].to_string(), weight))
+                })
+                .collect();
+
+            match weights {
+                Ok(weights) => {
+                    // Replace existing weights with environment values
+                    self.shodan.prompt_weights = weights;
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid SHODAN_PROMPT_WEIGHTS format: {}", e);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn load_from_file(path: &Path) -> Result<Self> {
@@ -102,8 +183,7 @@ impl Config {
 
     /// Save configuration to file
     pub async fn save(&self, path: &Path) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         fs::write(path, content)
             .await
@@ -120,13 +200,13 @@ impl Config {
         if Path::new(prompt_dir).is_absolute() {
             PathBuf::from(prompt_dir)
         } else {
-            // Try current directory first, then tools/shodan/
+            // Try current directory first, then .shodan/
             let current_dir_path = PathBuf::from(prompt_dir);
             if current_dir_path.exists() {
                 current_dir_path
             } else {
-                // Fallback to tools/shodan/ relative path
-                PathBuf::from("tools/shodan").join(prompt_dir)
+                // Fallback to .shodan/ relative path
+                PathBuf::from(".shodan").join(prompt_dir)
             }
         }
     }
@@ -170,14 +250,16 @@ fn parse_duration(duration_str: &str) -> Result<u64> {
         return Err(anyhow::anyhow!("Empty duration string"));
     }
 
-    let (number_part, unit_part) = if let Some(pos) = duration_str.find(|c: char| c.is_alphabetic()) {
+    let (number_part, unit_part) = if let Some(pos) = duration_str.find(|c: char| c.is_alphabetic())
+    {
         (&duration_str[..pos], &duration_str[pos..])
     } else {
         // If no unit, assume seconds
         (duration_str, "s")
     };
 
-    let number: u64 = number_part.parse()
+    let number: u64 = number_part
+        .parse()
         .with_context(|| format!("Invalid number in duration: {}", number_part))?;
 
     let multiplier = match unit_part.to_lowercase().as_str() {
@@ -209,6 +291,9 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.shodan.interval, "1h");
         assert_eq!(config.shodan.main_branch, "main");
-        assert!(config.shodan.prompt_weights.contains_key("iterate-on-projects.md"));
+        assert!(config
+            .shodan
+            .prompt_weights
+            .contains_key("iterate-on-projects.md"));
     }
 }

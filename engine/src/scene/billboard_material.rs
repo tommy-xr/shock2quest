@@ -3,6 +3,7 @@ use std::ops::Deref;
 
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
+use crate::scene::light::Light;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;
@@ -111,7 +112,7 @@ where
         world_matrix: &Matrix4<f32>,
     ) {
         let (shader_program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
-        self.diffuse_texture.bind0(&render_context);
+        self.diffuse_texture.bind0(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
 
@@ -134,7 +135,7 @@ where
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &Box<dyn crate::file_system::Storage>) {
+    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------
@@ -210,5 +211,19 @@ where
         } else {
             false
         }
+    }
+
+    fn draw_light_pass(
+        &self,
+        _render_context: &EngineRenderContext,
+        _view_matrix: &Matrix4<f32>,
+        _world_matrix: &Matrix4<f32>,
+        _skinning_data: &[Matrix4<f32>],
+        _light: &dyn Light,
+        _shadow_map: Option<&()>,
+    ) -> bool {
+        // Billboard materials typically don't participate in dynamic lighting
+        // They're often used for UI elements, particles, or emissive effects
+        false
     }
 }
