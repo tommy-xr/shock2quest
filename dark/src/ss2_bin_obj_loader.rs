@@ -11,7 +11,7 @@ use cgmath::{vec4, Matrix4, Vector2, Vector3, Vector4};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinned},
+    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -125,7 +125,7 @@ pub fn to_scene_objects(
 
     let vertices = slot_to_vertices
         .into_iter()
-        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinned>)>>();
+        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinnedNormal>)>>();
 
     let mut bones = Vec::new();
     build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
@@ -309,17 +309,18 @@ fn build_vertex(
     vec: Vector3<f32>,
     uv: Vector2<f32>,
     bone_idx: u32,
-) -> VertexPositionTextureSkinned {
-    VertexPositionTextureSkinned {
+) -> VertexPositionTextureSkinnedNormal {
+    VertexPositionTextureSkinnedNormal {
         position: vec,
         uv,
         bone_indices: [bone_idx, 0, 0, 0],
+        normal: Vector3::new(0.0, 1.0, 0.0), // Hardcoded up normal for Phase 1
     }
 }
 
 pub fn to_vertices(
     mesh: &SystemShock2ObjectMesh,
-) -> HashMap<u16, Vec<VertexPositionTextureSkinned>> {
+) -> HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>> {
     let polygons = &mesh.polygons;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
@@ -720,7 +721,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
 }
 
 fn convert_skinned_vertices_to_static_vertices(
-    vertices: &Vec<VertexPositionTextureSkinned>,
+    vertices: &Vec<VertexPositionTextureSkinnedNormal>,
     skeleton: &Skeleton,
 ) -> Vec<VertexPositionTexture> {
     let mut v = Vec::new();

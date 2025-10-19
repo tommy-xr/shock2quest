@@ -11,7 +11,7 @@ use cgmath::{Point3, Vector2};
 use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTextureSkinned},
+    scene::{SceneObject, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
 use tracing::trace;
@@ -463,7 +463,7 @@ pub fn to_vertices(
     mesh: &SystemShock2AIMesh,
     _skeleton: &Skeleton,
 ) -> (
-    Vec<(String, Vec<VertexPositionTextureSkinned>)>,
+    Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)>,
     HashMap<u32, Aabb3<f32>>,
 ) {
     let materials = &mesh.materials;
@@ -550,10 +550,11 @@ fn build_vertex(
     vec: Point3<f32>,
     uv: Vector2<f32>,
     bone_indices: [u32; 4],
-) -> VertexPositionTextureSkinned {
-    VertexPositionTextureSkinned {
+) -> VertexPositionTextureSkinnedNormal {
+    VertexPositionTextureSkinnedNormal {
         position: vec.to_vec(),
         uv,
         bone_indices,
+        normal: cgmath::Vector3::new(0.0, 1.0, 0.0), // Hardcoded up normal for Phase 1
     }
 }
