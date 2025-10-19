@@ -16,6 +16,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -42,14 +43,18 @@ jobs:
       # Install Windows-specific dependencies
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          # Use choco to install FFmpeg and pkg-config
-          choco install ffmpeg pkgconfiglite -y
-          # Refresh environment variables
-          refreshenv
-          # Set environment variables for FFmpeg
-          echo "FFMPEG_DIR=C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg" >> $env:GITHUB_ENV
-          echo "PKG_CONFIG_PATH=C:\ProgramData\chocolatey\lib\pkgconfiglite\tools\pkg-config\lib" >> $env:GITHUB_ENV
+          # Download and extract FFmpeg development libraries
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\"
+          $ffmpegDir = Get-ChildItem -Path "C:\ffmpeg-*" -Directory | Select-Object -First 1
+          # Set environment variables
+          echo "FFMPEG_DIR=$($ffmpegDir.FullName)" >> $env:GITHUB_ENV
+          echo "CPATH=$($ffmpegDir.FullName)\include" >> $env:GITHUB_ENV
+          echo "LIBRARY_PATH=$($ffmpegDir.FullName)\lib" >> $env:GITHUB_ENV
+          echo "PATH=$($ffmpegDir.FullName)\bin;$env:PATH" >> $env:GITHUB_ENV
 
       - name: Cache cargo build
         uses: actions/cache@v4
