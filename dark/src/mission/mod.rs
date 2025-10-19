@@ -364,6 +364,10 @@ fn build_vertex(
     let tex_v;
     let ax_u = uv_calc_info.axis_u;
     let ax_v = uv_calc_info.axis_v;
+
+    // Calculate face normal from cross product of texture axes
+    // Try inverted normal - Dark Engine might use different winding order
+    let face_normal = -(ax_u.cross(ax_v).normalize());
     let mag2_u = uv_calc_info.mag2_u;
     let mag2_v = uv_calc_info.mag2_v;
     let dotp = uv_calc_info.dotp;
@@ -421,6 +425,7 @@ fn build_vertex(
         lightmap_u,
         lightmap_v,
         lightmap_atlas,
+        face_normal,
     )
 }
 
@@ -433,13 +438,14 @@ fn vert(
     lightmap_u: f32,
     lightmap_v: f32,
     atlas_info: Vector4<f32>,
+    normal: Vector3<f32>,
 ) -> VertexPositionTextureLightmapAtlasNormal {
     VertexPositionTextureLightmapAtlasNormal {
         position: vec3(x, y, z) / SCALE_FACTOR,
         uv: vec2(u, v),
         lightmap_uv: vec2(lightmap_u, lightmap_v),
         lightmap_atlas: atlas_info,
-        normal: vec3(0.0, 1.0, 0.0), // Calculate proper normal from face data
+        normal,
     }
 }
 

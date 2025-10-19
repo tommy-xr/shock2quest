@@ -21,8 +21,8 @@ use crate::{
     importers::TEXTURE_IMPORTER,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
-        self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_point3,
-        read_single, read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
+        self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_packed_normal,
+        read_point3, read_single, read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
     },
     ss2_skeleton::{Bone, Skeleton},
     util::load_multiple_textures_for_model,
@@ -78,8 +78,17 @@ pub fn read<T: Read + Seek>(
 ) -> SystemShock2ObjectMesh {
     let header = read_header(reader, common_header);
 
+    // Debug logging to identify problematic files
+    println!("Loading .bin object file:");
+    println!("  obj_name: {:?}", header.obj_name);
+    println!("  num_verts: {}", header.num_verts);
+    println!("  num_polygons: {}", header.num_polygons);
+
     let vertices = read_vertices(&header, reader);
-    let normals = read_normals(&header, reader);
+    let normals = read_lights(&header, reader);
+
+    println!("  normals.len(): {}", normals.len());
+    println!("  vertices.len(): {}", vertices.len());
 
     let polygons: Vec<SystemShock2ObjectPolygon> =
         read_polygons(&header, reader, common_header.version);
@@ -335,7 +344,6 @@ pub fn to_vertices(
     for poly in polygons {
         let indices = &poly.vertex_indices;
         let uv_indices = &poly.uv_indices;
-        let normal_indices = &poly.normal_indices;
         let slot = poly.slot_index;
 
         let vec = Vec::new();
@@ -349,43 +357,22 @@ pub fn to_vertices(
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
 
-                // Get normals with bounds checking and fallback
-                let normal_idx_0 = normal_indices[idx] as usize;
-                let normal_idx_1 = normal_indices[idx + 1] as usize;
-                let normal_idx_2 = normal_indices[0] as usize;
-
-                let normal_0 = if normal_idx_0 < normals.len() {
-                    normals[normal_idx_0]
-                } else {
-                    Vector3::new(0.0, 1.0, 0.0) // Fallback to up normal
-                };
-                let normal_1 = if normal_idx_1 < normals.len() {
-                    normals[normal_idx_1]
-                } else {
-                    Vector3::new(0.0, 1.0, 0.0) // Fallback to up normal
-                };
-                let normal_2 = if normal_idx_2 < normals.len() {
-                    normals[normal_idx_2]
-                } else {
-                    Vector3::new(0.0, 1.0, 0.0) // Fallback to up normal
-                };
-
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
                     uvs[uv_indices[idx] as usize],
-                    normal_0,
+                    normals[indices[idx] as usize],
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[idx + 1] as usize],
                     uvs[uv_indices[idx + 1_usize] as usize],
-                    normal_1,
+                    normals[indices[idx] as usize],
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[0] as usize],
                     uvs[uv_indices[0] as usize],
-                    normal_2,
+                    normals[indices[0] as usize],
                     bone_idx,
                 ));
             }
@@ -529,7 +516,29 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
     vhots
 }
 
-fn read_normals<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector3<f32>> {
+pub fn read_lights<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector3<f32>> {
+    reader
+        .seek(SeekFrom::Start((header.offset_lights) as u64))
+        .unwrap();
+
+    let mut normals = Vec::new();
+
+    // Calculate number of lights like SystemShock2VR: (offset_normals - offset_lights) / 8
+    let num_lights = (header.offset_normals - header.offset_lights) / 8;
+    for _idx in 0..num_lights {
+        // Read ObjLight structure (8 bytes total):
+        let _material_idx = read_u16(reader); // Material reference (2 bytes)
+        let _vertex_idx = read_u16(reader); // Point on object reference (2 bytes)
+        let packed_normal = read_u32(reader); // Packed normal vector (4 bytes)
+
+        let normal = read_packed_normal(packed_normal).normalize(); // Apply coordinate transform and normalize
+        normals.push(normal);
+    }
+
+    normals
+}
+
+pub fn read_normals<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector3<f32>> {
     reader
         .seek(SeekFrom::Start((header.offset_normals) as u64))
         .unwrap();
@@ -538,7 +547,9 @@ fn read_normals<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Ve
 
     let len = header.num_verts;
     for _idx in 0..len {
-        let normal = read_vec3(reader);
+        // Read packed normal (32-bit) instead of raw vector3 (96-bit)
+        let packed_normal = read_u32(reader);
+        let normal = read_packed_normal(packed_normal);
         normals.push(normal);
     }
 
@@ -672,11 +683,11 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 pub struct ObjBinHeader {
     bbox_min: Point3<f32>,
     bbox_max: Point3<f32>,
-    obj_name: String,
+    pub obj_name: String,
     num_mats: u8,
     num_objs: u8,
     num_polygons: u16,
-    num_verts: u16,
+    pub num_verts: u16,
     num_vhots: u8,
 
     offset_mats: u32,
@@ -688,7 +699,8 @@ pub struct ObjBinHeader {
     offset_verts: u32,
     offset_vhots: u32,
     offset_uvs: u32,
-    offset_normals: u32,
+    pub offset_lights: u32,
+    pub offset_normals: u32,
 }
 
 pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeader) -> ObjBinHeader {
@@ -730,7 +742,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
     let offset_uvs = ss2_common::read_u32(reader);
     let offset_vhots = ss2_common::read_u32(reader);
     let offset_verts = ss2_common::read_u32(reader);
-    let _offset_lights = ss2_common::read_u32(reader);
+    let offset_lights = ss2_common::read_u32(reader);
     let offset_normals = ss2_common::read_u32(reader);
     let offset_polygons = ss2_common::read_u32(reader);
     let _offset_nodes = ss2_common::read_u32(reader);
@@ -756,6 +768,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
         offset_verts,
         offset_vhots,
         offset_uvs,
+        offset_lights,
         offset_polygons,
         offset_normals,
         num_mats,

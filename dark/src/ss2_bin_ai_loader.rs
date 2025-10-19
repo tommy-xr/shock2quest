@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use cgmath::{prelude::*};
+use cgmath::prelude::*;
 use cgmath::{Point3, Vector2, Vector3};
 use collision::{Aabb, Aabb3};
 use engine::{
@@ -21,8 +21,8 @@ use crate::{
     motion::JointId,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
-        read_bytes, read_i16, read_i32, read_i8, read_point3, read_single, read_string_with_size,
-        read_u16, read_u32, read_u8, read_vec2, read_vec3,
+        read_bytes, read_i16, read_i32, read_i8, read_packed_normal, read_point3, read_single,
+        read_string_with_size, read_u16, read_u32, read_u8, read_vec2, read_vec3,
     },
     ss2_skeleton::Skeleton,
     util::load_multiple_textures_for_model,
@@ -399,16 +399,18 @@ pub fn read_triangle<T: Read + Seek>(reader: &mut T) -> AITriangle {
 #[derive(Clone, Debug)]
 pub struct AIUv {
     uv: Vector2<f32>,
+    normal: Vector3<f32>,
 }
 
 pub fn read_uv<T: Read + Seek>(reader: &mut T) -> AIUv {
     let uv = read_vec2(reader);
 
-    // TODO: Properly read normal
-    // Idea here: https://github.com/Kernvirus/SystemShock2VR/blob/5f0f7d054e79c2e36d9661f4ca62ab95ae69de0b/Assets/Scripts/Editor/DarkEngine/DarkDataConverter.cs#L12
-    let _packed_normal = read_u32(reader);
+    // Read packed normal from SystemShock2VR implementation
+    // Reference: https://github.com/Kernvirus/SystemShock2VR/blob/5f0f7d054e79c2e36d9661f4ca62ab95ae69de0b/Assets/Scripts/Editor/DarkEngine/DarkDataConverter.cs#L12
+    let packed_normal = read_u32(reader);
+    let normal = read_packed_normal(packed_normal);
 
-    AIUv { uv }
+    AIUv { uv, normal }
 }
 
 // Converter
@@ -522,10 +524,15 @@ pub fn to_vertices(
             let uv0 = uvs[tri.vert_index0 as usize].uv;
             let uv1 = uvs[tri.vert_index1 as usize].uv;
             let uv2 = uvs[tri.vert_index2 as usize].uv;
-            let normal = normals[tri.normal_index as usize];
-            verts.push(build_vertex(v0, uv0, normal, [*j1, 0, 0, 0]));
-            verts.push(build_vertex(v1, uv1, normal, [*j2, 0, 0, 0]));
-            verts.push(build_vertex(v2, uv2, normal, [*j3, 0, 0, 0]));
+
+            // Use per-vertex normals from packed UV data instead of triangle normals
+            let normal0 = uvs[tri.vert_index0 as usize].normal; // Coordinate transform already applied
+            let normal1 = uvs[tri.vert_index1 as usize].normal;
+            let normal2 = uvs[tri.vert_index2 as usize].normal;
+
+            verts.push(build_vertex(v0, uv0, normal0, [*j1, 0, 0, 0]));
+            verts.push(build_vertex(v1, uv1, normal1, [*j2, 0, 0, 0]));
+            verts.push(build_vertex(v2, uv2, normal2, [*j3, 0, 0, 0]));
         }
         material_to_verts.push((name.to_owned(), verts));
     }

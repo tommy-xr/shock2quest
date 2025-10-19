@@ -89,6 +89,16 @@ pub fn read_vec2<T: io::Read>(reader: &mut T) -> Vector2<f32> {
     vec2(x, y)
 }
 
+pub fn read_packed_normal(packed_vector: u32) -> Vector3<f32> {
+    // Unpack using OpenDarkEngine's exact algorithm
+    let raw_z = (((packed_vector & 0x0FFC) << 4) as i16) as f32 / 16384.0;
+    let raw_y = (((packed_vector >> 6) & 0x0FFC0) as i16) as f32 / 16384.0;
+    let raw_x = (((packed_vector >> 16) & 0x0FFC0) as i16) as f32 / 16384.0;
+
+    // Return in OpenDarkEngine order: (x, y, z)
+    Vector3::new(raw_x, raw_y, raw_z)
+}
+
 pub fn read_duration<T: io::Read>(reader: &mut T) -> Duration {
     let dur_as_secs_f32 = read_single(reader);
     Duration::from_secs_f32(dur_as_secs_f32)
