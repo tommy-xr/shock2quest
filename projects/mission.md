@@ -7,6 +7,7 @@ This document outlines the comprehensive plan to refactor the current monolithic
 ## Current State Analysis
 
 ### Existing Architecture
+
 - **File**: `shock2vr/src/mission/mod.rs` (1,840 lines)
 - **Structure**: Monolithic `Mission` struct handling all gameplay functionality
 - **Capabilities**:
@@ -18,6 +19,7 @@ This document outlines the comprehensive plan to refactor the current monolithic
   - Save/load functionality
 
 ### Identified Issues
+
 1. **No experience when assets unavailable** - Game crashes or behaves unexpectedly
 2. **No menu screen for settings** - No way to configure options or select levels
 3. **Monolithic design** - Hard to add new experience types (cutscenes, menus, etc.)
@@ -99,13 +101,14 @@ pub enum MissionTransition {
 ### Mission Implementations
 
 #### 1. AssetValidationMission
+
 **Purpose**: Verify game assets and guide user setup
 **Location**: `shock2vr/src/mission/asset_validation_mission.rs`
 
 ```rust
 pub struct AssetValidationMission {
     validation_state: AssetValidationState,
-    ui_elements: Vec<GuiElement>,
+    ui_components: Vec<GuiComponent<AssetValidationEvent>>,
     background_scene: Vec<SceneObject>,
 }
 
@@ -118,12 +121,14 @@ enum AssetValidationState {
 ```
 
 **Features**:
+
 - Check for required game files (`shock2.gam`, mission files, etc.)
 - Display helpful setup instructions
 - Show progress during validation
 - Graceful error handling with user guidance
 
 #### 2. MainMenuMission
+
 **Purpose**: Main menu interface for settings and level selection
 **Location**: `shock2vr/src/mission/main_menu_mission.rs`
 
@@ -144,6 +149,7 @@ enum MenuState {
 ```
 
 **Features**:
+
 - VR-friendly menu interface
 - Settings configuration (graphics, audio, controls)
 - Level selection with progress tracking
@@ -151,16 +157,19 @@ enum MenuState {
 - Asset path configuration
 
 #### 3. GameplayMission
+
 **Purpose**: Current gameplay functionality (refactored)
 **Location**: `shock2vr/src/mission/gameplay_mission.rs`
 
 **Changes**:
+
 - Extract from current `Mission` struct
 - Implement `Mission` trait
 - Clean up interface dependencies
 - Improve state management
 
 #### 4. CutsceneMission
+
 **Purpose**: Video playback for intro/cutscenes
 **Location**: `shock2vr/src/mission/cutscene_mission.rs`
 
@@ -174,12 +183,14 @@ pub struct CutsceneMission {
 ```
 
 **Features**:
+
 - FFmpeg-based video playback
 - Skip functionality (trigger press)
 - Audio synchronization
 - Seamless transitions to next mission
 
 #### 5. LoadingMission
+
 **Purpose**: Smooth transitions between missions
 **Location**: `shock2vr/src/mission/loading_mission.rs`
 
@@ -195,61 +206,71 @@ pub struct LoadingMission {
 ## Implementation Phases
 
 ### Phase 1: Foundation (Week 1-2)
+
 **Objective**: Create trait infrastructure and basic missions
 
-#### 1.1 Mission Trait Definition (2-3 days) ✅ COMPLETED
-- ✅ Create `shock2vr/src/mission/mission_trait.rs`
-- ✅ Define core `Mission` trait interface
-- ✅ Create `MissionType` and `MissionTransition` enums
-- ✅ Add mission manager/coordinator struct
+#### 1.1 Mission Trait Definition (2-3 days)
 
-**Completed in PR #73**: Implemented comprehensive Mission trait system with:
-- Core `Mission` trait defining update/render/effects interface
-- `MissionType` enum for identifying mission types (AssetValidation, MainMenu, Gameplay, Cutscene, Loading)
-- `MissionTransition` enum for managing state transitions
-- `MissionManager` for coordinating active missions and transitions
-- `GameplayMissionWrapper` as temporary compatibility layer
-- Comprehensive documentation and Display traits for debugging
+- [x] Create `shock2vr/src/mission/mission_trait.rs`
+- [x] Define core `Mission` trait interface
+- [x] Create `MissionType` and `MissionTransition` enums
+- [x:] Add mission manager/coordinator struct
 
-#### 1.2 Asset Validation Mission (2-3 days)
-- [ ] Implement `AssetValidationMission`
+#### 1.2 Main Loop Integration (1-2 days)
+
+- [ ] Update main game loop in `runtimes/desktop_runtime/src/main.rs` and `runtimes/oculus_runtime/src/lib.rs`
+- [ ] Replace direct `Mission` instantiation with `MissionManager`
+- [ ] Handle mission transitions in the render/update cycle
+- [ ] Ensure proper state management between mission switches
+- [ ] Create a NoopMission that can be started with `--mission=noop`
+- [ ] Test basic mission switching functionality
+
+#### 1.3 Asset Validation Mission (2-3 days)
+
+- [ ] Implement `AssetValidationMission` using existing `GuiComponent<AssetValidationEvent>` system
 - [ ] Create asset checking logic
-- [ ] Design VR UI for error messages and instructions
+- [ ] Design VR UI for error messages and instructions using `shock2vr/src/gui/gui_component.rs` primitives
 - [ ] Test with missing/invalid asset scenarios
 
-#### 1.3 Basic Menu Mission (3-4 days)
-- [ ] Implement `MainMenuMission` with basic functionality
-- [ ] Create VR menu UI system
+#### 1.4 Basic Menu Mission (3-4 days)
+
+- [ ] Implement `MainMenuMission` with basic functionality using existing GUI system
+- [ ] Create VR menu UI system with `GuiComponent<MenuEvent>` primitives
 - [ ] Add level selection capability
 - [ ] Integrate with asset validation
 
-#### 1.4 Refactor Current Mission (2-3 days)
+#### 1.5 Refactor Current Mission (2-3 days)
+
 - [ ] Extract current logic to `GameplayMission`
 - [ ] Implement `Mission` trait for gameplay
 - [ ] Ensure feature parity with current system
-- [ ] Update runtime integration
 
 ### Phase 2: Enhanced Experience (Week 3-4)
+
 **Objective**: Add cutscenes, polish, and complete MVP
 
 #### 2.1 Cutscene Mission (3-4 days)
+
 - [ ] Implement `CutsceneMission` using existing ffmpeg work
 - [ ] Add video playback controls (skip, audio sync)
 - [ ] Create transition system to next mission
 - [ ] Test with intro video
 
 #### 2.2 Loading Mission (1-2 days)
+
 - [ ] Implement smooth loading screens
 - [ ] Add progress indicators
 - [ ] Create transition animations
 
 #### 2.3 Mission Manager (2-3 days)
+
 - [ ] Create central mission coordinator
 - [ ] Handle transitions between mission types
 - [ ] Manage global state (settings, save data)
 - [ ] Update runtimes to use mission manager
 
 #### 2.4 Polish & Testing (2-3 days)
+
 - [ ] Performance optimization
 - [ ] VR comfort improvements
 - [ ] User experience testing
@@ -258,6 +279,7 @@ pub struct LoadingMission {
 ## Technical Implementation Details
 
 ### File Structure Changes
+
 ```
 shock2vr/src/mission/
 ├── mod.rs                    # Public interface, re-exports
@@ -275,12 +297,14 @@ shock2vr/src/mission/
 ```
 
 ### Runtime Integration
+
 - Update `runtimes/desktop_runtime/src/main.rs`
 - Update `runtimes/oculus_runtime/src/lib.rs`
 - Replace direct `Mission` usage with `MissionManager`
 - Handle mission transitions in main game loop
 
 ### Asset Management
+
 - Asset validation logic for required files:
   - `shock2.gam`
   - Mission files (`.mis`)
@@ -290,6 +314,7 @@ shock2vr/src/mission/
 - User-friendly error messages with setup instructions
 
 ### VR UI Considerations
+
 - Design menus for VR interaction (hand pointing, trigger selection)
 - Appropriate text sizing and positioning
 - Comfortable viewing distances and angles
@@ -299,6 +324,7 @@ shock2vr/src/mission/
 ## Success Criteria
 
 ### MVP Completion Checklist
+
 - [ ] Game launches with asset validation
 - [ ] Main menu allows level selection and settings
 - [ ] Gameplay mission maintains current functionality
@@ -309,6 +335,7 @@ shock2vr/src/mission/
 - [ ] Performance remains stable
 
 ### User Experience Goals
+
 1. **New User Journey**: Asset setup → Intro cutscene → Main menu → Tutorial level
 2. **Returning Player**: Asset validation → Main menu → Continue/Level select
 3. **Error Scenarios**: Clear guidance for asset setup and troubleshooting
@@ -316,22 +343,25 @@ shock2vr/src/mission/
 ## Risks and Mitigations
 
 ### Technical Risks
+
 1. **Performance Impact**: Trait-based system overhead
-   - *Mitigation*: Benchmark and optimize hot paths
+   - _Mitigation_: Benchmark and optimize hot paths
 2. **Complexity Increase**: Multiple mission types to maintain
-   - *Mitigation*: Shared utilities and comprehensive testing
+   - _Mitigation_: Shared utilities and comprehensive testing
 3. **VR UI Challenges**: Menu interaction in 3D space
-   - *Mitigation*: Iterative design with user testing
+   - _Mitigation_: Iterative design with user testing
 
 ### Timeline Risks
+
 1. **Scope Creep**: Feature additions during implementation
-   - *Mitigation*: Strict MVP focus, document future enhancements
+   - _Mitigation_: Strict MVP focus, document future enhancements
 2. **Integration Complexity**: Runtime and build system changes
-   - *Mitigation*: Incremental integration, maintain current functionality
+   - _Mitigation_: Incremental integration, maintain current functionality
 
 ## Future Enhancements (Post-MVP)
 
 ### Advanced Features
+
 - Mod support through mission plugin system
 - Advanced settings (graphics quality, accessibility)
 - Save game preview and management
@@ -339,6 +369,7 @@ shock2vr/src/mission/
 - Multi-language support
 
 ### Additional Mission Types
+
 - `TutorialMission`: Interactive tutorials
 - `BenchmarkMission`: Performance testing
 - `DebugMission`: Developer tools and debugging
