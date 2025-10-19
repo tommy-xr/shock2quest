@@ -21,7 +21,6 @@ impl HeldItemSaveData {
         }
     }
 
-    // TODO: Refactor return value to result
     pub fn instantiate(
         &self,
         world: &mut World,
