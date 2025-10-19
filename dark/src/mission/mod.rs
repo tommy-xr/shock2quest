@@ -34,7 +34,7 @@ use crate::ss2_common::read_u32;
 use cgmath::vec4;
 use cgmath::Vector4;
 use engine::assets::asset_cache::AssetCache;
-use engine::scene::VertexPositionTextureLightmapAtlas;
+use engine::scene::VertexPositionTextureLightmapAtlasNormal;
 pub use scene_builder::to_scene;
 
 use crate::properties::PropertyDefinition;
@@ -58,7 +58,7 @@ use crate::ss2_common::read_string_with_size;
 
 #[derive(Clone)]
 pub struct SystemShock2Geometry {
-    pub verts: Vec<VertexPositionTextureLightmapAtlas>,
+    pub verts: Vec<VertexPositionTextureLightmapAtlasNormal>,
     pub texture_idx: u16, // Texture index to use
 
     pub cell_idx: u32, // Index of cell
@@ -433,12 +433,13 @@ fn vert(
     lightmap_u: f32,
     lightmap_v: f32,
     atlas_info: Vector4<f32>,
-) -> VertexPositionTextureLightmapAtlas {
-    VertexPositionTextureLightmapAtlas {
+) -> VertexPositionTextureLightmapAtlasNormal {
+    VertexPositionTextureLightmapAtlasNormal {
         position: vec3(x, y, z) / SCALE_FACTOR,
         uv: vec2(u, v),
         lightmap_uv: vec2(lightmap_u, lightmap_v),
         lightmap_atlas: atlas_info,
+        normal: vec3(0.0, 1.0, 0.0), // Calculate proper normal from face data
     }
 }
 

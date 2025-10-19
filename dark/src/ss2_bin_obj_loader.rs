@@ -11,7 +11,7 @@ use cgmath::{vec4, Matrix4, Vector2, Vector3, Vector4};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinned},
+    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -66,6 +66,7 @@ pub struct SystemShock2ObjectMesh {
     pub materials: Vec<SystemShock2MeshMaterial>,
     pub uvs: Vec<Vector2<f32>>,
     pub vertices: Vec<Vector3<f32>>,
+    pub normals: Vec<Vector3<f32>>,
     pub vhots: Vec<Vhot>,
     pub polygons: Vec<SystemShock2ObjectPolygon>,
     pub sub_objects: Vec<SubObjectHeader>,
@@ -78,6 +79,7 @@ pub fn read<T: Read + Seek>(
     let header = read_header(reader, common_header);
 
     let vertices = read_vertices(&header, reader);
+    let normals = read_normals(&header, reader);
 
     let polygons: Vec<SystemShock2ObjectPolygon> =
         read_polygons(&header, reader, common_header.version);
@@ -98,6 +100,7 @@ pub fn read<T: Read + Seek>(
         bounding_box,
         materials,
         vertices,
+        normals,
         polygons,
         header,
         uvs,
@@ -125,7 +128,7 @@ pub fn to_scene_objects(
 
     let vertices = slot_to_vertices
         .into_iter()
-        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinned>)>>();
+        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinnedNormal>)>>();
 
     let mut bones = Vec::new();
     build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
@@ -308,27 +311,31 @@ pub fn read_materials<T: Read + Seek>(
 fn build_vertex(
     vec: Vector3<f32>,
     uv: Vector2<f32>,
+    normal: Vector3<f32>,
     bone_idx: u32,
-) -> VertexPositionTextureSkinned {
-    VertexPositionTextureSkinned {
+) -> VertexPositionTextureSkinnedNormal {
+    VertexPositionTextureSkinnedNormal {
         position: vec,
         uv,
         bone_indices: [bone_idx, 0, 0, 0],
+        normal,
     }
 }
 
 pub fn to_vertices(
     mesh: &SystemShock2ObjectMesh,
-) -> HashMap<u16, Vec<VertexPositionTextureSkinned>> {
+) -> HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>> {
     let polygons = &mesh.polygons;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
+    let normals = &mesh.normals;
 
     let mut hash_map = HashMap::new();
 
     for poly in polygons {
         let indices = &poly.vertex_indices;
         let uv_indices = &poly.uv_indices;
+        let normal_indices = &poly.normal_indices;
         let slot = poly.slot_index;
 
         let vec = Vec::new();
@@ -344,16 +351,19 @@ pub fn to_vertices(
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
                     uvs[uv_indices[idx] as usize],
+                    normals[normal_indices[idx] as usize],
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[idx + 1] as usize],
                     uvs[uv_indices[idx + 1_usize] as usize],
+                    normals[normal_indices[idx + 1] as usize],
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[0] as usize],
                     uvs[uv_indices[0] as usize],
+                    normals[normal_indices[0] as usize],
                     bone_idx,
                 ));
             }
@@ -495,6 +505,22 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
     }
     vhots.sort_by(|a, b| a.vhot_type.cmp(&b.vhot_type));
     vhots
+}
+
+fn read_normals<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector3<f32>> {
+    reader
+        .seek(SeekFrom::Start((header.offset_normals) as u64))
+        .unwrap();
+
+    let mut normals = Vec::new();
+
+    let len = header.num_verts;
+    for _idx in 0..len {
+        let normal = read_vec3(reader);
+        normals.push(normal);
+    }
+
+    normals
 }
 
 pub fn read_uvs<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector2<f32>> {
@@ -640,6 +666,7 @@ pub struct ObjBinHeader {
     offset_verts: u32,
     offset_vhots: u32,
     offset_uvs: u32,
+    offset_normals: u32,
 }
 
 pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeader) -> ObjBinHeader {
@@ -682,7 +709,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
     let offset_vhots = ss2_common::read_u32(reader);
     let offset_verts = ss2_common::read_u32(reader);
     let _offset_lights = ss2_common::read_u32(reader);
-    let _offset_normals = ss2_common::read_u32(reader);
+    let offset_normals = ss2_common::read_u32(reader);
     let offset_polygons = ss2_common::read_u32(reader);
     let _offset_nodes = ss2_common::read_u32(reader);
     let _model_size = ss2_common::read_u32(reader);
@@ -708,6 +735,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
         offset_vhots,
         offset_uvs,
         offset_polygons,
+        offset_normals,
         num_mats,
         num_objs,
         num_polygons,
@@ -720,7 +748,7 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
 }
 
 fn convert_skinned_vertices_to_static_vertices(
-    vertices: &Vec<VertexPositionTextureSkinned>,
+    vertices: &Vec<VertexPositionTextureSkinnedNormal>,
     skeleton: &Skeleton,
 ) -> Vec<VertexPositionTexture> {
     let mut v = Vec::new();
