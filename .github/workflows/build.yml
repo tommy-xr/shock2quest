@@ -31,8 +31,13 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install ffmpeg pkg-config
-          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix ffmpeg)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          # Install FFmpeg 6 which is compatible with ffmpeg-the-third 2.0.1
+          brew install ffmpeg@6 pkg-config
+          # Set up environment for FFmpeg@6
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix ffmpeg@6)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          echo "FFMPEG_DIR=$(brew --prefix ffmpeg@6)" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix ffmpeg@6)/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix ffmpeg@6)/lib" >> $GITHUB_ENV
 
       - name: Cache cargo build
         uses: actions/cache@v4
