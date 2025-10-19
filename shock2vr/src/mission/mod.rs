@@ -193,6 +193,11 @@ impl Mission {
         entity_populator: Box<dyn EntityPopulator>,
         held_item_save_data: HeldItemSaveData,
     ) -> Mission {
+        // Handle special mission types that don't correspond to .mis files
+        if mission == "asset_validation" {
+            panic!("Asset validation mission requested but not yet integrated.\n\nThis is a special mission type that uses the new Mission trait system (AssetValidationMission).\nCurrently the game uses the old Mission struct system.\n\nTo test AssetValidationMission:\n1. Create a simple test runner using MissionManager\n2. Or integrate the new mission system into the main game loop\n\nSee shock2vr/src/mission/asset_validation_mission.rs for the implementation.");
+        }
+
         let properties = &global_context.properties;
         let links = &global_context.links;
         let links_with_data = &global_context.links_with_data;
