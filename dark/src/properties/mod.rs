@@ -1421,8 +1421,6 @@ type Reader<R, ROutput> = fn(&mut R, u32) -> ROutput;
 
 type Converter<RIntermediate, ROutput> = fn(RIntermediate) -> ROutput;
 
-type LinkDataConverter<TData> = fn(TData, ToTemplateLinkInfo) -> ToTemplateLink;
-
 type Accumulator<T> = fn(T, T) -> T;
 
 struct PropertyDefinitionStruct<R: io::Read + io::Seek, RIntermediate, ROutput: Component> {

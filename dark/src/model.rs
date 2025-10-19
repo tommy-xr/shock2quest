@@ -22,6 +22,7 @@ impl StaticModel {
         &self.scene_objects
     }
 
+    #[allow(dead_code)]
     fn pose(&mut self, _animation_clip: &AnimationClip) {}
 
     fn transform(model: &StaticModel, transform: Matrix4<f32>) -> StaticModel {

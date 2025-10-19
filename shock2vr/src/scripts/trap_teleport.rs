@@ -3,10 +3,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{
-    script_util::{get_all_switch_links},
-    Effect, MessagePayload, Script,
-};
+use super::{script_util::get_all_switch_links, Effect, MessagePayload, Script};
 
 pub struct TrapTeleport {}
 impl TrapTeleport {

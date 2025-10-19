@@ -1,6 +1,6 @@
-use std::{
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
+
+use engine::render_log;
 
 use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
@@ -8,10 +8,7 @@ use dark::{
     mission::{Cell, SystemShock2Level},
     properties::PropPosition,
 };
-use engine::{
-    assets::asset_cache::AssetCache,
-    scene::{SceneObject},
-};
+use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
 
 use crate::util::has_refs;
@@ -137,7 +134,6 @@ impl PortalVisibilityEngine {
 
                     continue;
                 }
-                
 
                 // debug_cells.push(PortalDebugInfo {
                 //     from_cell: current_cell.idx,
@@ -217,7 +213,8 @@ impl VisibilityEngine for PortalVisibilityEngine {
         let maybe_camera_cell_idx = level.get_cell_idx_from_position(camera_position);
         let maybe_camera_cell = level.get_cell_from_position(camera_position);
 
-        println!(
+        render_log!(
+            DEBUG,
             "visibility engine - starting from cell: {:?}",
             maybe_camera_cell_idx
         );
@@ -257,7 +254,8 @@ impl VisibilityEngine for PortalVisibilityEngine {
             0,
         );
 
-        println!(
+        render_log!(
+            DEBUG,
             "total cells: {} | visible cells: {}",
             level.cells.len(),
             visible_cells.len()

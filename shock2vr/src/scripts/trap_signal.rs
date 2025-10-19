@@ -1,9 +1,9 @@
-use dark::properties::{Links, PropSignalType};
+use dark::properties::PropSignalType;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{physics::PhysicsWorld, scripts::script_util};
 
-use super::{script_util::get_all_switch_links, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script};
 
 pub struct TrapSignal;
 impl TrapSignal {

@@ -706,8 +706,7 @@ impl PhysicsWorld {
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
         /* Run the game loop, stepping the simulation once per frame. */
-        profile!(
-            "physics.step",
+        profile!(scope: "physics", level: TRACE, "physics.step", {
             self.physics_pipeline.step(
                 &self.gravity,
                 &self.integration_parameters,
@@ -723,13 +722,12 @@ impl PhysicsWorld {
                 &(),
                 &self.events,
             )
-        );
+        });
 
-        profile!(
-            "physics.update_query_pipeline",
+        profile!(scope: "physics", level: TRACE, "physics.update_query_pipeline", {
             self.query_pipeline
                 .update(&self.rigid_body_set, &self.collider_set)
-        );
+        });
 
         // Update character controller
         let desired_movement = vec_to_nvec(desired_movement);
@@ -761,8 +759,7 @@ impl PhysicsWorld {
         let movement_with_gravity = desired_movement + Vector::y() * gravity;
 
         //let mut collisions = vec![];
-        let mvt = profile!(
-            "physics.move_player",
+        let mvt = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &self.rigid_body_set,
@@ -781,11 +778,11 @@ impl PhysicsWorld {
                 |_c| (),
                 //|c| collisions.push(c),
             )
-        );
+        });
 
         let mut collision_events = Vec::new();
         let mut current_sensor_intersections = HashSet::new();
-        profile!("physics.intersections_with_shape", {
+        profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
             &self.query_pipeline.intersections_with_shape(
                 &self.rigid_body_set,
                 &self.collider_set,

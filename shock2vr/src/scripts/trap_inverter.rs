@@ -1,9 +1,6 @@
-
-
 use shipyard::{EntityId, World};
 
-
-use crate::{physics::PhysicsWorld};
+use crate::physics::PhysicsWorld;
 
 use super::{
     script_util::{invert, send_to_all_switch_links},

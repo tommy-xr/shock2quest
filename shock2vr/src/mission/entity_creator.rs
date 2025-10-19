@@ -7,6 +7,7 @@ use crate::{
     time::Time,
     util::{get_rotation_from_matrix, has_refs, point3_to_vec3},
 };
+use engine::physics_log;
 
 use cgmath::{
     num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform,
@@ -749,7 +750,7 @@ pub fn create_physics_representation(
 
             let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
             {
-                println!("-- hitbox - creating dynamic entity");
+                physics_log!(DEBUG, "Creating dynamic hitbox entity");
                 physics.add_dynamic(
                     entity_id,
                     pos.position,

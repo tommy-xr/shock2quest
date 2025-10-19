@@ -3,6 +3,7 @@
 use cgmath::{point3, vec3, Matrix4, Quaternion, Rotation, Vector3, Zero};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 use engine::scene::SceneObject;
+use engine::script_log;
 
 use rapier3d::prelude::RigidBodyHandle;
 use shipyard::{EntityId, Get, View, World};
@@ -127,6 +128,14 @@ impl VirtualHand {
 
     pub fn is_holding(&self, entity_id: EntityId) -> bool {
         self.get_held_entity() == Some(entity_id)
+    }
+
+    pub fn get_position(&self) -> Vector3<f32> {
+        self.position
+    }
+
+    pub fn get_rotation(&self) -> Quaternion<f32> {
+        self.rotation
     }
 
     pub fn grab_entity(
@@ -258,7 +267,7 @@ impl VirtualHand {
                     }
 
                     if prev.trigger_value > 0.5 && input_hand.trigger_value < 0.5 {
-                        println!("releasing!");
+                        script_log!(DEBUG, "Hand releasing trigger");
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
                                 to: entity_id,

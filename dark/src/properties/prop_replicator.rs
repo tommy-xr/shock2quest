@@ -1,7 +1,5 @@
 use std::io;
 
-
-
 use shipyard::Component;
 
 use crate::ss2_common::{read_string_with_size, read_u32};

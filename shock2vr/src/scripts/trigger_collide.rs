@@ -1,15 +1,8 @@
-
-
-
 use shipyard::{EntityId, World};
 
+use crate::physics::PhysicsWorld;
 
-use crate::{physics::PhysicsWorld};
-
-use super::{
-    script_util::{send_to_all_switch_links_and_self},
-    Effect, MessagePayload, Script,
-};
+use super::{script_util::send_to_all_switch_links_and_self, Effect, MessagePayload, Script};
 
 pub struct TriggerCollide {}
 

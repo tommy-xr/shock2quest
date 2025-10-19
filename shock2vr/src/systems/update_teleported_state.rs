@@ -1,7 +1,3 @@
-
-
-
-
 //
 // update_teleported_state
 //

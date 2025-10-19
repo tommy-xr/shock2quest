@@ -19,15 +19,15 @@ unsafe impl Send for Texture {}
 unsafe impl Sync for Texture {}
 
 pub trait TextureTrait {
-    fn bind0(&self, render_context: &EngineRenderContext) -> ();
-    fn bind1(&self, render_context: &EngineRenderContext) -> ();
+    fn bind0(&self, render_context: &EngineRenderContext);
+    fn bind1(&self, render_context: &EngineRenderContext);
 }
 
 impl TextureTrait for Texture {
-    fn bind0(&self, _render_context: &EngineRenderContext) -> () {
+    fn bind0(&self, _render_context: &EngineRenderContext) {
         bind0(self);
     }
-    fn bind1(&self, _render_context: &EngineRenderContext) -> () {
+    fn bind1(&self, _render_context: &EngineRenderContext) {
         bind1(self);
     }
 }
@@ -47,12 +47,12 @@ impl AnimatedTexture {
 }
 
 impl TextureTrait for AnimatedTexture {
-    fn bind0(&self, render_context: &EngineRenderContext) -> () {
+    fn bind0(&self, render_context: &EngineRenderContext) {
         let frame = (render_context.time / self.time_per_frame) as usize;
         let frame = frame % self.textures.len();
         bind0(&self.textures[frame]);
     }
-    fn bind1(&self, render_context: &EngineRenderContext) -> () {
+    fn bind1(&self, render_context: &EngineRenderContext) {
         let frame = (render_context.time / self.time_per_frame) as usize;
         let frame = frame % self.textures.len();
         bind1(&self.textures[frame]);
@@ -183,7 +183,7 @@ pub fn init<T: crate::texture_format::TextureFormat>(
     init_from_memory(raw_texture_data)
 }
 
-pub fn init2(buffer: &std::vec::Vec<u8>, format: &Box<dyn TextureFormat>) -> Texture {
+pub fn init2(buffer: &[u8], format: &dyn TextureFormat) -> Texture {
     // TODO:
     //let img = image::load_from_memory_with_format(&buffer, format).expect("Failed to load texture");
 

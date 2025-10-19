@@ -1,13 +1,15 @@
 use std::collections::HashSet;
 
-use dark::properties::{PropLocalPlayer, PropTeleported, PropTripFlags, TripFlags, PropTranslatingDoor};
+use dark::properties::{
+    PropLocalPlayer, PropTeleported, PropTranslatingDoor, PropTripFlags, TripFlags,
+};
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
 
 use crate::physics::PhysicsWorld;
 
 use super::{
-    script_util::{invert, send_to_all_switch_links, get_all_switch_links},
+    script_util::{get_all_switch_links, invert, send_to_all_switch_links},
     Effect, MessagePayload, Script,
 };
 
@@ -65,7 +67,6 @@ impl TrapNewTripwire {
         if is_once && self.has_activated {
             false
         } else if trip_flags.contains(TripFlags::PLAYER) {
-
             // TODO: TripFlags::Player
             // I'm not sure what the TripFlags::Player is actually used for.
             // It seems like - in the game - AI can trigger tripwires that are marked as Player
@@ -80,15 +81,13 @@ impl TrapNewTripwire {
 
     fn is_linked_to_simple_door(world: &World, entity_id: EntityId) -> bool {
         let links = get_all_switch_links(world, entity_id);
-    
+
         let v_simple_door = world.borrow::<View<PropTranslatingDoor>>().unwrap();
 
         // Are there any links that are a simple door?
         // TODO: Make sure it is _simple_ - ie, not locked
         // TODO: Handle rotating doors?
-        links.iter().any(|link| {
-            v_simple_door.get(*link).is_ok()
-        })
+        links.iter().any(|link| v_simple_door.get(*link).is_ok())
     }
 }
 impl Script for TrapNewTripwire {

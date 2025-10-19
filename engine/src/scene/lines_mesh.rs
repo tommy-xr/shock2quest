@@ -51,9 +51,9 @@ pub fn create(raw_vertices: Vec<VertexPosition>) -> LinesMesh {
     // uncomment this call to draw in wireframe polygons.
     LinesMesh {
         index_count,
-        vao: vao,
-        vbo: vbo,
-        ebo: ebo,
+        vao,
+        vbo,
+        ebo,
     }
 }
 

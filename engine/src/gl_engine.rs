@@ -33,8 +33,8 @@ use crate::engine::EngineRenderContext;
 use crate::scene::scene::Scene;
 
 impl Engine for OpenGLEngine {
-    fn get_storage(&self) -> &Box<dyn crate::file_system::Storage> {
-        &self.storage
+    fn get_storage(&self) -> &dyn crate::file_system::Storage {
+        &*self.storage
     }
 
     fn render(&self, render_context: &EngineRenderContext, scene: &Scene) {
@@ -71,7 +71,7 @@ impl Engine for OpenGLEngine {
 
             // let view = head * camera;
 
-            let view = util::compute_view_matrix_from_render_context(&render_context);
+            let view = util::compute_view_matrix_from_render_context(render_context);
 
             //let view = camera_translation * camera_rotation * head_rotation;
 
@@ -122,15 +122,48 @@ impl Engine for OpenGLEngine {
             // // );
             // floor.draw(&self, render_context, &view);
 
-            // STEP 1: Opaque pass
+            // STEP 1: Base opaque pass (no lighting, just base material properties)
             scene
                 .iter()
                 .for_each(|s| s.draw_opaque(self, render_context, &view));
 
+            // STEP 2: Multi-pass lighting for opaque objects
+            if scene.light_count() > 0 {
+                // Setup additive blending for light accumulation
+                gl::Enable(gl::BLEND);
+                gl::BlendFunc(gl::ONE, gl::ONE); // Additive blending
+                gl::DepthMask(gl::FALSE); // Read-only depth testing
+                gl::DepthFunc(gl::EQUAL); // Only render pixels with exact depth match
+
+                // Render one pass per light
+                for light in scene.lights().lights() {
+                    scene.iter().for_each(|scene_object| {
+                        // Check if this light affects this object's position
+                        // For now, use object's transform position as a simple check
+                        let world_pos = scene_object.get_world_position();
+                        if light.affects_position(world_pos) {
+                            scene_object.draw_light_pass(
+                                self,
+                                render_context,
+                                &view,
+                                light.as_ref(),
+                                None, // No shadow map yet
+                            );
+                        }
+                    });
+                }
+
+                // Restore normal blend state
+                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+                gl::DepthFunc(gl::LESS); // Restore normal depth testing
+                gl::DepthMask(gl::TRUE); // Re-enable depth writes
+            }
+
             gl::DepthMask(gl::FALSE);
 
-            // STEP 2: Transparent pass
+            // STEP 3: Transparent pass
             // TODO: Properly order back-to-front..
+            // TODO: Add lighting support for transparent materials
             scene
                 .iter()
                 .for_each(|s| s.draw_transparent(self, render_context, &view));

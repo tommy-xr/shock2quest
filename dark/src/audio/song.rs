@@ -19,6 +19,7 @@ pub struct Song {
 
 #[derive(Debug, Clone)]
 pub struct SongSection {
+    #[allow(dead_code)]
     name: String,
     wav_file: String,
     options: Vec<SongSectionOption>,

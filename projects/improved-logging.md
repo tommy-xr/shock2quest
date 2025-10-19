@@ -84,15 +84,15 @@ Create `engine/src/logging/mod.rs` with:
 
 ### 6. Migration Strategy
 
-**Phase 1: Core Infrastructure**
-- Implement logging configuration module
-- Update profile! macro
-- Add scope-aware logging utilities
+**Phase 1: Core Infrastructure ✅ COMPLETED**
+- ✅ Implement logging configuration module (`engine/src/logging/`)
+- ✅ Update profile! macro with scope-aware functionality
+- ✅ Add scope-aware logging utilities and convenience macros
 
-**Phase 2: High-Impact Areas**
-- Migrate performance-critical rendering code
-- Update physics logging
-- Replace audio debug prints
+**Phase 2: High-Impact Areas - COMPLETED ✅**
+- ✅ Migrate performance-critical rendering code (completed: shader compilation errors, scene object debug prints, visibility engine logging)
+- ✅ Update physics logging (completed: 4 profile! macros migrated to scoped system)
+- ✅ Replace audio debug prints (completed: replaced noisy debug prints with scoped logging)
 
 **Phase 3: Systematic Migration**
 - Update remaining subsystems one by one
@@ -176,6 +176,258 @@ THIEF_LOG=debug cargo run --bin thief
 ```
 
 This strategy provides a comprehensive solution to the current logging noise while maintaining debugging capabilities and adding powerful filtering options.
+
+## Implementation Status
+
+### Phase 1: Core Infrastructure - COMPLETED ✅
+
+**Implemented Files:**
+- `engine/src/logging/mod.rs` - Main logging module with static configuration management
+- `engine/src/logging/config.rs` - Configuration parsing and log level management
+- `engine/src/logging/macros.rs` - Scoped logging convenience macros
+- `engine/src/macros.rs` - Enhanced profile! macro with backwards compatibility
+- `engine/Cargo.toml` - Added tracing-subscriber dependency
+- `engine/src/lib.rs` - Exported logging module
+
+**Features Delivered:**
+1. **LogConfig System**: Configurable logging with global and per-scope levels
+2. **Environment Variable Support**: Parse logging configuration from environment variables like `SHOCK2_LOG=warn,physics=debug`
+3. **Enhanced profile! Macro**:
+   - New: `profile!(scope: "physics", level: debug, "description", { code })`
+   - Backwards compatible: `profile!("description", { code })` (uses "performance" scope, DEBUG level)
+4. **Convenience Macros**: `physics_log!`, `audio_log!`, `render_log!`, etc. for common scopes
+5. **Thread-Safe Configuration**: Uses `OnceLock` for global config with lazy defaults
+
+**Usage Examples:**
+```rust
+// Initialize in runtime (e.g., main.rs)
+engine::logging::init_logging("SHOCK2_LOG");
+
+// Enhanced profile macro
+profile!(scope: "physics", level: debug, "collision_detection", {
+    // expensive physics computation
+});
+
+// Backwards compatible
+profile!("render_frame", {
+    // rendering code - uses "performance" scope, DEBUG level
+});
+
+// Scoped logging
+physics_log!(warn, "Physics simulation unstable: dt={}", dt);
+audio_log!(info, "Loading audio file: {}", filename);
+```
+
+**Environment Variable Examples:**
+```bash
+# Only warnings and errors
+SHOCK2_LOG=warn cargo run
+
+# Debug physics, trace rendering, warn everything else
+SHOCK2_LOG=warn,physics=debug,render=trace cargo run
+
+# Trace everything (very verbose)
+SHOCK2_LOG=trace cargo run
+```
+
+### Phase 2: Audio System Migration - COMPLETED ✅
+
+**Completed in branch `feat/logging-phase2-audio-migration`:**
+
+**Audio System Updates:**
+- `engine/src/audio/mod.rs`:
+  - Replaced noisy `println!("!!debug - audio update")` with `audio_log!(DEBUG, "Audio system update started")`
+  - Added proper import for `audio_log!` macro
+- `engine/src/audio/output.rs`:
+  - Migrated 5 error handling `println!` statements to use `audio_log!(ERROR, ...)`
+  - Improved error messages with proper capitalization and context
+
+**Benefits Achieved:**
+- **Eliminated Noisy Debug Output**: The frequent "!!debug - audio update" print that appeared every frame is now controlled by log levels
+- **Consistent Error Reporting**: Audio subsystem errors now use structured logging with proper scope attribution
+- **Configurable Verbosity**: Audio logs can be controlled via `SHOCK2_LOG=audio=level` environment variable
+- **Better Debugging**: Audio issues can now be isolated with `SHOCK2_LOG=warn,audio=debug`
+
+**Fixed Issue in scoped_log Macro:**
+- Updated `engine/src/logging/macros.rs` to use `tracing::event!` instead of `tracing::$level!` for proper level handling
+- Ensures all scoped logging macros work correctly with Level constants
+
+**Usage Examples:**
+```bash
+# Silent audio (only errors)
+SHOCK2_LOG=error cargo run
+
+# Audio debugging enabled
+SHOCK2_LOG=warn,audio=debug cargo run
+
+# Everything audio-related
+SHOCK2_LOG=warn,audio=trace cargo run
+```
+
+**Phase 2 Render System Migration - COMPLETED ✅**
+
+**Completed in branch `feat/logging-phase2-render-migration`:**
+
+**Render System Updates:**
+- `engine/src/shader.rs`:
+  - Migrated shader compilation error logging from `println!` to `render_log!(ERROR, ...)` for proper scoped error reporting
+  - Migrated shader deletion debug prints to use `render_log!(DEBUG, ...)`
+  - Fixed clippy warning about uninitialized vector for shader compilation error logs
+- `engine/src/scene/scene_object.rs`:
+  - Migrated screen-space text debug prints to use `render_log!(DEBUG, ...)` instead of noisy `println!` statements
+- `shock2vr/src/mission/visibility_engine/portal_visibility_engine.rs`:
+  - Migrated visibility engine debug prints to use `render_log!(DEBUG, ...)` for portal culling information
+  - Replaced frequent cell visibility logging with controlled scoped logging
+- `shock2vr/src/mission/mod.rs`:
+  - Updated old-style `profile!` macros to use new scoped versions
+  - Script world updates now use `profile!(scope: "game", level: DEBUG, ...)`
+  - Visibility engine preparation now uses `profile!(scope: "render", level: DEBUG, ...)`
+
+**Benefits Achieved:**
+- **Controlled Render Debugging**: Shader compilation errors and scene rendering logs can now be controlled via `SHOCK2_LOG=render=level`
+- **Reduced Noise**: Debug prints that appeared every frame are now controlled by log levels
+- **Better Error Reporting**: Shader compilation failures now use structured logging with proper scope attribution
+- **Performance Monitoring**: Rendering performance can be isolated with `SHOCK2_LOG=warn,render=trace`
+
+**Usage Examples:**
+```bash
+# Silent rendering (only errors)
+SHOCK2_LOG=error cargo run
+
+# Render debugging enabled
+SHOCK2_LOG=warn,render=debug cargo run
+
+# Everything render-related including performance traces
+SHOCK2_LOG=warn,render=trace cargo run
+
+# Game logic debugging with render errors only
+SHOCK2_LOG=render=error,game=debug cargo run
+```
+
+**Render Scope Coverage:**
+The render scope now covers:
+- Shader compilation and management
+- Scene object creation and debugging
+- Portal-based visibility culling
+- Rendering performance profiling
+- Visual debugging output
+
+### Phase 3: Script & Mission System Migration - COMPLETED ✅
+
+**Completed in branch `feat/logging-phase3-systematic-migration`:**
+
+**Script System Updates:**
+- `shock2vr/src/scripts/use_sound.rs`:
+  - Migrated `println!("Playing - Turn on message")` to `script_log!(DEBUG, "Playing turn on sound for entity")`
+  - Updated commented debug print to use scoped logging format
+- `shock2vr/src/scripts/energy_station.rs`:
+  - Migrated `println!("debug!! {:?}", query)` to `script_log!(DEBUG, "Energy station activate query: {:?}", query)`
+  - Improved debug message clarity and context
+- `shock2vr/src/virtual_hand.rs`:
+  - Migrated `println!("releasing!")` to `script_log!(DEBUG, "Hand releasing trigger")`
+  - More descriptive logging for VR interaction debugging
+
+**Mission System Updates:**
+- `shock2vr/src/mission/mod.rs`:
+  - Migrated animation direction change logging: `println!("!! animation direction changed: {:?}", ang)` → `game_log!(DEBUG, "Animation direction changed: {:?}", ang)`
+  - Migrated animation loading warnings: `println!("WARN!! Unable to load/find animation...")` → `game_log!(WARN, ...)`
+  - Migrated unhandled effect logging: `println!("Unhandled effect...")` → `game_log!(WARN, "Unhandled effect: {effect:?}")`
+  - Migrated render model count logging: `println!("rendered models: {} total models: {}")` → `game_log!(TRACE, "Rendered models: {} / {} total")`
+  - Migrated cell position warnings: `println!("unable to find cell at position...")` → `game_log!(WARN, "Unable to find cell at position: {:?}", player_pos)`
+
+**Benefits Achieved:**
+- **Script Debugging Control**: Script behavior can now be debugged with `SHOCK2_LOG=script=debug`
+- **Mission System Monitoring**: Game logic and mission system behavior controlled via `SHOCK2_LOG=game=level`
+- **Better Error Categorization**: Warnings and debug messages properly categorized by importance level
+- **Reduced Console Noise**: High-frequency logs (render counts) moved to TRACE level
+- **Enhanced VR Debugging**: Hand interaction logging can be enabled for VR troubleshooting
+
+**Usage Examples:**
+```bash
+# Script debugging only
+SHOCK2_LOG=script=debug cargo run
+
+# Mission system warnings and errors
+SHOCK2_LOG=game=warn cargo run
+
+# Everything game and script related
+SHOCK2_LOG=warn,game=debug,script=debug cargo run
+
+# Performance monitoring with render counts
+SHOCK2_LOG=warn,game=trace cargo run
+
+# VR interaction debugging
+SHOCK2_LOG=warn,script=debug cargo run
+```
+
+**Phase 3 Scope Coverage:**
+The script and game scopes now cover:
+- Entity script interactions and debugging
+- VR hand/controller interactions
+- Mission system state changes
+- Animation system debugging
+- Effect handling and validation
+- Rendering performance metrics
+- Cell/level navigation warnings
+
+### Phase 4: Save/Load System Migration - COMPLETED ✅
+
+**Completed in branches `feat/logging-phase4-systematic-migration` and `feat/logging-phase4-continue`:**
+
+**Save/Load System Updates:**
+- `shock2vr/src/save_load/entity_save_data.rs`:
+  - Migrated property deserialization debug print: `println!("deserializing: {}")` → `game_log!(DEBUG, "Deserializing property: {}", name)`
+  - Added proper import for `game_log` macro
+- `shock2vr/src/lib.rs`:
+  - Migrated entity count logging: `println!("ALL ENTITIES: {}")` → `game_log!(DEBUG, "Saving {} entities to save data", count)`
+  - Enhanced message for better context and clarity
+- `engine_ffmpeg/src/video_player.rs`:
+  - Migrated video decoder error: `println!("received err in send_packet: {:?}", err)` → `render_log!(ERROR, "Video decoder send_packet error: {:?}", err)`
+  - Properly categorized as render scope error for FFmpeg integration
+
+**Additional System Updates:**
+- `dark/src/ss2_entity_info.rs`:
+  - Migrated entity initialization debug prints to `tracing::debug!` calls
+  - Improved entity skipping and player factory logging
+- `dark/src/gamesys/gamesys.rs`:
+  - Migrated speech database debug print: `println!("!! -- voice: {} concept: {} tag_map: {}", ...)` → `tracing::debug!("Voice {} concept '{}' tag_map {}", ...)`
+- `shock2vr/src/mission/entity_creator.rs`:
+  - Migrated physics debug print: `println!("-- hitbox - creating dynamic entity")` → `physics_log!(debug, "Creating dynamic hitbox entity")`
+- `shock2vr/src/util.rs`:
+  - Migrated entity debugging prints to use `game_log!(debug, ...)` for consistent scoped logging
+- `dark/src/tag_database.rs`:
+  - Migrated tag database debug prints to `tracing::debug!` calls
+- `dark/src/mission/mod.rs`:
+  - Migrated mission lighting info: `println!("static_lights: {:?} dynamic_lights {:?}", ...)` → `tracing::debug!("Mission lights - static: {} dynamic: {}", ...)`
+- `runtimes/oculus_runtime/src/android_permissions.rs`:
+  - Migrated Android permission debug prints to proper tracing calls
+
+**Benefits Achieved:**
+- **Save/Load Debugging Control**: Save/load operations can now be debugged with `SHOCK2_LOG=game=debug`
+- **Video System Integration**: FFmpeg video decoder errors properly categorized in render scope
+- **Consistent Message Format**: All logging now follows structured format with clear context
+- **Reduced Console Noise**: Debug-level logs only appear when explicitly requested
+
+**Usage Examples:**
+```bash
+# Debug save/load operations only
+SHOCK2_LOG=game=debug cargo run
+
+# Debug video/render issues
+SHOCK2_LOG=render=debug cargo run
+
+# Combined save/load and video debugging
+SHOCK2_LOG=warn,game=debug,render=debug cargo run
+```
+
+**Phase 4 Scope Coverage:**
+The game and render scopes now additionally cover:
+- Entity save/load serialization debugging
+- Property deserialization tracking
+- Save data entity count logging
+- FFmpeg video decoder error handling
+
+**Phase 4 Completion Status:** All major active `println!` statements have been migrated to scoped or structured logging. The project logging infrastructure is now fully implemented and operational.
 
 ## Files to Modify
 

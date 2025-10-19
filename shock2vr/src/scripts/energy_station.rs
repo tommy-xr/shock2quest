@@ -3,6 +3,7 @@ use dark::{
     EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
+use engine::script_log;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
@@ -65,7 +66,7 @@ fn do_recharge(world: &World, entity_id: EntityId, with: &EntityId) -> Effect {
 
     let mut query = vec![("event", "activate")];
     query.append(&mut class_tags);
-    println!("debug!! {:?}", query);
+    script_log!(DEBUG, "Energy station activate query: {:?}", query);
     let sound_effect = Effect::PlayEnvironmentalSound {
         audio_handle: AudioHandle::new(),
         query: EnvSoundQuery::from_tag_values(query),

@@ -1,10 +1,8 @@
-
-
-use engine::audio::{AudioHandle};
+use engine::audio::AudioHandle;
+use engine::script_log;
 use shipyard::{EntityId, World};
 
-
-use crate::{physics::PhysicsWorld};
+use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script};
 
@@ -24,14 +22,14 @@ impl Script for UseSound {
     ) -> Effect {
         match msg {
             MessagePayload::Frob => {
-                println!("Playing - Turn on message");
+                script_log!(DEBUG, "Playing turn on sound for entity");
                 // TODO: Get sound from schema
                 // let v_sound = world.borrow::<View<PropObjectSound>>().unwrap();
                 // let maybe_trip_sound = v_sound.get(entity_id);
                 let handle = AudioHandle::new();
                 // // self.playing_sounds.push(handle.clone());
                 // if let Ok(sound) = maybe_trip_sound {
-                // println!("Playing - Sound: {}", sound.name);
+                //     script_log!(debug, "Playing sound: {}", sound.name);
                 Effect::PlaySound {
                     handle,
                     name: "TELEPHON".to_owned(),

@@ -3,6 +3,7 @@
 opt-level = 3
 
 [workspace]
+resolver = "2"
 
 members = [
     "runtimes/*",
@@ -10,4 +11,5 @@ members = [
     "engine_ffmpeg",
     "shock2vr",
     "dark",
+    "tools/shodan",
 ]

@@ -7,6 +7,7 @@ use clap::Parser;
 
 use dark::SCALE_FACTOR;
 use engine::profile;
+use engine::scene::Scene;
 
 use engine::util::compute_view_matrix_from_render_context;
 use glfw::GlfwReceiver;
@@ -16,7 +17,6 @@ use shock2vr::command::MoveInventoryCommand;
 
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
-
 
 use shock2vr::GameOptions;
 use shock2vr::SpawnLocation;
@@ -323,7 +323,18 @@ pub fn main() {
 
         scene.extend(per_eye_scene);
 
-        profile!("engine.render", engine.render(&render_context, &scene));
+        let mut scene_for_render = Scene::from_objects(scene);
+
+        // Add hand spotlights for enhanced lighting testing (experimental feature)
+        let hand_spotlights = game.get_hand_spotlights();
+        for spotlight in hand_spotlights {
+            scene_for_render.lights_mut().add_spotlight(spotlight);
+        }
+
+        profile!(
+            "engine.render",
+            engine.render(&render_context, &scene_for_render)
+        );
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------

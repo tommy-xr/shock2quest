@@ -8,6 +8,7 @@ use rodio::buffer::SamplesBuffer;
 use rodio::source::{Buffered, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
+use crate::audio_log;
 use tracing::trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,6 +27,12 @@ const SOUND_SCALE_FACTOR: f32 = 5.0;
 #[derive(Clone, Debug)]
 pub struct AudioHandle {
     id: u64,
+}
+
+impl Default for AudioHandle {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AudioHandle {
@@ -121,6 +128,16 @@ where
     ambient_sounds: HashMap<TAmbientKey, (SpatialSink, Rc<AudioClip>)>,
 }
 
+impl<TAmbientKey, TCue> Default for AudioContext<TAmbientKey, TCue>
+where
+    TAmbientKey: Hash + Eq + Copy,
+    TCue: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<TAmbientKey, TCue> AudioContext<TAmbientKey, TCue>
 where
     TAmbientKey: Hash + Eq + Copy,
@@ -151,21 +168,21 @@ where
     pub fn set_background_music(
         &mut self,
         background_music_player: Box<dyn BackgroundMusic<TCue>>,
-    ) -> () {
+    ) {
         self.background_music_player = Some(background_music_player);
         self.next_music_cue = None;
     }
 
-    pub fn stop_background_music(&mut self) -> () {
+    pub fn stop_background_music(&mut self) {
         self.background_music_player = None;
         self.next_music_cue = None;
     }
 
-    pub fn set_background_music_cue(&mut self, cue: TCue) -> () {
+    pub fn set_background_music_cue(&mut self, cue: TCue) {
         self.next_music_cue = Some(cue)
     }
 
-    pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) -> () {
+    pub fn set_environmental_sound(&mut self, clip: Rc<AudioClip>) {
         let sink = rodio::Sink::try_new(&self.handle).unwrap();
         clip.add_to_sink(&sink);
         sink.set_volume(0.2);
@@ -178,7 +195,7 @@ where
         position: Vector3<f32>,
         current_ambient_sounds: Vec<(TAmbientKey, Vector3<f32>, Rc<AudioClip>)>,
     ) {
-        println!("!!debug - audio update");
+        audio_log!(DEBUG, "Audio system update started");
         self.update_background_music();
         self.update_environmental_sounds();
 
@@ -211,7 +228,7 @@ where
 
         self.handle_to_sink.retain(|_, sink| !sink.empty());
         // Update positional sounds
-        for (_, sink) in &mut self.handle_to_sink {
+        for sink in self.handle_to_sink.values_mut() {
             sink.update_listener_position(left_ear_position, right_ear_position);
         }
 
@@ -226,7 +243,7 @@ where
         for (key, (sink, clip)) in &self.ambient_sounds {
             if let Some(current_sound) = current_sound_hash.get(key) {
                 if sink.len() == 0 {
-                    clip.add_to_spatial_sink(&sink);
+                    clip.add_to_spatial_sink(sink);
                 }
 
                 sink.set_emitter_position([
@@ -319,13 +336,13 @@ pub struct AudioClip {
 }
 
 impl AudioClip {
-    pub fn add_to_spatial_sink(&self, sink: &SpatialSink) -> () {
+    pub fn add_to_spatial_sink(&self, sink: &SpatialSink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
             SourceType::Raw(source) => sink.append(source.clone()),
         }
     }
-    pub fn add_to_sink(&self, sink: &Sink) -> () {
+    pub fn add_to_sink(&self, sink: &Sink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
             SourceType::Raw(source) => sink.append(source.clone()),
@@ -350,7 +367,7 @@ impl AudioClip {
 pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
     handle: AudioHandle,
-) -> () {
+) {
     let maybe_sink = context.handle_to_sink.remove(&handle.id);
 
     if let Some(sink) = maybe_sink {
@@ -366,7 +383,7 @@ pub fn test_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 ) {
     let position = (context.last_left_ear_position + context.last_right_ear_position) / 2.0;
 
-    let id = handle.id.clone();
+    let id = handle.id;
     let sink = play_audio_core(context, position, handle, maybe_channel, audio_clip);
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
@@ -379,7 +396,7 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
 ) {
-    let id = handle.id.clone();
+    let id = handle.id;
     let scaled_position = position / SOUND_SCALE_FACTOR;
     let sink = play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
 
