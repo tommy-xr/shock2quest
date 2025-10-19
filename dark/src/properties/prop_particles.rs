@@ -1,12 +1,10 @@
-use std::{io};
+use std::io;
 
 use cgmath::Vector3;
-
 
 use shipyard::Component;
 
 use crate::ss2_common::*;
-
 
 use serde::{Deserialize, Serialize};
 

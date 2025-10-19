@@ -7,5 +7,5 @@
 pub mod teleport_system;
 pub mod trajectory;
 
-pub use teleport_system::{TeleportSystem, TeleportConfig, TeleportButton, TeleportHandState};
+pub use teleport_system::{TeleportButton, TeleportConfig, TeleportHandState, TeleportSystem};
 pub use trajectory::ArcTrajectory;

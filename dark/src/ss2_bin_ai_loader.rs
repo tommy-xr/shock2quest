@@ -6,12 +6,12 @@ use std::{
     time::Duration,
 };
 
-use cgmath::{prelude::*};
-use cgmath::{Point3, Vector2};
+use cgmath::prelude::*;
+use cgmath::{Point3, Vector2, Vector3};
 use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTextureSkinned},
+    scene::{SceneObject, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
 use tracing::trace;
@@ -21,8 +21,8 @@ use crate::{
     motion::JointId,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
-        read_bytes, read_i16, read_i32, read_i8, read_point3, read_single, read_string_with_size,
-        read_u16, read_u32, read_u8, read_vec2, read_vec3,
+        read_bytes, read_i16, read_i32, read_i8, read_packed_normal, read_point3, read_single,
+        read_string_with_size, read_u16, read_u32, read_u8, read_vec2, read_vec3,
     },
     ss2_skeleton::Skeleton,
     util::load_multiple_textures_for_model,
@@ -35,6 +35,7 @@ pub struct SystemShock2AIMesh {
     pub materials: Vec<AIMaterial>,
     pub uvs: Vec<AIUv>,
     pub vertices: Vec<Point3<f32>>,
+    pub normals: Vec<Vector3<f32>>,
     pub triangles: Vec<AITriangle>,
 
     pub joints: Vec<AIJointInfo>,
@@ -198,11 +199,7 @@ pub fn read<T: Read + Seek>(
         triangles,
         uvs,
         vertices,
-        //     materials,
-        //     vertices,
-        //     polygons,
-        //     header: header,
-        //     uvs,
+        normals,
     }
 }
 
@@ -402,16 +399,18 @@ pub fn read_triangle<T: Read + Seek>(reader: &mut T) -> AITriangle {
 #[derive(Clone, Debug)]
 pub struct AIUv {
     uv: Vector2<f32>,
+    normal: Vector3<f32>,
 }
 
 pub fn read_uv<T: Read + Seek>(reader: &mut T) -> AIUv {
     let uv = read_vec2(reader);
 
-    // TODO: Properly read normal
-    // Idea here: https://github.com/Kernvirus/SystemShock2VR/blob/5f0f7d054e79c2e36d9661f4ca62ab95ae69de0b/Assets/Scripts/Editor/DarkEngine/DarkDataConverter.cs#L12
-    let _packed_normal = read_u32(reader);
+    // Read packed normal from SystemShock2VR implementation
+    // Reference: https://github.com/Kernvirus/SystemShock2VR/blob/5f0f7d054e79c2e36d9661f4ca62ab95ae69de0b/Assets/Scripts/Editor/DarkEngine/DarkDataConverter.cs#L12
+    let packed_normal = read_u32(reader);
+    let normal = read_packed_normal(packed_normal);
 
-    AIUv { uv }
+    AIUv { uv, normal }
 }
 
 // Converter
@@ -463,13 +462,14 @@ pub fn to_vertices(
     mesh: &SystemShock2AIMesh,
     _skeleton: &Skeleton,
 ) -> (
-    Vec<(String, Vec<VertexPositionTextureSkinned>)>,
+    Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)>,
     HashMap<u32, Aabb3<f32>>,
 ) {
     let materials = &mesh.materials;
     let triangles = &mesh.triangles;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
+    let normals = &mesh.normals;
     let joints = &mesh.joints;
     let joint_map = &mesh.joint_map;
 
@@ -524,9 +524,15 @@ pub fn to_vertices(
             let uv0 = uvs[tri.vert_index0 as usize].uv;
             let uv1 = uvs[tri.vert_index1 as usize].uv;
             let uv2 = uvs[tri.vert_index2 as usize].uv;
-            verts.push(build_vertex(v0, uv0, [*j1, 0, 0, 0]));
-            verts.push(build_vertex(v1, uv1, [*j2, 0, 0, 0]));
-            verts.push(build_vertex(v2, uv2, [*j3, 0, 0, 0]));
+
+            // Use per-vertex normals from packed UV data instead of triangle normals
+            let normal0 = uvs[tri.vert_index0 as usize].normal; // Coordinate transform already applied
+            let normal1 = uvs[tri.vert_index1 as usize].normal;
+            let normal2 = uvs[tri.vert_index2 as usize].normal;
+
+            verts.push(build_vertex(v0, uv0, normal0, [*j1, 0, 0, 0]));
+            verts.push(build_vertex(v1, uv1, normal1, [*j2, 0, 0, 0]));
+            verts.push(build_vertex(v2, uv2, normal2, [*j3, 0, 0, 0]));
         }
         material_to_verts.push((name.to_owned(), verts));
     }
@@ -549,11 +555,13 @@ fn add_vertex_to_hitbox(
 fn build_vertex(
     vec: Point3<f32>,
     uv: Vector2<f32>,
+    normal: Vector3<f32>,
     bone_indices: [u32; 4],
-) -> VertexPositionTextureSkinned {
-    VertexPositionTextureSkinned {
+) -> VertexPositionTextureSkinnedNormal {
+    VertexPositionTextureSkinnedNormal {
         position: vec.to_vec(),
         uv,
         bone_indices,
+        normal,
     }
 }

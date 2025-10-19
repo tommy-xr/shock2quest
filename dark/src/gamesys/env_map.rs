@@ -1,11 +1,11 @@
-use std::{io};
-
+use std::io;
 
 use tracing::trace;
 
 use crate::{
     ss2_chunk_file_reader::ChunkFileTableOfContents,
-    ss2_common::{read_bytes, read_u32}, TagDatabase,
+    ss2_common::{read_bytes, read_u32},
+    TagDatabase,
 };
 
 pub struct EnvMap {}
@@ -28,8 +28,6 @@ impl EnvMap {
         //     let c1 = read_char(reader);
         //     trace!("-- read tag: {c0} {c1}");
         // }
-
-        
 
         // trace!("tag_database: {:#?}", tag_database);
         TagDatabase::read(reader)

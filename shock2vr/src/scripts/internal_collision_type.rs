@@ -3,7 +3,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{Effect, MessagePayload, Script, Message};
+use super::{Effect, Message, MessagePayload, Script};
 
 // Script to handle collision type
 pub struct InternalCollisionType {
@@ -39,8 +39,7 @@ impl Script for InternalCollisionType {
         match msg {
             MessagePayload::Collided { with } => {
                 let initial_effect = {
-                    if self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT)
-                    {
+                    if self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT) {
                         Effect::SlayEntity { entity_id }
                     } else if self
                         .collision_flags

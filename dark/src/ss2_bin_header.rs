@@ -1,18 +1,8 @@
 // ss2_bin_header.rs
 // Common header for ai/obj bin files
-use std::{
-    io::{prelude::*},
-};
+use std::io::prelude::*;
 
-
-
-
-
-use crate::{
-    ss2_common::{
-        self,
-    },
-};
+use crate::ss2_common::{self};
 
 pub enum BinFileType {
     Mesh, // Animated AI Mesh

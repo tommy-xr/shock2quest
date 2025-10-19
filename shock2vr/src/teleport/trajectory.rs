@@ -35,7 +35,8 @@ impl ArcTrajectory {
         let velocity = direction * initial_velocity;
 
         // Time step for simulation
-        let max_time = Self::calculate_max_flight_time(velocity, gravity, start_position.y, ground_height);
+        let max_time =
+            Self::calculate_max_flight_time(velocity, gravity, start_position.y, ground_height);
         let time_step = max_time / num_segments as f32;
 
         // Calculate arc points
@@ -142,7 +143,8 @@ impl ArcTrajectory {
             landing_pos.x - start_pos.x,
             0.0,
             landing_pos.z - start_pos.z,
-        ).magnitude();
+        )
+        .magnitude();
 
         if horizontal_distance < 1.0 {
             return false;
@@ -207,13 +209,11 @@ mod tests {
         let start_pos = Vector3::new(0.0, 2.0, 0.0);
         let direction = Vector3::new(0.0, 0.5, -1.0).normalize();
         let trajectory = ArcTrajectory::calculate(
-            start_pos,
-            direction,
-            10.0,  // initial velocity
-            9.8,   // gravity
-            20.0,  // max distance
-            20,    // segments
-            0.0,   // ground height
+            start_pos, direction, 10.0, // initial velocity
+            9.8,  // gravity
+            20.0, // max distance
+            20,   // segments
+            0.0,  // ground height
         );
 
         assert!(!trajectory.points.is_empty());
@@ -225,15 +225,7 @@ mod tests {
     fn test_arc_trajectory_physics() {
         let start_pos = Vector3::new(0.0, 5.0, 0.0);
         let direction = Vector3::new(1.0, 0.0, 0.0); // Horizontal throw
-        let trajectory = ArcTrajectory::calculate(
-            start_pos,
-            direction,
-            10.0,
-            9.8,
-            50.0,
-            30,
-            0.0,
-        );
+        let trajectory = ArcTrajectory::calculate(start_pos, direction, 10.0, 9.8, 50.0, 30, 0.0);
 
         // Should have points and land somewhere
         assert!(!trajectory.points.is_empty());
@@ -251,13 +243,8 @@ mod tests {
         let start_pos = Vector3::new(0.0, 1.0, 0.0);
         let direction = Vector3::new(0.0, -1.0, 0.0); // Straight down
         let trajectory = ArcTrajectory::calculate(
-            start_pos,
-            direction,
-            1.0,   // Low velocity
-            9.8,
-            20.0,
-            20,
-            0.0,
+            start_pos, direction, 1.0, // Low velocity
+            9.8, 20.0, 20, 0.0,
         );
 
         // Should land but be marked invalid (too close)
@@ -270,17 +257,15 @@ mod tests {
         let start_pos = Vector3::new(0.0, 1.0, 0.0);
         let direction = Vector3::new(1.0, 0.0, 0.0);
         let trajectory = ArcTrajectory::calculate(
-            start_pos,
-            direction,
-            50.0,  // High velocity
-            9.8,
-            5.0,   // Small max distance
-            20,
-            0.0,
+            start_pos, direction, 50.0, // High velocity
+            9.8, 5.0, // Small max distance
+            20, 0.0,
         );
 
         // Trajectory should be cut off by max distance
-        let max_distance_reached = trajectory.points.iter()
+        let max_distance_reached = trajectory
+            .points
+            .iter()
             .any(|p| (p - start_pos).magnitude() > 5.0);
         assert!(!max_distance_reached);
     }
@@ -289,15 +274,7 @@ mod tests {
     fn test_get_arc_length() {
         let start_pos = Vector3::new(0.0, 2.0, 0.0);
         let direction = Vector3::new(1.0, 0.0, 0.0);
-        let trajectory = ArcTrajectory::calculate(
-            start_pos,
-            direction,
-            10.0,
-            9.8,
-            20.0,
-            20,
-            0.0,
-        );
+        let trajectory = ArcTrajectory::calculate(start_pos, direction, 10.0, 9.8, 20.0, 20, 0.0);
 
         let arc_length = trajectory.get_arc_length();
         assert!(arc_length > 0.0);
@@ -308,15 +285,7 @@ mod tests {
     fn test_normalized_position_interpolation() {
         let start_pos = Vector3::new(0.0, 2.0, 0.0);
         let direction = Vector3::new(1.0, 0.0, 0.0);
-        let trajectory = ArcTrajectory::calculate(
-            start_pos,
-            direction,
-            10.0,
-            9.8,
-            20.0,
-            10,
-            0.0,
-        );
+        let trajectory = ArcTrajectory::calculate(start_pos, direction, 10.0, 9.8, 20.0, 10, 0.0);
 
         // Test various normalized positions
         assert!(trajectory.get_point_at_normalized_position(0.0).is_some());

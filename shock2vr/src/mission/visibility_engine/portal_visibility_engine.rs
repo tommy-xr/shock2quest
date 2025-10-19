@@ -1,6 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use engine::render_log;
 
@@ -10,10 +8,7 @@ use dark::{
     mission::{Cell, SystemShock2Level},
     properties::PropPosition,
 };
-use engine::{
-    assets::asset_cache::AssetCache,
-    scene::{SceneObject},
-};
+use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
 
 use crate::util::has_refs;
@@ -139,7 +134,6 @@ impl PortalVisibilityEngine {
 
                     continue;
                 }
-                
 
                 // debug_cells.push(PortalDebugInfo {
                 //     from_cell: current_cell.idx,

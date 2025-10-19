@@ -1,5 +1,5 @@
 pub mod scene;
-pub use scene::{Scene, LegacyScene};
+pub use scene::{LegacyScene, Scene};
 
 pub mod light;
 pub use light::{Light, LightType, SpotLight};

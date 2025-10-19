@@ -53,7 +53,11 @@ where
                         game_log!(
                             DEBUG,
                             "Entity {:?} [{:?}|{:?}|{:?}] link: {:?}",
-                            id, maybe_template_id, maybe_sym_name, maybe_obj_name, link.link
+                            id,
+                            maybe_template_id,
+                            maybe_sym_name,
+                            maybe_obj_name,
+                            link.link
                         );
                     }
                 }

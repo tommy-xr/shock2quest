@@ -9,7 +9,6 @@ macro_rules! offset_of {
     };
 }
 
-
 /// Enhanced profile macro with scope and level awareness
 ///
 /// Usage:

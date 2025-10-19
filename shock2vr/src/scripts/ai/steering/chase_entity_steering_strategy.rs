@@ -3,9 +3,7 @@ use dark::properties::PropPosition;
 
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    physics::PhysicsWorld, scripts::Effect, time::Time, util::vec3_to_point3,
-};
+use crate::{physics::PhysicsWorld, scripts::Effect, time::Time, util::vec3_to_point3};
 
 use super::{Steering, SteeringOutput, SteeringStrategy};
 

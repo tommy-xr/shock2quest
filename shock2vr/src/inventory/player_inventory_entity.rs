@@ -20,7 +20,9 @@ impl PlayerInventoryEntity {
                 scripts: vec!["internal_inventory".to_owned()],
                 inherits: true,
             },
-            PropTemplateId { template_id: INVALID_TEMPLATE_ID },
+            PropTemplateId {
+                template_id: INVALID_TEMPLATE_ID,
+            },
             PropPosition {
                 position: Vector3::new(0.0, 1.0, 0.0),
                 rotation: cgmath::Quaternion {
@@ -78,4 +80,3 @@ impl PlayerInventoryEntity {
         }
     }
 }
-

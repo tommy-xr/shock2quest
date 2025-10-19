@@ -1,9 +1,5 @@
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::SceneObject,
-};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
 use shipyard::EntityId;
 use tracing::{debug, info, warn};
 
@@ -29,7 +25,10 @@ pub struct MissionManager {
 impl MissionManager {
     /// Create a new mission manager with an initial mission.
     pub fn new(initial_mission: Box<dyn Mission>) -> Self {
-        info!("MissionManager initialized with mission type: {}", initial_mission.mission_type());
+        info!(
+            "MissionManager initialized with mission type: {}",
+            initial_mission.mission_type()
+        );
         Self {
             current_mission: initial_mission,
             pending_transition: None,
@@ -75,7 +74,9 @@ impl MissionManager {
         input_context: &InputContext,
     ) -> Vec<Effect> {
         // Update the current mission
-        let effects = self.current_mission.update(time, asset_cache, input_context);
+        let effects = self
+            .current_mission
+            .update(time, asset_cache, input_context);
 
         // Check for transition requests
         if let Some(transition) = self.current_mission.should_transition() {
@@ -121,7 +122,8 @@ impl MissionManager {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
-        self.current_mission.render_per_eye(asset_cache, view, projection, screen_size)
+        self.current_mission
+            .render_per_eye(asset_cache, view, projection, screen_size)
     }
 
     /// Finalize rendering for the current mission.
@@ -132,7 +134,8 @@ impl MissionManager {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) {
-        self.current_mission.finish_render(asset_cache, view, projection, screen_size)
+        self.current_mission
+            .finish_render(asset_cache, view, projection, screen_size)
     }
 }
 
@@ -143,9 +146,7 @@ pub mod mission_factory {
 
     /// Create a mission manager with a gameplay mission (current implementation).
     /// This is a temporary function until we implement the full mission system.
-    pub fn create_gameplay_mission_manager(
-        mission: crate::mission::Mission,
-    ) -> MissionManager {
+    pub fn create_gameplay_mission_manager(mission: crate::mission::Mission) -> MissionManager {
         // For now, we'll wrap the existing Mission in a compatibility layer
         let gameplay_mission = Box::new(GameplayMissionWrapper::new(mission));
         MissionManager::new(gameplay_mission)
@@ -184,7 +185,11 @@ impl Mission for GameplayMissionWrapper {
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         // Delegate to the existing Mission's render method
         warn!("GameplayMissionWrapper::render - using temporary implementation");
-        (Vec::new(), Vector3::new(0.0, 0.0, 0.0), Quaternion::new(1.0, 0.0, 0.0, 0.0))
+        (
+            Vec::new(),
+            Vector3::new(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        )
     }
 
     fn handle_effects(

@@ -2,8 +2,8 @@
 
 use cgmath::{point3, vec3, Matrix4, Quaternion, Rotation, Vector3, Zero};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
-use engine::script_log;
 use engine::scene::SceneObject;
+use engine::script_log;
 
 use rapier3d::prelude::RigidBodyHandle;
 use shipyard::{EntityId, Get, View, World};

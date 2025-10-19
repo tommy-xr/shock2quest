@@ -6,7 +6,6 @@ use shipyard::Component;
 
 use crate::ss2_common::*;
 
-
 use serde::{Deserialize, Serialize};
 
 #[derive(FromPrimitive, Clone, Debug, Deserialize, Serialize)]

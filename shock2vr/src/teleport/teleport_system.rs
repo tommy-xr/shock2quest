@@ -1,7 +1,7 @@
 use cgmath::Vector3;
 
 use crate::{
-    input_context::{InputContext, Hand},
+    input_context::{Hand, InputContext},
     scripts::Effect,
     vr_config::Handedness,
 };
@@ -99,7 +99,7 @@ impl TeleportSystem {
             &self.config,
             &input_context.left_hand,
             &mut self.left_hand_state,
-            Handedness::Left
+            Handedness::Left,
         ) {
             effects.push(effect);
         }
@@ -109,7 +109,7 @@ impl TeleportSystem {
             &self.config,
             &input_context.right_hand,
             &mut self.right_hand_state,
-            Handedness::Right
+            Handedness::Right,
         ) {
             effects.push(effect);
         }
@@ -184,7 +184,11 @@ impl TeleportSystem {
     }
 
     /// Update trajectory calculation and target validation
-    fn update_teleport_trajectory_static(config: &TeleportConfig, hand: &Hand, hand_state: &mut TeleportHandState) {
+    fn update_teleport_trajectory_static(
+        config: &TeleportConfig,
+        hand: &Hand,
+        hand_state: &mut TeleportHandState,
+    ) {
         // Phase 2: Calculate proper parabolic arc trajectory
 
         // Calculate forward direction from hand rotation

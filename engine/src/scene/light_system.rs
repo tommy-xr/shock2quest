@@ -1,4 +1,4 @@
-use crate::scene::light::{Light, SpotLight, LightType};
+use crate::scene::light::{Light, LightType, SpotLight};
 use cgmath::Vector3;
 
 /// Container for managing multiple lights in a scene
@@ -90,7 +90,11 @@ impl LightSystem {
 
     /// Remove lights that don't affect any geometry in a given bounding volume
     /// This is a future optimization point for portal culling integration
-    pub fn cull_lights_for_bounds(&self, min_bounds: Vector3<f32>, max_bounds: Vector3<f32>) -> Vec<&dyn Light> {
+    pub fn cull_lights_for_bounds(
+        &self,
+        min_bounds: Vector3<f32>,
+        max_bounds: Vector3<f32>,
+    ) -> Vec<&dyn Light> {
         // For now, just check if any corner of the bounding box is affected
         // This is a conservative approach that ensures we don't miss any lights
         let corners = [
@@ -108,9 +112,7 @@ impl LightSystem {
             .iter()
             .filter_map(|light| {
                 // Check if light affects any corner of the bounding box
-                let affects_bounds = corners.iter().any(|&corner| {
-                    light.affects_position(corner)
-                });
+                let affects_bounds = corners.iter().any(|&corner| light.affects_position(corner));
 
                 if affects_bounds {
                     Some(light.as_ref())
@@ -148,7 +150,7 @@ impl Clone for Box<dyn Light> {
                     pos,
                     Vector3::new(0.0, -1.0, 0.0), // Default direction
                     Vector3::new(color.x, color.y, color.z),
-                    color.w
+                    color.w,
                 ))
             }
         }
@@ -174,7 +176,7 @@ mod tests {
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
 
         system.add_spotlight(spotlight);
@@ -192,7 +194,7 @@ mod tests {
             Vector3::new(0.0, 2.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
         system.add_spotlight(spotlight);
 
@@ -213,13 +215,13 @@ mod tests {
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
         let spotlight2 = SpotLight::new(
             Vector3::new(1.0, 1.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 0.0, 0.0),
-            0.5
+            0.5,
         );
 
         system.add_spotlight(spotlight1);
@@ -237,7 +239,7 @@ mod tests {
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
         system.add_spotlight(spotlight);
 

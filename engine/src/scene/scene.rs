@@ -1,5 +1,5 @@
-pub use crate::scene::scene_object::SceneObject;
 use crate::scene::light_system::LightSystem;
+pub use crate::scene::scene_object::SceneObject;
 
 /// Legacy scene type - simple vector of scene objects
 pub type LegacyScene = Vec<SceneObject>;

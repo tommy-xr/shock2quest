@@ -49,7 +49,6 @@ pub struct Torso {
     pub fixed_joint_offset: Vec<Vector3<f32>>,
 }
 
-
 pub fn read_torso<T: Read + Seek>(reader: &mut T) -> Torso {
     let joint = read_u32(reader);
     let parent = read_i32(reader);

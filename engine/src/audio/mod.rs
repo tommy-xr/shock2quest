@@ -8,8 +8,8 @@ use rodio::buffer::SamplesBuffer;
 use rodio::source::{Buffered, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
-use tracing::trace;
 use crate::audio_log;
+use tracing::trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -132,7 +132,7 @@ impl<TAmbientKey, TCue> Default for AudioContext<TAmbientKey, TCue>
 where
     TAmbientKey: Hash + Eq + Copy,
     TCue: Clone,
- {
+{
     fn default() -> Self {
         Self::new()
     }

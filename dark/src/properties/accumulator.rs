@@ -8,4 +8,3 @@
 pub fn latest<T>(_ancestor_value: T, new_value: T) -> T {
     new_value
 }
-

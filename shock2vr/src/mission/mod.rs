@@ -42,9 +42,10 @@ use dark::{
 use engine::{
     assets::asset_cache::AssetCache,
     audio::{AudioChannel, AudioContext, AudioHandle},
-    game_log,
-    profile,
-    scene::{quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight},
+    game_log, profile,
+    scene::{
+        light::SpotLight, quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition,
+    },
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
@@ -1310,7 +1311,7 @@ impl Mission {
                 Effect::GlobalEffect(global_effect) => global_effects.push(global_effect),
                 _ => {
                     game_log!(WARN, "Unhandled effect: {effect:?}");
-                },
+                }
             }
         }
 
@@ -1445,7 +1446,8 @@ impl Mission {
         game_log!(
             TRACE,
             "Rendered models: {} / {} total",
-            rendered_model_count, total_model_count
+            rendered_model_count,
+            total_model_count
         );
         // Render bitmap_animation
         for (entity_id, objs) in &self.id_to_bitmap {
@@ -1594,9 +1596,9 @@ impl Mission {
                 position: right_hand_pos,
                 direction: right_direction.normalize(),
                 color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
-                inner_cone_angle: 15.0_f32.to_radians(), // 15 degree inner cone
-                outer_cone_angle: 30.0_f32.to_radians(), // 30 degree outer cone
-                range: 10.0, // 10 meter range
+                inner_cone_angle: 15.0_f32.to_radians(),                   // 15 degree inner cone
+                outer_cone_angle: 30.0_f32.to_radians(),                   // 30 degree outer cone
+                range: 10.0,                                               // 10 meter range
             };
             lights.push(right_spotlight);
 
@@ -1611,9 +1613,9 @@ impl Mission {
                 position: left_hand_pos,
                 direction: left_direction.normalize(),
                 color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
-                inner_cone_angle: 15.0_f32.to_radians(), // 15 degree inner cone
-                outer_cone_angle: 30.0_f32.to_radians(), // 30 degree outer cone
-                range: 10.0, // 10 meter range
+                inner_cone_angle: 15.0_f32.to_radians(),                   // 15 degree inner cone
+                outer_cone_angle: 30.0_f32.to_radians(),                   // 30 degree outer cone
+                range: 10.0,                                               // 10 meter range
             };
             lights.push(left_spotlight);
         }

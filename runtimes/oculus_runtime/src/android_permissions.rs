@@ -61,7 +61,9 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
 
     tracing::debug!(
         "Permission check result: {:?} (granted={:?}, denied={:?})",
-        ret, permission_granted, permission_denied
+        ret,
+        permission_granted,
+        permission_denied
     );
 
     //return Ok(true);

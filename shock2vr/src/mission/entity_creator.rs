@@ -1,6 +1,5 @@
 use std::{collections::HashMap, rc::Rc};
 
-use engine::physics_log;
 use crate::{
     creature::get_creature_definition,
     physics::DynamicPhysicsOptions,
@@ -8,6 +7,7 @@ use crate::{
     time::Time,
     util::{get_rotation_from_matrix, has_refs, point3_to_vec3},
 };
+use engine::physics_log;
 
 use cgmath::{
     num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform,

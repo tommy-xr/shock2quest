@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    env,
     io::{prelude::*, SeekFrom},
     rc::Rc,
     time::Duration,
@@ -11,7 +12,7 @@ use cgmath::{vec4, Matrix4, Vector2, Vector3, Vector4};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTexture, VertexPositionTextureSkinned},
+    scene::{SceneObject, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -21,8 +22,8 @@ use crate::{
     importers::TEXTURE_IMPORTER,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
-        self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_point3,
-        read_single, read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
+        self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_packed_normal,
+        read_point3, read_single, read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
     },
     ss2_skeleton::{Bone, Skeleton},
     util::load_multiple_textures_for_model,
@@ -66,6 +67,7 @@ pub struct SystemShock2ObjectMesh {
     pub materials: Vec<SystemShock2MeshMaterial>,
     pub uvs: Vec<Vector2<f32>>,
     pub vertices: Vec<Vector3<f32>>,
+    pub normals: Vec<Vector3<f32>>,
     pub vhots: Vec<Vhot>,
     pub polygons: Vec<SystemShock2ObjectPolygon>,
     pub sub_objects: Vec<SubObjectHeader>,
@@ -77,7 +79,17 @@ pub fn read<T: Read + Seek>(
 ) -> SystemShock2ObjectMesh {
     let header = read_header(reader, common_header);
 
+    // Debug logging to identify problematic files
+    println!("Loading .bin object file:");
+    println!("  obj_name: {:?}", header.obj_name);
+    println!("  num_verts: {}", header.num_verts);
+    println!("  num_polygons: {}", header.num_polygons);
+
     let vertices = read_vertices(&header, reader);
+    let normals = read_lights(&header, reader);
+
+    println!("  normals.len(): {}", normals.len());
+    println!("  vertices.len(): {}", vertices.len());
 
     let polygons: Vec<SystemShock2ObjectPolygon> =
         read_polygons(&header, reader, common_header.version);
@@ -98,6 +110,7 @@ pub fn read<T: Read + Seek>(
         bounding_box,
         materials,
         vertices,
+        normals,
         polygons,
         header,
         uvs,
@@ -125,7 +138,7 @@ pub fn to_scene_objects(
 
     let vertices = slot_to_vertices
         .into_iter()
-        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinned>)>>();
+        .collect::<Vec<(u16, Vec<VertexPositionTextureSkinnedNormal>)>>();
 
     let mut bones = Vec::new();
     build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
@@ -164,17 +177,24 @@ pub fn to_scene_objects(
                 Rc::new(Box::new(engine::scene::mesh::create(simpler_vertices)))
             };
 
-            let diffuse_texture: Rc<dyn TextureTrait> = {
+            let debug_normals_enabled = env::var_os("SS2_DEBUG_NORMALS").is_some();
+
+            let diffuse_texture: Option<Rc<dyn TextureTrait>> = if debug_normals_enabled
+                && !is_skinned
+            {
+                None
+            } else {
                 let mut animation_frames = load_multiple_textures_for_model(asset_cache, &tex_path);
-                if !animation_frames.is_empty() {
-                    animation_frames.insert(0, texture);
+                let texture = if !animation_frames.is_empty() {
+                    animation_frames.insert(0, texture.clone());
                     Rc::new(AnimatedTexture::new(
                         animation_frames,
                         Duration::from_millis(200),
-                    ))
+                    )) as Rc<dyn TextureTrait>
                 } else {
-                    texture
-                }
+                    texture.clone()
+                };
+                Some(texture)
             };
 
             let mut transparency = material.transparency;
@@ -184,15 +204,27 @@ pub fn to_scene_objects(
                 transparency = 0.8
             }
 
-            let mat = if is_skinned {
+            let mat: Box<dyn engine::scene::Material> = if debug_normals_enabled {
+                if is_skinned {
+                    engine::scene::debug_normal_material::create_skinned()
+                } else {
+                    engine::scene::debug_normal_material::create()
+                }
+            } else if is_skinned {
                 engine::scene::SkinnedMaterial::create(
-                    diffuse_texture,
+                    diffuse_texture
+                        .as_ref()
+                        .expect("diffuse texture should exist when debug normals disabled")
+                        .clone(),
                     material.emissivity,
                     transparency,
                 )
             } else {
                 engine::scene::basic_material::create(
-                    diffuse_texture,
+                    diffuse_texture
+                        .as_ref()
+                        .expect("diffuse texture should exist when debug normals disabled")
+                        .clone(),
                     material.emissivity,
                     transparency,
                 )
@@ -308,27 +340,31 @@ pub fn read_materials<T: Read + Seek>(
 fn build_vertex(
     vec: Vector3<f32>,
     uv: Vector2<f32>,
+    normal: Vector3<f32>,
     bone_idx: u32,
-) -> VertexPositionTextureSkinned {
-    VertexPositionTextureSkinned {
+) -> VertexPositionTextureSkinnedNormal {
+    VertexPositionTextureSkinnedNormal {
         position: vec,
         uv,
         bone_indices: [bone_idx, 0, 0, 0],
+        normal,
     }
 }
 
 pub fn to_vertices(
     mesh: &SystemShock2ObjectMesh,
-) -> HashMap<u16, Vec<VertexPositionTextureSkinned>> {
+) -> HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>> {
     let polygons = &mesh.polygons;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
+    let normals = &mesh.normals;
 
     let mut hash_map = HashMap::new();
 
     for poly in polygons {
         let indices = &poly.vertex_indices;
         let uv_indices = &poly.uv_indices;
+        let normal_indices = &poly.normal_indices;
         let slot = poly.slot_index;
 
         let vec = Vec::new();
@@ -338,22 +374,34 @@ pub fn to_vertices(
 
         let len = indices.len();
         let uv_len = uv_indices.len();
-        if len > 1 && uv_len > 1 {
+
+        let normal_for_corner = |corner: usize| -> Vector3<f32> {
+            normals
+                .get(normal_indices[corner] as usize)
+                .copied()
+                .unwrap()
+        };
+
+        if len >= 3 && uv_len >= len {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
+
                 verts.push(build_vertex(
                     vertices[indices[idx] as usize],
                     uvs[uv_indices[idx] as usize],
+                    normal_for_corner(idx),
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[idx + 1] as usize],
                     uvs[uv_indices[idx + 1_usize] as usize],
+                    normal_for_corner(idx + 1),
                     bone_idx,
                 ));
                 verts.push(build_vertex(
                     vertices[indices[0] as usize],
                     uvs[uv_indices[0] as usize],
+                    normal_for_corner(0),
                     bone_idx,
                 ));
             }
@@ -497,6 +545,46 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
     vhots
 }
 
+pub fn read_lights<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector3<f32>> {
+    reader
+        .seek(SeekFrom::Start((header.offset_lights) as u64))
+        .unwrap();
+
+    let mut normals = Vec::new();
+
+    // Calculate number of lights like SystemShock2VR: (offset_normals - offset_lights) / 8
+    let num_lights = (header.offset_normals - header.offset_lights) / 8;
+    for _idx in 0..num_lights {
+        // Read ObjLight structure (8 bytes total):
+        let _material_idx = read_u16(reader); // Material reference (2 bytes)
+        let _vertex_idx = read_u16(reader); // Point on object reference (2 bytes)
+        let packed_normal = read_u32(reader); // Packed normal vector (4 bytes)
+
+        let normal = read_packed_normal(packed_normal).normalize(); // Apply coordinate transform and normalize
+        normals.push(normal);
+    }
+
+    normals
+}
+
+pub fn read_normals<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector3<f32>> {
+    reader
+        .seek(SeekFrom::Start((header.offset_normals) as u64))
+        .unwrap();
+
+    let mut normals = Vec::new();
+
+    let len = header.num_verts;
+    for _idx in 0..len {
+        // Read packed normal (32-bit) instead of raw vector3 (96-bit)
+        let packed_normal = read_u32(reader);
+        let normal = read_packed_normal(packed_normal);
+        normals.push(normal);
+    }
+
+    normals
+}
+
 pub fn read_uvs<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<Vector2<f32>> {
     let mut uvs = Vec::new();
 
@@ -624,11 +712,11 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 pub struct ObjBinHeader {
     bbox_min: Point3<f32>,
     bbox_max: Point3<f32>,
-    obj_name: String,
+    pub obj_name: String,
     num_mats: u8,
     num_objs: u8,
     num_polygons: u16,
-    num_verts: u16,
+    pub num_verts: u16,
     num_vhots: u8,
 
     offset_mats: u32,
@@ -640,6 +728,8 @@ pub struct ObjBinHeader {
     offset_verts: u32,
     offset_vhots: u32,
     offset_uvs: u32,
+    pub offset_lights: u32,
+    pub offset_normals: u32,
 }
 
 pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeader) -> ObjBinHeader {
@@ -681,8 +771,8 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
     let offset_uvs = ss2_common::read_u32(reader);
     let offset_vhots = ss2_common::read_u32(reader);
     let offset_verts = ss2_common::read_u32(reader);
-    let _offset_lights = ss2_common::read_u32(reader);
-    let _offset_normals = ss2_common::read_u32(reader);
+    let offset_lights = ss2_common::read_u32(reader);
+    let offset_normals = ss2_common::read_u32(reader);
     let offset_polygons = ss2_common::read_u32(reader);
     let _offset_nodes = ss2_common::read_u32(reader);
     let _model_size = ss2_common::read_u32(reader);
@@ -707,7 +797,9 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
         offset_verts,
         offset_vhots,
         offset_uvs,
+        offset_lights,
         offset_polygons,
+        offset_normals,
         num_mats,
         num_objs,
         num_polygons,
@@ -720,9 +812,9 @@ pub fn read_header<T: Read>(reader: &mut T, common_header: &SystemShock2BinHeade
 }
 
 fn convert_skinned_vertices_to_static_vertices(
-    vertices: &Vec<VertexPositionTextureSkinned>,
+    vertices: &Vec<VertexPositionTextureSkinnedNormal>,
     skeleton: &Skeleton,
-) -> Vec<VertexPositionTexture> {
+) -> Vec<VertexPositionTextureNormal> {
     let mut v = Vec::new();
 
     let bone_transform = skeleton.get_transforms()[0];
@@ -735,9 +827,14 @@ fn convert_skinned_vertices_to_static_vertices(
                 vertex.position.z,
             ))
             .to_vec();
-        v.push(VertexPositionTexture {
+        let mut normal = bone_transform.transform_vector(vertex.normal);
+        if normal.magnitude2() > f32::EPSILON {
+            normal = normal.normalize();
+        }
+        v.push(VertexPositionTextureNormal {
             position,
             uv: vertex.uv,
+            normal,
         });
     }
 

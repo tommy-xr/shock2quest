@@ -34,7 +34,7 @@ use crate::ss2_common::read_u32;
 use cgmath::vec4;
 use cgmath::Vector4;
 use engine::assets::asset_cache::AssetCache;
-use engine::scene::VertexPositionTextureLightmapAtlas;
+use engine::scene::VertexPositionTextureLightmapAtlasNormal;
 pub use scene_builder::to_scene;
 
 use crate::properties::PropertyDefinition;
@@ -58,7 +58,7 @@ use crate::ss2_common::read_string_with_size;
 
 #[derive(Clone)]
 pub struct SystemShock2Geometry {
-    pub verts: Vec<VertexPositionTextureLightmapAtlas>,
+    pub verts: Vec<VertexPositionTextureLightmapAtlasNormal>,
     pub texture_idx: u16, // Texture index to use
 
     pub cell_idx: u32, // Index of cell
@@ -101,7 +101,6 @@ pub struct TextureSize {
 }
 
 const LIGHTMAP_SIZE: u32 = 4096;
-
 
 pub struct UVCalculationInfo {
     origin: Vector3<f32>,
@@ -186,7 +185,8 @@ pub fn read<T: io::Read + io::Seek>(
     let num_dynamic_lights = read_u32(reader);
     tracing::debug!(
         "Mission lights - static: {} dynamic: {}",
-        num_static_lights, num_dynamic_lights
+        num_static_lights,
+        num_dynamic_lights
     );
 
     let (obj_map, obj_texture_families) = read_obj_map(&table_of_contents, reader);
@@ -357,13 +357,17 @@ fn build_vertex(
     vec: Vector3<f32>,
     uv_calc_info: &UVCalculationInfo,
     atlas_info: &TexturePackResult,
-) -> VertexPositionTextureLightmapAtlas {
+) -> VertexPositionTextureLightmapAtlasNormal {
     let lightmap_u;
     let lightmap_v;
     let tex_u;
     let tex_v;
     let ax_u = uv_calc_info.axis_u;
     let ax_v = uv_calc_info.axis_v;
+
+    // Calculate face normal from cross product of texture axes
+    // Try inverted normal - Dark Engine might use different winding order
+    let face_normal = -(ax_u.cross(ax_v).normalize());
     let mag2_u = uv_calc_info.mag2_u;
     let mag2_v = uv_calc_info.mag2_v;
     let dotp = uv_calc_info.dotp;
@@ -421,6 +425,7 @@ fn build_vertex(
         lightmap_u,
         lightmap_v,
         lightmap_atlas,
+        face_normal,
     )
 }
 
@@ -433,12 +438,14 @@ fn vert(
     lightmap_u: f32,
     lightmap_v: f32,
     atlas_info: Vector4<f32>,
-) -> VertexPositionTextureLightmapAtlas {
-    VertexPositionTextureLightmapAtlas {
+    normal: Vector3<f32>,
+) -> VertexPositionTextureLightmapAtlasNormal {
+    VertexPositionTextureLightmapAtlasNormal {
         position: vec3(x, y, z) / SCALE_FACTOR,
         uv: vec2(u, v),
         lightmap_uv: vec2(lightmap_u, lightmap_v),
         lightmap_atlas: atlas_info,
+        normal,
     }
 }
 

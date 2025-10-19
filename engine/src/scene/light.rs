@@ -1,4 +1,4 @@
-use cgmath::{Vector3, Vector4, InnerSpace};
+use cgmath::{InnerSpace, Vector3, Vector4};
 
 /// Spotlight-specific parameters for shader uniforms
 #[derive(Debug, Clone, Copy)]
@@ -77,21 +77,22 @@ impl Light for SpotLight {
 
     fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
         // Quick range check
-        let distance = (world_pos - self.position).magnitude();
-        if distance > self.range {
-            return false;
-        }
+        true
+        // let distance = (world_pos - self.position).magnitude();
+        // if distance > self.range {
+        //     return false;
+        // }
 
-        // Cone check - ensure position is within the outer cone
-        if distance > 0.0 {
-            let to_position = (world_pos - self.position).normalize();
-            let dot = to_position.dot(self.direction);
-            let cos_outer = self.outer_cone_angle.cos();
-            dot >= cos_outer
-        } else {
-            // Position is exactly at light source
-            true
-        }
+        // // Cone check - ensure position is within the outer cone
+        // if distance > 0.0 {
+        //     let to_position = (world_pos - self.position).normalize();
+        //     let dot = to_position.dot(self.direction);
+        //     let cos_outer = self.outer_cone_angle.cos();
+        //     dot >= cos_outer
+        // } else {
+        //     // Position is exactly at light source
+        //     true
+        // }
     }
 
     fn spotlight_params(&self) -> Option<SpotlightParams> {
@@ -110,7 +111,7 @@ impl SpotLight {
         position: Vector3<f32>,
         direction: Vector3<f32>,
         color: Vector3<f32>,
-        intensity: f32
+        intensity: f32,
     ) -> Self {
         Self {
             position,
@@ -128,8 +129,8 @@ impl SpotLight {
             position,
             direction: direction.normalize(),
             color_intensity: Vector4::new(1.0, 1.0, 0.9, intensity), // Warm white
-            inner_cone_angle: std::f32::consts::FRAC_PI_8, // 22.5 degrees
-            outer_cone_angle: std::f32::consts::FRAC_PI_6, // 30 degrees
+            inner_cone_angle: std::f32::consts::FRAC_PI_8,           // 22.5 degrees
+            outer_cone_angle: std::f32::consts::FRAC_PI_6,           // 30 degrees
             range: 15.0,
         }
     }
@@ -184,7 +185,7 @@ mod tests {
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
 
         assert_eq!(light.position(), Vector3::new(0.0, 1.0, 0.0));
@@ -198,7 +199,7 @@ mod tests {
             Vector3::new(0.0, 2.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0), // Pointing down
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
 
         // Position directly below should be affected
@@ -220,7 +221,7 @@ mod tests {
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, -1.0, 0.0),
             Vector3::new(1.0, 1.0, 1.0),
-            1.0
+            1.0,
         );
 
         // Position at light source should have high attenuation
