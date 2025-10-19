@@ -391,7 +391,8 @@ pub fn main() {
 
         frame += 1;
 
-        engine.render(&render_context, &scene);
+        let full_scene = Scene::from_objects(scene);
+        engine.render(&render_context, &full_scene);
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
