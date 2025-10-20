@@ -2,7 +2,7 @@ extern crate glfw;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{ToolScene, VideoPlayerScene};
+use scenes::{BinObjViewerScene, ToolScene, VideoPlayerScene};
 
 use self::glfw::{Action, Context, Key};
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
@@ -215,6 +215,7 @@ pub fn main() {
     let engine = engine::opengl();
     let file_system = engine.get_storage().external_filesystem();
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
+    let mut bin_obj_scene = BinObjViewerScene::from_model("tu_l.bin".to_string(), &game.asset_cache).unwrap();
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
@@ -244,10 +245,6 @@ pub fn main() {
     let ss2_cal = ss2_cal_loader::read(&mut skeleton_reader);
     let skeleton = ss2_skeleton::create(ss2_cal);
 
-    let turret = game.asset_cache.get(&MODELS_IMPORTER, "tu_l.bin");
-    //let turret = game.asset_cache.get(&MODELS_IMPORTER, "camgrn.bin");
-
-    let mut obj = turret.to_scene_objects();
 
     // let font = File::open(resource_path("res/book/default/font.FON")).unwrap();
     // let font = File::open(resource_path("res/intrface/METAFONT.FON")).unwrap();
@@ -269,12 +266,6 @@ pub fn main() {
     let start_time = last_time;
 
     let mut frame = 0;
-    let mut animation_player = AnimationPlayer::empty();
-    animation_player = AnimationPlayer::set_additional_joint_transform(
-        &animation_player,
-        2,
-        Matrix4::from_translation(vec3(-0.5, 0.0, 0.0)) * Matrix4::from_angle_x(Deg(45.0)),
-    );
     // render loop
     // -----------
     while !window.should_close() {
@@ -298,20 +289,12 @@ pub fn main() {
         //let (mut scene, pawn_offset, pawn_rotation) = game.render();
 
         let mut scene = vec![];
-        animation_player = AnimationPlayer::set_additional_joint_transform(
-            &animation_player,
-            2,
-            Matrix4::from_translation(vec3(-0.8, 0.0, 0.0)),
-        );
-        animation_player = AnimationPlayer::set_additional_joint_transform(
-            &animation_player,
-            1,
-            Matrix4::from_angle_x(Deg(90.0 + 45.0 * time.total.as_secs_f32().sin())),
-        );
-        let turret_scene_obj = turret.to_animated_scene_objects(&animation_player);
 
-        for so in turret_scene_obj {
-            scene.push(so);
+        // Update and render scenes
+        bin_obj_scene.update(delta_time);
+        let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
+        for obj in bin_obj_scene_objects.objects {
+            scene.push(obj);
         }
 
         let yaw_rad = camera_context.yaw.to_radians();
@@ -344,7 +327,7 @@ pub fn main() {
 
         // Update and render video scene
         video_scene.update(delta_time);
-        let video_scene_objects = video_scene.render();
+        let video_scene_objects = video_scene.render(&mut game.asset_cache);
         for obj in video_scene_objects.objects {
             scene.push(obj);
         }
