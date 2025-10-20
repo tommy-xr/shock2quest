@@ -12,4 +12,5 @@ members = [
     "shock2vr",
     "dark",
     "tools/shodan",
+    "tools/dark_viewer",
 ]

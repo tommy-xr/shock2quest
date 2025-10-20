@@ -3,7 +3,7 @@
 See `CLAUDE.md` for the full deep-dive on workflow expectations and engine internals; this guide covers the essentials for a quick start.
 
 ## Project Structure & Module Organization
-Workspace members in `Cargo.toml` include `dark` (Dark Engine formats), `engine` (rendering + math), and `shock2vr` (gameplay scripts, missions, saves). Runtime wrappers live in `runtimes/desktop_runtime` and `runtimes/oculus_runtime`, with experiments in `runtimes/tool`. Retail game assets go in `Data`; docs, utilities, and research stay in `notes`, `tools`, and `references`. Keep build artifacts like `target/` out of commits.
+Workspace members in `Cargo.toml` include `dark` (Dark Engine formats), `engine` (rendering + math), and `shock2vr` (gameplay scripts, missions, saves). Runtime wrappers live in `runtimes/desktop_runtime` and `runtimes/oculus_runtime`, with development tools in `tools/dark_viewer`. Retail game assets go in `Data`; docs, utilities, and research stay in `notes`, `tools`, and `references`. Keep build artifacts like `target/` out of commits.
 
 ## Build, Test, and Development Commands
 - Desktop preview: `cd runtimes/desktop_runtime && cargo run --release` to launch the OpenXR desktop harness.

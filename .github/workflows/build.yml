@@ -64,3 +64,9 @@ jobs:
         run: cargo build --verbose --release -p shodan
       - name: Run Shodan CLI tests
         run: cargo test --verbose -p shodan
+
+      # Build and test dark_viewer tool
+      - name: Build dark_viewer tool
+        run: cargo build --verbose --release -p dark_viewer
+      - name: Run dark_viewer tests
+        run: cargo test --verbose -p dark_viewer

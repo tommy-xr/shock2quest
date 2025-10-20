@@ -444,7 +444,7 @@ The game and render scopes now additionally cover:
 ### Runtime Integration
 - `runtimes/desktop_runtime/src/main.rs` - Initialize logging with "SHOCK2_LOG"
 - `runtimes/oculus_runtime/src/lib.rs` - Initialize logging with "SHOCK2_LOG"
-- `runtimes/tool/src/main.rs` - Initialize logging (if applicable)
+- `tools/dark_viewer/src/main.rs` - Initialize logging (if applicable)
 
 ### Core Game Libraries
 - `shock2vr/src/lib.rs` - Replace println! and update tracing usage
