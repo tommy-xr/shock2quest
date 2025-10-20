@@ -198,8 +198,8 @@ When working with entity data, you may need to examine raw game files:
 
 ```bash
 # Create small CLI tools to examine file structure
-cargo run --bin tool -- inspect-gamesys shock2.gam
-cargo run --bin tool -- list-entities medsci1.mis
+cd tools/dark_viewer && cargo run -- inspect-gamesys shock2.gam
+cd tools/dark_viewer && cargo run -- list-entities medsci1.mis
 ```
 
 2. **Compare gamesys vs mission data**:

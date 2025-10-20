@@ -64,3 +64,13 @@ jobs:
         run: cargo build --verbose --release -p shodan
       - name: Run Shodan CLI tests
         run: cargo test --verbose -p shodan
+
+      # Build and test dark_viewer tool
+      # Note: Windows build for dark_viewer is currently disabled due to compilation issues
+      # TODO: Fix dark_viewer Windows compatibility and re-enable
+      - name: Build dark_viewer tool (Unix only)
+        if: runner.os != 'Windows'
+        run: cargo build --verbose --release -p dark_viewer
+      - name: Run dark_viewer tests (Unix only)
+        if: runner.os != 'Windows'
+        run: cargo test --verbose -p dark_viewer
