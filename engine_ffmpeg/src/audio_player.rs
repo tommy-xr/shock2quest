@@ -1,4 +1,4 @@
-extern crate ffmpeg_next as ffmpeg;
+extern crate ffmpeg_the_third as ffmpeg;
 
 use engine::audio::AudioClip;
 use ffmpeg::media::Type;
@@ -9,7 +9,7 @@ pub struct AudioPlayer;
 impl AudioPlayer {
     pub fn from_filename(filename: &str) -> Result<AudioClip, ffmpeg::Error> {
         // 2. Open the media file
-        let mut ictx = ffmpeg_next::format::input(&filename).unwrap();
+        let mut ictx = ffmpeg::format::input(&filename).unwrap();
 
         // 3. Find the audio stream
         let input = ictx
@@ -29,7 +29,7 @@ impl AudioPlayer {
         //     audio_decoder.channel_layout(),
         // );
 
-        let source_channel_layout = ChannelLayout::STEREO;
+        // let source_channel_layout = ChannelLayout::STEREO;
         // let source_sample_rate = audio_decoder.rate();
         let source_sample_rate = audio_decoder.rate();
         let source_sample_fmt = audio_decoder.format();
@@ -38,12 +38,11 @@ impl AudioPlayer {
         let target_channel_layout = ffmpeg::util::channel_layout::ChannelLayout::MONO;
         let target_channel_count = 1;
         let target_sample_rate = 44100; // For example, 44.1 kHz
-        let target_sample_fmt =
-            ffmpeg_next::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
+        let target_sample_fmt = ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
 
         // Set up the resampler
-        let mut swr = ffmpeg::software::resampler(
-            (source_sample_fmt, source_channel_layout, source_sample_rate),
+        let mut swr = ffmpeg::software::resampler2(
+            (source_sample_fmt, ChannelLayout::STEREO, source_sample_rate),
             (target_sample_fmt, target_channel_layout, target_sample_rate),
             //(target_sample_fmt, target_channel_layout, target_sample_rate),
         )
@@ -52,14 +51,14 @@ impl AudioPlayer {
         // 5. Decode audio packets
         let mut decoded_audio_samples: Vec<i16> = Vec::new();
 
-        for (stream, packet) in ictx.packets() {
+        for (stream, packet) in ictx.packets().filter_map(Result::ok) {
             if stream.index() == audio_stream_index {
                 audio_decoder.send_packet(&packet).unwrap();
-                let mut audio_frame = ffmpeg_next::util::frame::audio::Audio::empty();
+                let mut audio_frame = ffmpeg::util::frame::audio::Audio::empty();
 
                 while audio_decoder.receive_frame(&mut audio_frame).is_ok() {
-                    let mut decoded_audio_frame = ffmpeg_next::util::frame::audio::Audio::empty();
-                    audio_frame.set_channel_layout(source_channel_layout);
+                    let mut decoded_audio_frame = ffmpeg::util::frame::audio::Audio::empty();
+                    audio_frame.set_ch_layout(ChannelLayout::STEREO);
                     let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
 
                     let plane_count = decoded_audio_frame.planes();

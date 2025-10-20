@@ -11,4 +11,4 @@ path = "src/lib.rs"
 engine = { path = "../engine" }
 cgmath = "0.18.0"
 byteorder = "1.4.3"
-ffmpeg-next = "6.0.0"
+ffmpeg-the-third = { version = "2.0.1" }

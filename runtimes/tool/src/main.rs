@@ -1,4 +1,5 @@
 extern crate glfw;
+#[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::VideoPlayer;
 use glfw::GlfwReceiver;
 
@@ -10,6 +11,7 @@ use cgmath::Decomposed;
 use cgmath::Deg;
 use cgmath::Matrix4;
 use cgmath::Rad;
+#[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::AudioPlayer;
 
 use cgmath::vec4;
@@ -149,23 +151,25 @@ fn f32_from_bool(v: bool) -> f32 {
         0.0
     }
 }
-extern crate ffmpeg_next as ffmpeg;
-use ffmpeg::format::{input, Pixel};
-use ffmpeg::media::Type;
-use ffmpeg::util::frame::video::Video;
 pub fn main() {
     // glfw: initialize and configure
     // ------------------------------
 
-    ffmpeg::init().unwrap();
+    #[cfg(feature = "ffmpeg")]
+    engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
+    #[cfg(feature = "ffmpeg")]
     let file_name = &"../../Data/cutscenes/cs2.avi";
+    #[cfg(feature = "ffmpeg")]
     let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
 
-    let clip = AudioPlayer::from_filename(file_name).unwrap();
-    let handle = AudioHandle::new();
-    audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
+    #[cfg(feature = "ffmpeg")]
+    {
+        let clip = AudioPlayer::from_filename(file_name).unwrap();
+        let handle = AudioHandle::new();
+        audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
+    }
 
     // panic!();
     tracing_subscriber::fmt::init();
@@ -342,32 +346,6 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
-        let width = 16;
-        let height = 16;
-
-        let mut bytes = vec![];
-
-        for y in 0..height {
-            for x in 0..width {
-                if x % 2 == 0 {
-                    bytes.push(255);
-                    bytes.push(0);
-                    bytes.push(0);
-                } else {
-                    bytes.push(0);
-                    bytes.push(255);
-                    bytes.push(0);
-                }
-            }
-        }
-
-        let texture_data = RawTextureData {
-            width,
-            height,
-            format: engine::texture_format::PixelFormat::RGB,
-            bytes,
-        };
-
         video_player.advance_by_time(time.elapsed);
         let texture_data = video_player.get_current_frame();
         let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
@@ -413,7 +391,8 @@ pub fn main() {
 
         frame += 1;
 
-        engine.render(&render_context, &scene);
+        let full_scene = Scene::from_objects(scene);
+        engine.render(&render_context, &full_scene);
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -500,9 +479,3 @@ fn process_events(
 
 //     AnimationClip::create(&motion, &motion_info, mps_motion)
 // }
-fn save_file(frame: &Video, index: usize) -> std::result::Result<(), std::io::Error> {
-    let mut file = File::create(format!("frame{}.ppm", index))?;
-    file.write_all(format!("P6\n{} {}\n255\n", frame.width(), frame.height()).as_bytes())?;
-    file.write_all(frame.data(0))?;
-    Ok(())
-}

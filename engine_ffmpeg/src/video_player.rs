@@ -1,4 +1,4 @@
-extern crate ffmpeg_next as ffmpeg;
+extern crate ffmpeg_the_third as ffmpeg;
 
 use engine::{
     render_log,
@@ -79,11 +79,11 @@ impl VideoPlayer {
                 Ok(())
             };
 
-        for (stream, packet) in ictx.packets() {
+        for (stream, packet) in ictx.packets().filter_map(Result::ok) {
             if stream.index() == video_stream_index {
                 match decoder.send_packet(&packet) {
                     Ok(()) => receive_and_process_decoded_frames(&mut decoder).unwrap(),
-                    Err(err) => render_log!(ERROR, "Video decoder send_packet error: {:?}", err),
+                    Err(err) => println!("Video decoder send_packet error: {:?}", err),
                 }
             }
         }

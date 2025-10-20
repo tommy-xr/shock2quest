@@ -16,51 +16,51 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [macOS-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v3
-  
-    # Install Linux-specific dependencies
-    - name: Install ALSA (Linux only)
-      if: runner.os == 'Linux'
-      run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+      - uses: actions/checkout@v3
 
-    # Install Windows-specific dependencies
-    - name: Install CMake (Windows only)
-      if: runner.os == 'Windows'
-      run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+      # Install Linux-specific dependencies
+      - name: Install ALSA (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavdevice-dev libavfilter-dev libswresample-dev libswscale-dev pkg-config yasm
 
-    # Cache cargo build artifacts
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      
-    - name: Cache cargo index
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+      # Install macOS-specific dependencies
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          # Install FFmpeg 6 which is compatible with ffmpeg-the-third 2.0.1
+          brew install ffmpeg@6 pkg-config
+          # Set up environment for FFmpeg@6
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix ffmpeg@6)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          echo "FFMPEG_DIR=$(brew --prefix ffmpeg@6)" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix ffmpeg@6)/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix ffmpeg@6)/lib" >> $GITHUB_ENV
 
-    - name: Cache cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-  
-    # Actual build steps
-    - name: Build Desktop Runtime
-      run: cargo build --verbose --release
-      working-directory: runtimes/desktop_runtime
-    - name: Run Desktop Runtime tests
-      run: cargo test --verbose
-      working-directory: runtimes/desktop_runtime
+      # Windows builds with FFmpeg disabled - no additional dependencies needed
+      - name: Windows setup
+        if: runner.os == 'Windows'
+        run: echo "Windows build will use default-features = false to skip FFmpeg"
 
-    # Build and test Shodan CLI tool
-    - name: Build Shodan CLI
-      run: cargo build --verbose --release -p shodan
-    - name: Run Shodan CLI tests
-      run: cargo test --verbose -p shodan
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      # Actual build steps
+      - name: Build Desktop Runtime
+        run: cargo build --verbose --release
+        working-directory: runtimes/desktop_runtime
+      - name: Run Desktop Runtime tests
+        run: cargo test --verbose
+        working-directory: runtimes/desktop_runtime
+
+      # Build and test Shodan CLI tool
+      - name: Build Shodan CLI
+        run: cargo build --verbose --release -p shodan
+      - name: Run Shodan CLI tests
+        run: cargo test --verbose -p shodan
