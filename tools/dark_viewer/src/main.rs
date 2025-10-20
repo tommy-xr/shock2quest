@@ -104,6 +104,25 @@ pub fn resource_path(str: &str) -> String {
     format!("{BASE_PATH}/{str}")
 }
 
+trait ToolScene {
+    fn init();
+    fn render() -> Scene;
+}
+
+struct VideoViewScene {
+    file_name: &str,
+}
+
+impl ToolScene for VideoViewScene {
+    fn init() {
+        todo!()
+    }
+
+    fn render() -> Scene {
+        todo!()
+    }
+}
+
 fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> MouseUpdateResult {
     match camera.mouse_position {
         None => {
