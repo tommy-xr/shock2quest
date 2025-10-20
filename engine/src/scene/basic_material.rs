@@ -73,8 +73,10 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
             vec4 worldPosition = world * vec4(inPos, 1.0);
             worldPos = worldPosition.xyz;
 
-            mat3 normalMatrix = transpose(inverse(mat3(world)));
-            worldNormal = normalize(normalMatrix * inNormal);
+            // Transform normal to world space (inverse transpose)
+            mat3 world_normal_matrix = mat3(transpose(inverse(world)));
+            worldNormal = normalize(world_normal_matrix * mod_normal);
+
             gl_Position = projection * view * worldPosition;
         }
 "#;

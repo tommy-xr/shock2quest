@@ -91,8 +91,34 @@ pub fn read<T: Read + Seek>(
     println!("  normals.len(): {}", normals.len());
     println!("  vertices.len(): {}", vertices.len());
 
+    // Debug: Show the calculated number of lights and actual offset differences
+    let num_lights_calculated = (header.offset_normals - header.offset_lights) / 8;
+    println!("  num_lights_calculated: {}", num_lights_calculated);
+    println!("  offset_lights: 0x{:x}", header.offset_lights);
+    println!("  offset_normals: 0x{:x}", header.offset_normals);
+
+    // Show first few normals to see if they look reasonable
+    if normals.len() > 0 {
+        println!("  first normal: {:?}", normals[0]);
+        if normals.len() > 1 {
+            println!("  second normal: {:?}", normals[1]);
+        }
+    }
+
     let polygons: Vec<SystemShock2ObjectPolygon> =
         read_polygons(&header, reader, common_header.version);
+
+    // Debug: Check if normal indices are out of bounds
+    if polygons.len() > 0 {
+        let first_poly = &polygons[0];
+        println!("  first polygon normal_indices: {:?}", first_poly.normal_indices);
+        if let Some(max_normal_idx) = first_poly.normal_indices.iter().max() {
+            println!("  max normal index in first poly: {}, normals available: {}", max_normal_idx, normals.len());
+            if *max_normal_idx as usize >= normals.len() {
+                println!("  WARNING: Normal index out of bounds!");
+            }
+        }
+    }
 
     let uvs = read_uvs(&header, reader);
 
@@ -204,13 +230,7 @@ pub fn to_scene_objects(
                 transparency = 0.8
             }
 
-            let mat: Box<dyn engine::scene::Material> = if debug_normals_enabled {
-                if is_skinned {
-                    engine::scene::debug_normal_material::create_skinned()
-                } else {
-                    engine::scene::debug_normal_material::create()
-                }
-            } else if is_skinned {
+            let mat: Box<dyn engine::scene::Material> = if is_skinned {
                 engine::scene::SkinnedMaterial::create(
                     diffuse_texture
                         .as_ref()
@@ -219,6 +239,8 @@ pub fn to_scene_objects(
                     material.emissivity,
                     transparency,
                 )
+            } else if debug_normals_enabled {
+                engine::scene::debug_normal_material::create()
             } else {
                 engine::scene::basic_material::create(
                     diffuse_texture
@@ -376,10 +398,14 @@ pub fn to_vertices(
         let uv_len = uv_indices.len();
 
         let normal_for_corner = |corner: usize| -> Vector3<f32> {
-            normals
-                .get(normal_indices[corner] as usize)
-                .copied()
-                .unwrap()
+            if normal_indices.len() > corner {
+                normals
+                    .get(normal_indices[corner] as usize)
+                    .copied()
+                    .unwrap_or_else(|| vec3(0.0, 1.0, 0.0))
+            } else {
+                vec3(0.0, 1.0, 0.0) // Default normal if no normal indices
+            }
         };
 
         if len >= 3 && uv_len >= len {
@@ -469,6 +495,7 @@ pub struct SystemShock2ObjectPolygon {
     pub normal_indices: Vec<u16>,
     pub uv_indices: Vec<u16>,
     pub slot_index: u16,
+    pub polygon_normal_index: u16,
 }
 
 fn read_polygon<T: Read>(
@@ -483,7 +510,7 @@ fn read_polygon<T: Read>(
     let num_verts = ss2_common::read_u8(reader);
 
     // Plane info?
-    let _norm = ss2_common::read_u16(reader);
+    let polygon_normal_index = ss2_common::read_u16(reader);
     let _d = ss2_common::read_single(reader);
 
     // Read vert indices
@@ -507,6 +534,7 @@ fn read_polygon<T: Read>(
         normal_indices,
         uv_indices: uvs,
         slot_index,
+        polygon_normal_index,
     }
 }
 
@@ -574,11 +602,14 @@ pub fn read_normals<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
 
     let mut normals = Vec::new();
 
+    // Calculate number of normals like UVs: use space between offsets
+    // Assuming normals are stored after the normals section, we need to find the next section
+    // For now, let's try using num_verts but add normalization like read_lights does
     let len = header.num_verts;
     for _idx in 0..len {
         // Read packed normal (32-bit) instead of raw vector3 (96-bit)
         let packed_normal = read_u32(reader);
-        let normal = read_packed_normal(packed_normal);
+        let normal = read_packed_normal(packed_normal).normalize(); // Add normalization like read_lights
         normals.push(normal);
     }
 
@@ -827,7 +858,9 @@ fn convert_skinned_vertices_to_static_vertices(
                 vertex.position.z,
             ))
             .to_vec();
-        let mut normal = bone_transform.transform_vector(vertex.normal);
+        // Correct normal transformation using inverse transpose
+        let normal_matrix = bone_transform.invert().unwrap().transpose();
+        let mut normal = normal_matrix.transform_vector(vertex.normal);
         if normal.magnitude2() > f32::EPSILON {
             normal = normal.normalize();
         }

@@ -84,12 +84,17 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
 
             // Apply bone transformations to position and normal
             vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            vec3 mod_normal = mat3(bone_matrices[bone_ids.x]) * inNormal;
+            
+            mat3 bone_normal_matrix = mat3(transpose(inverse(bone_matrices[bone_ids.x])));
+            vec3 mod_normal = bone_normal_matrix * inNormal;
 
             // Transform to world space
             vec4 worldPosition = world * mod_position;
             worldPos = worldPosition.xyz;
-            worldNormal = normalize(mat3(world) * mod_normal);
+
+            // Transform normal to world space (inverse transpose)
+            mat3 world_normal_matrix = mat3(transpose(inverse(world)));
+            worldNormal = normalize(world_normal_matrix * mod_normal);
 
             gl_Position = projection * view * worldPosition;
         }
