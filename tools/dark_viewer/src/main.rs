@@ -4,7 +4,7 @@ use dark::model::Model;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinAiViewerScene, BinObjViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -227,6 +227,7 @@ pub fn main() {
         resource_path,
     )
     .unwrap();
+    let mut font_scene = FontViewerScene::from_file("res/fonts/BLUEAA.FON".to_string(), resource_path).unwrap();
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
@@ -235,11 +236,6 @@ pub fn main() {
     //     mouse_position: None,
     // };
 
-    // let font = File::open(resource_path("res/book/default/font.FON")).unwrap();
-    // let font = File::open(resource_path("res/intrface/METAFONT.FON")).unwrap();
-    let font = File::open(resource_path("res/fonts/BLUEAA.FON")).unwrap();
-    let mut font_reader = BufReader::new(font);
-    let font = Font::read(&mut font_reader);
 
     let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
     let mut motiondb_reader = BufReader::new(motiondb_file);
@@ -286,6 +282,13 @@ pub fn main() {
         for obj in bin_ai_scene_objects.objects {
             scene.push(obj);
         }
+
+        font_scene.update(delta_time);
+        let font_scene_objects = font_scene.render(&mut game.asset_cache);
+        for obj in font_scene_objects.objects {
+            scene.push(obj);
+        }
+
 
         let yaw_rad = camera_context.yaw.to_radians();
         let pitch_rad = camera_context.pitch.to_radians();
