@@ -4,7 +4,7 @@ use dark::model::Model;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -152,7 +152,79 @@ fn f32_from_bool(v: bool) -> f32 {
         0.0
     }
 }
+
+fn find_video_file(filename: &str) -> Option<String> {
+    // Define common video paths to try (only for video files that don't use asset_cache)
+    let paths_to_try = vec![
+        filename.to_string(),
+        format!("../../Data/cutscenes/{}", filename),
+        format!("Data/cutscenes/{}", filename),
+        format!("cutscenes/{}", filename),
+    ];
+
+    // Try each path
+    for path in paths_to_try {
+        if std::path::Path::new(&path).exists() {
+            println!("Found video at: {}", path);
+            return Some(path);
+        }
+    }
+
+    println!(
+        "Could not find video file {} in any of the expected locations",
+        filename
+    );
+    None
+}
+
 pub fn main() {
+    // Parse command line arguments
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() < 2 || args.len() > 4 {
+        eprintln!(
+            "Usage: {} <filename> [--animation <animation_file>]",
+            args[0]
+        );
+        eprintln!("Supported file types: .avi (video), .bin (3D model), .fon (font)");
+        eprintln!("Optional: --animation <file.cal> for .bin files with skeleton animation");
+        std::process::exit(1);
+    }
+
+    let filename = &args[1];
+
+    // Parse optional animation flag
+    let animation_file = if args.len() == 4 && args[2] == "--animation" {
+        Some(args[3].clone())
+    } else if args.len() == 3 {
+        eprintln!("Error: --animation flag requires an animation filename");
+        std::process::exit(1);
+    } else {
+        None
+    };
+
+    // Determine scene type from file extension
+    let scene_type = if filename.to_lowercase().ends_with(".avi") {
+        "video"
+    } else if filename.to_lowercase().ends_with(".bin") {
+        "bin_obj"
+    } else if filename.to_lowercase().ends_with(".fon") {
+        "font"
+    } else {
+        eprintln!("Unsupported file type: {}", filename);
+        eprintln!("Supported file types: .avi (video), .bin (3D model), .fon (font)");
+        std::process::exit(1);
+    };
+
+    if let Some(ref anim_file) = animation_file {
+        println!(
+            "Loading {} as {} scene with animation {}",
+            filename, scene_type, anim_file
+        );
+    } else {
+        println!("Loading {} as {} scene", filename, scene_type);
+    }
+
     // glfw: initialize and configure
     // ------------------------------
 
@@ -160,16 +232,25 @@ pub fn main() {
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let mut video_scene =
-        VideoPlayerScene::from_file("../../Data/cutscenes/cs2.avi".to_string()).unwrap();
+    // Initialize video scene only if needed
+    let mut video_scene = if scene_type == "video" {
+        if let Some(video_path) = find_video_file(filename) {
+            Some(VideoPlayerScene::from_file(video_path).unwrap())
+        } else {
+            eprintln!("Error: Could not find video file: {}", filename);
+            std::process::exit(1);
+        }
+    } else {
+        None
+    };
 
-    #[cfg(feature = "ffmpeg")]
-    {
-        let file_name = "../../Data/cutscenes/cs2.avi";
-        let clip = AudioPlayer::from_filename(file_name).unwrap();
-        let handle = AudioHandle::new();
-        audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
-    }
+    // #[cfg(feature = "ffmpeg")]
+    // {
+    //     let file_name = "../../Data/cutscenes/cs2.avi";
+    //     let clip = AudioPlayer::from_filename(file_name).unwrap();
+    //     let handle = AudioHandle::new();
+    //     audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
+    // }
 
     // panic!();
     tracing_subscriber::fmt::init();
@@ -219,15 +300,21 @@ pub fn main() {
     let engine = engine::opengl();
     let file_system = engine.get_storage().external_filesystem();
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
-    let mut bin_obj_scene =
-        BinObjViewerScene::from_model("tu_l.bin".to_string(), &game.asset_cache).unwrap();
-    let mut bin_ai_scene = BinAiViewerScene::from_files(
-        "res/mesh/ASSASSIN.BIN".to_string(),
-        "res/mesh/ASSASSIN.cal".to_string(),
-        resource_path,
-    )
-    .unwrap();
-    let mut font_scene = FontViewerScene::from_file("res/fonts/BLUEAA.FON".to_string(), resource_path).unwrap();
+    // Initialize scenes based on scene type
+    let mut bin_obj_scene = if scene_type == "bin_obj" {
+        Some(BinObjViewerScene::from_model(filename.clone(), &game.asset_cache).unwrap())
+    } else {
+        None
+    };
+
+    // Note: We removed bin_ai_scene since the model importer handles both types of .bin files
+    // The animation file (if provided) could be used for more advanced animation features later
+
+    let mut font_scene = if scene_type == "font" {
+        Some(FontViewerScene::from_file(filename.clone(), resource_path).unwrap())
+    } else {
+        None
+    };
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
@@ -235,7 +322,6 @@ pub fn main() {
     //     yaw: -213.0,
     //     mouse_position: None,
     // };
-
 
     let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
     let mut motiondb_reader = BufReader::new(motiondb_file);
@@ -270,25 +356,22 @@ pub fn main() {
 
         let mut scene = vec![];
 
-        // Update and render scenes
-        bin_obj_scene.update(delta_time);
-        let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
-        for obj in bin_obj_scene_objects.objects {
-            scene.push(obj);
+        // Update and render active scene
+        if let Some(ref mut bin_obj_scene) = bin_obj_scene {
+            bin_obj_scene.update(delta_time);
+            let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
+            for obj in bin_obj_scene_objects.objects {
+                scene.push(obj);
+            }
         }
 
-        bin_ai_scene.update(delta_time);
-        let bin_ai_scene_objects = bin_ai_scene.render(&mut game.asset_cache);
-        for obj in bin_ai_scene_objects.objects {
-            scene.push(obj);
+        if let Some(ref mut font_scene) = font_scene {
+            font_scene.update(delta_time);
+            let font_scene_objects = font_scene.render(&mut game.asset_cache);
+            for obj in font_scene_objects.objects {
+                scene.push(obj);
+            }
         }
-
-        font_scene.update(delta_time);
-        let font_scene_objects = font_scene.render(&mut game.asset_cache);
-        for obj in font_scene_objects.objects {
-            scene.push(obj);
-        }
-
 
         let yaw_rad = camera_context.yaw.to_radians();
         let pitch_rad = camera_context.pitch.to_radians();
@@ -319,10 +402,12 @@ pub fn main() {
         ));
 
         // Update and render video scene
-        video_scene.update(delta_time);
-        let video_scene_objects = video_scene.render(&mut game.asset_cache);
-        for obj in video_scene_objects.objects {
-            // scene.push(obj);
+        if let Some(ref mut video_scene) = video_scene {
+            video_scene.update(delta_time);
+            let video_scene_objects = video_scene.render(&mut game.asset_cache);
+            for obj in video_scene_objects.objects {
+                scene.push(obj);
+            }
         }
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
