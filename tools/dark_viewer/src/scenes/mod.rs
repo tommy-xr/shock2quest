@@ -13,5 +13,4 @@ pub mod font_viewer;
 
 pub use video_player::VideoPlayerScene;
 pub use bin_obj_viewer::BinObjViewerScene;
-pub use bin_ai_viewer::BinAiViewerScene;
 pub use font_viewer::FontViewerScene;
