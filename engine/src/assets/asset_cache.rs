@@ -140,7 +140,6 @@ impl AssetCache {
         importer: &AssetImporter<TData, TOutput, TConfig>,
         asset_name: &str,
     ) -> Rc<TOutput> {
-        println!("asset_name: {}", asset_name);
         self.get_opt(importer, asset_name).unwrap()
     }
 }

@@ -4,7 +4,7 @@ use dark::model::Model;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinObjViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{BinAiViewerScene, BinObjViewerScene, ToolScene, VideoPlayerScene};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -221,6 +221,12 @@ pub fn main() {
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
     let mut bin_obj_scene =
         BinObjViewerScene::from_model("tu_l.bin".to_string(), &game.asset_cache).unwrap();
+    let mut bin_ai_scene = BinAiViewerScene::from_files(
+        "res/mesh/ASSASSIN.BIN".to_string(),
+        "res/mesh/ASSASSIN.cal".to_string(),
+        resource_path,
+    )
+    .unwrap();
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
@@ -228,38 +234,12 @@ pub fn main() {
     //     yaw: -213.0,
     //     mouse_position: None,
     // };
-    let asset_paths = AssetPath::combine(vec![
-        ZipAssetPath::new(resource_path("res/obj.crf")),
-        ZipAssetPath::new(resource_path("res/bitmap.crf")),
-        ZipAssetPath::new(resource_path("res/fam.crf")),
-        ZipAssetPath::new(resource_path("res/iface.crf")),
-        ZipAssetPath::new(resource_path("res/mesh.crf")),
-        ZipAssetPath::new(resource_path("res/motions.crf")),
-        ZipAssetPath::new(resource_path("res/objicon.crf")),
-        ZipAssetPath::new(resource_path("res/snd.crf")),
-        ZipAssetPath::new(resource_path("res/snd2.crf")),
-        ZipAssetPath::new(resource_path("res/song.crf")),
-        ZipAssetPath::new2(resource_path("res/strings.crf"), false),
-        AssetPath::folder("../assets/".to_owned()),
-        // Motion db
-        AssetPath::folder("".to_owned()),
-    ]);
-    let mut asset_cache = AssetCache::new(BASE_PATH.to_owned(), asset_paths);
-    let skeleton_file = File::open(resource_path("res/mesh/ASSASSIN.cal")).unwrap();
-    let mut skeleton_reader = BufReader::new(skeleton_file);
-    let ss2_cal = ss2_cal_loader::read(&mut skeleton_reader);
-    let skeleton = Rc::new(ss2_skeleton::create(ss2_cal));
 
     // let font = File::open(resource_path("res/book/default/font.FON")).unwrap();
     // let font = File::open(resource_path("res/intrface/METAFONT.FON")).unwrap();
     let font = File::open(resource_path("res/fonts/BLUEAA.FON")).unwrap();
     let mut font_reader = BufReader::new(font);
     let font = Font::read(&mut font_reader);
-
-    let mesh_file = File::open(resource_path("res/mesh/ASSASSIN.BIN")).unwrap();
-    let mut mesh_reader = BufReader::new(mesh_file);
-    let header = ss2_bin_header::read(&mut mesh_reader);
-    let ai_mesh = ss2_bin_ai_loader::read(&mut mesh_reader, &header);
 
     let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
     let mut motiondb_reader = BufReader::new(motiondb_file);
@@ -294,16 +274,16 @@ pub fn main() {
 
         let mut scene = vec![];
 
-        let model = Model::from_ai_bin(ai_mesh.clone(), skeleton.clone(), &mut asset_cache);
-
-        for obj in model.to_scene_objects() {
-            scene.push(obj.clone())
-        }
-
         // Update and render scenes
         bin_obj_scene.update(delta_time);
         let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
         for obj in bin_obj_scene_objects.objects {
+            scene.push(obj);
+        }
+
+        bin_ai_scene.update(delta_time);
+        let bin_ai_scene_objects = bin_ai_scene.render(&mut game.asset_cache);
+        for obj in bin_ai_scene_objects.objects {
             scene.push(obj);
         }
 
@@ -339,7 +319,7 @@ pub fn main() {
         video_scene.update(delta_time);
         let video_scene_objects = video_scene.render(&mut game.asset_cache);
         for obj in video_scene_objects.objects {
-            //scene.push(obj);
+            // scene.push(obj);
         }
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
