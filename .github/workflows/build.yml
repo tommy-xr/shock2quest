@@ -43,24 +43,19 @@ jobs:
       # Install Windows-specific dependencies
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: cmd
         run: |
-          # Download FFmpeg 6.0 which still includes avfft.h
-          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2023-06-18-12-55/ffmpeg-n6.0-latest-win64-gpl-shared.zip"
-          Invoke-WebRequest -Uri $ffmpegUrl -OutFile "ffmpeg.zip"
-          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "C:\"
-          $ffmpegDir = Get-ChildItem -Path "C:\ffmpeg-*" -Directory | Select-Object -First 1
-          Write-Host "FFmpeg installed to: $($ffmpegDir.FullName)"
-
-          # Set multiple environment variables for different build systems
-          echo "FFMPEG_DIR=$($ffmpegDir.FullName)" >> $env:GITHUB_ENV
-          echo "FFMPEG_INCLUDE_DIR=$($ffmpegDir.FullName)\include" >> $env:GITHUB_ENV
-          echo "FFMPEG_LIB_DIR=$($ffmpegDir.FullName)\lib" >> $env:GITHUB_ENV
-          echo "CPATH=$($ffmpegDir.FullName)\include" >> $env:GITHUB_ENV
-          echo "LIBRARY_PATH=$($ffmpegDir.FullName)\lib" >> $env:GITHUB_ENV
-          echo "LIB=$($ffmpegDir.FullName)\lib;$env:LIB" >> $env:GITHUB_ENV
-          echo "INCLUDE=$($ffmpegDir.FullName)\include;$env:INCLUDE" >> $env:GITHUB_ENV
-          echo "PATH=$($ffmpegDir.FullName)\bin;$env:PATH" >> $env:GITHUB_ENV
+          REM Check what FFmpeg versions are available
+          vcpkg search ffmpeg
+          REM Try to use a specific FFmpeg version or checkout an older vcpkg commit
+          git -C C:\vcpkg checkout 2023.04.15
+          vcpkg install ffmpeg[core,avcodec,avformat,avutil,avdevice,avfilter,swresample,swscale]:x64-windows --recurse
+          REM Set environment variables for Rust build
+          echo VCPKG_ROOT=C:\vcpkg>> %GITHUB_ENV%
+          echo FFMPEG_DIR=C:\vcpkg\installed\x64-windows>> %GITHUB_ENV%
+          echo FFMPEG_INCLUDE_DIR=C:\vcpkg\installed\x64-windows\include>> %GITHUB_ENV%
+          echo FFMPEG_LIB_DIR=C:\vcpkg\installed\x64-windows\lib>> %GITHUB_ENV%
+          echo PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig>> %GITHUB_ENV%
 
       - name: Cache cargo build
         uses: actions/cache@v4
