@@ -346,12 +346,32 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
-        video_player.advance_by_time(time.elapsed);
-        let texture_data = video_player.get_current_frame();
-        let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
-            texture_data,
-            &TextureOptions { wrap: false },
-        ));
+        let texture: Rc<dyn TextureTrait> = {
+            #[cfg(feature = "ffmpeg")]
+            {
+                video_player.advance_by_time(time.elapsed);
+                let texture_data = video_player.get_current_frame();
+                Rc::new(init_from_memory2(
+                    texture_data,
+                    &TextureOptions { wrap: false },
+                ))
+            }
+            #[cfg(not(feature = "ffmpeg"))]
+            {
+                // Create a simple 1x1 white texture as fallback
+                let white_pixel = vec![255u8, 255u8, 255u8, 255u8];
+                let texture_data = RawTextureData {
+                    width: 1,
+                    height: 1,
+                    bytes: white_pixel,
+                    format: engine::texture_format::PixelFormat::RGBA,
+                };
+                Rc::new(init_from_memory2(
+                    texture_data,
+                    &TextureOptions { wrap: false },
+                ))
+            }
+        };
 
         let cube_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
         let mut cube_obj = SceneObject::new(cube_mat, Box::new(engine::scene::cube::create()));
