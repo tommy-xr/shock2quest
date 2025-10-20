@@ -1,8 +1,11 @@
 extern crate glfw;
+use dark::model::AnimatedModel;
+use dark::model::Model;
 use glfw::GlfwReceiver;
 
 mod scenes;
 use scenes::{BinObjViewerScene, ToolScene, VideoPlayerScene};
+use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
@@ -55,6 +58,7 @@ use shock2vr::command::Command;
 use glfw::MouseButton;
 use shock2vr::input_context::InputContext;
 use shock2vr::time::Time;
+use shock2vr::zip_asset_path;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
@@ -100,7 +104,6 @@ const BASE_PATH: &str = "../../Data";
 pub fn resource_path(str: &str) -> String {
     format!("{BASE_PATH}/{str}")
 }
-
 
 fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> MouseUpdateResult {
     match camera.mouse_position {
@@ -157,7 +160,8 @@ pub fn main() {
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    let mut video_scene = VideoPlayerScene::from_file("../../Data/cutscenes/cs2.avi".to_string()).unwrap();
+    let mut video_scene =
+        VideoPlayerScene::from_file("../../Data/cutscenes/cs2.avi".to_string()).unwrap();
 
     #[cfg(feature = "ffmpeg")]
     {
@@ -215,7 +219,8 @@ pub fn main() {
     let engine = engine::opengl();
     let file_system = engine.get_storage().external_filesystem();
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
-    let mut bin_obj_scene = BinObjViewerScene::from_model("tu_l.bin".to_string(), &game.asset_cache).unwrap();
+    let mut bin_obj_scene =
+        BinObjViewerScene::from_model("tu_l.bin".to_string(), &game.asset_cache).unwrap();
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
@@ -224,17 +229,17 @@ pub fn main() {
     //     mouse_position: None,
     // };
     let asset_paths = AssetPath::combine(vec![
-        // ZipAssetPath::new(resource_path("res/obj.crf")),
-        // ZipAssetPath::new(resource_path("res/bitmap.crf")),
-        // ZipAssetPath::new(resource_path("res/fam.crf")),
-        // ZipAssetPath::new(resource_path("res/iface.crf")),
-        // ZipAssetPath::new(resource_path("res/mesh.crf")),
-        // ZipAssetPath::new(resource_path("res/motions.crf")),
-        // ZipAssetPath::new(resource_path("res/objicon.crf")),
-        // ZipAssetPath::new(resource_path("res/snd.crf")),
-        // ZipAssetPath::new(resource_path("res/snd2.crf")),
-        // ZipAssetPath::new(resource_path("res/song.crf")),
-        // ZipAssetPath::new2(resource_path("res/strings.crf"), false),
+        ZipAssetPath::new(resource_path("res/obj.crf")),
+        ZipAssetPath::new(resource_path("res/bitmap.crf")),
+        ZipAssetPath::new(resource_path("res/fam.crf")),
+        ZipAssetPath::new(resource_path("res/iface.crf")),
+        ZipAssetPath::new(resource_path("res/mesh.crf")),
+        ZipAssetPath::new(resource_path("res/motions.crf")),
+        ZipAssetPath::new(resource_path("res/objicon.crf")),
+        ZipAssetPath::new(resource_path("res/snd.crf")),
+        ZipAssetPath::new(resource_path("res/snd2.crf")),
+        ZipAssetPath::new(resource_path("res/song.crf")),
+        ZipAssetPath::new2(resource_path("res/strings.crf"), false),
         AssetPath::folder("../assets/".to_owned()),
         // Motion db
         AssetPath::folder("".to_owned()),
@@ -243,8 +248,7 @@ pub fn main() {
     let skeleton_file = File::open(resource_path("res/mesh/ASSASSIN.cal")).unwrap();
     let mut skeleton_reader = BufReader::new(skeleton_file);
     let ss2_cal = ss2_cal_loader::read(&mut skeleton_reader);
-    let skeleton = ss2_skeleton::create(ss2_cal);
-
+    let skeleton = Rc::new(ss2_skeleton::create(ss2_cal));
 
     // let font = File::open(resource_path("res/book/default/font.FON")).unwrap();
     // let font = File::open(resource_path("res/intrface/METAFONT.FON")).unwrap();
@@ -290,6 +294,12 @@ pub fn main() {
 
         let mut scene = vec![];
 
+        let model = Model::from_ai_bin(ai_mesh.clone(), skeleton.clone(), &mut asset_cache);
+
+        for obj in model.to_scene_objects() {
+            scene.push(obj.clone())
+        }
+
         // Update and render scenes
         bin_obj_scene.update(delta_time);
         let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
@@ -329,7 +339,7 @@ pub fn main() {
         video_scene.update(delta_time);
         let video_scene_objects = video_scene.render(&mut game.asset_cache);
         for obj in video_scene_objects.objects {
-            scene.push(obj);
+            //scene.push(obj);
         }
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
