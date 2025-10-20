@@ -10,7 +10,13 @@ gl = "0.14.0"
 glfw = "0.56.0"
 engine = { path = "../../engine" }
 dark = { path = "../../dark" }
+# FFmpeg is disabled on Windows due to build complexity
+[target.'cfg(not(windows))'.dependencies]
 shock2vr = { path = "../../shock2vr" }
+
+[target.'cfg(windows)'.dependencies]
+shock2vr = { path = "../../shock2vr", default-features = false }
+
 cgmath = "0.18.0"
 byteorder = "1.4.3"
 pcx = "0.2.3"
