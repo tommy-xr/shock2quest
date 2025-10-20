@@ -1,7 +1,8 @@
 extern crate glfw;
-#[cfg(feature = "ffmpeg")]
-use engine_ffmpeg::VideoPlayer;
 use glfw::GlfwReceiver;
+
+mod scenes;
+use scenes::{ToolScene, VideoPlayerScene};
 
 use self::glfw::{Action, Context, Key};
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
@@ -37,10 +38,6 @@ use engine::scene::mesh;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
-use engine::texture::init_from_memory2;
-use engine::texture::TextureOptions;
-use engine::texture::TextureTrait;
-use engine::texture_format::RawTextureData;
 use num::ToPrimitive;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
@@ -104,24 +101,6 @@ pub fn resource_path(str: &str) -> String {
     format!("{BASE_PATH}/{str}")
 }
 
-trait ToolScene {
-    fn init();
-    fn render() -> Scene;
-}
-
-struct VideoViewScene {
-    file_name: &str,
-}
-
-impl ToolScene for VideoViewScene {
-    fn init() {
-        todo!()
-    }
-
-    fn render() -> Scene {
-        todo!()
-    }
-}
 
 fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> MouseUpdateResult {
     match camera.mouse_position {
@@ -178,13 +157,11 @@ pub fn main() {
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    #[cfg(feature = "ffmpeg")]
-    let file_name = &"../../Data/cutscenes/cs2.avi";
-    #[cfg(feature = "ffmpeg")]
-    let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
+    let mut video_scene = VideoPlayerScene::from_file("../../Data/cutscenes/cs2.avi".to_string()).unwrap();
 
     #[cfg(feature = "ffmpeg")]
     {
+        let file_name = "../../Data/cutscenes/cs2.avi";
         let clip = AudioPlayer::from_filename(file_name).unwrap();
         let handle = AudioHandle::new();
         audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
@@ -365,37 +342,12 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
-        let texture: Rc<dyn TextureTrait> = {
-            #[cfg(feature = "ffmpeg")]
-            {
-                video_player.advance_by_time(time.elapsed);
-                let texture_data = video_player.get_current_frame();
-                Rc::new(init_from_memory2(
-                    texture_data,
-                    &TextureOptions { wrap: false },
-                ))
-            }
-            #[cfg(not(feature = "ffmpeg"))]
-            {
-                // Create a simple 1x1 white texture as fallback
-                let white_pixel = vec![255u8, 255u8, 255u8, 255u8];
-                let texture_data = RawTextureData {
-                    width: 1,
-                    height: 1,
-                    bytes: white_pixel,
-                    format: engine::texture_format::PixelFormat::RGBA,
-                };
-                Rc::new(init_from_memory2(
-                    texture_data,
-                    &TextureOptions { wrap: false },
-                ))
-            }
-        };
-
-        let cube_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
-        let mut cube_obj = SceneObject::new(cube_mat, Box::new(engine::scene::cube::create()));
-        cube_obj.set_transform(Matrix4::from_scale(3.0));
-        scene.push(cube_obj);
+        // Update and render video scene
+        video_scene.update(delta_time);
+        let video_scene_objects = video_scene.render();
+        for obj in video_scene_objects.objects {
+            scene.push(obj);
+        }
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
