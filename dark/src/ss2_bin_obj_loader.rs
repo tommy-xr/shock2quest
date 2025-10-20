@@ -103,6 +103,9 @@ pub fn read<T: Read + Seek>(
         if normals.len() > 1 {
             println!("  second normal: {:?}", normals[1]);
         }
+
+        // Check if this object has sub-objects (which might have transforms)
+        println!("  num_sub_objects: {}", header.num_objs);
     }
 
     let polygons: Vec<SystemShock2ObjectPolygon> =
@@ -111,9 +114,16 @@ pub fn read<T: Read + Seek>(
     // Debug: Check if normal indices are out of bounds
     if polygons.len() > 0 {
         let first_poly = &polygons[0];
-        println!("  first polygon normal_indices: {:?}", first_poly.normal_indices);
+        println!(
+            "  first polygon normal_indices: {:?}",
+            first_poly.normal_indices
+        );
         if let Some(max_normal_idx) = first_poly.normal_indices.iter().max() {
-            println!("  max normal index in first poly: {}, normals available: {}", max_normal_idx, normals.len());
+            println!(
+                "  max normal index in first poly: {}, normals available: {}",
+                max_normal_idx,
+                normals.len()
+            );
             if *max_normal_idx as usize >= normals.len() {
                 println!("  WARNING: Normal index out of bounds!");
             }
@@ -849,6 +859,16 @@ fn convert_skinned_vertices_to_static_vertices(
     let mut v = Vec::new();
 
     let bone_transform = skeleton.get_transforms()[0];
+
+    // Debug: Check for negative scale in bone transform
+    let determinant = bone_transform.determinant();
+    if determinant < 0.0 {
+        println!(
+            "WARNING: Bone transform has negative determinant ({}), which will flip normals!",
+            determinant
+        );
+    }
+
     for vertex in vertices {
         let _bone_indices = vertex.bone_indices;
         let position = bone_transform
@@ -861,6 +881,12 @@ fn convert_skinned_vertices_to_static_vertices(
         // Correct normal transformation using inverse transpose
         let normal_matrix = bone_transform.invert().unwrap().transpose();
         let mut normal = normal_matrix.transform_vector(vertex.normal);
+
+        // Handle negative scale (flip normal if determinant is negative)
+        if determinant < 0.0 {
+            normal = -normal;
+        }
+
         if normal.magnitude2() > f32::EPSILON {
             normal = normal.normalize();
         }

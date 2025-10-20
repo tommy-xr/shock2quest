@@ -21,7 +21,7 @@ const VERTEX_SHADER_SOURCE: &str = r#"
         out vec3 worldNormal;
 
         void main() {
-            mat3 normalMatrix = transpose(inverse(mat3(world)));
+            mat3 normalMatrix = mat3(transpose(inverse(world)));
             worldNormal = normalize(normalMatrix * inNormal);
             gl_Position = projection * view * world * vec4(inPos, 1.0);
         }
