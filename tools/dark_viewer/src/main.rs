@@ -1,7 +1,11 @@
 extern crate glfw;
-#[cfg(feature = "ffmpeg")]
-use engine_ffmpeg::VideoPlayer;
+use dark::model::AnimatedModel;
+use dark::model::Model;
 use glfw::GlfwReceiver;
+
+mod scenes;
+use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
+use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
@@ -37,10 +41,6 @@ use engine::scene::mesh;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
-use engine::texture::init_from_memory2;
-use engine::texture::TextureOptions;
-use engine::texture::TextureTrait;
-use engine::texture_format::RawTextureData;
 use num::ToPrimitive;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
@@ -58,6 +58,7 @@ use shock2vr::command::Command;
 use glfw::MouseButton;
 use shock2vr::input_context::InputContext;
 use shock2vr::time::Time;
+use shock2vr::zip_asset_path;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
@@ -159,13 +160,12 @@ pub fn main() {
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    #[cfg(feature = "ffmpeg")]
-    let file_name = &"../../Data/cutscenes/cs2.avi";
-    #[cfg(feature = "ffmpeg")]
-    let mut video_player = VideoPlayer::from_filename(file_name).unwrap();
+    let mut video_scene =
+        VideoPlayerScene::from_file("../../Data/cutscenes/cs2.avi".to_string()).unwrap();
 
     #[cfg(feature = "ffmpeg")]
     {
+        let file_name = "../../Data/cutscenes/cs2.avi";
         let clip = AudioPlayer::from_filename(file_name).unwrap();
         let handle = AudioHandle::new();
         audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
@@ -219,6 +219,15 @@ pub fn main() {
     let engine = engine::opengl();
     let file_system = engine.get_storage().external_filesystem();
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
+    let mut bin_obj_scene =
+        BinObjViewerScene::from_model("tu_l.bin".to_string(), &game.asset_cache).unwrap();
+    let mut bin_ai_scene = BinAiViewerScene::from_files(
+        "res/mesh/ASSASSIN.BIN".to_string(),
+        "res/mesh/ASSASSIN.cal".to_string(),
+        resource_path,
+    )
+    .unwrap();
+    let mut font_scene = FontViewerScene::from_file("res/fonts/BLUEAA.FON".to_string(), resource_path).unwrap();
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
@@ -226,43 +235,7 @@ pub fn main() {
     //     yaw: -213.0,
     //     mouse_position: None,
     // };
-    let asset_paths = AssetPath::combine(vec![
-        // ZipAssetPath::new(resource_path("res/obj.crf")),
-        // ZipAssetPath::new(resource_path("res/bitmap.crf")),
-        // ZipAssetPath::new(resource_path("res/fam.crf")),
-        // ZipAssetPath::new(resource_path("res/iface.crf")),
-        // ZipAssetPath::new(resource_path("res/mesh.crf")),
-        // ZipAssetPath::new(resource_path("res/motions.crf")),
-        // ZipAssetPath::new(resource_path("res/objicon.crf")),
-        // ZipAssetPath::new(resource_path("res/snd.crf")),
-        // ZipAssetPath::new(resource_path("res/snd2.crf")),
-        // ZipAssetPath::new(resource_path("res/song.crf")),
-        // ZipAssetPath::new2(resource_path("res/strings.crf"), false),
-        AssetPath::folder("../assets/".to_owned()),
-        // Motion db
-        AssetPath::folder("".to_owned()),
-    ]);
-    let mut asset_cache = AssetCache::new(BASE_PATH.to_owned(), asset_paths);
-    let skeleton_file = File::open(resource_path("res/mesh/ASSASSIN.cal")).unwrap();
-    let mut skeleton_reader = BufReader::new(skeleton_file);
-    let ss2_cal = ss2_cal_loader::read(&mut skeleton_reader);
-    let skeleton = ss2_skeleton::create(ss2_cal);
 
-    let turret = game.asset_cache.get(&MODELS_IMPORTER, "tu_l.bin");
-    //let turret = game.asset_cache.get(&MODELS_IMPORTER, "camgrn.bin");
-
-    let mut obj = turret.to_scene_objects();
-
-    // let font = File::open(resource_path("res/book/default/font.FON")).unwrap();
-    // let font = File::open(resource_path("res/intrface/METAFONT.FON")).unwrap();
-    let font = File::open(resource_path("res/fonts/BLUEAA.FON")).unwrap();
-    let mut font_reader = BufReader::new(font);
-    let font = Font::read(&mut font_reader);
-
-    let mesh_file = File::open(resource_path("res/mesh/ASSASSIN.BIN")).unwrap();
-    let mut mesh_reader = BufReader::new(mesh_file);
-    let header = ss2_bin_header::read(&mut mesh_reader);
-    let ai_mesh = ss2_bin_ai_loader::read(&mut mesh_reader, &header);
 
     let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
     let mut motiondb_reader = BufReader::new(motiondb_file);
@@ -273,12 +246,6 @@ pub fn main() {
     let start_time = last_time;
 
     let mut frame = 0;
-    let mut animation_player = AnimationPlayer::empty();
-    animation_player = AnimationPlayer::set_additional_joint_transform(
-        &animation_player,
-        2,
-        Matrix4::from_translation(vec3(-0.5, 0.0, 0.0)) * Matrix4::from_angle_x(Deg(45.0)),
-    );
     // render loop
     // -----------
     while !window.should_close() {
@@ -302,21 +269,26 @@ pub fn main() {
         //let (mut scene, pawn_offset, pawn_rotation) = game.render();
 
         let mut scene = vec![];
-        animation_player = AnimationPlayer::set_additional_joint_transform(
-            &animation_player,
-            2,
-            Matrix4::from_translation(vec3(-0.8, 0.0, 0.0)),
-        );
-        animation_player = AnimationPlayer::set_additional_joint_transform(
-            &animation_player,
-            1,
-            Matrix4::from_angle_x(Deg(90.0 + 45.0 * time.total.as_secs_f32().sin())),
-        );
-        let turret_scene_obj = turret.to_animated_scene_objects(&animation_player);
 
-        for so in turret_scene_obj {
-            scene.push(so);
+        // Update and render scenes
+        bin_obj_scene.update(delta_time);
+        let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
+        for obj in bin_obj_scene_objects.objects {
+            scene.push(obj);
         }
+
+        bin_ai_scene.update(delta_time);
+        let bin_ai_scene_objects = bin_ai_scene.render(&mut game.asset_cache);
+        for obj in bin_ai_scene_objects.objects {
+            scene.push(obj);
+        }
+
+        font_scene.update(delta_time);
+        let font_scene_objects = font_scene.render(&mut game.asset_cache);
+        for obj in font_scene_objects.objects {
+            scene.push(obj);
+        }
+
 
         let yaw_rad = camera_context.yaw.to_radians();
         let pitch_rad = camera_context.pitch.to_radians();
@@ -346,37 +318,12 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
-        let texture: Rc<dyn TextureTrait> = {
-            #[cfg(feature = "ffmpeg")]
-            {
-                video_player.advance_by_time(time.elapsed);
-                let texture_data = video_player.get_current_frame();
-                Rc::new(init_from_memory2(
-                    texture_data,
-                    &TextureOptions { wrap: false },
-                ))
-            }
-            #[cfg(not(feature = "ffmpeg"))]
-            {
-                // Create a simple 1x1 white texture as fallback
-                let white_pixel = vec![255u8, 255u8, 255u8, 255u8];
-                let texture_data = RawTextureData {
-                    width: 1,
-                    height: 1,
-                    bytes: white_pixel,
-                    format: engine::texture_format::PixelFormat::RGBA,
-                };
-                Rc::new(init_from_memory2(
-                    texture_data,
-                    &TextureOptions { wrap: false },
-                ))
-            }
-        };
-
-        let cube_mat = engine::scene::basic_material::create(texture, 1.0, 0.0);
-        let mut cube_obj = SceneObject::new(cube_mat, Box::new(engine::scene::cube::create()));
-        cube_obj.set_transform(Matrix4::from_scale(3.0));
-        scene.push(cube_obj);
+        // Update and render video scene
+        video_scene.update(delta_time);
+        let video_scene_objects = video_scene.render(&mut game.asset_cache);
+        for obj in video_scene_objects.objects {
+            // scene.push(obj);
+        }
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
