@@ -1323,6 +1323,7 @@ impl Mission {
         view: Matrix4<f32>,
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
+        options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
         if let Some(hit_entity) = self.left_hand.get_raytraced_entity() {
@@ -1343,6 +1344,7 @@ impl Mission {
                 view,
                 projection,
                 screen_size,
+                options.debug_show_ids,
             ));
         };
 
@@ -1363,6 +1365,7 @@ impl Mission {
                 view,
                 projection,
                 screen_size,
+                options.debug_show_ids,
             ));
         };
 

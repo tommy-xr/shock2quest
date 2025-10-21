@@ -2,7 +2,7 @@ use cgmath::{point2, vec2, vec3, Matrix4, Vector2};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{FONT_IMPORTER, TEXTURE_IMPORTER},
-    properties::{PropHitPoints, PropObjName},
+    properties::{PropHitPoints, PropObjName, PropTemplateId},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{EntityId, Get, View, World};
@@ -18,6 +18,7 @@ pub fn draw_item_name(
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
+    debug_show_ids: bool,
 ) -> Vec<SceneObject> {
     let maybe_bbox = physics.get_aabb2(entity_id);
 
@@ -27,6 +28,8 @@ pub fn draw_item_name(
 
     let v_prop_obj_short_name = world.borrow::<View<PropObjName>>().unwrap();
     let maybe_prop_obj_short_name = v_prop_obj_short_name.get(entity_id);
+    let v_prop_template_id = world.borrow::<View<PropTemplateId>>().unwrap();
+    let prop_template_id = v_prop_template_id.get(entity_id).unwrap();
 
     if maybe_prop_obj_short_name.is_err() {
         return vec![];
@@ -48,8 +51,24 @@ pub fn draw_item_name(
         .map(|hp| hp.hit_points.to_string())
         .unwrap_or("?".to_string());
 
+    let text_content = if debug_show_ids {
+        format!(
+            "{} | {} (Tem {}| Ent {})",
+            prop_obj_short_name.0,
+            &maybe_hitpoints,
+            prop_template_id.template_id,
+            entity_id.inner(),
+        )
+    } else {
+        format!(
+            "{} | {}",
+            prop_obj_short_name.0,
+            &maybe_hitpoints,
+        )
+    };
+
     let text_obj_0_0 = SceneObject::screen_space_text(
-        &format!("{} | {}", prop_obj_short_name.0, &maybe_hitpoints),
+        &text_content,
         font.clone(),
         10.0,
         0.5,

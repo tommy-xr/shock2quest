@@ -121,9 +121,10 @@ impl MissionManager {
         view: Matrix4<f32>,
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
+        options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         self.current_mission
-            .render_per_eye(asset_cache, view, projection, screen_size)
+            .render_per_eye(asset_cache, view, projection, screen_size, options)
     }
 
     /// Finalize rendering for the current mission.
@@ -211,6 +212,7 @@ impl Mission for GameplayMissionWrapper {
         _view: Matrix4<f32>,
         _projection: Matrix4<f32>,
         _screen_size: Vector2<f32>,
+        _options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         // Delegate to the existing Mission's render_per_eye method
         warn!("GameplayMissionWrapper::render_per_eye - using temporary implementation");

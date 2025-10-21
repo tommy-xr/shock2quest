@@ -82,6 +82,7 @@ pub struct GameOptions {
     pub debug_physics: bool,
     pub debug_draw: bool,
     pub debug_portals: bool,
+    pub debug_show_ids: bool,
     pub experimental_features: HashSet<String>,
 }
 
@@ -94,6 +95,7 @@ impl Default for GameOptions {
             debug_draw: false,
             debug_portals: false,
             debug_physics: false,
+            debug_show_ids: false,
             render_particles: true,
             experimental_features: HashSet::new(),
         }
@@ -747,6 +749,7 @@ impl Game {
             view,
             projection,
             screen_size,
+            &self.options,
         );
 
         let world_position = vec3(0.0, 1.0, 0.0);
