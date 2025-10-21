@@ -177,6 +177,34 @@ fn find_video_file(filename: &str) -> Option<String> {
     None
 }
 
+fn create_scene(
+    filename: &str,
+    scene_type: &str,
+    _animation_file: &Option<String>,
+    asset_cache: &engine::assets::asset_cache::AssetCache,
+    resource_path: fn(&str) -> String
+) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
+    match scene_type {
+        "video" => {
+            if let Some(video_path) = find_video_file(filename) {
+                let scene = VideoPlayerScene::from_file(video_path)?;
+                Ok(Box::new(scene))
+            } else {
+                Err(format!("Could not find video file: {}", filename).into())
+            }
+        }
+        "bin_obj" => {
+            let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+            Ok(Box::new(scene))
+        }
+        "font" => {
+            let scene = FontViewerScene::from_file(filename.to_string(), resource_path)?;
+            Ok(Box::new(scene))
+        }
+        _ => Err(format!("Unsupported scene type: {}", scene_type).into())
+    }
+}
+
 pub fn main() {
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
@@ -232,17 +260,6 @@ pub fn main() {
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-    // Initialize video scene only if needed
-    let mut video_scene = if scene_type == "video" {
-        if let Some(video_path) = find_video_file(filename) {
-            Some(VideoPlayerScene::from_file(video_path).unwrap())
-        } else {
-            eprintln!("Error: Could not find video file: {}", filename);
-            std::process::exit(1);
-        }
-    } else {
-        None
-    };
 
     // #[cfg(feature = "ffmpeg")]
     // {
@@ -300,20 +317,14 @@ pub fn main() {
     let engine = engine::opengl();
     let file_system = engine.get_storage().external_filesystem();
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
-    // Initialize scenes based on scene type
-    let mut bin_obj_scene = if scene_type == "bin_obj" {
-        Some(BinObjViewerScene::from_model(filename.clone(), &game.asset_cache).unwrap())
-    } else {
-        None
-    };
 
-    // Note: We removed bin_ai_scene since the model importer handles both types of .bin files
-    // The animation file (if provided) could be used for more advanced animation features later
-
-    let mut font_scene = if scene_type == "font" {
-        Some(FontViewerScene::from_file(filename.clone(), resource_path).unwrap())
-    } else {
-        None
+    // Create the appropriate scene based on file type
+    let mut scene = match create_scene(filename, scene_type, &animation_file, &game.asset_cache, resource_path) {
+        Ok(scene) => scene,
+        Err(err) => {
+            eprintln!("Error creating scene: {}", err);
+            std::process::exit(1);
+        }
     };
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
@@ -354,23 +365,13 @@ pub fn main() {
 
         //let (mut scene, pawn_offset, pawn_rotation) = game.render();
 
-        let mut scene = vec![];
+        let mut scene_objects = vec![];
 
-        // Update and render active scene
-        if let Some(ref mut bin_obj_scene) = bin_obj_scene {
-            bin_obj_scene.update(delta_time);
-            let bin_obj_scene_objects = bin_obj_scene.render(&mut game.asset_cache);
-            for obj in bin_obj_scene_objects.objects {
-                scene.push(obj);
-            }
-        }
-
-        if let Some(ref mut font_scene) = font_scene {
-            font_scene.update(delta_time);
-            let font_scene_objects = font_scene.render(&mut game.asset_cache);
-            for obj in font_scene_objects.objects {
-                scene.push(obj);
-            }
+        // Update and render the scene
+        scene.update(delta_time);
+        let rendered_scene = scene.render(&mut game.asset_cache);
+        for obj in rendered_scene.objects {
+            scene_objects.push(obj);
         }
 
         let yaw_rad = camera_context.yaw.to_radians();
@@ -401,14 +402,6 @@ pub fn main() {
             orig_camera_position + orig_camera_forward,
         ));
 
-        // Update and render video scene
-        if let Some(ref mut video_scene) = video_scene {
-            video_scene.update(delta_time);
-            let video_scene_objects = video_scene.render(&mut game.asset_cache);
-            for obj in video_scene_objects.objects {
-                scene.push(obj);
-            }
-        }
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
@@ -443,7 +436,7 @@ pub fn main() {
 
         frame += 1;
 
-        let full_scene = Scene::from_objects(scene);
+        let full_scene = Scene::from_objects(scene_objects);
         engine.render(&render_context, &full_scene);
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
