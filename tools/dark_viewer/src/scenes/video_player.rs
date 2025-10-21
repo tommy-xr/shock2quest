@@ -1,5 +1,6 @@
 use super::ToolScene;
-use cgmath::{vec3, Matrix4};
+use cgmath::Matrix4;
+use engine::audio::{AudioClip, AudioContext, AudioHandle};
 use engine::scene::{basic_material, cube, Scene, SceneObject};
 use engine::texture::{init_from_memory2, TextureOptions, TextureTrait};
 use engine::texture_format::{PixelFormat, RawTextureData};
@@ -7,12 +8,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 #[cfg(feature = "ffmpeg")]
-use engine_ffmpeg::VideoPlayer;
+use engine_ffmpeg::{AudioPlayer, VideoPlayer};
 
 pub struct VideoPlayerScene {
     file_name: String,
     #[cfg(feature = "ffmpeg")]
     video_player: VideoPlayer,
+    #[cfg(feature = "ffmpeg")]
+    audio_clip: Rc<AudioClip>,
     total_time: Duration,
 }
 
@@ -21,9 +24,11 @@ impl VideoPlayerScene {
         #[cfg(feature = "ffmpeg")]
         {
             let video_player = VideoPlayer::from_filename(&file_name)?;
+            let audio_clip = Rc::new(AudioPlayer::from_filename(&file_name)?);
             Ok(VideoPlayerScene {
                 file_name,
                 video_player,
+                audio_clip,
                 total_time: Duration::ZERO,
             })
         }
@@ -34,6 +39,12 @@ impl VideoPlayerScene {
                 total_time: Duration::ZERO,
             })
         }
+    }
+
+    #[cfg(feature = "ffmpeg")]
+    pub fn init_audio(&self, audio_context: &mut AudioContext<(), String>) {
+        let handle = AudioHandle::new();
+        engine::audio::test_audio(audio_context, handle, None, self.audio_clip.clone());
     }
 }
 

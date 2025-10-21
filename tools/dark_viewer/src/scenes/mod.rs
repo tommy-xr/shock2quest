@@ -8,10 +8,8 @@ pub trait ToolScene {
 
 pub mod video_player;
 pub mod bin_obj_viewer;
-pub mod bin_ai_viewer;
 pub mod font_viewer;
 
 pub use video_player::VideoPlayerScene;
 pub use bin_obj_viewer::BinObjViewerScene;
-pub use bin_ai_viewer::BinAiViewerScene;
 pub use font_viewer::FontViewerScene;
