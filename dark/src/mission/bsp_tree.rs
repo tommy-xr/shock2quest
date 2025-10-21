@@ -183,11 +183,6 @@ impl BspTree {
                 front,
                 back,
             } => {
-                println!(
-                    "converting cell: {} plane: {} front: {} back: {}",
-                    cell_idx, plane_idx, front, back
-                );
-
                 let front_node = if *front == 0xFFFFFF {
                     None
                 } else {

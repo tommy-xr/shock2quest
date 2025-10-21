@@ -64,6 +64,10 @@ pub trait Behavior {
     ) -> Effect {
         Effect::NoEffect
     }
+
+    fn is_locomotion(&self) -> bool {
+        false
+    }
 }
 
 #[allow(dead_code)]

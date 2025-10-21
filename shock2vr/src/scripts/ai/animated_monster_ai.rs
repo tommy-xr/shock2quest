@@ -28,6 +28,7 @@ pub struct AnimatedMonsterAI {
     is_dead: bool,
     took_damage: bool,
     animation_seq: u32,
+    locomotion_seq: u32,
 
     played_ai_watch_obj: HashSet<EntityId>,
 }
@@ -42,6 +43,7 @@ impl AnimatedMonsterAI {
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
             animation_seq: 0,
+            locomotion_seq: 0,
             last_hit_sensor: None,
 
             played_ai_watch_obj: HashSet::new(),
@@ -56,6 +58,7 @@ impl AnimatedMonsterAI {
             current_behavior: Box::new(RefCell::new(RangedAttackBehavior)),
             current_heading: Deg(0.0),
             animation_seq: 0,
+            locomotion_seq: 0,
             last_hit_sensor: None,
             played_ai_watch_obj: HashSet::new(),
         }
@@ -164,21 +167,36 @@ impl AnimatedMonsterAI {
 
         Effect::combine(vec![sensor_effect, debug_effect])
     }
+
+    fn next_selection(
+        &mut self,
+        is_locomotion: bool,
+    ) -> dark::motion::MotionQuerySelectionStrategy {
+        if is_locomotion {
+            let seq = self.locomotion_seq;
+            self.locomotion_seq = self.locomotion_seq.wrapping_add(1);
+            dark::motion::MotionQuerySelectionStrategy::Sequential(seq)
+        } else {
+            let seq = self.animation_seq;
+            self.animation_seq = self.animation_seq.wrapping_add(1);
+            dark::motion::MotionQuerySelectionStrategy::Sequential(seq)
+        }
+    }
 }
 
 impl Script for AnimatedMonsterAI {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.current_heading = current_yaw(entity_id, world);
+        let is_locomotion = self.current_behavior.borrow().is_locomotion();
+        let selection_strategy = self.next_selection(is_locomotion);
         Effect::QueueAnimationBySchema {
             entity_id,
             motion_query_items: self.current_behavior.borrow().animation(),
-            selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
-                self.animation_seq,
-            ), //     MotionQueryItem::new("rangedcombat".to_owned())),
-               //     // "rangedcombat".to_owned(),
-               //     // "attack".to_owned(),
-               //     //"direction".to_owned(),
-               // ],
+            selection_strategy, //     MotionQueryItem::new("rangedcombat".to_owned())),
+                                //     // "rangedcombat".to_owned(),
+                                //     // "attack".to_owned(),
+                                //     //"direction".to_owned(),
+                                // ],
         }
 
         // Effect::QueueAnimationBySchema {
@@ -212,13 +230,12 @@ impl Script for AnimatedMonsterAI {
                     world,
                     watch_options.scripted_actions.clone(),
                 )));
-                self.animation_seq += 1;
+                let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                let selection_strategy = self.next_selection(is_locomotion);
                 return Effect::QueueAnimationBySchema {
                     entity_id,
                     motion_query_items: self.current_behavior.borrow().animation(),
-                    selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
-                        self.animation_seq,
-                    ),
+                    selection_strategy,
                 };
             }
         }
@@ -277,13 +294,12 @@ impl Script for AnimatedMonsterAI {
                         world,
                         prop_sig_resp.actions.clone(),
                     )));
-                    self.animation_seq += 1;
+                    let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                    let selection_strategy = self.next_selection(is_locomotion);
                     Effect::QueueAnimationBySchema {
                         entity_id,
                         motion_query_items: self.current_behavior.borrow().animation(),
-                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
-                            self.animation_seq,
-                        ),
+                        selection_strategy,
                     }
                 } else {
                     Effect::NoEffect
@@ -300,13 +316,12 @@ impl Script for AnimatedMonsterAI {
                         world,
                         prop_sig_resp.actions.clone(),
                     )));
-                    self.animation_seq += 1;
+                    let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                    let selection_strategy = self.next_selection(is_locomotion);
                     Effect::QueueAnimationBySchema {
                         entity_id,
                         motion_query_items: self.current_behavior.borrow().animation(),
-                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
-                            self.animation_seq,
-                        ),
+                        selection_strategy,
                     }
                 } else {
                     Effect::NoEffect
@@ -344,13 +359,12 @@ impl Script for AnimatedMonsterAI {
                         }
                     };
                     //self.current_behavior = Rc::new(IdleBehavior);
-                    self.animation_seq += 1;
+                    let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                    let selection_strategy = self.next_selection(is_locomotion);
                     Effect::QueueAnimationBySchema {
                         entity_id,
                         motion_query_items: self.current_behavior.borrow().animation(),
-                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Sequential(
-                            self.animation_seq,
-                        ),
+                        selection_strategy,
                         //tag: "idlegesture".to_owned(),
                         // motion_query_items: vec![
                         //     MotionQueryItem::new("search"),
