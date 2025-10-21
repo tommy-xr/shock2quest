@@ -16,6 +16,7 @@ pub struct AnimationClip {
     pub translation: Vector3<f32>,
     pub joint_to_frame: HashMap<JointId, Vec<Matrix4<f32>>>,
     pub motion_flags: Vec<FrameFlags>,
+    pub blend_length: Duration,
 }
 
 impl AnimationClip {
@@ -63,6 +64,7 @@ impl AnimationClip {
             sliding_velocity,
             translation: motion_stuff.translation,
             end_rotation,
+            blend_length: Duration::from_millis(motion_stuff.blend_length as u64),
         }
     }
 }
