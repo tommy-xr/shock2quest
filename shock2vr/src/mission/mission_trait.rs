@@ -51,6 +51,7 @@ pub trait Mission {
         view: Matrix4<f32>,
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
+        options: &crate::GameOptions,
     ) -> Vec<SceneObject>;
 
     /// Finalize rendering preparations (culling, visibility, etc.).
