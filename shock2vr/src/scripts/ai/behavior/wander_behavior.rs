@@ -46,4 +46,8 @@ impl Behavior for WanderBehavior {
             //MotionQueryItem::new("search").optional(),
         ]
     }
+
+    fn is_locomotion(&self) -> bool {
+        true
+    }
 }

@@ -62,6 +62,10 @@ impl Behavior for ChaseBehavior {
         ]
     }
 
+    fn is_locomotion(&self) -> bool {
+        true
+    }
+
     fn next_behavior(
         &mut self,
         world: &World,
