@@ -179,29 +179,26 @@ fn find_video_file(filename: &str) -> Option<String> {
 
 fn create_scene(
     filename: &str,
-    scene_type: &str,
     _animation_file: &Option<String>,
     asset_cache: &engine::assets::asset_cache::AssetCache,
     resource_path: fn(&str) -> String
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
-    match scene_type {
-        "video" => {
-            if let Some(video_path) = find_video_file(filename) {
-                let scene = VideoPlayerScene::from_file(video_path)?;
-                Ok(Box::new(scene))
-            } else {
-                Err(format!("Could not find video file: {}", filename).into())
-            }
-        }
-        "bin_obj" => {
-            let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+    // Determine scene type from file extension
+    if filename.to_lowercase().ends_with(".avi") {
+        if let Some(video_path) = find_video_file(filename) {
+            let scene = VideoPlayerScene::from_file(video_path)?;
             Ok(Box::new(scene))
+        } else {
+            Err(format!("Could not find video file: {}", filename).into())
         }
-        "font" => {
-            let scene = FontViewerScene::from_file(filename.to_string(), resource_path)?;
-            Ok(Box::new(scene))
-        }
-        _ => Err(format!("Unsupported scene type: {}", scene_type).into())
+    } else if filename.to_lowercase().ends_with(".bin") {
+        let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+        Ok(Box::new(scene))
+    } else if filename.to_lowercase().ends_with(".fon") {
+        let scene = FontViewerScene::from_file(filename.to_string(), resource_path)?;
+        Ok(Box::new(scene))
+    } else {
+        Err(format!("Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font)", filename).into())
     }
 }
 
@@ -231,26 +228,13 @@ pub fn main() {
         None
     };
 
-    // Determine scene type from file extension
-    let scene_type = if filename.to_lowercase().ends_with(".avi") {
-        "video"
-    } else if filename.to_lowercase().ends_with(".bin") {
-        "bin_obj"
-    } else if filename.to_lowercase().ends_with(".fon") {
-        "font"
-    } else {
-        eprintln!("Unsupported file type: {}", filename);
-        eprintln!("Supported file types: .avi (video), .bin (3D model), .fon (font)");
-        std::process::exit(1);
-    };
-
     if let Some(ref anim_file) = animation_file {
         println!(
-            "Loading {} as {} scene with animation {}",
-            filename, scene_type, anim_file
+            "Loading {} with animation {}",
+            filename, anim_file
         );
     } else {
-        println!("Loading {} as {} scene", filename, scene_type);
+        println!("Loading {}", filename);
     }
 
     // glfw: initialize and configure
@@ -319,7 +303,7 @@ pub fn main() {
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
 
     // Create the appropriate scene based on file type
-    let mut scene = match create_scene(filename, scene_type, &animation_file, &game.asset_cache, resource_path) {
+    let mut scene = match create_scene(filename, &animation_file, &game.asset_cache, resource_path) {
         Ok(scene) => scene,
         Err(err) => {
             eprintln!("Error creating scene: {}", err);
