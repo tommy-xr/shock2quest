@@ -6,13 +6,13 @@ use engine::assets::asset_cache::AssetCache;
 use engine::scene::{color_material, Scene, SceneObject};
 use std::time::Duration;
 
-pub struct BinObjViewerScene {
+pub struct CustomizableBonesScene {
     model_name: String,
     total_time: Duration,
     animation_player: AnimationPlayer,
 }
 
-impl BinObjViewerScene {
+impl CusomizableBonesScene {
     pub fn from_model(
         model_name: String,
         _asset_cache: &AssetCache,
@@ -33,7 +33,7 @@ impl BinObjViewerScene {
     }
 }
 
-impl ToolScene for BinObjViewerScene {
+impl ToolScene for CustomizableBonesScene {
     fn update(&mut self, delta_time: f32) {
         let elapsed = Duration::from_secs_f32(delta_time);
         self.total_time += elapsed;
