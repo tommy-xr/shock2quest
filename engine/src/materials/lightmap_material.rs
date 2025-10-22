@@ -300,6 +300,7 @@ impl Material for LightmapMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         unsafe {
             let (p, uniforms) = SHADER_PROGRAM.get().unwrap();
@@ -319,75 +320,4 @@ impl Material for LightmapMaterial {
         true
     }
 
-    fn draw_light_pass(
-        &self,
-        render_context: &EngineRenderContext,
-        view_matrix: &Matrix4<f32>,
-        world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
-        light: &dyn Light,
-        _shadow_map: Option<&()>,
-    ) -> bool {
-        // Only support spotlight for now
-        if light.light_type() != LightType::Spotlight {
-            return false;
-        }
-
-        let (shader_program, uniforms) = LIGHTING_SHADER_PROGRAM
-            .get()
-            .expect("lighting shader not compiled");
-
-        // Only bind diffuse texture for lighting (lightmap is already baked)
-        self.diffuse_texture.bind1(render_context);
-
-        unsafe {
-            gl::UseProgram(shader_program.gl_id);
-
-            let projection = render_context.projection_matrix;
-
-            // Set basic matrices
-            gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
-            gl::Uniform1i(uniforms.texture2_loc, 1); // diffuse texture
-
-            // Set light parameters
-            let light_pos = light.position();
-            let light_color_intensity = light.color_intensity();
-            gl::Uniform3f(
-                uniforms.light_pos_loc,
-                light_pos.x,
-                light_pos.y,
-                light_pos.z,
-            );
-            gl::Uniform4f(
-                uniforms.light_color_intensity_loc,
-                light_color_intensity.x,
-                light_color_intensity.y,
-                light_color_intensity.z,
-                light_color_intensity.w,
-            );
-
-            // Set spotlight-specific parameters
-            if let Some(spotlight_params) = light.spotlight_params() {
-                gl::Uniform3f(
-                    uniforms.light_direction_loc,
-                    spotlight_params.direction.x,
-                    spotlight_params.direction.y,
-                    spotlight_params.direction.z,
-                );
-                gl::Uniform1f(
-                    uniforms.light_inner_cone_angle_loc,
-                    spotlight_params.inner_cone_angle,
-                );
-                gl::Uniform1f(
-                    uniforms.light_outer_cone_angle_loc,
-                    spotlight_params.outer_cone_angle,
-                );
-                gl::Uniform1f(uniforms.light_range_loc, spotlight_params.range);
-            }
-        }
-
-        true
-    }
 }

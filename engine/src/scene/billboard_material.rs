@@ -189,6 +189,7 @@ where
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         if !self.is_transparent() {
             self.draw_common(render_context, view_matrix, world_matrix);
@@ -204,6 +205,7 @@ where
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         if self.is_transparent() {
             self.draw_common(render_context, view_matrix, world_matrix);
@@ -211,19 +213,5 @@ where
         } else {
             false
         }
-    }
-
-    fn draw_light_pass(
-        &self,
-        _render_context: &EngineRenderContext,
-        _view_matrix: &Matrix4<f32>,
-        _world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
-        _light: &dyn Light,
-        _shadow_map: Option<&()>,
-    ) -> bool {
-        // Billboard materials typically don't participate in dynamic lighting
-        // They're often used for UI elements, particles, or emissive effects
-        false
     }
 }
