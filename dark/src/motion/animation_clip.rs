@@ -11,6 +11,7 @@ pub struct AnimationClip {
     pub num_frames: u32,
     pub time_per_frame: Duration,
     pub duration: Duration,
+    pub blend_length: Duration,
     pub end_rotation: Deg<f32>,
     pub sliding_velocity: Vector3<f32>,
     pub translation: Vector3<f32>,
@@ -57,6 +58,7 @@ impl AnimationClip {
         AnimationClip {
             num_frames,
             duration,
+            blend_length: Duration::from_millis(motion_stuff.blend_length as u64),
             joint_to_frame,
             time_per_frame,
             motion_flags: mps_motion.motion_flags.clone(),
