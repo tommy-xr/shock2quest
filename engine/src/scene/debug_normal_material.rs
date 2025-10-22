@@ -22,7 +22,8 @@ const VERTEX_SHADER_SOURCE: &str = r#"
 
         void main() {
             mat3 normalMatrix = transpose(inverse(mat3(world)));
-            worldNormal = normalize(normalMatrix * inNormal);
+            float orientation = determinant(mat3(world)) < 0.0 ? -1.0 : 1.0;
+            worldNormal = normalize(normalMatrix * inNormal) * orientation;
             gl_Position = projection * view * world * vec4(inPos, 1.0);
         }
 "#;
@@ -157,7 +158,8 @@ const SKINNED_VERTEX_SHADER_SOURCE: &str = r#"
             vec4 skinnedPos = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
             vec3 skinnedNormal = mat3(bone_matrices[bone_ids.x]) * inNormal;
             vec4 worldPosition = world * skinnedPos;
-            worldNormal = normalize(mat3(world) * skinnedNormal);
+            float orientation = determinant(mat3(world)) < 0.0 ? -1.0 : 1.0;
+            worldNormal = normalize(mat3(world) * skinnedNormal) * orientation;
             gl_Position = projection * view * worldPosition;
         }
 "#;

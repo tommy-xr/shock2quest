@@ -137,7 +137,7 @@ const LIGHTING_FRAGMENT_SHADER_SOURCE: &str = r#"
             vec3 lightContribution = texColor.rgb * lightColorIntensity.rgb * lightColorIntensity.a
                                    * lambertian * coneAttenuation * distanceAttenuation;
 
-            fragColor = vec4(lightContribution, texColor.a);
+            fragColor = vec4(lightContribution, 1.0);
         }
 "#;
 

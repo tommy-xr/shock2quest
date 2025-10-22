@@ -17,7 +17,7 @@ use std::{
 };
 
 use cgmath::{
-    num_traits::ToPrimitive, vec3, InnerSpace, Matrix4, Point3, Quaternion, Rotation3,
+    num_traits::ToPrimitive, vec3, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Rotation3,
     SquareMatrix, Transform, Vector2, Vector3,
 };
 use cgmath::{EuclideanSpace, Zero};
@@ -691,7 +691,8 @@ impl Mission {
         } else {
             let translation_matrix = Matrix4::from_translation(position);
             let rotation_matrix = Matrix4::<f32>::from(rotation);
-            let scale_matrix = Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+            let scale_matrix =
+                Matrix4::from_nonuniform_scale(scale.x.abs(), scale.y.abs(), scale.z.abs());
             let xform = translation_matrix * rotation_matrix * scale_matrix;
 
             let v_entities = self.world.borrow::<EntitiesView>().unwrap();
@@ -1439,6 +1440,16 @@ impl Mission {
             };
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                let basis =
+                    Matrix3::from_cols(xform.x.truncate(), xform.y.truncate(), xform.z.truncate());
+                let eid = entity_id.inner();
+                println!("entity {eid:?} det {} ", basis.determinant());
+
+                let world_up = (basis * Vector3::unit_y()).normalize();
+                // println!("--- entity {:?} up {:?}", eid, world_up);
+
+                // println!("--- xform: {:?}", xform);
+
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);

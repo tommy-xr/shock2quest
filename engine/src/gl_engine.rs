@@ -133,7 +133,7 @@ impl Engine for OpenGLEngine {
                 gl::Enable(gl::BLEND);
                 gl::BlendFunc(gl::ONE, gl::ONE); // Additive blending
                 gl::DepthMask(gl::FALSE); // Read-only depth testing
-                gl::DepthFunc(gl::EQUAL); // Only render pixels with exact depth match
+                gl::DepthFunc(gl::LEQUAL); // Only render pixels with exact depth match
 
                 // Render one pass per light
                 for light in scene.lights().lights() {
@@ -164,9 +164,9 @@ impl Engine for OpenGLEngine {
             // STEP 3: Transparent pass
             // TODO: Properly order back-to-front..
             // TODO: Add lighting support for transparent materials
-            scene
-                .iter()
-                .for_each(|s| s.draw_transparent(self, render_context, &view));
+            // scene
+            //     .iter()
+            //     .for_each(|s| s.draw_transparent(self, render_context, &view));
             gl::DepthMask(gl::TRUE);
 
             //cube.destroy();

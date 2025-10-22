@@ -53,8 +53,21 @@ impl ToolScene for BinObjViewerScene {
 
     fn render(&self, asset_cache: &mut AssetCache) -> Scene {
         let turret = asset_cache.get(&MODELS_IMPORTER, &self.model_name);
-        let turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
+        let turret_scene_objects = turret.to_scene_objects().clone();
 
-        Scene::from_objects(turret_scene_objects)
+        let mut scene = vec![];
+
+        // Reproduce issue with messed up normals
+        let xform = Matrix4::from_nonuniform_scale(1.0, 1.0, 1.0);
+
+        for obj in turret_scene_objects {
+            let mut xformed_obj = obj.clone();
+            xformed_obj.set_transform(xform);
+            scene.push(xformed_obj);
+        }
+
+        // Scene::from_objects(model_scene_objects)
+
+        Scene::from_objects(scene)
     }
 }

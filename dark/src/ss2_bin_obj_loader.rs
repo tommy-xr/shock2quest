@@ -828,9 +828,15 @@ fn convert_skinned_vertices_to_static_vertices(
             ))
             .to_vec();
         let mut normal = bone_transform.transform_vector(vertex.normal);
+        let pre_normal = normal.clone();
+
         if normal.magnitude2() > f32::EPSILON {
             normal = normal.normalize();
         }
+        println!(
+            "--- pre-transform - position: {:?} normal: {:?} - after transform - position: {:?} normal: {:?}",
+        vertex.position, vertex.normal, position, normal
+        );
         v.push(VertexPositionTextureNormal {
             position,
             uv: vertex.uv,

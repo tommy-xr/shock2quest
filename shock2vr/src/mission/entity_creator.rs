@@ -109,7 +109,7 @@ pub fn create_entity_with_position(
     let transform = root_transform
         * Matrix4::from_translation(position.to_vec())
         * Matrix4::from(orientation)
-        * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+        * Matrix4::from_nonuniform_scale(scale.x.abs(), scale.y.abs(), scale.z.abs());
 
     world.add_component(entity_id, RuntimePropTransform(transform));
 
@@ -154,7 +154,7 @@ pub fn initialize_entity(
     if let Ok(position) = maybe_position {
         let transform = Matrix4::from_translation(position.position)
             * Matrix4::from(position.rotation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+            * Matrix4::from_nonuniform_scale(scale.x.abs(), scale.y.abs(), scale.z.abs());
 
         world.add_component(entity_id, RuntimePropTransform(transform));
     };
@@ -367,9 +367,9 @@ fn create_model(
         if v_scale.contains(entity_id) {
             let scale_vec = v_scale.get(entity_id).unwrap().0;
             scale = Matrix4::<f32>::from_nonuniform_scale(
-                abs(scale_vec.x),
-                abs(scale_vec.y),
-                abs(scale_vec.z),
+                abs(scale_vec.x.abs()),
+                abs(scale_vec.y.abs()),
+                abs(scale_vec.z.abs()),
             );
         }
 
