@@ -22,7 +22,13 @@ pub trait Light: std::fmt::Debug {
 
     /// Check if this light affects a given world position
     /// Used for optimization to skip lights that don't affect geometry
-    fn affects_position(&self, world_pos: Vector3<f32>) -> bool;
+    fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+        self.influence_at(world_pos) > 0.0
+    }
+
+    /// Compute the influence factor for a world position.
+    /// Values greater than zero indicate the position lies within the light's effective region.
+    fn influence_at(&self, world_pos: Vector3<f32>) -> f32;
 
     /// Get spotlight parameters if this is a spotlight
     /// Returns None for other light types
@@ -76,23 +82,11 @@ impl Light for SpotLight {
     }
 
     fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
-        // Quick range check
-        true
-        // let distance = (world_pos - self.position).magnitude();
-        // if distance > self.range {
-        //     return false;
-        // }
+        self.influence_at(world_pos) > 0.0
+    }
 
-        // // Cone check - ensure position is within the outer cone
-        // if distance > 0.0 {
-        //     let to_position = (world_pos - self.position).normalize();
-        //     let dot = to_position.dot(self.direction);
-        //     let cos_outer = self.outer_cone_angle.cos();
-        //     dot >= cos_outer
-        // } else {
-        //     // Position is exactly at light source
-        //     true
-        // }
+    fn influence_at(&self, world_pos: Vector3<f32>) -> f32 {
+        self.attenuation_at(world_pos)
     }
 
     fn spotlight_params(&self) -> Option<SpotlightParams> {
@@ -140,12 +134,11 @@ impl SpotLight {
     pub fn attenuation_at(&self, world_pos: Vector3<f32>) -> f32 {
         let distance = (world_pos - self.position).magnitude();
 
-        // Range falloff
         if distance > self.range {
             return 0.0;
         }
 
-        // Distance attenuation (quadratic falloff)
+        // Distance attenuation (quadratic falloff). Clamp to avoid runaway values when distance ~0.
         let distance_attenuation = if distance > 0.0 {
             1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance)
         } else {
@@ -161,11 +154,11 @@ impl SpotLight {
 
             if dot < cos_outer {
                 0.0
-            } else if dot > cos_inner {
+            } else if dot >= cos_inner {
                 1.0
             } else {
-                // Smooth falloff between inner and outer cone
-                (dot - cos_outer) / (cos_inner - cos_outer)
+                let cone_range = (cos_inner - cos_outer).max(0.0001);
+                (dot - cos_outer) / cone_range
             }
         } else {
             1.0

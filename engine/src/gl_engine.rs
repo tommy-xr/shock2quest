@@ -1,5 +1,6 @@
 extern crate gl;
 
+use crate::scene::light_system::LightingBatch;
 use crate::texture_descriptor::TextureDescriptor;
 use crate::util;
 use std::cell::RefCell;
@@ -122,41 +123,17 @@ impl Engine for OpenGLEngine {
             // // );
             // floor.draw(&self, render_context, &view);
 
-            // STEP 1: Base opaque pass (no lighting, just base material properties)
-            scene
-                .iter()
-                .for_each(|s| s.draw_opaque(self, render_context, &view));
+            // STEP 1: Opaque pass with per-object spotlight batching
+            for scene_object in scene.iter() {
+                let lighting = if scene.light_count() > 0 {
+                    scene
+                        .lights()
+                        .gather_spotlights_for_position(scene_object.get_world_position())
+                } else {
+                    LightingBatch::default()
+                };
 
-            // STEP 2: Multi-pass lighting for opaque objects
-            if scene.light_count() > 0 {
-                // Setup additive blending for light accumulation
-                gl::Enable(gl::BLEND);
-                gl::BlendFunc(gl::ONE, gl::ONE); // Additive blending
-                gl::DepthMask(gl::FALSE); // Read-only depth testing
-                gl::DepthFunc(gl::EQUAL); // Only render pixels with exact depth match
-
-                // Render one pass per light
-                for light in scene.lights().lights() {
-                    scene.iter().for_each(|scene_object| {
-                        // Check if this light affects this object's position
-                        // For now, use object's transform position as a simple check
-                        let world_pos = scene_object.get_world_position();
-                        if light.affects_position(world_pos) {
-                            scene_object.draw_light_pass(
-                                self,
-                                render_context,
-                                &view,
-                                light.as_ref(),
-                                None, // No shadow map yet
-                            );
-                        }
-                    });
-                }
-
-                // Restore normal blend state
-                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-                gl::DepthFunc(gl::LESS); // Restore normal depth testing
-                gl::DepthMask(gl::TRUE); // Re-enable depth writes
+                scene_object.draw_opaque(self, render_context, &view, &lighting);
             }
 
             gl::DepthMask(gl::FALSE);

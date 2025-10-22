@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::basic_material;
+use super::light_system::LightingBatch;
 use super::mesh;
 use super::quad;
 use super::TextVertex;
@@ -213,6 +214,7 @@ impl SceneObject {
         engine_context: &OpenGLEngine,
         render_context: &EngineRenderContext,
         view: &Matrix4<f32>,
+        lighting: &LightingBatch,
     ) {
         if !self.material.borrow().has_initialized() {
             self.material
@@ -221,11 +223,13 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
-        if self
-            .material
-            .borrow()
-            .draw_opaque(render_context, view, &xform, &self.skinning_data)
-        {
+        if self.material.borrow().draw_opaque(
+            render_context,
+            view,
+            &xform,
+            &self.skinning_data,
+            lighting,
+        ) {
             self.geometry.draw();
         }
     }
@@ -241,34 +245,6 @@ impl SceneObject {
             view,
             &xform,
             &self.skinning_data,
-        ) {
-            self.geometry.draw();
-        }
-    }
-
-    /// Draw the scene object with a specific light for multi-pass lighting
-    pub fn draw_light_pass(
-        &self,
-        engine_context: &OpenGLEngine,
-        render_context: &EngineRenderContext,
-        view: &Matrix4<f32>,
-        light: &dyn crate::scene::light::Light,
-        shadow_map: Option<&()>,
-    ) {
-        if !self.material.borrow().has_initialized() {
-            self.material
-                .borrow_mut()
-                .initialize(engine_context.is_opengl_es, &*engine_context.storage);
-        }
-
-        let xform = self.transform * self.local_transform;
-        if self.material.borrow().draw_light_pass(
-            render_context,
-            view,
-            &xform,
-            &self.skinning_data,
-            light,
-            shadow_map,
         ) {
             self.geometry.draw();
         }

@@ -1,5 +1,64 @@
-use crate::scene::light::{Light, LightType, SpotLight};
-use cgmath::Vector3;
+use crate::scene::light::{Light, LightType, SpotLight, SpotlightParams};
+use cgmath::{Vector3, Vector4};
+
+pub const MAX_SPOT_LIGHTS: usize = 2;
+
+#[derive(Clone, Copy, Debug)]
+pub struct SpotlightUniform {
+    pub position: Vector3<f32>,
+    pub range: f32,
+    pub color_intensity: Vector4<f32>,
+    pub direction: Vector3<f32>,
+    pub cos_inner: f32,
+    pub cos_outer: f32,
+}
+
+impl SpotlightUniform {
+    fn from_light(light: &dyn Light, params: SpotlightParams) -> Self {
+        Self {
+            position: light.position(),
+            range: params.range,
+            color_intensity: light.color_intensity(),
+            direction: params.direction,
+            cos_inner: params.inner_cone_angle.cos(),
+            cos_outer: params.outer_cone_angle.cos(),
+        }
+    }
+}
+
+impl Default for SpotlightUniform {
+    fn default() -> Self {
+        Self {
+            position: Vector3::new(0.0, 0.0, 0.0),
+            range: 0.0,
+            color_intensity: Vector4::new(0.0, 0.0, 0.0, 0.0),
+            direction: Vector3::new(0.0, -1.0, 0.0),
+            cos_inner: 0.0,
+            cos_outer: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LightingBatch {
+    pub spot_count: usize,
+    pub spots: [SpotlightUniform; MAX_SPOT_LIGHTS],
+}
+
+impl Default for LightingBatch {
+    fn default() -> Self {
+        Self {
+            spot_count: 0,
+            spots: [SpotlightUniform::default(); MAX_SPOT_LIGHTS],
+        }
+    }
+}
+
+impl LightingBatch {
+    pub fn is_empty(&self) -> bool {
+        self.spot_count == 0
+    }
+}
 
 /// Container for managing multiple lights in a scene
 /// This provides the foundation for multi-pass lighting while maintaining
@@ -51,6 +110,42 @@ impl LightSystem {
                 }
             })
             .collect()
+    }
+
+    /// Gather up to MAX_SPOT_LIGHTS spotlights influencing the provided world position.
+    pub fn gather_spotlights_for_position(&self, world_pos: Vector3<f32>) -> LightingBatch {
+        use std::cmp::Ordering;
+
+        let mut candidates: Vec<(f32, &dyn Light)> = self
+            .lights
+            .iter()
+            .filter_map(|light| {
+                if light.light_type() != LightType::Spotlight {
+                    return None;
+                }
+
+                let influence = light.influence_at(world_pos);
+                if influence <= 0.0 {
+                    return None;
+                }
+
+                let intensity = light.color_intensity().w;
+                Some((influence * intensity, light.as_ref()))
+            })
+            .collect();
+
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or_else(|| Ordering::Equal));
+
+        let mut batch = LightingBatch::default();
+
+        for (index, (_, light)) in candidates.into_iter().take(MAX_SPOT_LIGHTS).enumerate() {
+            if let Some(params) = light.spotlight_params() {
+                batch.spots[index] = SpotlightUniform::from_light(light, params);
+                batch.spot_count += 1;
+            }
+        }
+
+        batch
     }
 
     /// Get lights by type (for shader optimization)

@@ -1,5 +1,6 @@
 extern crate gl;
 use crate::engine::EngineRenderContext;
+use crate::scene::light_system::LightingBatch;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 
@@ -96,6 +97,7 @@ impl Material for ColorMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lighting: &LightingBatch,
     ) -> bool {
         let (shader_program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
         let p = shader_program;

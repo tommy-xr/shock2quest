@@ -1,7 +1,7 @@
 extern crate gl;
 
 use crate::engine::EngineRenderContext;
-use crate::scene::light::Light;
+use crate::scene::light_system::LightingBatch;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 use c_string::*;
@@ -83,6 +83,7 @@ impl Material for DebugNormalMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lighting: &LightingBatch,
     ) -> bool {
         let shader = unsafe { SHADER.get().expect("Shader should be initialized") };
 
@@ -118,21 +119,15 @@ impl Material for DebugNormalMaterial {
         world_matrix: &Matrix4<f32>,
         skinning_data: &[Matrix4<f32>],
     ) -> bool {
+        let empty = LightingBatch::default();
         // Normal debug materials are always opaque
-        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data)
-    }
-
-    fn draw_light_pass(
-        &self,
-        _render_context: &EngineRenderContext,
-        _view_matrix: &Matrix4<f32>,
-        _world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
-        _light: &dyn Light,
-        _shadow_map: Option<&()>,
-    ) -> bool {
-        // Debug normal material doesn't participate in lighting passes
-        false
+        self.draw_opaque(
+            render_context,
+            view_matrix,
+            world_matrix,
+            skinning_data,
+            &empty,
+        )
     }
 }
 
@@ -204,6 +199,7 @@ impl Material for DebugNormalSkinnedMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         skinning_data: &[Matrix4<f32>],
+        _lighting: &LightingBatch,
     ) -> bool {
         let shader = unsafe { SKINNED_SHADER.get().expect("Shader should be initialized") };
 
@@ -244,19 +240,14 @@ impl Material for DebugNormalSkinnedMaterial {
         world_matrix: &Matrix4<f32>,
         skinning_data: &[Matrix4<f32>],
     ) -> bool {
-        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data)
-    }
-
-    fn draw_light_pass(
-        &self,
-        _render_context: &EngineRenderContext,
-        _view_matrix: &Matrix4<f32>,
-        _world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
-        _light: &dyn Light,
-        _shadow_map: Option<&()>,
-    ) -> bool {
-        false
+        let empty = LightingBatch::default();
+        self.draw_opaque(
+            render_context,
+            view_matrix,
+            world_matrix,
+            skinning_data,
+            &empty,
+        )
     }
 }
 

@@ -2,6 +2,7 @@ extern crate gl;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
+use crate::scene::light_system::LightingBatch;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 
@@ -147,6 +148,7 @@ impl Material for ScreenSpaceMaterial {
         _view_matrix: &Matrix4<f32>,
         _world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lighting: &LightingBatch,
     ) -> bool {
         // no-op
         false
