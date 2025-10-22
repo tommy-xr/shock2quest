@@ -347,6 +347,7 @@ fn build_vertex(
         position: vec,
         uv,
         bone_indices: [bone_idx, 0, 0, 0],
+        bone_weights: [1.0, 0.0, 0.0, 0.0],
         normal,
     }
 }

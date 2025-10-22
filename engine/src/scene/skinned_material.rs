@@ -19,6 +19,7 @@ const VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
+        layout (location = 3) in vec4 bone_weights;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -29,9 +30,22 @@ const VERTEX_SHADER_SOURCE: &str = r#"
 
         void main() {
             texCoord = inTex;
-            vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            // vec4 mod_position = vec4(inPos, 1.0);
-            // mod_position.y += float(bone_ids[0]) * 0.25;
+            mat4 skin_matrix = mat4(0.0);
+            float total_weight = 0.0;
+            for (int i = 0; i < 4; ++i) {
+                float weight = bone_weights[i];
+                if (weight > 0.0) {
+                    skin_matrix += weight * bone_matrices[bone_ids[i]];
+                    total_weight += weight;
+                }
+            }
+            if (total_weight == 0.0) {
+                skin_matrix = bone_matrices[bone_ids.x];
+            } else {
+                skin_matrix /= total_weight;
+            }
+
+            vec4 mod_position = skin_matrix * vec4(inPos, 1.0);
             vec4 position = projection * view * world * mod_position;
             gl_Position = position;
         }
@@ -68,7 +82,8 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
-        layout (location = 3) in vec3 inNormal;
+        layout (location = 3) in vec4 bone_weights;
+        layout (location = 4) in vec3 inNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -82,14 +97,28 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
         void main() {
             texCoord = inTex;
 
-            // Apply bone transformations to position and normal
-            vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            vec3 mod_normal = mat3(bone_matrices[bone_ids.x]) * inNormal;
+            mat4 skin_matrix = mat4(0.0);
+            float total_weight = 0.0;
+            for (int i = 0; i < 4; ++i) {
+                float weight = bone_weights[i];
+                if (weight > 0.0) {
+                    skin_matrix += weight * bone_matrices[bone_ids[i]];
+                    total_weight += weight;
+                }
+            }
+            if (total_weight == 0.0) {
+                skin_matrix = bone_matrices[bone_ids.x];
+            } else {
+                skin_matrix /= total_weight;
+            }
+
+            vec4 skinned_position = skin_matrix * vec4(inPos, 1.0);
+            vec3 skinned_normal = mat3(skin_matrix) * inNormal;
 
             // Transform to world space
-            vec4 worldPosition = world * mod_position;
+            vec4 worldPosition = world * skinned_position;
             worldPos = worldPosition.xyz;
-            worldNormal = normalize(mat3(world) * mod_normal);
+            worldNormal = normalize(mat3(world) * skinned_normal);
 
             gl_Position = projection * view * worldPosition;
         }

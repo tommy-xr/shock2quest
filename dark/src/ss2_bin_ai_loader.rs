@@ -40,6 +40,7 @@ pub struct SystemShock2AIMesh {
 
     pub joints: Vec<AIJointInfo>,
     pub joint_map: Vec<AIJointMapEntry>,
+    pub weights: Vec<f32>,
 }
 
 pub struct AIMeshHeader {
@@ -200,6 +201,7 @@ pub fn read<T: Read + Seek>(
         uvs,
         vertices,
         normals,
+        weights,
     }
 }
 
@@ -460,7 +462,7 @@ pub fn to_scene_objects(
 
 pub fn to_vertices(
     mesh: &SystemShock2AIMesh,
-    _skeleton: &Skeleton,
+    skeleton: &Skeleton,
 ) -> (
     Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)>,
     HashMap<u32, Aabb3<f32>>,
@@ -472,20 +474,57 @@ pub fn to_vertices(
     let normals = &mesh.normals;
     let joints = &mesh.joints;
     let joint_map = &mesh.joint_map;
+    let weights = &mesh.weights;
 
-    // Create a map of vertex index -> joint
-    let mut vertex_to_weights: HashMap<u16, JointId> = HashMap::new();
+    // vertex index -> influences
+    let mut vertex_influences: HashMap<u16, Vec<(JointId, f32)>> = HashMap::new();
 
     for joint in joints {
-        let start_vertex = joint.start_vertex as u16;
-        let end_vertex = start_vertex + (joint.num_vertices as u16);
+        if joint.mapper_id < 0 {
+            continue;
+        }
 
-        // TODO: Incorporate weights
-        // let weight = weights[joint.weight_index];
+        let mapper_index = joint.mapper_id as usize;
+        if mapper_index >= joint_map.len() {
+            continue;
+        }
 
-        let joint_id = joint_map[joint.mapper_id as usize].joint as JointId;
-        for i in start_vertex..end_vertex {
-            vertex_to_weights.insert(i, joint_id);
+        let raw_child_joint = joint_map[mapper_index].joint;
+        if raw_child_joint < 0 {
+            continue;
+        }
+
+        let child_joint = raw_child_joint as JointId;
+        let parent_joint = skeleton.parent_of(child_joint).unwrap_or(child_joint);
+
+        let start_vertex = joint.start_vertex.max(0) as usize;
+        let count = joint.num_vertices.max(0) as usize;
+        let weight_start = joint.weight_index as usize;
+
+        for i in 0..count {
+            let vertex_idx = start_vertex + i;
+            let weight_idx = weight_start + i;
+            let raw_weight = weights
+                .get(weight_idx)
+                .copied()
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+
+            let parent_weight = if parent_joint == child_joint {
+                1.0
+            } else {
+                (1.0 - raw_weight).max(0.0)
+            };
+            let child_weight = if parent_joint == child_joint {
+                0.0
+            } else {
+                raw_weight
+            };
+
+            let entry = vertex_influences.entry(vertex_idx as u16).or_default();
+
+            accumulate_influence(entry, parent_joint, parent_weight);
+            accumulate_influence(entry, child_joint, child_weight);
         }
     }
 
@@ -501,25 +540,16 @@ pub fn to_vertices(
             let v1 = vertices[tri.vert_index1 as usize];
             let v2 = vertices[tri.vert_index2 as usize];
 
-            let j1 = vertex_to_weights.get(&tri.vert_index0).unwrap();
-            let j2 = vertex_to_weights.get(&tri.vert_index1).unwrap();
-            let j3 = vertex_to_weights.get(&tri.vert_index2).unwrap();
+            let (bone_indices0, bone_weights0, dominant_joint0) =
+                build_skinning_for_vertex(tri.vert_index0, &vertex_influences);
+            let (bone_indices1, bone_weights1, dominant_joint1) =
+                build_skinning_for_vertex(tri.vert_index1, &vertex_influences);
+            let (bone_indices2, bone_weights2, dominant_joint2) =
+                build_skinning_for_vertex(tri.vert_index2, &vertex_influences);
 
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v0);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v1);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v2);
-
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v0);
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v1);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v2);
-
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v0);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v1);
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v2);
-
-            // let xform0 = skeleton.global_transform(j1);
-            // let xform1 = skeleton.global_transform(j2);
-            // let xform2 = skeleton.global_transform(j3);
+            add_vertex_to_hitbox(&mut joint_to_hitbox, dominant_joint0, v0);
+            add_vertex_to_hitbox(&mut joint_to_hitbox, dominant_joint1, v1);
+            add_vertex_to_hitbox(&mut joint_to_hitbox, dominant_joint2, v2);
 
             let uv0 = uvs[tri.vert_index0 as usize].uv;
             let uv1 = uvs[tri.vert_index1 as usize].uv;
@@ -530,14 +560,26 @@ pub fn to_vertices(
             let normal1 = uvs[tri.vert_index1 as usize].normal;
             let normal2 = uvs[tri.vert_index2 as usize].normal;
 
-            verts.push(build_vertex(v0, uv0, normal0, [*j1, 0, 0, 0]));
-            verts.push(build_vertex(v1, uv1, normal1, [*j2, 0, 0, 0]));
-            verts.push(build_vertex(v2, uv2, normal2, [*j3, 0, 0, 0]));
+            verts.push(build_vertex(v0, uv0, normal0, bone_indices0, bone_weights0));
+            verts.push(build_vertex(v1, uv1, normal1, bone_indices1, bone_weights1));
+            verts.push(build_vertex(v2, uv2, normal2, bone_indices2, bone_weights2));
         }
         material_to_verts.push((name.to_owned(), verts));
     }
 
     (material_to_verts, joint_to_hitbox)
+}
+
+fn accumulate_influence(entry: &mut Vec<(JointId, f32)>, joint: JointId, weight: f32) {
+    if weight <= 0.0 {
+        return;
+    }
+
+    if let Some(existing) = entry.iter_mut().find(|(j, _)| *j == joint) {
+        existing.1 += weight;
+    } else {
+        entry.push((joint, weight));
+    }
 }
 
 fn add_vertex_to_hitbox(
@@ -552,16 +594,64 @@ fn add_vertex_to_hitbox(
     *entry = entry.grow(point);
 }
 
+fn build_skinning_for_vertex(
+    vertex_index: u16,
+    vertex_influences: &HashMap<u16, Vec<(JointId, f32)>>,
+) -> ([u32; 4], [f32; 4], JointId) {
+    let mut influences = vertex_influences
+        .get(&vertex_index)
+        .cloned()
+        .unwrap_or_else(|| vec![(0, 1.0)]);
+
+    // Combine duplicate joints if any slipped through cloning
+    let mut combined: HashMap<JointId, f32> = HashMap::new();
+    for (joint, weight) in influences.drain(..) {
+        let entry = combined.entry(joint).or_insert(0.0);
+        *entry += weight;
+    }
+
+    let mut pairs: Vec<(JointId, f32)> = combined.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    if pairs.is_empty() {
+        pairs.push((0, 1.0));
+    }
+
+    let dominant_joint = pairs[0].0;
+
+    let mut bone_indices = [0u32; 4];
+    let mut bone_weights = [0.0f32; 4];
+
+    let mut total_weight = 0.0;
+    for (slot, (joint, weight)) in pairs.into_iter().take(4).enumerate() {
+        bone_indices[slot] = joint;
+        bone_weights[slot] = weight;
+        total_weight += weight;
+    }
+
+    if total_weight > 0.0 {
+        for weight in &mut bone_weights {
+            *weight /= total_weight;
+        }
+    } else {
+        bone_weights[0] = 1.0;
+    }
+
+    (bone_indices, bone_weights, dominant_joint as JointId)
+}
+
 fn build_vertex(
     vec: Point3<f32>,
     uv: Vector2<f32>,
     normal: Vector3<f32>,
     bone_indices: [u32; 4],
+    bone_weights: [f32; 4],
 ) -> VertexPositionTextureSkinnedNormal {
     VertexPositionTextureSkinnedNormal {
         position: vec.to_vec(),
         uv,
         bone_indices,
+        bone_weights,
         normal,
     }
 }

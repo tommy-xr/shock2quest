@@ -113,6 +113,13 @@ impl Skeleton {
             global_transforms,
         }
     }
+
+    pub fn parent_of(&self, joint_id: JointId) -> Option<JointId> {
+        self.bones
+            .iter()
+            .find(|bone| bone.joint_id == joint_id)
+            .and_then(|bone| bone.parent_id)
+    }
 }
 
 pub fn create(cal: SystemShock2Cal) -> Skeleton {
