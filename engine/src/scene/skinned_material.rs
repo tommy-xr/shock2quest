@@ -19,6 +19,8 @@ const VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
+        layout (location = 3) in vec4 bone_weights;
+        layout (location = 4) in vec3 inNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -29,10 +31,19 @@ const VERTEX_SHADER_SOURCE: &str = r#"
 
         void main() {
             texCoord = inTex;
-            vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            // vec4 mod_position = vec4(inPos, 1.0);
-            // mod_position.y += float(bone_ids[0]) * 0.25;
-            vec4 position = projection * view * world * mod_position;
+
+            // Multi-bone vertex blending
+            vec4 pos = vec4(inPos, 1.0);
+            vec4 blended_pos = vec4(0.0);
+
+            // Blend up to 4 bone influences
+            for (int i = 0; i < 4; i++) {
+                if (bone_weights[i] > 0.0) {
+                    blended_pos += bone_weights[i] * (bone_matrices[bone_ids[i]] * pos);
+                }
+            }
+
+            vec4 position = projection * view * world * blended_pos;
             gl_Position = position;
         }
 "#;
@@ -68,7 +79,8 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
-        layout (location = 3) in vec3 inNormal;
+        layout (location = 3) in vec4 bone_weights;
+        layout (location = 4) in vec3 inNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -82,14 +94,23 @@ const LIGHTING_VERTEX_SHADER_SOURCE: &str = r#"
         void main() {
             texCoord = inTex;
 
-            // Apply bone transformations to position and normal
-            vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            vec3 mod_normal = mat3(bone_matrices[bone_ids.x]) * inNormal;
+            // Multi-bone vertex blending for position
+            vec4 pos = vec4(inPos, 1.0);
+            vec4 blended_pos = vec4(0.0);
+            vec3 blended_normal = vec3(0.0);
+
+            // Blend up to 4 bone influences
+            for (int i = 0; i < 4; i++) {
+                if (bone_weights[i] > 0.0) {
+                    blended_pos += bone_weights[i] * (bone_matrices[bone_ids[i]] * pos);
+                    blended_normal += bone_weights[i] * (mat3(bone_matrices[bone_ids[i]]) * inNormal);
+                }
+            }
 
             // Transform to world space
-            vec4 worldPosition = world * mod_position;
+            vec4 worldPosition = world * blended_pos;
             worldPos = worldPosition.xyz;
-            worldNormal = normalize(mat3(world) * mod_normal);
+            worldNormal = normalize(mat3(world) * blended_normal);
 
             gl_Position = projection * view * worldPosition;
         }

@@ -29,6 +29,57 @@ use crate::{
     SCALE_FACTOR,
 };
 
+#[derive(Debug, Clone)]
+pub struct VertexInfluence {
+    pub joint_id: JointId,
+    pub weight: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct VertexWeights {
+    pub influences: Vec<VertexInfluence>,
+}
+
+impl VertexWeights {
+    fn new() -> Self {
+        Self {
+            influences: Vec::new(),
+        }
+    }
+
+    fn add_influence(&mut self, joint_id: JointId, weight: f32) {
+        if weight > 0.0 {
+            self.influences.push(VertexInfluence { joint_id, weight });
+        }
+    }
+
+    fn normalize_and_limit(&mut self) {
+        // Sort by weight (descending) and take top 4
+        self.influences.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap());
+        self.influences.truncate(4);
+
+        // Normalize weights to sum to 1.0
+        let total: f32 = self.influences.iter().map(|inf| inf.weight).sum();
+        if total > 0.0 {
+            for influence in &mut self.influences {
+                influence.weight /= total;
+            }
+        }
+    }
+
+    fn to_arrays(&self) -> ([u32; 4], [f32; 4]) {
+        let mut indices = [0u32; 4];
+        let mut weights = [0.0f32; 4];
+
+        for (i, influence) in self.influences.iter().take(4).enumerate() {
+            indices[i] = influence.joint_id;
+            weights[i] = influence.weight;
+        }
+
+        (indices, weights)
+    }
+}
+
 #[derive(Clone)]
 pub struct SystemShock2AIMesh {
     // pub header: BinHeader,
@@ -40,6 +91,7 @@ pub struct SystemShock2AIMesh {
 
     pub joints: Vec<AIJointInfo>,
     pub joint_map: Vec<AIJointMapEntry>,
+    pub weights: Vec<f32>,
 }
 
 pub struct AIMeshHeader {
@@ -200,6 +252,7 @@ pub fn read<T: Read + Seek>(
         uvs,
         vertices,
         normals,
+        weights,
     }
 }
 
@@ -458,6 +511,40 @@ pub fn to_scene_objects(
     (scene_objects, hitboxes)
 }
 
+fn calculate_vertex_weights(mesh: &SystemShock2AIMesh) -> HashMap<u16, VertexWeights> {
+    let mut vertex_weights: HashMap<u16, VertexWeights> = HashMap::new();
+
+    for joint in &mesh.joints {
+        let start_vertex = joint.start_vertex as u16;
+        let end_vertex = start_vertex + (joint.num_vertices as u16);
+        let joint_id = mesh.joint_map[joint.mapper_id as usize].joint as JointId;
+
+        for (vertex_offset, vertex_idx) in (start_vertex..end_vertex).enumerate() {
+            // Calculate weight index for this specific vertex
+            let weight_index = joint.weight_index as usize + vertex_offset;
+
+            let weight = if weight_index < mesh.weights.len() {
+                mesh.weights[weight_index]
+            } else {
+                // Fallback: if no specific weight data, assume full influence
+                1.0
+            };
+
+            vertex_weights
+                .entry(vertex_idx)
+                .or_insert_with(VertexWeights::new)
+                .add_influence(joint_id, weight);
+        }
+    }
+
+    // Normalize and limit all vertex weights
+    for vertex_weight in vertex_weights.values_mut() {
+        vertex_weight.normalize_and_limit();
+    }
+
+    vertex_weights
+}
+
 pub fn to_vertices(
     mesh: &SystemShock2AIMesh,
     _skeleton: &Skeleton,
@@ -469,25 +556,10 @@ pub fn to_vertices(
     let triangles = &mesh.triangles;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
-    let normals = &mesh.normals;
-    let joints = &mesh.joints;
-    let joint_map = &mesh.joint_map;
+    let _normals = &mesh.normals;
 
-    // Create a map of vertex index -> joint
-    let mut vertex_to_weights: HashMap<u16, JointId> = HashMap::new();
-
-    for joint in joints {
-        let start_vertex = joint.start_vertex as u16;
-        let end_vertex = start_vertex + (joint.num_vertices as u16);
-
-        // TODO: Incorporate weights
-        // let weight = weights[joint.weight_index];
-
-        let joint_id = joint_map[joint.mapper_id as usize].joint as JointId;
-        for i in start_vertex..end_vertex {
-            vertex_to_weights.insert(i, joint_id);
-        }
-    }
+    // Calculate vertex weights with multi-bone support
+    let vertex_weights = calculate_vertex_weights(mesh);
 
     let mut material_to_verts = Vec::new();
     let mut joint_to_hitbox = HashMap::new();
@@ -501,38 +573,40 @@ pub fn to_vertices(
             let v1 = vertices[tri.vert_index1 as usize];
             let v2 = vertices[tri.vert_index2 as usize];
 
-            let j1 = vertex_to_weights.get(&tri.vert_index0).unwrap();
-            let j2 = vertex_to_weights.get(&tri.vert_index1).unwrap();
-            let j3 = vertex_to_weights.get(&tri.vert_index2).unwrap();
+            // Get vertex weights for each vertex of the triangle
+            let weights0 = vertex_weights.get(&tri.vert_index0);
+            let weights1 = vertex_weights.get(&tri.vert_index1);
+            let weights2 = vertex_weights.get(&tri.vert_index2);
 
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v0);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v1);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v2);
-
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v0);
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v1);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v2);
-
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v0);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v1);
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v2);
-
-            // let xform0 = skeleton.global_transform(j1);
-            // let xform1 = skeleton.global_transform(j2);
-            // let xform2 = skeleton.global_transform(j3);
+            // Add vertices to hitboxes for the primary (strongest) joint influence
+            if let Some(w) = weights0 {
+                if let Some(primary) = w.influences.first() {
+                    add_vertex_to_hitbox(&mut joint_to_hitbox, primary.joint_id, v0);
+                }
+            }
+            if let Some(w) = weights1 {
+                if let Some(primary) = w.influences.first() {
+                    add_vertex_to_hitbox(&mut joint_to_hitbox, primary.joint_id, v1);
+                }
+            }
+            if let Some(w) = weights2 {
+                if let Some(primary) = w.influences.first() {
+                    add_vertex_to_hitbox(&mut joint_to_hitbox, primary.joint_id, v2);
+                }
+            }
 
             let uv0 = uvs[tri.vert_index0 as usize].uv;
             let uv1 = uvs[tri.vert_index1 as usize].uv;
             let uv2 = uvs[tri.vert_index2 as usize].uv;
 
             // Use per-vertex normals from packed UV data instead of triangle normals
-            let normal0 = uvs[tri.vert_index0 as usize].normal; // Coordinate transform already applied
+            let normal0 = uvs[tri.vert_index0 as usize].normal;
             let normal1 = uvs[tri.vert_index1 as usize].normal;
             let normal2 = uvs[tri.vert_index2 as usize].normal;
 
-            verts.push(build_vertex(v0, uv0, normal0, [*j1, 0, 0, 0]));
-            verts.push(build_vertex(v1, uv1, normal1, [*j2, 0, 0, 0]));
-            verts.push(build_vertex(v2, uv2, normal2, [*j3, 0, 0, 0]));
+            verts.push(build_vertex_with_weights(v0, uv0, normal0, weights0));
+            verts.push(build_vertex_with_weights(v1, uv1, normal1, weights1));
+            verts.push(build_vertex_with_weights(v2, uv2, normal2, weights2));
         }
         material_to_verts.push((name.to_owned(), verts));
     }
@@ -552,6 +626,29 @@ fn add_vertex_to_hitbox(
     *entry = entry.grow(point);
 }
 
+fn build_vertex_with_weights(
+    vec: Point3<f32>,
+    uv: Vector2<f32>,
+    normal: Vector3<f32>,
+    vertex_weights: Option<&VertexWeights>,
+) -> VertexPositionTextureSkinnedNormal {
+    let (bone_indices, bone_weights) = if let Some(weights) = vertex_weights {
+        weights.to_arrays()
+    } else {
+        // Default: no bone influence (identity transformation)
+        ([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+    };
+
+    VertexPositionTextureSkinnedNormal {
+        position: vec.to_vec(),
+        uv,
+        bone_indices,
+        bone_weights,
+        normal,
+    }
+}
+
+// Keep the old function for backward compatibility (deprecated)
 fn build_vertex(
     vec: Point3<f32>,
     uv: Vector2<f32>,
@@ -562,6 +659,7 @@ fn build_vertex(
         position: vec.to_vec(),
         uv,
         bone_indices,
+        bone_weights: [1.0, 0.0, 0.0, 0.0], // Default: full weight on first bone
         normal,
     }
 }
