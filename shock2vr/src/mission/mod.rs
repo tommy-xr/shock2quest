@@ -1,7 +1,5 @@
 pub mod entity_creator;
 pub mod entity_populator;
-pub mod mission_manager;
-pub mod mission_trait;
 mod spawn_location;
 pub mod visibility_engine;
 
