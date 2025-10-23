@@ -13,11 +13,7 @@ use super::EntityPopulator;
 
 pub struct EmptyEntityPopulator {}
 
-impl EmptyEntityPopulator {
-    pub fn create() -> EmptyEntityPopulator {
-        EmptyEntityPopulator {}
-    }
-}
+impl EmptyEntityPopulator {}
 
 impl EntityPopulator for EmptyEntityPopulator {
     fn populate(

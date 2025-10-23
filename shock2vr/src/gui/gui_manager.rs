@@ -16,8 +16,10 @@ use crate::{
 use crate::gui::*;
 
 pub struct GuiInstanceInfo {
+    #[allow(dead_code)]
     pub parent_entity: EntityId,
     pub proxy_entity: EntityId,
+    #[allow(dead_code)]
     pub offset: Vector3<f32>,
     pub components: Vec<GuiComponentRenderInfo>,
     pub world_size: Vector2<f32>,
@@ -31,6 +33,7 @@ pub struct GuiManager {
 
 #[derive(Component)]
 pub struct GuiPropProxyEntity {
+    #[allow(dead_code)]
     entity_id: EntityId,
 }
 

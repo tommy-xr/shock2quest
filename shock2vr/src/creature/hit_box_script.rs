@@ -9,8 +9,10 @@ use super::HitBoxType;
 
 // Script to handle simple health behavior
 pub struct HitBoxScript {
+    #[allow(dead_code)]
     hit_box_type: HitBoxType,
     parent_entity_id: EntityId,
+    #[allow(dead_code)]
     hit_box_joint_idx: u32,
 }
 

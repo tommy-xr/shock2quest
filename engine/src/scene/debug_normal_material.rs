@@ -1,7 +1,6 @@
 extern crate gl;
 
 use crate::engine::EngineRenderContext;
-use crate::scene::light::Light;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 use c_string::*;
@@ -121,7 +120,13 @@ impl Material for DebugNormalMaterial {
         lights: &crate::scene::light::LightArray,
     ) -> bool {
         // Normal debug materials are always opaque
-        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data, lights)
+        self.draw_opaque(
+            render_context,
+            view_matrix,
+            world_matrix,
+            skinning_data,
+            lights,
+        )
     }
 }
 
@@ -235,9 +240,14 @@ impl Material for DebugNormalSkinnedMaterial {
         skinning_data: &[Matrix4<f32>],
         lights: &crate::scene::light::LightArray,
     ) -> bool {
-        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data, lights)
+        self.draw_opaque(
+            render_context,
+            view_matrix,
+            world_matrix,
+            skinning_data,
+            lights,
+        )
     }
-
 }
 
 pub fn create_skinned() -> Box<dyn Material> {

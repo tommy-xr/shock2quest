@@ -16,7 +16,9 @@ use crate::{
 use super::{Steering, SteeringOutput, SteeringStrategy};
 
 pub struct CollisionAvoidanceSteeringStrategy {
+    #[allow(dead_code)]
     extra_whisker_distance: f32,
+    #[allow(dead_code)]
     main_whisker_distance: f32,
     last_mitigation_direction: Deg<f32>,
 }

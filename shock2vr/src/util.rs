@@ -1,70 +1,17 @@
-use std::{collections::HashMap, fmt};
+use std::collections::HashMap;
 
 use cgmath::{
-    point3, vec2, vec3, InnerSpace, Matrix3, Matrix4, Point2, Point3, Quaternion, Transform,
-    Vector2, Vector3,
+    point3, vec3, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Transform,
+    Vector3,
 };
 
-use dark::properties::{Link, Links, PropHasRefs, PropPosition};
+use dark::properties::{PropHasRefs, PropPosition};
 use engine::game_log;
-use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, Get, View, World};
 use tracing::warn;
 
 use crate::runtime_props::{RuntimePropProxyEntity, RuntimePropTransform};
 
-/// log_property
-///
-/// Helper function to log a specific property of the world, with extra context
-pub fn log_property<T>(world: &World)
-where
-    T: Component + fmt::Debug + Sync + Send,
-{
-    world.run(
-        |v_template_id: View<dark::properties::PropTemplateId>,
-         v_objname: View<dark::properties::PropObjName>,
-         v_symname: View<dark::properties::PropSymName>,
-         v_property: View<T>| {
-            for (id, door) in (&v_property).iter().with_id() {
-                let maybe_template_id = v_template_id.get(id);
-                let maybe_sym_name = v_symname.get(id);
-                let maybe_obj_name = v_objname.get(id);
-                game_log!(DEBUG, "Entity {id:?} [{maybe_template_id:?}|{maybe_sym_name:?}|{maybe_obj_name:?}] prop: {door:?}");
-            }
-        },
-    );
-}
-
-pub fn log_entities_with_link<F>(world: &World, should_log_link: F)
-where
-    F: Fn(&Link) -> bool,
-{
-    world.run(
-        |v_template_id: View<dark::properties::PropTemplateId>,
-         v_objname: View<dark::properties::PropObjName>,
-         v_symname: View<dark::properties::PropSymName>,
-         v_links: View<Links>| {
-            for (id, links) in (&v_links).iter().with_id() {
-                let maybe_template_id = v_template_id.get(id);
-                let maybe_sym_name = v_symname.get(id);
-                let maybe_obj_name = v_objname.get(id);
-
-                for link in &links.to_links {
-                    if should_log_link(&link.link) {
-                        game_log!(
-                            DEBUG,
-                            "Entity {:?} [{:?}|{:?}|{:?}] link: {:?}",
-                            id,
-                            maybe_template_id,
-                            maybe_sym_name,
-                            maybe_obj_name,
-                            link.link
-                        );
-                    }
-                }
-            }
-        },
-    );
-}
 
 pub fn log_entity(world: &World, id: EntityId) {
     world.run(
@@ -93,9 +40,6 @@ pub fn point3_to_vec3(p: Point3<f32>) -> Vector3<f32> {
     vec3(p.x, p.y, p.z)
 }
 
-pub fn point2_to_vec2(p: Point2<f32>) -> Vector2<f32> {
-    vec2(p.x, p.y)
-}
 
 fn format_number(num: u32) -> String {
     if num < 10 {

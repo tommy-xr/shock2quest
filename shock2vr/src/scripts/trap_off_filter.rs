@@ -5,11 +5,7 @@ use crate::physics::PhysicsWorld;
 use super::{script_util::send_to_all_switch_links, Effect, MessagePayload, Script};
 
 pub struct TrapOnFilter {}
-impl TrapOnFilter {
-    pub fn new() -> TrapOnFilter {
-        TrapOnFilter {}
-    }
-}
+impl TrapOnFilter {}
 impl Script for TrapOnFilter {
     fn handle_message(
         &mut self,

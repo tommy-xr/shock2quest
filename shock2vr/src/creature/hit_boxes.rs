@@ -20,7 +20,9 @@ use super::{get_entity_creature, hit_box_script::HitBoxScript};
 
 #[derive(Component)]
 pub struct RuntimePropHitBox {
+    #[allow(dead_code)]
     pub parent_entity_id: EntityId,
+    #[allow(dead_code)]
     pub hit_box_type: HitBoxType,
 }
 
@@ -30,6 +32,7 @@ pub enum HitBoxType {
     Body,
     Limb,
     Extremity,
+    #[allow(dead_code)]
     NoDamage,
 }
 
