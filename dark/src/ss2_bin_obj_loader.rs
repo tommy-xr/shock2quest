@@ -252,12 +252,17 @@ pub fn to_scene_objects(
 #[derive(Debug, Clone)]
 pub struct SystemShock2MeshMaterial {
     pub name: String,
+    #[allow(dead_code)]
     material_type: u8, // TODO: Add real type
     pub slot_num: u8,
+    #[allow(dead_code)]
     ipal_index: u32, // unused
 
+    #[allow(dead_code)]
     color: Vector4<f32>,
+    #[allow(dead_code)]
     handle: u32,
+    #[allow(dead_code)]
     uv_scale: f32,
 
     pub transparency: f32,
@@ -641,11 +646,16 @@ fn read_vertices<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<V
 
 #[derive(Debug)]
 pub struct SubObjectHeader {
+    #[allow(dead_code)]
     idx: u32,
+    #[allow(dead_code)]
     parent_idx: i32,
+    #[allow(dead_code)]
     name: String,
     transform: Matrix4<f32>,
+    #[allow(dead_code)]
     min_range: f32,
+    #[allow(dead_code)]
     max_range: f32,
     child_sub_obj_idx: i16,
     next_sub_obj_idx: i16,
@@ -713,6 +723,7 @@ pub struct ObjBinHeader {
     offset_mats: u32,
     offset_mat_extra: u32,
     offset_objs: u32,
+    #[allow(dead_code)]
     mat_flags: u32,
     size_mat_extra: u32,
     offset_polygons: u32,

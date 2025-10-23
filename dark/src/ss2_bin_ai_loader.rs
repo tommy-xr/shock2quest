@@ -469,7 +469,7 @@ pub fn to_vertices(
     let triangles = &mesh.triangles;
     let uvs = &mesh.uvs;
     let vertices = &mesh.vertices;
-    let normals = &mesh.normals;
+    let _normals = &mesh.normals;
     let joints = &mesh.joints;
     let joint_map = &mesh.joint_map;
 

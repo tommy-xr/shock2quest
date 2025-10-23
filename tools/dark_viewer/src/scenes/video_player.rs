@@ -1,3 +1,6 @@
+#![allow(unused_imports)]
+#![allow(dead_code)]
+
 use super::ToolScene;
 use cgmath::Matrix4;
 use engine::audio::{AudioClip, AudioContext, AudioHandle};

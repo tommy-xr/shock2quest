@@ -1,3 +1,8 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(dead_code)]
+
 extern crate glfw;
 use clap::Parser;
 use glfw::GlfwReceiver;

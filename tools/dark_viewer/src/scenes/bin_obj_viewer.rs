@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 use super::ToolScene;
 use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad};
 use dark::importers::MODELS_IMPORTER;
