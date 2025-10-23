@@ -1,18 +1,18 @@
-use crate::scene::light_system::LightSystem;
+use crate::scene::light::LightArray;
 pub use crate::scene::scene_object::SceneObject;
 
 /// Legacy scene type - simple vector of scene objects
 pub type LegacyScene = Vec<SceneObject>;
 
-/// Enhanced scene with lighting support for multi-pass rendering
-/// This struct provides the foundation for Doom 3-style multi-pass lighting
+/// Enhanced scene with lighting support for single-pass rendering
+/// This struct provides the foundation for efficient single-pass lighting with up to 6 spotlights
 #[derive(Clone)]
 pub struct Scene {
     /// Scene objects (geometry and materials)
     pub objects: Vec<SceneObject>,
 
-    /// Lighting system for multi-pass rendering
-    pub lights: LightSystem,
+    /// Light array for single-pass rendering (up to 6 spotlights)
+    pub lights: LightArray,
 }
 
 impl Scene {
@@ -20,7 +20,7 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             objects: Vec::new(),
-            lights: LightSystem::new(),
+            lights: LightArray::new(),
         }
     }
 
@@ -28,7 +28,7 @@ impl Scene {
     pub fn from_objects(objects: Vec<SceneObject>) -> Self {
         Self {
             objects,
-            lights: LightSystem::new(),
+            lights: LightArray::new(),
         }
     }
 
@@ -47,13 +47,13 @@ impl Scene {
         &mut self.objects
     }
 
-    /// Get a reference to the light system
-    pub fn lights(&self) -> &LightSystem {
+    /// Get a reference to the light array
+    pub fn lights(&self) -> &LightArray {
         &self.lights
     }
 
-    /// Get a mutable reference to the light system
-    pub fn lights_mut(&mut self) -> &mut LightSystem {
+    /// Get a mutable reference to the light array
+    pub fn lights_mut(&mut self) -> &mut LightArray {
         &mut self.lights
     }
 
@@ -68,9 +68,9 @@ impl Scene {
         self.objects.len()
     }
 
-    /// Get the total number of lights
+    /// Get the total number of active lights
     pub fn light_count(&self) -> usize {
-        self.lights.light_count()
+        self.lights.active_count()
     }
 }
 

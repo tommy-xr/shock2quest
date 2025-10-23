@@ -96,6 +96,7 @@ impl Material for ColorMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         let (shader_program, uniforms) = SHADER_PROGRAM.get().expect("shader not compiled");
         let p = shader_program;

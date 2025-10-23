@@ -3,9 +3,11 @@
 ## Overview
 Implement Doom 3-style multi-pass lighting system starting with spotlight support for in-game flashlight functionality. The implementation will extend the current SceneObject architecture and work across both desktop and Oculus VR runtimes, with extensibility for future light types and shadow mapping.
 
+> **2024-?? Update:** The engine now renders opaque geometry in a single pass using a per-object `LightingBatch`. Materials receive up to two spotlights directly through `Material::draw_opaque`, so the multi-pass sections below are retained for historical context and shadow-map planning.
+
 ## Current Architecture Analysis
 - **SceneObject** structure: Contains material, geometry, transform, and skinning data
-- **Material trait**: Has `draw_opaque()` and `draw_transparent()` methods
+- **Material trait**: Has `draw_opaque()` (now accepts a `LightingBatch`) and `draw_transparent()` methods
 - **Rendering pipeline**: Two-pass system (opaque → transparent) in `gl_engine.rs:125-137`
 - **Portal system**: Exists for culling optimization
 - **Existing lighting**: Basic lightmap system already implemented
@@ -33,17 +35,17 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
   - Comprehensive test coverage (8 passing tests)
   - Foundation for portal-based light culling integration
 
-### Step 2: Multi-Pass Rendering Foundation ✅ COMPLETED
-- ✅ Modify `gl_engine.rs` render loop to support multiple light passes
-- ✅ Implement additive blending for light accumulation after base pass
-- ✅ Add depth buffer management for light passes (read-only depth testing)
-- ✅ Structure for future shadow map integration
+### Step 2: Single-Pass Spotlight Batching ✅ COMPLETED
+- ✅ Replace multi-pass loop in `gl_engine.rs` with per-object spotlight batching
+- ✅ Introduce `LightingBatch` (two spotlights) and feed it into `SceneObject::draw_opaque`
+- ✅ Maintain standard blend/depth state for opaque pass, reserve transparent phase for alpha objects
+- ✅ Keep hooks in place for future shadow-map integration
 
 **Implementation Details:**
 - **Files Modified:**
-  - `engine/src/gl_engine.rs` - Enhanced render loop with 3-pass system (base → lighting → transparent)
-  - `engine/src/scene/material.rs` - Added `draw_light_pass()` method to Material trait
-  - `engine/src/scene/scene_object.rs` - Added `draw_light_pass()` and `get_world_position()` methods
+  - `engine/src/gl_engine.rs` - Simplified render loop with single-pass opacity + lighting batch
+  - `engine/src/scene/material.rs` - Replaced `draw_light_pass()` with a `LightingBatch` parameter on `draw_opaque`
+  - `engine/src/scene/scene_object.rs` - Updated `draw_opaque()` wiring, removed multi-pass helper
 - **Features Delivered:**
   - Three-pass rendering system: base opaque pass, per-light additive passes, transparent pass
   - Proper OpenGL state management: additive blending (GL_ONE, GL_ONE) for light accumulation
@@ -54,18 +56,18 @@ Implement Doom 3-style multi-pass lighting system starting with spotlight suppor
 
 ### Step 3: Extended Material System ✅ COMPLETED
 - ✅ Implement lighting in each material type:
-  - ✅ `BasicMaterial`: Standard Phong/Blinn-Phong lighting with spotlight support
-  - ✅ `SkinnedMaterial`: Phong lighting with bone transformations and spotlight support
-  - ✅ `LightmapMaterial`: Combine dynamic lights with existing lightmaps
-  - ✅ `BillboardMaterial`: Skip light passes (appropriate for UI/particle effects)
+  - ✅ `BasicMaterial`: Standard Phong/Blinn-Phong lighting with spotlight support (single shader)
+  - ✅ `SkinnedMaterial`: Phong lighting with bone transformations and spotlight batching
+  - ✅ `LightmapMaterial`: Combine dynamic lights with existing lightmaps and dynamic spotlights in one pass
+  - ✅ `BillboardMaterial`: Remains unlit (ignores `LightingBatch`)
 
 **Implementation Details:**
 - **Files Modified:**
-  - `engine/src/scene/basic_material.rs` - Added lighting vertex/fragment shaders and draw_light_pass implementation
-  - `engine/src/scene/skinned_material.rs` - Added lighting shaders with bone transformation support
-  - `engine/src/materials/lightmap_material.rs` - Added lighting support that combines with existing lightmaps
-  - `engine/src/scene/billboard_material.rs` - Added stub implementation (no lighting support by design)
-  - `engine/src/scene/light.rs` - Enhanced Light trait with spotlight_params() method for shader uniforms
+  - `engine/src/scene/basic_material.rs` - Unified shader handles base + dynamic lighting arrays
+  - `engine/src/scene/skinned_material.rs` - Same as basic, with bone matrix support
+  - `engine/src/materials/lightmap_material.rs` - Single shader blending baked lightmaps with batched spotlights
+  - `engine/src/scene/billboard_material.rs` - Continues to skip lighting
+  - `engine/src/scene/light.rs` - Enhanced `Light` trait with `influence_at` for batching heuristics
 - **Features Delivered:**
   - **Spotlight-only Support**: All materials support spotlight lighting with proper cone attenuation
   - **Shader Compilation**: Each material initializes both base and lighting shader programs

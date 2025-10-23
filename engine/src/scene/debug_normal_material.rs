@@ -83,6 +83,7 @@ impl Material for DebugNormalMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         let shader = unsafe { SHADER.get().expect("Shader should be initialized") };
 
@@ -117,22 +118,10 @@ impl Material for DebugNormalMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         skinning_data: &[Matrix4<f32>],
+        lights: &crate::scene::light::LightArray,
     ) -> bool {
         // Normal debug materials are always opaque
-        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data)
-    }
-
-    fn draw_light_pass(
-        &self,
-        _render_context: &EngineRenderContext,
-        _view_matrix: &Matrix4<f32>,
-        _world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
-        _light: &dyn Light,
-        _shadow_map: Option<&()>,
-    ) -> bool {
-        // Debug normal material doesn't participate in lighting passes
-        false
+        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data, lights)
     }
 }
 
@@ -204,6 +193,7 @@ impl Material for DebugNormalSkinnedMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         let shader = unsafe { SKINNED_SHADER.get().expect("Shader should be initialized") };
 
@@ -243,21 +233,11 @@ impl Material for DebugNormalSkinnedMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         skinning_data: &[Matrix4<f32>],
+        lights: &crate::scene::light::LightArray,
     ) -> bool {
-        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data)
+        self.draw_opaque(render_context, view_matrix, world_matrix, skinning_data, lights)
     }
 
-    fn draw_light_pass(
-        &self,
-        _render_context: &EngineRenderContext,
-        _view_matrix: &Matrix4<f32>,
-        _world_matrix: &Matrix4<f32>,
-        _skinning_data: &[Matrix4<f32>],
-        _light: &dyn Light,
-        _shadow_map: Option<&()>,
-    ) -> bool {
-        false
-    }
 }
 
 pub fn create_skinned() -> Box<dyn Material> {

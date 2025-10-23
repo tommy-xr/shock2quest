@@ -147,6 +147,7 @@ impl Material for ScreenSpaceMaterial {
         _view_matrix: &Matrix4<f32>,
         _world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         // no-op
         false
@@ -158,6 +159,7 @@ impl Material for ScreenSpaceMaterial {
         view_matrix: &Matrix4<f32>,
         world_matrix: &Matrix4<f32>,
         _skinning_data: &[Matrix4<f32>],
+        _lights: &crate::scene::light::LightArray,
     ) -> bool {
         self.draw_common(render_context, view_matrix, world_matrix);
         true

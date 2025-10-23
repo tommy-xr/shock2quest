@@ -40,6 +40,95 @@ pub enum LightType {
     // DirectionalLight,
 }
 
+/// Container for managing up to 6 spotlights for single-pass lighting
+#[derive(Debug, Clone)]
+pub struct LightArray {
+    /// Array of up to 6 spotlights (None = disabled slot)
+    pub spotlights: [Option<SpotLight>; 6],
+}
+
+impl LightArray {
+    /// Create a new empty light array
+    pub fn new() -> Self {
+        Self {
+            spotlights: [None, None, None, None, None, None],
+        }
+    }
+
+    /// Add a spotlight to the first available slot
+    /// Returns the slot index if successful, None if array is full
+    pub fn add_spotlight(&mut self, spotlight: SpotLight) -> Option<usize> {
+        for (i, slot) in self.spotlights.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(spotlight);
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Remove a spotlight from the specified slot
+    pub fn remove_spotlight(&mut self, index: usize) -> Option<SpotLight> {
+        if index < 6 {
+            self.spotlights[index].take()
+        } else {
+            None
+        }
+    }
+
+    /// Get a reference to a spotlight at the specified slot
+    pub fn get_spotlight(&self, index: usize) -> Option<&SpotLight> {
+        if index < 6 {
+            self.spotlights[index].as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Get a mutable reference to a spotlight at the specified slot
+    pub fn get_spotlight_mut(&mut self, index: usize) -> Option<&mut SpotLight> {
+        if index < 6 {
+            self.spotlights[index].as_mut()
+        } else {
+            None
+        }
+    }
+
+    /// Clear all spotlights
+    pub fn clear(&mut self) {
+        self.spotlights = [None, None, None, None, None, None];
+    }
+
+    /// Get the number of active spotlights
+    pub fn active_count(&self) -> usize {
+        self.spotlights.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Check if the array is empty
+    pub fn is_empty(&self) -> bool {
+        self.spotlights.iter().all(|s| s.is_none())
+    }
+
+    /// Check if the array is full
+    pub fn is_full(&self) -> bool {
+        self.spotlights.iter().all(|s| s.is_some())
+    }
+
+    /// Iterator over active spotlights with their indices
+    pub fn iter_active(&self) -> impl Iterator<Item = (usize, &SpotLight)> {
+        self.spotlights
+            .iter()
+            .enumerate()
+            .filter_map(|(i, light)| light.as_ref().map(|l| (i, l)))
+    }
+}
+
+impl Default for LightArray {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Spotlight implementation with direction and cone angles
 #[derive(Debug, Clone)]
 pub struct SpotLight {
@@ -75,7 +164,7 @@ impl Light for SpotLight {
         LightType::Spotlight
     }
 
-    fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+    fn affects_position(&self, _world_pos: Vector3<f32>) -> bool {
         // Quick range check
         true
         // let distance = (world_pos - self.position).magnitude();
@@ -232,5 +321,88 @@ mod tests {
 
         // Position outside range should have zero attenuation
         assert_eq!(light.attenuation_at(Vector3::new(0.0, -20.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn test_light_array_creation() {
+        let light_array = LightArray::new();
+        assert!(light_array.is_empty());
+        assert!(!light_array.is_full());
+        assert_eq!(light_array.active_count(), 0);
+    }
+
+    #[test]
+    fn test_light_array_add_remove() {
+        let mut light_array = LightArray::new();
+        let light = SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        );
+
+        // Add light
+        let index = light_array.add_spotlight(light.clone()).unwrap();
+        assert_eq!(index, 0);
+        assert_eq!(light_array.active_count(), 1);
+        assert!(!light_array.is_empty());
+
+        // Get light
+        let retrieved = light_array.get_spotlight(0).unwrap();
+        assert_eq!(retrieved.position(), light.position());
+
+        // Remove light
+        let removed = light_array.remove_spotlight(0).unwrap();
+        assert_eq!(removed.position(), light.position());
+        assert!(light_array.is_empty());
+        assert_eq!(light_array.active_count(), 0);
+    }
+
+    #[test]
+    fn test_light_array_fill_capacity() {
+        let mut light_array = LightArray::new();
+        let light = SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        );
+
+        // Fill array to capacity
+        for i in 0..6 {
+            let index = light_array.add_spotlight(light.clone()).unwrap();
+            assert_eq!(index, i);
+        }
+
+        assert!(light_array.is_full());
+        assert_eq!(light_array.active_count(), 6);
+
+        // Try to add one more (should fail)
+        assert!(light_array.add_spotlight(light).is_none());
+    }
+
+    #[test]
+    fn test_light_array_iter_active() {
+        let mut light_array = LightArray::new();
+        let light1 = SpotLight::new(
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            1.0,
+        );
+        let light2 = SpotLight::new(
+            Vector3::new(2.0, 0.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            1.0,
+        );
+
+        light_array.add_spotlight(light1);
+        light_array.add_spotlight(light2);
+
+        let active_lights: Vec<_> = light_array.iter_active().collect();
+        assert_eq!(active_lights.len(), 2);
+        assert_eq!(active_lights[0].0, 0); // First light at index 0
+        assert_eq!(active_lights[1].0, 1); // Second light at index 1
     }
 }
