@@ -11,6 +11,7 @@ use dark::ss2_entity_info::SystemShock2EntityInfo;
 
 use super::EntityPopulator;
 
+#[allow(dead_code)]
 pub struct EmptyEntityPopulator {}
 
 impl EmptyEntityPopulator {}

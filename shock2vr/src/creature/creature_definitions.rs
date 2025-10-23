@@ -20,7 +20,6 @@ use shipyard::{EntityId, Get, View, World};
 use super::HitBoxType;
 
 #[derive(FromPrimitive, ToPrimitive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(non_local_definitions)]
 pub enum ActorType {
     Human = 0,
     PlayerLimb = 1,

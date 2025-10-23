@@ -4,6 +4,7 @@ use crate::physics::PhysicsWorld;
 
 use super::{script_util::send_to_all_switch_links, Effect, MessagePayload, Script};
 
+#[allow(dead_code)]
 pub struct TrapOnFilter {}
 impl TrapOnFilter {}
 impl Script for TrapOnFilter {

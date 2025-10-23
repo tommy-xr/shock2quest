@@ -217,6 +217,7 @@ impl ScriptedAction for PlayAnimationScriptedAction {
     }
 }
 
+#[allow(dead_code)]
 pub struct IdleScriptedAction;
 
 impl ScriptedAction for IdleScriptedAction {
