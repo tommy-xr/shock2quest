@@ -534,7 +534,6 @@ impl ScriptWorld {
                 Box::new(WeaponScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
-            "stasismodify" => Box::new(UnimplementedScript::new(&script_name)),
             "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
 
             //goodies:
@@ -556,7 +555,6 @@ impl ScriptWorld {
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(UnimplementedScript::new(&script_name)),
             "psikitscript" => Box::new(UnimplementedScript::new(&script_name)),
-            "trapterminator" => Box::new(UnimplementedScript::new(&script_name)),
             "computer" => Box::new(UnimplementedScript::new(&script_name)),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => Box::new(UnimplementedScript::new(&script_name)),
@@ -650,15 +648,11 @@ impl ScriptWorld {
             "chemical" => Box::new(NoopScript::new()),
             "chooseservice" => Box::new(ChooseServiceScript::new()),
             "infocomputer" => Box::new(UnimplementedScript::new(&script_name)),
-            "lootable" => Box::new(UnimplementedScript::new(&script_name)),
-            "minigamecart" => Box::new(UnimplementedScript::new(&script_name)),
-            "reducehp" => Box::new(UnimplementedScript::new(&script_name)),
             "reducepsi" => Box::new(UnimplementedScript::new(&script_name)),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
             "researchablescript" => Box::new(UnimplementedScript::new(&script_name)),
             "setupinitialdebrief" => Box::new(NoopScript {}),
             "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
-            "transientcorpse" => Box::new(UnimplementedScript::new(&script_name)),
             // Need to read ambient hacked property
             "triggerecology" => Box::new(UnimplementedScript::new(&script_name)),
             "triggerecologydiff" => Box::new(UnimplementedScript::new(&script_name)),
