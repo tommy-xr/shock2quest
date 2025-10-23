@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct PropAI(pub String);
 
 #[derive(Debug, FromPrimitive, Clone, Serialize, Deserialize)]
+#[allow(non_local_definitions)]
 pub enum AIPriority {
     None = 0,
     VeryLow = 1,

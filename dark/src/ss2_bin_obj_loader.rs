@@ -31,6 +31,7 @@ use crate::{
 };
 
 #[derive(FromPrimitive, ToPrimitive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(non_local_definitions)]
 pub enum VhotType {
     Unknown = 0,
     LightSource = 1,
