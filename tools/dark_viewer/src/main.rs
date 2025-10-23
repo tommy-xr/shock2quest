@@ -1,10 +1,9 @@
 extern crate glfw;
-use dark::model::AnimatedModel;
-use dark::model::Model;
+use clap::Parser;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -19,29 +18,12 @@ use cgmath::Rad;
 use engine_ffmpeg::AudioPlayer;
 
 use cgmath::vec4;
-use dark::font;
-use dark::font::Font;
-use dark::importers::BITMAP_ANIMATION_IMPORTER;
-use dark::importers::MODELS_IMPORTER;
-use dark::motion;
-use dark::motion::AnimationClip;
-use dark::motion::AnimationPlayer;
-use dark::motion::MotionClip;
-use dark::motion::MotionDB;
-use dark::motion::MotionInfo;
-use dark::ss2_bin_ai_loader;
-use dark::ss2_bin_header;
-use dark::ss2_cal_loader;
-use dark::ss2_skeleton;
-use dark::ss2_skeleton::Skeleton;
 use engine::assets::asset_cache::AssetCache;
 use engine::assets::asset_paths::AssetPath;
-use engine::importers::FBX_IMPORTER;
-use engine::scene::mesh;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
-use num::ToPrimitive;
+use shock2vr::command::Command;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 use shock2vr::command::TransitionLevelCommand;
@@ -53,9 +35,6 @@ extern crate gl;
 use cgmath::prelude::*;
 use cgmath::vec2;
 use cgmath::{vec3, Quaternion, Vector3};
-use shock2vr::command::Command;
-
-use glfw::MouseButton;
 use shock2vr::input_context::InputContext;
 use shock2vr::time::Time;
 use shock2vr::zip_asset_path;
@@ -63,13 +42,77 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Write;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
+use std::sync::OnceLock;
 use std::time::Duration;
 
-// settings
 const SCR_WIDTH: u32 = 800;
 const SCR_HEIGHT: u32 = 600;
+
+static DATA_ROOT: OnceLock<String> = OnceLock::new();
+
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Shock Engine tooling viewer", long_about = None)]
+struct Cli {
+    /// Asset to preview (video .avi, object .bin, font .fon)
+    filename: String,
+
+    /// One or more animation clips, comma separated.
+    /// Paths can be provided with or without the trailing `_ .mc` suffix.
+    #[arg(long, value_delimiter = ',', value_name = "CLIP")]
+    animation: Vec<String>,
+
+    /// When true, loads assets and prints information but exits before opening a window.
+    #[arg(long)]
+    debug_no_render: bool,
+}
+
+fn resolve_data_path(resource: &str) -> String {
+    let base = DATA_ROOT.get_or_init(|| {
+        let candidates = ["../../Data", "../Data", "./Data"];
+        for candidate in candidates {
+            if Path::new(candidate).exists() {
+                return candidate.to_owned();
+            }
+        }
+        "../../Data".to_owned()
+    });
+
+    Path::new(base)
+        .join(resource)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn normalize_clip_name(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Animation name may not be empty".to_owned());
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.ends_with("_.mc") {
+        return Ok(trimmed.to_owned());
+    }
+    if lower.ends_with(".mc") {
+        let without_ext = &trimmed[..trimmed.len() - 3];
+        return Ok(format!("{}_.mc", without_ext));
+    }
+    Ok(format!("{}_.mc", trimmed))
+}
+
+fn gather_animation_list(cli: &Cli) -> Result<Vec<String>, String> {
+    if cli.animation.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    cli.animation
+        .iter()
+        .map(|raw| normalize_clip_name(raw))
+        .collect()
+}
 
 struct MousePosition {
     x: f32,
@@ -99,12 +142,6 @@ struct MouseUpdateResult {
     delta_y: f32,
 }
 
-const BASE_PATH: &str = "../../Data";
-
-pub fn resource_path(str: &str) -> String {
-    format!("{BASE_PATH}/{str}")
-}
-
 fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> MouseUpdateResult {
     match camera.mouse_position {
         None => {
@@ -123,38 +160,7 @@ fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> Mo
     }
 }
 
-fn camera_forward(camera: &CameraContext) -> Vector3<f32> {
-    let yaw = camera.yaw;
-    let pitch = camera.pitch;
-    let front = Vector3 {
-        x: yaw.to_radians().cos() * pitch.to_radians().cos(),
-        y: pitch.to_radians().sin(),
-        z: yaw.to_radians().sin() * pitch.to_radians().cos(),
-    };
-
-    front.normalize()
-}
-
-fn camera_rotation(camera: &CameraContext) -> Quaternion<f32> {
-    let forward = camera_forward(camera);
-    let forward_p = cgmath::Point3::new(forward.x, forward.y, forward.z);
-
-    let up: Vector3<f32> = vec3(0.0, 1.0, 0.0);
-    let mat: Decomposed<Vector3<f32>, Quaternion<f32>> =
-        cgmath::Transform::look_at_rh(forward_p, point3(0.0, 0.0, 0.0), up);
-    mat.rot.invert()
-}
-
-fn f32_from_bool(v: bool) -> f32 {
-    if v {
-        1.0
-    } else {
-        0.0
-    }
-}
-
 fn find_video_file(filename: &str) -> Option<String> {
-    // Define common video paths to try (only for video files that don't use asset_cache)
     let paths_to_try = vec![
         filename.to_string(),
         format!("../../Data/cutscenes/{}", filename),
@@ -162,7 +168,6 @@ fn find_video_file(filename: &str) -> Option<String> {
         format!("cutscenes/{}", filename),
     ];
 
-    // Try each path
     for path in paths_to_try {
         if std::path::Path::new(&path).exists() {
             println!("Found video at: {}", path);
@@ -179,85 +184,73 @@ fn find_video_file(filename: &str) -> Option<String> {
 
 fn create_scene(
     filename: &str,
-    _animation_file: &Option<String>,
-    asset_cache: &engine::assets::asset_cache::AssetCache,
-    resource_path: fn(&str) -> String
+    animations: &[String],
+    asset_cache: &mut engine::assets::asset_cache::AssetCache,
+    data_resolver: fn(&str) -> String,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
-    // Determine scene type from file extension
-    if filename.to_lowercase().ends_with(".avi") {
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".avi") {
         if let Some(video_path) = find_video_file(filename) {
             let scene = VideoPlayerScene::from_file(video_path)?;
             Ok(Box::new(scene))
         } else {
             Err(format!("Could not find video file: {}", filename).into())
         }
-    } else if filename.to_lowercase().ends_with(".bin") {
-        let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+    } else if lower.ends_with(".bin") {
+        if animations.is_empty() {
+            let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+            Ok(Box::new(scene))
+        } else {
+            let scene = BinAiViewerScene::from_clips(
+                filename.to_string(),
+                animations.to_vec(),
+                asset_cache,
+            )?;
+            Ok(Box::new(scene))
+        }
+    } else if lower.ends_with(".fon") {
+        let scene = FontViewerScene::from_file(filename.to_string(), data_resolver)?;
         Ok(Box::new(scene))
-    } else if filename.to_lowercase().ends_with(".fon") {
-        let scene = FontViewerScene::from_file(filename.to_string(), resource_path)?;
-        Ok(Box::new(scene))
+    } else if !animations.is_empty() {
+        Err("Animation preview is only supported for .bin AI meshes.".into())
     } else {
-        Err(format!("Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font)", filename).into())
+        Err(format!(
+            "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font)",
+            filename
+        )
+        .into())
     }
 }
 
 pub fn main() {
-    // Parse command line arguments
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() < 2 || args.len() > 4 {
-        eprintln!(
-            "Usage: {} <filename> [--animation <animation_file>]",
-            args[0]
-        );
-        eprintln!("Supported file types: .avi (video), .bin (3D model), .fon (font)");
-        eprintln!("Optional: --animation <file.cal> for .bin files with skeleton animation");
-        std::process::exit(1);
-    }
-
-    let filename = &args[1];
-
-    // Parse optional animation flag
-    let animation_file = if args.len() == 4 && args[2] == "--animation" {
-        Some(args[3].clone())
-    } else if args.len() == 3 {
-        eprintln!("Error: --animation flag requires an animation filename");
-        std::process::exit(1);
-    } else {
-        None
+    let cli = Cli::parse();
+    let animations = match gather_animation_list(&cli) {
+        Ok(list) => list,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::exit(1);
+        }
     };
 
-    if let Some(ref anim_file) = animation_file {
-        println!(
-            "Loading {} with animation {}",
-            filename, anim_file
-        );
-    } else {
+    let filename = cli.filename.clone();
+
+    if animations.is_empty() {
         println!("Loading {}", filename);
+    } else {
+        let summary = animations.join(", ");
+        println!("Loading {filename} with animations: {summary}");
     }
 
-    // glfw: initialize and configure
-    // ------------------------------
+    if cli.debug_no_render {
+        println!("Debug no-render mode enabled.");
+    }
 
     #[cfg(feature = "ffmpeg")]
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
-
-    // #[cfg(feature = "ffmpeg")]
-    // {
-    //     let file_name = "../../Data/cutscenes/cs2.avi";
-    //     let clip = AudioPlayer::from_filename(file_name).unwrap();
-    //     let handle = AudioHandle::new();
-    //     audio::test_audio(&mut audio_context, handle, None, Rc::new(clip));
-    // }
-
-    // panic!();
     tracing_subscriber::fmt::init();
     let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
-    // TODO: Figure out ANGLE
-    // glfw.window_hint(glfw::WindowHint::ClientApi(glfw::OpenGlEs));
     glfw.window_hint(glfw::WindowHint::ContextVersion(4, 1));
     glfw.window_hint(glfw::WindowHint::OpenGlProfile(
         glfw::OpenGlProfileHint::Core,
@@ -265,10 +258,6 @@ pub fn main() {
     #[cfg(target_os = "macos")]
     glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
 
-    // println!("RES: {:?}", res);
-    // res.unwrap();
-    // glfw window creation
-    // --------------------
     let (mut window, events) = glfw
         .create_window(
             SCR_WIDTH,
@@ -285,8 +274,6 @@ pub fn main() {
     window.set_framebuffer_size_polling(true);
     window.set_cursor_mode(glfw::CursorMode::Disabled);
 
-    // gl: load all OpenGL function pointers
-    // ---------------------------------------
     gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
     println!(
@@ -302,61 +289,51 @@ pub fn main() {
     let file_system = engine.get_storage().external_filesystem();
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
 
-    // Create the appropriate scene based on file type
-    let mut scene = match create_scene(filename, &animation_file, &game.asset_cache, resource_path) {
+    if cli.debug_no_render {
+        match create_scene(
+            &filename,
+            &animations,
+            &mut game.asset_cache,
+            resolve_data_path,
+        ) {
+            Ok(_) => println!("Scene creation succeeded."),
+            Err(err) => println!("Error creating scene: {err}"),
+        }
+        return;
+    }
+
+    let mut scene = match create_scene(
+        &filename,
+        &animations,
+        &mut game.asset_cache,
+        resolve_data_path,
+    ) {
         Ok(scene) => scene,
         Err(err) => {
             eprintln!("Error creating scene: {}", err);
             std::process::exit(1);
         }
     };
-    // FOR SCREENSHOT
-    // let mut camera_context = CameraContext {
-    //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
-    //     pitch: 4.81,
-    //     yaw: -213.0,
-    //     mouse_position: None,
-    // };
-
-    let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
-    let mut motiondb_reader = BufReader::new(motiondb_file);
 
     let mut camera_context = CameraContext::new();
 
     let mut last_time = glfw.get_time() as f32;
     let start_time = last_time;
 
-    let mut frame = 0;
-    // render loop
-    // -----------
     while !window.should_close() {
-        // events
-        // -----
         let time = glfw.get_time() as f32;
         let delta_time = time - last_time;
         last_time = time;
 
-        let (input_context, commands) =
+        let (_input_context, _commands) =
             process_events(&mut window, &mut camera_context, &events, delta_time);
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
             cgmath::perspective(cgmath::Deg(45.0), ratio, 0.1, 1000.0);
 
-        let time = Time {
-            elapsed: Duration::from_secs_f32(delta_time),
-            total: Duration::from_secs_f32(time - start_time),
-        };
-
-        //let (mut scene, pawn_offset, pawn_rotation) = game.render();
-
-        let mut scene_objects = vec![];
-
-        // Update and render the scene
         scene.update(delta_time);
         let rendered_scene = scene.render(&mut game.asset_cache);
-        for obj in rendered_scene.objects {
-            scene_objects.push(obj);
-        }
+        let scene_objects = rendered_scene.objects;
 
         let yaw_rad = camera_context.yaw.to_radians();
         let pitch_rad = camera_context.pitch.to_radians();
@@ -370,141 +347,52 @@ pub fn main() {
         let yaw_quat = Quaternion::from_angle_y(Rad(-yaw_rad + 90.0f32.to_radians()));
         let orig_camera_rot = yaw_quat * pitch_quat;
 
-        let mat: Decomposed<Vector3<f32>, Quaternion<f32>> = cgmath::Transform::look_at_rh(
-            point3(0.0, 0.0, -1.0),
-            point3(0.0, 0.0, 0.0),
-            vec3(0.0, 1.0, 0.0),
-        );
-
-        let cm = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0));
-
-        let orig_camera_forward = orig_camera_rot * vec3(0.0, 0.0, -1.0);
-        let pointer_mat = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0));
-        let mut pointer_obj =
-            SceneObject::new(pointer_mat, Box::new(engine::scene::cube::create()));
-        pointer_obj.set_transform(Matrix4::from_translation(
-            orig_camera_position + orig_camera_forward,
-        ));
-
-
-        let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
-        let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
-        camera_obj.set_transform(Matrix4::from_translation(orig_camera_position));
-        camera_obj.set_local_transform(Matrix4::from(orig_camera_rot));
-
-        let unit_vec = vec3(0.0, 0.0, 0.0);
-        let unit_quat = Quaternion {
-            v: vec3(0.0, 0.0, 0.0),
-            s: 1.0,
-        };
-
         let render_context = engine::EngineRenderContext {
             time: glfw.get_time() as f32,
             camera_offset: orig_camera_position,
-            camera_rotation: unit_quat,
-
-            head_offset: unit_vec,
+            camera_rotation: Quaternion {
+                v: vec3(0.0, 0.0, 0.0),
+                s: 1.0,
+            },
+            head_offset: vec3(0.0, 0.0, 0.0),
             head_rotation: orig_camera_rot,
-            // camera_offset: vec3(0.0, 0.0, 0.0),
-            // camera_rotation: Quaternion {
-            //     v: vec3(0.0, 0.0, 0.0),
-            //     s: 1.0,
-            // },
-
-            // head_offset: camera_position,
-            // head_rotation: rot,
             projection_matrix,
-
             screen_size: vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32),
         };
-
-        frame += 1;
 
         let full_scene = Scene::from_objects(scene_objects);
         engine.render(&render_context, &full_scene);
 
-        // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
-        // -------------------------------------------------------------------------------
         window.swap_buffers();
         glfw.poll_events();
     }
 }
 
-// NOTE: not the same version as in common.rs!
 fn process_events(
-    //audio: &mut AudioContext,
     window: &mut glfw::Window,
     camera_context: &mut CameraContext,
     events: &GlfwReceiver<(f64, glfw::WindowEvent)>,
-    delta_time: f32,
+    _delta_time: f32,
 ) -> (InputContext, Vec<Box<dyn Command>>) {
-    let _speed = 20.0;
-    let head_rot_speed = 10.0;
-
-    let _movement = cgmath::Vector3::new(0.0, 0.0, 0.0);
-    let mut commands: Vec<Box<dyn Command>> = vec![];
-    //let mut forward = cgmath::Vector3::new(0.0, );
-
-    trace!("delta time: {delta_time}");
-    let mut rot_yaw = 0.0;
-    let mut rot_pitch = 0.0;
-    let mut delta_zoom = 0.0;
-
     for (_, event) in glfw::flush_messages(events) {
         match event {
-            glfw::WindowEvent::FramebufferSize(width, height) => {
-                // make sure the viewport matches the new window dimensions; note that width and
-                // height will be significantly larger than specified on retina displays.
-                unsafe { gl::Viewport(0, 0, width, height) }
-            }
-            // glfw::WindowEvent::Key(Key::Space, _, Action::Press, _) => {
-            //     engine::audio::test_audio(audio)
-            // }
+            glfw::WindowEvent::FramebufferSize(width, height) => unsafe {
+                gl::Viewport(0, 0, width, height)
+            },
             glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
                 window.set_should_close(true)
             }
             glfw::WindowEvent::CursorPos(x, y) => {
                 let mouse_update = camera_update_mouse(camera_context, x as f32, y as f32);
-                rot_yaw = 1.0 * mouse_update.delta_x;
-                rot_pitch = 1.0 * mouse_update.delta_y;
+                camera_context.yaw += mouse_update.delta_x;
+                camera_context.pitch += mouse_update.delta_y;
             }
-            glfw::WindowEvent::Scroll(x, y) => {
-                delta_zoom = y as f32 * 2.0;
+            glfw::WindowEvent::Scroll(_, y) => {
+                camera_context.distance = (camera_context.distance - y as f32).clamp(1.0, 100.0);
             }
             _ => {}
         }
     }
 
-    camera_context.yaw += rot_yaw;
-    camera_context.pitch += rot_pitch;
-    camera_context.distance += delta_zoom;
-
-    if camera_context.distance < 1.0 {
-        camera_context.distance = 1.0;
-    }
-
-    if camera_context.distance > 100.0 {
-        camera_context.distance = 100.0;
-    }
-
-    let mut input_context = InputContext::default();
-    let head_rotation = camera_rotation(camera_context);
-    (input_context, commands)
+    (InputContext::default(), Vec::new())
 }
-
-// fn load_animation(motiondb: &MotionDB, name: String) -> AnimationClip {
-//     let mps_motion = motiondb.get_mps_motions(name.to_owned());
-
-//     let motion_info_path = format!("res/motions/{name}.mi");
-//     let motion_info_file = File::open(resource_path(&motion_info_path)).unwrap();
-//     let mut motion_info_reader = BufReader::new(motion_info_file);
-//     let motion_info = MotionInfo::read(&mut motion_info_reader);
-
-//     // panic!("frame rate: {}", motion_info.frame_rate);
-
-//     let motion_file = File::open(resource_path(&format!("res/motions/{name}_.mc"))).unwrap();
-//     let mut motion_reader = BufReader::new(motion_file);
-//     let motion = MotionClip::read(&mut motion_reader, &motion_info, mps_motion);
-
-//     AnimationClip::create(&motion, &motion_info, mps_motion)
-// }

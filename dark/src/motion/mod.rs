@@ -169,21 +169,16 @@ impl MotionDB {
             tag_value_to_animations,
         }
     }
-    ///
-    /// query the motion database
-    ///
-    /// Returns a string containing the name of the animation
-    pub fn query(&self, query: MotionQuery) -> Option<String> {
+    fn query_options(&self, query: &MotionQuery) -> Vec<String> {
         info!("motion_query: {:?}", query);
         let creature_type = query.creature_type;
 
         if creature_type >= self.tag_databases.len() as u32 {
-            return None;
+            return vec![];
         }
 
         let tag_database = &self.tag_databases[creature_type as usize];
 
-        // println!("name_map: {:?}", &self.tag_name_map);
         let tag_query = query.to_tag_query(&self.tag_name_map);
 
         info!("tag_query: {:?}", tag_query);
@@ -192,32 +187,49 @@ impl MotionDB {
         info!("query_result: {:?}", tag_query);
 
         if query_result.is_empty() {
-            return None;
+            return vec![];
         }
 
         let options = query_result
             .into_iter()
             .filter_map(|idx| self.tag_value_to_animations.get(&idx))
             .flatten()
-            .collect::<Vec<&String>>();
+            .cloned()
+            .collect::<Vec<String>>();
 
         info!("options: {:?}", options);
+        options
+    }
+
+    ///
+    /// query the motion database
+    ///
+    /// Returns a string containing the name of the animation
+    pub fn query(&self, query: MotionQuery) -> Option<String> {
+        let options = self.query_options(&query);
+
+        if options.is_empty() {
+            return None;
+        }
 
         match query.selection_strategy {
             MotionQuerySelectionStrategy::Random => {
                 let mut rng = thread_rng();
                 let idx = rng.gen_range(0..options.len());
 
-                let opt = options[idx];
+                let opt = options[idx].clone();
                 info!("querying - got: {}", opt);
-                Some(opt.to_owned())
+                Some(opt)
             }
             MotionQuerySelectionStrategy::Sequential(seq) => {
                 let idx = (seq as usize) % options.len();
-                let opt = options[idx];
-                return Some(opt.to_owned());
+                Some(options[idx].clone())
             }
         }
+    }
+
+    pub fn query_all(&self, query: MotionQuery) -> Vec<String> {
+        self.query_options(&query)
     }
 }
 

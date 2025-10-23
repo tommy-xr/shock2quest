@@ -1,42 +1,68 @@
 use super::ToolScene;
-use dark::{ss2_bin_ai_loader, ss2_bin_header, ss2_cal_loader, ss2_skeleton};
-use dark::ss2_skeleton::Skeleton;
+use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
+use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::Scene;
-use dark::model::Model;
-use std::fs::File;
-use std::io::BufReader;
 use std::rc::Rc;
 use std::time::Duration;
 
+#[derive(Clone)]
+struct AnimationController {
+    clips: Vec<Rc<AnimationClip>>,
+    next_index: usize,
+}
+
+impl AnimationController {
+    fn new(clips: Vec<Rc<AnimationClip>>) -> Self {
+        Self {
+            clips,
+            next_index: 0,
+        }
+    }
+
+    fn take_next(&mut self) -> Option<Rc<AnimationClip>> {
+        if self.clips.is_empty() {
+            return None;
+        }
+
+        let clip = self.clips[self.next_index].clone();
+        self.next_index = (self.next_index + 1) % self.clips.len();
+        Some(clip)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.clips.is_empty()
+    }
+}
+
 pub struct BinAiViewerScene {
-    mesh_file_path: String,
-    skeleton_file_path: String,
-    skeleton: Option<Rc<Skeleton>>,
-    ai_mesh: Option<ss2_bin_ai_loader::SystemShock2AIMesh>,
-    total_time: Duration,
+    model: Rc<dark::model::Model>,
+    animation_player: AnimationPlayer,
+    animation_controller: Option<AnimationController>,
 }
 
 impl BinAiViewerScene {
-    pub fn from_files(mesh_file_path: String, skeleton_file_path: String, resource_path_fn: fn(&str) -> String) -> Result<Self, Box<dyn std::error::Error>> {
-        // Load skeleton
-        let skeleton_file = File::open(resource_path_fn(&skeleton_file_path))?;
-        let mut skeleton_reader = BufReader::new(skeleton_file);
-        let ss2_cal = ss2_cal_loader::read(&mut skeleton_reader);
-        let skeleton = Rc::new(ss2_skeleton::create(ss2_cal));
+    pub fn from_clips(
+        mesh_file_path: String,
+        clip_names: Vec<String>,
+        asset_cache: &mut AssetCache,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let model = asset_cache.get(&MODELS_IMPORTER, mesh_file_path.as_str());
 
-        // Load AI mesh
-        let mesh_file = File::open(resource_path_fn(&mesh_file_path))?;
-        let mut mesh_reader = BufReader::new(mesh_file);
-        let header = ss2_bin_header::read(&mut mesh_reader);
-        let ai_mesh = ss2_bin_ai_loader::read(&mut mesh_reader, &header);
+        let mut controller = load_animation_controller(clip_names, asset_cache)?;
+        if controller.is_empty() {
+            return Err("Animation playlist is empty.".into());
+        }
+
+        let mut animation_player = AnimationPlayer::empty();
+        if let Some(first_clip) = controller.take_next() {
+            animation_player = AnimationPlayer::queue_animation(&animation_player, first_clip);
+        }
 
         Ok(BinAiViewerScene {
-            mesh_file_path,
-            skeleton_file_path,
-            skeleton: Some(skeleton),
-            ai_mesh: Some(ai_mesh),
-            total_time: Duration::ZERO,
+            model,
+            animation_player,
+            animation_controller: Some(controller),
         })
     }
 }
@@ -44,19 +70,45 @@ impl BinAiViewerScene {
 impl ToolScene for BinAiViewerScene {
     fn update(&mut self, delta_time: f32) {
         let elapsed = Duration::from_secs_f32(delta_time);
-        self.total_time += elapsed;
-    }
 
-    fn render(&self, asset_cache: &mut AssetCache) -> Scene {
-        let mut scene = vec![];
+        if let Some(controller) = &mut self.animation_controller {
+            let (updated_player, _flags, events, _velocity) =
+                AnimationPlayer::update(&self.animation_player, elapsed);
+            self.animation_player = updated_player;
 
-        if let (Some(ai_mesh), Some(skeleton)) = (&self.ai_mesh, &self.skeleton) {
-            let model = Model::from_ai_bin(ai_mesh.clone(), skeleton.clone(), asset_cache);
-            for obj in model.to_scene_objects() {
-                scene.push(obj.clone());
+            for event in events {
+                if matches!(event, AnimationEvent::Completed) {
+                    if let Some(next_clip) = controller.take_next() {
+                        self.animation_player =
+                            AnimationPlayer::queue_animation(&self.animation_player, next_clip);
+                    }
+                }
             }
         }
-
-        Scene::from_objects(scene)
     }
+
+    fn render(&self, _asset_cache: &mut AssetCache) -> Scene {
+        let objects = self.model.to_animated_scene_objects(&self.animation_player);
+        Scene::from_objects(objects)
+    }
+}
+
+fn load_animation_controller(
+    clip_names: Vec<String>,
+    asset_cache: &mut AssetCache,
+) -> Result<AnimationController, Box<dyn std::error::Error>> {
+    if clip_names.is_empty() {
+        return Ok(AnimationController::new(Vec::new()));
+    }
+
+    let mut clips = Vec::new();
+    for name in clip_names {
+        if let Some(clip) = asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, name.as_str()) {
+            clips.push(clip);
+        } else {
+            return Err(format!("Unable to load animation clip '{name}'. Ensure the file exists under Data/res/motions.").into());
+        }
+    }
+
+    Ok(AnimationController::new(clips))
 }

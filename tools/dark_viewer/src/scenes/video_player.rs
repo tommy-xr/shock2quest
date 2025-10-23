@@ -49,7 +49,6 @@ impl VideoPlayerScene {
 }
 
 impl ToolScene for VideoPlayerScene {
-
     fn update(&mut self, delta_time: f32) {
         let elapsed = Duration::from_secs_f32(delta_time);
         self.total_time += elapsed;

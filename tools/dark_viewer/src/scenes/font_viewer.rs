@@ -18,7 +18,10 @@ pub struct FontViewerScene {
 }
 
 impl FontViewerScene {
-    pub fn from_file(font_file_path: String, resource_path_fn: fn(&str) -> String) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_file(
+        font_file_path: String,
+        resource_path_fn: fn(&str) -> String,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load font
         let font_file = File::open(resource_path_fn(&font_file_path))?;
         let mut font_reader = BufReader::new(font_file);
@@ -57,10 +60,8 @@ impl ToolScene for FontViewerScene {
         let mut scene = vec![];
 
         if let Some(font) = &self.font {
-            let text_material = ScreenSpaceMaterial::create(
-                font.texture.clone(),
-                cgmath::vec4(1.0, 1.0, 1.0, 1.0),
-            );
+            let text_material =
+                ScreenSpaceMaterial::create(font.texture.clone(), cgmath::vec4(1.0, 1.0, 1.0, 1.0));
 
             let text_mesh = font.get_mesh(&self.text_string, self.position, self.font_size);
             let text_obj = SceneObject::new(text_material, Box::new(text_mesh));

@@ -6,10 +6,12 @@ pub trait ToolScene {
     fn render(&self, asset_cache: &mut AssetCache) -> Scene;
 }
 
-pub mod video_player;
+pub mod bin_ai_viewer;
 pub mod bin_obj_viewer;
 pub mod font_viewer;
+pub mod video_player;
 
-pub use video_player::VideoPlayerScene;
+pub use bin_ai_viewer::BinAiViewerScene;
 pub use bin_obj_viewer::BinObjViewerScene;
 pub use font_viewer::FontViewerScene;
+pub use video_player::VideoPlayerScene;
