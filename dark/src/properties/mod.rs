@@ -299,7 +299,6 @@ pub enum Link {
     Serialize,
     Deserialize,
 )]
-#[allow(non_local_definitions)]
 pub enum AITargetMethod {
     StraightLine = 0,
     Arcing = 1,
