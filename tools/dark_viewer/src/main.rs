@@ -245,8 +245,6 @@ pub fn main() {
         println!("Debug no-render mode enabled.");
     }
 
-    #[cfg(feature = "ffmpeg")]
-    engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
     tracing_subscriber::fmt::init();
@@ -314,6 +312,9 @@ pub fn main() {
             std::process::exit(1);
         }
     };
+
+    // Initialize the scene with audio context
+    scene.init(&mut audio_context);
 
     let mut camera_context = CameraContext::new();
 

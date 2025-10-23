@@ -49,6 +49,14 @@ impl VideoPlayerScene {
 }
 
 impl ToolScene for VideoPlayerScene {
+    fn init(&mut self, audio_context: &mut AudioContext<(), String>) {
+        #[cfg(feature = "ffmpeg")]
+        {
+            engine_ffmpeg::init().unwrap();
+            self.init_audio(audio_context);
+        }
+    }
+
     fn update(&mut self, delta_time: f32) {
         let elapsed = Duration::from_secs_f32(delta_time);
         self.total_time += elapsed;
