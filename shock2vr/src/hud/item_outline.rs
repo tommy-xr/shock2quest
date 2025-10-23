@@ -60,11 +60,7 @@ pub fn draw_item_name(
             entity_id.inner(),
         )
     } else {
-        format!(
-            "{} | {}",
-            prop_obj_short_name.0,
-            &maybe_hitpoints,
-        )
+        format!("{} | {}", prop_obj_short_name.0, &maybe_hitpoints,)
     };
 
     let text_obj_0_0 = SceneObject::screen_space_text(

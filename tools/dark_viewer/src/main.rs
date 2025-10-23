@@ -1,10 +1,14 @@
 extern crate glfw;
+use clap::Parser;
 use dark::model::AnimatedModel;
 use dark::model::Model;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{
+    BinAiAnimationConfig, BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene,
+    VideoPlayerScene,
+};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -105,6 +109,155 @@ pub fn resource_path(str: &str) -> String {
     format!("{BASE_PATH}/{str}")
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Shock Engine tooling viewer", long_about = None)]
+struct Cli {
+    /// Asset to preview (video .avi, object .bin, font .fon)
+    filename: String,
+
+    /// Optional skeleton file (.cal) for animated meshes
+    #[arg(long, value_name = "FILE")]
+    skeleton: Option<String>,
+
+    /// Animation clip (.mc) or tag (prefix with +tag)
+    #[arg(long, value_name = "FILE_OR_TAG")]
+    animation: Option<String>,
+
+    /// Creature type used when resolving animation tags
+    #[arg(long, value_name = "CREATURE")]
+    creature: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct AnimationArgs {
+    skeleton: String,
+    spec: AnimationSpec,
+}
+
+#[derive(Clone, Debug)]
+enum AnimationSpec {
+    Clip { clip_name: String },
+    Tag { tag: String, creature: CreatureKind },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CreatureKind {
+    Human,
+    PlayerLimb,
+    Droid,
+    Overlord,
+    Arachnid,
+}
+
+impl CreatureKind {
+    fn actor_type_id(self) -> u32 {
+        match self {
+            CreatureKind::Human => 0,
+            CreatureKind::PlayerLimb => 1,
+            CreatureKind::Droid => 2,
+            CreatureKind::Overlord => 3,
+            CreatureKind::Arachnid => 4,
+        }
+    }
+
+    fn parse(input: &str) -> Result<Self, String> {
+        let lowered = input.trim().to_ascii_lowercase();
+
+        if let Ok(value) = lowered.parse::<u32>() {
+            return match value {
+                0 => Ok(CreatureKind::Human),
+                1 => Ok(CreatureKind::PlayerLimb),
+                2 => Ok(CreatureKind::Droid),
+                3 => Ok(CreatureKind::Overlord),
+                4 => Ok(CreatureKind::Arachnid),
+                _ => Err(format!(
+                    "Unsupported creature id '{}'. Expected 0-4 matching known actor types.",
+                    value
+                )),
+            };
+        }
+
+        match lowered.as_str() {
+            "human" | "avatar" | "rumbler" | "monkey" | "hybrid" | "midwife" | "shodan" => {
+                Ok(CreatureKind::Human)
+            }
+            "player_limb" | "playerlimb" | "limb" => Ok(CreatureKind::PlayerLimb),
+            "droid" | "robot" => Ok(CreatureKind::Droid),
+            "overlord" => Ok(CreatureKind::Overlord),
+            "arachnid" | "spider" | "baby_arachnid" | "babyspider" => Ok(CreatureKind::Arachnid),
+            _ => Err(format!(
+                "Unknown creature '{}'. Try one of: human, player_limb, droid, overlord, arachnid (or ids 0-4).",
+                input
+            )),
+        }
+    }
+}
+
+fn parse_animation_args(cli: &Cli) -> Result<Option<AnimationArgs>, String> {
+    let Some(raw_animation) = &cli.animation else {
+        return Ok(None);
+    };
+
+    let skeleton = if let Some(skeleton) = &cli.skeleton {
+        skeleton.clone()
+    } else {
+        derive_skeleton_path(&cli.filename).ok_or_else(|| {
+            "Specify --skeleton when using --animation with meshes lacking a .cal sibling"
+                .to_owned()
+        })?
+    };
+
+    if raw_animation.starts_with('+') {
+        let tag = raw_animation
+            .trim_start_matches('+')
+            .trim()
+            .to_ascii_lowercase();
+        if tag.is_empty() {
+            return Err("Animation tag must contain characters after '+'".to_owned());
+        }
+
+        let creature_input = cli.creature.as_ref().ok_or_else(|| {
+            "Tag animations require --creature to determine the actor type.".to_owned()
+        })?;
+        let creature = CreatureKind::parse(creature_input)?;
+
+        Ok(Some(AnimationArgs {
+            skeleton,
+            spec: AnimationSpec::Tag { tag, creature },
+        }))
+    } else {
+        let clip_name = normalize_clip_name(raw_animation)?;
+        Ok(Some(AnimationArgs {
+            skeleton,
+            spec: AnimationSpec::Clip { clip_name },
+        }))
+    }
+}
+
+fn derive_skeleton_path(filename: &str) -> Option<String> {
+    if filename.to_ascii_lowercase().ends_with(".bin") {
+        Some(format!("{}cal", &filename[..filename.len() - 3]))
+    } else {
+        None
+    }
+}
+
+fn normalize_clip_name(raw: &str) -> Result<String, String> {
+    let clip_path = std::path::Path::new(raw);
+    let file_name = clip_path
+        .file_name()
+        .and_then(|os| os.to_str())
+        .unwrap_or(raw);
+    let lower = file_name.to_ascii_lowercase();
+    if !lower.ends_with(".mc") {
+        return Err(format!(
+            "Animation file '{}' must have '.mc' extension.",
+            raw
+        ));
+    }
+    Ok(file_name.to_owned())
+}
+
 fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> MouseUpdateResult {
     match camera.mouse_position {
         None => {
@@ -179,63 +332,82 @@ fn find_video_file(filename: &str) -> Option<String> {
 
 fn create_scene(
     filename: &str,
-    _animation_file: &Option<String>,
-    asset_cache: &engine::assets::asset_cache::AssetCache,
-    resource_path: fn(&str) -> String
+    animation: Option<&AnimationArgs>,
+    asset_cache: &mut engine::assets::asset_cache::AssetCache,
+    resource_path: fn(&str) -> String,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
     // Determine scene type from file extension
-    if filename.to_lowercase().ends_with(".avi") {
+    let lower = filename.to_ascii_lowercase();
+    if lower.ends_with(".avi") {
         if let Some(video_path) = find_video_file(filename) {
             let scene = VideoPlayerScene::from_file(video_path)?;
             Ok(Box::new(scene))
         } else {
             Err(format!("Could not find video file: {}", filename).into())
         }
-    } else if filename.to_lowercase().ends_with(".bin") {
-        let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
-        Ok(Box::new(scene))
-    } else if filename.to_lowercase().ends_with(".fon") {
+    } else if lower.ends_with(".bin") {
+        if let Some(anim) = animation {
+            let animation_config = match &anim.spec {
+                AnimationSpec::Clip { clip_name } => BinAiAnimationConfig::Clip {
+                    clip_name: clip_name.clone(),
+                },
+                AnimationSpec::Tag { tag, creature } => BinAiAnimationConfig::Tag {
+                    tag: tag.clone(),
+                    actor_type: creature.actor_type_id(),
+                },
+            };
+            let scene = BinAiViewerScene::from_config(
+                filename.to_string(),
+                anim.skeleton.clone(),
+                animation_config,
+                asset_cache,
+                resource_path,
+            )?;
+            Ok(Box::new(scene))
+        } else {
+            let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+            Ok(Box::new(scene))
+        }
+    } else if lower.ends_with(".fon") {
         let scene = FontViewerScene::from_file(filename.to_string(), resource_path)?;
         Ok(Box::new(scene))
+    } else if animation.is_some() {
+        Err("Animation preview is only supported for .bin AI meshes.".into())
     } else {
-        Err(format!("Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font)", filename).into())
+        Err(format!(
+            "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font)",
+            filename
+        )
+        .into())
     }
 }
 
 pub fn main() {
-    // Parse command line arguments
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() < 2 || args.len() > 4 {
-        eprintln!(
-            "Usage: {} <filename> [--animation <animation_file>]",
-            args[0]
-        );
-        eprintln!("Supported file types: .avi (video), .bin (3D model), .fon (font)");
-        eprintln!("Optional: --animation <file.cal> for .bin files with skeleton animation");
-        std::process::exit(1);
-    }
-
-    let filename = &args[1];
-
-    // Parse optional animation flag
-    let animation_file = if args.len() == 4 && args[2] == "--animation" {
-        Some(args[3].clone())
-    } else if args.len() == 3 {
-        eprintln!("Error: --animation flag requires an animation filename");
-        std::process::exit(1);
-    } else {
-        None
+    let cli = Cli::parse();
+    let animation_args = match parse_animation_args(&cli) {
+        Ok(anim) => anim,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::exit(1);
+        }
     };
 
-    if let Some(ref anim_file) = animation_file {
-        println!(
-            "Loading {} with animation {}",
-            filename, anim_file
-        );
-    } else {
-        println!("Loading {}", filename);
-    }
+    let filename = cli.filename;
+
+    match &animation_args {
+        Some(AnimationArgs {
+            spec: AnimationSpec::Clip { clip_name },
+            skeleton,
+        }) => println!("Loading {filename} with animation {clip_name} (skeleton: {skeleton})"),
+        Some(AnimationArgs {
+            spec: AnimationSpec::Tag { tag, creature },
+            skeleton,
+        }) => println!(
+            "Loading {filename} with animation tag +{tag} (creature: {:?}, skeleton: {skeleton})",
+            creature
+        ),
+        None => println!("Loading {filename}"),
+    };
 
     // glfw: initialize and configure
     // ------------------------------
@@ -243,7 +415,6 @@ pub fn main() {
     #[cfg(feature = "ffmpeg")]
     engine_ffmpeg::init().unwrap();
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
-
 
     // #[cfg(feature = "ffmpeg")]
     // {
@@ -303,7 +474,12 @@ pub fn main() {
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
 
     // Create the appropriate scene based on file type
-    let mut scene = match create_scene(filename, &animation_file, &game.asset_cache, resource_path) {
+    let mut scene = match create_scene(
+        &filename,
+        animation_args.as_ref(),
+        &mut game.asset_cache,
+        resource_path,
+    ) {
         Ok(scene) => scene,
         Err(err) => {
             eprintln!("Error creating scene: {}", err);
@@ -385,7 +561,6 @@ pub fn main() {
         pointer_obj.set_transform(Matrix4::from_translation(
             orig_camera_position + orig_camera_forward,
         ));
-
 
         let camera_mat = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
         let mut camera_obj = SceneObject::new(camera_mat, Box::new(engine::scene::cube::create()));
