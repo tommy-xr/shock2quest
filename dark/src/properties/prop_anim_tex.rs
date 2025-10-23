@@ -9,6 +9,7 @@ use crate::ss2_common::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(FromPrimitive, Clone, Debug, Deserialize, Serialize)]
+#[allow(non_local_definitions)]
 pub enum AnimTexFlags {
     WRAP = 0,
     RANDING = 1, // ?

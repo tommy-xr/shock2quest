@@ -9,6 +9,7 @@ use crate::ss2_common::read_u32;
 use serde::{Deserialize, Serialize};
 
 #[derive(FromPrimitive, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(non_local_definitions)]
 pub enum RenderType {
     Normal = 0,
     NoRender = 1,
