@@ -11,7 +11,7 @@ pub mod bin_obj_viewer;
 pub mod font_viewer;
 pub mod video_player;
 
-pub use bin_ai_viewer::{BinAiAnimationConfig, BinAiViewerScene};
+pub use bin_ai_viewer::BinAiViewerScene;
 pub use bin_obj_viewer::BinObjViewerScene;
 pub use font_viewer::FontViewerScene;
 pub use video_player::VideoPlayerScene;

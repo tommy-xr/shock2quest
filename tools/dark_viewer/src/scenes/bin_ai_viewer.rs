@@ -1,19 +1,10 @@
 use super::ToolScene;
-use dark::{
-    importers::{ANIMATION_CLIP_IMPORTER, MOTIONDB_IMPORTER},
-    model::Model,
-    motion::{AnimationClip, AnimationEvent, AnimationPlayer, MotionQuery, MotionQueryItem},
-    ss2_bin_ai_loader, ss2_bin_header, ss2_cal_loader, ss2_skeleton,
-};
+use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
+use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::Scene;
-use std::{fs::File, io::BufReader, rc::Rc, time::Duration};
-
-#[derive(Clone, Debug)]
-pub enum BinAiAnimationConfig {
-    Clip { clip_name: String },
-    Tag { tag: String, actor_type: u32 },
-}
+use std::rc::Rc;
+use std::time::Duration;
 
 #[derive(Clone)]
 struct AnimationController {
@@ -45,37 +36,20 @@ impl AnimationController {
 }
 
 pub struct BinAiViewerScene {
-    model: Model,
+    model: Rc<dark::model::Model>,
     animation_player: AnimationPlayer,
     animation_controller: Option<AnimationController>,
 }
 
 impl BinAiViewerScene {
-    pub fn from_config(
+    pub fn from_clips(
         mesh_file_path: String,
-        skeleton_file_path: String,
-        animation: BinAiAnimationConfig,
+        clip_names: Vec<String>,
         asset_cache: &mut AssetCache,
-        resource_path_fn: fn(&str) -> String,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let skeleton = {
-            let skeleton_file = File::open(resource_path_fn(&skeleton_file_path))?;
-            let mut skeleton_reader = BufReader::new(skeleton_file);
-            let ss2_cal = ss2_cal_loader::read(&mut skeleton_reader);
-            Rc::new(ss2_skeleton::create(ss2_cal))
-        };
+        let model = asset_cache.get(&MODELS_IMPORTER, mesh_file_path.as_str());
 
-        let ai_mesh = {
-            let mesh_file = File::open(resource_path_fn(&mesh_file_path))?;
-            let mut mesh_reader = BufReader::new(mesh_file);
-            let header = ss2_bin_header::read(&mut mesh_reader);
-            ss2_bin_ai_loader::read(&mut mesh_reader, &header)
-        };
-
-        let model = Model::from_ai_bin(ai_mesh, skeleton, asset_cache);
-
-        let mut controller = load_animation_controller(animation, asset_cache)?;
-
+        let mut controller = load_animation_controller(clip_names, asset_cache)?;
         if controller.is_empty() {
             return Err("Animation playlist is empty.".into());
         }
@@ -120,35 +94,21 @@ impl ToolScene for BinAiViewerScene {
 }
 
 fn load_animation_controller(
-    animation: BinAiAnimationConfig,
+    clip_names: Vec<String>,
     asset_cache: &mut AssetCache,
 ) -> Result<AnimationController, Box<dyn std::error::Error>> {
-    let clips = match animation {
-        BinAiAnimationConfig::Clip { clip_name } => {
-            vec![asset_cache.get(&ANIMATION_CLIP_IMPORTER, clip_name.as_str())]
-        }
-        BinAiAnimationConfig::Tag { tag, actor_type } => {
-            let motion_db = asset_cache.get(&MOTIONDB_IMPORTER, "motiondb.bin");
-            let query = MotionQuery::new(actor_type, vec![MotionQueryItem::new(&tag)]);
-            let results = motion_db.query_all(query);
+    if clip_names.is_empty() {
+        return Ok(AnimationController::new(Vec::new()));
+    }
 
-            if results.is_empty() {
-                return Err(format!(
-                    "No animations found for tag '+{}' and actor type {}",
-                    tag, actor_type
-                )
-                .into());
-            }
-
-            results
-                .into_iter()
-                .map(|name| {
-                    let clip_name = format!("{}_.mc", name);
-                    asset_cache.get(&ANIMATION_CLIP_IMPORTER, clip_name.as_str())
-                })
-                .collect::<Vec<_>>()
+    let mut clips = Vec::new();
+    for name in clip_names {
+        if let Some(clip) = asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, name.as_str()) {
+            clips.push(clip);
+        } else {
+            return Err(format!("Unable to load animation clip '{name}'. Ensure the file exists under Data/res/motions.").into());
         }
-    };
+    }
 
     Ok(AnimationController::new(clips))
 }
