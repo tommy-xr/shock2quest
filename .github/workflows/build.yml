@@ -55,15 +55,23 @@ jobs:
       - name: Build Desktop Runtime
         run: cargo build --verbose --release
         working-directory: runtimes/desktop_runtime
+        env:
+          RUSTFLAGS: "-D warnings"
       - name: Run Desktop Runtime tests
         run: cargo test --verbose
         working-directory: runtimes/desktop_runtime
+        env:
+          RUSTFLAGS: "-D warnings"
 
       # Build and test Shodan CLI tool
       - name: Build Shodan CLI
         run: cargo build --verbose --release -p shodan
+        env:
+          RUSTFLAGS: "-D warnings"
       - name: Run Shodan CLI tests
         run: cargo test --verbose -p shodan
+        env:
+          RUSTFLAGS: "-D warnings"
 
       # Build and test dark_viewer tool
       # Note: Windows build for dark_viewer is currently disabled due to compilation issues
@@ -71,6 +79,10 @@ jobs:
       - name: Build dark_viewer tool (Unix only)
         if: runner.os != 'Windows'
         run: cargo build --verbose --release -p dark_viewer
+        env:
+          RUSTFLAGS: "-D warnings"
       - name: Run dark_viewer tests (Unix only)
         if: runner.os != 'Windows'
         run: cargo test --verbose -p dark_viewer
+        env:
+          RUSTFLAGS: "-D warnings"
