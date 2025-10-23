@@ -31,7 +31,6 @@ bitflags! {
 }
 
 #[derive(FromPrimitive, Clone, Debug, Deserialize, Serialize)]
-#[allow(non_local_definitions)]
 pub enum TweqHalt {
     DestroyObject = 0,
     RemoveProp = 1,
