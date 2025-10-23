@@ -79,17 +79,8 @@ pub fn read<T: Read + Seek>(
 ) -> SystemShock2ObjectMesh {
     let header = read_header(reader, common_header);
 
-    // Debug logging to identify problematic files
-    println!("Loading .bin object file:");
-    println!("  obj_name: {:?}", header.obj_name);
-    println!("  num_verts: {}", header.num_verts);
-    println!("  num_polygons: {}", header.num_polygons);
-
     let vertices = read_vertices(&header, reader);
     let normals = read_lights(&header, reader);
-
-    println!("  normals.len(): {}", normals.len());
-    println!("  vertices.len(): {}", vertices.len());
 
     let polygons: Vec<SystemShock2ObjectPolygon> =
         read_polygons(&header, reader, common_header.version);
