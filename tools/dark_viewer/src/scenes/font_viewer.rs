@@ -53,7 +53,7 @@ impl ToolScene for FontViewerScene {
         self.total_time += elapsed;
     }
 
-    fn render(&self, _asset_cache: &mut AssetCache) -> Scene {
+    fn render(&mut self, _asset_cache: &mut AssetCache) -> Scene {
         let mut scene = vec![];
 
         if let Some(font) = &self.font {

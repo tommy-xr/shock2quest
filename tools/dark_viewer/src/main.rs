@@ -4,7 +4,7 @@ use dark::model::Model;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -179,7 +179,8 @@ fn find_video_file(filename: &str) -> Option<String> {
 
 fn create_scene(
     filename: &str,
-    _animation_file: &Option<String>,
+    animation_param: &Option<String>,
+    creature_type: &Option<String>,
     asset_cache: &engine::assets::asset_cache::AssetCache,
     resource_path: fn(&str) -> String
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
@@ -192,8 +193,23 @@ fn create_scene(
             Err(format!("Could not find video file: {}", filename).into())
         }
     } else if filename.to_lowercase().ends_with(".bin") {
-        let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
-        Ok(Box::new(scene))
+        // If animation parameter is provided, use BinAiViewerScene for animation support
+        if animation_param.is_some() {
+            // For animated bins, we need a skeleton file - assume it has same name with .cal extension
+            let base_name = filename.trim_end_matches(".bin");
+            let skeleton_file = format!("{}.cal", base_name);
+            let scene = BinAiViewerScene::from_files(
+                filename.to_string(),
+                skeleton_file,
+                animation_param.clone(),
+                creature_type.clone(),
+                resource_path
+            )?;
+            Ok(Box::new(scene))
+        } else {
+            let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+            Ok(Box::new(scene))
+        }
     } else if filename.to_lowercase().ends_with(".fon") {
         let scene = FontViewerScene::from_file(filename.to_string(), resource_path)?;
         Ok(Box::new(scene))
@@ -206,33 +222,63 @@ pub fn main() {
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() < 2 || args.len() > 4 {
+    if args.len() < 2 {
         eprintln!(
-            "Usage: {} <filename> [--animation <animation_file>]",
+            "Usage: {} <filename> [--animation <animation_param>] [--creature-type <type>]",
             args[0]
         );
         eprintln!("Supported file types: .avi (video), .bin (3D model), .fon (font)");
-        eprintln!("Optional: --animation <file.cal> for .bin files with skeleton animation");
+        eprintln!("Animation options:");
+        eprintln!("  --animation <file.mc>        Load specific animation file");
+        eprintln!("  --animation +tag[,+tag2]     Load animation by tag(s)");
+        eprintln!("  --creature-type <type>       Creature type for tag-based animations");
         std::process::exit(1);
     }
 
     let filename = &args[1];
 
-    // Parse optional animation flag
-    let animation_file = if args.len() == 4 && args[2] == "--animation" {
-        Some(args[3].clone())
-    } else if args.len() == 3 {
-        eprintln!("Error: --animation flag requires an animation filename");
-        std::process::exit(1);
-    } else {
-        None
-    };
+    // Parse optional flags
+    let mut animation_param: Option<String> = None;
+    let mut creature_type: Option<String> = None;
 
-    if let Some(ref anim_file) = animation_file {
-        println!(
-            "Loading {} with animation {}",
-            filename, anim_file
-        );
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--animation" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --animation flag requires a parameter");
+                    std::process::exit(1);
+                }
+                animation_param = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--creature-type" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --creature-type flag requires a parameter");
+                    std::process::exit(1);
+                }
+                creature_type = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => {
+                eprintln!("Error: Unknown flag {}", args[i]);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(ref anim_param) = animation_param {
+        if let Some(ref creature) = creature_type {
+            println!(
+                "Loading {} with animation {} (creature type: {})",
+                filename, anim_param, creature
+            );
+        } else {
+            println!(
+                "Loading {} with animation {}",
+                filename, anim_param
+            );
+        }
     } else {
         println!("Loading {}", filename);
     }
@@ -303,7 +349,7 @@ pub fn main() {
     let mut game = shock2vr::Game::init(file_system, GameOptions::default());
 
     // Create the appropriate scene based on file type
-    let mut scene = match create_scene(filename, &animation_file, &game.asset_cache, resource_path) {
+    let mut scene = match create_scene(filename, &animation_param, &creature_type, &game.asset_cache, resource_path) {
         Ok(scene) => scene,
         Err(err) => {
             eprintln!("Error creating scene: {}", err);

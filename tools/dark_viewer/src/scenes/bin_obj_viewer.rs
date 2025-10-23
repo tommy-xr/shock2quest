@@ -51,7 +51,7 @@ impl ToolScene for BinObjViewerScene {
         // );
     }
 
-    fn render(&self, asset_cache: &mut AssetCache) -> Scene {
+    fn render(&mut self, asset_cache: &mut AssetCache) -> Scene {
         let turret = asset_cache.get(&MODELS_IMPORTER, &self.model_name);
         let turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
 

@@ -60,7 +60,7 @@ impl ToolScene for VideoPlayerScene {
         }
     }
 
-    fn render(&self, _asset_cache: &mut engine::assets::asset_cache::AssetCache) -> Scene {
+    fn render(&mut self, _asset_cache: &mut engine::assets::asset_cache::AssetCache) -> Scene {
         let texture: Rc<dyn TextureTrait> = {
             #[cfg(feature = "ffmpeg")]
             {
