@@ -87,8 +87,7 @@ impl SceneObject {
         let mut vertices = Vec::new();
         for c in str.chars() {
             let a_info = font.get_character_info(c).unwrap();
-            // TODO: Get this from font (save as a field)
-            let _half_pixel = 0.5 / 512.0;
+            let _half_pixel = font.get_half_pixel();
             let min_uv_x = a_info.min_uv_x;
             let max_uv_x = a_info.max_uv_x;
 
@@ -146,8 +145,7 @@ impl SceneObject {
         let mut vertices = Vec::new();
         for c in str.chars() {
             let a_info = font.get_character_info(c).unwrap();
-            // TODO: Get this from font (save as a field)
-            let _half_pixel = 0.5 / 512.0;
+            let _half_pixel = font.get_half_pixel();
             let min_uv_x = a_info.min_uv_x;
             let min_uv_y = a_info.min_uv_y;
             let max_uv_x = a_info.max_uv_x;
