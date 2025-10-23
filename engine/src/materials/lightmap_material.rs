@@ -1,6 +1,6 @@
 extern crate gl;
 use crate::engine::EngineRenderContext;
-use crate::scene::light::{Light, LightType};
+use crate::scene::light::Light;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 use crate::texture::Texture;

@@ -39,8 +39,8 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         }
 "#;
 
-static mut SHADER: OnceCell<ShaderProgram> = OnceCell::new();
-static mut SKINNED_SHADER: OnceCell<ShaderProgram> = OnceCell::new();
+static SHADER: OnceCell<ShaderProgram> = OnceCell::new();
+static SKINNED_SHADER: OnceCell<ShaderProgram> = OnceCell::new();
 
 pub struct DebugNormalMaterial {
     initialized: bool,
@@ -58,21 +58,19 @@ impl Material for DebugNormalMaterial {
     }
 
     fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
-        unsafe {
-            SHADER.get_or_init(|| {
-                let vertex_shader = crate::shader::build(
-                    VERTEX_SHADER_SOURCE,
-                    crate::shader::ShaderType::Vertex,
-                    is_opengl_es,
-                );
-                let fragment_shader = crate::shader::build(
-                    FRAGMENT_SHADER_SOURCE,
-                    crate::shader::ShaderType::Fragment,
-                    is_opengl_es,
-                );
-                crate::shader_program::link(&vertex_shader, &fragment_shader)
-            });
-        }
+        SHADER.get_or_init(|| {
+            let vertex_shader = crate::shader::build(
+                VERTEX_SHADER_SOURCE,
+                crate::shader::ShaderType::Vertex,
+                is_opengl_es,
+            );
+            let fragment_shader = crate::shader::build(
+                FRAGMENT_SHADER_SOURCE,
+                crate::shader::ShaderType::Fragment,
+                is_opengl_es,
+            );
+            crate::shader_program::link(&vertex_shader, &fragment_shader)
+        });
         self.initialized = true;
     }
 
@@ -84,7 +82,7 @@ impl Material for DebugNormalMaterial {
         _skinning_data: &[Matrix4<f32>],
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
-        let shader = unsafe { SHADER.get().expect("Shader should be initialized") };
+        let shader = SHADER.get().expect("Shader should be initialized");
 
         unsafe {
             gl::UseProgram(shader.gl_id);
@@ -174,21 +172,19 @@ impl Material for DebugNormalSkinnedMaterial {
     }
 
     fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
-        unsafe {
-            SKINNED_SHADER.get_or_init(|| {
-                let vertex_shader = crate::shader::build(
-                    SKINNED_VERTEX_SHADER_SOURCE,
-                    crate::shader::ShaderType::Vertex,
-                    is_opengl_es,
-                );
-                let fragment_shader = crate::shader::build(
-                    SKINNED_FRAGMENT_SHADER_SOURCE,
-                    crate::shader::ShaderType::Fragment,
-                    is_opengl_es,
-                );
-                crate::shader_program::link(&vertex_shader, &fragment_shader)
-            });
-        }
+        SKINNED_SHADER.get_or_init(|| {
+            let vertex_shader = crate::shader::build(
+                SKINNED_VERTEX_SHADER_SOURCE,
+                crate::shader::ShaderType::Vertex,
+                is_opengl_es,
+            );
+            let fragment_shader = crate::shader::build(
+                SKINNED_FRAGMENT_SHADER_SOURCE,
+                crate::shader::ShaderType::Fragment,
+                is_opengl_es,
+            );
+            crate::shader_program::link(&vertex_shader, &fragment_shader)
+        });
         self.initialized = true;
     }
 
@@ -200,7 +196,7 @@ impl Material for DebugNormalSkinnedMaterial {
         skinning_data: &[Matrix4<f32>],
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
-        let shader = unsafe { SKINNED_SHADER.get().expect("Shader should be initialized") };
+        let shader = SKINNED_SHADER.get().expect("Shader should be initialized");
 
         unsafe {
             gl::UseProgram(shader.gl_id);
