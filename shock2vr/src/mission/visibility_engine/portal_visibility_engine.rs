@@ -6,10 +6,10 @@ use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
     mission::{Cell, SystemShock2Level},
-    properties::PropPosition,
+    properties::{PropPosition, PropPhysDimensions},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
-use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
 use crate::util::has_refs;
 
@@ -262,6 +262,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
         );
 
         let v_prop_position = world.borrow::<View<PropPosition>>().unwrap();
+        let v_prop_phys_dimensions = world.borrow::<View<PropPhysDimensions>>().unwrap();
 
         for (id, pos) in v_prop_position.iter().with_id() {
             if !has_refs(world, id) {
@@ -269,16 +270,37 @@ impl VisibilityEngine for PortalVisibilityEngine {
                 continue;
             }
 
-            let cell = self.get_cell_from_position(level, &id, pos.position);
-            //let cell: Option<&Cell> = None;
+            // Check if ANY corner of the entity's bounding box is in a visible cell
+            let is_entity_visible = if let Ok(dimensions) = v_prop_phys_dimensions.get(id) {
+                let half_size = dimensions.size * 0.5;
+                let corners = [
+                    pos.position + vec3(-half_size.x, -half_size.y, -half_size.z),
+                    pos.position + vec3( half_size.x, -half_size.y, -half_size.z),
+                    pos.position + vec3(-half_size.x,  half_size.y, -half_size.z),
+                    pos.position + vec3( half_size.x,  half_size.y, -half_size.z),
+                    pos.position + vec3(-half_size.x, -half_size.y,  half_size.z),
+                    pos.position + vec3( half_size.x, -half_size.y,  half_size.z),
+                    pos.position + vec3(-half_size.x,  half_size.y,  half_size.z),
+                    pos.position + vec3( half_size.x,  half_size.y,  half_size.z),
+                ];
 
-            if let Some(cell) = cell {
-                let is_visible = visible_cells.contains(&cell);
-
-                self.is_visible.insert(id, is_visible);
+                corners.iter().any(|&corner| {
+                    if let Some(cell_idx) = level.get_cell_idx_from_position(corner) {
+                        visible_cells.contains(&cell_idx)
+                    } else {
+                        false
+                    }
+                })
             } else {
-                self.is_visible.insert(id, false);
-            }
+                // Fallback to position-based check for entities without physics dimensions
+                if let Some(cell_idx) = level.get_cell_idx_from_position(pos.position) {
+                    visible_cells.contains(&cell_idx)
+                } else {
+                    false
+                }
+            };
+
+            self.is_visible.insert(id, is_entity_visible);
         }
     }
 
