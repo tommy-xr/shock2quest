@@ -15,6 +15,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Skeleton {
     bones: Vec<Bone>,
+    #[allow(dead_code)]
     animation_transforms: HashMap<JointId, Matrix4<f32>>,
     global_transforms: HashMap<JointId, Matrix4<f32>>,
 }

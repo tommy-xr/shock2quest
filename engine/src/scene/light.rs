@@ -75,7 +75,7 @@ impl Light for SpotLight {
         LightType::Spotlight
     }
 
-    fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+    fn affects_position(&self, _world_pos: Vector3<f32>) -> bool {
         // Quick range check
         true
         // let distance = (world_pos - self.position).magnitude();

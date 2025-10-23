@@ -26,7 +26,7 @@ pub mod cube;
 pub use cube::Cube;
 
 pub mod quad;
-pub use quad::*;
+pub use quad::{create as create_quad, Quad};
 
 pub mod plane;
 pub use plane::Plane;
@@ -53,4 +53,7 @@ pub mod color_material;
 pub use color_material::ColorMaterial;
 
 pub mod debug_normal_material;
-pub use debug_normal_material::*;
+pub use debug_normal_material::{
+    create as create_debug_normal_material, create_skinned as create_skinned_debug_normal_material,
+    DebugNormalMaterial, DebugNormalSkinnedMaterial,
+};

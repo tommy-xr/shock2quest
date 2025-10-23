@@ -1,7 +1,6 @@
 extern crate ffmpeg_the_third as ffmpeg;
 
 use engine::{
-    render_log,
     texture_format::{PixelFormat, RawTextureData},
 };
 use ffmpeg::format::{input, Pixel};
@@ -11,16 +10,21 @@ use ffmpeg::util::frame::video::Video;
 use std::time::Duration;
 
 pub struct VideoPlayer {
+    #[allow(dead_code)]
     width: u32,
+    #[allow(dead_code)]
     height: u32,
 
     current_time: Duration,
 
     duration: Duration,
+    #[allow(dead_code)]
     total_frame_count: i64,
 
     frames: Vec<RawTextureData>,
+    #[allow(dead_code)]
     decoder: ffmpeg::decoder::Video,
+    #[allow(dead_code)]
     scaler: ffmpeg::software::scaling::Context,
 }
 

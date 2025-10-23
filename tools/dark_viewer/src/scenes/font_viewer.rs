@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::ToolScene;
 use cgmath::vec2;
 use dark::font::Font;

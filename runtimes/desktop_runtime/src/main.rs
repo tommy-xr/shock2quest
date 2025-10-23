@@ -296,7 +296,7 @@ pub fn main() {
 
         let screen_size = vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32);
 
-        let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", { game.render() });
+        let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", game.render());
 
         let head_height = if last_input_state.is_crouching {
             1.5

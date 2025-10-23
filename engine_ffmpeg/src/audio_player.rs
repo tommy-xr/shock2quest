@@ -61,7 +61,7 @@ impl AudioPlayer {
                     audio_frame.set_ch_layout(ChannelLayout::STEREO);
                     let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
 
-                    let plane_count = decoded_audio_frame.planes();
+                    let _plane_count = decoded_audio_frame.planes();
                     let data: &[i16] = decoded_audio_frame.plane(0);
                     decoded_audio_samples.extend_from_slice(&data);
                 }
