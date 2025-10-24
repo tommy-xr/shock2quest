@@ -99,6 +99,7 @@ pub struct PRCommentsStatus {
     pub has_unaddressed_feedback: bool,
 }
 
+#[allow(dead_code)]
 impl PRMonitor {
     pub fn new(config: Config) -> Self {
         Self {
