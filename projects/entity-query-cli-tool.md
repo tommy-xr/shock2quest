@@ -51,8 +51,9 @@ Key files to look at for existing implementation are:
 2. [x] Add the initial cli scaffolding. This would just be run `cargo run -p dark_query -- --help`
 3. [x] Add the `ls` command - test with shock2.gam and a mission
 4. [x] Add the `show` command - test with a template in shock2.gam and an entity in amission file
-5. Add the `--filter` modifier
-6. Add a 'progress' command - `cargo run -p dark_query -- progress` that shows:
+5. [x] Show unparsed props as part of 'show'
+6. Add the `--filter` modifier
+7. Add a 'progress' command - `cargo run -p dark_query -- progress` that shows:
    - Percent of props that are parsed
    - Percent of links that are parsed
    - Percent of link data that is parsed
