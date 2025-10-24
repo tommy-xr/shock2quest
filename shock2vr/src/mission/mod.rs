@@ -15,7 +15,7 @@ use std::{
 };
 
 use cgmath::{
-    num_traits::ToPrimitive, vec3, InnerSpace, Matrix4, Point3, Quaternion, Rotation3,
+    num_traits::ToPrimitive, vec3, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3,
     SquareMatrix, Transform, Vector2, Vector3,
 };
 use cgmath::{EuclideanSpace, Zero};
@@ -75,6 +75,7 @@ use crate::{
         Effect, GlobalEffect, Message, MessagePayload,
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
+    teleport::TeleportSystem,
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::{VirtualHand, VirtualHandEffect},
@@ -168,6 +169,7 @@ pub struct Mission {
     pub left_hand: VirtualHand,
     pub right_hand: VirtualHand,
     pub visibility_engine: Box<dyn VisibilityEngine>,
+    pub teleport_system: TeleportSystem,
 }
 
 pub struct GlobalContext {
@@ -188,6 +190,7 @@ impl Mission {
         quest_info: QuestInfo,
         entity_populator: Box<dyn EntityPopulator>,
         held_item_save_data: HeldItemSaveData,
+        game_options: &GameOptions,
     ) -> Mission {
         let properties = &global_context.properties;
         let links = &global_context.links;
@@ -348,6 +351,24 @@ impl Mission {
             effects: Vec::new(),
         });
 
+        // Initialize teleport system based on game options
+        let teleport_system = if game_options.experimental_features.contains("teleport") {
+            let teleport_config = crate::teleport::TeleportConfig {
+                enabled: true,
+                button_mapping: crate::teleport::TeleportButton::Trigger,
+                trigger_threshold: 0.5,
+                max_distance: 20.0,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        } else {
+            let teleport_config = crate::teleport::TeleportConfig {
+                enabled: false,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        };
+
         Mission {
             level,
             left_hand,
@@ -370,6 +391,7 @@ impl Mission {
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
             visibility_engine: Box::new(PortalVisibilityEngine::new()),
+            teleport_system,
         }
     }
 
@@ -378,10 +400,125 @@ impl Mission {
         time: &Time,
         asset_cache: &mut AssetCache,
         input_context: &input_context::InputContext,
+        game_options: &GameOptions,
+        command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
-        let mut effects = Vec::new();
+        let mut effects = command_effects;
+
+        // Update teleport system and add effects (only if experimental flag enabled)
+        if game_options.experimental_features.contains("teleport") {
+            let teleport_effects = self.teleport_system.update(input_context);
+            effects.extend(teleport_effects);
+        }
+
+        // Player movement logic
+        let delta_time = time.elapsed.as_secs_f32();
+        let player = {
+            let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player_info.clone()
+        };
+
+        let rot_speed = 2.0;
+        let additional_rotation = cgmath::Quaternion::from_axis_angle(
+            cgmath::vec3(0.0, 1.0, 0.0),
+            cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * rot_speed),
+        );
+
+        let new_rotation = player.rotation * additional_rotation;
+
+        let dir = new_rotation * input_context.head.rotation;
+        let move_thumbstick_value = input_context.right_hand.thumbstick;
+        let forward = dir.rotate_vector(cgmath::vec3(
+            -delta_time * move_thumbstick_value.x * 25. / dark::SCALE_FACTOR,
+            0.0,
+            -delta_time * move_thumbstick_value.y * 25. / dark::SCALE_FACTOR,
+        ));
+
+        let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
+
+        let (new_character_pos, collision_events) = {
+            profile!(
+                "shock2.update.physics",
+                self.physics.update(
+                    forward + cgmath::vec3(0.0, up_value, 0.0),
+                    &mut self.player_handle,
+                )
+            )
+        };
+
+        // Clear forces
+        self.physics.clear_forces();
+
+        let (left_hand_entity_id, right_hand_entity_id) = {
+            (self.left_hand.get_held_entity(), self.right_hand.get_held_entity())
+        };
+
+        // Update player info
+        let mut player_info = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+        player_info.pos = new_character_pos;
+        player_info.rotation = new_rotation;
+        player_info.left_hand_entity_id = left_hand_entity_id;
+        player_info.right_hand_entity_id = right_hand_entity_id;
+        drop(player_info);
+
+        // Handle collision events
+        for ce in collision_events {
+            info!("event: {:?}", ce);
+
+            match ce {
+                physics::CollisionEvent::BeginIntersect {
+                    sensor_id,
+                    entity_id,
+                } => {
+                    self.script_world.dispatch(Message {
+                        to: sensor_id,
+                        payload: MessagePayload::SensorBeginIntersect { with: entity_id },
+                    });
+                }
+                physics::CollisionEvent::EndIntersect {
+                    sensor_id,
+                    entity_id,
+                } => {
+                    self.script_world.dispatch(Message {
+                        to: sensor_id,
+                        payload: MessagePayload::SensorEndIntersect { with: entity_id },
+                    });
+                }
+                physics::CollisionEvent::CollisionStarted {
+                    entity1_id,
+                    entity2_id,
+                } => {
+                    self.script_world.dispatch(Message {
+                        to: entity1_id,
+                        payload: MessagePayload::Collided { with: entity2_id },
+                    });
+                    self.script_world.dispatch(Message {
+                        to: entity2_id,
+                        payload: MessagePayload::Collided { with: entity1_id },
+                    });
+                }
+            }
+        }
+
+        // Update PropTeleported entities
+        self.world.run(
+            |mut v_teleported: ViewMut<dark::properties::PropTeleported>| {
+                let mut ents_to_remove = Vec::new();
+                for (id, door) in (&mut v_teleported).iter().with_id() {
+                    door.countdown_timer -= time.elapsed.as_secs_f32();
+
+                    if door.countdown_timer < 0.0 {
+                        ents_to_remove.push(id);
+                    }
+                }
+
+                for id in ents_to_remove {
+                    v_teleported.remove(id);
+                }
+            },
+        );
 
         let (player_pos, player_rot) = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -1896,10 +2033,12 @@ impl crate::game_scene::GameScene for Mission {
     fn update(
         &mut self,
         time: &Time,
-        asset_cache: &mut AssetCache,
         input_context: &InputContext,
+        asset_cache: &mut AssetCache,
+        game_options: &GameOptions,
+        command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
-        self.update(time, asset_cache, input_context)
+        self.update(time, asset_cache, input_context, game_options, command_effects)
     }
 
     fn render(
@@ -1950,47 +2089,7 @@ impl crate::game_scene::GameScene for Mission {
         &self.world
     }
 
-    fn world_mut(&mut self) -> &mut World {
-        &mut self.world
-    }
-
-    fn physics_world(&self) -> Option<&PhysicsWorld> {
-        Some(&self.physics)
-    }
-
-    fn physics_world_mut(&mut self) -> Option<&mut PhysicsWorld> {
-        Some(&mut self.physics)
-    }
-
     fn scene_name(&self) -> &str {
         &self.level_name
-    }
-
-    fn player_handle(&self) -> Option<&crate::physics::PlayerHandle> {
-        Some(&self.player_handle)
-    }
-
-    fn player_handle_mut(&mut self) -> Option<&mut crate::physics::PlayerHandle> {
-        Some(&mut self.player_handle)
-    }
-
-    fn left_hand(&self) -> Option<&crate::virtual_hand::VirtualHand> {
-        Some(&self.left_hand)
-    }
-
-    fn right_hand(&self) -> Option<&crate::virtual_hand::VirtualHand> {
-        Some(&self.right_hand)
-    }
-
-    fn script_world(&self) -> Option<&crate::scripts::ScriptWorld> {
-        Some(&self.script_world)
-    }
-
-    fn script_world_mut(&mut self) -> Option<&mut crate::scripts::ScriptWorld> {
-        Some(&mut self.script_world)
-    }
-
-    fn physics_and_player_mut(&mut self) -> Option<(&mut crate::physics::PhysicsWorld, &mut crate::physics::PlayerHandle)> {
-        Some((&mut self.physics, &mut self.player_handle))
     }
 }
