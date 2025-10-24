@@ -18,10 +18,25 @@ use crate::{
     Gamesys,
 };
 
+#[derive(Debug, Clone)]
+pub struct UnparsedProperty {
+    pub entity_id: i32,
+    pub byte_len: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnparsedLinkData {
+    pub link_id: i32,
+    pub byte_len: u32,
+}
+
 #[derive(Debug)]
 pub struct SystemShock2EntityInfo {
     pub entity_to_properties: HashMap<i32, Vec<Rc<Box<dyn Property>>>>,
     pub template_to_links: HashMap<i32, TemplateLinks>,
+    pub unparsed_properties: HashMap<String, Vec<UnparsedProperty>>,
+    pub unparsed_links: HashMap<String, Vec<Link>>,
+    pub unparsed_link_data: HashMap<String, Vec<UnparsedLinkData>>,
 
     // TODO: Create dictionary for these?
     // Or create a HashMap entity_to_links?
@@ -136,8 +151,35 @@ pub fn merge_with_gamesys(
     );
     let hierarchy = calculate_hierarchy(&link_metaprops);
 
+    let mut unparsed_properties = map_info.unparsed_properties.clone();
+    for (chunk, entries) in &gamesys_entity_info.unparsed_properties {
+        unparsed_properties
+            .entry(chunk.clone())
+            .or_insert_with(Vec::new)
+            .extend(entries.clone());
+    }
+
+    let mut unparsed_links = map_info.unparsed_links.clone();
+    for (chunk, entries) in &gamesys_entity_info.unparsed_links {
+        unparsed_links
+            .entry(chunk.clone())
+            .or_insert_with(Vec::new)
+            .extend(entries.clone());
+    }
+
+    let mut unparsed_link_data = map_info.unparsed_link_data.clone();
+    for (chunk, entries) in &gamesys_entity_info.unparsed_link_data {
+        unparsed_link_data
+            .entry(chunk.clone())
+            .or_insert_with(Vec::new)
+            .extend(entries.clone());
+    }
+
     SystemShock2EntityInfo {
         entity_to_properties,
+        unparsed_properties,
+        unparsed_links,
+        unparsed_link_data,
         link_metaprops,
         // TODO: Does this need to be merged?
         link_playerfactories: map_info.link_playerfactories.clone(),
@@ -224,10 +266,46 @@ pub fn new<R: io::Read + io::Seek>(
 
     let hierarchy = calculate_hierarchy(&link_metaprops);
 
+    let known_property_chunks: HashSet<String> =
+        properties.iter().map(|prop| prop.name()).collect();
+
+    let mut known_link_chunks: HashSet<String> = links.iter().map(|link| link.name()).collect();
+    known_link_chunks.extend(links_with_data.iter().map(|link| link.link_chunk_name()));
+    known_link_chunks.insert("L$MetaProp".to_string());
+    known_link_chunks.insert("L$PlayerFac".to_string());
+
+    let known_link_data_chunks: HashSet<String> = links_with_data
+        .iter()
+        .map(|link| link.link_data_chunk_name())
+        .collect();
+
+    let mut unparsed_properties: HashMap<String, Vec<UnparsedProperty>> = HashMap::new();
+    let mut unparsed_links: HashMap<String, Vec<Link>> = HashMap::new();
+    let mut unparsed_link_data: HashMap<String, Vec<UnparsedLinkData>> = HashMap::new();
+
+    let chunk_names: Vec<String> = toc.chunk_names().cloned().collect();
+    for chunk_name in chunk_names {
+        if chunk_name.starts_with("P$") && !known_property_chunks.contains(chunk_name.as_str()) {
+            let entries = read_unparsed_property_chunk(toc, &chunk_name, reader);
+            unparsed_properties.insert(chunk_name, entries);
+        } else if chunk_name.starts_with("L$") && !known_link_chunks.contains(chunk_name.as_str()) {
+            let links_for_chunk = read_link(&chunk_name, reader, toc);
+            unparsed_links.insert(chunk_name, links_for_chunk);
+        } else if chunk_name.starts_with("LD$")
+            && !known_link_data_chunks.contains(chunk_name.as_str())
+        {
+            let entries = read_unparsed_link_data_chunk(toc, &chunk_name, reader);
+            unparsed_link_data.insert(chunk_name, entries);
+        }
+    }
+
     SystemShock2EntityInfo {
-        template_to_links,
-        link_playerfactories,
         entity_to_properties,
+        template_to_links,
+        unparsed_properties,
+        unparsed_links,
+        unparsed_link_data,
+        link_playerfactories,
         link_metaprops,
         hierarchy,
     }
@@ -423,4 +501,58 @@ fn read_all_properties<R: io::Read + io::Seek>(
         }
     }
     ent_to_props
+}
+
+fn read_unparsed_property_chunk<R: io::Read + io::Seek>(
+    toc: &ChunkFileTableOfContents,
+    chunk_name: &str,
+    reader: &mut R,
+) -> Vec<UnparsedProperty> {
+    let mut entries = Vec::new();
+
+    if let Some(chunk) = toc.get_chunk(chunk_name.to_owned()) {
+        reader.seek(SeekFrom::Start(chunk.offset)).unwrap();
+
+        let end_pos = chunk.offset + chunk.length;
+        while reader.stream_position().unwrap() < end_pos {
+            let entity_id = read_i32(reader);
+            let prop_len = read_u32(reader);
+            let expected_pos = reader.stream_position().unwrap() + prop_len as u64;
+            reader.seek(SeekFrom::Start(expected_pos)).unwrap();
+
+            entries.push(UnparsedProperty {
+                entity_id,
+                byte_len: prop_len,
+            });
+        }
+    }
+
+    entries
+}
+
+fn read_unparsed_link_data_chunk<R: io::Read + io::Seek>(
+    toc: &ChunkFileTableOfContents,
+    chunk_name: &str,
+    reader: &mut R,
+) -> Vec<UnparsedLinkData> {
+    let mut entries = Vec::new();
+
+    if let Some(chunk) = toc.get_chunk(chunk_name.to_owned()) {
+        reader.seek(SeekFrom::Start(chunk.offset)).unwrap();
+
+        let end_pos = chunk.offset + chunk.length;
+        if reader.stream_position().unwrap() < end_pos {
+            let data_len = read_u32(reader) as usize;
+            while reader.stream_position().unwrap() < end_pos {
+                let link_id = read_i32(reader);
+                reader.seek(SeekFrom::Current(data_len as i64)).unwrap();
+                entries.push(UnparsedLinkData {
+                    link_id,
+                    byte_len: data_len as u32,
+                });
+            }
+        }
+    }
+
+    entries
 }
