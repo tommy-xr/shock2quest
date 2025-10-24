@@ -58,7 +58,7 @@ use crate::{
     creature::{get_creature_definition, HitBoxManager},
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
-    input_context::{self},
+    input_context::{self, InputContext},
     inventory::PlayerInventoryEntity,
     mission::entity_populator::EntityPopulator,
     physics::{self, PlayerHandle},
@@ -1891,8 +1891,8 @@ fn play_environmental_sound(
     }
 }
 
-// Implementation of Scene trait for Mission
-impl crate::scene::Scene for Mission {
+// Implementation of GameScene trait for Mission
+impl crate::game_scene::GameScene for Mission {
     fn update(
         &mut self,
         time: &Time,
@@ -1964,5 +1964,33 @@ impl crate::scene::Scene for Mission {
 
     fn scene_name(&self) -> &str {
         &self.level_name
+    }
+
+    fn player_handle(&self) -> Option<&crate::physics::PlayerHandle> {
+        Some(&self.player_handle)
+    }
+
+    fn player_handle_mut(&mut self) -> Option<&mut crate::physics::PlayerHandle> {
+        Some(&mut self.player_handle)
+    }
+
+    fn left_hand(&self) -> Option<&crate::virtual_hand::VirtualHand> {
+        Some(&self.left_hand)
+    }
+
+    fn right_hand(&self) -> Option<&crate::virtual_hand::VirtualHand> {
+        Some(&self.right_hand)
+    }
+
+    fn script_world(&self) -> Option<&crate::scripts::ScriptWorld> {
+        Some(&self.script_world)
+    }
+
+    fn script_world_mut(&mut self) -> Option<&mut crate::scripts::ScriptWorld> {
+        Some(&mut self.script_world)
+    }
+
+    fn physics_and_player_mut(&mut self) -> Option<(&mut crate::physics::PhysicsWorld, &mut crate::physics::PlayerHandle)> {
+        Some((&mut self.physics, &mut self.player_handle))
     }
 }

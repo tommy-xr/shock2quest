@@ -9,16 +9,17 @@ use shipyard::{EntityId, World};
 use crate::{
     input_context::InputContext,
     mission::GlobalContext,
-    physics::PhysicsWorld,
+    physics::{PhysicsWorld, PlayerHandle},
     quest_info::QuestInfo,
-    scripts::{Effect, GlobalEffect},
+    scripts::{Effect, GlobalEffect, ScriptWorld},
     time::Time,
+    virtual_hand::VirtualHand,
     GameOptions,
 };
 
-/// Abstract scene that can be rendered and updated
+/// Abstract game scene that can be rendered and updated
 /// Supports missions, cutscenes, UI screens, debug scenes, etc.
-pub trait Scene {
+pub trait GameScene {
     /// Update the scene state, returning effects to be processed
     fn update(
         &mut self,
@@ -73,6 +74,22 @@ pub trait Scene {
     /// Access to physics world (may be None for UI-only scenes)
     fn physics_world(&self) -> Option<&PhysicsWorld>;
     fn physics_world_mut(&mut self) -> Option<&mut PhysicsWorld>;
+
+    /// Access to player handle for physics (may be None for non-mission scenes)
+    fn player_handle(&self) -> Option<&PlayerHandle>;
+    fn player_handle_mut(&mut self) -> Option<&mut PlayerHandle>;
+
+    /// Access to virtual hands (may be None for non-VR scenes)
+    fn left_hand(&self) -> Option<&VirtualHand>;
+    fn right_hand(&self) -> Option<&VirtualHand>;
+
+    /// Access to script world (may be None for non-scripted scenes)
+    fn script_world(&self) -> Option<&ScriptWorld>;
+    fn script_world_mut(&mut self) -> Option<&mut ScriptWorld>;
+
+    /// Get mutable references to both physics world and player handle
+    /// Returns None if either is not available
+    fn physics_and_player_mut(&mut self) -> Option<(&mut PhysicsWorld, &mut PlayerHandle)>;
 
     /// Scene identification
     fn scene_name(&self) -> &str;
