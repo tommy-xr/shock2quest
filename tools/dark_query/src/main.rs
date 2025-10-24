@@ -195,6 +195,11 @@ fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&s
 
         println!();
 
+        // Show links
+        show_entity_links(entity_id, &entity_info);
+
+        println!();
+
         // Show inheritance hierarchy as a tree
         show_inheritance_tree(entity_id, &entity_info);
 
@@ -277,5 +282,99 @@ fn show_properties_for_entity(_entity_id: i32, properties: &[std::rc::Rc<Box<dyn
         };
 
         println!("{}  {}. {}", indent, i + 1, display);
+    }
+}
+
+fn show_entity_links(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {
+    // Collect outgoing links
+    let outgoing_links = if let Some(template_links) = entity_info.template_to_links.get(&entity_id) {
+        &template_links.to_links
+    } else {
+        &vec![]
+    };
+
+    // Collect incoming links by scanning all entities
+    let mut incoming_links = Vec::new();
+    for (source_id, template_links) in &entity_info.template_to_links {
+        for link in &template_links.to_links {
+            if link.to_template_id == entity_id {
+                incoming_links.push((source_id, link));
+            }
+        }
+    }
+
+    println!("Links:");
+
+    // Show outgoing links
+    println!("  Outgoing Links:");
+    if outgoing_links.is_empty() {
+        println!("    (none)");
+    } else {
+        for (i, link) in outgoing_links.iter().enumerate() {
+            let target_names = entity_analyzer::extract_names_with_inheritance(
+                link.to_template_id,
+                entity_info,
+            );
+            let target_display = if target_names.sym_name.is_some() || target_names.obj_name.is_some() || target_names.obj_short_name.is_some() {
+                format!(" ({})", target_names.display_names())
+            } else {
+                "".to_string()
+            };
+
+            let link_type = format_link_type(&link.link);
+
+            println!("    {}. {} -> Entity {}{}",
+                i + 1,
+                link_type,
+                link.to_template_id,
+                target_display
+            );
+        }
+    }
+
+    // Show incoming links
+    println!("  Incoming Links:");
+    if incoming_links.is_empty() {
+        println!("    (none)");
+    } else {
+        for (i, (source_id, link)) in incoming_links.iter().enumerate() {
+            let source_names = entity_analyzer::extract_names_with_inheritance(
+                **source_id,
+                entity_info,
+            );
+            let source_display = if source_names.sym_name.is_some() || source_names.obj_name.is_some() || source_names.obj_short_name.is_some() {
+                format!(" ({})", source_names.display_names())
+            } else {
+                "".to_string()
+            };
+
+            let link_type = format_link_type(&link.link);
+
+            println!("    {}. Entity {}{} -> {} here",
+                i + 1,
+                source_id,
+                source_display,
+                link_type
+            );
+        }
+    }
+}
+
+fn format_link_type(link: &dark::properties::Link) -> String {
+    match link {
+        dark::properties::Link::SwitchLink => "SwitchLink".to_string(),
+        dark::properties::Link::Contains(_) => "Contains".to_string(),
+        dark::properties::Link::Flinderize(_) => "Flinderize".to_string(),
+        dark::properties::Link::AIWatchObj(_) => "AIWatchObj".to_string(),
+        dark::properties::Link::Projectile(_) => "Projectile".to_string(),
+        dark::properties::Link::Corpse(_) => "Corpse".to_string(),
+        dark::properties::Link::AIProjectile(_) => "AIProjectile".to_string(),
+        dark::properties::Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
+        dark::properties::Link::GunFlash(_) => "GunFlash".to_string(),
+        dark::properties::Link::LandingPoint => "LandingPoint".to_string(),
+        dark::properties::Link::Replicator => "Replicator".to_string(),
+        dark::properties::Link::MissSpang => "MissSpang".to_string(),
+        dark::properties::Link::TPathInit => "TPathInit".to_string(),
+        dark::properties::Link::TPath(_) => "TPath".to_string(),
     }
 }
