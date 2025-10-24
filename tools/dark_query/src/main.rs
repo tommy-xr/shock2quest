@@ -203,6 +203,11 @@ fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&s
         // Show inheritance hierarchy as a tree
         show_inheritance_tree(entity_id, &entity_info);
 
+        println!();
+
+        // Show unparsed data for this entity
+        show_unparsed_data(entity_id, &entity_info);
+
     } else {
         println!("Entity {} not found", entity_id);
     }
@@ -377,4 +382,55 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::TPathInit => "TPathInit".to_string(),
         dark::properties::Link::TPath(_) => "TPath".to_string(),
     }
+}
+
+fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {
+    println!("Unparsed Data:");
+
+    // Collect unparsed properties for this entity
+    let mut unparsed_props = Vec::new();
+    for (prop_name, unparsed_list) in &entity_info.unparsed_properties {
+        for unparsed_prop in unparsed_list {
+            if unparsed_prop.entity_id == entity_id {
+                unparsed_props.push((prop_name.clone(), unparsed_prop.byte_len));
+            }
+        }
+    }
+
+    // Collect unparsed links for this entity
+    let mut unparsed_links = Vec::new();
+    for (link_name, link_list) in &entity_info.unparsed_links {
+        for link in link_list {
+            if link.src == entity_id || link.dest == entity_id {
+                unparsed_links.push(link_name.clone());
+            }
+        }
+    }
+
+
+    // Show unparsed properties
+    println!("  Unparsed Properties:");
+    if unparsed_props.is_empty() {
+        println!("    (none)");
+    } else {
+        for (i, (prop_name, byte_len)) in unparsed_props.iter().enumerate() {
+            println!("    {}. {} ({} bytes)", i + 1, prop_name, byte_len);
+        }
+    }
+
+    // Show unparsed links
+    println!("  Unparsed Links:");
+    if unparsed_links.is_empty() {
+        println!("    (none)");
+    } else {
+        // Deduplicate link names
+        let mut unique_links: Vec<String> = unparsed_links.into_iter().collect();
+        unique_links.sort();
+        unique_links.dedup();
+
+        for (i, link_name) in unique_links.iter().enumerate() {
+            println!("    {}. {}", i + 1, link_name);
+        }
+    }
+
 }
