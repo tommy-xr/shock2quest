@@ -1,8 +1,9 @@
 use std::{collections::HashMap, rc::Rc};
 use glob::Pattern;
+use shipyard::{World, Get, View};
 use dark::{
-    ss2_entity_info::SystemShock2EntityInfo,
-    properties::{Property},
+    ss2_entity_info::{self, SystemShock2EntityInfo},
+    properties::{Property, PropSymName, PropObjName, PropObjShortName, PropTemplateId},
 };
 
 #[derive(Debug, Clone)]
@@ -65,10 +66,39 @@ pub struct FilterCriteria {
     pub property_filter: Option<String>,
 }
 
-/// Extract name properties from a property list
-fn extract_names(_properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
-    // TODO: For now, return empty names until we figure out how to properly
-    // access the property data from the trait objects
+/// Extract name properties by creating a temporary world and reading components
+pub fn extract_names_public(properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
+    extract_names(properties)
+}
+
+/// Extract names with inheritance support - walks up the hierarchy to find names
+pub fn extract_names_with_inheritance(
+    entity_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> EntityNames {
+    // First try direct properties
+    if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
+        let direct_names = extract_names(properties);
+        if direct_names.sym_name.is_some() || direct_names.obj_name.is_some() || direct_names.obj_short_name.is_some() {
+            return direct_names;
+        }
+    }
+
+    // If no direct names, walk up the inheritance hierarchy (from most specific to most general)
+    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+    let ancestors = ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+
+    // Walk from most specific to most general (reverse order)
+    for ancestor_id in ancestors.iter().rev() {
+        if let Some(properties) = entity_info.entity_to_properties.get(ancestor_id) {
+            let ancestor_names = extract_names(properties);
+            if ancestor_names.sym_name.is_some() || ancestor_names.obj_name.is_some() || ancestor_names.obj_short_name.is_some() {
+                return ancestor_names;
+            }
+        }
+    }
+
+    // No names found in hierarchy
     EntityNames {
         sym_name: None,
         obj_name: None,
@@ -76,10 +106,88 @@ fn extract_names(_properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
     }
 }
 
-/// Extract template ID from properties
-fn extract_template_id(_properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
-    // TODO: For now, return None until we figure out how to properly
-    // access the property data from the trait objects
+/// Extract template ID with inheritance support - walks up the hierarchy to find template ID
+pub fn extract_template_id_with_inheritance(
+    entity_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> Option<i32> {
+    // First try direct properties
+    if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
+        let direct_template_id = extract_template_id(properties);
+        if direct_template_id.is_some() {
+            return direct_template_id;
+        }
+    }
+
+    // If no direct template ID, use the most specific ancestor as the template ID
+    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+    let ancestors = ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+
+    // Return the most specific ancestor (last in the list) as the template ID
+    ancestors.last().copied()
+}
+
+fn extract_names(properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
+    let mut world = World::new();
+    let entity = world.add_entity(());
+
+    // Initialize all properties into the world
+    for prop in properties {
+        prop.initialize(&mut world, entity);
+    }
+
+    // Now read the components
+    let mut sym_name = None;
+    let mut obj_name = None;
+    let mut obj_short_name = None;
+
+    // Try to get each name property
+    if let Ok(view) = world.borrow::<View<PropSymName>>() {
+        if let Ok(prop) = view.get(entity) {
+            sym_name = Some(prop.0.clone());
+        }
+    }
+
+    if let Ok(view) = world.borrow::<View<PropObjName>>() {
+        if let Ok(prop) = view.get(entity) {
+            obj_name = Some(prop.0.clone());
+        }
+    }
+
+    if let Ok(view) = world.borrow::<View<PropObjShortName>>() {
+        if let Ok(prop) = view.get(entity) {
+            obj_short_name = Some(prop.0.clone());
+        }
+    }
+
+    EntityNames {
+        sym_name,
+        obj_name,
+        obj_short_name,
+    }
+}
+
+/// Extract template ID by creating a temporary world and reading components
+pub fn extract_template_id_public(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
+    extract_template_id(properties)
+}
+
+fn extract_template_id(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
+    let mut world = World::new();
+    let entity = world.add_entity(());
+
+    // Initialize all properties into the world
+    for prop in properties {
+        prop.initialize(&mut world, entity);
+    }
+
+    // Try to get template ID
+    if let Ok(view) = world.borrow::<View<PropTemplateId>>() {
+        if let Ok(prop) = view.get(entity) {
+            return Some(prop.template_id);
+        }
+    }
+
     None
 }
 
@@ -122,8 +230,8 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
             EntityType::Entity
         };
 
-        let names = extract_names(properties);
-        let template_id = extract_template_id(properties);
+        let names = extract_names_with_inheritance(*entity_id, entity_info);
+        let template_id = extract_template_id_with_inheritance(*entity_id, entity_info);
 
         let unparsed_properties = entity_unparsed_props
             .get(entity_id)

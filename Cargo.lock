@@ -814,6 +814,10 @@ dependencies = [
  "anyhow",
  "clap",
  "dark",
+ "engine",
+ "glob",
+ "shipyard",
+ "shock2vr",
  "tracing",
  "tracing-subscriber",
 ]

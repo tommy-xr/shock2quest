@@ -82,8 +82,7 @@ fn main() -> Result<()> {
             handle_ls_command(cli.mission.as_deref(), only_unparsed, filter.as_deref())?;
         }
         Commands::Show { entity_id, filter } => {
-            println!("show command - entity_id: {}, filter: {:?}", entity_id, filter);
-            // TODO: Implement show command
+            handle_show_command(cli.mission.as_deref(), entity_id, filter.as_deref())?;
         }
     }
 
@@ -168,4 +167,55 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
     }
 
     println!("\nTotal: {} entities", summaries.len());
+}
+
+fn handle_show_command(mission: Option<&str>, entity_id: i32, filter: Option<&str>) -> Result<()> {
+    info!("Loading entity data...");
+    let entity_info = load_entity_data(mission)?;
+
+    // Find the specific entity
+    if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
+        println!("Entity ID: {}", entity_id);
+
+        let entity_type = if entity_id < 0 {
+            "Template"
+        } else {
+            "Entity"
+        };
+        println!("Type: {}", entity_type);
+
+        // Extract names directly from this entity's properties
+        let direct_names = entity_analyzer::extract_names_public(properties);
+        println!("Direct Names: {}", direct_names.display_names());
+
+        // Extract names with inheritance
+        let inherited_names = entity_analyzer::extract_names_with_inheritance(entity_id, &entity_info);
+        println!("Inherited Names: {}", inherited_names.display_names());
+
+        // Extract template ID
+        let template_id = entity_analyzer::extract_template_id_public(properties);
+        if let Some(tid) = template_id {
+            println!("Template ID: {}", tid);
+        } else {
+            println!("Template ID: None");
+        }
+
+        // Show inheritance hierarchy
+        let hierarchy = dark::ss2_entity_info::get_hierarchy(&entity_info);
+        let ancestors = dark::ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+        println!("Inheritance Chain: {:?}", ancestors);
+
+        // Show all properties
+        println!("\nProperties ({}):", properties.len());
+        for (i, prop) in properties.iter().enumerate() {
+            println!("  {}: {:?}", i + 1, prop);
+        }
+
+        // TODO: Show inherited properties by walking inheritance chain
+
+    } else {
+        println!("Entity {} not found", entity_id);
+    }
+
+    Ok(())
 }
