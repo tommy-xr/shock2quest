@@ -302,7 +302,11 @@ mod tests {
 
         for (width, expected) in test_cases {
             let actual = 0.5 / width as f32;
-            assert_eq!(actual, expected, "Half pixel calculation should be 0.5 / width for width {}", width);
+            assert_eq!(
+                actual, expected,
+                "Half pixel calculation should be 0.5 / width for width {}",
+                width
+            );
         }
     }
 
@@ -321,8 +325,11 @@ mod tests {
             let expected_dynamic = 0.5 / width as f32;
             // The dynamic calculation should be different from hardcoded for non-512 textures
             if width != 512 {
-                assert_ne!(expected_dynamic, hardcoded_value,
-                    "Dynamic calculation for {}px texture should differ from hardcoded 512px value", width);
+                assert_ne!(
+                    expected_dynamic, hardcoded_value,
+                    "Dynamic calculation for {}px texture should differ from hardcoded 512px value",
+                    width
+                );
             }
         }
     }

@@ -156,7 +156,7 @@ fn projectile_ray_cast(
         InternalCollisionGroups::ENTITY
             // Sometimes, the hitbox can stick out past the bounding box...
             // so we should still check for it here
-            | InternalCollisionGroups::HITBOX 
+            | InternalCollisionGroups::HITBOX
             | InternalCollisionGroups::SELECTABLE
             | InternalCollisionGroups::WORLD,
     );

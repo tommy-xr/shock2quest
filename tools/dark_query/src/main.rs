@@ -6,7 +6,7 @@ mod data_loader;
 mod entity_analyzer;
 
 use data_loader::load_entity_data;
-use entity_analyzer::{analyze_entities, filter_entities, FilterCriteria, EntityType};
+use entity_analyzer::{analyze_entities, filter_entities, EntityType, FilterCriteria};
 
 #[derive(Parser)]
 #[command(name = "dark_query")]
@@ -78,7 +78,10 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Ls { only_unparsed, filter } => {
+        Commands::Ls {
+            only_unparsed,
+            filter,
+        } => {
             handle_ls_command(cli.mission.as_deref(), only_unparsed, filter.as_deref())?;
         }
         Commands::Show { entity_id, filter } => {
@@ -89,7 +92,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_ls_command(mission: Option<&str>, only_unparsed: bool, filter: Option<&str>) -> Result<()> {
+fn handle_ls_command(
+    mission: Option<&str>,
+    only_unparsed: bool,
+    filter: Option<&str>,
+) -> Result<()> {
     info!("Loading entity data...");
     let entity_info = load_entity_data(mission)?;
 
@@ -117,15 +124,23 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
 
     // Print header
     if show_filter_details {
-        println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | Matched Items",
-                 "ID", "Type", "Names", "Template", "Props", "Links", "Unparsed");
-        println!("{:-<8}-+-{:-<8}-+-{:-<40}-+-{:-<8}-+-{:-<5}-+-{:-<5}-+-{:-<8}-+{:-<20}",
-                 "", "", "", "", "", "", "", "");
+        println!(
+            "{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | Matched Items",
+            "ID", "Type", "Names", "Template", "Props", "Links", "Unparsed"
+        );
+        println!(
+            "{:-<8}-+-{:-<8}-+-{:-<40}-+-{:-<8}-+-{:-<5}-+-{:-<5}-+-{:-<8}-+{:-<20}",
+            "", "", "", "", "", "", "", ""
+        );
     } else {
-        println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8}",
-                 "ID", "Type", "Names", "Template", "Props", "Links", "Unparsed");
-        println!("{:-<8}-+-{:-<8}-+-{:-<40}-+-{:-<8}-+-{:-<5}-+-{:-<5}-+-{:-<8}",
-                 "", "", "", "", "", "", "");
+        println!(
+            "{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8}",
+            "ID", "Type", "Names", "Template", "Props", "Links", "Unparsed"
+        );
+        println!(
+            "{:-<8}-+-{:-<8}-+-{:-<40}-+-{:-<8}-+-{:-<5}-+-{:-<5}-+-{:-<8}",
+            "", "", "", "", "", "", ""
+        );
     }
 
     // Print entities
@@ -141,11 +156,16 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
             summary.names.display_names()
         };
 
-        let template_display = summary.template_id
+        let template_display = summary
+            .template_id
             .map(|id| id.to_string())
             .unwrap_or_else(|| "-".to_string());
 
-        let unparsed_display = if summary.has_unparsed_data { "Yes" } else { "No" };
+        let unparsed_display = if summary.has_unparsed_data {
+            "Yes"
+        } else {
+            "No"
+        };
 
         if show_filter_details {
             let matched_items = summary.matched_items.join(", ");
@@ -155,14 +175,28 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
                 matched_items
             };
 
-            println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | {}",
-                     summary.id, entity_type, names_display, template_display,
-                     summary.property_count, summary.link_count, unparsed_display,
-                     matched_display);
+            println!(
+                "{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | {}",
+                summary.id,
+                entity_type,
+                names_display,
+                template_display,
+                summary.property_count,
+                summary.link_count,
+                unparsed_display,
+                matched_display
+            );
         } else {
-            println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8}",
-                     summary.id, entity_type, names_display, template_display,
-                     summary.property_count, summary.link_count, unparsed_display);
+            println!(
+                "{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8}",
+                summary.id,
+                entity_type,
+                names_display,
+                template_display,
+                summary.property_count,
+                summary.link_count,
+                unparsed_display
+            );
         }
     }
 
@@ -175,20 +209,18 @@ fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&s
 
     // Find the specific entity
     if let Some(_properties) = entity_info.entity_to_properties.get(&entity_id) {
-        let entity_type = if entity_id < 0 {
-            "Template"
-        } else {
-            "Entity"
-        };
+        let entity_type = if entity_id < 0 { "Template" } else { "Entity" };
 
         println!("=== {} {} ===", entity_type, entity_id);
 
         // Extract names with inheritance
-        let inherited_names = entity_analyzer::extract_names_with_inheritance(entity_id, &entity_info);
+        let inherited_names =
+            entity_analyzer::extract_names_with_inheritance(entity_id, &entity_info);
         println!("Name: {}", inherited_names.display_names());
 
         // Extract template ID with inheritance
-        let template_id = entity_analyzer::extract_template_id_with_inheritance(entity_id, &entity_info);
+        let template_id =
+            entity_analyzer::extract_template_id_with_inheritance(entity_id, &entity_info);
         if let Some(tid) = template_id {
             println!("Template: {}", tid);
         }
@@ -207,7 +239,6 @@ fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&s
 
         // Show unparsed data for this entity
         show_unparsed_data(entity_id, &entity_info);
-
     } else {
         println!("Entity {} not found", entity_id);
     }
@@ -215,7 +246,10 @@ fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&s
     Ok(())
 }
 
-fn show_inheritance_tree(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {
+fn show_inheritance_tree(
+    entity_id: i32,
+    entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo,
+) {
     println!("Inheritance Tree:");
 
     // Get the inheritance chain
@@ -234,16 +268,25 @@ fn show_inheritance_tree(entity_id: i32, entity_info: &dark::ss2_entity_info::Sy
         // Get entity info
         let entity_type = if current_id < 0 { "Template" } else { "Entity" };
         let names = entity_analyzer::extract_names_public(
-            entity_info.entity_to_properties.get(&current_id).unwrap_or(&vec![])
+            entity_info
+                .entity_to_properties
+                .get(&current_id)
+                .unwrap_or(&vec![]),
         );
 
-        let name_display = if names.sym_name.is_some() || names.obj_name.is_some() || names.obj_short_name.is_some() {
+        let name_display = if names.sym_name.is_some()
+            || names.obj_name.is_some()
+            || names.obj_short_name.is_some()
+        {
             names.display_names()
         } else {
             "<no name>".to_string()
         };
 
-        println!("{}├─ {} {} ({})", indent, entity_type, current_id, name_display);
+        println!(
+            "{}├─ {} {} ({})",
+            indent, entity_type, current_id, name_display
+        );
 
         // Show properties for this entity
         if let Some(properties) = entity_info.entity_to_properties.get(&current_id) {
@@ -254,7 +297,11 @@ fn show_inheritance_tree(entity_id: i32, entity_info: &dark::ss2_entity_info::Sy
     }
 }
 
-fn show_properties_for_entity(_entity_id: i32, properties: &[std::rc::Rc<Box<dyn dark::properties::Property>>], depth: usize) {
+fn show_properties_for_entity(
+    _entity_id: i32,
+    properties: &[std::rc::Rc<Box<dyn dark::properties::Property>>],
+    depth: usize,
+) {
     let indent = "  ".repeat(depth);
 
     println!("{}Properties ({}):", indent, properties.len());
@@ -286,7 +333,8 @@ fn show_properties_for_entity(_entity_id: i32, properties: &[std::rc::Rc<Box<dyn
 
 fn show_entity_links(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {
     // Collect outgoing links
-    let outgoing_links = if let Some(template_links) = entity_info.template_to_links.get(&entity_id) {
+    let outgoing_links = if let Some(template_links) = entity_info.template_to_links.get(&entity_id)
+    {
         &template_links.to_links
     } else {
         &vec![]
@@ -310,11 +358,12 @@ fn show_entity_links(entity_id: i32, entity_info: &dark::ss2_entity_info::System
         println!("    (none)");
     } else {
         for (i, link) in outgoing_links.iter().enumerate() {
-            let target_names = entity_analyzer::extract_names_with_inheritance(
-                link.to_template_id,
-                entity_info,
-            );
-            let target_display = if target_names.sym_name.is_some() || target_names.obj_name.is_some() || target_names.obj_short_name.is_some() {
+            let target_names =
+                entity_analyzer::extract_names_with_inheritance(link.to_template_id, entity_info);
+            let target_display = if target_names.sym_name.is_some()
+                || target_names.obj_name.is_some()
+                || target_names.obj_short_name.is_some()
+            {
                 format!(" ({})", target_names.display_names())
             } else {
                 "".to_string()
@@ -322,7 +371,8 @@ fn show_entity_links(entity_id: i32, entity_info: &dark::ss2_entity_info::System
 
             let link_type = format_link_type(&link.link);
 
-            println!("    {}. {} -> Entity {}{}",
+            println!(
+                "    {}. {} -> Entity {}{}",
                 i + 1,
                 link_type,
                 link.to_template_id,
@@ -337,11 +387,12 @@ fn show_entity_links(entity_id: i32, entity_info: &dark::ss2_entity_info::System
         println!("    (none)");
     } else {
         for (i, (source_id, link)) in incoming_links.iter().enumerate() {
-            let source_names = entity_analyzer::extract_names_with_inheritance(
-                **source_id,
-                entity_info,
-            );
-            let source_display = if source_names.sym_name.is_some() || source_names.obj_name.is_some() || source_names.obj_short_name.is_some() {
+            let source_names =
+                entity_analyzer::extract_names_with_inheritance(**source_id, entity_info);
+            let source_display = if source_names.sym_name.is_some()
+                || source_names.obj_name.is_some()
+                || source_names.obj_short_name.is_some()
+            {
                 format!(" ({})", source_names.display_names())
             } else {
                 "".to_string()
@@ -349,7 +400,8 @@ fn show_entity_links(entity_id: i32, entity_info: &dark::ss2_entity_info::System
 
             let link_type = format_link_type(&link.link);
 
-            println!("    {}. Entity {}{} -> {} here",
+            println!(
+                "    {}. Entity {}{} -> {} here",
                 i + 1,
                 source_id,
                 source_display,
@@ -401,7 +453,6 @@ fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::Syste
         }
     }
 
-
     // Show unparsed properties
     println!("  Unparsed Properties:");
     if unparsed_props.is_empty() {
@@ -426,5 +477,4 @@ fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::Syste
             println!("    {}. {}", i + 1, link_name);
         }
     }
-
 }

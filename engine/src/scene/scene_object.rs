@@ -220,11 +220,13 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
-        if self
-            .material
-            .borrow()
-            .draw_opaque(render_context, view, &xform, &self.skinning_data, lights)
-        {
+        if self.material.borrow().draw_opaque(
+            render_context,
+            view,
+            &xform,
+            &self.skinning_data,
+            lights,
+        ) {
             self.geometry.draw();
         }
     }
@@ -246,7 +248,6 @@ impl SceneObject {
             self.geometry.draw();
         }
     }
-
 
     /// Get the world position of this scene object from its transform matrix
     pub fn get_world_position(&self) -> cgmath::Vector3<f32> {

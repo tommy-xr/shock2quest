@@ -13,13 +13,6 @@ use tracing::trace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(target_os = "android")]
-const BASE_PATH: &str = "/mnt/sdcard/shock2quest";
-
-#[cfg(not(target_os = "android"))]
-#[allow(dead_code)]
-const BASE_PATH: &str = "../../Data";
-
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(0);
 
 const SOUND_SCALE_FACTOR: f32 = 5.0;

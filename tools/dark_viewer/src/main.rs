@@ -32,6 +32,7 @@ use shock2vr::command::Command;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 use shock2vr::command::TransitionLevelCommand;
+use shock2vr::paths;
 use shock2vr::GameOptions;
 use tracing::trace;
 
@@ -50,13 +51,10 @@ use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 const SCR_WIDTH: u32 = 800;
 const SCR_HEIGHT: u32 = 600;
-
-static DATA_ROOT: OnceLock<String> = OnceLock::new();
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Shock Engine tooling viewer", long_about = None)]
@@ -75,17 +73,7 @@ struct Cli {
 }
 
 fn resolve_data_path(resource: &str) -> String {
-    let base = DATA_ROOT.get_or_init(|| {
-        let candidates = ["../../Data", "../Data", "./Data"];
-        for candidate in candidates {
-            if Path::new(candidate).exists() {
-                return candidate.to_owned();
-            }
-        }
-        "../../Data".to_owned()
-    });
-
-    Path::new(base)
+    paths::data_root()
         .join(resource)
         .to_string_lossy()
         .into_owned()
@@ -166,24 +154,26 @@ fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> Mo
 }
 
 fn find_video_file(filename: &str) -> Option<String> {
-    let paths_to_try = vec![
-        filename.to_string(),
-        format!("../../Data/cutscenes/{}", filename),
-        format!("Data/cutscenes/{}", filename),
-        format!("cutscenes/{}", filename),
-    ];
+    let requested = Path::new(filename);
+    let data_root = paths::data_root();
 
-    for path in paths_to_try {
-        if std::path::Path::new(&path).exists() {
-            println!("Found video at: {}", path);
-            return Some(path);
+    let mut candidates = vec![requested.to_path_buf()];
+    if requested.is_relative() {
+        candidates.push(data_root.join(requested));
+        if let Some(file_name) = requested.file_name() {
+            candidates.push(data_root.join("cutscenes").join(file_name));
+            candidates.push(Path::new("cutscenes").join(file_name));
         }
     }
 
-    println!(
-        "Could not find video file {} in any of the expected locations",
-        filename
-    );
+    for candidate in candidates {
+        if candidate.exists() {
+            println!("Found video at: {}", candidate.display());
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+
+    println!("Could not find video file {} in any of the expected locations (searched under {} and current directory)", filename, data_root.display());
     None
 }
 
