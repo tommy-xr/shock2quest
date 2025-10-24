@@ -37,6 +37,10 @@ impl ChunkFileTableOfContents {
     pub fn get_chunk(&self, chunk_name: String) -> Option<Chunk> {
         self.table_of_contents.get(&chunk_name).cloned()
     }
+
+    pub fn chunk_names(&self) -> impl Iterator<Item = &String> + '_ {
+        self.table_of_contents.keys()
+    }
 }
 
 pub fn read_table_of_contents<T: io::Read + io::Seek>(reader: &mut T) -> ChunkFileTableOfContents {
