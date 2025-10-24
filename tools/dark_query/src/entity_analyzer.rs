@@ -1,9 +1,9 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::{HashMap, HashSet}, rc::Rc};
 use glob::Pattern;
 use shipyard::{World, Get, View};
 use dark::{
     ss2_entity_info::{self, SystemShock2EntityInfo},
-    properties::{Property, PropSymName, PropObjName, PropObjShortName, PropTemplateId},
+    properties::{Property, PropSymName, PropObjName, PropObjShortName, PropTemplateId, PropScripts, Link},
 };
 
 #[derive(Debug, Clone)]
@@ -52,6 +52,9 @@ pub struct EntitySummary {
     pub link_count: usize,
     pub parsed_properties: Vec<String>,
     pub unparsed_properties: Vec<String>,
+    pub link_types: Vec<String>,
+    pub script_names: Vec<String>,
+    pub matched_items: Vec<String>, // What actually matched the filter
 }
 
 #[derive(Debug, Clone)]
@@ -186,14 +189,159 @@ fn get_property_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
         .map(|prop| {
             // Try to extract the property type name from the debug representation
             let debug_str = format!("{:?}", prop.as_ref());
-            if debug_str.starts_with("Prop") {
-                // Extract just the property name part
-                debug_str.split('(').next().unwrap_or(&debug_str).to_string()
+
+            // Handle WrappedProperty format
+            let prop_str = if debug_str.starts_with("WrappedProperty { inner_property: ") {
+                if let Some(start) = debug_str.find("inner_property: ") {
+                    let remaining = &debug_str[start + 16..];
+                    if let Some(end) = remaining.find(", accumulator:") {
+                        remaining[..end].to_string()
+                    } else {
+                        remaining.to_string()
+                    }
+                } else {
+                    debug_str.clone()
+                }
             } else {
-                debug_str
+                debug_str.clone()
+            };
+
+            // Extract just the property type name (before the opening parenthesis)
+            if prop_str.starts_with("Prop") {
+                prop_str.split('(').next().unwrap_or(&prop_str).to_string()
+            } else {
+                prop_str
             }
         })
         .collect()
+}
+
+/// Get property type names with inheritance support - walks up the hierarchy to collect all properties
+fn get_property_names_with_inheritance(
+    entity_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> Vec<String> {
+    let mut all_properties = Vec::new();
+
+    // Collect direct properties
+    if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
+        all_properties.extend(get_property_names(properties));
+    }
+
+    // Walk up the inheritance hierarchy
+    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+    let ancestors = ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+
+    for ancestor_id in ancestors.iter().rev() {
+        if let Some(properties) = entity_info.entity_to_properties.get(ancestor_id) {
+            all_properties.extend(get_property_names(properties));
+        }
+    }
+
+    // Remove duplicates while preserving order
+    let mut seen = std::collections::HashSet::new();
+    all_properties.into_iter().filter(|prop| seen.insert(prop.clone())).collect()
+}
+
+/// Get link type names from the entity's links
+fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<String> {
+    if let Some(template_links) = entity_info.template_to_links.get(&entity_id) {
+        let link_types: Vec<String> = template_links.to_links.iter()
+            .map(|link| {
+                match &link.link {
+                    Link::SwitchLink => "SwitchLink".to_string(),
+                    Link::Contains(_) => "Contains".to_string(),
+                    Link::Flinderize(_) => "Flinderize".to_string(),
+                    Link::AIWatchObj(_) => "AIWatchObj".to_string(),
+                    Link::Projectile(_) => "Projectile".to_string(),
+                    Link::Corpse(_) => "Corpse".to_string(),
+                    Link::AIProjectile(_) => "AIProjectile".to_string(),
+                    Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
+                    Link::GunFlash(_) => "GunFlash".to_string(),
+                    Link::LandingPoint => "LandingPoint".to_string(),
+                    Link::Replicator => "Replicator".to_string(),
+                    Link::MissSpang => "MissSpang".to_string(),
+                    Link::TPathInit => "TPathInit".to_string(),
+                    Link::TPath(_) => "TPath".to_string(),
+                }
+            })
+            .collect();
+
+        link_types
+    } else {
+        vec![]
+    }
+}
+
+/// Get link type names with inheritance support - walks up the hierarchy to collect all link types
+fn get_link_types_with_inheritance(
+    entity_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> Vec<String> {
+    let mut all_link_types = Vec::new();
+
+    // Collect direct link types
+    all_link_types.extend(get_link_types(entity_id, entity_info));
+
+    // Walk up the inheritance hierarchy
+    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+    let ancestors = ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+
+    for ancestor_id in ancestors.iter().rev() {
+        all_link_types.extend(get_link_types(*ancestor_id, entity_info));
+    }
+
+    // Remove duplicates while preserving order
+    let mut seen = std::collections::HashSet::new();
+    all_link_types.into_iter().filter(|link_type| seen.insert(link_type.clone())).collect()
+}
+
+/// Extract script names from properties
+fn get_script_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
+    // Create a temporary world to extract script information
+    let mut world = World::new();
+    let entity = world.add_entity(());
+
+    // Initialize all properties into the world
+    for prop in properties {
+        prop.initialize(&mut world, entity);
+    }
+
+    // Try to get script property
+    if let Ok(view) = world.borrow::<View<PropScripts>>() {
+        if let Ok(scripts_prop) = view.get(entity) {
+            return scripts_prop.scripts.clone();
+        }
+    }
+
+    vec![]
+}
+
+/// Get script names with inheritance support - walks up the hierarchy to collect all scripts
+fn get_script_names_with_inheritance(
+    entity_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> Vec<String> {
+    let mut all_scripts = Vec::new();
+
+    // Collect direct scripts
+    if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
+        all_scripts.extend(get_script_names(properties));
+    }
+
+    // Walk up the inheritance hierarchy
+    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+    let ancestors = ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+
+    for ancestor_id in ancestors.iter().rev() {
+        if let Some(properties) = entity_info.entity_to_properties.get(ancestor_id) {
+            all_scripts.extend(get_script_names(properties));
+        }
+    }
+
+    // Remove duplicates while preserving order
+    let mut seen = std::collections::HashSet::new();
+    all_scripts.into_iter().filter(|script| seen.insert(script.clone())).collect()
 }
 
 /// Analyze all entities and create summaries
@@ -237,7 +385,9 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
             .map(|links| links.to_links.len())
             .unwrap_or(0);
 
-        let parsed_properties = get_property_names(properties);
+        let parsed_properties = get_property_names_with_inheritance(*entity_id, entity_info);
+        let link_types = get_link_types_with_inheritance(*entity_id, entity_info);
+        let script_names = get_script_names_with_inheritance(*entity_id, entity_info);
 
         summaries.push(EntitySummary {
             id: *entity_id,
@@ -249,6 +399,9 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
             link_count,
             parsed_properties,
             unparsed_properties,
+            link_types,
+            script_names,
+            matched_items: Vec::new(), // Initially empty, populated during filtering
         });
     }
 
@@ -260,6 +413,7 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
 /// Apply filters to entity summaries
 pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -> Vec<EntitySummary> {
     let mut filtered = summaries.to_vec();
+
 
     // Apply unparsed filter
     if criteria.only_unparsed {
@@ -301,18 +455,126 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
                 }
             });
         } else {
-            // Property name matching only
-            let prop_glob = Pattern::new(filter_pattern).ok();
-            filtered.retain(|summary| {
-                if let Some(glob) = &prop_glob {
-                    summary.parsed_properties.iter().any(|prop| glob.matches(prop)) ||
-                    summary.unparsed_properties.iter().any(|prop| glob.matches(prop))
-                } else {
-                    // Fallback to simple contains matching
-                    summary.parsed_properties.iter().any(|prop| prop.contains(filter_pattern)) ||
-                    summary.unparsed_properties.iter().any(|prop| prop.contains(filter_pattern))
-                }
-            });
+            // Check for link filtering (L$LinkType)
+            if filter_pattern.starts_with("L$") {
+                let link_pattern = &filter_pattern[2..]; // Remove "L$" prefix
+                let link_glob = Pattern::new(link_pattern).ok();
+                filtered.retain_mut(|summary| {
+                    let mut matches = Vec::new();
+
+                    if let Some(glob) = &link_glob {
+                        for link_type in &summary.link_types {
+                            if glob.matches(link_type) {
+                                matches.push(format!("L${}", link_type));
+                            }
+                        }
+                    } else {
+                        for link_type in &summary.link_types {
+                            if link_type.contains(link_pattern) {
+                                matches.push(format!("L${}", link_type));
+                            }
+                        }
+                    }
+
+                    if !matches.is_empty() {
+                        summary.matched_items = matches;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+            // Check for script filtering (S$ScriptName)
+            else if filter_pattern.starts_with("S$") {
+                let script_pattern = &filter_pattern[2..]; // Remove "S$" prefix
+                let script_glob = Pattern::new(script_pattern).ok();
+                filtered.retain_mut(|summary| {
+                    let mut matches = Vec::new();
+
+                    if let Some(glob) = &script_glob {
+                        for script in &summary.script_names {
+                            if glob.matches(script) {
+                                matches.push(format!("S${}", script));
+                            }
+                        }
+                    } else {
+                        for script in &summary.script_names {
+                            if script.contains(script_pattern) {
+                                matches.push(format!("S${}", script));
+                            }
+                        }
+                    }
+
+                    if !matches.is_empty() {
+                        summary.matched_items = matches;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+            // No prefix: search across all categories (properties, links, scripts)
+            else {
+                let glob = Pattern::new(filter_pattern).ok();
+                filtered.retain_mut(|summary| {
+                    let mut matches = Vec::new();
+
+                    if let Some(g) = &glob {
+                        // Check properties (use cleaned property names)
+                        for prop in &summary.parsed_properties {
+                            if g.matches(prop) {
+                                matches.push(prop.clone());
+                            }
+                        }
+                        for prop in &summary.unparsed_properties {
+                            if g.matches(prop) {
+                                matches.push(prop.clone());
+                            }
+                        }
+                        // Check link types
+                        for link_type in &summary.link_types {
+                            if g.matches(link_type) {
+                                matches.push(format!("L${}", link_type));
+                            }
+                        }
+                        // Check script names
+                        for script in &summary.script_names {
+                            if g.matches(script) {
+                                matches.push(format!("S${}", script));
+                            }
+                        }
+                    } else {
+                        // Fallback to simple contains matching across all categories
+                        for prop in &summary.parsed_properties {
+                            if prop.contains(filter_pattern) {
+                                matches.push(prop.clone());
+                            }
+                        }
+                        for prop in &summary.unparsed_properties {
+                            if prop.contains(filter_pattern) {
+                                matches.push(prop.clone());
+                            }
+                        }
+                        for link_type in &summary.link_types {
+                            if link_type.contains(filter_pattern) {
+                                matches.push(format!("L${}", link_type));
+                            }
+                        }
+                        for script in &summary.script_names {
+                            if script.contains(filter_pattern) {
+                                matches.push(format!("S${}", script));
+                            }
+                        }
+                    }
+
+                    if !matches.is_empty() {
+                        summary.matched_items = matches;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
         }
     }
 

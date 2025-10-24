@@ -117,7 +117,7 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
 
     // Print header
     if show_filter_details {
-        println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | Matched Properties",
+        println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | Matched Items",
                  "ID", "Type", "Names", "Template", "Props", "Links", "Unparsed");
         println!("{:-<8}-+-{:-<8}-+-{:-<40}-+-{:-<8}-+-{:-<5}-+-{:-<5}-+-{:-<8}-+{:-<20}",
                  "", "", "", "", "", "", "", "");
@@ -148,17 +148,17 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
         let unparsed_display = if summary.has_unparsed_data { "Yes" } else { "No" };
 
         if show_filter_details {
-            let matched_props = summary.parsed_properties.join(", ");
-            let matched_props_display = if matched_props.len() > 20 {
-                format!("{}...", &matched_props[..17])
+            let matched_items = summary.matched_items.join(", ");
+            let matched_display = if matched_items.len() > 25 {
+                format!("{}...", &matched_items[..22])
             } else {
-                matched_props
+                matched_items
             };
 
             println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8} | {}",
                      summary.id, entity_type, names_display, template_display,
                      summary.property_count, summary.link_count, unparsed_display,
-                     matched_props_display);
+                     matched_display);
         } else {
             println!("{:<8} | {:<8} | {:<40} | {:<8} | {:<5} | {:<5} | {:<8}",
                      summary.id, entity_type, names_display, template_display,
