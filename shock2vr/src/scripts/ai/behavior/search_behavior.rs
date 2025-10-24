@@ -2,6 +2,7 @@ use dark::motion::MotionQueryItem;
 
 use super::Behavior;
 
+#[allow(dead_code)]
 pub struct SearchBehavior;
 
 impl Behavior for SearchBehavior {

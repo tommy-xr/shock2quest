@@ -15,6 +15,7 @@ pub trait VisibilityEngine {
     }
 }
 
+#[allow(dead_code)]
 pub struct AlwaysVisible;
 
 impl VisibilityEngine for AlwaysVisible {
@@ -23,6 +24,7 @@ impl VisibilityEngine for AlwaysVisible {
     }
 }
 
+#[allow(dead_code)]
 pub struct NeverVisible;
 
 impl VisibilityEngine for NeverVisible {

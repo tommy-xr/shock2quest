@@ -43,6 +43,7 @@ pub struct EntityCreationInfo {
     pub model: Option<(Model, Option<AnimationPlayer>)>,
     pub bitmap_animation: Option<Rc<BitmapAnimation>>,
     pub rigid_body: Option<RigidBodyHandle>,
+    #[allow(dead_code)]
     pub scripts: Vec<String>,
 }
 

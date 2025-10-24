@@ -13,6 +13,7 @@ use shipyard::Component;
 
 // RuntimePropGazeAmount - track how much the player is gazing at a prop
 #[derive(Component)]
+#[allow(dead_code)]
 pub struct RuntimePropGazeAmount(pub f32);
 
 #[derive(Component)]

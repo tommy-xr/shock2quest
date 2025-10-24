@@ -3,6 +3,9 @@ name = "shock2vr"
 version = "0.0.1"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [lib]
 name = "shock2vr"
 path = "src/lib.rs"

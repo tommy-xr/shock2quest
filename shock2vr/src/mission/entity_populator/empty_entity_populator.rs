@@ -11,13 +11,10 @@ use dark::ss2_entity_info::SystemShock2EntityInfo;
 
 use super::EntityPopulator;
 
+#[allow(dead_code)]
 pub struct EmptyEntityPopulator {}
 
-impl EmptyEntityPopulator {
-    pub fn create() -> EmptyEntityPopulator {
-        EmptyEntityPopulator {}
-    }
-}
+impl EmptyEntityPopulator {}
 
 impl EntityPopulator for EmptyEntityPopulator {
     fn populate(

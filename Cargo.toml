@@ -14,3 +14,9 @@ members = [
     "tools/shodan",
     "tools/dark_viewer",
 ]
+
+[workspace.lints.rust]
+# Suppress non-local-definitions warning caused by num_derive macros (FromPrimitive/ToPrimitive)
+# This is a known issue with the num_derive crate and is safe to suppress
+# See: https://github.com/rust-num/num-derive/issues
+non_local_definitions = "allow"

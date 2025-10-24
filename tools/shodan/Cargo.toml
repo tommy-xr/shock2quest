@@ -3,6 +3,12 @@ name = "shodan"
 version = "0.1.0"
 edition = "2021"
 
+[lints.rust]
+# Shodan is a development tool with many experimental features that may not be used yet
+dead_code = "allow"
+# Suppress non-local-definitions warning caused by num_derive macros (FromPrimitive/ToPrimitive)
+non_local_definitions = "allow"
+
 [[bin]]
 name = "shodan"
 path = "src/main.rs"

@@ -16,10 +16,15 @@ use crate::util::has_refs;
 use super::{CullingInfo, VisibilityEngine};
 
 pub struct PortalDebugInfo {
+    #[allow(dead_code)]
     from_cell: u32,
+    #[allow(dead_code)]
     to_cell: u32,
+    #[allow(dead_code)]
     screen_bbox: Aabb2<f32>,
+    #[allow(dead_code)]
     vertices: Vec<Point3<f32>>,
+    #[allow(dead_code)]
     is_visible: bool,
 }
 
@@ -28,11 +33,13 @@ pub struct PortalVisibilityEngine {
     /// Cache of the cell that each entity is in
     ///
     /// If the position hasn't changed, no need to recompute the cell position
+    #[allow(dead_code)]
     entity_cell_cache: HashMap<EntityId, (Vector3<f32>, Option<u32>)>,
 
     is_visible: HashMap<EntityId, bool>,
 
     debug_portals: Vec<PortalDebugInfo>,
+    #[allow(dead_code)]
     is_debug: bool,
 }
 
@@ -175,6 +182,7 @@ impl PortalVisibilityEngine {
         }
     }
 
+    #[allow(dead_code)]
     fn get_cell_from_position(
         &mut self,
         level: &SystemShock2Level,

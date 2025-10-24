@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use util::*;
 
 use bitflags::bitflags;
-use cgmath::{point3, InnerSpace, Matrix4, Point3, Quaternion, Vector3};
+use cgmath::{point3, InnerSpace, Point3, Quaternion, Vector3};
 use dark::{mission::SystemShock2Level, SCALE_FACTOR};
 use engine::scene::SceneObject;
 use rapier3d::{
@@ -49,12 +49,6 @@ impl Default for DynamicPhysicsOptions {
 pub struct CollisionGroup(InteractionGroups);
 
 impl CollisionGroup {
-    pub fn world() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
-            memberships: InternalCollisionGroups::WORLD.bits.into(),
-            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
-        })
-    }
 
     pub fn hitbox() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
@@ -83,13 +77,6 @@ impl CollisionGroup {
         })
     }
 
-    pub fn projectile() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
-            memberships: InternalCollisionGroups::RAYCAST.bits.into(),
-            filter: (InternalCollisionGroups::WORLD.bits | InternalCollisionGroups::HITBOX.bits)
-                .into(),
-        })
-    }
 
     pub fn selectable() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
@@ -217,22 +204,6 @@ impl PhysicsWorld {
         }
     }
 
-    pub fn set_transform2(&mut self, entity_id: EntityId, transform: Matrix4<f32>) {
-        if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
-            let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);
-
-            if let Some(rigid_body) = maybe_rigid_body {
-                let xform = mat_to_nmat(transform);
-                if rigid_body.is_kinematic() {
-                    rigid_body.set_next_kinematic_position(xform);
-                } else {
-                    rigid_body.set_position(xform, true);
-                    rigid_body.reset_torques(true);
-                    rigid_body.reset_forces(true);
-                }
-            }
-        }
-    }
 
     pub fn set_position_rotation(
         &mut self,
@@ -305,19 +276,6 @@ impl PhysicsWorld {
         }
     }
 
-    pub fn get_size(&self, handle: RigidBodyHandle) -> Option<f32> {
-        let maybe_rigid_body = self.rigid_body_set.get(handle);
-        maybe_rigid_body.map(|rigid_body| {
-            let character_collider = &self.collider_set[rigid_body.colliders()[0]];
-            let aabb = character_collider.compute_aabb();
-
-            let size0 = (aabb.maxs[0] - aabb.mins[0]).abs();
-            let size1 = (aabb.maxs[1] - aabb.mins[1]).abs();
-            let size2 = (aabb.maxs[2] - aabb.mins[2]).abs();
-
-            size0.max(size1).max(size2)
-        })
-    }
 
     pub fn clear_forces(&mut self) {
         for rigid_body_handle in &self.rigid_bodies_with_forces {
@@ -359,15 +317,6 @@ impl PhysicsWorld {
         character_body.set_translation(vec_to_nvec(position), true)
     }
 
-    pub fn get_position2(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
-        if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
-            let maybe_rigid_body = self.rigid_body_set.get(*handle);
-
-            maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.translation()))
-        } else {
-            None
-        }
-    }
 
     pub fn get_aabb2(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
@@ -391,11 +340,6 @@ impl PhysicsWorld {
         maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.translation()))
     }
 
-    pub fn get_angular_velocity(&self, handle: RigidBodyHandle) -> Option<Vector3<f32>> {
-        let maybe_rigid_body = self.rigid_body_set.get(handle);
-
-        maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.angvel()))
-    }
 
     pub fn get_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
@@ -495,7 +439,6 @@ impl PhysicsWorld {
                     .restitution(0.7)
                     .build()
             }
-            _ => panic!("Unknown shape"),
         };
 
         self.entity_id_to_body.insert(entity_id, *handle);

@@ -3,13 +3,12 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
-use crate::scene::light::{Light, LightType};
+use crate::scene::light::Light;
 use crate::scene::Material;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;
 use c_string::*;
-use cgmath::num_traits::ToPrimitive;
 use cgmath::prelude::*;
 use cgmath::Matrix4;
 
@@ -173,7 +172,9 @@ impl SkinnedMaterial {
         skinning_data: &[Matrix4<f32>],
         lights: &crate::scene::light::LightArray,
     ) {
-        let (shader_program, uniforms) = UNIFIED_SHADER_PROGRAM.get().expect("unified shader not compiled");
+        let (shader_program, uniforms) = UNIFIED_SHADER_PROGRAM
+            .get()
+            .expect("unified shader not compiled");
         self.diffuse_texture.bind0(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
@@ -210,13 +211,30 @@ impl SkinnedMaterial {
                         color_intensity.z,
                         color_intensity.w,
                     );
-                    gl::Uniform3f(uniforms.spotlight_direction_loc[i], direction.x, direction.y, direction.z);
-                    gl::Uniform1f(uniforms.spotlight_inner_angle_loc[i], spotlight.inner_cone_angle);
-                    gl::Uniform1f(uniforms.spotlight_outer_angle_loc[i], spotlight.outer_cone_angle);
+                    gl::Uniform3f(
+                        uniforms.spotlight_direction_loc[i],
+                        direction.x,
+                        direction.y,
+                        direction.z,
+                    );
+                    gl::Uniform1f(
+                        uniforms.spotlight_inner_angle_loc[i],
+                        spotlight.inner_cone_angle,
+                    );
+                    gl::Uniform1f(
+                        uniforms.spotlight_outer_angle_loc[i],
+                        spotlight.outer_cone_angle,
+                    );
                     gl::Uniform1f(uniforms.spotlight_range_loc[i], spotlight.range);
                 } else {
                     // Disable this light slot by setting intensity to 0
-                    gl::Uniform4f(uniforms.spotlight_color_intensity_loc[i], 0.0, 0.0, 0.0, 0.0);
+                    gl::Uniform4f(
+                        uniforms.spotlight_color_intensity_loc[i],
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    );
                 }
             }
         }
@@ -257,11 +275,20 @@ impl Material for SkinnedMaterial {
                     // Basic transformation matrices
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
-                    projection_loc: gl::GetUniformLocation(shader.gl_id, c_str!("projection").as_ptr()),
+                    projection_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("projection").as_ptr(),
+                    ),
 
                     // Material properties
-                    emissivity_loc: gl::GetUniformLocation(shader.gl_id, c_str!("emissivity").as_ptr()),
-                    transparency_loc: gl::GetUniformLocation(shader.gl_id, c_str!("transparency").as_ptr()),
+                    emissivity_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("emissivity").as_ptr(),
+                    ),
+                    transparency_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("transparency").as_ptr(),
+                    ),
 
                     // Bone matrices
                     bone_matrices_locs,
@@ -276,36 +303,108 @@ impl Material for SkinnedMaterial {
                         gl::GetUniformLocation(shader.gl_id, c_str!("spotlightPos[5]").as_ptr()),
                     ],
                     spotlight_color_intensity_loc: [
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightColorIntensity[0]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightColorIntensity[1]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightColorIntensity[2]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightColorIntensity[3]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightColorIntensity[4]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightColorIntensity[5]").as_ptr()),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightColorIntensity[0]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightColorIntensity[1]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightColorIntensity[2]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightColorIntensity[3]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightColorIntensity[4]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightColorIntensity[5]").as_ptr(),
+                        ),
                     ],
                     spotlight_direction_loc: [
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightDirection[0]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightDirection[1]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightDirection[2]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightDirection[3]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightDirection[4]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightDirection[5]").as_ptr()),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightDirection[0]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightDirection[1]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightDirection[2]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightDirection[3]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightDirection[4]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightDirection[5]").as_ptr(),
+                        ),
                     ],
                     spotlight_inner_angle_loc: [
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightInnerAngle[0]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightInnerAngle[1]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightInnerAngle[2]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightInnerAngle[3]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightInnerAngle[4]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightInnerAngle[5]").as_ptr()),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightInnerAngle[0]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightInnerAngle[1]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightInnerAngle[2]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightInnerAngle[3]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightInnerAngle[4]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightInnerAngle[5]").as_ptr(),
+                        ),
                     ],
                     spotlight_outer_angle_loc: [
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightOuterAngle[0]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightOuterAngle[1]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightOuterAngle[2]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightOuterAngle[3]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightOuterAngle[4]").as_ptr()),
-                        gl::GetUniformLocation(shader.gl_id, c_str!("spotlightOuterAngle[5]").as_ptr()),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightOuterAngle[0]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightOuterAngle[1]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightOuterAngle[2]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightOuterAngle[3]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightOuterAngle[4]").as_ptr(),
+                        ),
+                        gl::GetUniformLocation(
+                            shader.gl_id,
+                            c_str!("spotlightOuterAngle[5]").as_ptr(),
+                        ),
                     ],
                     spotlight_range_loc: [
                         gl::GetUniformLocation(shader.gl_id, c_str!("spotlightRange[0]").as_ptr()),
@@ -332,7 +431,13 @@ impl Material for SkinnedMaterial {
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
         if !self.is_transparent() {
-            self.draw_unified(render_context, view_matrix, world_matrix, _skinning_data, _lights);
+            self.draw_unified(
+                render_context,
+                view_matrix,
+                world_matrix,
+                _skinning_data,
+                _lights,
+            );
             true
         } else {
             false
@@ -348,13 +453,18 @@ impl Material for SkinnedMaterial {
         _lights: &crate::scene::light::LightArray,
     ) -> bool {
         if self.is_transparent() {
-            self.draw_unified(render_context, view_matrix, world_matrix, _skinning_data, _lights);
+            self.draw_unified(
+                render_context,
+                view_matrix,
+                world_matrix,
+                _skinning_data,
+                _lights,
+            );
             true
         } else {
             false
         }
     }
-
 }
 
 impl SkinnedMaterial {

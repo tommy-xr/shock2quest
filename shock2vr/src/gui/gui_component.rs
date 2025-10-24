@@ -447,6 +447,7 @@ impl GuiComponentRenderInfo {
 
 #[derive(Clone, Debug)]
 pub struct GuiInputInfo {
+    #[allow(dead_code)]
     pub(crate) held_entity_id: Option<EntityId>,
     pub(crate) cursor_position: Point2<f32>,
     pub(crate) is_pressed: bool,

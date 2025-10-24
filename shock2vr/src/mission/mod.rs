@@ -123,6 +123,7 @@ pub struct EntityMetadata {
     pub template_id: i32,
     pub obj_icon: Option<String>,
     pub obj_short_name: Option<String>,
+    #[allow(dead_code)]
     pub obj_name: Option<String>,
 }
 
@@ -158,6 +159,7 @@ pub struct Mission {
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
     pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
+    #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
     pub world: World,
