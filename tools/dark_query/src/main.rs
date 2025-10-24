@@ -169,53 +169,113 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
     println!("\nTotal: {} entities", summaries.len());
 }
 
-fn handle_show_command(mission: Option<&str>, entity_id: i32, filter: Option<&str>) -> Result<()> {
+fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&str>) -> Result<()> {
     info!("Loading entity data...");
     let entity_info = load_entity_data(mission)?;
 
     // Find the specific entity
-    if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
-        println!("Entity ID: {}", entity_id);
-
+    if let Some(_properties) = entity_info.entity_to_properties.get(&entity_id) {
         let entity_type = if entity_id < 0 {
             "Template"
         } else {
             "Entity"
         };
-        println!("Type: {}", entity_type);
 
-        // Extract names directly from this entity's properties
-        let direct_names = entity_analyzer::extract_names_public(properties);
-        println!("Direct Names: {}", direct_names.display_names());
+        println!("=== {} {} ===", entity_type, entity_id);
 
         // Extract names with inheritance
         let inherited_names = entity_analyzer::extract_names_with_inheritance(entity_id, &entity_info);
-        println!("Inherited Names: {}", inherited_names.display_names());
+        println!("Name: {}", inherited_names.display_names());
 
-        // Extract template ID
-        let template_id = entity_analyzer::extract_template_id_public(properties);
+        // Extract template ID with inheritance
+        let template_id = entity_analyzer::extract_template_id_with_inheritance(entity_id, &entity_info);
         if let Some(tid) = template_id {
-            println!("Template ID: {}", tid);
-        } else {
-            println!("Template ID: None");
+            println!("Template: {}", tid);
         }
 
-        // Show inheritance hierarchy
-        let hierarchy = dark::ss2_entity_info::get_hierarchy(&entity_info);
-        let ancestors = dark::ss2_entity_info::get_ancestors(hierarchy, &entity_id);
-        println!("Inheritance Chain: {:?}", ancestors);
+        println!();
 
-        // Show all properties
-        println!("\nProperties ({}):", properties.len());
-        for (i, prop) in properties.iter().enumerate() {
-            println!("  {}: {:?}", i + 1, prop);
-        }
-
-        // TODO: Show inherited properties by walking inheritance chain
+        // Show inheritance hierarchy as a tree
+        show_inheritance_tree(entity_id, &entity_info);
 
     } else {
         println!("Entity {} not found", entity_id);
     }
 
     Ok(())
+}
+
+fn show_inheritance_tree(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {
+    println!("Inheritance Tree:");
+
+    // Get the inheritance chain
+    let hierarchy = dark::ss2_entity_info::get_hierarchy(entity_info);
+    let ancestors = dark::ss2_entity_info::get_ancestors(hierarchy, &entity_id);
+
+    // Build the full chain from most general to most specific
+    let mut full_chain = ancestors.clone();
+    full_chain.reverse(); // Now goes from most general to most specific
+    full_chain.push(entity_id); // Add the entity itself at the end
+
+    // Display each level in the tree
+    for (depth, &current_id) in full_chain.iter().enumerate() {
+        let indent = "  ".repeat(depth);
+
+        // Get entity info
+        let entity_type = if current_id < 0 { "Template" } else { "Entity" };
+        let names = entity_analyzer::extract_names_public(
+            entity_info.entity_to_properties.get(&current_id).unwrap_or(&vec![])
+        );
+
+        let name_display = if names.sym_name.is_some() || names.obj_name.is_some() || names.obj_short_name.is_some() {
+            names.display_names()
+        } else {
+            "<no name>".to_string()
+        };
+
+        println!("{}├─ {} {} ({})", indent, entity_type, current_id, name_display);
+
+        // Show properties for this entity
+        if let Some(properties) = entity_info.entity_to_properties.get(&current_id) {
+            show_properties_for_entity(current_id, properties, depth + 1);
+        }
+
+        println!();
+    }
+}
+
+fn show_properties_for_entity(_entity_id: i32, properties: &[std::rc::Rc<Box<dyn dark::properties::Property>>], depth: usize) {
+    let indent = "  ".repeat(depth);
+
+    println!("{}Properties ({}):", indent, properties.len());
+
+    for (i, prop) in properties.iter().enumerate() {
+        let prop_debug = format!("{:?}", prop);
+
+        // Extract a more comprehensive property representation
+        let prop_display = if prop_debug.starts_with("WrappedProperty { inner_property: ") {
+            if let Some(start) = prop_debug.find("inner_property: ") {
+                let remaining = &prop_debug[start + 16..];
+                if let Some(end) = remaining.find(", accumulator:") {
+                    remaining[..end].to_string()
+                } else {
+                    // Fallback to the full remaining string
+                    remaining.to_string()
+                }
+            } else {
+                prop_debug
+            }
+        } else {
+            prop_debug
+        };
+
+        // Truncate very long property displays for readability
+        let display = if prop_display.len() > 80 {
+            format!("{}...", &prop_display[..77])
+        } else {
+            prop_display
+        };
+
+        println!("{}  {}. {}", indent, i + 1, display);
+    }
 }
