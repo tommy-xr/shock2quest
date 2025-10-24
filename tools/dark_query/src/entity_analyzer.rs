@@ -183,6 +183,64 @@ fn extract_template_id(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
     None
 }
 
+/// Get a set of all known P$ property names from the property definitions
+fn get_known_p_property_names() -> std::collections::HashSet<String> {
+    let mut p_names = std::collections::HashSet::new();
+
+    // Get the property definitions - we only need the names
+    let (properties, _links, _links_with_data) = dark::properties::get::<std::io::Cursor<Vec<u8>>>();
+
+    for prop_def in properties {
+        let original_name = prop_def.name();
+        if original_name.starts_with("P$") {
+            p_names.insert(original_name);
+        }
+    }
+
+    p_names
+}
+
+/// Check if a filter pattern could match a property name in either cleaned or P$ form
+fn property_matches_pattern(clean_prop_name: &str, pattern: &str, known_p_names: &std::collections::HashSet<String>) -> bool {
+    // Check if the pattern matches the clean name directly
+    if clean_prop_name.contains(pattern) {
+        return true;
+    }
+
+    // Check if the pattern is a P$ name and matches this property
+    if pattern.starts_with("P$") && known_p_names.contains(pattern) {
+        // Simple heuristic: check if the pattern could correspond to this clean name
+        // For example, P$FrobInfo should match PropFrobInfo
+        let pattern_part = &pattern[2..]; // Remove "P$"
+        if clean_prop_name.starts_with("Prop") && clean_prop_name[4..].contains(pattern_part) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if a glob pattern could match a property name in either cleaned or P$ form
+fn property_matches_glob(clean_prop_name: &str, glob: &Pattern, known_p_names: &std::collections::HashSet<String>) -> bool {
+    // Check if the glob matches the clean name directly
+    if glob.matches(clean_prop_name) {
+        return true;
+    }
+
+    // Check if any P$ name would match and correspond to this property
+    for p_name in known_p_names {
+        if glob.matches(p_name) {
+            // Simple heuristic: check if this P$ name could correspond to the clean name
+            let pattern_part = &p_name[2..]; // Remove "P$"
+            if clean_prop_name.starts_with("Prop") && clean_prop_name[4..].contains(pattern_part) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Get property type names from the property list
 fn get_property_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
     properties.iter()
@@ -206,9 +264,13 @@ fn get_property_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
                 debug_str.clone()
             };
 
-            // Extract just the property type name (before the opening parenthesis)
+            // Extract just the property type name (before the opening parenthesis or space/brace)
             if prop_str.starts_with("Prop") {
-                prop_str.split('(').next().unwrap_or(&prop_str).to_string()
+                // Split on multiple possible delimiters: '(', ' ', '{'
+                prop_str.split(['(', ' ', '{'])
+                    .next()
+                    .unwrap_or(&prop_str)
+                    .to_string()
             } else {
                 prop_str
             }
@@ -414,6 +476,9 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
 pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -> Vec<EntitySummary> {
     let mut filtered = summaries.to_vec();
 
+    // Get known P$ property names for dual-name support
+    let known_p_names = get_known_p_property_names();
+
 
     // Apply unparsed filter
     if criteria.only_unparsed {
@@ -425,34 +490,65 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
         // Handle property value matching (e.g., "P$SymName:*Robot*")
         if let Some((prop_name, value_pattern)) = filter_pattern.split_once(':') {
             let value_glob = Pattern::new(value_pattern).ok();
-            filtered.retain(|summary| {
+            filtered.retain_mut(|summary| {
+                let mut matches = false;
+
                 match prop_name {
                     "P$SymName" => {
                         if let Some(sym_name) = &summary.names.sym_name {
-                            value_glob.as_ref().map_or(false, |g| g.matches(sym_name))
-                        } else {
-                            false
+                            if value_glob.as_ref().map_or(false, |g| g.matches(sym_name)) {
+                                summary.matched_items = vec![format!("P$SymName:{}", sym_name)];
+                                matches = true;
+                            }
                         }
                     }
                     "P$ObjName" => {
                         if let Some(obj_name) = &summary.names.obj_name {
-                            value_glob.as_ref().map_or(false, |g| g.matches(obj_name))
-                        } else {
-                            false
+                            if value_glob.as_ref().map_or(false, |g| g.matches(obj_name)) {
+                                summary.matched_items = vec![format!("P$ObjName:{}", obj_name)];
+                                matches = true;
+                            }
                         }
                     }
                     "P$ObjShortName" => {
                         if let Some(short_name) = &summary.names.obj_short_name {
-                            value_glob.as_ref().map_or(false, |g| g.matches(short_name))
+                            if value_glob.as_ref().map_or(false, |g| g.matches(short_name)) {
+                                summary.matched_items = vec![format!("P$ObjShortName:{}", short_name)];
+                                matches = true;
+                            }
+                        }
+                    }
+                    "P$Scripts" => {
+                        // Check if any script names match the pattern
+                        let matching_scripts: Vec<String> = if let Some(glob) = &value_glob {
+                            summary.script_names.iter()
+                                .filter(|script| glob.matches(script))
+                                .map(|script| format!("P$Scripts:{}", script))
+                                .collect()
                         } else {
-                            false
+                            summary.script_names.iter()
+                                .filter(|script| script.contains(value_pattern))
+                                .map(|script| format!("P$Scripts:{}", script))
+                                .collect()
+                        };
+
+                        if !matching_scripts.is_empty() {
+                            summary.matched_items = matching_scripts;
+                            matches = true;
                         }
                     }
                     _ => {
-                        // Check if the property name matches and any value exists
-                        summary.parsed_properties.iter().any(|p| p.contains(prop_name.trim_start_matches("P$")))
+                        // For other properties, just check if the property name exists
+                        let prop_exists = summary.parsed_properties.iter()
+                            .any(|p| p.contains(prop_name.trim_start_matches("P$")));
+                        if prop_exists {
+                            summary.matched_items = vec![prop_name.to_string()];
+                            matches = true;
+                        }
                     }
                 }
+
+                matches
             });
         } else {
             // Check for link filtering (L$LinkType)
@@ -520,10 +616,10 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
                     let mut matches = Vec::new();
 
                     if let Some(g) = &glob {
-                        // Check properties (use cleaned property names)
+                        // Check properties (check both cleaned and original P$ names)
                         for prop in &summary.parsed_properties {
-                            if g.matches(prop) {
-                                matches.push(prop.clone());
+                            if property_matches_glob(prop, g, &known_p_names) {
+                                matches.push(prop.clone()); // Always show the clean property name
                             }
                         }
                         for prop in &summary.unparsed_properties {
@@ -546,8 +642,8 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
                     } else {
                         // Fallback to simple contains matching across all categories
                         for prop in &summary.parsed_properties {
-                            if prop.contains(filter_pattern) {
-                                matches.push(prop.clone());
+                            if property_matches_pattern(prop, filter_pattern, &known_p_names) {
+                                matches.push(prop.clone()); // Always show the clean property name
                             }
                         }
                         for prop in &summary.unparsed_properties {

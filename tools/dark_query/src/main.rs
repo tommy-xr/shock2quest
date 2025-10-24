@@ -279,14 +279,8 @@ fn show_properties_for_entity(_entity_id: i32, properties: &[std::rc::Rc<Box<dyn
             prop_debug
         };
 
-        // Truncate very long property displays for readability
-        let display = if prop_display.len() > 80 {
-            format!("{}...", &prop_display[..77])
-        } else {
-            prop_display
-        };
-
-        println!("{}  {}. {}", indent, i + 1, display);
+        // Show full property display without truncation
+        println!("{}  {}. {}", indent, i + 1, prop_display);
     }
 }
 
