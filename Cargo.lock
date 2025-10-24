@@ -808,6 +808,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dark_query"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dark",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dark_viewer"
 version = "0.1.0"
 dependencies = [

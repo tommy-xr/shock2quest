@@ -1,0 +1,17 @@
+[package]
+name = "dark_query"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dark_query"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dark = { path = "../../dark" }
+clap = { version = "4.5.4", features = ["derive"] }
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
+anyhow = "1.0"

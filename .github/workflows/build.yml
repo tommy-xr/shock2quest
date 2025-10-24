@@ -86,3 +86,13 @@ jobs:
         run: cargo test --verbose -p dark_viewer
         env:
           RUSTFLAGS: "-D warnings"
+
+      # Build and test dark_query tool
+      - name: Build dark_query tool
+        run: cargo build --verbose --release -p dark_query
+        env:
+          RUSTFLAGS: "-D warnings"
+      - name: Run dark_query tests
+        run: cargo test --verbose -p dark_query
+        env:
+          RUSTFLAGS: "-D warnings"

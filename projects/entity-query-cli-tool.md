@@ -29,7 +29,7 @@ Ultimately we want to be able to show the main data for all entities & templates
 Key files to look at for existing implementation are:
 
 - shock2vr/src/mission/entity_creator.rs - has some inheritance details
-- dark/src/ss2_enity_info.rs - the main place we load entity info
+- dark/src/ss2_entity_info.rs - the main place we load entity info
 - dark/src/properties/mod.rs - all the properties and links
 
 ## Key Considerations
