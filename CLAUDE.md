@@ -409,6 +409,118 @@ When modifying trait definitions or function signatures:
 
 This pattern prevents leaving the codebase in a broken state and ensures all implementations stay in sync.
 
+## Entity Query CLI Tool (`dark_query`)
+
+The `dark_query` CLI tool in `tools/dark_query` provides powerful entity analysis capabilities for debugging and understanding System Shock 2's entity system.
+
+### Overview
+
+```bash
+# Run from Data directory or tools/dark_query
+cargo run -p dark_query -- --help
+
+# Basic commands
+cargo run -p dark_query -- ls                    # List all entities
+cargo run -p dark_query -- --mission earth.mis ls  # List entities with mission
+cargo run -p dark_query -- show 443              # Show detailed entity info
+```
+
+### Key Features
+
+1. **Entity Listing (`ls` command)**:
+   - Lists all templates (negative IDs) and entities (positive IDs)
+   - Shows names, template IDs, property counts, link counts
+   - Inheritance-aware name resolution (finds names from template hierarchy)
+   - Supports filtering: `--filter "Railing"`, `--filter "P$SymName:*Robot*"`
+   - Unparsed data detection: `--only-unparsed`
+
+2. **Detailed Entity Analysis (`show` command)**:
+   - Complete entity information with inheritance-aware names
+   - **Bidirectional link analysis** with "Outgoing Links" and "Incoming Links" sections
+   - **Inheritance tree visualization** from most specific to most general
+   - Property details at each inheritance level
+   - Demonstrates property inheritance and overrides
+
+3. **Mission Support**:
+   - Load entity data from gamesys only: `cargo run -p dark_query -- ls`
+   - Load gamesys + mission: `cargo run -p dark_query -- --mission earth.mis ls`
+   - Automatically merges and resolves entity hierarchies
+
+### Usage Examples
+
+#### Basic Entity Exploration
+```bash
+# Find all entities with "Railing" in the name
+cargo run -p dark_query -- --mission earth.mis ls --filter "*Railing*"
+
+# Find entities with unparsed data (useful for development)
+cargo run -p dark_query -- ls --only-unparsed
+
+# Show property value filtering
+cargo run -p dark_query -- ls --filter "P$SymName:*Robot*"
+```
+
+#### Detailed Entity Analysis
+```bash
+# Analyze entity 443 (Railing) inheritance and relationships
+cargo run -p dark_query -- --mission earth.mis show 443
+
+# Analyze entity 442 (Tripwire) to see its switch links
+cargo run -p dark_query -- --mission earth.mis show 442
+
+# Analyze template -1718 to understand railing template structure
+cargo run -p dark_query -- --mission earth.mis show -- -1718
+```
+
+#### Understanding Entity Relationships
+```bash
+# Entity 442 (Tripwire) shows:
+# Outgoing Links:
+#   1. SwitchLink -> Entity 445 (Sound Trap)
+#   2. SwitchLink -> Entity 503 (Inverter)
+
+# Entity 445 (Sound Trap) shows:
+# Incoming Links:
+#   1. Entity 442 (New Tripwire) -> SwitchLink here
+```
+
+### Key Use Cases
+
+1. **Debug Entity Issues**:
+   - Find why an entity has unexpected behavior
+   - Trace inheritance chains to understand property sources
+   - Identify missing or incorrect links
+
+2. **Understand Game Logic**:
+   - Follow trigger chains (tripwire → sound trap → other effects)
+   - Analyze complex multi-entity interactions
+   - Map out level design patterns
+
+3. **Development Support**:
+   - Identify unparsed properties/links that need implementation
+   - Validate entity merging between gamesys and missions
+   - Test inheritance-aware property resolution
+
+4. **LLM Integration**:
+   - Provide detailed entity context for AI debugging
+   - Generate comprehensive entity relationship reports
+   - Support complex entity system analysis
+
+### Implementation Notes
+
+- **Inheritance Resolution**: Uses `ss2_entity_info::get_hierarchy()` and `get_ancestors()` for proper inheritance traversal
+- **Bidirectional Links**: Scans all entities to build complete relationship graphs
+- **Performance**: Efficient for typical missions (1000-5000 entities)
+- **Path Detection**: Automatically works from Data directory or tools/dark_query
+- **Mission Parsing**: Uses entity-only parsing (no asset loading) for CLI efficiency
+
+### File Locations
+
+- **Main CLI**: `tools/dark_query/src/main.rs`
+- **Entity Analysis**: `tools/dark_query/src/entity_analyzer.rs`
+- **Data Loading**: `tools/dark_query/src/data_loader.rs`
+- **Project Plan**: `projects/entity-query-cli-tool.md`
+
 ## Getting Help
 
 - Check existing code for similar patterns
@@ -419,6 +531,7 @@ This pattern prevents leaving the codebase in a broken state and ensures all imp
   - Memory usage optimization
   - Rendering pipeline efficiency
 - Use desktop runtime for rapid iteration and debugging
+- **Use `dark_query` CLI tool** to understand entity relationships and debug complex interactions
 - It may be necessary to create one-off CLI tools to exercise functionality - feel free to add these as part of the PR. This is especially useful when a change may require understanding the games metadata (ie, the .gam or .mis files) - using our existing parsing tools to query the data can help with understanding the format.
 
 ## Testing

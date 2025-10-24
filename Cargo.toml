@@ -13,6 +13,7 @@ members = [
     "dark",
     "tools/shodan",
     "tools/dark_viewer",
+    "tools/dark_query",
 ]
 
 [workspace.lints.rust]

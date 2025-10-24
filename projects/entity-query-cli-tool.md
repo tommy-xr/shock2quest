@@ -29,7 +29,7 @@ Ultimately we want to be able to show the main data for all entities & templates
 Key files to look at for existing implementation are:
 
 - shock2vr/src/mission/entity_creator.rs - has some inheritance details
-- dark/src/ss2_enity_info.rs - the main place we load entity info
+- dark/src/ss2_entity_info.rs - the main place we load entity info
 - dark/src/properties/mod.rs - all the properties and links
 
 ## Key Considerations
@@ -48,7 +48,12 @@ Key files to look at for existing implementation are:
 ## Proposed Plan
 
 1. [x] Extend ss2*entity_info to also keep a record of all props, links, and link data that we do \_not* parse. We could keep some sort of dictionary of entity id -> unparsed props/links/link data so that we could query this efficiently int he CLI. Implemented in PR #128
-2. Add the initial cli scaffolding. This would just be run `cargo run -p dark_query -- --help`
-3. Add the `ls` command - test with shock2.gam and a mission
-4. Add the `show` command - test with a template in shock2.gam and an entity in amission file
+2. [x] Add the initial cli scaffolding. This would just be run `cargo run -p dark_query -- --help`
+3. [x] Add the `ls` command - test with shock2.gam and a mission
+4. [x] Add the `show` command - test with a template in shock2.gam and an entity in amission file
 5. Add the `--filter` modifier
+6. Add a 'progress' command - `cargo run -p dark_query -- progress` that shows:
+   - Percent of props that are parsed
+   - Percent of links that are parsed
+   - Percent of link data that is parsed
+   - A list of all unparsed props, links, and link data with the name and data size
