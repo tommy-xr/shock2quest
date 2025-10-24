@@ -49,6 +49,11 @@ Key files to look at for existing implementation are:
 
 1. [x] Extend ss2*entity_info to also keep a record of all props, links, and link data that we do \_not* parse. We could keep some sort of dictionary of entity id -> unparsed props/links/link data so that we could query this efficiently int he CLI. Implemented in PR #128
 2. [x] Add the initial cli scaffolding. This would just be run `cargo run -p dark_query -- --help`
-3. Add the `ls` command - test with shock2.gam and a mission
+3. [x] Add the `ls` command - test with shock2.gam and a mission
 4. Add the `show` command - test with a template in shock2.gam and an entity in amission file
 5. Add the `--filter` modifier
+6. Add a 'progress' command - `cargo run -p dark_query -- progress` that shows:
+   - Percent of props that are parsed
+   - Percent of links that are parsed
+   - Percent of link data that is parsed
+   - A list of all unparsed props, links, and link data with the name and data size
