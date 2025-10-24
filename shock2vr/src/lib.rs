@@ -2,6 +2,7 @@ pub mod command;
 pub mod input_context;
 pub mod inventory;
 pub mod save_load;
+pub mod scene;
 pub mod teleport;
 pub mod time;
 
@@ -60,6 +61,7 @@ use zip_asset_path::ZipAssetPath;
 
 use crate::{
     mission::{GlobalContext, Mission, PlayerInfo},
+    scene::Scene,
     scripts::{Effect, Message, MessagePayload},
     teleport::{TeleportButton, TeleportConfig, TeleportSystem},
 };

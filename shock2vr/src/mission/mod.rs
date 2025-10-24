@@ -1890,3 +1890,79 @@ fn play_environmental_sound(
         engine::audio::play_spatial_audio(audio_context, position, audio_handle, None, audio_clip);
     }
 }
+
+// Implementation of Scene trait for Mission
+impl crate::scene::Scene for Mission {
+    fn update(
+        &mut self,
+        time: &Time,
+        asset_cache: &mut AssetCache,
+        input_context: &InputContext,
+    ) -> Vec<Effect> {
+        self.update(time, asset_cache, input_context)
+    }
+
+    fn render(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        options: &GameOptions,
+    ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        self.render(asset_cache, options)
+    }
+
+    fn render_per_eye(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+        options: &GameOptions,
+    ) -> Vec<SceneObject> {
+        self.render_per_eye(asset_cache, view, projection, screen_size, options)
+    }
+
+    fn finish_render(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) {
+        self.finish_render(asset_cache, view, projection, screen_size)
+    }
+
+    fn handle_effects(
+        &mut self,
+        effects: Vec<Effect>,
+        global_context: &GlobalContext,
+        game_options: &GameOptions,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) -> Vec<GlobalEffect> {
+        self.handle_effects(effects, global_context, game_options, asset_cache, audio_context)
+    }
+
+    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+        self.get_hand_spotlights(options)
+    }
+
+    fn world(&self) -> &World {
+        &self.world
+    }
+
+    fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    fn physics_world(&self) -> Option<&PhysicsWorld> {
+        Some(&self.physics)
+    }
+
+    fn physics_world_mut(&mut self) -> Option<&mut PhysicsWorld> {
+        Some(&mut self.physics)
+    }
+
+    fn scene_name(&self) -> &str {
+        &self.level_name
+    }
+}
