@@ -123,15 +123,15 @@ impl Engine for OpenGLEngine {
             // floor.draw(&self, render_context, &view);
 
             // SINGLE-PASS LIGHTING: Opaque pass with all lighting calculated in shaders
-            scene.iter().for_each(|s| {
-                s.draw_opaque(self, render_context, &view, scene.lights())
-            });
+            scene
+                .iter()
+                .for_each(|s| s.draw_opaque(self, render_context, &view, scene.lights()));
 
             // Transparent pass with all lighting calculated in shaders
             gl::DepthMask(gl::FALSE);
-            scene.iter().for_each(|s| {
-                s.draw_transparent(self, render_context, &view, scene.lights())
-            });
+            scene
+                .iter()
+                .for_each(|s| s.draw_transparent(self, render_context, &view, scene.lights()));
             gl::DepthMask(gl::TRUE);
 
             //cube.destroy();

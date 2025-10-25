@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{
-    point3, vec3, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Transform,
-    Vector3,
-};
+use cgmath::{point3, vec3, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Transform, Vector3};
 
 use dark::properties::{PropHasRefs, PropPosition};
 use engine::game_log;
@@ -11,7 +8,6 @@ use shipyard::{EntityId, Get, View, World};
 use tracing::warn;
 
 use crate::runtime_props::{RuntimePropProxyEntity, RuntimePropTransform};
-
 
 pub fn log_entity(world: &World, id: EntityId) {
     world.run(
@@ -39,7 +35,6 @@ pub fn vec3_to_point3(v: Vector3<f32>) -> Point3<f32> {
 pub fn point3_to_vec3(p: Point3<f32>) -> Vector3<f32> {
     vec3(p.x, p.y, p.z)
 }
-
 
 fn format_number(num: u32) -> String {
     if num < 10 {

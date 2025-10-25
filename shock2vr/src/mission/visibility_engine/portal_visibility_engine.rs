@@ -6,7 +6,7 @@ use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
     mission::{Cell, SystemShock2Level},
-    properties::{PropPosition, PropPhysDimensions},
+    properties::{PropPhysDimensions, PropPosition},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
@@ -283,13 +283,13 @@ impl VisibilityEngine for PortalVisibilityEngine {
                 let half_size = dimensions.size * 0.5;
                 let corners = [
                     pos.position + vec3(-half_size.x, -half_size.y, -half_size.z),
-                    pos.position + vec3( half_size.x, -half_size.y, -half_size.z),
-                    pos.position + vec3(-half_size.x,  half_size.y, -half_size.z),
-                    pos.position + vec3( half_size.x,  half_size.y, -half_size.z),
-                    pos.position + vec3(-half_size.x, -half_size.y,  half_size.z),
-                    pos.position + vec3( half_size.x, -half_size.y,  half_size.z),
-                    pos.position + vec3(-half_size.x,  half_size.y,  half_size.z),
-                    pos.position + vec3( half_size.x,  half_size.y,  half_size.z),
+                    pos.position + vec3(half_size.x, -half_size.y, -half_size.z),
+                    pos.position + vec3(-half_size.x, half_size.y, -half_size.z),
+                    pos.position + vec3(half_size.x, half_size.y, -half_size.z),
+                    pos.position + vec3(-half_size.x, -half_size.y, half_size.z),
+                    pos.position + vec3(half_size.x, -half_size.y, half_size.z),
+                    pos.position + vec3(-half_size.x, half_size.y, half_size.z),
+                    pos.position + vec3(half_size.x, half_size.y, half_size.z),
                 ];
 
                 corners.iter().any(|&corner| {

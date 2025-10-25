@@ -10,6 +10,7 @@ mod creature;
 mod gui;
 mod hud;
 mod mission;
+pub mod paths;
 mod physics;
 mod quest_info;
 mod runtime_props;
@@ -56,22 +57,15 @@ use shipyard::{self, View};
 use time::Time;
 use tracing::{info, span, trace, warn, Level};
 
-use zip_asset_path::ZipAssetPath;
-
 use crate::{
     game_scene::GameScene,
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::Effect,
 };
-
-#[cfg(target_os = "android")]
-const BASE_PATH: &str = "/mnt/sdcard/shock2quest";
-
-#[cfg(not(target_os = "android"))]
-const BASE_PATH: &str = "../../Data";
+use zip_asset_path::ZipAssetPath;
 
 pub fn resource_path(str: &str) -> String {
-    format!("{BASE_PATH}/{str}")
+    paths::data_root().join(str).to_string_lossy().into_owned()
 }
 
 pub struct GameOptions {
@@ -220,7 +214,8 @@ impl Game {
             // AssetPath::folder("res/snd2/vTriggers/english".to_owned()),
         ]);
         // Global items
-        let mut asset_cache = AssetCache::new(BASE_PATH.to_owned(), asset_paths);
+        let base_path = paths::data_root().to_string_lossy().into_owned();
+        let mut asset_cache = AssetCache::new(base_path, asset_paths);
 
         // TODO: Start ffmpeg stuff
         #[cfg(feature = "ffmpeg")]

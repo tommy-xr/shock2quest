@@ -49,7 +49,6 @@ impl Default for DynamicPhysicsOptions {
 pub struct CollisionGroup(InteractionGroups);
 
 impl CollisionGroup {
-
     pub fn hitbox() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: (InternalCollisionGroups::HITBOX.bits
@@ -76,7 +75,6 @@ impl CollisionGroup {
                 .into(),
         })
     }
-
 
     pub fn selectable() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
@@ -204,7 +202,6 @@ impl PhysicsWorld {
         }
     }
 
-
     pub fn set_position_rotation(
         &mut self,
         handle: RigidBodyHandle,
@@ -276,7 +273,6 @@ impl PhysicsWorld {
         }
     }
 
-
     pub fn clear_forces(&mut self) {
         for rigid_body_handle in &self.rigid_bodies_with_forces {
             let rigid_body = &mut self.rigid_body_set[*rigid_body_handle];
@@ -317,7 +313,6 @@ impl PhysicsWorld {
         character_body.set_translation(vec_to_nvec(position), true)
     }
 
-
     pub fn get_aabb2(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);
@@ -339,7 +334,6 @@ impl PhysicsWorld {
 
         maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.translation()))
     }
-
 
     pub fn get_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {

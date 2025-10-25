@@ -1,8 +1,6 @@
 extern crate ffmpeg_the_third as ffmpeg;
 
-use engine::{
-    texture_format::{PixelFormat, RawTextureData},
-};
+use engine::texture_format::{PixelFormat, RawTextureData};
 use ffmpeg::format::{input, Pixel};
 use ffmpeg::media::Type;
 use ffmpeg::software::scaling::{context::Context, flag::Flags};

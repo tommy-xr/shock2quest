@@ -86,15 +86,7 @@ use self::{
     entity_creator::{CreateEntityOptions, EntityCreationInfo},
     visibility_engine::VisibilityEngine,
 };
-#[cfg(target_os = "android")]
-const BASE_PATH: &str = "/mnt/sdcard/shock2quest";
-
-#[cfg(not(target_os = "android"))]
-const BASE_PATH: &str = "../../Data";
-
-pub fn resource_path(str: &str) -> String {
-    format!("{BASE_PATH}/{str}")
-}
+pub use crate::resource_path;
 
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
