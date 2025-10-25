@@ -36,6 +36,10 @@ enum Commands {
         /// Filter by property or link name (supports wildcards)
         #[arg(long)]
         filter: Option<String>,
+
+        /// Limit the number of results displayed
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// Show details for a particular entity or template
     Show {
@@ -81,8 +85,14 @@ fn main() -> Result<()> {
         Commands::Ls {
             only_unparsed,
             filter,
+            limit,
         } => {
-            handle_ls_command(cli.mission.as_deref(), only_unparsed, filter.as_deref())?;
+            handle_ls_command(
+                cli.mission.as_deref(),
+                only_unparsed,
+                filter.as_deref(),
+                limit,
+            )?;
         }
         Commands::Show { entity_id, filter } => {
             handle_show_command(cli.mission.as_deref(), entity_id, filter.as_deref())?;
@@ -96,6 +106,7 @@ fn handle_ls_command(
     mission: Option<&str>,
     only_unparsed: bool,
     filter: Option<&str>,
+    limit: Option<usize>,
 ) -> Result<()> {
     info!("Loading entity data...");
     let entity_info = load_entity_data(mission)?;
@@ -111,16 +122,27 @@ fn handle_ls_command(
     let filtered_summaries = filter_entities(&summaries, &criteria);
 
     // Display results
-    display_entity_list(&filtered_summaries, filter.is_some());
+    display_entity_list(&filtered_summaries, filter.is_some(), limit);
 
     Ok(())
 }
 
-fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter_details: bool) {
+fn display_entity_list(
+    summaries: &[entity_analyzer::EntitySummary],
+    show_filter_details: bool,
+    limit: Option<usize>,
+) {
     if summaries.is_empty() {
         println!("No entities found matching the criteria.");
         return;
     }
+
+    // Apply limit if specified
+    let display_summaries = if let Some(limit_count) = limit {
+        &summaries[..summaries.len().min(limit_count)]
+    } else {
+        summaries
+    };
 
     // Print header
     if show_filter_details {
@@ -144,7 +166,7 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
     }
 
     // Print entities
-    for summary in summaries {
+    for summary in display_summaries {
         let entity_type = match summary.entity_type {
             EntityType::Template => "Template",
             EntityType::Entity => "Entity",
@@ -169,8 +191,8 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
 
         if show_filter_details {
             let matched_items = summary.matched_items.join(", ");
-            let matched_display = if matched_items.len() > 25 {
-                format!("{}...", &matched_items[..22])
+            let matched_display = if matched_items.len() > 50 {
+                format!("{}...", &matched_items[..47])
             } else {
                 matched_items
             };
@@ -200,7 +222,20 @@ fn display_entity_list(summaries: &[entity_analyzer::EntitySummary], show_filter
         }
     }
 
-    println!("\nTotal: {} entities", summaries.len());
+    // Display count information
+    if let Some(limit_count) = limit {
+        if summaries.len() > limit_count {
+            println!(
+                "\nShowing {} of {} entities (limited)",
+                display_summaries.len(),
+                summaries.len()
+            );
+        } else {
+            println!("\nTotal: {} entities", summaries.len());
+        }
+    } else {
+        println!("\nTotal: {} entities", summaries.len());
+    }
 }
 
 fn handle_show_command(mission: Option<&str>, entity_id: i32, _filter: Option<&str>) -> Result<()> {

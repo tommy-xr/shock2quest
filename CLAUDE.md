@@ -458,6 +458,10 @@ cargo run -p dark_query -- ls --only-unparsed
 
 # Show property value filtering
 cargo run -p dark_query -- ls --filter "P$SymName:*Robot*"
+
+# Limit results for quick iteration and testing
+cargo run -p dark_query -- --mission earth.mis ls --limit 5
+cargo run -p dark_query -- --mission earth.mis ls --filter "*Door*" --limit 10
 ```
 
 #### Detailed Entity Analysis
@@ -483,6 +487,37 @@ cargo run -p dark_query -- --mission earth.mis show -- -1718
 # Incoming Links:
 #   1. Entity 442 (New Tripwire) -> SwitchLink here
 ```
+
+#### Script Filtering Examples
+```bash
+# Search for entities with specific scripts using property value syntax (case-insensitive)
+cargo run -p dark_query -- --mission earth.mis ls --filter "P$Scripts:stddoor"
+
+# Search for entities with script names containing pattern (case-insensitive)
+cargo run -p dark_query -- --mission earth.mis ls --filter "P$Scripts:*camera*"
+
+# Alternative script search using S$ prefix (case-insensitive)
+cargo run -p dark_query -- --mission earth.mis ls --filter "S$*stddoor*"
+
+# Exact script name with S$ prefix (case-insensitive)
+cargo run -p dark_query -- --mission earth.mis ls --filter "S$stddoor"
+
+# General search across all entity data (properties, links, scripts)
+cargo run -p dark_query -- --mission earth.mis ls --filter "*StdDoor*"
+
+# Use --limit for quick iteration when testing script searches
+cargo run -p dark_query -- --mission earth.mis ls --filter "S$stddoor" --limit 5
+```
+
+**Script Filtering Notes:**
+- **Case-insensitive**: All script searches are now case-insensitive
+- Use `P$Scripts:pattern` to search for entities with specific script names
+- Use `S$pattern` as a shorthand for script-only searches
+- Supports wildcards: `*pattern*` matches scripts containing "pattern"
+- Scripts are inheritance-aware - child entities inherit parent scripts
+- Matched items display shows full script names (e.g., `P$Scripts:StdDoor`, `S$cameradeath`)
+- Improved display truncation shows up to 50 characters of matched items
+- **Use `--limit N`** to show only first N results for quick iteration and testing
 
 ### Key Use Cases
 

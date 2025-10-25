@@ -522,14 +522,14 @@ pub fn filter_entities(
     if let Some(filter_pattern) = &criteria.property_filter {
         // Handle property value matching (e.g., "P$SymName:*Robot*")
         if let Some((prop_name, value_pattern)) = filter_pattern.split_once(':') {
-            let value_glob = Pattern::new(value_pattern).ok();
+            let value_glob = Pattern::new(&value_pattern.to_lowercase()).ok();
             filtered.retain_mut(|summary| {
                 let mut matches = false;
 
                 match prop_name {
                     "P$SymName" => {
                         if let Some(sym_name) = &summary.names.sym_name {
-                            if value_glob.as_ref().map_or(false, |g| g.matches(sym_name)) {
+                            if value_glob.as_ref().map_or(false, |g| g.matches(&sym_name.to_lowercase())) {
                                 summary.matched_items = vec![format!("P$SymName:{}", sym_name)];
                                 matches = true;
                             }
@@ -537,7 +537,7 @@ pub fn filter_entities(
                     }
                     "P$ObjName" => {
                         if let Some(obj_name) = &summary.names.obj_name {
-                            if value_glob.as_ref().map_or(false, |g| g.matches(obj_name)) {
+                            if value_glob.as_ref().map_or(false, |g| g.matches(&obj_name.to_lowercase())) {
                                 summary.matched_items = vec![format!("P$ObjName:{}", obj_name)];
                                 matches = true;
                             }
@@ -545,7 +545,7 @@ pub fn filter_entities(
                     }
                     "P$ObjShortName" => {
                         if let Some(short_name) = &summary.names.obj_short_name {
-                            if value_glob.as_ref().map_or(false, |g| g.matches(short_name)) {
+                            if value_glob.as_ref().map_or(false, |g| g.matches(&short_name.to_lowercase())) {
                                 summary.matched_items =
                                     vec![format!("P$ObjShortName:{}", short_name)];
                                 matches = true;
@@ -553,19 +553,20 @@ pub fn filter_entities(
                         }
                     }
                     "P$Scripts" => {
-                        // Check if any script names match the pattern
+                        // Check if any script names match the pattern (case-insensitive)
                         let matching_scripts: Vec<String> = if let Some(glob) = &value_glob {
                             summary
                                 .script_names
                                 .iter()
-                                .filter(|script| glob.matches(script))
+                                .filter(|script| glob.matches(&script.to_lowercase()))
                                 .map(|script| format!("P$Scripts:{}", script))
                                 .collect()
                         } else {
+                            let pattern_lower = value_pattern.to_lowercase();
                             summary
                                 .script_names
                                 .iter()
-                                .filter(|script| script.contains(value_pattern))
+                                .filter(|script| script.to_lowercase().contains(&pattern_lower))
                                 .map(|script| format!("P$Scripts:{}", script))
                                 .collect()
                         };
@@ -623,19 +624,20 @@ pub fn filter_entities(
             // Check for script filtering (S$ScriptName)
             else if filter_pattern.starts_with("S$") {
                 let script_pattern = &filter_pattern[2..]; // Remove "S$" prefix
-                let script_glob = Pattern::new(script_pattern).ok();
+                let script_glob = Pattern::new(&script_pattern.to_lowercase()).ok();
                 filtered.retain_mut(|summary| {
                     let mut matches = Vec::new();
 
                     if let Some(glob) = &script_glob {
                         for script in &summary.script_names {
-                            if glob.matches(script) {
+                            if glob.matches(&script.to_lowercase()) {
                                 matches.push(format!("S${}", script));
                             }
                         }
                     } else {
+                        let pattern_lower = script_pattern.to_lowercase();
                         for script in &summary.script_names {
-                            if script.contains(script_pattern) {
+                            if script.to_lowercase().contains(&pattern_lower) {
                                 matches.push(format!("S${}", script));
                             }
                         }
@@ -673,9 +675,9 @@ pub fn filter_entities(
                                 matches.push(format!("L${}", link_type));
                             }
                         }
-                        // Check script names
+                        // Check script names (case-insensitive)
                         for script in &summary.script_names {
-                            if g.matches(script) {
+                            if g.matches(&script.to_lowercase()) {
                                 matches.push(format!("S${}", script));
                             }
                         }
@@ -696,8 +698,9 @@ pub fn filter_entities(
                                 matches.push(format!("L${}", link_type));
                             }
                         }
+                        let pattern_lower = filter_pattern.to_lowercase();
                         for script in &summary.script_names {
-                            if script.contains(filter_pattern) {
+                            if script.to_lowercase().contains(&pattern_lower) {
                                 matches.push(format!("S${}", script));
                             }
                         }
