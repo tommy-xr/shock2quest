@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 dark = { path = "../../dark" }
 engine = { path = "../../engine" }
-shock2vr = { path = "../../shock2vr" }
+shock2vr = { path = "../../shock2vr", default-features = false }
 shipyard = "0.6"
 clap = { version = "4.5.4", features = ["derive"] }
 tracing = "0.1.37"
