@@ -444,7 +444,10 @@ impl Mission {
         self.physics.clear_forces();
 
         let (left_hand_entity_id, right_hand_entity_id) = {
-            (self.left_hand.get_held_entity(), self.right_hand.get_held_entity())
+            (
+                self.left_hand.get_held_entity(),
+                self.right_hand.get_held_entity(),
+            )
         };
 
         // Update player info
@@ -2030,7 +2033,13 @@ impl crate::game_scene::GameScene for Mission {
         game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
-        self.update(time, asset_cache, input_context, game_options, command_effects)
+        self.update(
+            time,
+            asset_cache,
+            input_context,
+            game_options,
+            command_effects,
+        )
     }
 
     fn render(
@@ -2070,7 +2079,13 @@ impl crate::game_scene::GameScene for Mission {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
-        self.handle_effects(effects, global_context, game_options, asset_cache, audio_context)
+        self.handle_effects(
+            effects,
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        )
     }
 
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {

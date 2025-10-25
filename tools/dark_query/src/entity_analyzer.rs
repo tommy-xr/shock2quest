@@ -529,7 +529,10 @@ pub fn filter_entities(
                 match prop_name {
                     "P$SymName" => {
                         if let Some(sym_name) = &summary.names.sym_name {
-                            if value_glob.as_ref().map_or(false, |g| g.matches(&sym_name.to_lowercase())) {
+                            if value_glob
+                                .as_ref()
+                                .map_or(false, |g| g.matches(&sym_name.to_lowercase()))
+                            {
                                 summary.matched_items = vec![format!("P$SymName:{}", sym_name)];
                                 matches = true;
                             }
@@ -537,7 +540,10 @@ pub fn filter_entities(
                     }
                     "P$ObjName" => {
                         if let Some(obj_name) = &summary.names.obj_name {
-                            if value_glob.as_ref().map_or(false, |g| g.matches(&obj_name.to_lowercase())) {
+                            if value_glob
+                                .as_ref()
+                                .map_or(false, |g| g.matches(&obj_name.to_lowercase()))
+                            {
                                 summary.matched_items = vec![format!("P$ObjName:{}", obj_name)];
                                 matches = true;
                             }
@@ -545,7 +551,10 @@ pub fn filter_entities(
                     }
                     "P$ObjShortName" => {
                         if let Some(short_name) = &summary.names.obj_short_name {
-                            if value_glob.as_ref().map_or(false, |g| g.matches(&short_name.to_lowercase())) {
+                            if value_glob
+                                .as_ref()
+                                .map_or(false, |g| g.matches(&short_name.to_lowercase()))
+                            {
                                 summary.matched_items =
                                     vec![format!("P$ObjShortName:{}", short_name)];
                                 matches = true;
