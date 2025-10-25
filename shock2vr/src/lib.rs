@@ -30,20 +30,19 @@ use std::{
     rc::Rc,
 };
 
-use cgmath::{vec3, InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector2, Vector3};
+use cgmath::{vec3, InnerSpace, Matrix4, Quaternion, Vector2, Vector3};
 use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
     motion::MotionDB,
     properties::{AmbientSoundFlags, PropAmbientHacked, PropPosition},
-    SCALE_FACTOR,
 };
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AssetPath},
     audio::{AudioClip, AudioContext},
     file_system::FileSystem,
-    game_log, profile,
+    game_log,
     scene::SceneObject,
 };
 
@@ -62,8 +61,7 @@ use zip_asset_path::ZipAssetPath;
 use crate::{
     game_scene::GameScene,
     mission::{GlobalContext, Mission, PlayerInfo},
-    scripts::{Effect, Message, MessagePayload},
-    teleport::{TeleportButton, TeleportConfig, TeleportSystem},
+    scripts::Effect,
 };
 
 #[cfg(target_os = "android")]
@@ -118,7 +116,6 @@ pub struct Game {
     //world: World,
     last_music_cue: Option<String>,
     last_env_sound: Option<String>,
-    teleport_system: TeleportSystem,
 
     mission_to_save_data: HashMap<String, EntitySaveData>,
 }
@@ -132,7 +129,8 @@ impl Game {
             .unwrap()
             .clone();
 
-        let (current_save_data, held_data) = save_load::to_save_data(self.active_game_scene.world());
+        let (current_save_data, held_data) =
+            save_load::to_save_data(self.active_game_scene.world());
         game_log!(
             DEBUG,
             "Saving {} entities to save data",
@@ -166,6 +164,7 @@ impl Game {
             current_quest_info,
             populator,
             held_data,
+            &self.options,
         );
         self.active_game_scene = Box::new(active_mission);
     }
@@ -308,6 +307,7 @@ impl Game {
                     &mut asset_cache,
                     &mut audio_context,
                     &global_context,
+                    &options,
                 )
             } else {
                 // Level specific items
@@ -323,6 +323,7 @@ impl Game {
                     //Box::new(MissionEntityPopulator::create()),
                     Box::new(MissionEntityPopulator::create()),
                     HeldItemSaveData::empty(),
+                    &options,
                 );
                 (active_mission, mission_to_save_data)
             };
@@ -341,24 +342,6 @@ impl Game {
         // );
         // panic!();
 
-        // Initialize teleport system with default configuration (gated behind experimental flag)
-        let teleport_system = if options.experimental_features.contains("teleport") {
-            let teleport_config = TeleportConfig {
-                enabled: true,
-                button_mapping: TeleportButton::Trigger,
-                trigger_threshold: 0.5,
-                max_distance: 20.0,
-                ..Default::default()
-            };
-            TeleportSystem::new(teleport_config)
-        } else {
-            let teleport_config = TeleportConfig {
-                enabled: false,
-                ..Default::default()
-            };
-            TeleportSystem::new(teleport_config)
-        };
-
         Game {
             asset_cache,
             audio_context,
@@ -366,7 +349,6 @@ impl Game {
             global_context,
             last_music_cue: None,
             last_env_sound: None,
-            teleport_system,
             options,
             mission_to_save_data,
         }
@@ -383,109 +365,66 @@ impl Game {
         let delta_time = time.elapsed.as_secs_f32();
         trace!("delta_time: {}", delta_time);
 
+        // Process commands into effects
         let mut command_effects = Vec::new();
         for command in commands {
             let eff = command.execute(self.active_game_scene.world());
             command_effects.push(eff);
         }
 
-        // Update teleport system and add effects (only if experimental flag enabled)
-        if self.options.experimental_features.contains("teleport") {
-            let teleport_effects = self.teleport_system.update(input_context);
-            command_effects.extend(teleport_effects);
-        }
-
-        let player = &self
-            .active_game_scene
-            .world()
-            .borrow::<UniqueView<PlayerInfo>>()
-            .unwrap()
-            .clone();
-
-        let rot_speed = 2.0;
-        let additional_rotation = Quaternion::from_axis_angle(
-            vec3(0.0, 1.0, 0.0),
-            Rad(input_context.left_hand.thumbstick.x * delta_time * rot_speed),
+        // Update the scene (handles movement, physics, collision, teleport internally)
+        let effects = self.active_game_scene.update(
+            time,
+            input_context,
+            &mut self.asset_cache,
+            &self.options,
+            command_effects,
         );
 
-        let new_rotation = player.rotation * additional_rotation;
+        // Handle ambient sound processing
+        let (new_character_pos, next_env_sound, new_cue, potential_ambient_sounds) = {
+            let player_info = self.active_game_scene.world().borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let current_pos = player_info.pos;
 
-        let dir = new_rotation * input_context.head.rotation;
-        let move_thumbstick_value = input_context.right_hand.thumbstick;
-        let forward = dir.rotate_vector(vec3(
-            -delta_time * move_thumbstick_value.x * 25. / SCALE_FACTOR,
-            0.0,
-            -delta_time * move_thumbstick_value.y * 25. / SCALE_FACTOR,
-        ));
+            let mut next_env_sound = None;
+            let mut new_cue = None;
+            let mut potential_ambient_sounds = Vec::new();
 
-        let up_value = input_context.left_hand.thumbstick.y / SCALE_FACTOR;
+            self.active_game_scene.world().run(
+                |v_ambient_hacked: View<PropAmbientHacked>,
+                 v_position: View<PropPosition>,
+                 v_player_position: UniqueView<PlayerInfo>| {
+                    for (id, (ambient_sound, position)) in
+                        (&v_ambient_hacked, &v_position).iter().with_id()
+                    {
+                        let dist_squared = (position.position - v_player_position.pos).magnitude2();
 
-        let (new_character_pos, collision_events) = {
-            let (physics, player_handle) = self.active_game_scene.physics_and_player_mut().unwrap();
-            profile!(
-                "shock2.update.physics",
-                physics.update(
-                    forward + vec3(0.0, up_value, 0.0),
-                    player_handle,
-                )
-            )
-        };
-
-        // Clear forces
-        self.active_game_scene.physics_world_mut().unwrap().clear_forces();
-
-        let (left_hand_entity_id, right_hand_entity_id) = {
-            let left_hand = self.active_game_scene.left_hand().unwrap();
-            let right_hand = self.active_game_scene.right_hand().unwrap();
-            (left_hand.get_held_entity(), right_hand.get_held_entity())
-        };
-
-        let mut player_info = self
-            .active_game_scene
-            .world_mut()
-            .borrow::<UniqueViewMut<PlayerInfo>>()
-            .unwrap();
-        player_info.pos = new_character_pos;
-        player_info.rotation = new_rotation;
-        player_info.left_hand_entity_id = left_hand_entity_id;
-        player_info.right_hand_entity_id = right_hand_entity_id;
-        drop(player_info);
-
-        let mut next_env_sound = None;
-        let mut new_cue = None;
-        let mut potential_ambient_sounds = Vec::new();
-        self.active_game_scene.world().run(
-            |v_ambient_hacked: View<PropAmbientHacked>,
-             v_position: View<PropPosition>,
-             v_player_position: UniqueView<PlayerInfo>| {
-                for (id, (ambient_sound, position)) in
-                    (&v_ambient_hacked, &v_position).iter().with_id()
-                {
-                    // Filter for items within radius
-                    let dist_squared = (position.position - v_player_position.pos).magnitude2();
-
-                    if dist_squared < ambient_sound.radius_squared {
-                        if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
-                            new_cue = Some(ambient_sound.schema.to_owned());
-                        } else if ambient_sound
-                            .sound_flags
-                            .contains(AmbientSoundFlags::ENVIRONMENTAL)
-                        {
-                            let schema_val = self.resolve_schema(&ambient_sound.schema);
-                            next_env_sound = Some(schema_val)
-                        } else {
-                            potential_ambient_sounds.push((
-                                dist_squared,
-                                position.position,
-                                id,
-                                ambient_sound.schema.to_owned(),
-                            ))
+                        if dist_squared < ambient_sound.radius_squared {
+                            if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
+                                new_cue = Some(ambient_sound.schema.to_owned());
+                            } else if ambient_sound
+                                .sound_flags
+                                .contains(AmbientSoundFlags::ENVIRONMENTAL)
+                            {
+                                let schema_val = self.resolve_schema(&ambient_sound.schema);
+                                next_env_sound = Some(schema_val)
+                            } else {
+                                potential_ambient_sounds.push((
+                                    dist_squared,
+                                    position.position,
+                                    id,
+                                    ambient_sound.schema.to_owned(),
+                                ))
+                            }
                         }
                     }
-                }
-            },
-        );
+                },
+            );
 
+            (current_pos, next_env_sound, new_cue, potential_ambient_sounds)
+        };
+
+        // Update audio
         if let Some(cue) = new_cue {
             self.update_music_cue_if_necessary(cue);
         }
@@ -494,10 +433,11 @@ impl Game {
             self.update_env_sound_if_necessary(cue);
         }
 
-        // Take a look at the ambient sounds... sort by distance and take the first 8 or so
-        potential_ambient_sounds.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Process ambient sounds
+        let mut ambient_sounds_sorted = potential_ambient_sounds;
+        ambient_sounds_sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-        let ambient_sounds = potential_ambient_sounds
+        let ambient_sounds = ambient_sounds_sorted
             .iter()
             .take(8)
             .filter_map(|(_dist, position, id, schema)| {
@@ -511,68 +451,7 @@ impl Game {
 
         self.audio_context.update(new_character_pos, ambient_sounds);
 
-        for ce in collision_events {
-            info!("event: {:?}", ce);
-
-            match ce {
-                physics::CollisionEvent::BeginIntersect {
-                    sensor_id,
-                    entity_id,
-                } => {
-                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
-                        to: sensor_id,
-                        payload: MessagePayload::SensorBeginIntersect { with: entity_id },
-                    });
-                }
-                physics::CollisionEvent::EndIntersect {
-                    sensor_id,
-                    entity_id,
-                } => {
-                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
-                        to: sensor_id,
-                        payload: MessagePayload::SensorEndIntersect { with: entity_id },
-                    });
-                }
-                physics::CollisionEvent::CollisionStarted {
-                    entity1_id,
-                    entity2_id,
-                } => {
-                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
-                        to: entity1_id,
-                        payload: MessagePayload::Collided { with: entity2_id },
-                    });
-                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
-                        to: entity2_id,
-                        payload: MessagePayload::Collided { with: entity1_id },
-                    });
-                }
-            }
-        }
-
-        // Update world
-        self.active_game_scene.world_mut().run(
-            |mut v_teleported: ViewMut<dark::properties::PropTeleported>| {
-                let mut ents_to_remove = Vec::new();
-                for (id, door) in (&mut v_teleported).iter().with_id() {
-                    door.countdown_timer -= time.elapsed.as_secs_f32();
-
-                    if door.countdown_timer < 0.0 {
-                        ents_to_remove.push(id);
-                    }
-                }
-
-                for id in ents_to_remove {
-                    v_teleported.remove(id);
-                }
-            },
-        );
-
-        let mut effects = self
-            .active_game_scene
-            .update(time, &mut self.asset_cache, input_context);
-
-        effects.append(&mut command_effects);
-
+        // Handle global effects
         let global_effects = self.active_game_scene.handle_effects(
             effects,
             &self.global_context,
@@ -605,6 +484,7 @@ impl Game {
             &mut self.asset_cache,
             &mut self.audio_context,
             &mut self.global_context,
+            &self.options,
         );
         self.active_game_scene = Box::new(mission);
         self.mission_to_save_data = level_map;
@@ -615,6 +495,7 @@ impl Game {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
         global_context: &GlobalContext,
+        game_options: &GameOptions,
     ) -> (Mission, HashMap<String, EntitySaveData>) {
         let current_mission = save_data.global_data.active_mission.clone();
         //self.mission_to_save_data = save_data.level_data;
@@ -646,6 +527,7 @@ impl Game {
             save_data.global_data.quest_info,
             populator,
             save_data.global_data.held_items,
+            game_options,
         );
 
         //self.active_mission = active_mission;
