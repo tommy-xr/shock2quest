@@ -378,7 +378,11 @@ impl Game {
 
         // Handle ambient sound processing
         let (new_character_pos, next_env_sound, new_cue, potential_ambient_sounds) = {
-            let player_info = self.active_game_scene.world().borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let player_info = self
+                .active_game_scene
+                .world()
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap();
             let current_pos = player_info.pos;
 
             let mut next_env_sound = None;
@@ -416,7 +420,12 @@ impl Game {
                 },
             );
 
-            (current_pos, next_env_sound, new_cue, potential_ambient_sounds)
+            (
+                current_pos,
+                next_env_sound,
+                new_cue,
+                potential_ambient_sounds,
+            )
         };
 
         // Update audio
