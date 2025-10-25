@@ -1,4 +1,5 @@
 pub mod command;
+pub mod game_scene;
 pub mod input_context;
 pub mod inventory;
 pub mod save_load;
@@ -59,6 +60,7 @@ use tracing::{info, span, trace, warn, Level};
 use zip_asset_path::ZipAssetPath;
 
 use crate::{
+    game_scene::GameScene,
     mission::{GlobalContext, Mission, PlayerInfo},
     scripts::{Effect, Message, MessagePayload},
     teleport::{TeleportButton, TeleportConfig, TeleportSystem},
@@ -106,7 +108,7 @@ pub struct Game {
     options: GameOptions,
     pub asset_cache: AssetCache,
     global_context: GlobalContext,
-    active_mission: Mission,
+    active_game_scene: Box<dyn GameScene>,
     // physics: PhysicsWorld,
     // script_world: ScriptWorld,
     audio_context: AudioContext<EntityId, String>,
@@ -124,13 +126,13 @@ pub struct Game {
 impl Game {
     fn switch_mission(&mut self, level_name: String, spawn_loc: SpawnLocation) {
         let current_quest_info = self
-            .active_mission
-            .world
+            .active_game_scene
+            .world()
             .borrow::<UniqueView<QuestInfo>>()
             .unwrap()
             .clone();
 
-        let (current_save_data, held_data) = save_load::to_save_data(&self.active_mission.world);
+        let (current_save_data, held_data) = save_load::to_save_data(self.active_game_scene.world());
         game_log!(
             DEBUG,
             "Saving {} entities to save data",
@@ -138,7 +140,7 @@ impl Game {
         );
 
         self.mission_to_save_data.insert(
-            self.active_mission.level_name.to_ascii_lowercase(),
+            self.active_game_scene.scene_name().to_ascii_lowercase(),
             current_save_data,
         );
 
@@ -165,7 +167,7 @@ impl Game {
             populator,
             held_data,
         );
-        self.active_mission = active_mission;
+        self.active_game_scene = Box::new(active_mission);
     }
     pub fn init(_file_system: &dyn FileSystem, options: GameOptions) -> Game {
         let asset_paths = AssetPath::combine(vec![
@@ -360,7 +362,7 @@ impl Game {
         Game {
             asset_cache,
             audio_context,
-            active_mission,
+            active_game_scene: Box::new(active_mission),
             global_context,
             last_music_cue: None,
             last_env_sound: None,
@@ -383,7 +385,7 @@ impl Game {
 
         let mut command_effects = Vec::new();
         for command in commands {
-            let eff = command.execute(&self.active_mission.world);
+            let eff = command.execute(self.active_game_scene.world());
             command_effects.push(eff);
         }
 
@@ -394,8 +396,8 @@ impl Game {
         }
 
         let player = &self
-            .active_mission
-            .world
+            .active_game_scene
+            .world()
             .borrow::<UniqueView<PlayerInfo>>()
             .unwrap()
             .clone();
@@ -418,32 +420,41 @@ impl Game {
 
         let up_value = input_context.left_hand.thumbstick.y / SCALE_FACTOR;
 
-        let (new_character_pos, collision_events) = profile!(
-            "shock2.update.physics",
-            self.active_mission.physics.update(
-                forward + vec3(0.0, up_value, 0.0),
-                &mut self.active_mission.player_handle,
+        let (new_character_pos, collision_events) = {
+            let (physics, player_handle) = self.active_game_scene.physics_and_player_mut().unwrap();
+            profile!(
+                "shock2.update.physics",
+                physics.update(
+                    forward + vec3(0.0, up_value, 0.0),
+                    player_handle,
+                )
             )
-        );
+        };
 
         // Clear forces
-        self.active_mission.physics.clear_forces();
+        self.active_game_scene.physics_world_mut().unwrap().clear_forces();
+
+        let (left_hand_entity_id, right_hand_entity_id) = {
+            let left_hand = self.active_game_scene.left_hand().unwrap();
+            let right_hand = self.active_game_scene.right_hand().unwrap();
+            (left_hand.get_held_entity(), right_hand.get_held_entity())
+        };
 
         let mut player_info = self
-            .active_mission
-            .world
+            .active_game_scene
+            .world_mut()
             .borrow::<UniqueViewMut<PlayerInfo>>()
             .unwrap();
         player_info.pos = new_character_pos;
         player_info.rotation = new_rotation;
-        player_info.left_hand_entity_id = self.active_mission.left_hand.get_held_entity();
-        player_info.right_hand_entity_id = self.active_mission.right_hand.get_held_entity();
+        player_info.left_hand_entity_id = left_hand_entity_id;
+        player_info.right_hand_entity_id = right_hand_entity_id;
         drop(player_info);
 
         let mut next_env_sound = None;
         let mut new_cue = None;
         let mut potential_ambient_sounds = Vec::new();
-        self.active_mission.world.run(
+        self.active_game_scene.world().run(
             |v_ambient_hacked: View<PropAmbientHacked>,
              v_position: View<PropPosition>,
              v_player_position: UniqueView<PlayerInfo>| {
@@ -508,7 +519,7 @@ impl Game {
                     sensor_id,
                     entity_id,
                 } => {
-                    self.active_mission.script_world.dispatch(Message {
+                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
                         to: sensor_id,
                         payload: MessagePayload::SensorBeginIntersect { with: entity_id },
                     });
@@ -517,7 +528,7 @@ impl Game {
                     sensor_id,
                     entity_id,
                 } => {
-                    self.active_mission.script_world.dispatch(Message {
+                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
                         to: sensor_id,
                         payload: MessagePayload::SensorEndIntersect { with: entity_id },
                     });
@@ -526,11 +537,11 @@ impl Game {
                     entity1_id,
                     entity2_id,
                 } => {
-                    self.active_mission.script_world.dispatch(Message {
+                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
                         to: entity1_id,
                         payload: MessagePayload::Collided { with: entity2_id },
                     });
-                    self.active_mission.script_world.dispatch(Message {
+                    self.active_game_scene.script_world_mut().unwrap().dispatch(Message {
                         to: entity2_id,
                         payload: MessagePayload::Collided { with: entity1_id },
                     });
@@ -539,7 +550,7 @@ impl Game {
         }
 
         // Update world
-        self.active_mission.world.run(
+        self.active_game_scene.world_mut().run(
             |mut v_teleported: ViewMut<dark::properties::PropTeleported>| {
                 let mut ents_to_remove = Vec::new();
                 for (id, door) in (&mut v_teleported).iter().with_id() {
@@ -557,12 +568,12 @@ impl Game {
         );
 
         let mut effects = self
-            .active_mission
+            .active_game_scene
             .update(time, &mut self.asset_cache, input_context);
 
         effects.append(&mut command_effects);
 
-        let global_effects = self.active_mission.handle_effects(
+        let global_effects = self.active_game_scene.handle_effects(
             effects,
             &self.global_context,
             &self.options,
@@ -595,7 +606,7 @@ impl Game {
             &mut self.audio_context,
             &mut self.global_context,
         );
-        self.active_mission = mission;
+        self.active_game_scene = Box::new(mission);
         self.mission_to_save_data = level_map;
     }
 
@@ -644,22 +655,22 @@ impl Game {
     fn build_save_data(&self) -> SaveData {
         let mut level_data = self.mission_to_save_data.clone();
 
-        let (save_data, held_items) = save_load::to_save_data(&self.active_mission.world);
+        let (save_data, held_items) = save_load::to_save_data(self.active_game_scene.world());
 
-        level_data.insert(self.active_mission.level_name.clone(), save_data);
+        level_data.insert(self.active_game_scene.scene_name().to_string(), save_data);
 
         let (position, rotation) = {
             let player_info = self
-                .active_mission
-                .world
+                .active_game_scene
+                .world()
                 .borrow::<UniqueView<PlayerInfo>>()
                 .unwrap();
             (player_info.pos, player_info.rotation)
         };
 
         let quest_info = self
-            .active_mission
-            .world
+            .active_game_scene
+            .world()
             .borrow::<UniqueView<QuestInfo>>()
             .unwrap()
             .clone();
@@ -669,7 +680,7 @@ impl Game {
             position,
             rotation,
             quest_info,
-            active_mission: self.active_mission.level_name.clone(),
+            active_mission: self.active_game_scene.scene_name().to_string(),
         };
 
         SaveData {
@@ -693,14 +704,14 @@ impl Game {
             GlobalEffect::TestReload => {
                 let (position, rotation) = {
                     let player_info = self
-                        .active_mission
-                        .world
+                        .active_game_scene
+                        .world()
                         .borrow::<UniqueView<PlayerInfo>>()
                         .unwrap();
                     (player_info.pos, player_info.rotation)
                 };
                 self.switch_mission(
-                    self.active_mission.level_name.clone(),
+                    self.active_game_scene.scene_name().to_string(),
                     SpawnLocation::PositionRotation(position, rotation),
                 );
             }
@@ -709,12 +720,12 @@ impl Game {
 
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
-        self.active_mission.get_hand_spotlights(&self.options)
+        self.active_game_scene.get_hand_spotlights(&self.options)
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let (scene, pos, rot) = self
-            .active_mission
+            .active_game_scene
             .render(&mut self.asset_cache, &self.options);
 
         // let font = File::open(resource_path("res/fonts/mainfont.FON")).unwrap();
@@ -744,7 +755,7 @@ impl Game {
         // let text_obj_0_0 =
         //     SceneObject::screen_space_text("0, 0", font.clone(), 16.0, 0.5, 0.0, 0.0);
 
-        let mut objs = self.active_mission.render_per_eye(
+        let mut objs = self.active_game_scene.render_per_eye(
             &mut self.asset_cache,
             view,
             projection,
@@ -787,7 +798,7 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) {
-        self.active_mission
+        self.active_game_scene
             .finish_render(&mut self.asset_cache, view, projection, screen_size)
     }
 
