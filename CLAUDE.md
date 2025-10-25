@@ -517,6 +517,7 @@ cargo run -p dark_query -- --mission earth.mis ls --filter "S$stddoor" --limit 5
 - Scripts are inheritance-aware - child entities inherit parent scripts
 - Matched items display shows full script names (e.g., `P$Scripts:StdDoor`, `S$cameradeath`)
 - Improved display truncation shows up to 50 characters of matched items
+- **Use `--limit N`** to show only first N results for quick iteration and testing
 
 ### Key Use Cases
 
