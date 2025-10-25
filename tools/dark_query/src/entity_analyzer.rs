@@ -20,12 +20,6 @@ pub struct EntityNames {
 }
 
 impl EntityNames {
-    pub fn primary_name(&self) -> Option<&String> {
-        self.sym_name.as_ref()
-            .or(self.obj_name.as_ref())
-            .or(self.obj_short_name.as_ref())
-    }
-
     pub fn display_names(&self) -> String {
         let mut parts = Vec::new();
 
@@ -165,11 +159,6 @@ fn extract_names(properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
         obj_name,
         obj_short_name,
     }
-}
-
-/// Extract template ID by creating a temporary world and reading components
-pub fn extract_template_id_public(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
-    extract_template_id(properties)
 }
 
 fn extract_template_id(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
