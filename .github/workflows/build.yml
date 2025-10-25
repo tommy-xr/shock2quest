@@ -23,6 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      # Check code formatting
+      - name: Check cargo fmt
+        run: cargo fmt --all -- --check
+
       # Install Linux-specific dependencies
       - name: Install ALSA (Linux only)
         if: runner.os == 'Linux'
