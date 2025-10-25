@@ -1,10 +1,12 @@
-use std::{collections::{HashMap, HashSet}, rc::Rc};
-use glob::Pattern;
-use shipyard::{World, Get, View};
 use dark::{
+    properties::{
+        Link, PropObjName, PropObjShortName, PropScripts, PropSymName, PropTemplateId, Property,
+    },
     ss2_entity_info::{self, SystemShock2EntityInfo},
-    properties::{Property, PropSymName, PropObjName, PropObjShortName, PropTemplateId, PropScripts, Link},
 };
+use glob::Pattern;
+use shipyard::{Get, View, World};
+use std::{collections::HashMap, rc::Rc};
 
 #[derive(Debug, Clone)]
 pub enum EntityType {
@@ -76,7 +78,10 @@ pub fn extract_names_with_inheritance(
     // First try direct properties
     if let Some(properties) = entity_info.entity_to_properties.get(&entity_id) {
         let direct_names = extract_names(properties);
-        if direct_names.sym_name.is_some() || direct_names.obj_name.is_some() || direct_names.obj_short_name.is_some() {
+        if direct_names.sym_name.is_some()
+            || direct_names.obj_name.is_some()
+            || direct_names.obj_short_name.is_some()
+        {
             return direct_names;
         }
     }
@@ -89,7 +94,10 @@ pub fn extract_names_with_inheritance(
     for ancestor_id in ancestors.iter().rev() {
         if let Some(properties) = entity_info.entity_to_properties.get(ancestor_id) {
             let ancestor_names = extract_names(properties);
-            if ancestor_names.sym_name.is_some() || ancestor_names.obj_name.is_some() || ancestor_names.obj_short_name.is_some() {
+            if ancestor_names.sym_name.is_some()
+                || ancestor_names.obj_name.is_some()
+                || ancestor_names.obj_short_name.is_some()
+            {
                 return ancestor_names;
             }
         }
@@ -188,7 +196,8 @@ fn get_known_p_property_names() -> std::collections::HashSet<String> {
     let mut p_names = std::collections::HashSet::new();
 
     // Get the property definitions - we only need the names
-    let (properties, _links, _links_with_data) = dark::properties::get::<std::io::Cursor<Vec<u8>>>();
+    let (properties, _links, _links_with_data) =
+        dark::properties::get::<std::io::Cursor<Vec<u8>>>();
 
     for prop_def in properties {
         let original_name = prop_def.name();
@@ -201,7 +210,11 @@ fn get_known_p_property_names() -> std::collections::HashSet<String> {
 }
 
 /// Check if a filter pattern could match a property name in either cleaned or P$ form
-fn property_matches_pattern(clean_prop_name: &str, pattern: &str, known_p_names: &std::collections::HashSet<String>) -> bool {
+fn property_matches_pattern(
+    clean_prop_name: &str,
+    pattern: &str,
+    known_p_names: &std::collections::HashSet<String>,
+) -> bool {
     // Check if the pattern matches the clean name directly
     if clean_prop_name.contains(pattern) {
         return true;
@@ -221,7 +234,11 @@ fn property_matches_pattern(clean_prop_name: &str, pattern: &str, known_p_names:
 }
 
 /// Check if a glob pattern could match a property name in either cleaned or P$ form
-fn property_matches_glob(clean_prop_name: &str, glob: &Pattern, known_p_names: &std::collections::HashSet<String>) -> bool {
+fn property_matches_glob(
+    clean_prop_name: &str,
+    glob: &Pattern,
+    known_p_names: &std::collections::HashSet<String>,
+) -> bool {
     // Check if the glob matches the clean name directly
     if glob.matches(clean_prop_name) {
         return true;
@@ -243,7 +260,8 @@ fn property_matches_glob(clean_prop_name: &str, glob: &Pattern, known_p_names: &
 
 /// Get property type names from the property list
 fn get_property_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
-    properties.iter()
+    properties
+        .iter()
         .map(|prop| {
             // Try to extract the property type name from the debug representation
             let debug_str = format!("{:?}", prop.as_ref());
@@ -267,7 +285,8 @@ fn get_property_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
             // Extract just the property type name (before the opening parenthesis or space/brace)
             if prop_str.starts_with("Prop") {
                 // Split on multiple possible delimiters: '(', ' ', '{'
-                prop_str.split(['(', ' ', '{'])
+                prop_str
+                    .split(['(', ' ', '{'])
                     .next()
                     .unwrap_or(&prop_str)
                     .to_string()
@@ -302,30 +321,33 @@ fn get_property_names_with_inheritance(
 
     // Remove duplicates while preserving order
     let mut seen = std::collections::HashSet::new();
-    all_properties.into_iter().filter(|prop| seen.insert(prop.clone())).collect()
+    all_properties
+        .into_iter()
+        .filter(|prop| seen.insert(prop.clone()))
+        .collect()
 }
 
 /// Get link type names from the entity's links
 fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<String> {
     if let Some(template_links) = entity_info.template_to_links.get(&entity_id) {
-        let link_types: Vec<String> = template_links.to_links.iter()
-            .map(|link| {
-                match &link.link {
-                    Link::SwitchLink => "SwitchLink".to_string(),
-                    Link::Contains(_) => "Contains".to_string(),
-                    Link::Flinderize(_) => "Flinderize".to_string(),
-                    Link::AIWatchObj(_) => "AIWatchObj".to_string(),
-                    Link::Projectile(_) => "Projectile".to_string(),
-                    Link::Corpse(_) => "Corpse".to_string(),
-                    Link::AIProjectile(_) => "AIProjectile".to_string(),
-                    Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
-                    Link::GunFlash(_) => "GunFlash".to_string(),
-                    Link::LandingPoint => "LandingPoint".to_string(),
-                    Link::Replicator => "Replicator".to_string(),
-                    Link::MissSpang => "MissSpang".to_string(),
-                    Link::TPathInit => "TPathInit".to_string(),
-                    Link::TPath(_) => "TPath".to_string(),
-                }
+        let link_types: Vec<String> = template_links
+            .to_links
+            .iter()
+            .map(|link| match &link.link {
+                Link::SwitchLink => "SwitchLink".to_string(),
+                Link::Contains(_) => "Contains".to_string(),
+                Link::Flinderize(_) => "Flinderize".to_string(),
+                Link::AIWatchObj(_) => "AIWatchObj".to_string(),
+                Link::Projectile(_) => "Projectile".to_string(),
+                Link::Corpse(_) => "Corpse".to_string(),
+                Link::AIProjectile(_) => "AIProjectile".to_string(),
+                Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
+                Link::GunFlash(_) => "GunFlash".to_string(),
+                Link::LandingPoint => "LandingPoint".to_string(),
+                Link::Replicator => "Replicator".to_string(),
+                Link::MissSpang => "MissSpang".to_string(),
+                Link::TPathInit => "TPathInit".to_string(),
+                Link::TPath(_) => "TPath".to_string(),
             })
             .collect();
 
@@ -355,7 +377,10 @@ fn get_link_types_with_inheritance(
 
     // Remove duplicates while preserving order
     let mut seen = std::collections::HashSet::new();
-    all_link_types.into_iter().filter(|link_type| seen.insert(link_type.clone())).collect()
+    all_link_types
+        .into_iter()
+        .filter(|link_type| seen.insert(link_type.clone()))
+        .collect()
 }
 
 /// Extract script names from properties
@@ -403,7 +428,10 @@ fn get_script_names_with_inheritance(
 
     // Remove duplicates while preserving order
     let mut seen = std::collections::HashSet::new();
-    all_scripts.into_iter().filter(|script| seen.insert(script.clone())).collect()
+    all_scripts
+        .into_iter()
+        .filter(|script| seen.insert(script.clone()))
+        .collect()
 }
 
 /// Analyze all entities and create summaries
@@ -437,12 +465,15 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
             .cloned()
             .unwrap_or_default();
 
-        let has_unparsed_data = !unparsed_properties.is_empty() ||
-            entity_info.unparsed_links.values().any(|links|
-                links.iter().any(|link| link.src == *entity_id || link.dest == *entity_id)
-            );
+        let has_unparsed_data = !unparsed_properties.is_empty()
+            || entity_info.unparsed_links.values().any(|links| {
+                links
+                    .iter()
+                    .any(|link| link.src == *entity_id || link.dest == *entity_id)
+            });
 
-        let link_count = entity_info.template_to_links
+        let link_count = entity_info
+            .template_to_links
             .get(entity_id)
             .map(|links| links.to_links.len())
             .unwrap_or(0);
@@ -473,12 +504,14 @@ pub fn analyze_entities(entity_info: &SystemShock2EntityInfo) -> Vec<EntitySumma
 }
 
 /// Apply filters to entity summaries
-pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -> Vec<EntitySummary> {
+pub fn filter_entities(
+    summaries: &[EntitySummary],
+    criteria: &FilterCriteria,
+) -> Vec<EntitySummary> {
     let mut filtered = summaries.to_vec();
 
     // Get known P$ property names for dual-name support
     let known_p_names = get_known_p_property_names();
-
 
     // Apply unparsed filter
     if criteria.only_unparsed {
@@ -513,7 +546,8 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
                     "P$ObjShortName" => {
                         if let Some(short_name) = &summary.names.obj_short_name {
                             if value_glob.as_ref().map_or(false, |g| g.matches(short_name)) {
-                                summary.matched_items = vec![format!("P$ObjShortName:{}", short_name)];
+                                summary.matched_items =
+                                    vec![format!("P$ObjShortName:{}", short_name)];
                                 matches = true;
                             }
                         }
@@ -521,12 +555,16 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
                     "P$Scripts" => {
                         // Check if any script names match the pattern
                         let matching_scripts: Vec<String> = if let Some(glob) = &value_glob {
-                            summary.script_names.iter()
+                            summary
+                                .script_names
+                                .iter()
                                 .filter(|script| glob.matches(script))
                                 .map(|script| format!("P$Scripts:{}", script))
                                 .collect()
                         } else {
-                            summary.script_names.iter()
+                            summary
+                                .script_names
+                                .iter()
                                 .filter(|script| script.contains(value_pattern))
                                 .map(|script| format!("P$Scripts:{}", script))
                                 .collect()
@@ -539,7 +577,9 @@ pub fn filter_entities(summaries: &[EntitySummary], criteria: &FilterCriteria) -
                     }
                     _ => {
                         // For other properties, just check if the property name exists
-                        let prop_exists = summary.parsed_properties.iter()
+                        let prop_exists = summary
+                            .parsed_properties
+                            .iter()
                             .any(|p| p.contains(prop_name.trim_start_matches("P$")));
                         if prop_exists {
                             summary.matched_items = vec![prop_name.to_string()];
