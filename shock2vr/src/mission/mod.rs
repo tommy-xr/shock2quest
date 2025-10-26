@@ -1313,7 +1313,6 @@ impl Mission {
                         warn!("Unable to load clip: {}", name)
                     }
                 }
-                // TODO: Global effect
                 Effect::PlayEnvironmentalSound {
                     query,
                     position,

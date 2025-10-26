@@ -163,12 +163,18 @@ impl Game {
         self.active_game_scene = Box::new(active_mission);
     }
 
-    fn switch_mission_with_trigger(&mut self, level_name: String, spawn_loc: SpawnLocation, entity_to_trigger: Option<String>) {
+    fn switch_mission_with_trigger(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        entity_to_trigger: Option<String>,
+    ) {
         // First, switch to the new mission
         self.switch_mission(level_name, spawn_loc);
 
         // Then, trigger the entity if specified
         if let Some(entity_name) = entity_to_trigger {
+            println!("Trying to trigger entity: {}", entity_name);
             self.trigger_entity_by_name(entity_name);
         }
     }
@@ -590,7 +596,11 @@ impl Game {
         match global_effect {
             GlobalEffect::Save { file_name } => self.save_to_file(file_name),
             GlobalEffect::Load { file_name } => self.load_from_file(file_name),
-            GlobalEffect::TransitionLevel { level_file, loc, entity_to_trigger } => {
+            GlobalEffect::TransitionLevel {
+                level_file,
+                loc,
+                entity_to_trigger,
+            } => {
                 let spawn_loc = match loc {
                     None => SpawnLocation::MapDefault,
                     Some(marker) => SpawnLocation::Marker(marker),
@@ -616,34 +626,39 @@ impl Game {
     }
 
     fn trigger_entity_by_name(&mut self, entity_name: String) {
-        // Find entities by name and send TurnOn message to them
+        // Find entities by name and send TurnOn to all their switch links
         let entities = scripts::script_util::get_entities_by_name(
             &self.active_game_scene.world(),
-            &entity_name
+            &entity_name,
         );
 
         if entities.is_empty() {
+            println!("!! Unable to find entity");
             game_log!(DEBUG, "No entities found with name: {}", entity_name);
             return;
         }
 
-        // Use the first entity as the "from" source
-        let from_entity = entities[0];
+        game_log!(
+            DEBUG,
+            "Triggering {} entities with name: {}",
+            entities.len(),
+            entity_name
+        );
 
-        let effects: Vec<scripts::Effect> = entities.into_iter().map(|entity_id| {
-            scripts::Effect::Send {
-                msg: scripts::Message {
-                    to: entity_id,
-                    payload: scripts::MessagePayload::TurnOn { from: from_entity },
-                },
-            }
-        }).collect();
+        // For each found entity, send TurnOn to all its switch links (like a script would do)
+        let mut all_effects = Vec::new();
+        for entity_id in entities {
+            let switch_link_effect = scripts::script_util::send_to_all_switch_links(
+                &self.active_game_scene.world(),
+                entity_id,
+                scripts::MessagePayload::TurnOn { from: entity_id },
+            );
+            all_effects.push(switch_link_effect);
+        }
 
-        game_log!(DEBUG, "Triggering {} entities with name: {}", effects.len(), entity_name);
-
-        // Process the effects through the game scene
+        // Process all the effects through the game scene
         let global_effects = self.active_game_scene.handle_effects(
-            effects,
+            all_effects,
             &self.global_context,
             &self.options,
             &mut self.asset_cache,

@@ -321,3 +321,29 @@ _Updated with complete START entity activation analysis on 2025-10-25_
 My new plan:
 
 - Implement P$Service, verify entities 219/311/609 in earth.mis get parsed correctly (those are the ones with the choose service script)
+ID       | Type     | Names                                    | Template | Props | Links | Unparsed | Matched Items
+---------+----------+------------------------------------------+----------+-------+-------+----------+--------------------
+219      | Entity   | sym:Marker                               | -327     | 5     | 0     | Yes      | S$ChooseService
+  311 | Entity | sym:Marker | -327 | 5 | 0 | Yes | S$ChooseService
+609      | Entity   | sym:SendToMarines                        | -327     | 6     | 0     | Yes      | S$ChooseService
+
+- See if there is a quickw ay we can test activating these entities in station.mis:
+
+917 | Entity | sym:START_01 | -327 | 4 | 5 | No  
+918 | Entity | sym:START_02 | -327 | 3 | 5 | No  
+919 | Entity | sym:START_03 | -327 | 3 | 5 | No  
+920 | Entity | sym:START_04 | -327 | 3 | 1 | No  
+921 | Entity | sym:START_11 | -327 | 3 | 5 | No  
+922 | Entity | sym:START_12 | -327 | 3 | 5 | No  
+923 | Entity | sym:START_13 | -327 | 3 | 5 | No  
+924 | Entity | sym:START_14 | -327 | 3 | 1 | No  
+925 | Entity | sym:START_21 | -327 | 3 | 5 | No  
+926 | Entity | sym:START_22 | -327 | 3 | 5 | No  
+950 | Entity | sym:START_23 | -327 | 3 | 5 | No  
+951 | Entity | sym:START_24 | -327 | 3 | 1 | No
+
+Mysteries:
+
+- Is Quest Bit being set correctly?
+- Why are the entities still not being triggered? May need more logging on that path
+- Why is there a prop crash when going to the end of ChooseService
