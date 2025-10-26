@@ -4,6 +4,7 @@ pub mod effect;
 mod base_button;
 mod base_elevator;
 mod base_monster;
+mod choose_mission;
 mod choose_service;
 mod core_room;
 mod create_sound;
@@ -67,6 +68,7 @@ use crate::{physics::PhysicsWorld, time::Time};
 
 use crate::gui::gui_script;
 
+use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
@@ -499,7 +501,7 @@ impl ScriptWorld {
 
             // station:
             "oldstylebaseelevator" => Box::new(UnimplementedScript::new(&script_name)),
-            "choosemission" => Box::new(PanicOnLoadScript::new(&script_name)),
+            "choosemission" => Box::new(ChooseMissionScript::new()),
 
             // "trapquestbit" => Box::new(UnimplementedScript {
             //     name: "trapquestbit".to_owned(),
