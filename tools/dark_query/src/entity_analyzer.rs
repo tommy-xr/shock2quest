@@ -662,11 +662,27 @@ pub fn filter_entities(
             }
             // No prefix: search across all categories (properties, links, scripts)
             else {
-                let glob = Pattern::new(filter_pattern).ok();
+                let glob = Pattern::new(&filter_pattern.to_lowercase()).ok();
                 filtered.retain_mut(|summary| {
                     let mut matches = Vec::new();
 
                     if let Some(g) = &glob {
+                        // Check entity names
+                        if let Some(sym_name) = &summary.names.sym_name {
+                            if g.matches(&sym_name.to_lowercase()) {
+                                matches.push(format!("SymName:{}", sym_name));
+                            }
+                        }
+                        if let Some(obj_name) = &summary.names.obj_name {
+                            if g.matches(&obj_name.to_lowercase()) {
+                                matches.push(format!("ObjName:{}", obj_name));
+                            }
+                        }
+                        if let Some(short_name) = &summary.names.obj_short_name {
+                            if g.matches(&short_name.to_lowercase()) {
+                                matches.push(format!("ObjShortName:{}", short_name));
+                            }
+                        }
                         // Check properties (check both cleaned and original P$ names)
                         for prop in &summary.parsed_properties {
                             if property_matches_glob(prop, g, &known_p_names) {
@@ -692,6 +708,23 @@ pub fn filter_entities(
                         }
                     } else {
                         // Fallback to simple contains matching across all categories
+                        let pattern_lower = filter_pattern.to_lowercase();
+                        // Check entity names
+                        if let Some(sym_name) = &summary.names.sym_name {
+                            if sym_name.to_lowercase().contains(&pattern_lower) {
+                                matches.push(format!("SymName:{}", sym_name));
+                            }
+                        }
+                        if let Some(obj_name) = &summary.names.obj_name {
+                            if obj_name.to_lowercase().contains(&pattern_lower) {
+                                matches.push(format!("ObjName:{}", obj_name));
+                            }
+                        }
+                        if let Some(short_name) = &summary.names.obj_short_name {
+                            if short_name.to_lowercase().contains(&pattern_lower) {
+                                matches.push(format!("ObjShortName:{}", short_name));
+                            }
+                        }
                         for prop in &summary.parsed_properties {
                             if property_matches_pattern(prop, filter_pattern, &known_p_names) {
                                 matches.push(prop.clone()); // Always show the clean property name
@@ -707,7 +740,6 @@ pub fn filter_entities(
                                 matches.push(format!("L${}", link_type));
                             }
                         }
-                        let pattern_lower = filter_pattern.to_lowercase();
                         for script in &summary.script_names {
                             if script.to_lowercase().contains(&pattern_lower) {
                                 matches.push(format!("S${}", script));
