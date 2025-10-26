@@ -1303,9 +1303,15 @@ impl Mission {
                 }
                 Effect::PlaySound { handle, name } => {
                     let audio_file = resolve_schema(global_context, &name.to_string());
-                    let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{audio_file}.wav"));
-                    info!("Playing clip: {} handle: {:?}", name, &handle);
-                    engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                    let maybe_audio_clip =
+                        asset_cache.get_opt(&AUDIO_IMPORTER, &format!("{audio_file}.wav"));
+
+                    if let Some(audio_clip) = maybe_audio_clip {
+                        info!("Playing clip: {} handle: {:?}", name, &handle);
+                        engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                    } else {
+                        warn!("Unable to load clip: {}", name)
+                    }
                 }
                 // TODO: Global effect
                 Effect::PlayEnvironmentalSound {
