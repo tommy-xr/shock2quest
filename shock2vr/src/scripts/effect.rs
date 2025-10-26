@@ -30,6 +30,7 @@ pub enum GlobalEffect {
     TransitionLevel {
         level_file: String,
         loc: Option<i32>,
+        entity_to_trigger: Option<String>,
     },
 
     // Test the reload functionality (as if saving + loading)

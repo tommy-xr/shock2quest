@@ -162,6 +162,17 @@ impl Game {
         );
         self.active_game_scene = Box::new(active_mission);
     }
+
+    fn switch_mission_with_trigger(&mut self, level_name: String, spawn_loc: SpawnLocation, entity_to_trigger: Option<String>) {
+        // First, switch to the new mission
+        self.switch_mission(level_name, spawn_loc);
+
+        // Then, trigger the entity if specified
+        if let Some(entity_name) = entity_to_trigger {
+            self.trigger_entity_by_name(entity_name);
+        }
+    }
+
     pub fn init(_file_system: &dyn FileSystem, options: GameOptions) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
@@ -579,13 +590,13 @@ impl Game {
         match global_effect {
             GlobalEffect::Save { file_name } => self.save_to_file(file_name),
             GlobalEffect::Load { file_name } => self.load_from_file(file_name),
-            GlobalEffect::TransitionLevel { level_file, loc } => {
+            GlobalEffect::TransitionLevel { level_file, loc, entity_to_trigger } => {
                 let spawn_loc = match loc {
                     None => SpawnLocation::MapDefault,
                     Some(marker) => SpawnLocation::Marker(marker),
                 };
 
-                self.switch_mission(level_file, spawn_loc);
+                self.switch_mission_with_trigger(level_file, spawn_loc, entity_to_trigger);
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = {
@@ -601,6 +612,47 @@ impl Game {
                     SpawnLocation::PositionRotation(position, rotation),
                 );
             }
+        }
+    }
+
+    fn trigger_entity_by_name(&mut self, entity_name: String) {
+        // Find entities by name and send TurnOn message to them
+        let entities = scripts::script_util::get_entities_by_name(
+            &self.active_game_scene.world(),
+            &entity_name
+        );
+
+        if entities.is_empty() {
+            game_log!(DEBUG, "No entities found with name: {}", entity_name);
+            return;
+        }
+
+        // Use the first entity as the "from" source
+        let from_entity = entities[0];
+
+        let effects: Vec<scripts::Effect> = entities.into_iter().map(|entity_id| {
+            scripts::Effect::Send {
+                msg: scripts::Message {
+                    to: entity_id,
+                    payload: scripts::MessagePayload::TurnOn { from: from_entity },
+                },
+            }
+        }).collect();
+
+        game_log!(DEBUG, "Triggering {} entities with name: {}", effects.len(), entity_name);
+
+        // Process the effects through the game scene
+        let global_effects = self.active_game_scene.handle_effects(
+            effects,
+            &self.global_context,
+            &self.options,
+            &mut self.asset_cache,
+            &mut self.audio_context,
+        );
+
+        // Handle any global effects that result from triggering the entities
+        for effect in global_effects {
+            self.handle_global_effect(effect);
         }
     }
 
