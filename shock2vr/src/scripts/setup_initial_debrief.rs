@@ -29,10 +29,14 @@ impl Script for SetupInitialDebriefScript {
                 // From analysis, we know DEBRIEF1-DOOR is controlled by an Inverter
 
                 // First, try to find DEBRIEF1-DOOR entity
-                let debrief_door_entities = script_util::get_entities_by_name(world, "DEBRIEF1-DOOR");
+                let debrief_door_entities =
+                    script_util::get_entities_by_name(world, "DEBRIEF1-DOOR");
 
                 if let Some(door_entity) = debrief_door_entities.first() {
-                    println!("SetupInitialDebrief: Found DEBRIEF1-DOOR entity {:?}", door_entity);
+                    println!(
+                        "SetupInitialDebrief: Found DEBRIEF1-DOOR entity {:?}",
+                        door_entity
+                    );
 
                     // Send TurnOn directly to the door
                     Effect::Send {

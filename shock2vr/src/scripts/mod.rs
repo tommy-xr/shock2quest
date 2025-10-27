@@ -25,8 +25,8 @@ mod obj_consume_button;
 mod once_room;
 mod once_router;
 mod room_trigger;
-mod setup_initial_debrief;
 pub mod script_util;
+mod setup_initial_debrief;
 mod std_door;
 mod tool_consumable;
 mod trap_delay;
@@ -655,7 +655,9 @@ impl ScriptWorld {
             "reducepsi" => Box::new(UnimplementedScript::new(&script_name)),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
             "researchablescript" => Box::new(UnimplementedScript::new(&script_name)),
-            "setupinitialdebrief" => Box::new(setup_initial_debrief::SetupInitialDebriefScript::new()),
+            "setupinitialdebrief" => {
+                Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())
+            }
             "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
             // Need to read ambient hacked property
             "triggerecology" => Box::new(UnimplementedScript::new(&script_name)),

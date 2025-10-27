@@ -1889,14 +1889,21 @@ impl Mission {
         for entity_id in entities {
             // Get all switch links and create TurnOn messages for each target
             let switch_links = scripts::script_util::get_all_switch_links(&self.world, entity_id);
-            println!("Found {} switch links for entity {:?}", switch_links.len(), entity_id);
+            println!(
+                "Found {} switch links for entity {:?}",
+                switch_links.len(),
+                entity_id
+            );
 
             for target_entity_id in switch_links {
                 let message = Message {
                     payload: MessagePayload::TurnOn { from: entity_id },
                     to: target_entity_id,
                 };
-                println!("Creating TurnOn message from {:?} to {:?}", entity_id, target_entity_id);
+                println!(
+                    "Creating TurnOn message from {:?} to {:?}",
+                    entity_id, target_entity_id
+                );
                 messages.push(message);
             }
         }

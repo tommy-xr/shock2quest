@@ -1,4 +1,4 @@
-use dark::properties::PropService;
+use dark::properties::{PropService, QuestBitValue};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
@@ -38,6 +38,11 @@ impl Script for ChooseServiceScript {
                 entities_to_trigger.push(start_entity);
 
                 Effect::Multiple(vec![
+                    // Updat quest bit
+                    Effect::SetQuestBit {
+                        quest_bit_name: "training_year_1".to_string(),
+                        quest_bit_value: QuestBitValue::COMPLETE,
+                    },
                     Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
                         level_file: "station.mis".to_owned(),
                         loc: None,
