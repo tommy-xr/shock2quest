@@ -20,6 +20,7 @@ mod prop_quest_bit;
 mod prop_render_type;
 mod prop_replicator;
 mod prop_room_gravity;
+mod prop_service;
 mod prop_trip_flags;
 mod prop_tweq;
 
@@ -45,6 +46,7 @@ pub use prop_quest_bit::*;
 pub use prop_render_type::*;
 pub use prop_replicator::*;
 pub use prop_room_gravity::*;
+pub use prop_service::*;
 pub use prop_trip_flags::*;
 pub use prop_tweq::*;
 
@@ -1011,6 +1013,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$SelfIllum",
             |reader, _len| read_single(reader),
             PropSelfIllumination,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Service",
+            |reader, _len| read_u32(reader),
+            PropService,
             accumulator::latest,
         ),
         define_prop(

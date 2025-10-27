@@ -31,6 +31,7 @@ impl Script for TrapTripLevel {
                 Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
                     level_file: format!("{}.mis", level_file.0),
                     loc: maybe_dest_loc,
+                    entities_to_trigger: vec![],
                 })
             }
             _ => Effect::NoEffect,

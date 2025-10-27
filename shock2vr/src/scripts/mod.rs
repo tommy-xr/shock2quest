@@ -4,6 +4,7 @@ pub mod effect;
 mod base_button;
 mod base_elevator;
 mod base_monster;
+mod choose_mission;
 mod choose_service;
 mod core_room;
 mod create_sound;
@@ -25,6 +26,7 @@ mod once_room;
 mod once_router;
 mod room_trigger;
 pub mod script_util;
+mod setup_initial_debrief;
 mod std_door;
 mod tool_consumable;
 mod trap_delay;
@@ -60,13 +62,15 @@ use dark::motion::MotionFlags;
 pub use effect::*;
 
 use shipyard::{EntityId, World};
-use tracing::{info, span, trace, warn, Level};
+use tracing::{info, span, warn, Level};
 
+use crate::util::debug_entity;
 use crate::vr_config::Handedness;
 use crate::{physics::PhysicsWorld, time::Time};
 
 use crate::gui::gui_script;
 
+use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
@@ -282,6 +286,7 @@ struct PanicOnLoadScript {
 }
 
 impl PanicOnLoadScript {
+    #[allow(dead_code)]
     pub fn new(name: &str) -> PanicOnLoadScript {
         PanicOnLoadScript {
             name: name.to_owned(),
@@ -499,7 +504,7 @@ impl ScriptWorld {
 
             // station:
             "oldstylebaseelevator" => Box::new(UnimplementedScript::new(&script_name)),
-            "choosemission" => Box::new(PanicOnLoadScript::new(&script_name)),
+            "choosemission" => Box::new(ChooseMissionScript::new()),
 
             // "trapquestbit" => Box::new(UnimplementedScript {
             //     name: "trapquestbit".to_owned(),
@@ -651,7 +656,9 @@ impl ScriptWorld {
             "reducepsi" => Box::new(UnimplementedScript::new(&script_name)),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
             "researchablescript" => Box::new(UnimplementedScript::new(&script_name)),
-            "setupinitialdebrief" => Box::new(NoopScript {}),
+            "setupinitialdebrief" => {
+                Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())
+            }
             "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
             // Need to read ambient hacked property
             "triggerecology" => Box::new(UnimplementedScript::new(&script_name)),
@@ -714,11 +721,26 @@ impl ScriptWorld {
                 slayed_entities.insert(to_entity_id);
             }
 
+            let mut is_turn_on = false;
+            match msg.payload {
+                MessagePayload::TurnOn { from: _ } => is_turn_on = true,
+                _ => {}
+            }
+
+            if is_turn_on {
+                info!("Got turn on message: {}", debug_entity(world, to_entity_id));
+            }
+
             self.entity_to_scripts
                 .entry(to_entity_id)
                 .and_modify(|scripts| {
                     for script in scripts {
-                        trace!("handling message {:?} to: {:?}", &msg.payload, to_entity_id);
+                        if is_turn_on {
+                            info!(
+                                "-- processing turn on message: {}",
+                                debug_entity(world, to_entity_id)
+                            );
+                        }
                         let eff = script.handle_message(to_entity_id, world, physics, &msg.payload);
                         produced_effects.push(eff);
                     }
@@ -741,6 +763,7 @@ impl ScriptWorld {
         let flattened_effects = Effect::flatten(produced_effects);
 
         // Filter out message effects, add to queue
+        // TODO: Is this necessary to filter out and manually queue?
         let mut ret = Vec::new();
         for eff in flattened_effects {
             match eff {

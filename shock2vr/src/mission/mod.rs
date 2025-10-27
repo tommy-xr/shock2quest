@@ -162,6 +162,7 @@ pub struct Mission {
     pub right_hand: VirtualHand,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
+    pub pending_entity_triggers: Vec<String>,
 }
 
 pub struct GlobalContext {
@@ -384,6 +385,7 @@ impl Mission {
             hit_boxes: HitBoxManager::new(),
             visibility_engine: Box::new(PortalVisibilityEngine::new()),
             teleport_system,
+            pending_entity_triggers: Vec::new(),
         }
     }
 
@@ -550,6 +552,23 @@ impl Mission {
             self.script_world.update(&self.world, &self.physics, time)
         );
         effects.append(&mut script_effects);
+
+        // Handle any pending entity triggers now that scripts are initialized
+        if !self.pending_entity_triggers.is_empty() {
+            println!(
+                "Processing {} pending entity triggers after script initialization",
+                self.pending_entity_triggers.len()
+            );
+            let pending_triggers = self.pending_entity_triggers.drain(..).collect::<Vec<_>>();
+            for entity_name in pending_triggers {
+                println!("Triggering delayed entity: {}", entity_name);
+                let messages = self.trigger_entity_by_name_internal(entity_name);
+                for message in messages {
+                    println!("Dispatching message: {:?}", message);
+                    self.script_world.dispatch(message);
+                }
+            }
+        }
 
         self.world.run(run_tweq);
         self.world.run(run_bitmap_animation);
@@ -1188,6 +1207,11 @@ impl Mission {
                     }
                 }
 
+                Effect::Send { msg } => {
+                    println!("handling Effect::Send event: {:?}", msg);
+                    self.script_world.dispatch(msg);
+                }
+
                 Effect::SetUI {
                     parent_entity,
                     handle,
@@ -1303,11 +1327,16 @@ impl Mission {
                 }
                 Effect::PlaySound { handle, name } => {
                     let audio_file = resolve_schema(global_context, &name.to_string());
-                    let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{audio_file}.wav"));
-                    info!("Playing clip: {} handle: {:?}", name, &handle);
-                    engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                    let maybe_audio_clip =
+                        asset_cache.get_opt(&AUDIO_IMPORTER, &format!("{audio_file}.wav"));
+
+                    if let Some(audio_clip) = maybe_audio_clip {
+                        info!("Playing clip: {} handle: {:?}", name, &handle);
+                        engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                    } else {
+                        warn!("Unable to load clip: {}", name)
+                    }
                 }
-                // TODO: Global effect
                 Effect::PlayEnvironmentalSound {
                     query,
                     position,
@@ -1840,6 +1869,46 @@ impl Mission {
             }
         }
     }
+
+    /// Queue an entity to be triggered after scripts are initialized
+    pub fn queue_entity_trigger(&mut self, entity_name: String) {
+        println!("Queueing entity trigger for: {}", entity_name);
+        self.pending_entity_triggers.push(entity_name);
+    }
+
+    /// Internal method to trigger an entity and return messages to dispatch
+    fn trigger_entity_by_name_internal(&mut self, entity_name: String) -> Vec<Message> {
+        let entities = scripts::script_util::get_entities_by_name(&self.world, &entity_name);
+        println!(
+            "Triggering {} entities with name: {}",
+            entities.len(),
+            entity_name
+        );
+
+        let mut messages = Vec::new();
+        for entity_id in entities {
+            // Get all switch links and create TurnOn messages for each target
+            let switch_links = scripts::script_util::get_all_switch_links(&self.world, entity_id);
+            println!(
+                "Found {} switch links for entity {:?}",
+                switch_links.len(),
+                entity_id
+            );
+
+            for target_entity_id in switch_links {
+                let message = Message {
+                    payload: MessagePayload::TurnOn { from: entity_id },
+                    to: target_entity_id,
+                };
+                println!(
+                    "Creating TurnOn message from {:?} to {:?}",
+                    entity_id, target_entity_id
+                );
+                messages.push(message);
+            }
+        }
+        messages
+    }
 }
 
 fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, EntityMetadata> {
@@ -2098,5 +2167,9 @@ impl crate::game_scene::GameScene for Mission {
 
     fn scene_name(&self) -> &str {
         &self.level_name
+    }
+
+    fn queue_entity_trigger(&mut self, entity_name: String) {
+        self.queue_entity_trigger(entity_name);
     }
 }

@@ -162,6 +162,23 @@ impl Game {
         );
         self.active_game_scene = Box::new(active_mission);
     }
+
+    fn switch_mission_with_trigger(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        entities_to_trigger: Vec<String>,
+    ) {
+        // First, switch to the new mission
+        self.switch_mission(level_name, spawn_loc);
+
+        // Then, queue the entities to be triggered after scripts are initialized
+        for entity_name in entities_to_trigger {
+            println!("Queueing entity trigger for: {}", entity_name);
+            self.active_game_scene.queue_entity_trigger(entity_name);
+        }
+    }
+
     pub fn init(_file_system: &dyn FileSystem, options: GameOptions) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
@@ -579,13 +596,17 @@ impl Game {
         match global_effect {
             GlobalEffect::Save { file_name } => self.save_to_file(file_name),
             GlobalEffect::Load { file_name } => self.load_from_file(file_name),
-            GlobalEffect::TransitionLevel { level_file, loc } => {
+            GlobalEffect::TransitionLevel {
+                level_file,
+                loc,
+                entities_to_trigger,
+            } => {
                 let spawn_loc = match loc {
                     None => SpawnLocation::MapDefault,
                     Some(marker) => SpawnLocation::Marker(marker),
                 };
 
-                self.switch_mission(level_file, spawn_loc);
+                self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = {
