@@ -31,7 +31,7 @@ impl Script for LevelChangeButton {
                 Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
                     level_file: format!("{}.mis", level_file.0),
                     loc: maybe_dest_loc,
-                    entity_to_trigger: None,
+                    entities_to_trigger: vec![],
                 })
             }
             _ => Effect::NoEffect,

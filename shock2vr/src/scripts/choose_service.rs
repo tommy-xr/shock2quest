@@ -26,22 +26,30 @@ impl Script for ChooseServiceScript {
                 let v_service = world.borrow::<View<PropService>>().unwrap();
                 let service = v_service.get(entity_id).map(|s| s.0).unwrap_or(0);
 
-                // Determine which entity to trigger based on service type
-                let entity_to_trigger = match service {
-                    0 => Some("START_01".to_string()), // Marines
-                    1 => Some("START_11".to_string()), // Navy
-                    2 => Some("START_21".to_string()), // OSA
-                    _ => {
-                        // Unknown service type, default to Marines
-                        Some("START_01".to_string())
-                    }
-                };
+                // Determine which entities to trigger based on service type
+                let mut entities_to_trigger = vec!["DEBRIEF1-DOOR".to_string()]; // Always trigger DEBRIEF1-DOOR
 
-                Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
-                    level_file: "station.mis".to_owned(),
-                    loc: None,
-                    entity_to_trigger,
-                })
+                let start_entity = match service {
+                    0 => "START_01".to_string(), // Marines
+                    1 => "START_11".to_string(), // Navy
+                    2 => "START_21".to_string(), // OSA
+                    _ => "START_01".to_string(), // Unknown service type, default to Marines
+                };
+                entities_to_trigger.push(start_entity);
+
+                Effect::Multiple(vec![
+                    Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
+                        level_file: "station.mis".to_owned(),
+                        loc: None,
+                        entities_to_trigger,
+                    }),
+                    // Also trigger switch links in the current mission
+                    super::script_util::send_to_all_switch_links_and_self(
+                        world,
+                        entity_id,
+                        MessagePayload::TurnOn { from: entity_id },
+                    ),
+                ])
             }
             _ => Effect::NoEffect,
         }

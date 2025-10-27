@@ -86,7 +86,7 @@ impl Gui<ElevatorGuiState, ElevatorGuiMsg> for ElevatorGui {
                 Effect::GlobalEffect(crate::scripts::GlobalEffect::TransitionLevel {
                     level_file: level.clone(),
                     loc: Some(22),
-                    entity_to_trigger: None,
+                    entities_to_trigger: vec![],
                 }),
             ),
         }

@@ -63,7 +63,7 @@ impl Command for TransitionLevelCommand {
         Effect::GlobalEffect(crate::scripts::GlobalEffect::TransitionLevel {
             level_file: "medsci1.mis".to_owned(),
             loc: None,
-            entity_to_trigger: None,
+            entities_to_trigger: vec![],
         })
     }
 }

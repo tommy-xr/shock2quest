@@ -167,13 +167,13 @@ impl Game {
         &mut self,
         level_name: String,
         spawn_loc: SpawnLocation,
-        entity_to_trigger: Option<String>,
+        entities_to_trigger: Vec<String>,
     ) {
         // First, switch to the new mission
         self.switch_mission(level_name, spawn_loc);
 
-        // Then, queue the entity to be triggered after scripts are initialized
-        if let Some(entity_name) = entity_to_trigger {
+        // Then, queue the entities to be triggered after scripts are initialized
+        for entity_name in entities_to_trigger {
             println!("Queueing entity trigger for: {}", entity_name);
             self.active_game_scene.queue_entity_trigger(entity_name);
         }
@@ -599,14 +599,14 @@ impl Game {
             GlobalEffect::TransitionLevel {
                 level_file,
                 loc,
-                entity_to_trigger,
+                entities_to_trigger,
             } => {
                 let spawn_loc = match loc {
                     None => SpawnLocation::MapDefault,
                     Some(marker) => SpawnLocation::Marker(marker),
                 };
 
-                self.switch_mission_with_trigger(level_file, spawn_loc, entity_to_trigger);
+                self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = {
