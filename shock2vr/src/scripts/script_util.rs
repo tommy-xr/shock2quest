@@ -230,7 +230,6 @@ pub fn send_to_all_switch_links(
     producing_entity_id: EntityId,
     message: MessagePayload,
 ) -> Effect {
-    let _links = world.borrow::<View<Links>>().unwrap();
     let entities = get_all_switch_links(world, producing_entity_id);
     let effects = entities
         .iter()

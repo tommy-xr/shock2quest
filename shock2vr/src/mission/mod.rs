@@ -1188,6 +1188,11 @@ impl Mission {
                     }
                 }
 
+                Effect::Send { msg } => {
+                    println!("handling Effect::Send event: {:?}", msg);
+                    self.script_world.dispatch(msg);
+                }
+
                 Effect::SetUI {
                     parent_entity,
                     handle,

@@ -63,6 +63,7 @@ pub use effect::*;
 use shipyard::{EntityId, World};
 use tracing::{info, span, trace, warn, Level};
 
+use crate::util::debug_entity;
 use crate::vr_config::Handedness;
 use crate::{physics::PhysicsWorld, time::Time};
 
@@ -695,6 +696,10 @@ impl ScriptWorld {
                 self.entity_to_scripts
                     .entry(*entity_id)
                     .and_modify(|scripts| {
+                        println!(
+                            "*** Initializing entity: {:?}",
+                            debug_entity(world, *entity_id)
+                        );
                         for script in scripts {
                             let eff = script.initialize(*entity_id, world);
                             produced_effects.push(eff);
@@ -716,11 +721,26 @@ impl ScriptWorld {
                 slayed_entities.insert(to_entity_id);
             }
 
+            let mut is_turn_on = false;
+            match msg.payload {
+                MessagePayload::TurnOn { from: _ } => is_turn_on = true,
+                _ => {}
+            }
+
+            if (is_turn_on) {
+                println!("Got turn on message: {}", debug_entity(world, to_entity_id));
+            }
+
             self.entity_to_scripts
                 .entry(to_entity_id)
                 .and_modify(|scripts| {
                     for script in scripts {
-                        trace!("handling message {:?} to: {:?}", &msg.payload, to_entity_id);
+                        if (is_turn_on) {
+                            println!(
+                                "-- processing turn on message: {}",
+                                debug_entity(world, to_entity_id)
+                            );
+                        }
                         let eff = script.handle_message(to_entity_id, world, physics, &msg.payload);
                         produced_effects.push(eff);
                     }
@@ -743,6 +763,7 @@ impl ScriptWorld {
         let flattened_effects = Effect::flatten(produced_effects);
 
         // Filter out message effects, add to queue
+        // TODO: Is this necessary to filter out and manually queue?
         let mut ret = Vec::new();
         for eff in flattened_effects {
             match eff {

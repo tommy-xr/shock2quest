@@ -638,8 +638,7 @@ impl Game {
             return;
         }
 
-        game_log!(
-            DEBUG,
+        println!(
             "Triggering {} entities with name: {}",
             entities.len(),
             entity_name
@@ -653,6 +652,7 @@ impl Game {
                 entity_id,
                 scripts::MessagePayload::TurnOn { from: entity_id },
             );
+            println!("-- sending effects: {:?}", switch_link_effect);
             all_effects.push(switch_link_effect);
         }
 
