@@ -43,11 +43,17 @@ impl Script for ChooseServiceScript {
                         quest_bit_name: "training_year_1".to_string(),
                         quest_bit_value: QuestBitValue::COMPLETE,
                     },
+                    // TODO: Fully implement station.msi
                     Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
-                        level_file: "station.mis".to_owned(),
+                        level_file: "medsci1.mis".to_owned(),
                         loc: None,
                         entities_to_trigger,
                     }),
+                    // Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
+                    //     level_file: "station.mis".to_owned(),
+                    //     loc: None,
+                    //     entities_to_trigger,
+                    // }),
                     // Also trigger switch links in the current mission
                     super::script_util::send_to_all_switch_links_and_self(
                         world,

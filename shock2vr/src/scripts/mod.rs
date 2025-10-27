@@ -62,7 +62,7 @@ use dark::motion::MotionFlags;
 pub use effect::*;
 
 use shipyard::{EntityId, World};
-use tracing::{info, span, trace, warn, Level};
+use tracing::{info, span, warn, Level};
 
 use crate::util::debug_entity;
 use crate::vr_config::Handedness;
@@ -286,6 +286,7 @@ struct PanicOnLoadScript {
 }
 
 impl PanicOnLoadScript {
+    #[allow(dead_code)]
     pub fn new(name: &str) -> PanicOnLoadScript {
         PanicOnLoadScript {
             name: name.to_owned(),
@@ -699,10 +700,6 @@ impl ScriptWorld {
                 self.entity_to_scripts
                     .entry(*entity_id)
                     .and_modify(|scripts| {
-                        println!(
-                            "*** Initializing entity: {:?}",
-                            debug_entity(world, *entity_id)
-                        );
                         for script in scripts {
                             let eff = script.initialize(*entity_id, world);
                             produced_effects.push(eff);
@@ -730,16 +727,16 @@ impl ScriptWorld {
                 _ => {}
             }
 
-            if (is_turn_on) {
-                println!("Got turn on message: {}", debug_entity(world, to_entity_id));
+            if is_turn_on {
+                info!("Got turn on message: {}", debug_entity(world, to_entity_id));
             }
 
             self.entity_to_scripts
                 .entry(to_entity_id)
                 .and_modify(|scripts| {
                     for script in scripts {
-                        if (is_turn_on) {
-                            println!(
+                        if is_turn_on {
+                            info!(
                                 "-- processing turn on message: {}",
                                 debug_entity(world, to_entity_id)
                             );

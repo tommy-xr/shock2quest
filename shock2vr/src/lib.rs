@@ -625,52 +625,6 @@ impl Game {
         }
     }
 
-    fn trigger_entity_by_name(&mut self, entity_name: String) {
-        // Find entities by name and send TurnOn to all their switch links
-        let entities = scripts::script_util::get_entities_by_name(
-            &self.active_game_scene.world(),
-            &entity_name,
-        );
-
-        if entities.is_empty() {
-            println!("!! Unable to find entity");
-            game_log!(DEBUG, "No entities found with name: {}", entity_name);
-            return;
-        }
-
-        println!(
-            "Triggering {} entities with name: {}",
-            entities.len(),
-            entity_name
-        );
-
-        // For each found entity, send TurnOn to all its switch links (like a script would do)
-        let mut all_effects = Vec::new();
-        for entity_id in entities {
-            let switch_link_effect = scripts::script_util::send_to_all_switch_links(
-                &self.active_game_scene.world(),
-                entity_id,
-                scripts::MessagePayload::TurnOn { from: entity_id },
-            );
-            println!("-- sending effects: {:?}", switch_link_effect);
-            all_effects.push(switch_link_effect);
-        }
-
-        // Process all the effects through the game scene
-        let global_effects = self.active_game_scene.handle_effects(
-            all_effects,
-            &self.global_context,
-            &self.options,
-            &mut self.asset_cache,
-            &mut self.audio_context,
-        );
-
-        // Handle any global effects that result from triggering the entities
-        for effect in global_effects {
-            self.handle_global_effect(effect);
-        }
-    }
-
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
         self.active_game_scene.get_hand_spotlights(&self.options)

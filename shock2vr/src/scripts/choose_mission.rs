@@ -1,14 +1,8 @@
-use cgmath::Vector3;
-use dark::properties::{
-    Link, PropDestLevel, PropDestLoc, PropPosition, PropStartLoc, QuestBitValue,
-};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
+use dark::properties::{PropDestLevel, PropDestLoc, QuestBitValue};
+use shipyard::{EntityId, Get, UniqueView, View, World};
+use tracing::info;
 
-use crate::{
-    physics::PhysicsWorld,
-    quest_info::QuestInfo,
-    scripts::script_util::{get_all_links_of_type, get_first_link_of_type},
-};
+use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{Effect, MessagePayload, Script};
 
@@ -62,7 +56,10 @@ impl Script for ChooseMissionScript {
                 let set_year_effect = Self::set_training_year(new_year);
 
                 if new_year < 4 {
-                    println!("-- Handling year < 4 chase");
+                    info!(
+                        "ChooseMission: Handling year {} (< 4), returning to station.mis",
+                        new_year
+                    );
                     // For years 1, 2, 3: only teleport to PropDestLoc (stay in current mission)
 
                     Effect::Multiple(vec![

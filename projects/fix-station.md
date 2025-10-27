@@ -347,3 +347,44 @@ Mysteries:
 - Is Quest Bit being set correctly?
 - Why are the entities still not being triggered? May need more logging on that path
 - Why is there a prop crash when going to the end of ChooseService
+
+## Latest Progress (2025-10-27)
+
+### Code Quality Improvements
+- ✅ **Fixed all compiler warnings in choose_mission.rs**:
+  - Removed unused imports: `cgmath::Vector3`, `Link`, `PropPosition`, `PropStartLoc`, `IntoIter`, `IntoWithId`
+  - Removed unused utility imports: `get_all_links_of_type`, `get_first_link_of_type`
+  - Code now compiles without warnings
+
+- ✅ **Fixed debug logging issues in scripts/mod.rs**:
+  - Removed unused `trace` import from tracing crate
+  - Fixed unnecessary parentheses around if conditions (Clippy warnings)
+  - Added `#[allow(dead_code)]` annotations for debugging methods
+
+- ✅ **Build validation passed**: All code now compiles cleanly without warnings
+
+### Current Implementation Status
+
+**Working Components:**
+- ✅ ChooseMissionScript implementation with year progression logic (years 1-4)
+- ✅ ChooseServiceScript with P$Service property detection
+- ✅ Quest bit system for tracking training years
+- ✅ Level transition infrastructure
+- ✅ Entity triggering system for station.mis initialization
+
+**Current Focus Areas:**
+- 🔍 **P$Service Property Parsing**: Ensuring entities 219/311/609 in earth.mis parse correctly
+- 🔍 **Station Entity Activation**: Testing START_XX entity triggering mechanism
+- 🔍 **Quest Bit Verification**: Confirming quest bits are set/read correctly
+- 🔍 **PropService Property Crash**: Investigating property access issues in ChooseService
+
+**Debug Infrastructure:**
+- Enhanced logging in entity message processing
+- Station iteration tracking via quest bits (`training_year_1`, `training_year_2`, etc.)
+- Entity-to-trigger system for activating specific START entities
+
+### Next Steps
+1. **Verify P$Service property parsing** for earth.mis entities (219, 311, 609)
+2. **Test START entity activation** in station.mis (entities 917-951)
+3. **Debug quest bit persistence** across level transitions
+4. **Resolve PropService property access issues** causing crashes
