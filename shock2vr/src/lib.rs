@@ -172,10 +172,10 @@ impl Game {
         // First, switch to the new mission
         self.switch_mission(level_name, spawn_loc);
 
-        // Then, trigger the entity if specified
+        // Then, queue the entity to be triggered after scripts are initialized
         if let Some(entity_name) = entity_to_trigger {
-            println!("Trying to trigger entity: {}", entity_name);
-            self.trigger_entity_by_name(entity_name);
+            println!("Queueing entity trigger for: {}", entity_name);
+            self.active_game_scene.queue_entity_trigger(entity_name);
         }
     }
 

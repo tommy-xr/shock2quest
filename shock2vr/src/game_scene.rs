@@ -85,4 +85,11 @@ pub trait GameScene {
             .map(|q| q.clone())
             .unwrap_or_else(|_| QuestInfo::new())
     }
+
+    /// Queue an entity to be triggered after scripts are initialized
+    /// This is used for delayed entity triggering during level transitions
+    fn queue_entity_trigger(&mut self, entity_name: String) {
+        // Default implementation for scenes that don't support entity triggering
+        let _ = entity_name;
+    }
 }
