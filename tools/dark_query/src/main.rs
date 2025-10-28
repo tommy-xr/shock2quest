@@ -16,10 +16,6 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Mission file to load (loads shock2.gam by default, or shock2.gam + mission if specified)
-    #[arg(short, long)]
-    mission: Option<String>,
-
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -27,28 +23,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List all templates and entities
-    Ls {
-        /// Show only templates and entities with unparsed properties or links
-        #[arg(long)]
-        only_unparsed: bool,
+    /// Query entities and templates from gamesys and optional mission
+    Entities {
+        /// Mission file to load (loads shock2.gam by default, or shock2.gam + mission if specified)
+        mission: Option<String>,
+
+        /// Specific entity or template ID to show details for (positive for entities, negative for templates)
+        id: Option<i32>,
 
         /// Filter by property or link name (supports wildcards)
         #[arg(long)]
         filter: Option<String>,
 
+        /// Show only entities/templates with unparsed properties or links
+        #[arg(long)]
+        only_unparsed: bool,
+
         /// Limit the number of results displayed
         #[arg(long)]
         limit: Option<usize>,
-    },
-    /// Show details for a particular entity or template
-    Show {
-        /// Entity ID or template ID to show details for
-        entity_id: i32,
-
-        /// Filter properties or links by name (supports wildcards)
-        #[arg(long)]
-        filter: Option<String>,
     },
 }
 
@@ -75,34 +68,26 @@ fn main() -> Result<()> {
 
     info!("Starting dark_query");
 
-    if let Some(mission) = &cli.mission {
-        info!("Mission specified: {}", mission);
-    } else {
-        info!("No mission specified, will use shock2.gam only");
-    }
-
     match cli.command {
-        Commands::Ls {
-            only_unparsed,
+        Commands::Entities {
+            mission,
+            id,
             filter,
+            only_unparsed,
             limit,
         } => {
-            handle_ls_command(
-                cli.mission.as_deref(),
-                only_unparsed,
-                filter.as_deref(),
-                limit,
-            )?;
-        }
-        Commands::Show { entity_id, filter } => {
-            handle_show_command(cli.mission.as_deref(), entity_id, filter.as_deref())?;
+            if let Some(entity_id) = id {
+                handle_show_command(mission.as_deref(), entity_id, filter.as_deref())?;
+            } else {
+                handle_list_command(mission.as_deref(), only_unparsed, filter.as_deref(), limit)?;
+            }
         }
     }
 
     Ok(())
 }
 
-fn handle_ls_command(
+fn handle_list_command(
     mission: Option<&str>,
     only_unparsed: bool,
     filter: Option<&str>,
@@ -120,6 +105,8 @@ fn handle_ls_command(
         property_filter: filter.map(|s| s.to_string()),
     };
     let filtered_summaries = filter_entities(&summaries, &criteria);
+
+    // No entity type filtering needed - show both templates and entities
 
     // Display results
     display_entity_list(&filtered_summaries, filter.is_some(), limit);

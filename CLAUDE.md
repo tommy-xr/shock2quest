@@ -416,25 +416,25 @@ The `dark_query` CLI tool in `tools/dark_query` provides powerful entity analysi
 ### Overview
 
 ```bash
-# Run from Data directory or tools/dark_query
+# Run from project root directory
 cargo run -p dark_query -- --help
 
 # Basic commands
-cargo run -p dark_query -- ls                    # List all entities
-cargo run -p dark_query -- --mission earth.mis ls  # List entities with mission
-cargo run -p dark_query -- show 443              # Show detailed entity info
+cargo run -p dark_query -- entities                    # List all entities and templates (gamesys only)
+cargo run -p dark_query -- entities earth.mis         # List entities with mission
+cargo run -p dark_query -- entities earth.mis 443     # Show detailed entity info
 ```
 
 ### Key Features
 
-1. **Entity Listing (`ls` command)**:
+1. **Entity and Template Listing**:
    - Lists all templates (negative IDs) and entities (positive IDs)
    - Shows names, template IDs, property counts, link counts
    - Inheritance-aware name resolution (finds names from template hierarchy)
-   - Supports filtering: `--filter "Railing"`, `--filter "P$SymName:*Robot*"`
+   - Supports filtering: `--filter "*Railing*"`, `--filter "P$SymName:*Robot*"`
    - Unparsed data detection: `--only-unparsed`
 
-2. **Detailed Entity Analysis (`show` command)**:
+2. **Detailed Entity Analysis**:
    - Complete entity information with inheritance-aware names
    - **Bidirectional link analysis** with "Outgoing Links" and "Incoming Links" sections
    - **Inheritance tree visualization** from most specific to most general
@@ -442,8 +442,8 @@ cargo run -p dark_query -- show 443              # Show detailed entity info
    - Demonstrates property inheritance and overrides
 
 3. **Mission Support**:
-   - Load entity data from gamesys only: `cargo run -p dark_query -- ls`
-   - Load gamesys + mission: `cargo run -p dark_query -- --mission earth.mis ls`
+   - Load entity data from gamesys only: `cargo run -p dark_query -- entities`
+   - Load gamesys + mission: `cargo run -p dark_query -- entities earth.mis`
    - Automatically merges and resolves entity hierarchies
 
 ### Usage Examples
@@ -451,29 +451,29 @@ cargo run -p dark_query -- show 443              # Show detailed entity info
 #### Basic Entity Exploration
 ```bash
 # Find all entities with "Railing" in the name
-cargo run -p dark_query -- --mission earth.mis ls --filter "*Railing*"
+cargo run -p dark_query -- entities earth.mis --filter "*Railing*"
 
 # Find entities with unparsed data (useful for development)
-cargo run -p dark_query -- ls --only-unparsed
+cargo run -p dark_query -- entities --only-unparsed
 
 # Show property value filtering
-cargo run -p dark_query -- ls --filter "P$SymName:*Robot*"
+cargo run -p dark_query -- entities --filter "P$SymName:*Robot*"
 
 # Limit results for quick iteration and testing
-cargo run -p dark_query -- --mission earth.mis ls --limit 5
-cargo run -p dark_query -- --mission earth.mis ls --filter "*Door*" --limit 10
+cargo run -p dark_query -- entities earth.mis --limit 5
+cargo run -p dark_query -- entities earth.mis --filter "*Door*" --limit 10
 ```
 
 #### Detailed Entity Analysis
 ```bash
 # Analyze entity 443 (Railing) inheritance and relationships
-cargo run -p dark_query -- --mission earth.mis show 443
+cargo run -p dark_query -- entities earth.mis 443
 
 # Analyze entity 442 (Tripwire) to see its switch links
-cargo run -p dark_query -- --mission earth.mis show 442
+cargo run -p dark_query -- entities earth.mis 442
 
 # Analyze template -1718 to understand railing template structure
-cargo run -p dark_query -- --mission earth.mis show -- -1718
+cargo run -p dark_query -- entities earth.mis -- -1718
 ```
 
 #### Understanding Entity Relationships
@@ -491,22 +491,22 @@ cargo run -p dark_query -- --mission earth.mis show -- -1718
 #### Script Filtering Examples
 ```bash
 # Search for entities with specific scripts using property value syntax (case-insensitive)
-cargo run -p dark_query -- --mission earth.mis ls --filter "P$Scripts:stddoor"
+cargo run -p dark_query -- entities earth.mis --filter "P$Scripts:stddoor"
 
 # Search for entities with script names containing pattern (case-insensitive)
-cargo run -p dark_query -- --mission earth.mis ls --filter "P$Scripts:*camera*"
+cargo run -p dark_query -- entities earth.mis --filter "P$Scripts:*camera*"
 
 # Alternative script search using S$ prefix (case-insensitive)
-cargo run -p dark_query -- --mission earth.mis ls --filter "S$*stddoor*"
+cargo run -p dark_query -- entities earth.mis --filter "S$*stddoor*"
 
 # Exact script name with S$ prefix (case-insensitive)
-cargo run -p dark_query -- --mission earth.mis ls --filter "S$stddoor"
+cargo run -p dark_query -- entities earth.mis --filter "S$stddoor"
 
 # General search across all entity data (properties, links, scripts)
-cargo run -p dark_query -- --mission earth.mis ls --filter "*StdDoor*"
+cargo run -p dark_query -- entities earth.mis --filter "*StdDoor*"
 
 # Use --limit for quick iteration when testing script searches
-cargo run -p dark_query -- --mission earth.mis ls --filter "S$stddoor" --limit 5
+cargo run -p dark_query -- entities earth.mis --filter "S$stddoor" --limit 5
 ```
 
 **Script Filtering Notes:**
