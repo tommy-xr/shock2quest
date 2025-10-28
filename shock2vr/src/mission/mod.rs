@@ -1658,9 +1658,10 @@ impl Mission {
         scene.append(&mut self.left_hand.render());
         scene.append(&mut self.right_hand.render());
 
-        // Render forearm HUD panels
+        // Render forearm HUD panels with health/psi overlays
         let mut hud_panels = crate::hud::create_arm_hud_panels(
             asset_cache,
+            &self.world,
             self.left_hand.get_position(),
             self.left_hand.get_rotation(),
             self.right_hand.get_position(),
