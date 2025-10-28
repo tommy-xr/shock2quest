@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Quaternion, Vector2, Vector3};
+use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector2, Vector3};
 use dark::SCALE_FACTOR;
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{light::SpotLight, SceneObject},
+    scene::{light::SpotLight, SceneObject, VertexPosition},
 };
 use shipyard::{UniqueViewMut, World};
 
@@ -29,6 +29,11 @@ pub struct DebugMinimalScene {
     head_height: f32,
     cube_distance: f32,
     cube_scale: f32,
+    hand_scale: f32,
+    left_hand_position: Vector3<f32>,
+    left_hand_rotation: Quaternion<f32>,
+    right_hand_position: Vector3<f32>,
+    right_hand_rotation: Quaternion<f32>,
     scene_name: String,
 }
 
@@ -66,8 +71,17 @@ impl DebugMinimalScene {
             head_height: 4.0 / SCALE_FACTOR,
             cube_distance: 4.0 / SCALE_FACTOR,
             cube_scale: 0.35,
+            hand_scale: 0.2,
+            left_hand_position: vec3(0.0, 0.0, 0.0),
+            left_hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            right_hand_position: vec3(0.0, 0.0, 0.0),
+            right_hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             scene_name: "debug_minimal".to_owned(),
         }
+    }
+
+    fn head_base(&self) -> Vector3<f32> {
+        self.player_position + vec3(0.0, self.head_height, 0.0)
     }
 
     fn update_player_info(&mut self) {
@@ -82,13 +96,79 @@ impl DebugMinimalScene {
         let mut cube = SceneObject::new(color, Box::new(engine::scene::cube::create()));
 
         let forward = self.head_rotation * vec3(0.0, 0.0, -1.0);
-        let base = self.player_position + vec3(0.0, self.head_height, 0.0);
+        let base = self.head_base();
         let cube_position = base + forward * self.cube_distance;
 
-        let transform =
-            Matrix4::from_translation(cube_position) * Matrix4::from_scale(self.cube_scale);
+        let mut look_dir = base - cube_position;
+        if look_dir.magnitude2() < 1e-6 {
+            look_dir = vec3(0.0, 0.0, 1.0);
+        } else {
+            look_dir = look_dir.normalize();
+        }
+
+        let mut up = vec3(0.0, 1.0, 0.0);
+        let mut right = look_dir.cross(up);
+        if right.magnitude2() < 1e-6 {
+            up = vec3(0.0, 0.0, 1.0);
+            right = look_dir.cross(up);
+        }
+        right = right.normalize();
+        let true_up = right.cross(look_dir).normalize();
+        let rotation_matrix = Matrix3::from_cols(right, true_up, -look_dir);
+        let rotation = Quaternion::from(rotation_matrix);
+
+        let transform = Matrix4::from_translation(cube_position)
+            * Matrix4::from(rotation)
+            * Matrix4::from_scale(self.cube_scale);
         cube.set_transform(transform);
         cube
+    }
+
+    fn hand_marker(
+        &self,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        color: Vector3<f32>,
+    ) -> SceneObject {
+        let material = engine::scene::color_material::create(color);
+        let mut cube = SceneObject::new(material, Box::new(engine::scene::cube::create()));
+        let transform = Matrix4::from_translation(position)
+            * Matrix4::from(rotation)
+            * Matrix4::from_scale(self.hand_scale);
+        cube.set_transform(transform);
+        cube
+    }
+
+    fn arm_segment(&self, hand_position: Vector3<f32>, color: Vector3<f32>) -> SceneObject {
+        let base = self.head_base();
+        let material = engine::scene::color_material::create(color);
+        let vertices = vec![
+            VertexPosition { position: base },
+            VertexPosition {
+                position: hand_position,
+            },
+        ];
+        SceneObject::new(
+            material,
+            Box::new(engine::scene::lines_mesh::create(vertices)),
+        )
+    }
+
+    fn hand_objects(&self) -> Vec<SceneObject> {
+        let mut objs = Vec::new();
+        let left_color = vec3(0.9, 0.3, 0.3);
+        let right_color = vec3(0.3, 0.9, 0.3);
+
+        objs.push(self.hand_marker(self.left_hand_position, self.left_hand_rotation, left_color));
+        objs.push(self.arm_segment(self.left_hand_position, left_color));
+        objs.push(self.hand_marker(
+            self.right_hand_position,
+            self.right_hand_rotation,
+            right_color,
+        ));
+        objs.push(self.arm_segment(self.right_hand_position, right_color));
+
+        objs
     }
 }
 
@@ -114,6 +194,10 @@ impl GameScene for DebugMinimalScene {
         }
 
         self.head_rotation = input_context.head.rotation;
+        self.left_hand_position = input_context.left_hand.position;
+        self.left_hand_rotation = input_context.left_hand.rotation;
+        self.right_hand_position = input_context.right_hand.position;
+        self.right_hand_rotation = input_context.right_hand.rotation;
         self.update_player_info();
 
         Vec::new()
@@ -124,8 +208,9 @@ impl GameScene for DebugMinimalScene {
         _asset_cache: &mut AssetCache,
         _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        let cube = self.cube_object();
-        (vec![cube], self.player_position, self.player_rotation)
+        let mut scene = vec![self.cube_object()];
+        scene.extend(self.hand_objects());
+        (scene, self.player_position, self.player_rotation)
     }
 
     fn render_per_eye(
