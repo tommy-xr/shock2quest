@@ -41,14 +41,9 @@ fn create_forearm_hud_panel(
     // Calculate forearm position - offset from hand toward elbow
     let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
 
-    // Choose color based on handedness
-    let panel_color = match handedness {
-        Handedness::Left => vec3(0.0, 1.0, 0.0), // Green for left (health/bio)
-        Handedness::Right => vec3(0.0, 0.0, 1.0), // Blue for right (ammo)
-    };
-
-    // Create colored material
-    let material = engine::scene::color_material::create(panel_color);
+    // Create debug normal material to visualize normals
+    // This will show normals as colors to verify they're working correctly
+    let material = engine::scene::create_debug_normal_material();
 
     // Create quad geometry
     let geometry = Box::new(engine::scene::quad::create());
