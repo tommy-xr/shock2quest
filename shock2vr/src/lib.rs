@@ -3,6 +3,7 @@ pub mod game_scene;
 pub mod input_context;
 pub mod inventory;
 pub mod save_load;
+pub mod scenes;
 pub mod teleport;
 pub mod time;
 
@@ -20,6 +21,8 @@ mod util;
 mod virtual_hand;
 mod vr_config;
 pub mod zip_asset_path;
+
+use scenes::DebugMinimalScene;
 
 pub use mission::visibility_engine::CullingInfo;
 pub use mission::SpawnLocation;
@@ -310,35 +313,40 @@ impl Game {
         //     }
         // }
 
-        let (active_mission, mission_to_save_data) =
-            if let Some(save_file_path) = &options.save_file {
-                let mut file = OpenOptions::new().read(true).open(save_file_path).unwrap();
-                let save_data = SaveData::read(&mut file);
-                Self::load_from_save_data(
-                    save_data,
-                    &mut asset_cache,
-                    &mut audio_context,
-                    &global_context,
-                    &options,
-                )
-            } else {
-                // Level specific items
-                let mission_to_save_data = HashMap::new();
-                let active_mission = Mission::load(
-                    options.mission.to_owned(),
-                    //"medsci2.mis".to_owned(),
-                    &mut asset_cache,
-                    &mut audio_context,
-                    &global_context,
-                    options.spawn_location.clone(),
-                    QuestInfo::new(),
-                    //Box::new(MissionEntityPopulator::create()),
-                    Box::new(MissionEntityPopulator::create()),
-                    HeldItemSaveData::empty(),
-                    &options,
-                );
-                (active_mission, mission_to_save_data)
-            };
+        let (active_game_scene, mission_to_save_data): (
+            Box<dyn GameScene>,
+            HashMap<String, EntitySaveData>,
+        ) = if options.mission.eq_ignore_ascii_case("debug_minimal") {
+            (Box::new(DebugMinimalScene::new()), HashMap::new())
+        } else if let Some(save_file_path) = &options.save_file {
+            let mut file = OpenOptions::new().read(true).open(save_file_path).unwrap();
+            let save_data = SaveData::read(&mut file);
+            let (mission, mission_to_save_data) = Self::load_from_save_data(
+                save_data,
+                &mut asset_cache,
+                &mut audio_context,
+                &global_context,
+                &options,
+            );
+            (Box::new(mission), mission_to_save_data)
+        } else {
+            // Level specific items
+            let mission_to_save_data = HashMap::new();
+            let active_mission = Mission::load(
+                options.mission.to_owned(),
+                //"medsci2.mis".to_owned(),
+                &mut asset_cache,
+                &mut audio_context,
+                &global_context,
+                options.spawn_location.clone(),
+                QuestInfo::new(),
+                //Box::new(MissionEntityPopulator::create()),
+                Box::new(MissionEntityPopulator::create()),
+                HeldItemSaveData::empty(),
+                &options,
+            );
+            (Box::new(active_mission), mission_to_save_data)
+        };
 
         // log_entities_with_link(&active_mission.world, |link| {
         //     matches!(link, Link::AIWatchObj(_))
@@ -357,7 +365,7 @@ impl Game {
         Game {
             asset_cache,
             audio_context,
-            active_game_scene: Box::new(active_mission),
+            active_game_scene,
             global_context,
             last_music_cue: None,
             last_env_sound: None,
@@ -394,56 +402,51 @@ impl Game {
         );
 
         // Handle ambient sound processing
-        let (new_character_pos, next_env_sound, new_cue, potential_ambient_sounds) = {
-            let player_info = self
-                .active_game_scene
-                .world()
-                .borrow::<UniqueView<PlayerInfo>>()
-                .unwrap();
-            let current_pos = player_info.pos;
-
-            let mut next_env_sound = None;
-            let mut new_cue = None;
-            let mut potential_ambient_sounds = Vec::new();
-
-            self.active_game_scene.world().run(
-                |v_ambient_hacked: View<PropAmbientHacked>,
-                 v_position: View<PropPosition>,
-                 v_player_position: UniqueView<PlayerInfo>| {
-                    for (id, (ambient_sound, position)) in
-                        (&v_ambient_hacked, &v_position).iter().with_id()
-                    {
-                        let dist_squared = (position.position - v_player_position.pos).magnitude2();
-
-                        if dist_squared < ambient_sound.radius_squared {
-                            if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
-                                new_cue = Some(ambient_sound.schema.to_owned());
-                            } else if ambient_sound
-                                .sound_flags
-                                .contains(AmbientSoundFlags::ENVIRONMENTAL)
-                            {
-                                let schema_val = self.resolve_schema(&ambient_sound.schema);
-                                next_env_sound = Some(schema_val)
-                            } else {
-                                potential_ambient_sounds.push((
-                                    dist_squared,
-                                    position.position,
-                                    id,
-                                    ambient_sound.schema.to_owned(),
-                                ))
-                            }
-                        }
-                    }
-                },
-            );
-
-            (
-                current_pos,
-                next_env_sound,
-                new_cue,
-                potential_ambient_sounds,
-            )
+        let world = self.active_game_scene.world();
+        let current_pos = {
+            let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player_info.pos
         };
+
+        let mut next_env_sound = None;
+        let mut new_cue = None;
+        let mut potential_ambient_sounds = Vec::new();
+
+        if let (Ok(v_ambient_hacked), Ok(v_position)) = (
+            world.borrow::<View<PropAmbientHacked>>(),
+            world.borrow::<View<PropPosition>>(),
+        ) {
+            for (id, (ambient_sound, position)) in (&v_ambient_hacked, &v_position).iter().with_id()
+            {
+                let dist_squared = (position.position - current_pos).magnitude2();
+
+                if dist_squared < ambient_sound.radius_squared {
+                    if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
+                        new_cue = Some(ambient_sound.schema.to_owned());
+                    } else if ambient_sound
+                        .sound_flags
+                        .contains(AmbientSoundFlags::ENVIRONMENTAL)
+                    {
+                        let schema_val = self.resolve_schema(&ambient_sound.schema);
+                        next_env_sound = Some(schema_val)
+                    } else {
+                        potential_ambient_sounds.push((
+                            dist_squared,
+                            position.position,
+                            id,
+                            ambient_sound.schema.to_owned(),
+                        ))
+                    }
+                }
+            }
+        }
+
+        let (new_character_pos, next_env_sound, new_cue, potential_ambient_sounds) = (
+            current_pos,
+            next_env_sound,
+            new_cue,
+            potential_ambient_sounds,
+        );
 
         // Update audio
         if let Some(cue) = new_cue {
