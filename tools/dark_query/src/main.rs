@@ -4,9 +4,11 @@ use tracing::info;
 
 mod data_loader;
 mod entity_analyzer;
+mod motion_analyzer;
 
 use data_loader::load_entity_data;
 use entity_analyzer::{analyze_entities, filter_entities, EntityType, FilterCriteria};
+use motion_analyzer::MotionAnalyzer;
 
 #[derive(Parser)]
 #[command(name = "dark_query")]
@@ -38,6 +40,18 @@ enum Commands {
         /// Show only entities/templates with unparsed properties or links
         #[arg(long)]
         only_unparsed: bool,
+
+        /// Limit the number of results displayed
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Query motion database for animations by creature type and tags
+    Motion {
+        /// Creature type (numeric ID like 0, 1, 2) or name (like "human", "midwife")
+        creature_type: String,
+
+        /// Tags to query (e.g., "+locomote", "+midwife", "+cs:184")
+        tags: Vec<String>,
 
         /// Limit the number of results displayed
         #[arg(long)]
@@ -81,6 +95,13 @@ fn main() -> Result<()> {
             } else {
                 handle_list_command(mission.as_deref(), only_unparsed, filter.as_deref(), limit)?;
             }
+        }
+        Commands::Motion {
+            creature_type,
+            tags,
+            limit,
+        } => {
+            handle_motion_command(&creature_type, &tags, limit)?;
         }
     }
 
@@ -450,6 +471,21 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::TPathInit => "TPathInit".to_string(),
         dark::properties::Link::TPath(_) => "TPath".to_string(),
     }
+}
+
+fn handle_motion_command(creature_type: &str, tags: &[String], limit: Option<usize>) -> Result<()> {
+    info!("Loading motion database...");
+    let motion_analyzer = MotionAnalyzer::new()?;
+
+    let creature_id = motion_analyzer.parse_creature_type(creature_type)?;
+
+    if tags.is_empty() {
+        motion_analyzer.list_all_tags_and_animations(creature_id, limit)?;
+    } else {
+        motion_analyzer.query_with_tags(creature_id, tags, limit)?;
+    }
+
+    Ok(())
 }
 
 fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {

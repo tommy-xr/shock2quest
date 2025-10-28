@@ -411,7 +411,7 @@ This pattern prevents leaving the codebase in a broken state and ensures all imp
 
 ## Entity Query CLI Tool (`dark_query`)
 
-The `dark_query` CLI tool in `tools/dark_query` provides powerful entity analysis capabilities for debugging and understanding System Shock 2's entity system.
+The `dark_query` CLI tool in `tools/dark_query` provides powerful analysis capabilities for debugging and understanding System Shock 2's entity system and motion database.
 
 ### Overview
 
@@ -419,10 +419,15 @@ The `dark_query` CLI tool in `tools/dark_query` provides powerful entity analysi
 # Run from project root directory
 cargo run -p dark_query -- --help
 
-# Basic commands
+# Basic entity commands
 cargo run -p dark_query -- entities                    # List all entities and templates (gamesys only)
 cargo run -p dark_query -- entities earth.mis         # List entities with mission
 cargo run -p dark_query -- entities earth.mis 443     # Show detailed entity info
+
+# Motion database commands
+cargo run -p dark_query -- motion 0                    # Show animations for ActorType::Human (0)
+cargo run -p dark_query -- motion human +playspecmotion +human  # Query specific tags
+cargo run -p dark_query -- motion 0 +cs:184            # Query with tag value
 ```
 
 ### Key Features
@@ -518,6 +523,81 @@ cargo run -p dark_query -- entities earth.mis --filter "S$stddoor" --limit 5
 - Matched items display shows full script names (e.g., `P$Scripts:StdDoor`, `S$cameradeath`)
 - Improved display truncation shows up to 50 characters of matched items
 - **Use `--limit N`** to show only first N results for quick iteration and testing
+
+## Motion Database Queries
+
+The `motion` command provides powerful querying capabilities for the System Shock 2 motion database, allowing you to explore creature animations and their tag-based organization.
+
+### Motion Database Overview
+
+```bash
+# Basic motion queries
+cargo run -p dark_query -- motion 0                    # List available animations for Human
+cargo run -p dark_query -- motion human                # Same as above using name
+cargo run -p dark_query -- motion droid                # List animations for Droid
+```
+
+### Creature Types (ActorType Enum)
+
+```bash
+# Available creature types
+cargo run -p dark_query -- motion 0        # Human (ActorType::Human)
+cargo run -p dark_query -- motion 1        # PlayerLimb (ActorType::PlayerLimb)
+cargo run -p dark_query -- motion 2        # Droid (ActorType::Droid)
+cargo run -p dark_query -- motion 3        # Overlord (ActorType::Overlord)
+cargo run -p dark_query -- motion 4        # Arachnid (ActorType::Arachnid)
+```
+
+### Tag-Based Animation Queries
+
+```bash
+# Query with basic tags
+cargo run -p dark_query -- motion 0 +human +playspecmotion
+cargo run -p dark_query -- motion 0 +locomote
+
+# Query with tag values (similar to spew files)
+cargo run -p dark_query -- motion 0 +cs:184           # Specific cutscene animation
+cargo run -p dark_query -- motion 0 +cs:116           # Another cutscene
+
+# Multiple tags for specific animations
+cargo run -p dark_query -- motion 0 +playspecmotion +human --limit 10
+```
+
+### Motion Query Examples
+
+```bash
+# Find all human animations
+cargo run -p dark_query -- motion human +playspecmotion +human
+
+# Find specific cutscene animations
+cargo run -p dark_query -- motion 0 +cs:184
+
+# Explore droid animations
+cargo run -p dark_query -- motion droid +playspecmotion
+
+# Limited results for quick exploration
+cargo run -p dark_query -- motion 0 --limit 5
+```
+
+### Motion Database Features
+
+1. **Tag-Based Queries**: Uses the same hierarchical tag system as the original Dark Engine
+2. **Creature Type Support**: Supports both numeric IDs (0, 1, 2...) and names (human, droid, etc.)
+3. **Value Tags**: Supports tags with values like `+cs:184` for specific cutscenes
+4. **Spew File Compatible**: Output format similar to original animation spew files
+5. **Multiple Tags**: Combine multiple tags to find specific animation sets
+
+### Understanding Motion Database Output
+
+The motion database organizes animations hierarchically using tags:
+
+- **`+playspecmotion`**: General animation category
+- **`+human`**: Human-specific animations
+- **`+cs:VALUE`**: Cutscene animations with specific IDs
+- **`+locomote`**: Movement animations
+- **Creature-specific tags**: `+midwife`, `+droid`, etc.
+
+This system matches the tag database structure found in the original spew files and allows precise animation queries for debugging AI behavior and animation systems.
 
 ### Key Use Cases
 
