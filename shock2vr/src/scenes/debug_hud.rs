@@ -28,9 +28,9 @@ const DEBUG_HAND_LATERAL_SPREAD: f32 = 0.15;
 const DEBUG_HAND_VERTICAL_OFFSET: f32 = 1.45;
 
 /// Health animation constants
-const HEALTH_ANIMATION_SPEED: f32 = 2.0; // Cycles per second
-const MIN_HEALTH_PERCENTAGE: f32 = 0.1;  // 10% minimum
-const MAX_HEALTH_PERCENTAGE: f32 = 1.0;  // 100% maximum
+const HEALTH_ANIMATION_SPEED: f32 = 0.25; // Cycles per second
+const MIN_HEALTH_PERCENTAGE: f32 = 0.1; // 10% minimum
+const MAX_HEALTH_PERCENTAGE: f32 = 1.0; // 100% maximum
 
 /// Debug scene focused on testing the virtual arms HUD system
 /// Positions hands closer to camera for easy inspection
@@ -144,7 +144,9 @@ impl DebugHudScene {
         let time_seconds = time.total.as_secs_f32();
         let sin_value = (time_seconds * HEALTH_ANIMATION_SPEED * 2.0 * std::f32::consts::PI).sin();
         // Map sin wave from [-1, 1] to [MIN_HEALTH_PERCENTAGE, MAX_HEALTH_PERCENTAGE]
-        let health_percentage = (sin_value + 1.0) / 2.0 * (MAX_HEALTH_PERCENTAGE - MIN_HEALTH_PERCENTAGE) + MIN_HEALTH_PERCENTAGE;
+        let health_percentage = (sin_value + 1.0) / 2.0
+            * (MAX_HEALTH_PERCENTAGE - MIN_HEALTH_PERCENTAGE)
+            + MIN_HEALTH_PERCENTAGE;
 
         // Update the player entity's health component
         if let Ok(mut v_hit_points) = self.world.borrow::<ViewMut<PropHitPoints>>() {

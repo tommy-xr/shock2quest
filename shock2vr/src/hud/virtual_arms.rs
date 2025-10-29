@@ -19,13 +19,16 @@ const HUD_PANEL_HEIGHT: f32 = 0.064; // 6.4cm tall (260:64 = 4.0625:1 ratio)
 const BIOFULL_WIDTH: f32 = 260.0;
 const BIOFULL_HEIGHT: f32 = 64.0;
 
+const BAR_VERTICAL_OFFSET: f32 = -8.0;
+const BAR_HORIZONTAL_OFFSET: f32 = 1.0;
+
 /// Health bar overlay coordinates (pixel space on BIOFULL.PCX)
-const HEALTH_BAR_START: (f32, f32) = (7.0, 17.0);
-const HEALTH_BAR_END: (f32, f32) = (86.0, 30.0);
+const HEALTH_BAR_START: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 8.0, 40.0 + BAR_VERTICAL_OFFSET);
+const HEALTH_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 54.0 + BAR_VERTICAL_OFFSET);
 
 /// Psi bar overlay coordinates (pixel space on BIOFULL.PCX)
-const PSI_BAR_START: (f32, f32) = (7.0, 40.0);
-const PSI_BAR_END: (f32, f32) = (86.0, 54.0);
+const PSI_BAR_START: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 8.0, 17.0 + BAR_VERTICAL_OFFSET);
+const PSI_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 31.0 + BAR_VERTICAL_OFFSET);
 
 /// Z-offset for overlay layers to ensure proper rendering order
 const OVERLAY_Z_OFFSET: f32 = 0.001;
@@ -65,7 +68,10 @@ pub fn create_arm_hud_panels(
 
 /// Convert pixel coordinates to UV coordinates (0.0 to 1.0)
 fn pixel_to_uv(pixel_coords: (f32, f32)) -> (f32, f32) {
-    (pixel_coords.0 / BIOFULL_WIDTH, pixel_coords.1 / BIOFULL_HEIGHT)
+    (
+        pixel_coords.0 / BIOFULL_WIDTH,
+        pixel_coords.1 / BIOFULL_HEIGHT,
+    )
 }
 
 /// Calculate overlay quad dimensions and position in world space
@@ -160,7 +166,8 @@ fn create_forearm_hud_with_overlays(
     let final_rotation = hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation;
 
     // Layer 1: Base BIOFULL panel
-    let base_panel = create_forearm_hud_panel(asset_cache, hand_position, hand_rotation, handedness);
+    let base_panel =
+        create_forearm_hud_panel(asset_cache, hand_position, hand_rotation, handedness);
     layers.push(base_panel);
 
     // Layer 2: Health bar overlay
@@ -221,8 +228,13 @@ fn create_bar_overlay(
     let geometry = Box::new(engine::scene::quad::create());
 
     // Calculate overlay transform
-    let (transform, _width, _height) =
-        create_overlay_transform(base_position, base_rotation, pixel_start, pixel_end, z_offset);
+    let (transform, _width, _height) = create_overlay_transform(
+        base_position,
+        base_rotation,
+        pixel_start,
+        pixel_end,
+        z_offset,
+    );
 
     // Create scene object
     let mut scene_object = SceneObject::new(material, geometry);
