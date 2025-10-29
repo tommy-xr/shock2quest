@@ -23,11 +23,11 @@ impl MotionAnalyzer {
 
         // Create creature name mapping based on ActorType enum
         let mut creature_name_to_id = HashMap::new();
-        creature_name_to_id.insert("human".to_string(), 0);        // ActorType::Human
-        creature_name_to_id.insert("playerlimb".to_string(), 1);   // ActorType::PlayerLimb
-        creature_name_to_id.insert("droid".to_string(), 2);        // ActorType::Droid
-        creature_name_to_id.insert("overlord".to_string(), 3);     // ActorType::Overlord
-        creature_name_to_id.insert("arachnid".to_string(), 4);     // ActorType::Arachnid
+        creature_name_to_id.insert("human".to_string(), 0); // ActorType::Human
+        creature_name_to_id.insert("playerlimb".to_string(), 1); // ActorType::PlayerLimb
+        creature_name_to_id.insert("droid".to_string(), 2); // ActorType::Droid
+        creature_name_to_id.insert("overlord".to_string(), 3); // ActorType::Overlord
+        creature_name_to_id.insert("arachnid".to_string(), 4); // ActorType::Arachnid
 
         Ok(Self {
             motion_db,
@@ -35,8 +35,15 @@ impl MotionAnalyzer {
         })
     }
 
-    pub fn list_all_tags_and_animations(&self, creature_type: u32, limit: Option<usize>) -> Result<()> {
-        info!("Querying motion database for creature type {}", creature_type);
+    pub fn list_all_tags_and_animations(
+        &self,
+        creature_type: u32,
+        limit: Option<usize>,
+    ) -> Result<()> {
+        info!(
+            "Querying motion database for creature type {}",
+            creature_type
+        );
 
         println!("=== Motion Database Info ===");
         println!("Creature Type: {}", creature_type);
@@ -44,7 +51,10 @@ impl MotionAnalyzer {
         // Check if creature type is valid
         if creature_type >= self.motion_db.get_creature_type_count() as u32 {
             println!("Invalid creature type: {}.", creature_type);
-            println!("Available creature types: 0-{}", self.motion_db.get_creature_type_count() - 1);
+            println!(
+                "Available creature types: 0-{}",
+                self.motion_db.get_creature_type_count() - 1
+            );
             self.list_available_creature_types();
             return Ok(());
         }
@@ -79,20 +89,37 @@ impl MotionAnalyzer {
         Ok(())
     }
 
-
     fn list_available_creature_types(&self) {
         let count = self.motion_db.get_creature_type_count();
         println!("Available creature types (ActorType enum):");
 
-        if count > 0 { println!("  0 - Human (try: dark_query motion 0 +human +playspecmotion)"); }
-        if count > 1 { println!("  1 - PlayerLimb (try: dark_query motion 1 +playerlimb)"); }
-        if count > 2 { println!("  2 - Droid (try: dark_query motion 2 +droid)"); }
-        if count > 3 { println!("  3 - Overlord (try: dark_query motion 3 +overlord)"); }
-        if count > 4 { println!("  4 - Arachnid (try: dark_query motion 4 +arachnid)"); }
+        if count > 0 {
+            println!("  0 - Human (try: dark_query motion 0 +human +playspecmotion)");
+        }
+        if count > 1 {
+            println!("  1 - PlayerLimb (try: dark_query motion 1 +playerlimb)");
+        }
+        if count > 2 {
+            println!("  2 - Droid (try: dark_query motion 2 +droid)");
+        }
+        if count > 3 {
+            println!("  3 - Overlord (try: dark_query motion 3 +overlord)");
+        }
+        if count > 4 {
+            println!("  4 - Arachnid (try: dark_query motion 4 +arachnid)");
+        }
     }
 
-    pub fn query_with_tags(&self, creature_type: u32, tags: &[String], limit: Option<usize>) -> Result<()> {
-        info!("Querying motion database for creature type {} with tags: {:?}", creature_type, tags);
+    pub fn query_with_tags(
+        &self,
+        creature_type: u32,
+        tags: &[String],
+        limit: Option<usize>,
+    ) -> Result<()> {
+        info!(
+            "Querying motion database for creature type {} with tags: {:?}",
+            creature_type, tags
+        );
 
         // Parse tags into motion query items
         let motion_query_items = parse_tags(tags)?;
@@ -103,7 +130,10 @@ impl MotionAnalyzer {
         let matching_animations = self.motion_db.query_all(query);
 
         if matching_animations.is_empty() {
-            println!("No animations found for creature type {} with tags: {:?}", creature_type, tags);
+            println!(
+                "No animations found for creature type {} with tags: {:?}",
+                creature_type, tags
+            );
             return Ok(());
         }
 
@@ -129,7 +159,10 @@ impl MotionAnalyzer {
 
         if let Some(limit_count) = limit {
             if matching_animations.len() > limit_count {
-                println!("\n... and {} more animations", matching_animations.len() - limit_count);
+                println!(
+                    "\n... and {} more animations",
+                    matching_animations.len() - limit_count
+                );
             }
         }
 
@@ -143,7 +176,10 @@ impl MotionAnalyzer {
         }
 
         // Try looking up by name
-        if let Some(&id) = self.creature_name_to_id.get(&creature_type_str.to_lowercase()) {
+        if let Some(&id) = self
+            .creature_name_to_id
+            .get(&creature_type_str.to_lowercase())
+        {
             return Ok(id);
         }
 
