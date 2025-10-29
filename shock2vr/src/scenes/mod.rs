@@ -13,11 +13,11 @@ use crate::{
     GameOptions, QuestInfo, SpawnLocation,
 };
 
-pub mod debug_minimal;
 pub mod debug_hud;
+pub mod debug_minimal;
 
-pub use debug_minimal::DebugMinimalScene;
 pub use debug_hud::DebugHudScene;
+pub use debug_minimal::DebugMinimalScene;
 
 pub struct SceneInitResult {
     pub scene: Box<dyn GameScene>,

@@ -71,7 +71,7 @@ where
 {
     has_initialized: bool,
     diffuse_texture: T,
-    clip_percentage: f32,  // 0.0 to 1.0
+    clip_percentage: f32, // 0.0 to 1.0
 }
 
 impl<T> ClippedScreenMaterial<T>
@@ -138,7 +138,10 @@ where
                 let uniforms = ClippedScreenUniforms {
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
-                    projection_loc: gl::GetUniformLocation(shader.gl_id, c_str!("projection").as_ptr()),
+                    projection_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("projection").as_ptr(),
+                    ),
                     clip_x_loc: gl::GetUniformLocation(shader.gl_id, c_str!("clipX").as_ptr()),
                 };
 

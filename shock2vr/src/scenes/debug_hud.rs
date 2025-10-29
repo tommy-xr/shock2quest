@@ -208,7 +208,6 @@ impl GameScene for DebugHudScene {
         (hud_panels, self.player_position, self.player_rotation)
     }
 
-
     fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
         Vec::new()
     }
