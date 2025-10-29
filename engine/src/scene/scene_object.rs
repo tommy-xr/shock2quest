@@ -192,6 +192,60 @@ impl SceneObject {
         Self::new(material, Box::new(mesh))
     }
 
+    /// Improved world space text with configurable font size and predictable positioning
+    /// Text is positioned starting at (0, 0) in local space instead of (0, 1.0)
+    pub fn world_space_text2(text: &str, font: Rc<Box<dyn Font>>, font_size: f32, transparency: f32) -> SceneObject {
+        let mut x = 0.0;
+        let y = 0.0; // Start at origin instead of 1.0
+
+        let multiplier = font_size / font.base_height();
+        let adj_height = font_size;
+
+        let mut vertices = Vec::new();
+        for c in text.chars() {
+            let a_info = font.get_character_info(c).unwrap();
+            let min_uv_x = a_info.min_uv_x;
+            let min_uv_y = a_info.min_uv_y;
+            let max_uv_x = a_info.max_uv_x;
+            let max_uv_y = a_info.max_uv_y;
+
+            let adj_width = a_info.advance * multiplier;
+
+            vertices.extend(vec![
+                TextVertex {
+                    position: vec2(x, y),
+                    uv: vec2(min_uv_x, max_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x, y + adj_height),
+                    uv: vec2(min_uv_x, min_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x + adj_width, y + adj_height),
+                    uv: vec2(max_uv_x, min_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x, y),
+                    uv: vec2(min_uv_x, max_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x + adj_width, y + adj_height),
+                    uv: vec2(max_uv_x, min_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x + adj_width, y),
+                    uv: vec2(max_uv_x, max_uv_y),
+                },
+            ]);
+
+            x += adj_width + multiplier;
+        }
+
+        let mesh = mesh::create(vertices);
+        let material = basic_material::create(font.get_texture(), 1.0, transparency);
+        Self::new(material, Box::new(mesh))
+    }
+
     pub fn create(
         material: RefCell<Box<dyn Material>>,
         geometry: Rc<Box<dyn Geometry>>,
