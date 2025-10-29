@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use cgmath::{vec3, Deg, Euler, Matrix4, Quaternion, Vector2, Vector3};
-use dark::{
-    properties::{PropHitPoints, PropMaxHitPoints},
-    SCALE_FACTOR,
-};
+use dark::properties::{PropHitPoints, PropMaxHitPoints};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -24,18 +21,25 @@ use crate::{
     GameOptions,
 };
 
+/// Debug HUD positioning constants
+const DEBUG_HEAD_HEIGHT: f32 = 0.0;
+const DEBUG_HAND_FORWARD_DISTANCE: f32 = 0.6;
+const DEBUG_HAND_LATERAL_SPREAD: f32 = 0.15;
+const DEBUG_HAND_VERTICAL_OFFSET: f32 = 1.45;
+
+/// Health animation constants
+const HEALTH_ANIMATION_SPEED: f32 = 2.0; // Cycles per second
+const MIN_HEALTH_PERCENTAGE: f32 = 0.1;  // 10% minimum
+const MAX_HEALTH_PERCENTAGE: f32 = 1.0;  // 100% maximum
+
 /// Debug scene focused on testing the virtual arms HUD system
 /// Positions hands closer to camera for easy inspection
 pub struct DebugHudScene {
     world: World,
+    player_entity: shipyard::EntityId,
     player_position: Vector3<f32>,
     player_rotation: Quaternion<f32>,
     head_rotation: Quaternion<f32>,
-    head_height: f32,
-    // Hand positioning offsets relative to camera forward
-    hand_forward_distance: f32,
-    hand_lateral_spread: f32,
-    hand_vertical_offset: f32,
     left_hand_position: Vector3<f32>,
     left_hand_rotation: Quaternion<f32>,
     right_hand_position: Vector3<f32>,
@@ -76,14 +80,10 @@ impl DebugHudScene {
 
         Self {
             world,
+            player_entity,
             player_position: vec3(0.0, 0.0, 0.0),
             player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            head_height: 0.0,
-            // Position hands relative to camera forward for better HUD visibility
-            hand_forward_distance: 0.6,
-            hand_lateral_spread: 0.15,
-            hand_vertical_offset: 1.45,
             left_hand_position: vec3(0.0, 0.0, 0.0),
             left_hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             right_hand_position: vec3(0.0, 0.0, 0.0),
@@ -93,7 +93,7 @@ impl DebugHudScene {
     }
 
     fn head_base(&self) -> Vector3<f32> {
-        self.player_position + vec3(0.0, self.head_height, 0.0)
+        self.player_position + vec3(0.0, DEBUG_HEAD_HEIGHT, 0.0)
     }
 
     fn update_player_info(&mut self) {
@@ -103,26 +103,24 @@ impl DebugHudScene {
         }
     }
 
-    fn calculate_hand_positions(&mut self, time: &Time) {
+    fn calculate_hand_positions(&mut self, _time: &Time) {
         let head_base = self.head_base();
 
         // Calculate camera forward vector (negative Z in camera space)
         let forward = self.head_rotation * vec3(0.0, 0.0, -1.0);
-        // let forward = vec3(0.0, 0.0, -1.0);
         // Calculate camera right vector (positive X in camera space)
         let right = self.head_rotation * vec3(1.0, 0.0, 0.0);
-        // let right = vec3(1.0, 0.0, 0.0);
 
         // Position hands in front of camera, spread laterally
         let center_position = head_base
-            + forward * self.hand_forward_distance
-            + vec3(0.0, self.hand_vertical_offset, 0.0);
+            + forward * DEBUG_HAND_FORWARD_DISTANCE
+            + vec3(0.0, DEBUG_HAND_VERTICAL_OFFSET, 0.0);
 
-        let CENTER_OFFSET = -0.25;
+        let center_offset = -0.25;
         self.left_hand_position =
-            center_position - right * self.hand_lateral_spread + (right * CENTER_OFFSET);
+            center_position - right * DEBUG_HAND_LATERAL_SPREAD + (right * center_offset);
         self.right_hand_position =
-            center_position + right * self.hand_lateral_spread + (right * CENTER_OFFSET);
+            center_position + right * DEBUG_HAND_LATERAL_SPREAD + (right * center_offset);
 
         // Set hand rotations to face the camera for optimal HUD viewing
         // The hands should be rotated so the HUD panels face toward the camera
@@ -136,6 +134,24 @@ impl DebugHudScene {
 
         self.left_hand_rotation = base_rotation * left_inward_rotation;
         self.right_hand_rotation = base_rotation * right_inward_rotation;
+    }
+
+    /// Update player health dynamically using a sin wave for testing
+    fn update_dynamic_health(&mut self, time: &Time) {
+        use shipyard::{Get, ViewMut};
+
+        // Calculate animated health percentage using sin wave
+        let time_seconds = time.total.as_secs_f32();
+        let sin_value = (time_seconds * HEALTH_ANIMATION_SPEED * 2.0 * std::f32::consts::PI).sin();
+        // Map sin wave from [-1, 1] to [MIN_HEALTH_PERCENTAGE, MAX_HEALTH_PERCENTAGE]
+        let health_percentage = (sin_value + 1.0) / 2.0 * (MAX_HEALTH_PERCENTAGE - MIN_HEALTH_PERCENTAGE) + MIN_HEALTH_PERCENTAGE;
+
+        // Update the player entity's health component
+        if let Ok(mut v_hit_points) = self.world.borrow::<ViewMut<PropHitPoints>>() {
+            if let Ok(hit_points) = (&mut v_hit_points).get(self.player_entity) {
+                hit_points.hit_points = (health_percentage * 100.0) as i32;
+            }
+        }
     }
 }
 
@@ -162,6 +178,9 @@ impl GameScene for DebugHudScene {
 
         // Update head rotation from input
         self.head_rotation = input_context.head.rotation;
+
+        // Update dynamic health for testing
+        self.update_dynamic_health(&time);
 
         // Update hand positions for HUD testing
         self.calculate_hand_positions(&time);
