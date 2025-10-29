@@ -231,6 +231,18 @@ impl MotionDB {
     pub fn query_all(&self, query: MotionQuery) -> Vec<String> {
         self.query_options(&query)
     }
+
+    /// Get all available tag names
+    pub fn get_all_tag_names(&self) -> Vec<String> {
+        let mut tag_names: Vec<String> = self.tag_name_map.name_to_index.keys().cloned().collect();
+        tag_names.sort();
+        tag_names
+    }
+
+    /// Get the number of tag databases (creature types)
+    pub fn get_creature_type_count(&self) -> usize {
+        self.tag_databases.len()
+    }
 }
 
 fn load_name_map<T: io::Read + io::Seek>(
