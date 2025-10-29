@@ -22,7 +22,7 @@ mod virtual_hand;
 mod vr_config;
 pub mod zip_asset_path;
 
-use scenes::DebugMinimalScene;
+use scenes::{create_initial_scene, load_mission_from_save_data, SceneInitResult};
 
 pub use mission::visibility_engine::CullingInfo;
 pub use mission::SpawnLocation;
@@ -34,13 +34,12 @@ use std::{
     rc::Rc,
 };
 
-use cgmath::{vec3, InnerSpace, Matrix4, Quaternion, Vector2, Vector3};
+use cgmath::{vec3, Matrix4, Quaternion, Vector2, Vector3};
 use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
     motion::MotionDB,
-    properties::{AmbientSoundFlags, PropAmbientHacked, PropPosition},
 };
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AssetPath},
@@ -53,10 +52,9 @@ use engine::{
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
 
-use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
+use save_load::{EntitySaveData, GlobalData, SaveData};
 use scripts::GlobalEffect;
 use shipyard::*;
-use shipyard::{self, View};
 use time::Time;
 use tracing::{info, span, trace, warn, Level};
 
@@ -313,40 +311,15 @@ impl Game {
         //     }
         // }
 
-        let (active_game_scene, mission_to_save_data): (
-            Box<dyn GameScene>,
-            HashMap<String, EntitySaveData>,
-        ) = if options.mission.eq_ignore_ascii_case("debug_minimal") {
-            (Box::new(DebugMinimalScene::new()), HashMap::new())
-        } else if let Some(save_file_path) = &options.save_file {
-            let mut file = OpenOptions::new().read(true).open(save_file_path).unwrap();
-            let save_data = SaveData::read(&mut file);
-            let (mission, mission_to_save_data) = Self::load_from_save_data(
-                save_data,
-                &mut asset_cache,
-                &mut audio_context,
-                &global_context,
-                &options,
-            );
-            (Box::new(mission), mission_to_save_data)
-        } else {
-            // Level specific items
-            let mission_to_save_data = HashMap::new();
-            let active_mission = Mission::load(
-                options.mission.to_owned(),
-                //"medsci2.mis".to_owned(),
-                &mut asset_cache,
-                &mut audio_context,
-                &global_context,
-                options.spawn_location.clone(),
-                QuestInfo::new(),
-                //Box::new(MissionEntityPopulator::create()),
-                Box::new(MissionEntityPopulator::create()),
-                HeldItemSaveData::empty(),
-                &options,
-            );
-            (Box::new(active_mission), mission_to_save_data)
-        };
+        let SceneInitResult {
+            scene: active_game_scene,
+            mission_save_data: mission_to_save_data,
+        } = create_initial_scene(
+            &mut asset_cache,
+            &mut audio_context,
+            &global_context,
+            &options,
+        );
 
         // log_entities_with_link(&active_mission.world, |link| {
         //     matches!(link, Link::AIWatchObj(_))
@@ -401,79 +374,46 @@ impl Game {
             command_effects,
         );
 
-        // Handle ambient sound processing
-        let world = self.active_game_scene.world();
-        let current_pos = {
-            let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-            player_info.pos
-        };
-
-        let mut next_env_sound = None;
-        let mut new_cue = None;
-        let mut potential_ambient_sounds = Vec::new();
-
-        if let (Ok(v_ambient_hacked), Ok(v_position)) = (
-            world.borrow::<View<PropAmbientHacked>>(),
-            world.borrow::<View<PropPosition>>(),
-        ) {
-            for (id, (ambient_sound, position)) in (&v_ambient_hacked, &v_position).iter().with_id()
-            {
-                let dist_squared = (position.position - current_pos).magnitude2();
-
-                if dist_squared < ambient_sound.radius_squared {
-                    if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
-                        new_cue = Some(ambient_sound.schema.to_owned());
-                    } else if ambient_sound
-                        .sound_flags
-                        .contains(AmbientSoundFlags::ENVIRONMENTAL)
-                    {
-                        let schema_val = self.resolve_schema(&ambient_sound.schema);
-                        next_env_sound = Some(schema_val)
-                    } else {
-                        potential_ambient_sounds.push((
-                            dist_squared,
-                            position.position,
-                            id,
-                            ambient_sound.schema.to_owned(),
-                        ))
-                    }
-                }
-            }
-        }
-
-        let (new_character_pos, next_env_sound, new_cue, potential_ambient_sounds) = (
-            current_pos,
-            next_env_sound,
-            new_cue,
-            potential_ambient_sounds,
-        );
-
-        // Update audio
-        if let Some(cue) = new_cue {
-            self.update_music_cue_if_necessary(cue);
-        }
-
-        if let Some(cue) = next_env_sound {
-            self.update_env_sound_if_necessary(cue);
-        }
-
-        // Process ambient sounds
-        let mut ambient_sounds_sorted = potential_ambient_sounds;
-        ambient_sounds_sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
-
-        let ambient_sounds = ambient_sounds_sorted
-            .iter()
-            .take(8)
-            .filter_map(|(_dist, position, id, schema)| {
-                let asset_name = self.resolve_schema(schema);
-                let maybe_audio_clip = self
-                    .asset_cache
-                    .get_opt(&AUDIO_IMPORTER, &format!("{asset_name}.wav"));
-                maybe_audio_clip.map(|clip| (*id, *position, clip.clone()))
+        // Handle ambient audio
+        let ambient_state = self.active_game_scene.ambient_audio_state();
+        let listener_position = ambient_state
+            .as_ref()
+            .map(|state| state.player_position)
+            .or_else(|| {
+                self.active_game_scene
+                    .world()
+                    .borrow::<UniqueView<PlayerInfo>>()
+                    .ok()
+                    .map(|player_info| player_info.pos)
             })
-            .collect::<Vec<(EntityId, Vector3<f32>, Rc<AudioClip>)>>();
+            .unwrap_or(vec3(0.0, 0.0, 0.0));
 
-        self.audio_context.update(new_character_pos, ambient_sounds);
+        if let Some(state) = ambient_state {
+            if let Some(cue) = state.music_cue {
+                self.update_music_cue_if_necessary(cue);
+            }
+
+            if let Some(cue_schema) = state.environmental_cue {
+                let resolved = self.resolve_schema(&cue_schema);
+                self.update_env_sound_if_necessary(resolved);
+            }
+
+            let ambient_sounds = state
+                .ambient_emitters
+                .into_iter()
+                .filter_map(|(id, position, schema_name)| {
+                    let asset_name = self.resolve_schema(&schema_name);
+                    let maybe_audio_clip = self
+                        .asset_cache
+                        .get_opt(&AUDIO_IMPORTER, &format!("{asset_name}.wav"));
+                    maybe_audio_clip.map(|clip| (id, position, clip.clone()))
+                })
+                .collect::<Vec<(EntityId, Vector3<f32>, Rc<AudioClip>)>>();
+
+            self.audio_context.update(listener_position, ambient_sounds);
+        } else {
+            self.audio_context.update(listener_position, Vec::new());
+        }
 
         // Handle global effects
         let global_effects = self.active_game_scene.handle_effects(
@@ -521,41 +461,13 @@ impl Game {
         global_context: &GlobalContext,
         game_options: &GameOptions,
     ) -> (Mission, HashMap<String, EntitySaveData>) {
-        let current_mission = save_data.global_data.active_mission.clone();
-        //self.mission_to_save_data = save_data.level_data;
-
-        let populator: Box<dyn EntityPopulator> = {
-            if let Some(save_data) = save_data
-                .level_data
-                .get(&current_mission.to_ascii_lowercase())
-            {
-                let save_data_cloned = save_data.clone();
-                let populator = SaveFileEntityPopulator::create(save_data_cloned);
-                Box::new(populator)
-            } else {
-                Box::new(MissionEntityPopulator::create())
-            }
-        };
-
-        let spawn_loc = SpawnLocation::PositionRotation(
-            save_data.global_data.position,
-            save_data.global_data.rotation,
-        );
-
-        let active_mission = Mission::load(
-            current_mission,
+        load_mission_from_save_data(
+            save_data,
             asset_cache,
             audio_context,
             global_context,
-            spawn_loc,
-            save_data.global_data.quest_info,
-            populator,
-            save_data.global_data.held_items,
             game_options,
-        );
-
-        //self.active_mission = active_mission;
-        (active_mission, save_data.level_data)
+        )
     }
 
     fn build_save_data(&self) -> SaveData {

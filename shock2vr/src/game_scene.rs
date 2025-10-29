@@ -15,6 +15,14 @@ use crate::{
     GameOptions,
 };
 
+#[derive(Clone, Debug)]
+pub struct AmbientAudioState {
+    pub player_position: Vector3<f32>,
+    pub music_cue: Option<String>,
+    pub environmental_cue: Option<String>,
+    pub ambient_emitters: Vec<(EntityId, Vector3<f32>, String)>,
+}
+
 /// Abstract game scene that can be rendered and updated
 /// Supports missions, cutscenes, UI screens, debug scenes, etc.
 pub trait GameScene {
@@ -84,6 +92,11 @@ pub trait GameScene {
             .borrow::<shipyard::UniqueView<QuestInfo>>()
             .map(|q| q.clone())
             .unwrap_or_else(|_| QuestInfo::new())
+    }
+
+    /// Optional ambient audio information for the scene
+    fn ambient_audio_state(&self) -> Option<AmbientAudioState> {
+        None
     }
 
     /// Queue an entity to be triggered after scripts are initialized
