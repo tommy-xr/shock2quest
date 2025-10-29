@@ -3,7 +3,14 @@ use dark::{
     importers::{FONT_IMPORTER, TEXTURE_IMPORTER},
     properties::{PropHitPoints, PropMaxHitPoints},
 };
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{
+        scene_object::{HorizontalAlignment, VerticalAlignment},
+        SceneObject,
+    },
+    texture::TextureOptions,
+};
 use shipyard::{Get, UniqueView, View, World};
 
 use crate::{mission::PlayerInfo, vr_config::Handedness};
@@ -43,6 +50,7 @@ const TEXT_Z_OFFSET: f32 = 0.005; // Z-offset for text (higher above bars)
 pub fn create_arm_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
+    options: &crate::GameOptions,
     left_hand_position: Vector3<f32>,
     left_hand_rotation: Quaternion<f32>,
     right_hand_position: Vector3<f32>,
@@ -54,6 +62,7 @@ pub fn create_arm_hud_panels(
     let mut left_hud_layers = create_forearm_hud_with_overlays(
         asset_cache,
         world,
+        options,
         left_hand_position,
         left_hand_rotation,
         Handedness::Left,
@@ -151,6 +160,7 @@ fn get_psi_percentage(_world: &World) -> f32 {
 fn create_forearm_hud_with_overlays(
     asset_cache: &mut AssetCache,
     world: &World,
+    options: &crate::GameOptions,
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
@@ -211,6 +221,7 @@ fn create_forearm_hud_with_overlays(
     if let Some(mut health_objects) = create_text_overlay(
         asset_cache,
         world,
+        options,
         "health",
         panel_position,
         final_rotation,
@@ -225,6 +236,7 @@ fn create_forearm_hud_with_overlays(
     if let Some(mut psi_objects) = create_text_overlay(
         asset_cache,
         world,
+        options,
         "psi",
         panel_position,
         final_rotation,
@@ -282,6 +294,7 @@ fn create_bar_overlay(
 fn create_text_overlay(
     asset_cache: &mut AssetCache,
     world: &World,
+    options: &crate::GameOptions,
     text_type: &str, // "health" or "psi"
     base_position: Vector3<f32>,
     base_rotation: Quaternion<f32>,
@@ -307,8 +320,15 @@ fn create_text_overlay(
     // Load the font
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon").clone();
 
-    // Create text object using improved world_space_text2
-    let mut text_object = SceneObject::world_space_text2(&text_content, font, HUD_FONT_SIZE, 0.0); // No transparency (fully opaque)
+    // Create text object using improved world_space_text2 with centered alignment
+    let mut text_object = SceneObject::world_space_text2(
+        &text_content,
+        font,
+        HUD_FONT_SIZE,
+        0.0, // No transparency (fully opaque)
+        HorizontalAlignment::Center,
+        VerticalAlignment::Center,
+    );
 
     // Position text relative to the specific bar location
     // Calculate bar center in pixel space, then convert to world offset
@@ -330,17 +350,22 @@ fn create_text_overlay(
     let text_position = base_position + bar_world_offset + text_world_offset;
 
     // Simple transform - no compensation needed with world_space_text2
-    let text_transform = Matrix4::from_translation(text_position)
-        * Matrix4::from(base_rotation);
+    let text_transform = Matrix4::from_translation(text_position) * Matrix4::from(base_rotation);
 
     text_object.set_transform(text_transform);
 
-    // Create debug cube at the same position to visualize placement
-    let debug_material = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0)); // Green
-    let mut debug_cube = SceneObject::new(debug_material, Box::new(engine::scene::cube::create()));
-    debug_cube.set_transform(text_transform * Matrix4::from_scale(0.01)); // Small cube
+    let mut objects = vec![text_object];
 
-    Some(vec![text_object, debug_cube])
+    // Create debug cube at the same position to visualize placement (if debug flag is enabled)
+    if options.debug_text_rendering {
+        let debug_material = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0)); // Green
+        let mut debug_cube =
+            SceneObject::new(debug_material, Box::new(engine::scene::cube::create()));
+        debug_cube.set_transform(text_transform * Matrix4::from_scale(0.01)); // Small cube
+        objects.push(debug_cube);
+    }
+
+    Some(objects)
 }
 
 /// Create a single forearm HUD panel

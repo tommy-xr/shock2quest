@@ -108,6 +108,9 @@ struct Args {
     #[arg(long = "debug-show-ids")]
     debug_show_ids: bool,
 
+    #[arg(long = "debug-text-rendering")]
+    debug_text_rendering: bool,
+
     #[arg(short, long, default_value = None)]
     save_file: Option<String>,
     // Number of times to greet
@@ -241,6 +244,7 @@ pub fn main() {
         debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
+        debug_text_rendering: args.debug_text_rendering,
         render_particles: true,
         experimental_features,
         ..GameOptions::default()

@@ -199,6 +199,7 @@ impl GameScene for DebugHudScene {
         let hud_panels = create_arm_hud_panels(
             asset_cache,
             &self.world,
+            _options,
             self.left_hand_position,
             self.left_hand_rotation,
             self.right_hand_position,

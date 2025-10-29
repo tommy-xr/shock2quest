@@ -1662,6 +1662,7 @@ impl Mission {
         let mut hud_panels = crate::hud::create_arm_hud_panels(
             asset_cache,
             &self.world,
+            options,
             self.left_hand.get_position(),
             self.left_hand.get_rotation(),
             self.right_hand.get_position(),
