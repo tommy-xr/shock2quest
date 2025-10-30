@@ -23,11 +23,10 @@ use crate::{
 };
 
 /// Map rendering constants
-const MAP_MISSION: &str = "MEDSCI2";
+const MAP_MISSION: &str = "MEDSCI1";
 const MAP_WIDTH: f32 = 614.0; // PAGE001.PCX dimensions
 const MAP_HEIGHT: f32 = 260.0;
 const MAP_SCALE: f32 = 0.002; // Back to original scale
-const MAP_DISTANCE: f32 = 2.0; // Distance from player
 const SLOT_REVEAL_INTERVAL: f32 = 1.0; // Reveal one slot every second
 
 /// Reusable map renderer component that can be positioned anywhere in 3D space
@@ -87,13 +86,7 @@ impl MapRenderer {
             * Matrix4::from_nonuniform_scale(-pixel_to_world_scale, -pixel_to_world_scale, 1.0) // Flip Y to correct upside-down PCX
             * Matrix4::from_translation(vec3(-MAP_WIDTH / 2.0, -MAP_HEIGHT / 2.0, 0.0)); // Center after scaling
 
-        println!(
-            "Final World transform with centering: {:?}",
-            world_transform
-        );
-
         map_group.set_transform(world_transform);
-        println!("World transform: {:?}", world_transform);
 
         // Create background quad with actual PAGE001.PCX texture or fallback
         let background_texture_path =
@@ -101,15 +94,10 @@ impl MapRenderer {
         let background_material = if let Some(background_texture) =
             asset_cache.get_opt(&TEXTURE_IMPORTER, &background_texture_path)
         {
-            println!("Loaded background texture: {}", background_texture_path);
             let background_texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> =
                 background_texture;
             basic_material::create(background_texture_trait, 1.0, 0.0)
         } else {
-            println!(
-                "Could not load background texture: {}, using fallback color",
-                background_texture_path
-            );
             color_material::create(vec3(0.3, 0.3, 0.8)) // Blue fallback
         };
         let mut background =
@@ -120,14 +108,8 @@ impl MapRenderer {
         background.set_transform(background_transform);
         map_group.add_scene_object(background);
 
-        println!("Background transform: {:?}", background_transform);
 
-        println!(
-            "Map group: world_pos: {:?}, pixel_scale: {:.5}",
-            self.world_position, pixel_to_world_scale
-        );
 
-        // Test chunks removed - now using real PCX textures
 
         // Add revealed chunks in pixel space - coordinates directly from data!
         if let Some(ref map_data) = self.map_data {
@@ -143,9 +125,6 @@ impl MapRenderer {
                     let chunk_pixel_width = rect.width() as f32;
                     let chunk_pixel_height = rect.height() as f32;
 
-                    println!("Creating chunk {} at pixels: ({}, {}) size: {}x{} (from rect: ({}, {}) -> ({}, {}))",
-                        slot_idx, chunk_pixel_x, chunk_pixel_y, chunk_pixel_width, chunk_pixel_height,
-                        rect.ul_x, rect.ul_y, rect.lr_x, rect.lr_y);
 
                     // Create chunk quad with actual PCX texture
                     let chunk_texture_path = format!(
@@ -158,37 +137,20 @@ impl MapRenderer {
                     let chunk_material = if let Some(chunk_texture) =
                         asset_cache.get_opt(&TEXTURE_IMPORTER, &chunk_texture_path)
                     {
-                        println!("Loaded chunk texture: {}", chunk_texture_path);
                         let chunk_texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> =
                             chunk_texture;
                         basic_material::create(chunk_texture_trait, 1.0, 0.0)
                     } else {
-                        println!(
-                            "Could not load chunk texture: {}, using fallback color",
-                            chunk_texture_path
-                        );
                         color_material::create(vec3(1.0, 1.0, 0.0)) // Yellow fallback
                     };
 
                     let mut chunk =
                         SceneObject::new(chunk_material, Box::new(engine::scene::quad::create()));
 
-                    // Position in (0,0)→(614,260) pixel space - simple and clean!
                     let chunk_center_x = chunk_pixel_x + chunk_pixel_width / 2.0;
                     let chunk_center_y = chunk_pixel_y + chunk_pixel_height / 2.0;
-                    let chunk_transform = Matrix4::from_nonuniform_scale(1.0, 1.0, 1.0) *
-                    Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005)) // Closer than background
-                            * Matrix4::from_nonuniform_scale(
-                                chunk_pixel_width,
-                                -chunk_pixel_height,
-                                1.0,
-                            );
-
-                    println!("Chunk {} transform: {:?}", slot_idx, chunk_transform);
-                    println!("Chunk {} final center: ({:.1}, {:.1}, {:.3}) spans: ({:.1}-{:.1}, {:.1}-{:.1})",
-                        slot_idx, chunk_center_x, chunk_center_y, 0.01,
-                        chunk_center_x - chunk_pixel_width/2.0, chunk_center_x + chunk_pixel_width/2.0,
-                        chunk_center_y - chunk_pixel_height/2.0, chunk_center_y + chunk_pixel_height/2.0);
+                    let chunk_transform = Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005))
+                        * Matrix4::from_nonuniform_scale(chunk_pixel_width, chunk_pixel_height, 1.0);
 
                     chunk.set_transform(chunk_transform);
                     map_group.add_scene_object(chunk);
@@ -196,24 +158,7 @@ impl MapRenderer {
             }
         }
 
-        // Flatten the transform group into the SceneObjects the engine expects
-        let final_objects = map_group.render_objects();
-        println!(
-            "Total objects rendered: {} (background + {} chunks)",
-            final_objects.len(),
-            self.get_revealed_slot_count()
-        );
-
-        // Debug: Check final world positions of ALL objects with Z separation
-        for (i, obj) in final_objects.iter().enumerate() {
-            let world_pos = obj.get_world_position();
-            println!(
-                "Object {} final world position: {:?} (should show clear Z separation)",
-                i, world_pos
-            );
-        }
-
-        final_objects
+        map_group.render_objects()
     }
 }
 
@@ -330,16 +275,8 @@ impl GameScene for DebugMapScene {
             if self.current_slot_count < chunk_count {
                 self.current_slot_count += 1;
 
-                // Update revealed slots
                 let revealed_slots: Vec<usize> = (0..self.current_slot_count).collect();
                 self.map_renderer.set_revealed_slots(&revealed_slots);
-
-                println!(
-                    "Revealed slot {}, total: {}/{}",
-                    self.current_slot_count - 1,
-                    self.current_slot_count,
-                    chunk_count
-                );
             }
         }
 
