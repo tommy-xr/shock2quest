@@ -20,7 +20,13 @@ pub mod scene_object;
 pub use scene_object::SceneObject;
 
 pub mod renderable;
-pub use renderable::{Renderable, TransformSceneObject, flatten_renderables, scene_objects_to_renderables, create_transform_group};
+pub use renderable::{
+    create_transform_group, flatten_renderables, scene_objects_to_renderables, Renderable,
+    TransformSceneObject,
+};
+
+pub mod ui_2d_renderer;
+pub use ui_2d_renderer::UI2DRenderer;
 
 pub mod geometry;
 pub use geometry::Geometry;
@@ -30,6 +36,9 @@ pub use cube::Cube;
 
 pub mod quad;
 pub use quad::{create as create_quad, Quad};
+
+pub mod quad_unit;
+pub use quad_unit::{create as create_quad_unit, QuadUnit};
 
 pub mod plane;
 pub use plane::Plane;
