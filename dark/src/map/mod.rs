@@ -1,5 +1,7 @@
-use std::io::{self, Read};
-use std::path::Path;
+use std::io;
+
+use crate::importers::MAP_POSITION_IMPORTER;
+use engine::assets::asset_cache::AssetCache;
 
 /// Rectangle coordinates for map chunks, matches Dark Engine's Rect struct
 /// Format: upper-left corner (ul.x, ul.y) and lower-right corner (lr.x, lr.y)
@@ -42,51 +44,37 @@ pub struct MapChunkData {
 }
 
 impl MapChunkData {
-    /// Load map chunk data for a mission from interface directory
-    pub fn load_from_mission<P: AsRef<Path>>(data_path: P, mission_name: &str) -> io::Result<Self> {
-        let interface_path = data_path
-            .as_ref()
-            .join("res")
-            .join("intrface")
-            .join(mission_name.to_uppercase())
-            .join("english");
+    /// Load map chunk data for a mission using asset cache
+    pub fn load_from_mission(asset_cache: &mut AssetCache, mission_name: &str) -> io::Result<Self> {
+        let revealed_path = format!("{}/english/P001RA.BIN", mission_name.to_uppercase());
+        let explored_path = format!("{}/english/P001XA.BIN", mission_name.to_uppercase());
 
-        let revealed_path = interface_path.join("P001RA.BIN");
-        let explored_path = interface_path.join("P001XA.BIN");
+        // Load rectangle data using asset cache
+        let revealed_rects =
+            if let Some(rects) = asset_cache.get_opt(&MAP_POSITION_IMPORTER, &revealed_path) {
+                (*rects).clone() // Convert Rc<Vec<MapRect>> to Vec<MapRect>
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Could not load revealed rects: {}", revealed_path),
+                ));
+            };
 
-        let revealed_rects = Self::load_rect_file(&revealed_path)?;
-        let explored_rects = Self::load_rect_file(&explored_path)?;
+        let explored_rects =
+            if let Some(rects) = asset_cache.get_opt(&MAP_POSITION_IMPORTER, &explored_path) {
+                (*rects).clone() // Convert Rc<Vec<MapRect>> to Vec<MapRect>
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Could not load explored rects: {}", explored_path),
+                ));
+            };
 
         Ok(MapChunkData {
             mission_name: mission_name.to_string(),
             revealed_rects,
             explored_rects,
         })
-    }
-
-    /// Load rectangle data from a BIN file
-    fn load_rect_file<P: AsRef<Path>>(path: P) -> io::Result<Vec<MapRect>> {
-        let mut file = std::fs::File::open(&path)?;
-        let mut rects = Vec::new();
-
-        loop {
-            let mut buffer = [0u8; 8]; // 4 x 2-byte coordinates
-            match file.read_exact(&mut buffer) {
-                Ok(_) => {
-                    // Parse as little-endian 16-bit integers
-                    let ul_x = i16::from_le_bytes([buffer[0], buffer[1]]);
-                    let ul_y = i16::from_le_bytes([buffer[2], buffer[3]]);
-                    let lr_x = i16::from_le_bytes([buffer[4], buffer[5]]);
-                    let lr_y = i16::from_le_bytes([buffer[6], buffer[7]]);
-
-                    rects.push(MapRect::new(ul_x, ul_y, lr_x, lr_y));
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(rects)
     }
 
     /// Get the number of map chunks
