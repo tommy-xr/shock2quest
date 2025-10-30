@@ -35,16 +35,24 @@ pub struct MapRenderer {
 
 impl MapRenderer {
     pub fn new(mission_name: String, world_position: Vector3<f32>, scale: f32) -> Self {
-        let map_data = dark::map::MapChunkData::load_from_mission("Data", &mission_name).ok();
-        let slot_count = map_data.as_ref().map(|d| d.chunk_count()).unwrap_or(0);
-
         Self {
             mission_name,
-            map_data,
-            revealed_slots: vec![false; slot_count],
+            map_data: None, // Will be loaded on first render
+            revealed_slots: Vec::new(), // Will be initialized when map_data is loaded
             world_position,
             world_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             scale,
+        }
+    }
+
+    /// Initialize map data using asset cache (called automatically on first render)
+    fn ensure_map_data_loaded(&mut self, asset_cache: &mut AssetCache) {
+        if self.map_data.is_none() {
+            if let Ok(map_data) = dark::map::MapChunkData::load_from_mission(asset_cache, &self.mission_name) {
+                let slot_count = map_data.chunk_count();
+                self.revealed_slots = vec![false; slot_count];
+                self.map_data = Some(map_data);
+            }
         }
     }
 
@@ -69,7 +77,9 @@ impl MapRenderer {
             .count()
     }
 
-    pub fn render(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
+    pub fn render(&mut self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
+        // Ensure map data is loaded
+        self.ensure_map_data_loaded(asset_cache);
         // Create 2D UI renderer with proper coordinate system
         let mut ui = UI2DRenderer::new_with_flips(
             self.world_position,
