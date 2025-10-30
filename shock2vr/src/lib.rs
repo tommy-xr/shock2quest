@@ -190,6 +190,7 @@ impl Game {
             ZipAssetPath::new(resource_path("res/bitmap.crf")),
             ZipAssetPath::new(resource_path("res/fam.crf")),
             ZipAssetPath::new(resource_path("res/iface.crf")),
+            ZipAssetPath::new(resource_path("res/intrface.crf")),
             ZipAssetPath::new(resource_path("res/mesh.crf")),
             ZipAssetPath::new(resource_path("res/motions.crf")),
             ZipAssetPath::new(resource_path("res/objicon.crf")),
