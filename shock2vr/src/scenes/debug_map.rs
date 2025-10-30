@@ -4,9 +4,7 @@ use cgmath::{vec3, InnerSpace, Matrix3, Quaternion, Vector3};
 use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{
-        basic_material, color_material, light::SpotLight, SceneObject, UI2DRenderer,
-    },
+    scene::{basic_material, color_material, light::SpotLight, SceneObject, UI2DRenderer},
 };
 use shipyard::{UniqueViewMut, World};
 
@@ -39,7 +37,11 @@ pub struct MapRenderer {
 }
 
 /// Helper function to load texture material with fallback
-fn load_texture_material(asset_cache: &mut AssetCache, path: &str, fallback_color: Vector3<f32>) -> Box<dyn engine::scene::Material> {
+fn load_texture_material(
+    asset_cache: &mut AssetCache,
+    path: &str,
+    fallback_color: Vector3<f32>,
+) -> Box<dyn engine::scene::Material> {
     if let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, path) {
         let texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> = texture;
         basic_material::create(texture_trait, 1.0, 0.0)
@@ -86,17 +88,20 @@ impl MapRenderer {
 
     pub fn render(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         // Create 2D UI renderer with proper coordinate system
-        let mut ui = UI2DRenderer::new_with_rotation(
+        let mut ui = UI2DRenderer::new_with_flips(
             self.world_position,
             (MAP_WIDTH, MAP_HEIGHT),
             self.scale,
+            true, // Flip X to match original working behavior
             true, // Flip Y to correct upside-down PCX
-            self.world_rotation
+            self.world_rotation,
         );
 
         // Add background
-        let background_texture_path = format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
-        let background_material = load_texture_material(asset_cache, &background_texture_path, vec3(0.3, 0.3, 0.8));
+        let background_texture_path =
+            format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
+        let background_material =
+            load_texture_material(asset_cache, &background_texture_path, vec3(0.3, 0.3, 0.8));
         ui.add_rect(background_material, 0.0, 0.0, MAP_WIDTH, MAP_HEIGHT, 0.02);
 
         // Add revealed chunks
@@ -107,15 +112,23 @@ impl MapRenderer {
                 }
 
                 if let Some(rect) = map_data.get_revealed_rect(slot_idx) {
-                    let chunk_texture_path = format!("{}/english/P001R{:03}.PCX", self.mission_name.to_uppercase(), slot_idx);
-                    let chunk_material = load_texture_material(asset_cache, &chunk_texture_path, vec3(1.0, 1.0, 0.0));
+                    let chunk_texture_path = format!(
+                        "{}/english/P001R{:03}.PCX",
+                        self.mission_name.to_uppercase(),
+                        slot_idx
+                    );
+                    let chunk_material = load_texture_material(
+                        asset_cache,
+                        &chunk_texture_path,
+                        vec3(1.0, 1.0, 0.0),
+                    );
                     ui.add_rect(
                         chunk_material,
                         rect.ul_x as f32,
                         rect.ul_y as f32,
                         rect.width() as f32,
                         rect.height() as f32,
-                        -0.005
+                        -0.005,
                     );
                 }
             }
