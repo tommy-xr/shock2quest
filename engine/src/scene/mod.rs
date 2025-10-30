@@ -31,6 +31,9 @@ pub use cube::Cube;
 pub mod quad;
 pub use quad::{create as create_quad, Quad};
 
+pub mod quad_unit;
+pub use quad_unit::{create as create_quad_unit, QuadUnit};
+
 pub mod plane;
 pub use plane::Plane;
 

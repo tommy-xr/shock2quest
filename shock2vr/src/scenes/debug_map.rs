@@ -5,7 +5,7 @@ use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{
-        basic_material, color_material, light::SpotLight, Renderable, SceneObject,
+        basic_material, color_material, light::SpotLight, quad_unit, Renderable, SceneObject,
         TransformSceneObject,
     },
 };
@@ -84,7 +84,7 @@ impl MapRenderer {
         let world_transform = Matrix4::from_translation(self.world_position)
             * Matrix4::from(self.world_rotation)
             * Matrix4::from_nonuniform_scale(-pixel_to_world_scale, -pixel_to_world_scale, 1.0) // Flip Y to correct upside-down PCX
-            * Matrix4::from_translation(vec3(-MAP_WIDTH / 2.0, -MAP_HEIGHT / 2.0, 0.0)); // Center after scaling
+            * Matrix4::from_translation(vec3(-MAP_WIDTH / 2.0, -MAP_HEIGHT / 2.0, 0.0)); // Center the unit quad
 
         map_group.set_transform(world_transform);
 
@@ -100,10 +100,9 @@ impl MapRenderer {
         } else {
             color_material::create(vec3(0.3, 0.3, 0.8)) // Blue fallback
         };
-        let mut background =
-            SceneObject::new(background_material, Box::new(engine::scene::quad::create()));
-        // CORRECT Z-ORDERING: Negative Z = closer, positive Z = further away
-        let background_transform = Matrix4::from_translation(vec3(MAP_WIDTH / 2.0, MAP_HEIGHT / 2.0, 0.02)) // Behind chunks but visible
+        let mut background = SceneObject::new(background_material, Box::new(quad_unit::create()));
+        // Simple positioning with quad_unit - no centering needed!
+        let background_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.02))
             * Matrix4::from_nonuniform_scale(MAP_WIDTH, MAP_HEIGHT, 1.0);
         background.set_transform(background_transform);
         map_group.add_scene_object(background);
@@ -144,12 +143,10 @@ impl MapRenderer {
                         color_material::create(vec3(1.0, 1.0, 0.0)) // Yellow fallback
                     };
 
-                    let mut chunk =
-                        SceneObject::new(chunk_material, Box::new(engine::scene::quad::create()));
+                    let mut chunk = SceneObject::new(chunk_material, Box::new(quad_unit::create()));
 
-                    let chunk_center_x = chunk_pixel_x + chunk_pixel_width / 2.0;
-                    let chunk_center_y = chunk_pixel_y + chunk_pixel_height / 2.0;
-                    let chunk_transform = Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005))
+                    // Direct positioning with quad_unit - much simpler!
+                    let chunk_transform = Matrix4::from_translation(vec3(chunk_pixel_x, chunk_pixel_y, -0.005))
                         * Matrix4::from_nonuniform_scale(chunk_pixel_width, chunk_pixel_height, 1.0);
 
                     chunk.set_transform(chunk_transform);
