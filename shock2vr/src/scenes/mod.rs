@@ -14,9 +14,11 @@ use crate::{
 };
 
 pub mod debug_hud;
+pub mod debug_map;
 pub mod debug_minimal;
 
 pub use debug_hud::DebugHudScene;
+pub use debug_map::DebugMapScene;
 pub use debug_minimal::DebugMinimalScene;
 
 pub struct SceneInitResult {
@@ -40,6 +42,13 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("debug_hud") {
         return SceneInitResult {
             scene: Box::new(DebugHudScene::new()),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_map") {
+        return SceneInitResult {
+            scene: Box::new(DebugMapScene::new()),
             mission_save_data: HashMap::new(),
         };
     }
