@@ -93,8 +93,8 @@ impl MapRenderer {
             color_material::create(vec3(0.3, 0.3, 0.8)), // Semi-transparent blue background
             Box::new(engine::scene::quad::create()),
         );
-        // Proper background: full map size positioned to span (0,0) to (614,260) in pixel space
-        let background_transform = Matrix4::from_translation(vec3(MAP_WIDTH / 2.0, MAP_HEIGHT / 2.0, 0.0))
+        // CORRECT Z-ORDERING: Negative Z = closer, positive Z = further away
+        let background_transform = Matrix4::from_translation(vec3(MAP_WIDTH / 2.0, MAP_HEIGHT / 2.0, 0.02)) // Behind chunks but visible
             * Matrix4::from_nonuniform_scale(MAP_WIDTH, MAP_HEIGHT, 1.0);
         background.set_transform(background_transform);
         map_group.add_scene_object(background);
@@ -112,9 +112,9 @@ impl MapRenderer {
             color_material::create(vec3(1.0, 0.0, 1.0)), // Bright magenta
             Box::new(engine::scene::quad::create()),
         );
-        // Position at top-left in (0,0)→(614,260) space: (50, 50) with 100x100 size
-        let test_transform = Matrix4::from_translation(vec3(50.0, 50.0, 0.02)) // Small square at top-left of map
-            * Matrix4::from_nonuniform_scale(100.0, 100.0, 1.0); // 100x100 pixel square
+        // Magenta test chunk: negative Z = closer to camera
+        let test_transform = Matrix4::from_translation(vec3(150.0, 80.0, -0.01)) // Slightly closer to camera
+            * Matrix4::from_nonuniform_scale(200.0, 120.0, 1.0); // 200x120 pixel square - much larger
         test_chunk.set_transform(test_transform);
         map_group.add_scene_object(test_chunk);
         println!("Added test chunk at (0,0) with 100x100 size");
@@ -124,9 +124,9 @@ impl MapRenderer {
             color_material::create(vec3(0.0, 1.0, 0.0)), // Bright green
             Box::new(engine::scene::quad::create()),
         );
-        // Position at bottom-right in (0,0)→(614,260) space: center at (460, 195)
-        let giant_transform = Matrix4::from_translation(vec3(MAP_WIDTH * 0.75, MAP_HEIGHT * 0.75, 0.03)) // Bottom-right area
-            * Matrix4::from_nonuniform_scale(MAP_WIDTH * 0.5, MAP_HEIGHT * 0.5, 1.0); // Half the map size
+        // Green test chunk: negative Z = closer to camera, but behind magenta
+        let giant_transform = Matrix4::from_translation(vec3(MAP_WIDTH * 0.7, MAP_HEIGHT * 0.6, 0.005)) // Between background and yellow chunks
+            * Matrix4::from_nonuniform_scale(MAP_WIDTH * 0.6, MAP_HEIGHT * 0.8, 1.0); // Even larger - 60% x 80% of map
         giant_chunk.set_transform(giant_transform);
         map_group.add_scene_object(giant_chunk);
         println!("Added GIANT green chunk at bottom-right (should be impossible to miss!)");
@@ -159,7 +159,7 @@ impl MapRenderer {
                     let chunk_center_x = chunk_pixel_x + chunk_pixel_width / 2.0;
                     let chunk_center_y = chunk_pixel_y + chunk_pixel_height / 2.0;
                     let chunk_transform =
-                        Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, 0.01))
+                        Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005)) // Closer than background, behind test chunks
                             * Matrix4::from_nonuniform_scale(
                                 chunk_pixel_width,
                                 chunk_pixel_height,
@@ -186,10 +186,10 @@ impl MapRenderer {
             self.get_revealed_slot_count()
         );
 
-        // Debug: Check final world positions of first few objects
-        for (i, obj) in final_objects.iter().take(3).enumerate() {
+        // Debug: Check final world positions of ALL objects with Z separation
+        for (i, obj) in final_objects.iter().enumerate() {
             let world_pos = obj.get_world_position();
-            println!("Object {} final world position: {:?}", i, world_pos);
+            println!("Object {} final world position: {:?} (should show clear Z separation)", i, world_pos);
         }
 
         final_objects
