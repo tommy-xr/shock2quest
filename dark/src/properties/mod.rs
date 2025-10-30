@@ -155,6 +155,9 @@ pub struct PropExp(pub i32);
 pub struct PropLimbModel(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMapLoc(pub i32);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMaterial(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -872,6 +875,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$Logs9",
             PropLog::read_deck9,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$MapLoc",
+            |reader, _len| read_i32(reader),
+            PropMapLoc,
             accumulator::latest,
         ),
         define_prop(
