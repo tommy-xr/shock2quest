@@ -57,6 +57,11 @@ enum Commands {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Query map chunk data from interface files
+    Maps {
+        /// Mission name to load map data for (e.g., "MEDSCI1", "MEDSCI2")
+        mission: String,
+    },
 }
 
 fn init_logging(verbose: bool) -> Result<()> {
@@ -102,6 +107,9 @@ fn main() -> Result<()> {
             limit,
         } => {
             handle_motion_command(&creature_type, &tags, limit)?;
+        }
+        Commands::Maps { mission } => {
+            handle_maps_command(&mission)?;
         }
     }
 
@@ -483,6 +491,80 @@ fn handle_motion_command(creature_type: &str, tags: &[String], limit: Option<usi
         motion_analyzer.list_all_tags_and_animations(creature_id, limit)?;
     } else {
         motion_analyzer.query_with_tags(creature_id, tags, limit)?;
+    }
+
+    Ok(())
+}
+
+fn handle_maps_command(mission: &str) -> Result<()> {
+    info!("Loading map data for {}...", mission);
+
+    // Try to load from Data directory (assume we're in project root or tools/dark_query)
+    let data_path = if std::path::Path::new("Data").exists() {
+        "Data"
+    } else {
+        "../../Data" // From tools/dark_query directory
+    };
+
+    match dark::map::MapChunkData::load_from_mission(data_path, mission) {
+        Ok(map_data) => {
+            println!("=== Map Chunk Data for {} ===", map_data.mission_name);
+            println!("Found {} map chunks", map_data.chunk_count());
+            println!();
+
+            println!("Revealed Rectangles (P001RA.BIN):");
+            for (i, rect) in map_data.revealed_rects.iter().enumerate() {
+                println!(
+                    "  Slot {}: ({}, {}) -> ({}, {}) [{}x{}]",
+                    i,
+                    rect.ul_x,
+                    rect.ul_y,
+                    rect.lr_x,
+                    rect.lr_y,
+                    rect.width(),
+                    rect.height()
+                );
+            }
+
+            println!();
+            println!("Explored Rectangles (P001XA.BIN):");
+            for (i, rect) in map_data.explored_rects.iter().enumerate() {
+                println!(
+                    "  Slot {}: ({}, {}) -> ({}, {}) [{}x{}]",
+                    i,
+                    rect.ul_x,
+                    rect.ul_y,
+                    rect.lr_x,
+                    rect.lr_y,
+                    rect.width(),
+                    rect.height()
+                );
+            }
+
+            // Show corresponding PCX files
+            println!();
+            println!("Corresponding PCX files:");
+            for i in 0..map_data.chunk_count() {
+                println!(
+                    "  Slot {}: P001R{:03}.PCX (revealed), P001X{:03}.PCX (explored)",
+                    i, i, i
+                );
+            }
+        }
+        Err(e) => {
+            println!("Error loading map data for {}: {}", mission, e);
+            println!("Expected files:");
+            println!(
+                "  {}/res/intrface/{}/english/P001RA.BIN",
+                data_path,
+                mission.to_uppercase()
+            );
+            println!(
+                "  {}/res/intrface/{}/english/P001XA.BIN",
+                data_path,
+                mission.to_uppercase()
+            );
+        }
     }
 
     Ok(())
