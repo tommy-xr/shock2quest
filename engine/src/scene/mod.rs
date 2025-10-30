@@ -57,3 +57,6 @@ pub use debug_normal_material::{
     create as create_debug_normal_material, create_skinned as create_skinned_debug_normal_material,
     DebugNormalMaterial, DebugNormalSkinnedMaterial,
 };
+
+pub mod clipped_screen_material;
+pub use clipped_screen_material::ClippedScreenMaterial;

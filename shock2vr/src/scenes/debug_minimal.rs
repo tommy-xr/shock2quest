@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector2, Vector3};
+use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector3};
 use dark::SCALE_FACTOR;
 use engine::{
     assets::asset_cache::AssetCache,
-    audio::AudioContext,
     scene::{light::SpotLight, SceneObject, VertexPosition},
 };
 use shipyard::{UniqueViewMut, World};
@@ -15,7 +14,7 @@ use crate::{
     inventory::PlayerInventoryEntity,
     mission::{GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
     quest_info::QuestInfo,
-    scripts::{Effect, GlobalEffect},
+    scripts::Effect,
     time::Time,
     GameOptions,
 };
@@ -211,38 +210,6 @@ impl GameScene for DebugMinimalScene {
         let mut scene = vec![self.cube_object()];
         scene.extend(self.hand_objects());
         (scene, self.player_position, self.player_rotation)
-    }
-
-    fn render_per_eye(
-        &mut self,
-        _asset_cache: &mut AssetCache,
-        _view: Matrix4<f32>,
-        _projection: Matrix4<f32>,
-        _screen_size: Vector2<f32>,
-        _options: &GameOptions,
-    ) -> Vec<SceneObject> {
-        Vec::new()
-    }
-
-    fn finish_render(
-        &mut self,
-        _asset_cache: &mut AssetCache,
-        _view: Matrix4<f32>,
-        _projection: Matrix4<f32>,
-        _screen_size: Vector2<f32>,
-    ) {
-    }
-
-    fn handle_effects(
-        &mut self,
-        effects: Vec<Effect>,
-        _global_context: &crate::mission::GlobalContext,
-        _game_options: &GameOptions,
-        _asset_cache: &mut AssetCache,
-        _audio_context: &mut AudioContext<shipyard::EntityId, String>,
-    ) -> Vec<GlobalEffect> {
-        let _ = effects;
-        Vec::new()
     }
 
     fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
