@@ -2,6 +2,7 @@ pub mod audio;
 mod bitmap_animation;
 pub mod font;
 pub mod gamesys;
+pub mod map;
 pub mod mission;
 pub mod model;
 pub mod motion;
