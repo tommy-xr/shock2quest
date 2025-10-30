@@ -1,9 +1,16 @@
 use cgmath::{vec3, Deg, Euler, Matrix4, Quaternion, Rotation, Vector3};
 use dark::{
-    importers::TEXTURE_IMPORTER,
+    importers::{FONT_IMPORTER, TEXTURE_IMPORTER},
     properties::{PropHitPoints, PropMaxHitPoints},
 };
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{
+        scene_object::{HorizontalAlignment, VerticalAlignment},
+        SceneObject,
+    },
+    texture::TextureOptions,
+};
 use shipyard::{Get, UniqueView, View, World};
 
 use crate::{mission::PlayerInfo, vr_config::Handedness};
@@ -33,10 +40,17 @@ const PSI_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 31.0 + BAR_VERTIC
 /// Z-offset for overlay layers to ensure proper rendering order
 const OVERLAY_Z_OFFSET: f32 = 0.001;
 
+/// Text rendering constants
+const HUD_FONT_SIZE: f32 = 0.01; // Font size for health/psi text (small scale for VR)
+const TEXT_OFFSET_X: f32 = 0.1; // Distance to the right of bars (more spacing)
+const TEXT_OFFSET_Y: f32 = 0.0; // Vertical offset for centering
+const TEXT_Z_OFFSET: f32 = 0.005; // Z-offset for text (higher above bars)
+
 /// Create HUD panels for both arms with health/psi overlays
 pub fn create_arm_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
+    options: &crate::GameOptions,
     left_hand_position: Vector3<f32>,
     left_hand_rotation: Quaternion<f32>,
     right_hand_position: Vector3<f32>,
@@ -48,6 +62,7 @@ pub fn create_arm_hud_panels(
     let mut left_hud_layers = create_forearm_hud_with_overlays(
         asset_cache,
         world,
+        options,
         left_hand_position,
         left_hand_rotation,
         Handedness::Left,
@@ -145,6 +160,7 @@ fn get_psi_percentage(_world: &World) -> f32 {
 fn create_forearm_hud_with_overlays(
     asset_cache: &mut AssetCache,
     world: &World,
+    options: &crate::GameOptions,
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
@@ -200,6 +216,37 @@ fn create_forearm_hud_with_overlays(
         layers.push(psi_overlay);
     }
 
+    // Layer 4: Health text - position relative to health bar location
+    let panel_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
+    if let Some(mut health_objects) = create_text_overlay(
+        asset_cache,
+        world,
+        options,
+        "health",
+        panel_position,
+        final_rotation,
+        HEALTH_BAR_START,
+        HEALTH_BAR_END,
+        TEXT_Z_OFFSET,
+    ) {
+        layers.append(&mut health_objects);
+    }
+
+    // Layer 5: Psi text - position relative to psi bar location
+    if let Some(mut psi_objects) = create_text_overlay(
+        asset_cache,
+        world,
+        options,
+        "psi",
+        panel_position,
+        final_rotation,
+        PSI_BAR_START,
+        PSI_BAR_END,
+        TEXT_Z_OFFSET,
+    ) {
+        layers.append(&mut psi_objects);
+    }
+
     layers
 }
 
@@ -241,6 +288,84 @@ fn create_bar_overlay(
     scene_object.set_transform(transform);
 
     Some(scene_object)
+}
+
+/// Create a text overlay next to bars showing health/psi values
+fn create_text_overlay(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    options: &crate::GameOptions,
+    text_type: &str, // "health" or "psi"
+    base_position: Vector3<f32>,
+    base_rotation: Quaternion<f32>,
+    pixel_start: (f32, f32),
+    pixel_end: (f32, f32),
+    z_offset: f32,
+) -> Option<Vec<SceneObject>> {
+    // Get the actual values to display
+    let (_current_value, _max_value, text_content) = match text_type {
+        "health" => {
+            let health_percentage = get_health_percentage(world);
+            let current_hp = (health_percentage * 100.0) as i32;
+            (current_hp, 100, format!("{}/100", current_hp))
+        }
+        "psi" => {
+            let psi_percentage = get_psi_percentage(world);
+            let current_psi = (psi_percentage * 100.0) as i32;
+            (current_psi, 100, format!("{}/100", current_psi))
+        }
+        _ => return None,
+    };
+
+    // Load the font
+    let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon").clone();
+
+    // Create text object using improved world_space_text2 with centered alignment
+    let mut text_object = SceneObject::world_space_text2(
+        &text_content,
+        font,
+        HUD_FONT_SIZE,
+        0.0, // No transparency (fully opaque)
+        HorizontalAlignment::Center,
+        VerticalAlignment::Center,
+    );
+
+    // Position text relative to the specific bar location
+    // Calculate bar center in pixel space, then convert to world offset
+    let bar_center_pixel = (
+        (pixel_start.0 + pixel_end.0) / 2.0,
+        (pixel_start.1 + pixel_end.1) / 2.0,
+    );
+
+    // Convert to UV coordinates (0.0 to 1.0)
+    let bar_center_uv = pixel_to_uv(bar_center_pixel);
+
+    // Convert to world space offset from panel center
+    let bar_offset_x = (bar_center_uv.0 - 0.5) * HUD_PANEL_WIDTH;
+    let bar_offset_y = -(bar_center_uv.1 - 0.5) * HUD_PANEL_HEIGHT; // Flip Y
+
+    // Apply rotation to the bar-relative position, then add text offset
+    let bar_world_offset = base_rotation.rotate_vector(vec3(bar_offset_x, bar_offset_y, z_offset));
+    let text_world_offset = base_rotation.rotate_vector(vec3(TEXT_OFFSET_X, TEXT_OFFSET_Y, 0.0));
+    let text_position = base_position + bar_world_offset + text_world_offset;
+
+    // Simple transform - no compensation needed with world_space_text2
+    let text_transform = Matrix4::from_translation(text_position) * Matrix4::from(base_rotation);
+
+    text_object.set_transform(text_transform);
+
+    let mut objects = vec![text_object];
+
+    // Create debug cube at the same position to visualize placement (if debug flag is enabled)
+    if options.debug_text_rendering {
+        let debug_material = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0)); // Green
+        let mut debug_cube =
+            SceneObject::new(debug_material, Box::new(engine::scene::cube::create()));
+        debug_cube.set_transform(text_transform * Matrix4::from_scale(0.01)); // Small cube
+        objects.push(debug_cube);
+    }
+
+    Some(objects)
 }
 
 /// Create a single forearm HUD panel

@@ -18,6 +18,21 @@ pub use crate::scene::Geometry;
 pub use crate::scene::Material;
 
 use crate::gl_engine::OpenGLEngine;
+
+/// Text alignment options for world space text
+#[derive(Clone, Copy, Debug)]
+pub enum HorizontalAlignment {
+    Left,   // Text extends to the right of the position
+    Center, // Text is centered on the position
+    Right,  // Text extends to the left of the position
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum VerticalAlignment {
+    Top,    // Text extends downward from the position
+    Center, // Text is centered on the position
+    Bottom, // Text extends upward from the position
+}
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -154,6 +169,92 @@ impl SceneObject {
             let max_uv_y = a_info.max_uv_y;
             // + a_info.uv_height
             // - (half_pixel * 2.0);
+
+            let adj_width = a_info.advance * multiplier;
+
+            vertices.extend(vec![
+                TextVertex {
+                    position: vec2(x, y),
+                    uv: vec2(min_uv_x, max_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x, y + adj_height),
+                    uv: vec2(min_uv_x, min_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x + adj_width, y + adj_height),
+                    uv: vec2(max_uv_x, min_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x, y),
+                    uv: vec2(min_uv_x, max_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x + adj_width, y + adj_height),
+                    uv: vec2(max_uv_x, min_uv_y),
+                },
+                TextVertex {
+                    position: vec2(x + adj_width, y),
+                    uv: vec2(max_uv_x, max_uv_y),
+                },
+            ]);
+
+            x += adj_width + multiplier;
+        }
+
+        let mesh = mesh::create(vertices);
+        let material = basic_material::create(font.get_texture(), 1.0, transparency);
+        Self::new(material, Box::new(mesh))
+    }
+
+    /// Improved world space text with configurable font size and predictable positioning
+    /// Text is positioned starting at (0, 0) in local space instead of (0, 1.0)
+    pub fn world_space_text2(
+        text: &str,
+        font: Rc<Box<dyn Font>>,
+        font_size: f32,
+        transparency: f32,
+        h_align: HorizontalAlignment,
+        v_align: VerticalAlignment,
+    ) -> SceneObject {
+        let multiplier = font_size / font.base_height();
+        let adj_height = font_size;
+
+        // First pass: calculate total text dimensions
+        let mut total_width = 0.0;
+        for c in text.chars() {
+            let a_info = font.get_character_info(c).unwrap();
+            let adj_width = a_info.advance * multiplier;
+            total_width += adj_width + multiplier;
+        }
+        if total_width > 0.0 {
+            total_width -= multiplier; // Remove last character spacing
+        }
+
+        // Calculate alignment offsets
+        let x_offset = match h_align {
+            HorizontalAlignment::Left => 0.0,
+            HorizontalAlignment::Center => -total_width / 2.0,
+            HorizontalAlignment::Right => -total_width,
+        };
+
+        let y_offset = match v_align {
+            VerticalAlignment::Top => 0.0,
+            VerticalAlignment::Center => -adj_height / 2.0,
+            VerticalAlignment::Bottom => -adj_height,
+        };
+
+        // Second pass: generate vertices with alignment applied
+        let mut x = x_offset;
+        let y = y_offset;
+
+        let mut vertices = Vec::new();
+        for c in text.chars() {
+            let a_info = font.get_character_info(c).unwrap();
+            let min_uv_x = a_info.min_uv_x;
+            let min_uv_y = a_info.min_uv_y;
+            let max_uv_x = a_info.max_uv_x;
+            let max_uv_y = a_info.max_uv_y;
 
             let adj_width = a_info.advance * multiplier;
 
