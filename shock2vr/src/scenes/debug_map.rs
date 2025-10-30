@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix3, Matrix4, Quaternion, Vector3, InnerSpace};
+use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{color_material, light::SpotLight, SceneObject},
+    scene::{color_material, light::SpotLight, Renderable, SceneObject, TransformSceneObject},
 };
 use shipyard::{UniqueViewMut, World};
 
@@ -20,9 +20,9 @@ use crate::{
 
 /// Map rendering constants
 const MAP_MISSION: &str = "MEDSCI2";
-const MAP_WIDTH: f32 = 614.0;  // PAGE001.PCX dimensions
+const MAP_WIDTH: f32 = 614.0; // PAGE001.PCX dimensions
 const MAP_HEIGHT: f32 = 260.0;
-const MAP_SCALE: f32 = 0.002;  // Scale to make it reasonably sized in VR
+const MAP_SCALE: f32 = 0.002; // Back to original scale
 const MAP_DISTANCE: f32 = 2.0; // Distance from player
 const SLOT_REVEAL_INTERVAL: f32 = 1.0; // Reveal one slot every second
 
@@ -66,39 +66,72 @@ impl MapRenderer {
     }
 
     pub fn get_revealed_slot_count(&self) -> usize {
-        self.revealed_slots.iter().filter(|&&revealed| revealed).count()
+        self.revealed_slots
+            .iter()
+            .filter(|&&revealed| revealed)
+            .count()
     }
 
     pub fn render(&self, _asset_cache: &mut AssetCache) -> Vec<SceneObject> {
-        let mut objects = Vec::new();
+        // Create a transform group that handles world positioning
+        let mut map_group = TransformSceneObject::new();
 
-        // Calculate world space dimensions
-        let map_world_width = MAP_WIDTH * self.scale;
-        let map_world_height = MAP_HEIGHT * self.scale;
-
-        // Create base transform matrix for the map in world space
-        let base_transform = Matrix4::from_translation(self.world_position)
+        // Final transform: position, rotation, scale, then center the map
+        let pixel_to_world_scale = self.scale;
+        let world_transform = Matrix4::from_translation(self.world_position)
             * Matrix4::from(self.world_rotation)
-            * Matrix4::from_translation(vec3(-map_world_width / 2.0, -map_world_height / 2.0, 0.0));
+            * Matrix4::from_nonuniform_scale(pixel_to_world_scale, pixel_to_world_scale, 1.0)
+            * Matrix4::from_translation(vec3(-MAP_WIDTH / 2.0, -MAP_HEIGHT / 2.0, 0.0)); // Center after scaling
 
-        // Render background map (PAGE001.PCX)
-        let background_path = format!("res/intrface/{}/english/page001.pcx", self.mission_name.to_uppercase());
-        println!("Loading map background: {}", background_path);
-        println!("Map world position: {:?}, size: {}x{}", self.world_position, map_world_width, map_world_height);
+        println!("Final World transform with centering: {:?}", world_transform);
 
-        // For now, use a simple colored background to test positioning
-        println!("Creating colored background for map positioning test");
-        println!("Map background: world_pos: {:?}, size: {:.3}x{:.3}, scale: {:.5}",
-            self.world_position, map_world_width, map_world_height, self.scale);
-        let background_transform = base_transform
-            * Matrix4::from_nonuniform_scale(map_world_width, map_world_height, 1.0);
+        map_group.set_transform(world_transform);
+        println!("World transform: {:?}", world_transform);
 
-        let material = color_material::create(vec3(0.3, 0.3, 0.8)); // Blue background
-        let mut background_obj = SceneObject::new(material, Box::new(engine::scene::quad::create()));
-        background_obj.set_transform(background_transform);
-        objects.push(background_obj);
+        // Create background quad in pixel space (0,0) -> (614,260) - make it semi-transparent for debugging
+        let mut background = SceneObject::new(
+            color_material::create(vec3(0.3, 0.3, 0.8)), // Semi-transparent blue background
+            Box::new(engine::scene::quad::create()),
+        );
+        // CORRECT Z-ORDERING: Negative Z = closer, positive Z = further away
+        let background_transform = Matrix4::from_translation(vec3(MAP_WIDTH / 2.0, MAP_HEIGHT / 2.0, 0.02)) // Behind chunks but visible
+            * Matrix4::from_nonuniform_scale(MAP_WIDTH, MAP_HEIGHT, 1.0);
+        background.set_transform(background_transform);
+        map_group.add_scene_object(background);
 
-        // Render revealed map chunks
+        println!("Background transform: {:?}", background_transform);
+
+        println!(
+            "Map group: world_pos: {:?}, pixel_scale: {:.5}",
+            self.world_position, pixel_to_world_scale
+        );
+
+        // Add test chunks to verify positioning works
+        // Add a test chunk at known position - top-left of map area
+        let mut test_chunk = SceneObject::new(
+            color_material::create(vec3(1.0, 0.0, 1.0)), // Bright magenta
+            Box::new(engine::scene::quad::create()),
+        );
+        // Magenta test chunk: negative Z = closer to camera
+        let test_transform = Matrix4::from_translation(vec3(150.0, 80.0, -0.01)) // Slightly closer to camera
+            * Matrix4::from_nonuniform_scale(200.0, 120.0, 1.0); // 200x120 pixel square - much larger
+        test_chunk.set_transform(test_transform);
+        map_group.add_scene_object(test_chunk);
+        println!("Added test chunk at (0,0) with 100x100 size");
+
+        // Add a GIANT test chunk that covers 1/4 of the map - should be impossible to miss
+        let mut giant_chunk = SceneObject::new(
+            color_material::create(vec3(0.0, 1.0, 0.0)), // Bright green
+            Box::new(engine::scene::quad::create()),
+        );
+        // Green test chunk: negative Z = closer to camera, but behind magenta
+        let giant_transform = Matrix4::from_translation(vec3(MAP_WIDTH * 0.7, MAP_HEIGHT * 0.6, 0.005)) // Between background and yellow chunks
+            * Matrix4::from_nonuniform_scale(MAP_WIDTH * 0.6, MAP_HEIGHT * 0.8, 1.0); // Even larger - 60% x 80% of map
+        giant_chunk.set_transform(giant_transform);
+        map_group.add_scene_object(giant_chunk);
+        println!("Added GIANT green chunk at bottom-right (should be impossible to miss!)");
+
+        // Add revealed chunks in pixel space - coordinates directly from data!
         if let Some(ref map_data) = self.map_data {
             for (slot_idx, &is_revealed) in self.revealed_slots.iter().enumerate() {
                 if !is_revealed {
@@ -106,45 +139,60 @@ impl MapRenderer {
                 }
 
                 if let Some(rect) = map_data.get_revealed_rect(slot_idx) {
-                    let _chunk_path = format!(
-                        "res/intrface/{}/english/p001r{:03}.pcx",
-                        self.mission_name.to_uppercase(),
-                        slot_idx
+                    // Work directly in pixel coordinates - no conversion needed!
+                    let chunk_pixel_x = rect.ul_x as f32;
+                    let chunk_pixel_y = rect.ul_y as f32;
+                    let chunk_pixel_width = rect.width() as f32;
+                    let chunk_pixel_height = rect.height() as f32;
+
+                    println!("Creating chunk {} at pixels: ({}, {}) size: {}x{} (from rect: ({}, {}) -> ({}, {}))",
+                        slot_idx, chunk_pixel_x, chunk_pixel_y, chunk_pixel_width, chunk_pixel_height,
+                        rect.ul_x, rect.ul_y, rect.lr_x, rect.lr_y);
+
+                    // Create chunk quad in pixel space
+                    let mut chunk = SceneObject::new(
+                        color_material::create(vec3(1.0, 1.0, 0.0)), // Bright yellow for all chunks
+                        Box::new(engine::scene::quad::create()),
                     );
 
-                    // Calculate position and size based on rectangle coordinates
-                    let chunk_world_width = (rect.width() as f32) * self.scale;
-                    let chunk_world_height = (rect.height() as f32) * self.scale;
+                    // Position in (0,0)→(614,260) pixel space - simple and clean!
+                    let chunk_center_x = chunk_pixel_x + chunk_pixel_width / 2.0;
+                    let chunk_center_y = chunk_pixel_y + chunk_pixel_height / 2.0;
+                    let chunk_transform =
+                        Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005)) // Closer than background, behind test chunks
+                            * Matrix4::from_nonuniform_scale(
+                                chunk_pixel_width,
+                                chunk_pixel_height,
+                                1.0,
+                            );
 
-                    // Position relative to map background using same coordinate system as base map
-                    let chunk_offset_x = (rect.ul_x as f32) * self.scale;
-                    let chunk_offset_y = (rect.ul_y as f32) * self.scale;
+                    println!("Chunk {} transform: {:?}", slot_idx, chunk_transform);
+                    println!("Chunk {} final center: ({:.1}, {:.1}, {:.3}) spans: ({:.1}-{:.1}, {:.1}-{:.1})",
+                        slot_idx, chunk_center_x, chunk_center_y, 0.01,
+                        chunk_center_x - chunk_pixel_width/2.0, chunk_center_x + chunk_pixel_width/2.0,
+                        chunk_center_y - chunk_pixel_height/2.0, chunk_center_y + chunk_pixel_height/2.0);
 
-                    // Use colored rectangles to visualize the revealed chunks
-                    println!("Creating colored chunk {} at rect: ({}, {}) -> ({}, {}), size: {}x{}, offset: ({:.3}, {:.3})",
-                        slot_idx, rect.ul_x, rect.ul_y, rect.lr_x, rect.lr_y,
-                        rect.width(), rect.height(), chunk_offset_x, chunk_offset_y);
-
-                    // Use the same base_transform approach as the background map
-                    let chunk_transform = base_transform
-                        * Matrix4::from_translation(vec3(chunk_offset_x, chunk_offset_y, 0.01)) // Larger Z offset to ensure chunks are in front
-                        * Matrix4::from_nonuniform_scale(chunk_world_width, chunk_world_height, 1.0);
-
-                    // Use different colors for different slots to see the progression
-                    let color = match slot_idx % 3 {
-                        0 => vec3(1.0, 0.0, 0.0), // Red
-                        1 => vec3(0.0, 1.0, 0.0), // Green
-                        _ => vec3(1.0, 1.0, 0.0), // Yellow
-                    };
-                    let material = color_material::create(color);
-                    let mut chunk_obj = SceneObject::new(material, Box::new(engine::scene::quad::create()));
-                    chunk_obj.set_transform(chunk_transform);
-                    objects.push(chunk_obj);
+                    chunk.set_transform(chunk_transform);
+                    map_group.add_scene_object(chunk);
                 }
             }
         }
 
-        objects
+        // Flatten the transform group into the SceneObjects the engine expects
+        let final_objects = map_group.render_objects();
+        println!(
+            "Total objects rendered: {} (background + {} chunks)",
+            final_objects.len(),
+            self.get_revealed_slot_count()
+        );
+
+        // Debug: Check final world positions of ALL objects with Z separation
+        for (i, obj) in final_objects.iter().enumerate() {
+            let world_pos = obj.get_world_position();
+            println!("Object {} final world position: {:?} (should show clear Z separation)", i, world_pos);
+        }
+
+        final_objects
     }
 }
 
@@ -252,7 +300,12 @@ impl GameScene for DebugMapScene {
         if self.slot_timer >= SLOT_REVEAL_INTERVAL {
             self.slot_timer = 0.0;
 
-            let chunk_count = self.map_renderer.map_data.as_ref().map(|d| d.chunk_count()).unwrap_or(0);
+            let chunk_count = self
+                .map_renderer
+                .map_data
+                .as_ref()
+                .map(|d| d.chunk_count())
+                .unwrap_or(0);
             if self.current_slot_count < chunk_count {
                 self.current_slot_count += 1;
 

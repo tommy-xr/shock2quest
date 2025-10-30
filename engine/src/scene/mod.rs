@@ -19,6 +19,9 @@ pub use billboard_material::*;
 pub mod scene_object;
 pub use scene_object::SceneObject;
 
+pub mod renderable;
+pub use renderable::{Renderable, TransformSceneObject, flatten_renderables, scene_objects_to_renderables, create_transform_group};
+
 pub mod geometry;
 pub use geometry::Geometry;
 
