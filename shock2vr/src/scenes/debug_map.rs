@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 
 use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector3};
+use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{color_material, light::SpotLight, Renderable, SceneObject, TransformSceneObject},
+    scene::{
+        basic_material, color_material, light::SpotLight, Renderable, SceneObject,
+        TransformSceneObject,
+    },
 };
 use shipyard::{UniqueViewMut, World};
 
@@ -72,7 +76,7 @@ impl MapRenderer {
             .count()
     }
 
-    pub fn render(&self, _asset_cache: &mut AssetCache) -> Vec<SceneObject> {
+    pub fn render(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         // Create a transform group that handles world positioning
         let mut map_group = TransformSceneObject::new();
 
@@ -80,19 +84,36 @@ impl MapRenderer {
         let pixel_to_world_scale = self.scale;
         let world_transform = Matrix4::from_translation(self.world_position)
             * Matrix4::from(self.world_rotation)
-            * Matrix4::from_nonuniform_scale(pixel_to_world_scale, pixel_to_world_scale, 1.0)
+            * Matrix4::from_nonuniform_scale(-pixel_to_world_scale, -pixel_to_world_scale, 1.0) // Flip Y to correct upside-down PCX
             * Matrix4::from_translation(vec3(-MAP_WIDTH / 2.0, -MAP_HEIGHT / 2.0, 0.0)); // Center after scaling
 
-        println!("Final World transform with centering: {:?}", world_transform);
+        println!(
+            "Final World transform with centering: {:?}",
+            world_transform
+        );
 
         map_group.set_transform(world_transform);
         println!("World transform: {:?}", world_transform);
 
-        // Create background quad in pixel space (0,0) -> (614,260) - make it semi-transparent for debugging
-        let mut background = SceneObject::new(
-            color_material::create(vec3(0.3, 0.3, 0.8)), // Semi-transparent blue background
-            Box::new(engine::scene::quad::create()),
-        );
+        // Create background quad with actual PAGE001.PCX texture or fallback
+        let background_texture_path =
+            format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
+        let background_material = if let Some(background_texture) =
+            asset_cache.get_opt(&TEXTURE_IMPORTER, &background_texture_path)
+        {
+            println!("Loaded background texture: {}", background_texture_path);
+            let background_texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> =
+                background_texture;
+            basic_material::create(background_texture_trait, 1.0, 0.0)
+        } else {
+            println!(
+                "Could not load background texture: {}, using fallback color",
+                background_texture_path
+            );
+            color_material::create(vec3(0.3, 0.3, 0.8)) // Blue fallback
+        };
+        let mut background =
+            SceneObject::new(background_material, Box::new(engine::scene::quad::create()));
         // CORRECT Z-ORDERING: Negative Z = closer, positive Z = further away
         let background_transform = Matrix4::from_translation(vec3(MAP_WIDTH / 2.0, MAP_HEIGHT / 2.0, 0.02)) // Behind chunks but visible
             * Matrix4::from_nonuniform_scale(MAP_WIDTH, MAP_HEIGHT, 1.0);
@@ -106,30 +127,7 @@ impl MapRenderer {
             self.world_position, pixel_to_world_scale
         );
 
-        // Add test chunks to verify positioning works
-        // Add a test chunk at known position - top-left of map area
-        let mut test_chunk = SceneObject::new(
-            color_material::create(vec3(1.0, 0.0, 1.0)), // Bright magenta
-            Box::new(engine::scene::quad::create()),
-        );
-        // Magenta test chunk: negative Z = closer to camera
-        let test_transform = Matrix4::from_translation(vec3(150.0, 80.0, -0.01)) // Slightly closer to camera
-            * Matrix4::from_nonuniform_scale(200.0, 120.0, 1.0); // 200x120 pixel square - much larger
-        test_chunk.set_transform(test_transform);
-        map_group.add_scene_object(test_chunk);
-        println!("Added test chunk at (0,0) with 100x100 size");
-
-        // Add a GIANT test chunk that covers 1/4 of the map - should be impossible to miss
-        let mut giant_chunk = SceneObject::new(
-            color_material::create(vec3(0.0, 1.0, 0.0)), // Bright green
-            Box::new(engine::scene::quad::create()),
-        );
-        // Green test chunk: negative Z = closer to camera, but behind magenta
-        let giant_transform = Matrix4::from_translation(vec3(MAP_WIDTH * 0.7, MAP_HEIGHT * 0.6, 0.005)) // Between background and yellow chunks
-            * Matrix4::from_nonuniform_scale(MAP_WIDTH * 0.6, MAP_HEIGHT * 0.8, 1.0); // Even larger - 60% x 80% of map
-        giant_chunk.set_transform(giant_transform);
-        map_group.add_scene_object(giant_chunk);
-        println!("Added GIANT green chunk at bottom-right (should be impossible to miss!)");
+        // Test chunks removed - now using real PCX textures
 
         // Add revealed chunks in pixel space - coordinates directly from data!
         if let Some(ref map_data) = self.map_data {
@@ -149,20 +147,40 @@ impl MapRenderer {
                         slot_idx, chunk_pixel_x, chunk_pixel_y, chunk_pixel_width, chunk_pixel_height,
                         rect.ul_x, rect.ul_y, rect.lr_x, rect.lr_y);
 
-                    // Create chunk quad in pixel space
-                    let mut chunk = SceneObject::new(
-                        color_material::create(vec3(1.0, 1.0, 0.0)), // Bright yellow for all chunks
-                        Box::new(engine::scene::quad::create()),
+                    // Create chunk quad with actual PCX texture
+                    let chunk_texture_path = format!(
+                        "{}/english/P001R{:03}.PCX",
+                        self.mission_name.to_uppercase(),
+                        slot_idx
                     );
+
+                    // Try to load the chunk texture, fall back to color if missing
+                    let chunk_material = if let Some(chunk_texture) =
+                        asset_cache.get_opt(&TEXTURE_IMPORTER, &chunk_texture_path)
+                    {
+                        println!("Loaded chunk texture: {}", chunk_texture_path);
+                        let chunk_texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> =
+                            chunk_texture;
+                        basic_material::create(chunk_texture_trait, 1.0, 0.0)
+                    } else {
+                        println!(
+                            "Could not load chunk texture: {}, using fallback color",
+                            chunk_texture_path
+                        );
+                        color_material::create(vec3(1.0, 1.0, 0.0)) // Yellow fallback
+                    };
+
+                    let mut chunk =
+                        SceneObject::new(chunk_material, Box::new(engine::scene::quad::create()));
 
                     // Position in (0,0)→(614,260) pixel space - simple and clean!
                     let chunk_center_x = chunk_pixel_x + chunk_pixel_width / 2.0;
                     let chunk_center_y = chunk_pixel_y + chunk_pixel_height / 2.0;
-                    let chunk_transform =
-                        Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005)) // Closer than background, behind test chunks
+                    let chunk_transform = Matrix4::from_nonuniform_scale(1.0, 1.0, 1.0) *
+                    Matrix4::from_translation(vec3(chunk_center_x, chunk_center_y, -0.005)) // Closer than background
                             * Matrix4::from_nonuniform_scale(
                                 chunk_pixel_width,
-                                chunk_pixel_height,
+                                -chunk_pixel_height,
                                 1.0,
                             );
 
@@ -189,7 +207,10 @@ impl MapRenderer {
         // Debug: Check final world positions of ALL objects with Z separation
         for (i, obj) in final_objects.iter().enumerate() {
             let world_pos = obj.get_world_position();
-            println!("Object {} final world position: {:?} (should show clear Z separation)", i, world_pos);
+            println!(
+                "Object {} final world position: {:?} (should show clear Z separation)",
+                i, world_pos
+            );
         }
 
         final_objects
