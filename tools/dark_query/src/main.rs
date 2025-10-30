@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use shock2vr::zip_asset_path::ZipAssetPath;
 use tracing::info;
 
 mod data_loader;
@@ -499,14 +500,22 @@ fn handle_motion_command(creature_type: &str, tags: &[String], limit: Option<usi
 fn handle_maps_command(mission: &str) -> Result<()> {
     info!("Loading map data for {}...", mission);
 
-    // Try to load from Data directory (assume we're in project root or tools/dark_query)
-    let data_path = if std::path::Path::new("Data").exists() {
-        "Data"
-    } else {
-        "../../Data" // From tools/dark_query directory
-    };
+    // Use proper data root resolution from shock2vr
+    let data_root = shock2vr::paths::data_root();
+    let data_path = data_root.to_string_lossy().to_string();
 
-    match dark::map::MapChunkData::load_from_mission(data_path, mission) {
+    // Production runtime ONLY has intrface.crf - no fallback to folders
+    let intrface_crf_path = data_root.join("res/intrface.crf");
+
+    println!(
+        "Using intrface.crf archive: {}",
+        intrface_crf_path.display()
+    );
+    let asset_path = ZipAssetPath::new(intrface_crf_path.to_string_lossy().to_string());
+    let mut asset_cache =
+        engine::assets::asset_cache::AssetCache::new(data_path.clone(), asset_path);
+
+    match dark::map::MapChunkData::load_from_mission(&mut asset_cache, mission) {
         Ok(map_data) => {
             println!("=== Map Chunk Data for {} ===", map_data.mission_name);
             println!("Found {} map chunks", map_data.chunk_count());
@@ -553,16 +562,12 @@ fn handle_maps_command(mission: &str) -> Result<()> {
         }
         Err(e) => {
             println!("Error loading map data for {}: {}", mission, e);
-            println!("Expected files:");
+            println!("Expected asset paths:");
+            println!("  {}/english/P001RA.BIN", mission.to_uppercase());
+            println!("  {}/english/P001XA.BIN", mission.to_uppercase());
             println!(
-                "  {}/res/intrface/{}/english/P001RA.BIN",
-                data_path,
-                mission.to_uppercase()
-            );
-            println!(
-                "  {}/res/intrface/{}/english/P001XA.BIN",
-                data_path,
-                mission.to_uppercase()
+                "Note: These should be accessible via asset cache from {}/res/intrface/",
+                data_path
             );
         }
     }

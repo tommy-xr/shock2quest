@@ -1,8 +1,6 @@
 use std::io::{self, Read};
 
-use engine::{
-    assets::{asset_cache::AssetCache, asset_importer::AssetImporter},
-};
+use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
 use crate::map::MapRect;
@@ -55,5 +53,6 @@ fn parse_map_rects(bytes: &[u8]) -> io::Result<Vec<MapRect>> {
     Ok(rects)
 }
 
-pub static MAP_POSITION_IMPORTER: Lazy<AssetImporter<RawMapPositionData, Vec<MapRect>, MapPositionOptions>> =
-    Lazy::new(|| AssetImporter::define(load_map_position, process_map_position));
+pub static MAP_POSITION_IMPORTER: Lazy<
+    AssetImporter<RawMapPositionData, Vec<MapRect>, MapPositionOptions>,
+> = Lazy::new(|| AssetImporter::define(load_map_position, process_map_position));

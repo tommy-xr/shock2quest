@@ -1,7 +1,7 @@
 use std::io;
 
-use engine::assets::asset_cache::AssetCache;
 use crate::importers::MAP_POSITION_IMPORTER;
+use engine::assets::asset_cache::AssetCache;
 
 /// Rectangle coordinates for map chunks, matches Dark Engine's Rect struct
 /// Format: upper-left corner (ul.x, ul.y) and lower-right corner (lr.x, lr.y)
@@ -50,17 +50,25 @@ impl MapChunkData {
         let explored_path = format!("{}/english/P001XA.BIN", mission_name.to_uppercase());
 
         // Load rectangle data using asset cache
-        let revealed_rects = if let Some(rects) = asset_cache.get_opt(&MAP_POSITION_IMPORTER, &revealed_path) {
-            (*rects).clone() // Convert Rc<Vec<MapRect>> to Vec<MapRect>
-        } else {
-            return Err(io::Error::new(io::ErrorKind::NotFound, format!("Could not load revealed rects: {}", revealed_path)));
-        };
+        let revealed_rects =
+            if let Some(rects) = asset_cache.get_opt(&MAP_POSITION_IMPORTER, &revealed_path) {
+                (*rects).clone() // Convert Rc<Vec<MapRect>> to Vec<MapRect>
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Could not load revealed rects: {}", revealed_path),
+                ));
+            };
 
-        let explored_rects = if let Some(rects) = asset_cache.get_opt(&MAP_POSITION_IMPORTER, &explored_path) {
-            (*rects).clone() // Convert Rc<Vec<MapRect>> to Vec<MapRect>
-        } else {
-            return Err(io::Error::new(io::ErrorKind::NotFound, format!("Could not load explored rects: {}", explored_path)));
-        };
+        let explored_rects =
+            if let Some(rects) = asset_cache.get_opt(&MAP_POSITION_IMPORTER, &explored_path) {
+                (*rects).clone() // Convert Rc<Vec<MapRect>> to Vec<MapRect>
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Could not load explored rects: {}", explored_path),
+                ));
+            };
 
         Ok(MapChunkData {
             mission_name: mission_name.to_string(),
@@ -68,7 +76,6 @@ impl MapChunkData {
             explored_rects,
         })
     }
-
 
     /// Get the number of map chunks
     pub fn chunk_count(&self) -> usize {

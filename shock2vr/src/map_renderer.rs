@@ -37,7 +37,7 @@ impl MapRenderer {
     pub fn new(mission_name: String, world_position: Vector3<f32>, scale: f32) -> Self {
         Self {
             mission_name,
-            map_data: None, // Will be loaded on first render
+            map_data: None,             // Will be loaded on first render
             revealed_slots: Vec::new(), // Will be initialized when map_data is loaded
             world_position,
             world_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
@@ -48,7 +48,9 @@ impl MapRenderer {
     /// Initialize map data using asset cache (called automatically on first render)
     fn ensure_map_data_loaded(&mut self, asset_cache: &mut AssetCache) {
         if self.map_data.is_none() {
-            if let Ok(map_data) = dark::map::MapChunkData::load_from_mission(asset_cache, &self.mission_name) {
+            if let Ok(map_data) =
+                dark::map::MapChunkData::load_from_mission(asset_cache, &self.mission_name)
+            {
                 let slot_count = map_data.chunk_count();
                 self.revealed_slots = vec![false; slot_count];
                 self.map_data = Some(map_data);
@@ -93,8 +95,11 @@ impl MapRenderer {
         // Add background
         let background_texture_path =
             format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
-        let background_material =
-            load_texture_material(asset_cache, &background_texture_path, cgmath::vec3(0.3, 0.3, 0.8));
+        let background_material = load_texture_material(
+            asset_cache,
+            &background_texture_path,
+            cgmath::vec3(0.3, 0.3, 0.8),
+        );
         ui.add_rect(background_material, 0.0, 0.0, MAP_WIDTH, MAP_HEIGHT, 0.02);
 
         // Add revealed chunks
