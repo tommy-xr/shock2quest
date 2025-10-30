@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector3};
+use cgmath::{vec3, InnerSpace, Matrix3, Quaternion, Vector3};
 use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{
-        basic_material, color_material, light::SpotLight, quad_unit, Renderable, SceneObject,
-        TransformSceneObject,
+        basic_material, color_material, light::SpotLight, SceneObject, UI2DRenderer,
     },
 };
 use shipyard::{UniqueViewMut, World};
@@ -37,6 +36,16 @@ pub struct MapRenderer {
     pub world_position: Vector3<f32>,
     pub world_rotation: Quaternion<f32>,
     pub scale: f32,
+}
+
+/// Helper function to load texture material with fallback
+fn load_texture_material(asset_cache: &mut AssetCache, path: &str, fallback_color: Vector3<f32>) -> Box<dyn engine::scene::Material> {
+    if let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, path) {
+        let texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> = texture;
+        basic_material::create(texture_trait, 1.0, 0.0)
+    } else {
+        color_material::create(fallback_color)
+    }
 }
 
 impl MapRenderer {
@@ -76,41 +85,21 @@ impl MapRenderer {
     }
 
     pub fn render(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
-        // Create a transform group that handles world positioning
-        let mut map_group = TransformSceneObject::new();
+        // Create 2D UI renderer with proper coordinate system
+        let mut ui = UI2DRenderer::new_with_rotation(
+            self.world_position,
+            (MAP_WIDTH, MAP_HEIGHT),
+            self.scale,
+            true, // Flip Y to correct upside-down PCX
+            self.world_rotation
+        );
 
-        // Final transform: position, rotation, scale, then center the map
-        let pixel_to_world_scale = self.scale;
-        let world_transform = Matrix4::from_translation(self.world_position)
-            * Matrix4::from(self.world_rotation)
-            * Matrix4::from_nonuniform_scale(-pixel_to_world_scale, -pixel_to_world_scale, 1.0) // Flip Y to correct upside-down PCX
-            * Matrix4::from_translation(vec3(-MAP_WIDTH / 2.0, -MAP_HEIGHT / 2.0, 0.0)); // Center the unit quad
+        // Add background
+        let background_texture_path = format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
+        let background_material = load_texture_material(asset_cache, &background_texture_path, vec3(0.3, 0.3, 0.8));
+        ui.add_rect(background_material, 0.0, 0.0, MAP_WIDTH, MAP_HEIGHT, 0.02);
 
-        map_group.set_transform(world_transform);
-
-        // Create background quad with actual PAGE001.PCX texture or fallback
-        let background_texture_path =
-            format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
-        let background_material = if let Some(background_texture) =
-            asset_cache.get_opt(&TEXTURE_IMPORTER, &background_texture_path)
-        {
-            let background_texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> =
-                background_texture;
-            basic_material::create(background_texture_trait, 1.0, 0.0)
-        } else {
-            color_material::create(vec3(0.3, 0.3, 0.8)) // Blue fallback
-        };
-        let mut background = SceneObject::new(background_material, Box::new(quad_unit::create()));
-        // Simple positioning with quad_unit - no centering needed!
-        let background_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.02))
-            * Matrix4::from_nonuniform_scale(MAP_WIDTH, MAP_HEIGHT, 1.0);
-        background.set_transform(background_transform);
-        map_group.add_scene_object(background);
-
-
-
-
-        // Add revealed chunks in pixel space - coordinates directly from data!
+        // Add revealed chunks
         if let Some(ref map_data) = self.map_data {
             for (slot_idx, &is_revealed) in self.revealed_slots.iter().enumerate() {
                 if !is_revealed {
@@ -118,44 +107,21 @@ impl MapRenderer {
                 }
 
                 if let Some(rect) = map_data.get_revealed_rect(slot_idx) {
-                    // Work directly in pixel coordinates - no conversion needed!
-                    let chunk_pixel_x = rect.ul_x as f32;
-                    let chunk_pixel_y = rect.ul_y as f32;
-                    let chunk_pixel_width = rect.width() as f32;
-                    let chunk_pixel_height = rect.height() as f32;
-
-
-                    // Create chunk quad with actual PCX texture
-                    let chunk_texture_path = format!(
-                        "{}/english/P001R{:03}.PCX",
-                        self.mission_name.to_uppercase(),
-                        slot_idx
+                    let chunk_texture_path = format!("{}/english/P001R{:03}.PCX", self.mission_name.to_uppercase(), slot_idx);
+                    let chunk_material = load_texture_material(asset_cache, &chunk_texture_path, vec3(1.0, 1.0, 0.0));
+                    ui.add_rect(
+                        chunk_material,
+                        rect.ul_x as f32,
+                        rect.ul_y as f32,
+                        rect.width() as f32,
+                        rect.height() as f32,
+                        -0.005
                     );
-
-                    // Try to load the chunk texture, fall back to color if missing
-                    let chunk_material = if let Some(chunk_texture) =
-                        asset_cache.get_opt(&TEXTURE_IMPORTER, &chunk_texture_path)
-                    {
-                        let chunk_texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> =
-                            chunk_texture;
-                        basic_material::create(chunk_texture_trait, 1.0, 0.0)
-                    } else {
-                        color_material::create(vec3(1.0, 1.0, 0.0)) // Yellow fallback
-                    };
-
-                    let mut chunk = SceneObject::new(chunk_material, Box::new(quad_unit::create()));
-
-                    // Direct positioning with quad_unit - much simpler!
-                    let chunk_transform = Matrix4::from_translation(vec3(chunk_pixel_x, chunk_pixel_y, -0.005))
-                        * Matrix4::from_nonuniform_scale(chunk_pixel_width, chunk_pixel_height, 1.0);
-
-                    chunk.set_transform(chunk_transform);
-                    map_group.add_scene_object(chunk);
                 }
             }
         }
 
-        map_group.render_objects()
+        ui.render_objects()
     }
 }
 
