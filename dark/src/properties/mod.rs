@@ -158,7 +158,53 @@ pub struct PropLimbModel(pub String);
 pub struct PropMapLoc(pub i32);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropAutomap {
+    pub page: i32,
+    pub location: i32,
+}
+
+impl PropAutomap {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropAutomap {
+        let page = read_i32(reader);
+        let location = read_i32(reader);
+        PropAutomap { page, location }
+    }
+}
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMapRef {
+    pub x: i32,
+    pub y: i32,
+    pub frame: i32,
+}
+
+impl PropMapRef {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropMapRef {
+        let x = read_i32(reader);
+        let y = read_i32(reader);
+        let frame = read_i32(reader);
+        PropMapRef { x, y, frame }
+    }
+}
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMaterial(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMapText(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMapObjIcon(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMapObjRotate(pub bool);
+
+impl PropMapObjRotate {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropMapObjRotate {
+        let rotate = read_bool(reader);
+        PropMapObjRotate(rotate)
+    }
+}
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropSymName(pub String);
@@ -881,6 +927,31 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$MapLoc",
             |reader, _len| read_i32(reader),
             PropMapLoc,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Automap",
+            PropAutomap::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop("P$MapRef", PropMapRef::read, identity, accumulator::latest),
+        define_prop(
+            "P$MapText",
+            read_variable_length_string,
+            PropMapText,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$MapObjIco",
+            read_variable_length_string,
+            PropMapObjIcon,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$MapObjRot",
+            PropMapObjRotate::read,
+            identity,
             accumulator::latest,
         ),
         define_prop(

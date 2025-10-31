@@ -213,7 +213,7 @@ fn get_known_p_property_names() -> std::collections::HashSet<String> {
 fn property_matches_pattern(
     clean_prop_name: &str,
     pattern: &str,
-    known_p_names: &std::collections::HashSet<String>,
+    _known_p_names: &std::collections::HashSet<String>,
 ) -> bool {
     // Check if the pattern matches the clean name directly
     if clean_prop_name.contains(pattern) {
@@ -221,7 +221,7 @@ fn property_matches_pattern(
     }
 
     // Check if the pattern is a P$ name and matches this property
-    if pattern.starts_with("P$") && known_p_names.contains(pattern) {
+    if pattern.starts_with("P$") {
         // Simple heuristic: check if the pattern could correspond to this clean name
         // For example, P$FrobInfo should match PropFrobInfo
         let pattern_part = &pattern[2..]; // Remove "P$"
@@ -255,7 +255,42 @@ fn property_matches_glob(
         }
     }
 
+    // Additional check: if the glob looks like a P$ pattern, check if it would match this property
+    let glob_str = glob.as_str();
+    if glob_str.starts_with("P$") {
+        let pattern_part = &glob_str[2..]; // Remove "P$"
+                                           // Check if this could be a P$ pattern that matches our clean name
+        if clean_prop_name.starts_with("Prop") {
+            let clean_part = &clean_prop_name[4..]; // Remove "Prop"
+                                                    // Use a simple glob-style matching for the pattern part
+            if pattern_matches_simple_glob(clean_part, pattern_part) {
+                return true;
+            }
+        }
+    }
+
     false
+}
+
+/// Simple glob pattern matching for property name parts
+fn pattern_matches_simple_glob(text: &str, pattern: &str) -> bool {
+    // Handle simple cases
+    if pattern == "*" {
+        return true;
+    }
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    if !pattern.contains('*') && !pattern.contains('?') {
+        return text.contains(pattern);
+    }
+
+    // For more complex patterns, use the glob library
+    if let Ok(glob) = Pattern::new(pattern) {
+        glob.matches(text)
+    } else {
+        text.contains(pattern)
+    }
 }
 
 /// Get property type names from the property list
@@ -520,8 +555,16 @@ pub fn filter_entities(
 
     // Apply property filter
     if let Some(filter_pattern) = &criteria.property_filter {
+        // Auto-convert P$ patterns without colons to P$:* patterns to use value matching logic
+        let effective_pattern = if filter_pattern.starts_with("P$") && !filter_pattern.contains(':')
+        {
+            format!("{}:*", filter_pattern)
+        } else {
+            filter_pattern.clone()
+        };
+
         // Handle property value matching (e.g., "P$SymName:*Robot*")
-        if let Some((prop_name, value_pattern)) = filter_pattern.split_once(':') {
+        if let Some((prop_name, value_pattern)) = effective_pattern.split_once(':') {
             let value_glob = Pattern::new(&value_pattern.to_lowercase()).ok();
             filtered.retain_mut(|summary| {
                 let mut matches = false;
@@ -602,8 +645,8 @@ pub fn filter_entities(
             });
         } else {
             // Check for link filtering (L$LinkType)
-            if filter_pattern.starts_with("L$") {
-                let link_pattern = &filter_pattern[2..]; // Remove "L$" prefix
+            if effective_pattern.starts_with("L$") {
+                let link_pattern = &effective_pattern[2..]; // Remove "L$" prefix
                 let link_glob = Pattern::new(link_pattern).ok();
                 filtered.retain_mut(|summary| {
                     let mut matches = Vec::new();
@@ -631,8 +674,8 @@ pub fn filter_entities(
                 });
             }
             // Check for script filtering (S$ScriptName)
-            else if filter_pattern.starts_with("S$") {
-                let script_pattern = &filter_pattern[2..]; // Remove "S$" prefix
+            else if effective_pattern.starts_with("S$") {
+                let script_pattern = &effective_pattern[2..]; // Remove "S$" prefix
                 let script_glob = Pattern::new(&script_pattern.to_lowercase()).ok();
                 filtered.retain_mut(|summary| {
                     let mut matches = Vec::new();
@@ -662,7 +705,7 @@ pub fn filter_entities(
             }
             // No prefix: search across all categories (properties, links, scripts)
             else {
-                let glob = Pattern::new(&filter_pattern.to_lowercase()).ok();
+                let glob = Pattern::new(&effective_pattern.to_lowercase()).ok();
                 filtered.retain_mut(|summary| {
                     let mut matches = Vec::new();
 
@@ -708,7 +751,7 @@ pub fn filter_entities(
                         }
                     } else {
                         // Fallback to simple contains matching across all categories
-                        let pattern_lower = filter_pattern.to_lowercase();
+                        let pattern_lower = effective_pattern.to_lowercase();
                         // Check entity names
                         if let Some(sym_name) = &summary.names.sym_name {
                             if sym_name.to_lowercase().contains(&pattern_lower) {
@@ -726,17 +769,28 @@ pub fn filter_entities(
                             }
                         }
                         for prop in &summary.parsed_properties {
-                            if property_matches_pattern(prop, filter_pattern, &known_p_names) {
+                            if property_matches_pattern(prop, &effective_pattern, &known_p_names) {
                                 matches.push(prop.clone()); // Always show the clean property name
                             }
                         }
+                        // Additional check for P$ patterns in fallback mode - using exact same logic as value matching
+                        if effective_pattern.starts_with("P$") {
+                            let pattern_part = effective_pattern.trim_start_matches("P$");
+                            let prop_exists = summary
+                                .parsed_properties
+                                .iter()
+                                .any(|p| p.contains(pattern_part));
+                            if prop_exists {
+                                matches.push(effective_pattern.to_string()); // Show the P$ form
+                            }
+                        }
                         for prop in &summary.unparsed_properties {
-                            if prop.contains(filter_pattern) {
+                            if prop.contains(&effective_pattern) {
                                 matches.push(prop.clone());
                             }
                         }
                         for link_type in &summary.link_types {
-                            if link_type.contains(filter_pattern) {
+                            if link_type.contains(&effective_pattern) {
                                 matches.push(format!("L${}", link_type));
                             }
                         }
