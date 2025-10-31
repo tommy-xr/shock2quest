@@ -935,12 +935,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             identity,
             accumulator::latest,
         ),
-        define_prop(
-            "P$MapRef",
-            PropMapRef::read,
-            identity,
-            accumulator::latest,
-        ),
+        define_prop("P$MapRef", PropMapRef::read, identity, accumulator::latest),
         define_prop(
             "P$MapText",
             read_variable_length_string,

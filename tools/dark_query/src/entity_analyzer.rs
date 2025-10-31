@@ -259,10 +259,10 @@ fn property_matches_glob(
     let glob_str = glob.as_str();
     if glob_str.starts_with("P$") {
         let pattern_part = &glob_str[2..]; // Remove "P$"
-        // Check if this could be a P$ pattern that matches our clean name
+                                           // Check if this could be a P$ pattern that matches our clean name
         if clean_prop_name.starts_with("Prop") {
             let clean_part = &clean_prop_name[4..]; // Remove "Prop"
-            // Use a simple glob-style matching for the pattern part
+                                                    // Use a simple glob-style matching for the pattern part
             if pattern_matches_simple_glob(clean_part, pattern_part) {
                 return true;
             }
@@ -556,7 +556,8 @@ pub fn filter_entities(
     // Apply property filter
     if let Some(filter_pattern) = &criteria.property_filter {
         // Auto-convert P$ patterns without colons to P$:* patterns to use value matching logic
-        let effective_pattern = if filter_pattern.starts_with("P$") && !filter_pattern.contains(':') {
+        let effective_pattern = if filter_pattern.starts_with("P$") && !filter_pattern.contains(':')
+        {
             format!("{}:*", filter_pattern)
         } else {
             filter_pattern.clone()
