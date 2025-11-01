@@ -1,7 +1,7 @@
 use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, Vector4};
 use dark::{
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
-    properties::{KeyCard, QuestBitValue},
+    properties::{AIAlertLevel, AIMode, KeyCard, QuestBitValue},
     EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
@@ -35,6 +35,17 @@ pub enum GlobalEffect {
 
     // Test the reload functionality (as if saving + loading)
     TestReload,
+}
+
+#[derive(Clone, Debug)]
+pub enum AIPropertyUpdate {
+    Alertness {
+        level: AIAlertLevel,
+        peak: AIAlertLevel,
+    },
+    Mode {
+        mode: AIMode,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +175,11 @@ pub enum Effect {
     SetQuestBit {
         quest_bit_name: String,
         quest_bit_value: QuestBitValue,
+    },
+
+    SetAIProperty {
+        entity_id: EntityId,
+        update: AIPropertyUpdate,
     },
 
     AcquireKeyCard {
