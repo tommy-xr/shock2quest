@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cgmath::{vec3, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3, Vector2, Vector3};
+use cgmath::{vec3, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3, SquareMatrix, Vector2, Vector3};
 
 use dark::{
     motion::AnimationPlayer,
@@ -26,13 +26,15 @@ use crate::{
     gui::GuiManager,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
+    mission::{CreateEntityOptions, entity_creator::EntityCreationInfo},
     physics::PlayerHandle,
     quest_info::QuestInfo,
     runtime_props::{RuntimePropDoNotSerialize, RuntimePropTransform},
-    scripts::{Effect, GlobalEffect},
+    scripts::{Effect, GlobalEffect, Message, MessagePayload},
     teleport::TeleportSystem,
     time::Time,
-    virtual_hand::VirtualHand,
+    util::vec3_to_point3,
+    virtual_hand::{VirtualHand, VirtualHandEffect},
     vr_config, GameOptions,
     creature::HitBoxManager,
 };
@@ -332,6 +334,110 @@ impl MissionCore {
             }
         }
     }
+
+    pub fn create_entity_with_position(
+        &mut self,
+        _asset_cache: &mut AssetCache,
+        _template_id: i32,
+        _position: Point3<f32>,
+        _orientation: Quaternion<f32>,
+        _root_transform: Matrix4<f32>,
+        _additional_options: CreateEntityOptions,
+    ) -> EntityCreationInfo {
+        // Stub implementation for MissionCore - debug scenes typically don't spawn complex entities
+        // This method is called by VirtualHand effects but debug scenes can work without it
+        println!("MissionCore: create_entity_with_position stub called with template_id {}", _template_id);
+        EntityCreationInfo {
+            entity_id: self.world.add_entity(()),
+            model: None,
+            bitmap_animation: None,
+            rigid_body: None,
+            scripts: Vec::new(),
+        }
+    }
+
+    pub fn update_avatar_hands(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        player_pos: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+        input_context: &InputContext,
+    ) {
+        let (right_hand, mut right_hand_msgs) = VirtualHand::update(
+            &self.right_hand,
+            &self.physics,
+            &self.world,
+            player_pos,
+            player_rotation,
+            &input_context.right_hand,
+        );
+        self.right_hand = right_hand;
+
+        let (left_hand, mut left_hand_msgs) = VirtualHand::update(
+            &self.left_hand,
+            &self.physics,
+            &self.world,
+            player_pos,
+            player_rotation,
+            &input_context.left_hand,
+        );
+        self.left_hand = left_hand;
+
+        left_hand_msgs.append(&mut right_hand_msgs);
+
+        for msg in left_hand_msgs {
+            match msg {
+                VirtualHandEffect::OutMessage { message } => self.script_world.dispatch(message),
+                VirtualHandEffect::ApplyForce {
+                    entity_id,
+                    force,
+                    torque,
+                } => {
+                    if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
+                        self.physics.apply_torque(*rigid_body_handle, torque);
+                        self.physics.apply_force(*rigid_body_handle, force)
+                    };
+                }
+                VirtualHandEffect::SetPositionRotation {
+                    entity_id,
+                    position,
+                    rotation,
+                    scale,
+                } => {
+                    self.set_entity_position_rotation(entity_id, position, rotation, scale);
+                }
+                VirtualHandEffect::SpawnEntity {
+                    template_id,
+                    position,
+                    rotation,
+                } => {
+                    self.create_entity_with_position(
+                        asset_cache,
+                        template_id,
+                        vec3_to_point3(position),
+                        rotation,
+                        Matrix4::identity(),
+                        CreateEntityOptions::default(),
+                    );
+                }
+                VirtualHandEffect::HoldItem { entity_id } => {
+                    self.make_un_physical(entity_id);
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::Hold,
+                        to: entity_id,
+                    });
+                }
+                VirtualHandEffect::DropItem { entity_id } => {
+                    self.make_physical(entity_id);
+
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::Drop,
+                        to: entity_id,
+                    });
+                }
+            }
+        }
+    }
 }
 
 impl GameScene for MissionCore {
@@ -339,7 +445,7 @@ impl GameScene for MissionCore {
         &mut self,
         time: &Time,
         input_context: &InputContext,
-        _asset_cache: &mut AssetCache,
+        asset_cache: &mut AssetCache,
         game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
@@ -396,26 +502,8 @@ impl GameScene for MissionCore {
         player_info.rotation = new_rotation;
         drop(player_info);
 
-        // Update VR hands (using same parameters as Mission)
-        let (new_left_hand, _left_effects) = crate::virtual_hand::VirtualHand::update(
-            &self.left_hand,
-            &self.physics,
-            &self.world,
-            new_character_pos,
-            new_rotation,
-            &input_context.left_hand,
-        );
-        self.left_hand = new_left_hand;
-
-        let (new_right_hand, _right_effects) = crate::virtual_hand::VirtualHand::update(
-            &self.right_hand,
-            &self.physics,
-            &self.world,
-            new_character_pos,
-            new_rotation,
-            &input_context.right_hand,
-        );
-        self.right_hand = new_right_hand;
+        // Update VR hands (exact same logic as Mission::update_avatar_hands)
+        self.update_avatar_hands(asset_cache, new_character_pos, new_rotation, input_context);
 
         effects
     }
