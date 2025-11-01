@@ -17,7 +17,7 @@ pub enum AIAlertLevel {
 }
 
 impl AIAlertLevel {
-    fn from_raw(raw: u32) -> AIAlertLevel {
+    pub fn from_raw(raw: u32) -> AIAlertLevel {
         AIAlertLevel::from_u32(raw).unwrap_or(AIAlertLevel::High)
     }
 }

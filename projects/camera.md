@@ -16,8 +16,10 @@
    - `AI_Device` → joint ids (`m_jointActivate`, `m_jointRotate`), inactive/active positions, activation speed, facing epsilon, rotate-on-activate flag.
    - `AI_Camera` → scan angle limits and scan speed (deg/msec).
    - `AI_AlertCap` → min/max alert levels and minimum post-peak level.
- - `AI_AwrDel2` (AIAwareDelay) → delays for reaching level two/three, reuse windows, ignore range.
-  - No Tweq-driven model swapping is available (config only points to `camdam`); scripts must map the base model to its yellow/red variants explicitly.
+   - `AI_Alertn` (`AI_Alertness`) → current and peak alert levels; mirrors `AI_AlertCap` enum values and lets us seed the camera’s runtime awareness state from mission data.
+   - `AI_AwrDel2` (AIAwareDelay) → delays for reaching level two/three, reuse windows, ignore range.
+   - `AI_Mode` → high-level AI mode (`Asleep`, `SuperEfficient`, `Efficient`, `Normal`, `Combat`, `Dead`); for cameras this should remain `Normal`, but we ingest it so scripts can detect sleepers or disabled devices.
+   - No Tweq-driven model swapping is available (config only points to `camdam`); scripts must map the base model to its yellow/red variants explicitly.
 2. Register the new readers in `dark/src/properties/mod.rs` with accumulator `latest`.
 3. **Populate entity components** in `mission_entity_populator`:
    - When `PropAI` == `camera`, attach new components or stash parsed params on an `InternalCameraConfig` struct.
@@ -82,3 +84,6 @@
 - Hooking `AICamera` relation data to fire actual SwitchLink messages.
 - Sharing awareness with turrets/security system.
 - Respecting per-camera quest bit overrides or scripted responses.
+
+## Current Progress
+- Property readers and registrations added for `AI_Device`, `AI_Camera`, `AI_AlertCap`, `AI_Alertn`, `AI_AwrDel2`, and `AI_Mode` with mission data validated via `cargo dq entities medsci2.mis 141`.
