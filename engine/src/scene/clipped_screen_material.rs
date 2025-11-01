@@ -118,7 +118,7 @@ where
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
+    fn initialize(&mut self, is_opengl_es: bool) {
         let _ = CLIPPED_SCREEN_SHADER.get_or_init(|| {
             let vertex_shader = crate::shader::build(
                 VERTEX_SHADER_SOURCE,

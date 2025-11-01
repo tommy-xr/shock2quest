@@ -279,8 +279,7 @@ pub fn main() {
     );
 
     let engine = engine::opengl();
-    let file_system = engine.get_storage().external_filesystem();
-    let mut game = shock2vr::Game::init(file_system, GameOptions::default());
+    let mut game = shock2vr::Game::init(GameOptions::default());
 
     if cli.debug_no_render {
         match create_scene(

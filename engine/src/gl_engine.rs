@@ -1,30 +1,18 @@
 extern crate gl;
 
-use crate::texture_descriptor::TextureDescriptor;
 use crate::util;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 pub struct OpenGLEngine {
     pub is_opengl_es: bool,
     pub storage: Box<dyn crate::file_system::Storage>,
-    #[allow(dead_code)]
-    texture_descriptor: Rc<RefCell<Box<dyn TextureDescriptor>>>,
 }
 
 impl OpenGLEngine {}
 
 fn init(is_opengl_es: bool, storage: Box<dyn crate::file_system::Storage>) -> OpenGLEngine {
-    let texture = Rc::new(RefCell::new(
-        crate::texture_descriptor::FilePathTextureDescriptor::new(
-            "texture_07.png".to_owned(),
-            Box::new(crate::texture_format::PNG),
-        ),
-    ));
     OpenGLEngine {
         is_opengl_es,
         storage,
-        texture_descriptor: texture,
     }
 }
 
@@ -157,20 +145,14 @@ fn create_desktop_storage() -> Box<dyn crate::file_system::Storage> {
     let bundle_file_system = Box::new(crate::file_system::DefaultFileSystem {
         root_path: Box::new(std::path::Path::new("../assets/")),
     });
-    let external_file_system = Box::new(crate::file_system::DefaultFileSystem {
-        root_path: Box::new(std::path::Path::new("../../Data/")),
-    });
 
-    crate::file_system::storage::init(external_file_system, bundle_file_system)
+    crate::file_system::storage::init(bundle_file_system)
 }
 
 #[cfg(target_os = "android")]
 pub fn init_android() -> OpenGLEngine {
     let bundle_file_system = Box::new(crate::file_system::android_file_system::init());
-    let external_file_system = Box::new(crate::file_system::DefaultFileSystem {
-        root_path: Box::new(std::path::Path::new("/mnt/sdcard/shock2quest/")),
-    });
-    let storage = crate::file_system::storage::init(external_file_system, bundle_file_system);
+    let storage = crate::file_system::storage::init(bundle_file_system);
 
     init(true, storage)
 }

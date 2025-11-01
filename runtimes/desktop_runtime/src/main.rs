@@ -227,7 +227,6 @@ pub fn main() {
     );
 
     let engine = engine::opengl();
-    let file_system = engine.get_storage().external_filesystem();
     let experimental_features: HashSet<String> =
         args.experimental.unwrap_or(vec![]).into_iter().collect();
 
@@ -245,7 +244,7 @@ pub fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(file_system, options);
+    let mut game = shock2vr::Game::init(options);
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),

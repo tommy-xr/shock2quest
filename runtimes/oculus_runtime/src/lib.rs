@@ -413,7 +413,6 @@ fn main() {
     let mut frame = 0;
     let now = Instant::now();
     let engine = engine::android();
-    let file_system = engine.get_storage().external_filesystem();
     let mut experimental_features = HashSet::new();
     experimental_features.insert("gui".to_owned());
     let options: GameOptions = GameOptions {
@@ -422,7 +421,7 @@ fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(file_system, options);
+    let mut game = shock2vr::Game::init(options);
 
     let mut camera_pos = vec3(0.0, 5.0, 10.0);
 
