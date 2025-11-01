@@ -204,10 +204,45 @@ impl GameScene for DebugTeleportScene {
 2. This function takes SS2 data and populates a `MissionCore` instance
 3. Used by both `Mission::load` and potentially debug scenes that want SS2 data
 
-### Phase 6: Update Debug Scenes
-1. Refactor existing debug scenes to use `MissionCore`
-2. Create new debug scenes for teleport, ragdoll, etc.
-3. Add to scene selection in `scenes/mod.rs`
+### Phase 6: Create DebugEntityPlayground Prototype
+1. Create `DebugEntityPlaygroundScene` to validate the refactoring
+2. Spawn real SS2 entities from shock2.gam on a simple plane
+3. Test VR interaction, scripts, physics with real game entities
+4. Update existing debug scenes to use `MissionCore`
+
+### DebugEntityPlayground Prototype Details
+
+This prototype scene will be the key validation of the refactoring:
+
+**Setup**: Simple floor plane with real SS2 entities spawned from templates
+**Entities**: Pistol, Maintenance Tool, Security Crate, Med Bed, Turret, Cyber Module, Door
+**Features**: VR hand interaction, grabbing/throwing, teleport movement
+**Benefits**: Validates entity creation, scripts, physics, asset loading with real game data
+
+```rust
+pub struct DebugEntityPlaygroundScene {
+    core: MissionCore,
+}
+
+impl DebugEntityPlaygroundScene {
+    pub fn new(global_context: &GlobalContext) -> Self {
+        let mut core = MissionCore::new("debug_playground".to_string(), &default_options());
+
+        // Create template mapping from gamesys
+        core.template_name_to_template_id = create_template_name_map(&global_context.gamesys);
+
+        // Set up simple environment
+        Self::create_test_environment(&mut core);
+
+        // Spawn initial entities
+        Self::spawn_test_entities(&mut core);
+
+        Self { core }
+    }
+}
+```
+
+This prototype perfectly exercises the boundary between SS2-specific data and generic scene functionality.
 
 ## Benefits
 

@@ -1,8 +1,10 @@
 pub mod entity_creator;
 pub mod entity_populator;
+pub mod mission_core;
 mod spawn_location;
 pub mod visibility_engine;
 
+pub use mission_core::*;
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
