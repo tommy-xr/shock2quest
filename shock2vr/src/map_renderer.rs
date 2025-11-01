@@ -83,8 +83,11 @@ impl MapRenderer {
         // Add background
         let background_texture_path =
             format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
-        let background_material =
-            load_texture_material(asset_cache, &background_texture_path, cgmath::vec3(0.3, 0.3, 0.8));
+        let background_material = load_texture_material(
+            asset_cache,
+            &background_texture_path,
+            cgmath::vec3(0.3, 0.3, 0.8),
+        );
         ui.add_rect(background_material, 0.0, 0.0, MAP_WIDTH, MAP_HEIGHT, 0.02);
 
         // Add revealed chunks

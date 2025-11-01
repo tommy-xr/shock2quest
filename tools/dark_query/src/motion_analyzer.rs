@@ -220,10 +220,7 @@ fn parse_tags(tags: &[String]) -> Result<Vec<MotionQueryItem>> {
 fn find_motiondb_file() -> Result<std::path::PathBuf> {
     // Try common locations for motiondb.bin
     let data_motiondb_path = paths::data_root().join("motiondb.bin");
-    let possible_paths = [
-        "motiondb.bin",
-        &data_motiondb_path.to_string_lossy(),
-    ];
+    let possible_paths = ["motiondb.bin", &data_motiondb_path.to_string_lossy()];
 
     for path in &possible_paths {
         if Path::new(path).exists() {
