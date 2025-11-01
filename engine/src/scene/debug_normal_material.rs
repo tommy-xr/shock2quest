@@ -57,7 +57,7 @@ impl Material for DebugNormalMaterial {
         self.initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
+    fn initialize(&mut self, is_opengl_es: bool) {
         SHADER.get_or_init(|| {
             let vertex_shader = crate::shader::build(
                 VERTEX_SHADER_SOURCE,
@@ -171,7 +171,7 @@ impl Material for DebugNormalSkinnedMaterial {
         self.initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
+    fn initialize(&mut self, is_opengl_es: bool) {
         SKINNED_SHADER.get_or_init(|| {
             let vertex_shader = crate::shader::build(
                 SKINNED_VERTEX_SHADER_SOURCE,

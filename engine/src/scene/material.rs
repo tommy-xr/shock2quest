@@ -4,7 +4,7 @@ use cgmath::Matrix4;
 
 pub trait Material {
     fn has_initialized(&self) -> bool;
-    fn initialize(&mut self, is_opengl_es: bool, storage: &dyn crate::file_system::Storage);
+    fn initialize(&mut self, is_opengl_es: bool);
 
     /// Draw opaque material with single-pass lighting
     ///

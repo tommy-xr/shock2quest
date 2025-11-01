@@ -251,7 +251,7 @@ impl Material for LightmapMaterial {
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
+    fn initialize(&mut self, is_opengl_es: bool) {
         let _ = UNIFIED_SHADER_PROGRAM.get_or_init(|| {
             // Build and compile unified shader program with lightmaps + 6-spotlight support
             let vertex_shader = crate::shader::build(

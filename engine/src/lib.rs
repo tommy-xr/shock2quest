@@ -13,7 +13,6 @@ mod shader;
 mod shader_program;
 pub mod texture;
 pub mod texture_atlas;
-pub mod texture_descriptor;
 pub mod texture_format;
 pub mod util;
 

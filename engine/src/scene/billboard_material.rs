@@ -134,7 +134,7 @@ where
         self.has_initialized
     }
 
-    fn initialize(&mut self, is_opengl_es: bool, _storage: &dyn crate::file_system::Storage) {
+    fn initialize(&mut self, is_opengl_es: bool) {
         let _ = SHADER_PROGRAM.get_or_init(|| {
             // build and compile our shader program
             // ------------------------------------

@@ -45,7 +45,6 @@ use dark::{
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AssetPath},
     audio::{AudioClip, AudioContext},
-    file_system::FileSystem,
     game_log,
     scene::SceneObject,
 };
@@ -181,7 +180,7 @@ impl Game {
         }
     }
 
-    pub fn init(_file_system: &dyn FileSystem, options: GameOptions) -> Game {
+    pub fn init(options: GameOptions) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
             // AssetPath::folder(resource_path("res/mesh/txt16")),

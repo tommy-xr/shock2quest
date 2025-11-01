@@ -216,7 +216,7 @@ impl SceneObject {
         if !self.material.borrow().has_initialized() {
             self.material
                 .borrow_mut()
-                .initialize(engine_context.is_opengl_es, &*engine_context.storage);
+                .initialize(engine_context.is_opengl_es);
         }
 
         let xform = self.transform * self.local_transform;
