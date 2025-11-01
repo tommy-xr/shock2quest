@@ -3,6 +3,7 @@ use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::Scene;
+use shock2vr::paths;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -106,7 +107,7 @@ fn load_animation_controller(
         if let Some(clip) = asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, name.as_str()) {
             clips.push(clip);
         } else {
-            return Err(format!("Unable to load animation clip '{name}'. Ensure the file exists under Data/res/motions.").into());
+            return Err(format!("Unable to load animation clip '{name}'. Ensure the file exists under {}/res/motions.", paths::data_root().display()).into());
         }
     }
 
