@@ -1,5 +1,6 @@
 use anyhow::Result;
 use dark::motion::{MotionDB, MotionQuery, MotionQueryItem, MotionQuerySelectionStrategy};
+use shock2vr::paths;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -218,12 +219,8 @@ fn parse_tags(tags: &[String]) -> Result<Vec<MotionQueryItem>> {
 
 fn find_motiondb_file() -> Result<std::path::PathBuf> {
     // Try common locations for motiondb.bin
-    let possible_paths = [
-        "motiondb.bin",
-        "Data/motiondb.bin",
-        "../Data/motiondb.bin",
-        "../../Data/motiondb.bin",
-    ];
+    let data_motiondb_path = paths::data_root().join("motiondb.bin");
+    let possible_paths = ["motiondb.bin", &data_motiondb_path.to_string_lossy()];
 
     for path in &possible_paths {
         if Path::new(path).exists() {

@@ -654,6 +654,45 @@ This system matches the tag database structure found in the original spew files 
 - **Data Loading**: `tools/dark_query/src/data_loader.rs`
 - **Project Plan**: `projects/entity-query-cli-tool.md`
 
+## Data Path Management
+
+The project includes a centralized data path management system to handle platform-specific data locations:
+
+### Using `shock2vr::paths::data_root()`
+
+**ALWAYS use `shock2vr::paths::data_root()` instead of hardcoded "Data/" paths.**
+
+```rust
+use shock2vr::paths;
+
+// ✅ Correct - uses data_root() helper
+let motiondb_path = paths::data_root().join("motiondb.bin");
+let error_msg = format!("File not found under {}/res/motions", paths::data_root().display());
+
+// ❌ Incorrect - hardcoded paths
+let motiondb_path = "Data/motiondb.bin";
+let motiondb_path = "../../Data/motiondb.bin";
+```
+
+### How `data_root()` Works
+
+- **Desktop**:
+  1. First checks `DARK_ASSET_PATH` environment variable if set
+  2. Then searches `["./Data", "../Data", "../../Data", "."]` for sentinel files (`shock2.gam`, `motiondb.bin`, etc.)
+  3. Falls back to `"../../Data"` if no sentinel files found
+- **Android**: Returns `/mnt/sdcard/shock2quest`
+
+### Environment Variable
+
+Set `DARK_ASSET_PATH` to point to your data directory for multi-repo development:
+
+```bash
+export DARK_ASSET_PATH=/path/to/your/shock2/data
+cargo run -p dark_query -- entities
+```
+
+**Note**: The `engine` crate cannot depend on `shock2vr`, so `engine/src/gl_engine.rs` keeps its hardcoded path.
+
 ## Getting Help
 
 - Check existing code for similar patterns
