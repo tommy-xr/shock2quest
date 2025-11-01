@@ -244,7 +244,7 @@ pub fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(options);
+    let mut game = shock2vr::Game::init(options, "../../assets".to_string());
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),

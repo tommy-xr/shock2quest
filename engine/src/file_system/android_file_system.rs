@@ -51,6 +51,12 @@ impl FileSystem for AndroidFileSystem {
         let data = asset.get_buffer().unwrap();
         data.to_vec()
     }
+
+    fn file_exists(&self, path: &str) -> bool {
+        self.asset_manager
+            .open(&CString::new(path).unwrap())
+            .is_ok()
+    }
 }
 
 use ndk::asset::AssetManager;
