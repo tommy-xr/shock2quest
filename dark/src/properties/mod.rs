@@ -1,5 +1,9 @@
 mod accumulator;
 mod prop_ai;
+mod prop_ai_alert_cap;
+mod prop_ai_aware_delay;
+mod prop_ai_camera;
+mod prop_ai_device;
 mod prop_ambient_hacked;
 mod prop_anim_tex;
 mod prop_bitmap_animation;
@@ -26,6 +30,10 @@ mod prop_tweq;
 
 use num_derive::{FromPrimitive, ToPrimitive};
 pub use prop_ai::*;
+pub use prop_ai_alert_cap::*;
+pub use prop_ai_aware_delay::*;
+pub use prop_ai_camera::*;
+pub use prop_ai_device::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_tex::*;
 pub use prop_bitmap_animation::*;
@@ -738,6 +746,30 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$AI",
             read_prop_string,
             |str| PropAI(str),
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_AlertCap",
+            PropAIAlertCap::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_AwrDel2",
+            PropAIAwareDelay::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_Camera",
+            PropAICamera::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_Device",
+            PropAIDevice::read,
+            identity,
             accumulator::latest,
         ),
         define_prop(
