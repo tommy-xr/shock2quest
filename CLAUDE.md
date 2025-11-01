@@ -658,9 +658,20 @@ let motiondb_path = "../../Data/motiondb.bin";
 
 ### How `data_root()` Works
 
-- **Desktop**: Searches `["./Data", "../Data", "../../Data", "."]` for sentinel files (`shock2.gam`, `motiondb.bin`, etc.)
+- **Desktop**:
+  1. First checks `DARK_ASSET_PATH` environment variable if set
+  2. Then searches `["./Data", "../Data", "../../Data", "."]` for sentinel files (`shock2.gam`, `motiondb.bin`, etc.)
+  3. Falls back to `"../../Data"` if no sentinel files found
 - **Android**: Returns `/mnt/sdcard/shock2quest`
-- **Fallback**: Returns `"../../Data"` if no sentinel files found
+
+### Environment Variable
+
+Set `DARK_ASSET_PATH` to point to your data directory for multi-repo development:
+
+```bash
+export DARK_ASSET_PATH=/path/to/your/shock2/data
+cargo run -p dark_query -- entities
+```
 
 **Note**: The `engine` crate cannot depend on `shock2vr`, so `engine/src/gl_engine.rs` keeps its hardcoded path.
 

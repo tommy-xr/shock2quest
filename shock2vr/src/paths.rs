@@ -37,6 +37,19 @@ pub fn search_roots() -> &'static [&'static str] {
 
 #[cfg(not(target_os = "android"))]
 fn resolve_desktop_data_root() -> PathBuf {
+    // Check for DARK_ASSET_PATH environment variable first
+    if let Ok(env_path) = std::env::var("DARK_ASSET_PATH") {
+        let path = Path::new(&env_path);
+        if candidate_has_sentinel(path) {
+            return path.to_path_buf();
+        } else {
+            warn!(
+                path = %env_path,
+                "DARK_ASSET_PATH set but no sentinel files found; falling back to default search"
+            );
+        }
+    }
+
     for candidate in DESKTOP_CANDIDATES {
         let path = Path::new(candidate);
         if candidate_has_sentinel(path) {
