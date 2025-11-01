@@ -1,0 +1,336 @@
+use std::{
+    collections::HashMap,
+    rc::Rc,
+};
+
+use cgmath::{vec3, Matrix4, Point3, Quaternion, Vector2, Vector3};
+
+use dark::{
+    motion::AnimationPlayer,
+    properties::{PropLocalPlayer, PropPosition, WrappedEntityId},
+    BitmapAnimation, SCALE_FACTOR,
+};
+use engine::{
+    assets::asset_cache::AssetCache,
+    audio::AudioContext,
+    scene::{light::SpotLight, ParticleSystem, SceneObject},
+};
+use crate::physics::PhysicsWorld;
+use rapier3d::prelude::RigidBodyHandle;
+use crate::scripts::ScriptWorld;
+
+use shipyard::{EntitiesView, EntityId, ViewMut, World};
+
+use crate::{
+    game_scene::GameScene,
+    gui::GuiManager,
+    input_context::InputContext,
+    inventory::PlayerInventoryEntity,
+    physics::PlayerHandle,
+    quest_info::QuestInfo,
+    runtime_props::{RuntimePropDoNotSerialize, RuntimePropTransform},
+    scripts::{Effect, GlobalEffect},
+    teleport::TeleportSystem,
+    time::Time,
+    virtual_hand::VirtualHand,
+    vr_config, GameOptions,
+    creature::HitBoxManager,
+};
+
+use super::{
+    visibility_engine::VisibilityEngine,
+    DebugLine, EntityMetadata, PlayerInfo, EffectQueue, GlobalContext,
+};
+
+/// Core mission functionality separated from SS2-specific level loading
+/// Contains all generic game scene systems: ECS, physics, rendering, player management, etc.
+pub struct MissionCore {
+    // Core Systems
+    pub world: World,
+    pub physics: PhysicsWorld,
+    pub script_world: ScriptWorld,
+
+    // Rendering Systems
+    pub scene_objects: Vec<SceneObject>,
+    pub id_to_model: HashMap<EntityId, dark::model::Model>,
+    pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
+    pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
+    pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
+    pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
+
+    // Player Systems
+    pub player_handle: PlayerHandle,
+    pub left_hand: VirtualHand,
+    pub right_hand: VirtualHand,
+
+    // Game Systems
+    pub gui: GuiManager,
+    pub hit_boxes: HitBoxManager,
+    pub teleport_system: TeleportSystem,
+    pub visibility_engine: Box<dyn VisibilityEngine>,
+
+    // Debug and Utility
+    pub debug_lines: Vec<DebugLine>,
+    pub pending_entity_triggers: Vec<String>,
+
+    // Metadata and Templates
+    pub scene_name: String,
+    pub template_name_to_template_id: HashMap<String, EntityMetadata>,
+    pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
+}
+
+impl MissionCore {
+    /// Create a new MissionCore with default initialization
+    pub fn new(scene_name: String, game_options: &GameOptions) -> Self {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+
+        // Create player entity
+        let player_entity = world.add_entity((PropLocalPlayer {}, RuntimePropDoNotSerialize {}));
+
+        // Initialize inventory (placed far away to be invisible by default)
+        let inventory_entity = PlayerInventoryEntity::create(&mut world);
+        PlayerInventoryEntity::set_position_rotation(
+            &mut world,
+            vec3(0.0, -1000.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        );
+
+        // Default player starting position
+        let start_pos = vec3(0.0, 1.6 / SCALE_FACTOR, 0.0);
+        let start_rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+
+        let player_handle = physics.create_player(start_pos, player_entity);
+
+        // Add core world resources
+        world.add_unique(PlayerInfo {
+            pos: start_pos,
+            rotation: start_rotation,
+            entity_id: player_entity,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory_entity,
+        });
+
+        world.add_unique(QuestInfo::new());
+        world.add_unique(EffectQueue { effects: Vec::new() });
+        world.add_unique(Time::default());
+
+        // Initialize teleport system based on game options
+        let teleport_system = if game_options.experimental_features.contains("teleport") {
+            let teleport_config = crate::teleport::TeleportConfig {
+                enabled: true,
+                button_mapping: crate::teleport::TeleportButton::Trigger,
+                trigger_threshold: 0.5,
+                max_distance: 20.0,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        } else {
+            let teleport_config = crate::teleport::TeleportConfig {
+                enabled: false,
+                ..Default::default()
+            };
+            TeleportSystem::new(teleport_config)
+        };
+
+        Self {
+            world,
+            physics,
+            script_world: ScriptWorld::new(),
+            scene_objects: Vec::new(),
+            id_to_model: HashMap::new(),
+            id_to_animation_player: HashMap::new(),
+            id_to_bitmap: HashMap::new(),
+            id_to_particle_system: HashMap::new(),
+            id_to_physics: HashMap::new(),
+            player_handle,
+            left_hand: VirtualHand::new(vr_config::Handedness::Left),
+            right_hand: VirtualHand::new(vr_config::Handedness::Right),
+            gui: GuiManager::new(),
+            hit_boxes: HitBoxManager::new(),
+            teleport_system,
+            visibility_engine: Box::new(super::visibility_engine::PortalVisibilityEngine::new()),
+            debug_lines: Vec::new(),
+            pending_entity_triggers: Vec::new(),
+            scene_name,
+            template_name_to_template_id: HashMap::new(),
+            template_to_entity_id: HashMap::new(),
+        }
+    }
+
+    /// Make an entity non-physical (remove from physics world)
+    pub fn make_un_physical(&mut self, entity_id: EntityId) {
+        let current_entity = self.id_to_physics.get(&entity_id);
+        if current_entity.is_none() {
+            return;
+        }
+
+        self.physics.remove(entity_id);
+        self.id_to_physics.remove(&entity_id);
+    }
+
+    /// Make an entity physical (add to physics world)
+    pub fn make_physical(&mut self, entity_id: EntityId) {
+        let current_entity = self.id_to_physics.get(&entity_id);
+        if current_entity.is_some() {
+            return;
+        }
+
+        let maybe_model = self.id_to_model.get(&entity_id);
+
+        let maybe_phys_obj = super::entity_creator::create_physics_representation(
+            &mut self.world,
+            &mut self.physics,
+            &maybe_model,
+            entity_id,
+        );
+
+        if let Some(phys_obj) = maybe_phys_obj {
+            self.id_to_physics.insert(entity_id, phys_obj);
+        }
+    }
+
+    /// Set entity position, rotation, and scale
+    pub fn set_entity_position_rotation(
+        &mut self,
+        entity_id: EntityId,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        scale: Vector3<f32>,
+    ) {
+        if let Some(rigid_body_handle) = self.id_to_physics.get(&entity_id) {
+            self.physics
+                .set_position_rotation(*rigid_body_handle, position, rotation);
+        } else {
+            let translation_matrix = Matrix4::from_translation(position);
+            let rotation_matrix = Matrix4::<f32>::from(rotation);
+            let scale_matrix = Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+            let xform = translation_matrix * rotation_matrix * scale_matrix;
+
+            let v_entities = self.world.borrow::<EntitiesView>().unwrap();
+            let mut v_transform = self
+                .world
+                .borrow::<ViewMut<RuntimePropTransform>>()
+                .unwrap();
+
+            let mut v_prop_position = self.world.borrow::<ViewMut<PropPosition>>().unwrap();
+
+            v_entities.add_component(entity_id, &mut v_transform, RuntimePropTransform(xform));
+            v_entities.add_component(
+                entity_id,
+                &mut v_prop_position,
+                PropPosition {
+                    position,
+                    rotation,
+                    cell: 0,
+                },
+            );
+        }
+    }
+
+    /// Remove an entity from all systems
+    pub fn remove_entity(&mut self, entity_id: EntityId) {
+        // TODO: gui - remove entity
+        self.hit_boxes.remove_entity(
+            entity_id,
+            &mut self.world,
+            &mut self.script_world,
+            &mut self.physics,
+            &mut self.id_to_physics,
+        );
+
+        self.script_world.remove_entity(entity_id);
+        self.id_to_bitmap.remove(&entity_id);
+        self.id_to_model.remove(&entity_id);
+        self.id_to_physics.remove(&entity_id);
+        self.physics.remove(entity_id);
+
+        self.world.delete_entity(entity_id);
+    }
+}
+
+impl GameScene for MissionCore {
+    fn update(
+        &mut self,
+        time: &Time,
+        input_context: &InputContext,
+        _asset_cache: &mut AssetCache,
+        _game_options: &GameOptions,
+        command_effects: Vec<Effect>,
+    ) -> Vec<Effect> {
+        // Update time in world
+        let _ = self.world.remove_unique::<Time>();
+        self.world.add_unique(time.clone());
+
+        // For now, just return the command effects (basic implementation)
+        // TODO: Implement full update logic (physics, scripts, etc.)
+        command_effects
+    }
+
+    fn render(
+        &mut self,
+        _asset_cache: &mut AssetCache,
+        _options: &GameOptions,
+    ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        // Return scene objects and default camera position/rotation
+        let player_info = self.world.borrow::<shipyard::UniqueView<PlayerInfo>>().unwrap();
+        let pos = player_info.pos;
+        let rot = player_info.rotation;
+        drop(player_info);
+
+        (self.scene_objects.clone(), pos, rot)
+    }
+
+    fn render_per_eye(
+        &mut self,
+        _asset_cache: &mut AssetCache,
+        _view: Matrix4<f32>,
+        _projection: Matrix4<f32>,
+        _screen_size: Vector2<f32>,
+        _options: &GameOptions,
+    ) -> Vec<SceneObject> {
+        // Basic implementation - no per-eye specific rendering yet
+        Vec::new()
+    }
+
+    fn finish_render(
+        &mut self,
+        _asset_cache: &mut AssetCache,
+        _view: Matrix4<f32>,
+        _projection: Matrix4<f32>,
+        _screen_size: Vector2<f32>,
+    ) {
+        // Basic implementation - no finalization needed yet
+    }
+
+    fn handle_effects(
+        &mut self,
+        effects: Vec<Effect>,
+        _global_context: &GlobalContext,
+        _game_options: &GameOptions,
+        _asset_cache: &mut AssetCache,
+        _audio_context: &mut AudioContext<EntityId, String>,
+    ) -> Vec<GlobalEffect> {
+        // Basic implementation - just ignore effects for now
+        let _ = effects;
+        Vec::new()
+    }
+
+    fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
+        // Basic implementation - no hand spotlights
+        Vec::new()
+    }
+
+    fn world(&self) -> &World {
+        &self.world
+    }
+
+    fn scene_name(&self) -> &str {
+        &self.scene_name
+    }
+
+    fn queue_entity_trigger(&mut self, entity_name: String) {
+        self.pending_entity_triggers.push(entity_name);
+    }
+}
