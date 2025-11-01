@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cgmath::{vec3, Matrix4, Point3, Quaternion, Vector2, Vector3};
+use cgmath::{vec3, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3, Vector2, Vector3};
 
 use dark::{
     motion::AnimationPlayer,
@@ -19,7 +19,7 @@ use crate::physics::PhysicsWorld;
 use rapier3d::prelude::RigidBodyHandle;
 use crate::scripts::ScriptWorld;
 
-use shipyard::{EntitiesView, EntityId, ViewMut, World};
+use shipyard::{EntitiesView, EntityId, Get, UniqueView, UniqueViewMut, View, ViewMut, World};
 
 use crate::{
     game_scene::GameScene,
@@ -53,6 +53,7 @@ pub struct MissionCore {
     // Rendering Systems
     pub scene_objects: Vec<SceneObject>,
     pub id_to_model: HashMap<EntityId, dark::model::Model>,
+    pub id_to_scene_object: HashMap<EntityId, SceneObject>,
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_particle_system: HashMap<EntityId, ParticleSystem>,
@@ -96,8 +97,8 @@ impl MissionCore {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
         );
 
-        // Default player starting position
-        let start_pos = vec3(0.0, 1.6 / SCALE_FACTOR, 0.0);
+        // Default player starting position (much higher above the floor to be safe)
+        let start_pos = vec3(0.0, 3.0 / SCALE_FACTOR, 0.0);
         let start_rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
 
         let player_handle = physics.create_player(start_pos, player_entity);
@@ -140,6 +141,7 @@ impl MissionCore {
             script_world: ScriptWorld::new(),
             scene_objects: Vec::new(),
             id_to_model: HashMap::new(),
+            id_to_scene_object: HashMap::new(),
             id_to_animation_player: HashMap::new(),
             id_to_bitmap: HashMap::new(),
             id_to_particle_system: HashMap::new(),
@@ -243,10 +245,92 @@ impl MissionCore {
         self.script_world.remove_entity(entity_id);
         self.id_to_bitmap.remove(&entity_id);
         self.id_to_model.remove(&entity_id);
+        self.id_to_scene_object.remove(&entity_id);
         self.id_to_physics.remove(&entity_id);
         self.physics.remove(entity_id);
 
         self.world.delete_entity(entity_id);
+    }
+
+    /// Create a simple test entity with physics and rendering (for debug scenes)
+    pub fn create_test_entity(
+        &mut self,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        size: f32,
+        color: Vector3<f32>,
+    ) -> EntityId {
+        // Create entity with basic components
+        let entity = self.world.add_entity((
+            RuntimePropTransform(Matrix4::from_translation(position)),
+            PropPosition {
+                position,
+                rotation,
+                cell: 0,
+            },
+        ));
+
+        // Create visual representation
+        let material = engine::scene::color_material::create(color);
+        let cube_scene_obj = SceneObject::new(material, Box::new(engine::scene::cube::create()));
+
+        // Store the scene object for rendering
+        self.id_to_scene_object.insert(entity, cube_scene_obj);
+
+        // Add physics representation
+        let cube_handle = self.physics.add_dynamic(
+            entity,
+            position,
+            rotation,
+            Vector3::new(0.0, 0.0, 0.0),
+            crate::physics::PhysicsShape::Cuboid(Vector3::new(size, size, size)),
+            crate::physics::CollisionGroup::entity(),
+            false,
+            crate::physics::DynamicPhysicsOptions::default(),
+        );
+
+        // Store physics handle for synchronization
+        self.id_to_physics.insert(entity, cube_handle);
+
+        entity
+    }
+
+    /// Synchronize scene object positions with physics world
+    fn synchronize_physics_positions(&mut self) {
+        let mut v_transform = self
+            .world
+            .borrow::<ViewMut<RuntimePropTransform>>()
+            .unwrap();
+        let mut v_prop_position = self.world.borrow::<ViewMut<PropPosition>>().unwrap();
+        let v_entities = self.world.borrow::<EntitiesView>().unwrap();
+
+        for (entity_id, handle) in &self.id_to_physics {
+            if let Some(position) = self.physics.get_position(*handle) {
+                let rotation = self.physics.get_rotation(*handle).unwrap_or_else(|| {
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0)
+                });
+
+                // For test entities, use unit scale (no PropScale component needed)
+                let scale = vec3(1.0, 1.0, 1.0);
+
+                let scale_xform =
+                    Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+                let translation_xform = Matrix4::from_translation(position);
+                let rotation_xform = Matrix4::from(rotation);
+                let xform = translation_xform * rotation_xform * scale_xform;
+
+                v_entities.add_component(
+                    *entity_id,
+                    &mut v_prop_position,
+                    PropPosition {
+                        position,
+                        rotation,
+                        cell: 0,
+                    },
+                );
+                v_entities.add_component(*entity_id, &mut v_transform, RuntimePropTransform(xform));
+            }
+        }
     }
 }
 
@@ -256,30 +340,124 @@ impl GameScene for MissionCore {
         time: &Time,
         input_context: &InputContext,
         _asset_cache: &mut AssetCache,
-        _game_options: &GameOptions,
+        game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         // Update time in world
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
 
-        // For now, just return the command effects (basic implementation)
-        // TODO: Implement full update logic (physics, scripts, etc.)
-        command_effects
+        let mut effects = command_effects;
+
+        // Update teleport system and add effects (only if experimental flag enabled)
+        if game_options.experimental_features.contains("teleport") {
+            let teleport_effects = self.teleport_system.update(input_context);
+            effects.extend(teleport_effects);
+        }
+
+        // Player movement logic (similar to Mission::update)
+        let delta_time = time.elapsed.as_secs_f32();
+        let player = {
+            let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player_info.clone()
+        };
+
+        let rot_speed = 2.0;
+        let additional_rotation = Quaternion::from_axis_angle(
+            vec3(0.0, 1.0, 0.0),
+            Rad(input_context.left_hand.thumbstick.x * delta_time * rot_speed),
+        );
+
+        let new_rotation = player.rotation * additional_rotation;
+
+        let dir = new_rotation * input_context.head.rotation;
+        let move_thumbstick_value = input_context.right_hand.thumbstick;
+        let forward = dir.rotate_vector(vec3(
+            -delta_time * move_thumbstick_value.x * 25. / SCALE_FACTOR,
+            0.0,
+            -delta_time * move_thumbstick_value.y * 25. / SCALE_FACTOR,
+        ));
+
+        let up_value = input_context.left_hand.thumbstick.y / SCALE_FACTOR;
+
+        let (new_character_pos, _collision_events) = {
+            self.physics.update(
+                forward + vec3(0.0, up_value, 0.0),
+                &mut self.player_handle,
+            )
+        };
+
+        // Clear forces
+        self.physics.clear_forces();
+
+        // Update player info
+        let mut player_info = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+        player_info.pos = new_character_pos;
+        player_info.rotation = new_rotation;
+        drop(player_info);
+
+        // Update VR hands (using same parameters as Mission)
+        let (new_left_hand, _left_effects) = crate::virtual_hand::VirtualHand::update(
+            &self.left_hand,
+            &self.physics,
+            &self.world,
+            new_character_pos,
+            new_rotation,
+            &input_context.left_hand,
+        );
+        self.left_hand = new_left_hand;
+
+        let (new_right_hand, _right_effects) = crate::virtual_hand::VirtualHand::update(
+            &self.right_hand,
+            &self.physics,
+            &self.world,
+            new_character_pos,
+            new_rotation,
+            &input_context.right_hand,
+        );
+        self.right_hand = new_right_hand;
+
+        effects
     }
 
     fn render(
         &mut self,
         _asset_cache: &mut AssetCache,
-        _options: &GameOptions,
+        options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        // Return scene objects and default camera position/rotation
-        let player_info = self.world.borrow::<shipyard::UniqueView<PlayerInfo>>().unwrap();
+        // Synchronize physics positions first
+        self.synchronize_physics_positions();
+
+        // Start with base scene objects
+        let mut scene = self.scene_objects.clone();
+
+        // Render scene objects with their physics-synchronized transforms
+        let v_transform = self.world.borrow::<shipyard::View<RuntimePropTransform>>().unwrap();
+        for (entity_id, scene_obj) in &self.id_to_scene_object {
+            if let Ok(transform) = v_transform.get(*entity_id) {
+                let mut transformed_obj = scene_obj.clone();
+                transformed_obj.set_transform(transform.0);
+                scene.push(transformed_obj);
+            }
+        }
+
+        // Add VR hand rendering
+        scene.append(&mut self.left_hand.render());
+        scene.append(&mut self.right_hand.render());
+
+        // Add debug physics rendering if enabled
+        if options.debug_physics {
+            let debug_render = &self.physics.debug_render();
+            scene.extend(debug_render.clone());
+        }
+
+        // Return scene objects and player camera position/rotation
+        let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
         let pos = player_info.pos;
         let rot = player_info.rotation;
         drop(player_info);
 
-        (self.scene_objects.clone(), pos, rot)
+        (scene, pos, rot)
     }
 
     fn render_per_eye(
