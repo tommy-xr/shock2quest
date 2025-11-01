@@ -43,6 +43,18 @@
 - `cd runtimes/desktop_runtime`
 - `cargo run --release`
 
+##### Quick Start with Cargo Aliases
+
+Alternatively, use the project's cargo aliases from the root directory:
+- `cargo dr --release` - Run desktop runtime
+- `cargo dq entities --help` - Use dark_query CLI tool
+- `cargo dv --help` - Use dark_viewer tool
+
+Example:
+```bash
+cargo dr --release --experimental teleport
+```
+
 #### 3b. Oculus Quest 2
 
 ##### Pre-requisites
@@ -77,3 +89,5 @@
 - `cd runtimes/oculus_runtime`
 - `source ./set_up_android_sdk.sh`
 - `cargo apk run --release`
+
+**Note**: Cargo aliases (dr, dq, dv) work for desktop development but not for Android builds, which require the full cargo apk commands.
