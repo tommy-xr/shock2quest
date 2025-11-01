@@ -198,8 +198,8 @@ When working with entity data, you may need to examine raw game files:
 
 ```bash
 # Create small CLI tools to examine file structure
-cd tools/dark_viewer && cargo run -- inspect-gamesys shock2.gam
-cd tools/dark_viewer && cargo run -- list-entities medsci1.mis
+cargo dv inspect-gamesys shock2.gam
+cargo dv list-entities medsci1.mis
 ```
 
 2. **Compare gamesys vs mission data**:
@@ -229,6 +229,23 @@ See `references/entities.md` for comprehensive documentation of:
 
 - Desktop: `cd runtimes/desktop_runtime && cargo run --release`
 - Quest VR: `cd runtimes/oculus_runtime && source ./set_up_android_sdk.sh && cargo apk run --release`
+
+### Cargo Aliases
+
+For faster development, the project includes convenient cargo aliases (defined in `.cargo/config.toml`):
+
+- `cargo dr` - Desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
+- `cargo dq` - Dark query CLI tool (shorthand for `cargo run -p dark_query --`)
+- `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
+
+Example usage:
+```bash
+cargo dr --release --experimental teleport
+cargo dq entities earth.mis --filter "*Door*" --limit 10
+cargo dv inspect-gamesys shock2.gam
+```
+
+**Note**: These aliases only work for desktop development. Android builds still require the full `cargo apk` commands.
 
 ### Experimental Features
 
@@ -417,17 +434,18 @@ The `dark_query` CLI tool in `tools/dark_query` provides powerful analysis capab
 
 ```bash
 # Run from project root directory
-cargo run -p dark_query -- --help
+cargo dq --help  # Using cargo alias
+# OR: cargo run -p dark_query -- --help
 
 # Basic entity commands
-cargo run -p dark_query -- entities                    # List all entities and templates (gamesys only)
-cargo run -p dark_query -- entities earth.mis         # List entities with mission
-cargo run -p dark_query -- entities earth.mis 443     # Show detailed entity info
+cargo dq entities                    # List all entities and templates (gamesys only)
+cargo dq entities earth.mis         # List entities with mission
+cargo dq entities earth.mis 443     # Show detailed entity info
 
 # Motion database commands
-cargo run -p dark_query -- motion 0                    # Show animations for ActorType::Human (0)
-cargo run -p dark_query -- motion human +playspecmotion +human  # Query specific tags
-cargo run -p dark_query -- motion 0 +cs:184            # Query with tag value
+cargo dq motion 0                    # Show animations for ActorType::Human (0)
+cargo dq motion human +playspecmotion +human  # Query specific tags
+cargo dq motion 0 +cs:184            # Query with tag value
 ```
 
 ### Key Features
@@ -456,29 +474,29 @@ cargo run -p dark_query -- motion 0 +cs:184            # Query with tag value
 #### Basic Entity Exploration
 ```bash
 # Find all entities with "Railing" in the name
-cargo run -p dark_query -- entities earth.mis --filter "*Railing*"
+cargo dq entities earth.mis --filter "*Railing*"
 
 # Find entities with unparsed data (useful for development)
-cargo run -p dark_query -- entities --only-unparsed
+cargo dq entities --only-unparsed
 
 # Show property value filtering
-cargo run -p dark_query -- entities --filter "P$SymName:*Robot*"
+cargo dq entities --filter "P$SymName:*Robot*"
 
 # Limit results for quick iteration and testing
-cargo run -p dark_query -- entities earth.mis --limit 5
-cargo run -p dark_query -- entities earth.mis --filter "*Door*" --limit 10
+cargo dq entities earth.mis --limit 5
+cargo dq entities earth.mis --filter "*Door*" --limit 10
 ```
 
 #### Detailed Entity Analysis
 ```bash
 # Analyze entity 443 (Railing) inheritance and relationships
-cargo run -p dark_query -- entities earth.mis 443
+cargo dq entities earth.mis 443
 
 # Analyze entity 442 (Tripwire) to see its switch links
-cargo run -p dark_query -- entities earth.mis 442
+cargo dq entities earth.mis 442
 
 # Analyze template -1718 to understand railing template structure
-cargo run -p dark_query -- entities earth.mis -- -1718
+cargo dq entities earth.mis -- -1718
 ```
 
 #### Understanding Entity Relationships
@@ -496,22 +514,22 @@ cargo run -p dark_query -- entities earth.mis -- -1718
 #### Script Filtering Examples
 ```bash
 # Search for entities with specific scripts using property value syntax (case-insensitive)
-cargo run -p dark_query -- entities earth.mis --filter "P$Scripts:stddoor"
+cargo dq entities earth.mis --filter "P$Scripts:stddoor"
 
 # Search for entities with script names containing pattern (case-insensitive)
-cargo run -p dark_query -- entities earth.mis --filter "P$Scripts:*camera*"
+cargo dq entities earth.mis --filter "P$Scripts:*camera*"
 
 # Alternative script search using S$ prefix (case-insensitive)
-cargo run -p dark_query -- entities earth.mis --filter "S$*stddoor*"
+cargo dq entities earth.mis --filter "S$*stddoor*"
 
 # Exact script name with S$ prefix (case-insensitive)
-cargo run -p dark_query -- entities earth.mis --filter "S$stddoor"
+cargo dq entities earth.mis --filter "S$stddoor"
 
 # General search across all entity data (properties, links, scripts)
-cargo run -p dark_query -- entities earth.mis --filter "*StdDoor*"
+cargo dq entities earth.mis --filter "*StdDoor*"
 
 # Use --limit for quick iteration when testing script searches
-cargo run -p dark_query -- entities earth.mis --filter "S$stddoor" --limit 5
+cargo dq entities earth.mis --filter "S$stddoor" --limit 5
 ```
 
 **Script Filtering Notes:**
@@ -532,51 +550,51 @@ The `motion` command provides powerful querying capabilities for the System Shoc
 
 ```bash
 # Basic motion queries
-cargo run -p dark_query -- motion 0                    # List available animations for Human
-cargo run -p dark_query -- motion human                # Same as above using name
-cargo run -p dark_query -- motion droid                # List animations for Droid
+cargo dq motion 0                    # List available animations for Human
+cargo dq motion human                # Same as above using name
+cargo dq motion droid                # List animations for Droid
 ```
 
 ### Creature Types (ActorType Enum)
 
 ```bash
 # Available creature types
-cargo run -p dark_query -- motion 0        # Human (ActorType::Human)
-cargo run -p dark_query -- motion 1        # PlayerLimb (ActorType::PlayerLimb)
-cargo run -p dark_query -- motion 2        # Droid (ActorType::Droid)
-cargo run -p dark_query -- motion 3        # Overlord (ActorType::Overlord)
-cargo run -p dark_query -- motion 4        # Arachnid (ActorType::Arachnid)
+cargo dq motion 0        # Human (ActorType::Human)
+cargo dq motion 1        # PlayerLimb (ActorType::PlayerLimb)
+cargo dq motion 2        # Droid (ActorType::Droid)
+cargo dq motion 3        # Overlord (ActorType::Overlord)
+cargo dq motion 4        # Arachnid (ActorType::Arachnid)
 ```
 
 ### Tag-Based Animation Queries
 
 ```bash
 # Query with basic tags
-cargo run -p dark_query -- motion 0 +human +playspecmotion
-cargo run -p dark_query -- motion 0 +locomote
+cargo dq motion 0 +human +playspecmotion
+cargo dq motion 0 +locomote
 
 # Query with tag values (similar to spew files)
-cargo run -p dark_query -- motion 0 +cs:184           # Specific cutscene animation
-cargo run -p dark_query -- motion 0 +cs:116           # Another cutscene
+cargo dq motion 0 +cs:184           # Specific cutscene animation
+cargo dq motion 0 +cs:116           # Another cutscene
 
 # Multiple tags for specific animations
-cargo run -p dark_query -- motion 0 +playspecmotion +human --limit 10
+cargo dq motion 0 +playspecmotion +human --limit 10
 ```
 
 ### Motion Query Examples
 
 ```bash
 # Find all human animations
-cargo run -p dark_query -- motion human +playspecmotion +human
+cargo dq motion human +playspecmotion +human
 
 # Find specific cutscene animations
-cargo run -p dark_query -- motion 0 +cs:184
+cargo dq motion 0 +cs:184
 
 # Explore droid animations
-cargo run -p dark_query -- motion droid +playspecmotion
+cargo dq motion droid +playspecmotion
 
 # Limited results for quick exploration
-cargo run -p dark_query -- motion 0 --limit 5
+cargo dq motion 0 --limit 5
 ```
 
 ### Motion Database Features

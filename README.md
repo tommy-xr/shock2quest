@@ -38,9 +38,23 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `W` `A` `S` `D` - move around
 - `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
 
-## Building 
+## Building
 
 See [DEVELOPMENT.md](DEVELOPMENT.MD)
+
+### Quick Start with Cargo Aliases
+
+The project includes convenient cargo aliases:
+- `cargo dr` - Run desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
+- `cargo dq` - Run dark_query CLI tool (shorthand for `cargo run -p dark_query --`)
+- `cargo dv` - Run dark_viewer tool (shorthand for `cargo run -p dark_viewer --`)
+
+Example usage:
+```bash
+cargo dr --experimental teleport  # Run desktop with teleport feature
+cargo dq entities earth.mis --limit 5  # Query entities in mission
+cargo dv inspect-gamesys shock2.gam  # Inspect gamesys file
+```
 
 ## Roadmap
 
