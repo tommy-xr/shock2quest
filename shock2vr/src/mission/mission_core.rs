@@ -196,7 +196,7 @@ impl MissionCore {
         let mut world = World::new();
         let start = SystemTime::now();
         info!("starting level load");
-        let scene = dark::mission::to_scene(&level, asset_cache);
+        let scene = abstract_mission.scene_objects;
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 
