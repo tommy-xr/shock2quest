@@ -1,7 +1,4 @@
-use std::{
-    cell::RefCell,
-    io::Cursor,
-};
+use std::{cell::RefCell, io::Cursor};
 
 use tracing::trace;
 

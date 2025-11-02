@@ -14,11 +14,7 @@ fn import_text(
     content
 }
 
-fn process_text(
-    content: String,
-    _asset_cache: &mut AssetCache,
-    _config: &(),
-) -> String {
+fn process_text(content: String, _asset_cache: &mut AssetCache, _config: &()) -> String {
     content.trim().to_string()
 }
 
