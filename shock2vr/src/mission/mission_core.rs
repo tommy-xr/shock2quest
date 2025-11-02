@@ -45,7 +45,7 @@ use engine::{
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
-use rapier3d::prelude::RigidBodyHandle;
+use rapier3d::prelude::{Collider, RigidBodyHandle};
 use scripts::ScriptWorld;
 
 use shipyard::*;
@@ -176,6 +176,7 @@ pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
     pub song_params: SongParams,
     pub room_db: RoomDatabase,
+    pub physics_geometry: Option<Collider>,
 }
 
 impl MissionCore {
@@ -274,7 +275,9 @@ impl MissionCore {
         let mut script_world = ScriptWorld::new();
 
         let world_entity_id = world.add_entity(RuntimePropDoNotSerialize {});
-        physics.add_level_geometry(world_entity_id, &level);
+        if let Some(collider) = abstract_mission.physics_geometry {
+            physics.add_collider(world_entity_id, collider);
+        }
 
         // Finally, instantiate these entities
         for (entity_id, template_id) in entities_to_instantiate {

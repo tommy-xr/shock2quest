@@ -191,6 +191,15 @@ impl PhysicsWorld {
         self.collider_set.insert(collider);
     }
 
+    pub fn add_collider(&mut self, entity_id: EntityId, mut collider: Collider) {
+        collider.user_data = entity_id.inner() as u128;
+        collider.set_collision_groups(InteractionGroups {
+            memberships: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+        });
+        self.collider_set.insert(collider);
+    }
+
     pub fn set_position_rotation2(
         &mut self,
         entity_id: EntityId,
