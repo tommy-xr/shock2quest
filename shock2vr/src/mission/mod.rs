@@ -1,14 +1,16 @@
 pub mod entity_creator;
-use std::{fs::File, io::BufReader, time::SystemTime};
+use std::{fs::File, io::BufReader};
 
 use tracing::info;
 pub mod entity_populator;
 pub mod mission_core;
 mod spawn_location;
+pub mod spatial_query;
 pub mod visibility_engine;
 
 pub use mission_core::*;
 pub use spawn_location::*;
+pub use spatial_query::*;
 pub use visibility_engine::*;
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
@@ -72,12 +74,14 @@ impl Mission {
         let song_params = level.song_params.clone();
         let room_db = level.room_database.clone();
         let physics_geometry = create_physics_collider(&level);
+        let spatial_data = LevelSpatialData::from_level(&level);
 
         let abstract_mission = AbstractMission {
             scene_objects,
             song_params,
             room_db,
             physics_geometry,
+            spatial_data: Some(Box::new(spatial_data)),
         };
 
         let mission_core = MissionCore::load(

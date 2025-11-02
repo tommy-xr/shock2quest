@@ -20,7 +20,7 @@ use crate::SCALE_FACTOR;
 use super::CellPortal;
 use super::Plane;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Cell {
     pub idx: u32,
     pub center: Vector3<f32>,
@@ -242,7 +242,7 @@ impl Cell {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Polygon {
     pub flags: u8,
     pub count: u8,
@@ -273,7 +273,7 @@ fn read_polygon<T: io::Read>(reader: &mut T) -> Polygon {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PolygonTexturing {
     pub axis_u: Vector3<f32>,
     pub axis_v: Vector3<f32>,
@@ -385,7 +385,7 @@ fn read_lights<T: io::Read>(
     light_infos
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LightInfo {
     pub debug_idx: u32,
     pub u: i16,
