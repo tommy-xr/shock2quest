@@ -28,14 +28,13 @@ use dark::{
     importers::{ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER},
     mission::{room_database::RoomDatabase, SystemShock2Level},
     model::Model,
-    motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
+    motion::{AnimationEvent, AnimationPlayer, MotionQuery, MotionQueryItem},
     properties::{
-        AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropCreature, PropFrameAnimState,
-        PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags, PropParticleGroup,
-        PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
-        PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
-        PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
+        AmbientSoundFlags, Link, Links, PhysicsModelType, PropAmbientHacked, PropCreature,
+        PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
+        PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
+        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
+        PropTripFlags, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     BitmapAnimation, SCALE_FACTOR,
@@ -167,14 +166,6 @@ pub struct Mission {
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
-}
-
-pub struct GlobalContext {
-    pub properties: Vec<Box<dyn PropertyDefinition<BufReader<File>>>>,
-    pub links: Vec<Box<dyn LinkDefinition>>,
-    pub links_with_data: Vec<Box<dyn LinkDefinitionWithData>>,
-    pub gamesys: Gamesys,
-    pub motiondb: MotionDB,
 }
 
 impl Mission {
