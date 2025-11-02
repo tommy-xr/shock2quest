@@ -67,9 +67,14 @@ impl Mission {
             properties,
         );
 
+        let scene_objects = dark::mission::to_scene(&level, asset_cache);
+
+        let abstract_mission = AbstractMission { scene_objects };
+
         let mission_core = MissionCore::load(
             mission,
             level,
+            abstract_mission,
             asset_cache,
             audio_context,
             global_context,
