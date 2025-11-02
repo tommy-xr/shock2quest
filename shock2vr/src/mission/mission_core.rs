@@ -12,10 +12,10 @@ use cgmath::{
 };
 use cgmath::{EuclideanSpace, Zero};
 
-use crate::mission::entity_creator;
 use crate::mission::CullingInfo;
 use crate::mission::PortalVisibilityEngine;
 use crate::SpawnLocation;
+use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
     audio::SongPlayer,
@@ -26,11 +26,11 @@ use dark::{
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAmbientHacked, PropCreature, PropFrameAnimState, PropHasRefs, PropLocalPlayer,
-        PropModelName, PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo,
-        PropPhysDimensions, PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropertyDefinition, RenderType,
-        ToLink, TripFlags, WrappedEntityId,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropCreature, PropFrameAnimState,
+        PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags, PropParticleGroup,
+        PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
+        PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
+        PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     BitmapAnimation, SCALE_FACTOR,
@@ -1426,6 +1426,16 @@ impl MissionCore {
                         quest_bit_name, quest_bit_value, quests_new
                     );
                 }
+
+                Effect::SetAIProperty { entity_id, update } => match update {
+                    AIPropertyUpdate::Alertness { level, peak } => {
+                        self.world
+                            .add_component(entity_id, PropAIAlertness { level, peak });
+                    }
+                    AIPropertyUpdate::Mode { mode } => {
+                        self.world.add_component(entity_id, PropAIMode { mode });
+                    }
+                },
                 Effect::SetPositionRotation {
                     entity_id,
                     rotation,
@@ -1559,6 +1569,66 @@ impl MissionCore {
             self.visibility_engine
                 .prepare(&self.level, &self.world, &culling_info)
         );
+    }
+
+    pub fn ambient_audio_state(&self) -> Option<AmbientAudioState> {
+        let player_position = {
+            let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+            player_info.pos
+        };
+
+        let Ok((v_ambient_hacked, v_position)) = self
+            .world
+            .borrow::<(View<PropAmbientHacked>, View<PropPosition>)>()
+        else {
+            return Some(AmbientAudioState {
+                player_position,
+                music_cue: None,
+                environmental_cue: None,
+                ambient_emitters: Vec::new(),
+            });
+        };
+
+        let mut music_cue = None;
+        let mut environmental_cue = None;
+        let mut emitter_candidates: Vec<(f32, EntityId, Vector3<f32>, String)> = Vec::new();
+
+        for (id, (ambient_sound, position)) in (&v_ambient_hacked, &v_position).iter().with_id() {
+            let dist_squared = (position.position - player_position).magnitude2();
+
+            if dist_squared < ambient_sound.radius_squared {
+                if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
+                    music_cue = Some(ambient_sound.schema.clone());
+                } else if ambient_sound
+                    .sound_flags
+                    .contains(AmbientSoundFlags::ENVIRONMENTAL)
+                {
+                    environmental_cue = Some(ambient_sound.schema.clone());
+                } else {
+                    emitter_candidates.push((
+                        dist_squared,
+                        id,
+                        position.position,
+                        ambient_sound.schema.clone(),
+                    ));
+                }
+            }
+        }
+
+        emitter_candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+        let ambient_emitters = emitter_candidates
+            .into_iter()
+            .take(8)
+            .map(|(_, id, position, sample_name)| (id, position, sample_name))
+            .collect();
+
+        Some(AmbientAudioState {
+            player_position,
+            music_cue,
+            environmental_cue,
+            ambient_emitters,
+        })
     }
 
     pub fn render(
@@ -2188,63 +2258,7 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn ambient_audio_state(&self) -> Option<AmbientAudioState> {
-        let player_position = {
-            let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-            player_info.pos
-        };
-
-        let Ok((v_ambient_hacked, v_position)) = self
-            .world
-            .borrow::<(View<PropAmbientHacked>, View<PropPosition>)>()
-        else {
-            return Some(AmbientAudioState {
-                player_position,
-                music_cue: None,
-                environmental_cue: None,
-                ambient_emitters: Vec::new(),
-            });
-        };
-
-        let mut music_cue = None;
-        let mut environmental_cue = None;
-        let mut emitter_candidates: Vec<(f32, EntityId, Vector3<f32>, String)> = Vec::new();
-
-        for (id, (ambient_sound, position)) in (&v_ambient_hacked, &v_position).iter().with_id() {
-            let dist_squared = (position.position - player_position).magnitude2();
-
-            if dist_squared < ambient_sound.radius_squared {
-                if ambient_sound.sound_flags.contains(AmbientSoundFlags::MUSIC) {
-                    music_cue = Some(ambient_sound.schema.clone());
-                } else if ambient_sound
-                    .sound_flags
-                    .contains(AmbientSoundFlags::ENVIRONMENTAL)
-                {
-                    environmental_cue = Some(ambient_sound.schema.clone());
-                } else {
-                    emitter_candidates.push((
-                        dist_squared,
-                        id,
-                        position.position,
-                        ambient_sound.schema.clone(),
-                    ));
-                }
-            }
-        }
-
-        emitter_candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-
-        let ambient_emitters = emitter_candidates
-            .into_iter()
-            .take(8)
-            .map(|(_, id, position, sample_name)| (id, position, sample_name))
-            .collect();
-
-        Some(AmbientAudioState {
-            player_position,
-            music_cue,
-            environmental_cue,
-            ambient_emitters,
-        })
+        self.ambient_audio_state()
     }
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
