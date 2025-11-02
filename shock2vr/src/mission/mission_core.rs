@@ -21,7 +21,7 @@ use dark::{
     audio::SongPlayer,
     gamesys::Gamesys,
     importers::{ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER},
-    mission::{room_database::RoomDatabase, SongParams, SystemShock2Level},
+    mission::{room_database::RoomDatabase, SongParams},
     model::Model,
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
@@ -178,12 +178,13 @@ pub struct AbstractMission {
     pub room_db: RoomDatabase,
     pub physics_geometry: Option<Collider>,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
+    pub entity_info: SystemShock2EntityInfo,
+    pub obj_map: HashMap<i32, String>,
 }
 
 impl MissionCore {
     pub fn load(
         mission: String,
-        level: SystemShock2Level,
         abstract_mission: AbstractMission,
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
@@ -204,7 +205,7 @@ impl MissionCore {
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 
-        let entity_info = ss2_entity_info::merge_with_gamesys(&level.entity_info, game_entity_info);
+        let entity_info = ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -222,7 +223,7 @@ impl MissionCore {
         // ** Entity creation
 
         let template_to_entity_id =
-            entity_populator.populate(&entity_info, &level.entity_info, &level.obj_map, &mut world);
+            entity_populator.populate(&entity_info, &abstract_mission.entity_info, &abstract_mission.obj_map, &mut world);
 
         // Instantiate held items
         let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
@@ -324,7 +325,7 @@ impl MissionCore {
         };
 
         let (start_pos, start_rotation) =
-            spawn_loc.calculate_start_position(&world, &level.entity_info, &template_to_entity_id);
+            spawn_loc.calculate_start_position(&world, &abstract_mission.entity_info, &template_to_entity_id);
 
         let player_handle = physics.create_player(start_pos, player_entity);
 

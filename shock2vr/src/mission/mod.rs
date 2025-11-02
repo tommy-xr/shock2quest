@@ -75,6 +75,7 @@ impl Mission {
         let room_db = level.room_database.clone();
         let physics_geometry = create_physics_collider(&level);
         let spatial_data = LevelSpatialData::from_level(&level);
+        let obj_map = level.obj_map.clone();
 
         let abstract_mission = AbstractMission {
             scene_objects,
@@ -82,11 +83,12 @@ impl Mission {
             room_db,
             physics_geometry,
             spatial_data: Some(Box::new(spatial_data)),
+            entity_info: level.entity_info,
+            obj_map,
         };
 
         let mission_core = MissionCore::load(
             mission,
-            level,
             abstract_mission,
             asset_cache,
             audio_context,
