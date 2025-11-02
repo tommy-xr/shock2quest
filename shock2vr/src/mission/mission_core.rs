@@ -217,7 +217,8 @@ impl MissionCore {
 
         // ** Entity creation
 
-        let template_to_entity_id = entity_populator.populate(&entity_info, &level, &mut world);
+        let template_to_entity_id =
+            entity_populator.populate(&entity_info, &level.entity_info, &level.obj_map, &mut world);
 
         // Instantiate held items
         let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
