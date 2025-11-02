@@ -1,4 +1,7 @@
 pub mod entity_creator;
+use std::{fs::File, io::BufReader, time::SystemTime};
+
+use tracing::info;
 pub mod entity_populator;
 pub mod mission_core;
 mod spawn_location;
@@ -46,8 +49,27 @@ impl Mission {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> Mission {
+        let properties = &global_context.properties;
+        let links = &global_context.links;
+        let links_with_data = &global_context.links_with_data;
+        let _motiondb = &global_context.motiondb;
+
+        info!("starting level load");
+
+        let f = File::open(resource_path(&mission)).unwrap();
+        let mut reader = BufReader::new(f);
+        let level = dark::mission::read(
+            asset_cache,
+            &mut reader,
+            &global_context.gamesys,
+            links,
+            links_with_data,
+            properties,
+        );
+
         let mission_core = MissionCore::load(
             mission,
+            level,
             asset_cache,
             audio_context,
             global_context,
