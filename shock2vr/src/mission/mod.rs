@@ -29,11 +29,11 @@ use dark::{
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAmbientHacked, PropCreature, PropFrameAnimState, PropHasRefs, PropLocalPlayer,
-        PropModelName, PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo,
-        PropPhysDimensions, PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropertyDefinition, RenderType,
-        ToLink, TripFlags, WrappedEntityId,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropCreature, PropFrameAnimState,
+        PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags, PropParticleGroup,
+        PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
+        PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
+        PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     BitmapAnimation, SCALE_FACTOR,
@@ -74,7 +74,7 @@ use crate::{
         self,
         internal_fast_projectile::InternalFastProjectileScript,
         script_util::{get_all_links_with_template, get_environmental_sound_query},
-        Effect, GlobalEffect, Message, MessagePayload,
+        AIPropertyUpdate, Effect, GlobalEffect, Message, MessagePayload,
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     teleport::TeleportSystem,
@@ -1421,6 +1421,15 @@ impl Mission {
                         quest_bit_name, quest_bit_value, quests_new
                     );
                 }
+                Effect::SetAIProperty { entity_id, update } => match update {
+                    AIPropertyUpdate::Alertness { level, peak } => {
+                        self.world
+                            .add_component(entity_id, PropAIAlertness { level, peak });
+                    }
+                    AIPropertyUpdate::Mode { mode } => {
+                        self.world.add_component(entity_id, PropAIMode { mode });
+                    }
+                },
                 Effect::SetPositionRotation {
                     entity_id,
                     rotation,
