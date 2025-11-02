@@ -69,10 +69,12 @@ impl Mission {
 
         let scene_objects = dark::mission::to_scene(&level, asset_cache);
         let song_params = level.song_params.clone();
+        let room_db = level.room_database.clone();
 
         let abstract_mission = AbstractMission {
             scene_objects,
             song_params,
+            room_db,
         };
 
         let mission_core = MissionCore::load(

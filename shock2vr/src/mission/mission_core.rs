@@ -175,6 +175,7 @@ pub struct GlobalContext {
 pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
     pub song_params: SongParams,
+    pub room_db: RoomDatabase,
 }
 
 impl MissionCore {
@@ -251,7 +252,7 @@ impl MissionCore {
 
         // Create rooms
         create_room_entities(
-            &level.room_database,
+            &abstract_mission.room_db,
             &template_to_entity_id,
             &mut world,
             &mut entities_to_instantiate,
