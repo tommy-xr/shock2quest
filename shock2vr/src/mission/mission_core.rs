@@ -103,14 +103,6 @@ pub struct EffectQueue {
     effects: Vec<Effect>,
 }
 
-impl EffectQueue {
-    pub fn new() -> EffectQueue {
-        EffectQueue {
-            effects: Vec::new(),
-        }
-    }
-}
-
 pub struct DebugLine {
     pub start: Point3<f32>,
     pub end: Point3<f32>,
@@ -183,6 +175,7 @@ pub struct GlobalContext {
 impl MissionCore {
     pub fn load(
         mission: String,
+        level: SystemShock2Level,
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
         global_context: &GlobalContext,
@@ -192,25 +185,12 @@ impl MissionCore {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> MissionCore {
-        let properties = &global_context.properties;
-        let links = &global_context.links;
-        let links_with_data = &global_context.links_with_data;
         let game_entity_info = &global_context.gamesys;
         let _motiondb = &global_context.motiondb;
 
         let mut world = World::new();
-        let f = File::open(resource_path(&mission)).unwrap();
-        let mut reader = BufReader::new(f);
         let start = SystemTime::now();
         info!("starting level load");
-        let level = dark::mission::read(
-            asset_cache,
-            &mut reader,
-            &global_context.gamesys,
-            links,
-            links_with_data,
-            properties,
-        );
         let scene = dark::mission::to_scene(&level, asset_cache);
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
