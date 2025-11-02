@@ -6,7 +6,7 @@ use tracing::trace;
 use std::io;
 use std::io::SeekFrom;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RoomDatabase {
     pub rooms: Vec<Room>,
 }
