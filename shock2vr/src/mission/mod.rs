@@ -8,88 +8,27 @@ pub use mission_core::*;
 pub use spawn_location::*;
 pub use visibility_engine::*;
 
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::BufReader,
-    rc::Rc,
-    time::{Duration, SystemTime},
-};
+use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
 
-use cgmath::{
-    num_traits::ToPrimitive, vec3, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3,
-    SquareMatrix, Transform, Vector2, Vector3,
-};
-use cgmath::{EuclideanSpace, Zero};
-
-use dark::{
-    audio::SongPlayer,
-    gamesys::Gamesys,
-    importers::{ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER},
-    mission::{room_database::RoomDatabase, SystemShock2Level},
-    model::Model,
-    motion::{AnimationEvent, AnimationPlayer, MotionQuery, MotionQueryItem},
-    properties::{
-        AmbientSoundFlags, Link, Links, PhysicsModelType, PropAmbientHacked, PropCreature,
-        PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
-        PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
-        PropTripFlags, RenderType, ToLink, TripFlags, WrappedEntityId,
-    },
-    ss2_entity_info::{self, SystemShock2EntityInfo},
-    BitmapAnimation, SCALE_FACTOR,
-};
 use engine::{
     assets::asset_cache::AssetCache,
-    audio::{AudioChannel, AudioContext, AudioHandle},
-    game_log, profile,
-    scene::{
-        light::SpotLight, quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition,
-    },
-    texture::TextureTrait,
+    audio::AudioContext,
+    scene::{light::SpotLight, SceneObject},
 };
-use physics::PhysicsWorld;
-use rapier3d::prelude::RigidBodyHandle;
-use scripts::ScriptWorld;
 
+use shipyard::World;
 use shipyard::*;
-use shipyard::{self, View, World};
-use tracing::{info, trace, warn};
 
 use crate::{
-    creature::{get_creature_definition, HitBoxManager},
     game_scene::AmbientAudioState,
-    gui::GuiManager,
-    hud::{draw_item_name, draw_item_outline},
     input_context::{self, InputContext},
-    inventory::PlayerInventoryEntity,
     mission::entity_populator::EntityPopulator,
-    physics::{self, PlayerHandle},
     quest_info::QuestInfo,
-    runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform,
-        RuntimePropVhots,
-    },
     save_load::HeldItemSaveData,
-    scripts::{
-        self,
-        internal_fast_projectile::InternalFastProjectileScript,
-        script_util::{get_all_links_with_template, get_environmental_sound_query},
-        AIPropertyUpdate, Effect, GlobalEffect, Message, MessagePayload,
-    },
-    systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
-    teleport::TeleportSystem,
+    scripts::{Effect, GlobalEffect},
     time::Time,
-    util::{get_email_sound_file, has_refs, vec3_to_point3},
-    virtual_hand::{VirtualHand, VirtualHandEffect},
-    vr_config, GameOptions,
+    GameOptions,
 };
-
-use self::{
-    entity_creator::{CreateEntityOptions, EntityCreationInfo},
-    visibility_engine::VisibilityEngine,
-};
-pub use crate::resource_path;
 
 pub struct Mission {
     pub mission_core: MissionCore,
