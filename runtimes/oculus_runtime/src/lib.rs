@@ -421,7 +421,7 @@ fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(options);
+    let mut game = shock2vr::Game::init(options, "".to_string()); // Android assets root
 
     let mut camera_pos = vec3(0.0, 5.0, 10.0);
 

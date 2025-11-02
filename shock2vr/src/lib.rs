@@ -43,7 +43,7 @@ use dark::{
     motion::MotionDB,
 };
 use engine::{
-    assets::{asset_cache::AssetCache, asset_paths::AssetPath},
+    assets::{asset_cache::AssetCache, asset_paths::AssetPath, bundle_asset_path::BundleAssetPath},
     audio::{AudioClip, AudioContext},
     game_log,
     scene::SceneObject,
@@ -180,7 +180,7 @@ impl Game {
         }
     }
 
-    pub fn init(options: GameOptions) -> Game {
+    pub fn init(options: GameOptions, bundle_root_path: String) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
             // AssetPath::folder(resource_path("res/mesh/txt16")),
@@ -198,7 +198,8 @@ impl Game {
             ZipAssetPath::new(resource_path("res/snd2.crf")),
             ZipAssetPath::new(resource_path("res/song.crf")),
             ZipAssetPath::new2(resource_path("res/strings.crf"), false),
-            //AssetPath::folder("../assets/"),
+            // Bundle assets
+            BundleAssetPath::new("".to_owned(), bundle_root_path.clone()),
             // Textures
             // AssetPath::folder("res/bitmap".to_owned()),
             // AssetPath::folder("res/bitmap/txt16".to_owned()),

@@ -28,4 +28,9 @@ impl FileSystem for DefaultFileSystem<'_> {
 
         std::fs::read(full_path).unwrap()
     }
+
+    fn file_exists(&self, path: &str) -> bool {
+        let full_path = self.root_path.join(path);
+        full_path.exists()
+    }
 }

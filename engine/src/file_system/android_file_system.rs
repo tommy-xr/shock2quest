@@ -51,7 +51,19 @@ impl FileSystem for AndroidFileSystem {
         let data = asset.get_buffer().unwrap();
         data.to_vec()
     }
+
+    fn file_exists(&self, path: &str) -> bool {
+        self.asset_manager
+            .open(&CString::new(path).unwrap())
+            .is_some()
+    }
 }
+
+// SAFETY: AndroidFileSystem is only used on the main Android thread.
+// The raw pointers in AndroidContext are guaranteed to be valid for the
+// lifetime of the application and are only accessed from the main thread.
+unsafe impl Send for AndroidFileSystem {}
+unsafe impl Sync for AndroidFileSystem {}
 
 use ndk::asset::AssetManager;
 

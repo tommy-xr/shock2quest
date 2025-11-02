@@ -279,7 +279,7 @@ pub fn main() {
     );
 
     let engine = engine::opengl();
-    let mut game = shock2vr::Game::init(GameOptions::default());
+    let mut game = shock2vr::Game::init(GameOptions::default(), "../../assets".to_string());
 
     if cli.debug_no_render {
         match create_scene(
