@@ -172,10 +172,15 @@ pub struct GlobalContext {
     pub motiondb: MotionDB,
 }
 
+pub struct AbstractMission {
+    pub scene_objects: Vec<SceneObject>,
+}
+
 impl MissionCore {
     pub fn load(
         mission: String,
         level: SystemShock2Level,
+        abstract_mission: AbstractMission,
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
         global_context: &GlobalContext,
