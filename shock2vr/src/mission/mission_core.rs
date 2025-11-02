@@ -59,7 +59,7 @@ use crate::{
     hud::{draw_item_name, draw_item_outline},
     input_context::{self, InputContext},
     inventory::PlayerInventoryEntity,
-    mission::entity_populator::EntityPopulator,
+    mission::{entity_populator::EntityPopulator, SpatialQueryEngine},
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
@@ -156,7 +156,7 @@ pub struct MissionCore {
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
     pub world: World,
     pub player_handle: PlayerHandle,
-    pub level: SystemShock2Level,
+    pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     pub left_hand: VirtualHand,
     pub right_hand: VirtualHand,
     pub visibility_engine: Box<dyn VisibilityEngine>,
@@ -177,6 +177,7 @@ pub struct AbstractMission {
     pub song_params: SongParams,
     pub room_db: RoomDatabase,
     pub physics_geometry: Option<Collider>,
+    pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
 }
 
 impl MissionCore {
@@ -361,7 +362,6 @@ impl MissionCore {
         };
 
         MissionCore {
-            level,
             left_hand,
             right_hand,
             level_name: mission,
@@ -378,6 +378,7 @@ impl MissionCore {
             id_to_physics,
             template_to_entity_id,
             player_handle,
+            spatial_data: abstract_mission.spatial_data,
             debug_lines: Vec::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
@@ -1558,7 +1559,7 @@ impl MissionCore {
         profile!(
             scope: "render", level: DEBUG, "visibility_engine.prepare",
             self.visibility_engine
-                .prepare(&self.level, &self.world, &culling_info)
+                .prepare(self.spatial_data.as_deref(), &self.world, &culling_info)
         );
     }
 
@@ -1802,20 +1803,21 @@ impl MissionCore {
         // via get_hand_spotlights() method - they're added to the Scene's lighting system
 
         if options.debug_portals {
-            let (player_pos, _player_rot) = {
-                let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-                (player_info.pos, player_info.rotation)
-            };
-            let maybe_cell = self.level.get_cell_from_position(player_pos);
-            if maybe_cell.is_some() {
-                let cell = maybe_cell.unwrap();
-                // println!(
-                //     "!! pos: {:?}  [cell-idx]: {:?} center: {:?} radius: {:?}",
-                //     player_pos, cell.idx, cell.center, cell.radius
-                // );
-                scene.extend(cell.debug_render());
-            } else {
-                game_log!(WARN, "Unable to find cell at position: {:?}", player_pos);
+            if let Some(spatial_data) = &self.spatial_data {
+                let (player_pos, _player_rot) = {
+                    let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                    (player_info.pos, player_info.rotation)
+                };
+                let maybe_cell = spatial_data.get_cell_from_position(player_pos);
+                if let Some(cell) = maybe_cell {
+                    // println!(
+                    //     "!! pos: {:?}  [cell-idx]: {:?} center: {:?} radius: {:?}",
+                    //     player_pos, cell.idx, cell.center, cell.radius
+                    // );
+                    scene.extend(cell.debug_render());
+                } else {
+                    game_log!(WARN, "Unable to find cell at position: {:?}", player_pos);
+                }
             }
         }
 
