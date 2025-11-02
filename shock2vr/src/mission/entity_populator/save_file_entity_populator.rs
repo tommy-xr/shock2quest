@@ -29,7 +29,8 @@ impl EntityPopulator for SaveFileEntityPopulator {
     fn populate(
         &self,
         _gamesys_entity_info: &SystemShock2EntityInfo,
-        _level: &SystemShock2Level,
+        _level_entity_info: &SystemShock2EntityInfo,
+        _obj_name_map: &HashMap<i32, String>, // name override map
         world: &mut World,
     ) -> HashMap<i32, WrappedEntityId> {
         // panic!("todo: implement save file entity populator");
