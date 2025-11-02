@@ -21,7 +21,7 @@ use dark::{
     audio::SongPlayer,
     gamesys::Gamesys,
     importers::{ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER},
-    mission::{room_database::RoomDatabase, SystemShock2Level},
+    mission::{room_database::RoomDatabase, SongParams, SystemShock2Level},
     model::Model,
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
@@ -174,6 +174,7 @@ pub struct GlobalContext {
 
 pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
+    pub song_params: SongParams,
 }
 
 impl MissionCore {
@@ -244,7 +245,7 @@ impl MissionCore {
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
         // Start background music
-        initialize_background_music(&level, asset_cache, audio_context);
+        initialize_background_music(&abstract_mission.song_params, asset_cache, audio_context);
 
         let mut entities_to_instantiate = HashSet::new();
 
@@ -2028,11 +2029,11 @@ fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, Entit
 ///
 /// Helper function to set up the music player for the level
 fn initialize_background_music(
-    level: &dark::mission::SystemShock2Level,
+    song_params: &SongParams,
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
 ) {
-    let song_file_name = &level.song_params.song;
+    let song_file_name = &song_params.song;
     info!("loading music for level: {}", song_file_name);
     if !song_file_name.is_empty() {
         let song = {
