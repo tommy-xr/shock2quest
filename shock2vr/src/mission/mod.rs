@@ -91,56 +91,6 @@ use self::{
 };
 pub use crate::resource_path;
 
-#[derive(Unique, Clone)]
-pub struct PlayerInfo {
-    pub pos: Vector3<f32>,
-    pub rotation: Quaternion<f32>,
-    pub entity_id: EntityId,
-
-    pub left_hand_entity_id: Option<EntityId>,
-    pub right_hand_entity_id: Option<EntityId>,
-    pub inventory_entity_id: EntityId,
-}
-
-#[derive(Unique, Clone)]
-pub struct EffectQueue {
-    effects: Vec<Effect>,
-}
-
-pub struct DebugLine {
-    pub start: Point3<f32>,
-    pub end: Point3<f32>,
-    pub color: Vector3<f32>,
-    pub remaining_life_in_seconds: f32,
-}
-
-#[derive(Clone)]
-pub struct EntityMetadata {
-    pub template_id: i32,
-    pub obj_icon: Option<String>,
-    pub obj_short_name: Option<String>,
-    #[allow(dead_code)]
-    pub obj_name: Option<String>,
-}
-
-#[derive(Unique, Clone)]
-pub struct GlobalEntityMetadata(pub HashMap<String, EntityMetadata>);
-
-#[derive(Unique, Clone)]
-pub struct GlobalTemplateIdMap(pub HashMap<i32, WrappedEntityId>);
-
-impl EffectQueue {
-    pub fn push(&mut self, effect: Effect) {
-        self.effects.push(effect);
-    }
-
-    pub fn flush(&mut self) -> Vec<Effect> {
-        let prev = self.effects.clone();
-        self.effects = vec![];
-        prev
-    }
-}
-
 pub struct Mission {
     pub level_name: String,
     pub gui: GuiManager,
@@ -334,10 +284,7 @@ impl Mission {
         });
 
         world.add_unique(quest_info);
-
-        world.add_unique(EffectQueue {
-            effects: Vec::new(),
-        });
+        world.add_unique(EffectQueue::new());
 
         // Initialize teleport system based on game options
         let teleport_system = if game_options.experimental_features.contains("teleport") {

@@ -103,6 +103,14 @@ pub struct EffectQueue {
     effects: Vec<Effect>,
 }
 
+impl EffectQueue {
+    pub fn new() -> EffectQueue {
+        EffectQueue {
+            effects: Vec::new(),
+        }
+    }
+}
+
 pub struct DebugLine {
     pub start: Point3<f32>,
     pub end: Point3<f32>,
