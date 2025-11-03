@@ -4,13 +4,13 @@ use std::{fs::File, io::BufReader};
 use tracing::info;
 pub mod entity_populator;
 pub mod mission_core;
-mod spawn_location;
 pub mod spatial_query;
+mod spawn_location;
 pub mod visibility_engine;
 
 pub use mission_core::*;
-pub use spawn_location::*;
 pub use spatial_query::*;
+pub use spawn_location::*;
 pub use visibility_engine::*;
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3};

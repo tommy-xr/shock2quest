@@ -81,10 +81,8 @@ use crate::{
     vr_config, GameOptions,
 };
 
+use crate::mission::entity_creator::{CreateEntityOptions, EntityCreationInfo};
 pub use crate::resource_path;
-use crate::{
-    mission::entity_creator::{CreateEntityOptions, EntityCreationInfo},
-};
 
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
@@ -208,7 +206,6 @@ impl MissionCore {
 
         let entity_info =
             ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
-
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();

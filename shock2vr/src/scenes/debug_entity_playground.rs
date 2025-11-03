@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 
 use cgmath::{vec3, Matrix4, Quaternion, Vector2, Vector3};
@@ -20,7 +19,7 @@ use crate::{
     input_context::InputContext,
     mission::{
         entity_populator::empty_entity_populator::EmptyEntityPopulator, mission_core::MissionCore,
-        AlwaysVisible, AbstractMission, GlobalContext, SpawnLocation,
+        AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
@@ -85,9 +84,7 @@ impl DebugEntityPlaygroundScene {
             song_params: SongParams {
                 song: String::new(),
             },
-            room_db: RoomDatabase {
-                rooms: Vec::new(),
-            },
+            room_db: RoomDatabase { rooms: Vec::new() },
             physics_geometry: Some(physics_geometry),
             spatial_data: None, // No spatial queries needed for simple debug scene
             entity_info,
@@ -105,10 +102,15 @@ impl DebugEntityPlaygroundScene {
         );
 
         let floor_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.0))
-            * Matrix4::from_nonuniform_scale(floor_size_scaled.x, floor_size_scaled.y, floor_size_scaled.z);
+            * Matrix4::from_nonuniform_scale(
+                floor_size_scaled.x,
+                floor_size_scaled.y,
+                floor_size_scaled.z,
+            );
 
         let floor_material = color_material::create(FLOOR_COLOR);
-        let mut floor_object = SceneObject::new(floor_material, Box::new(engine::scene::cube::create()));
+        let mut floor_object =
+            SceneObject::new(floor_material, Box::new(engine::scene::cube::create()));
         floor_object.set_transform(floor_transform);
 
         vec![floor_object]
@@ -122,7 +124,12 @@ impl DebugEntityPlaygroundScene {
             FLOOR_SIZE.z / SCALE_FACTOR / 2.0,
         );
 
-        ColliderBuilder::cuboid(floor_size_scaled.x, floor_size_scaled.y, floor_size_scaled.z).build()
+        ColliderBuilder::cuboid(
+            floor_size_scaled.x,
+            floor_size_scaled.y,
+            floor_size_scaled.z,
+        )
+        .build()
     }
 
     /// Create empty entity info for debug scene
@@ -150,7 +157,13 @@ impl GameScene for DebugEntityPlaygroundScene {
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         // Delegate to core
-        self.core.update(time, asset_cache, input_context, game_options, command_effects)
+        self.core.update(
+            time,
+            asset_cache,
+            input_context,
+            game_options,
+            command_effects,
+        )
     }
 
     fn render(
@@ -171,7 +184,8 @@ impl GameScene for DebugEntityPlaygroundScene {
         options: &GameOptions,
     ) -> Vec<SceneObject> {
         // Delegate to core
-        self.core.render_per_eye(asset_cache, view, projection, screen_size, options)
+        self.core
+            .render_per_eye(asset_cache, view, projection, screen_size, options)
     }
 
     fn finish_render(
@@ -182,7 +196,8 @@ impl GameScene for DebugEntityPlaygroundScene {
         screen_size: Vector2<f32>,
     ) {
         // Delegate to core
-        self.core.finish_render(asset_cache, view, projection, screen_size)
+        self.core
+            .finish_render(asset_cache, view, projection, screen_size)
     }
 
     fn handle_effects(
@@ -194,7 +209,13 @@ impl GameScene for DebugEntityPlaygroundScene {
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
         // Delegate to core
-        self.core.handle_effects(effects, global_context, game_options, asset_cache, audio_context)
+        self.core.handle_effects(
+            effects,
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        )
     }
 
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {

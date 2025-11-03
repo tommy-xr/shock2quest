@@ -41,7 +41,10 @@ pub fn create_initial_scene(
         };
     }
 
-    if options.mission.eq_ignore_ascii_case("debug_entity_playground") {
+    if options
+        .mission
+        .eq_ignore_ascii_case("debug_entity_playground")
+    {
         return SceneInitResult {
             scene: Box::new(DebugEntityPlaygroundScene::new(
                 global_context,

@@ -1,5 +1,5 @@
 use cgmath::Vector3;
-use dark::mission::{Cell, BspTree, SystemShock2Level};
+use dark::mission::{BspTree, Cell, SystemShock2Level};
 
 /// Spatial query interface for level data
 /// Provides position-based lookups without requiring the full SystemShock2Level
