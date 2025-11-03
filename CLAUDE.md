@@ -442,6 +442,11 @@ cargo dq entities                    # List all entities and templates (gamesys 
 cargo dq entities earth.mis         # List entities with mission
 cargo dq entities earth.mis 443     # Show detailed entity info
 
+# Template commands (easier for negative template IDs)
+cargo dq templates                   # List templates only (negative IDs)
+cargo dq templates 22                # Show template -22 details (converts 22 to -22)
+cargo dq templates 22 earth.mis     # Show template -22 with mission data
+
 # Motion database commands
 cargo dq motion 0                    # Show animations for ActorType::Human (0)
 cargo dq motion human +playspecmotion +human  # Query specific tags
@@ -452,6 +457,7 @@ cargo dq motion 0 +cs:184            # Query with tag value
 
 1. **Entity and Template Listing**:
    - Lists all templates (negative IDs) and entities (positive IDs)
+   - **Templates command**: Use `cargo dq templates 22` instead of dealing with negative IDs like `-22`
    - Shows names, template IDs, property counts, link counts
    - Inheritance-aware name resolution (finds names from template hierarchy)
    - Supports filtering: `--filter "*Railing*"`, `--filter "P$SymName:*Robot*"`
@@ -496,7 +502,7 @@ cargo dq entities earth.mis 443
 cargo dq entities earth.mis 442
 
 # Analyze template -1718 to understand railing template structure
-cargo dq entities earth.mis -- -1718
+cargo dq templates 1718 earth.mis   # Much easier than: cargo dq entities earth.mis -- -1718
 ```
 
 #### Understanding Entity Relationships

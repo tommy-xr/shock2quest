@@ -46,6 +46,26 @@ enum Commands {
         #[arg(long)]
         limit: Option<usize>,
     },
+    /// Query templates specifically (handles negative template IDs more naturally)
+    Templates {
+        /// Template ID to show details for (use positive number, will be converted to negative internally)
+        id: Option<u32>,
+
+        /// Mission file to load (loads shock2.gam by default, or shock2.gam + mission if specified)
+        mission: Option<String>,
+
+        /// Filter by property or link name (supports wildcards)
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// Show only templates with unparsed properties or links
+        #[arg(long)]
+        only_unparsed: bool,
+
+        /// Limit the number of results displayed
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Query motion database for animations by creature type and tags
     Motion {
         /// Creature type (numeric ID like 0, 1, 2) or name (like "human", "midwife")
@@ -102,6 +122,27 @@ fn main() -> Result<()> {
                 handle_list_command(mission.as_deref(), only_unparsed, filter.as_deref(), limit)?;
             }
         }
+        Commands::Templates {
+            mission,
+            id,
+            filter,
+            only_unparsed,
+            limit,
+        } => {
+            if let Some(template_id) = id {
+                // Convert positive template ID to negative entity ID
+                let entity_id = -(template_id as i32);
+                handle_show_command(mission.as_deref(), entity_id, filter.as_deref())?;
+            } else {
+                // For listing, we can filter to show only templates (negative IDs)
+                handle_template_list_command(
+                    mission.as_deref(),
+                    only_unparsed,
+                    filter.as_deref(),
+                    limit,
+                )?;
+            }
+        }
         Commands::Motion {
             creature_type,
             tags,
@@ -140,6 +181,37 @@ fn handle_list_command(
 
     // Display results
     display_entity_list(&filtered_summaries, filter.is_some(), limit);
+
+    Ok(())
+}
+
+fn handle_template_list_command(
+    mission: Option<&str>,
+    only_unparsed: bool,
+    filter: Option<&str>,
+    limit: Option<usize>,
+) -> Result<()> {
+    info!("Loading entity data...");
+    let entity_info = load_entity_data(mission)?;
+
+    info!("Analyzing entities...");
+    let summaries = analyze_entities(&entity_info);
+
+    // Apply filters
+    let criteria = FilterCriteria {
+        only_unparsed,
+        property_filter: filter.map(|s| s.to_string()),
+    };
+    let filtered_summaries = filter_entities(&summaries, &criteria);
+
+    // Filter to show only templates (negative IDs)
+    let template_summaries: Vec<_> = filtered_summaries
+        .into_iter()
+        .filter(|summary| summary.id < 0)
+        .collect();
+
+    // Display results
+    display_entity_list(&template_summaries, filter.is_some(), limit);
 
     Ok(())
 }
