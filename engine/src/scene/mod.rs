@@ -49,6 +49,9 @@ pub use cube_indexed::CubeIndexed;
 pub mod mesh;
 pub use mesh::Mesh;
 
+pub mod indexed_mesh;
+pub use indexed_mesh::IndexedMesh;
+
 pub mod lines_mesh;
 pub use lines_mesh::LinesMesh;
 

@@ -8,7 +8,7 @@ use clap::Parser;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene, VideoPlayerScene};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};
@@ -206,11 +206,14 @@ fn create_scene(
     } else if lower.ends_with(".fon") {
         let scene = FontViewerScene::from_file(filename.to_string(), data_resolver)?;
         Ok(Box::new(scene))
+    } else if lower.ends_with(".glb") {
+        let scene = GlbViewerScene::from_model(filename.to_string(), asset_cache)?;
+        Ok(Box::new(scene))
     } else if !animations.is_empty() {
         Err("Animation preview is only supported for .bin AI meshes.".into())
     } else {
         Err(format!(
-            "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font)",
+            "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font), .glb (GLB/GLTF 3D model)",
             filename
         )
         .into())

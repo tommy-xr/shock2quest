@@ -20,6 +20,7 @@ cgmath = { version = "0.18.0", features = ["serde"] }
 collision = { version = "0.20.1", git = "https://github.com/rustgd/collision-rs" }
 engine = { path = "../engine" }
 gl = "0.14.0"
+gltf = "0.16"
 image = "0.24.3"
 lazy_static = "1.4.0"
 num = "0.4.0"
