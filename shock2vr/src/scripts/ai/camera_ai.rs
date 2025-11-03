@@ -1,14 +1,15 @@
 use cgmath::{Deg, Quaternion, Rotation3};
 use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
-    PropModelName,
+    PropModelName, PropPosition,
 };
 use num_traits::{FromPrimitive, ToPrimitive};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
+    mission::PlayerInfo,
     physics::PhysicsWorld,
-    scripts::{AIPropertyUpdate, Effect},
+    scripts::{ai::ai_util, AIPropertyUpdate, Effect},
     time::Time,
 };
 
@@ -371,8 +372,8 @@ impl Script for CameraAI {
     fn update(
         &mut self,
         entity_id: EntityId,
-        _world: &World,
-        _physics: &PhysicsWorld,
+        world: &World,
+        physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
         let mut effects = Vec::new();
@@ -392,7 +393,21 @@ impl Script for CameraAI {
             );
         }
 
-        let quat = Quaternion::from_angle_x(Deg(time.total.as_secs_f32().sin() * 90.0));
+        let mut aim_angle = time.total.as_secs_f32().sin() * 90.0;
+
+        if ai_util::is_player_visible(entity_id, world, physics) {
+            let v_pos = world.borrow::<View<PropPosition>>().unwrap();
+            if let Ok(pose) = v_pos.get(entity_id) {
+                let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                let target_yaw = ai_util::yaw_between_vectors(pose.position, u_player.pos);
+                drop(u_player);
+
+                let current_yaw = ai_util::current_yaw(entity_id, world);
+                aim_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
+            }
+        }
+
+        let quat = Quaternion::from_angle_x(Deg(aim_angle));
         effects.push(Effect::SetJointTransform {
             entity_id,
             joint_id: 1,
@@ -415,6 +430,16 @@ impl Script for CameraAI {
 
 fn ms_to_seconds(value: u32) -> f32 {
     value as f32 / 1000.0
+}
+
+fn normalize_deg(mut angle: f32) -> f32 {
+    while angle > 180.0 {
+        angle -= 360.0;
+    }
+    while angle < -180.0 {
+        angle += 360.0;
+    }
+    angle
 }
 
 fn derive_models(base_model: &str) -> CameraModels {
