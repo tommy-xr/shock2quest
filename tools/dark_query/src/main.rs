@@ -135,7 +135,12 @@ fn main() -> Result<()> {
                 handle_show_command(mission.as_deref(), entity_id, filter.as_deref())?;
             } else {
                 // For listing, we can filter to show only templates (negative IDs)
-                handle_template_list_command(mission.as_deref(), only_unparsed, filter.as_deref(), limit)?;
+                handle_template_list_command(
+                    mission.as_deref(),
+                    only_unparsed,
+                    filter.as_deref(),
+                    limit,
+                )?;
             }
         }
         Commands::Motion {
