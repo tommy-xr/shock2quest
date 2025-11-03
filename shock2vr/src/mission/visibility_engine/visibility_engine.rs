@@ -1,11 +1,16 @@
-use dark::mission::SystemShock2Level;
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, World};
 
 use super::CullingInfo;
+use crate::mission::SpatialQueryEngine;
 
 pub trait VisibilityEngine {
-    fn prepare(&mut self, _level: &SystemShock2Level, _world: &World, _culling_info: &CullingInfo) {
+    fn prepare(
+        &mut self,
+        _spatial_data: Option<&dyn SpatialQueryEngine>,
+        _world: &World,
+        _culling_info: &CullingInfo,
+    ) {
     }
 
     fn is_visible(&mut self, entity_id: EntityId) -> bool;

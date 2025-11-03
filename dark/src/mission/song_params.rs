@@ -5,7 +5,7 @@ use std::io::SeekFrom;
 
 use crate::ss2_common::read_string_with_size;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SongParams {
     pub song: String,
 }

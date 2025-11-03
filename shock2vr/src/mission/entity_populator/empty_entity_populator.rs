@@ -5,7 +5,6 @@
 use shipyard::World;
 use std::collections::HashMap;
 
-use dark::mission::SystemShock2Level;
 use dark::properties::WrappedEntityId;
 use dark::ss2_entity_info::SystemShock2EntityInfo;
 
@@ -20,7 +19,9 @@ impl EntityPopulator for EmptyEntityPopulator {
     fn populate(
         &self,
         _gamesys_entity_info: &SystemShock2EntityInfo,
-        _level: &SystemShock2Level,
+        _level_entity_info: &SystemShock2EntityInfo,
+
+        _obj_name_map: &HashMap<i32, String>, // name override map
         _world: &mut World,
     ) -> HashMap<i32, WrappedEntityId> {
         HashMap::new()

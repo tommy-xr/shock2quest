@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use engine::render_log;
 
+use crate::mission::SpatialQueryEngine;
 use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
-    mission::{Cell, SystemShock2Level},
+    mission::Cell,
     properties::{PropPhysDimensions, PropPosition},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
@@ -75,12 +76,12 @@ impl PortalVisibilityEngine {
         }
     }
     fn check_cell_recursive(
+        spatial_data: &dyn SpatialQueryEngine,
         current_screen_portal_candidate: Aabb2<f32>,
         screen_width: f32,
         screen_height: f32,
         projection_view: Matrix4<f32>,
         frustum: &Frustum<f32>,
-        level: &SystemShock2Level,
         visible_cells: &mut HashSet<u32>,
         visited_cells: &mut HashMap<u32, Aabb2<f32>>,
         debug_cells: &mut Vec<PortalDebugInfo>,
@@ -110,7 +111,10 @@ impl PortalVisibilityEngine {
         visited_cells.insert(current_cell.idx, current_screen_portal);
 
         for portal in &current_cell.portals {
-            let target_cell = &level.cells[portal.target_cell_idx as usize];
+            let Some(target_cell) = spatial_data.get_cell_by_index(portal.target_cell_idx as usize)
+            else {
+                continue;
+            };
 
             // Do quick frustum check. If the bounding sphere for the portal is not in the frustum,
             // we can ignore.
@@ -167,12 +171,12 @@ impl PortalVisibilityEngine {
 
             // TOO: Check visibility of portal
             Self::check_cell_recursive(
+                spatial_data,
                 new_intersection,
                 screen_width,
                 screen_height,
                 projection_view,
                 frustum,
-                level,
                 visible_cells,
                 visited_cells,
                 debug_cells,
@@ -185,7 +189,7 @@ impl PortalVisibilityEngine {
     #[allow(dead_code)]
     fn get_cell_from_position(
         &mut self,
-        level: &SystemShock2Level,
+        spatial_data: &dyn SpatialQueryEngine,
         entity_id: &EntityId,
         position: Vector3<f32>,
     ) -> Option<u32> {
@@ -200,8 +204,7 @@ impl PortalVisibilityEngine {
         }
 
         // Calculate new position for entity, since it moved...
-        let maybe_cell = level.get_cell_from_position(position);
-        let maybe_cell_idx = maybe_cell.map(|c| c.idx);
+        let maybe_cell_idx = spatial_data.get_cell_idx_from_position(position);
         self.entity_cell_cache
             .insert(*entity_id, (position, maybe_cell_idx));
         maybe_cell_idx
@@ -215,11 +218,22 @@ fn camera_position_from_view_matrix(view_matrix: Matrix4<f32>) -> Vector3<f32> {
 }
 
 impl VisibilityEngine for PortalVisibilityEngine {
-    fn prepare(&mut self, level: &SystemShock2Level, world: &World, culling_info: &CullingInfo) {
+    fn prepare(
+        &mut self,
+        spatial_data: Option<&dyn SpatialQueryEngine>,
+        world: &World,
+        culling_info: &CullingInfo,
+    ) {
         self.debug_portals.clear();
         let camera_position = camera_position_from_view_matrix(culling_info.view);
-        let maybe_camera_cell_idx = level.get_cell_idx_from_position(camera_position);
-        let maybe_camera_cell = level.get_cell_from_position(camera_position);
+
+        // If no spatial data is available, mark all entities as visible
+        let Some(spatial_data) = spatial_data else {
+            return;
+        };
+
+        let maybe_camera_cell_idx = spatial_data.get_cell_idx_from_position(camera_position);
+        let maybe_camera_cell = spatial_data.get_cell_from_position(camera_position);
 
         render_log!(
             DEBUG,
@@ -249,12 +263,12 @@ impl VisibilityEngine for PortalVisibilityEngine {
             point2(culling_info.screen_size.x, culling_info.screen_size.y),
         );
         Self::check_cell_recursive(
+            spatial_data,
             screen_portal,
             culling_info.screen_size.x,
             culling_info.screen_size.y,
             projection_view,
             &frustum,
-            level,
             &mut visible_cells,
             &mut visited_cells,
             &mut self.debug_portals,
@@ -265,7 +279,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
         render_log!(
             DEBUG,
             "total cells: {} | visible cells: {}",
-            level.cells.len(),
+            spatial_data.get_cell_count(),
             visible_cells.len()
         );
 
@@ -293,7 +307,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
                 ];
 
                 corners.iter().any(|&corner| {
-                    if let Some(cell_idx) = level.get_cell_idx_from_position(corner) {
+                    if let Some(cell_idx) = spatial_data.get_cell_idx_from_position(corner) {
                         visible_cells.contains(&cell_idx)
                     } else {
                         false
@@ -301,7 +315,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
                 })
             } else {
                 // Fallback to position-based check for entities without physics dimensions
-                if let Some(cell_idx) = level.get_cell_idx_from_position(pos.position) {
+                if let Some(cell_idx) = spatial_data.get_cell_idx_from_position(pos.position) {
                     visible_cells.contains(&cell_idx)
                 } else {
                     false

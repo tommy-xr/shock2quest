@@ -7,7 +7,7 @@ use crate::util::compute_bounding_sphere;
 /// CellPortal
 ///
 /// A cell portal is a portal between two cells. It defines geometry that connects two cells.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CellPortal {
     pub target_cell_idx: u16,
     pub all_vertices: Vec<Point3<f32>>,

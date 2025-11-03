@@ -7,12 +7,12 @@ use crate::ss2_common::*;
 
 pub type BspNodeId = u32;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BspTree {
     root_node: Rc<BspNode>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BspNode {
     Split {
         cell_idx: i32,
