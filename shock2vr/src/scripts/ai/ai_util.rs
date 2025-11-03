@@ -424,12 +424,9 @@ fn ray_cast_player_with_override(
     physics: &PhysicsWorld,
     ignore_entity: EntityId,
 ) -> Option<RayCastHit> {
-    let direction = (end_point - start_point).normalize();
-    let distance = (end_point - start_point).magnitude();
-    let result = physics.ray_cast2(
+    let result = physics.ray_cast3(
         start_point,
-        direction,
-        distance,
+        end_point,
         InternalCollisionGroups::WORLD,
         Some(ignore_entity),
         true,
