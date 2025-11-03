@@ -20,7 +20,7 @@ use crate::{
     input_context::InputContext,
     mission::{
         entity_populator::empty_entity_populator::EmptyEntityPopulator, mission_core::MissionCore,
-        AbstractMission, GlobalContext, SpawnLocation,
+        AlwaysVisible, AbstractMission, GlobalContext, SpawnLocation,
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
@@ -92,6 +92,7 @@ impl DebugEntityPlaygroundScene {
             spatial_data: None, // No spatial queries needed for simple debug scene
             entity_info,
             obj_map,
+            visibility_engine: Box::new(AlwaysVisible),
         }
     }
 

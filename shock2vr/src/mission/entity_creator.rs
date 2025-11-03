@@ -61,6 +61,7 @@ pub fn create_entity_with_position(
     template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
     additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
+    println!("entity_creator::create_entity_with_position called with template_id: {}", template_id);
     // Create initial entity
     let entity_id = world.add_entity(());
 
@@ -208,6 +209,8 @@ pub fn create_entity_core(
     //     world,
     // );
 
+    println!("Creating entity!");
+
     // Create model, if we can
     let maybe_model = create_model(world, asset_cache, entity_id);
     let maybe_just_model = maybe_model.clone().map(|m| m.0);
@@ -344,11 +347,62 @@ fn create_model(
         )>()
         .unwrap();
 
+    println!("-- create model for entity: {:?}", entity_id);
+
+    // Log all properties of the entity we are creating
+    println!("Entity {:?} properties:", entity_id);
+
+    // Try to get each property type and log if present
+    macro_rules! log_property {
+        ($view:expr, $prop_name:literal) => {
+            if let Ok(prop) = $view.get(entity_id) {
+                println!("  {}: {:?}", $prop_name, prop);
+            }
+        };
+    }
+
+    log_property!(v_prop_position, "PropPosition");
+    log_property!(v_prop_model, "PropModelName");
+    log_property!(v_creature_pose, "PropCreaturePose");
+    log_property!(_v_hasrefs, "PropHasRefs");
+    log_property!(_v_rendertype, "PropRenderType");
+    log_property!(v_scale, "PropScale");
+
+    // Check for additional properties that might be on the entity
+    let additional_views = world.borrow::<(
+        View<PropSymName>,
+        View<PropTemplateId>,
+        View<PropPhysType>,
+        View<PropPhysDimensions>,
+        View<PropFrobInfo>,
+        View<PropHitPoints>,
+        View<PropCollisionType>,
+        View<PropTripFlags>,
+        View<PropImmobile>,
+        View<PropCreature>,
+    )>().unwrap();
+
+    log_property!(additional_views.0, "PropSymName");
+    log_property!(additional_views.1, "PropTemplateId");
+    log_property!(additional_views.2, "PropPhysType");
+    log_property!(additional_views.3, "PropPhysDimensions");
+    log_property!(additional_views.4, "PropFrobInfo");
+    log_property!(additional_views.5, "PropHitPoints");
+    log_property!(additional_views.6, "PropCollisionType");
+    log_property!(additional_views.7, "PropTripFlags");
+    log_property!(additional_views.8, "PropImmobile");
+    log_property!(additional_views.9, "PropCreature");
+
     if let (Ok(pos), Ok(model)) = (v_prop_position.get(entity_id), v_prop_model.get(entity_id)) {
         let model_name = model.0.to_owned();
+        println!("  Attempting to load model: {}.BIN", model_name);
         let maybe_model = asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
 
-        maybe_model.as_ref()?;
+        if maybe_model.is_none() {
+            println!("  ERROR: Failed to load model {}.BIN", model_name);
+            return None;
+        }
+        println!("  Successfully loaded model: {}.BIN", model_name);
 
         let model = maybe_model.unwrap();
         let model_ref = model.as_ref();
@@ -377,8 +431,10 @@ fn create_model(
         let transform = translation * rotation * scale;
 
         // TODO: Handle creature pose
+        println!("  Creating model transformation...");
         let (model, animation_player) = {
             if let Ok(creature_pose) = v_creature_pose.get(entity_id) {
+                println!("  Found creature pose, using creature path");
                 // let motion_db = { asset_cache.get(&MOTIONDB_IMPORTER, "motiondb.bin".to_owned()) };
                 // TODO: We can only handle motion name props at the moment..
                 if creature_pose.pose_type.contains(PoseType::MOTION_NAME) {
@@ -406,8 +462,10 @@ fn create_model(
             }
         };
 
+        println!("  Successfully created model for entity {:?}", entity_id);
         Some((model, animation_player))
     } else {
+        println!("  No PropPosition or PropModelName found for entity {:?}", entity_id);
         None
     }
 }
@@ -495,14 +553,18 @@ pub fn initialize_entity_with_props(
     let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
     ancestors.push(template_id);
 
+    println!("initialize_entity_with_props: Setting PropTemplateId to {} for entity {:?}", template_id, entity_id);
     world.add_component(entity_id, PropTemplateId { template_id });
 
     for parent_id in ancestors {
         let maybe_parent_props = entity_info.entity_to_properties.get(&parent_id);
 
         match maybe_parent_props {
-            None => {}
+            None => {
+                println!("  No properties found for parent_id: {}", parent_id);
+            }
             Some(props) => {
+                println!("  Initializing {} properties for parent_id: {}", props.len(), parent_id);
                 for prop in props {
                     prop.initialize(world, entity_id)
                 }

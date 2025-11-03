@@ -14,7 +14,7 @@ use cgmath::{EuclideanSpace, Zero};
 
 use crate::mission::entity_creator;
 use crate::mission::CullingInfo;
-use crate::mission::PortalVisibilityEngine;
+use crate::mission::VisibilityEngine;
 use crate::SpawnLocation;
 
 use dark::{
@@ -84,7 +84,6 @@ use crate::{
 pub use crate::resource_path;
 use crate::{
     mission::entity_creator::{CreateEntityOptions, EntityCreationInfo},
-    mission::visibility_engine::VisibilityEngine,
 };
 
 #[derive(Unique, Clone)]
@@ -154,6 +153,7 @@ pub struct MissionCore {
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
+    pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
@@ -180,6 +180,7 @@ pub struct AbstractMission {
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     pub entity_info: SystemShock2EntityInfo,
     pub obj_map: HashMap<i32, String>,
+    pub visibility_engine: Box<dyn VisibilityEngine>,
 }
 
 impl MissionCore {
@@ -205,7 +206,10 @@ impl MissionCore {
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 
-        let entity_info = ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
+        let entity_info =
+            ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
+
+        println!("entity_info: {:?}", entity_info);
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -222,8 +226,12 @@ impl MissionCore {
 
         // ** Entity creation
 
-        let template_to_entity_id =
-            entity_populator.populate(&entity_info, &abstract_mission.entity_info, &abstract_mission.obj_map, &mut world);
+        let template_to_entity_id = entity_populator.populate(
+            &entity_info,
+            &abstract_mission.entity_info,
+            &abstract_mission.obj_map,
+            &mut world,
+        );
 
         // Instantiate held items
         let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
@@ -291,8 +299,7 @@ impl MissionCore {
                 asset_cache,
                 &mut script_world,
                 &entity_info,
-                // TODO:
-                &HashMap::new(),
+                &abstract_mission.obj_map,
                 &template_to_entity_id,
                 CreateEntityOptions::default(),
             );
@@ -324,8 +331,11 @@ impl MissionCore {
             make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
         };
 
-        let (start_pos, start_rotation) =
-            spawn_loc.calculate_start_position(&world, &abstract_mission.entity_info, &template_to_entity_id);
+        let (start_pos, start_rotation) = spawn_loc.calculate_start_position(
+            &world,
+            &abstract_mission.entity_info,
+            &template_to_entity_id,
+        );
 
         let player_handle = physics.create_player(start_pos, player_entity);
 
@@ -383,9 +393,10 @@ impl MissionCore {
             debug_lines: Vec::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
-            visibility_engine: Box::new(PortalVisibilityEngine::new()),
+            visibility_engine: abstract_mission.visibility_engine,
             teleport_system,
             pending_entity_triggers: Vec::new(),
+            obj_map: abstract_mission.obj_map,
         }
     }
 
@@ -875,6 +886,7 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
+        println!("Creating entity with template_id: {}", template_id);
         let created_entity = {
             entity_creator::create_entity_with_position(
                 template_id,
@@ -886,9 +898,8 @@ impl MissionCore {
                 asset_cache,
                 &mut self.script_world,
                 &self.entity_info,
-                // TODO:
-                &HashMap::new(),
-                &HashMap::new(),
+                &self.obj_map,
+                &self.template_to_entity_id,
                 additional_options,
             )
         };
@@ -919,7 +930,9 @@ impl MissionCore {
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
 
+        println!("Entity creation result - model: {:?}", created_entity.model.is_some());
         if let Some((model, maybe_animation_player)) = created_entity.model {
+            println!("Adding model to id_to_model for entity {:?}", created_entity.entity_id);
             id_to_model.insert(created_entity.entity_id, model);
 
             if let Some(animation_player) = maybe_animation_player {
@@ -1633,23 +1646,34 @@ impl MissionCore {
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
-            if !has_refs(&self.world, *entity_id) {
+            let has_refs_result = has_refs(&self.world, *entity_id);
+            println!("Entity {:?} has_refs: {}", entity_id, has_refs_result);
+            if !has_refs_result {
+                println!("  Skipping render for entity {:?} due to has_refs=false", entity_id);
                 continue;
             }
 
             if v_render_type.contains(*entity_id) {
                 let render_type = v_render_type.get(*entity_id).unwrap();
+                println!("  Entity {:?} has render_type: {:?}", entity_id, render_type.0);
                 if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender
                 {
+                    println!("  Skipping entity {:?} due to render_type: {:?}", entity_id, render_type.0);
                     continue;
                 };
+            } else {
+                println!("  Entity {:?} has no render_type property", entity_id);
             }
 
-            if !self.visibility_engine.is_visible(*entity_id) {
+            let is_visible = self.visibility_engine.is_visible(*entity_id);
+            println!("  Entity {:?} visibility check: {}", entity_id, is_visible);
+            if !is_visible {
+                println!("  Skipping entity {:?} due to visibility=false", entity_id);
                 continue;
             }
 
             rendered_model_count += 1;
+            println!("  Entity {:?} passed all checks, adding to scene", entity_id);
 
             let scene_objs = {
                 if let Some(player) = self.id_to_animation_player.get(entity_id) {
@@ -1660,11 +1684,14 @@ impl MissionCore {
             };
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                println!("  Entity {:?} has transform, adding {} scene objects", entity_id, scene_objs.len());
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
                     scene.push(xformed_obj);
                 }
+            } else {
+                println!("  Entity {:?} missing RuntimePropTransform - cannot render!", entity_id);
             }
         }
         game_log!(

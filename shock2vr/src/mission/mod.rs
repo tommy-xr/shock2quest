@@ -85,6 +85,7 @@ impl Mission {
             spatial_data: Some(Box::new(spatial_data)),
             entity_info: level.entity_info,
             obj_map,
+            visibility_engine: Box::new(PortalVisibilityEngine::new()),
         };
 
         let mission_core = MissionCore::load(
