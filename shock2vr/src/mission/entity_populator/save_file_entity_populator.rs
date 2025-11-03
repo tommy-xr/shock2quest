@@ -8,7 +8,6 @@ use dark::properties::WrappedEntityId;
 use shipyard::World;
 use std::collections::HashMap;
 
-use dark::mission::SystemShock2Level;
 use dark::ss2_entity_info::SystemShock2EntityInfo;
 
 use crate::save_load::EntitySaveData;

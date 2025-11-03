@@ -48,6 +48,21 @@ pub struct SystemShock2EntityInfo {
 }
 
 impl SystemShock2EntityInfo {
+    /// Create an empty SystemShock2EntityInfo for debug or testing purposes
+    /// This will be properly initialized when merged with gamesys data
+    pub fn empty() -> SystemShock2EntityInfo {
+        SystemShock2EntityInfo {
+            entity_to_properties: HashMap::new(),
+            template_to_links: HashMap::new(),
+            unparsed_properties: HashMap::new(),
+            unparsed_links: HashMap::new(),
+            unparsed_link_data: HashMap::new(),
+            link_playerfactories: Vec::new(),
+            link_metaprops: Vec::new(),
+            hierarchy: HashMap::new(),
+        }
+    }
+
     pub fn initialize_world_with_entities(
         &self,
         world: &mut World,
