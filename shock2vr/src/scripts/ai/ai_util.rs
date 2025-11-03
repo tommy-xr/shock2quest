@@ -347,9 +347,8 @@ pub struct VisibilityParams {
 
 pub struct VisibilityResult {
     pub visible: bool,
-    pub direction: Vector3<f32>,
-    pub distance: f32,
-    pub horizontal_angle_deg: f32,
+    pub signed_horizontal_angle: Deg<f32>,
+    pub target_yaw: Deg<f32>,
 }
 
 pub fn camera_player_visibility(
@@ -366,9 +365,8 @@ pub fn camera_player_visibility(
     let distance = to_player.magnitude();
     let mut result = VisibilityResult {
         visible: false,
-        direction: to_player.normalize(),
-        distance,
-        horizontal_angle_deg: 180.0,
+        signed_horizontal_angle: Deg(180.0),
+        target_yaw: yaw_between_vectors(params.origin.to_vec(), params.origin.to_vec() + to_player),
     };
 
     if distance > params.max_distance {
@@ -380,7 +378,10 @@ pub fn camera_player_visibility(
 
     let dot = forward_flat.dot(to_player_flat).clamp(-1.0, 1.0);
     let horizontal_angle = dot.acos().to_degrees();
-    result.horizontal_angle_deg = horizontal_angle;
+    let cross = forward_flat.cross(to_player_flat);
+    let sign = if cross.y >= 0.0 { 1.0 } else { -1.0 };
+    let signed_angle = horizontal_angle * sign;
+    result.signed_horizontal_angle = Deg(signed_angle);
 
     if horizontal_angle > params.horizontal_fov_deg * 0.5 {
         return result;
