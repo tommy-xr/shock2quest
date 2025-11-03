@@ -889,6 +889,25 @@ impl PhysicsWorld {
         self.ray_cast2(start_point, direction, 100.0, collision_groups, None, true)
     }
 
+    pub fn ray_cast3(
+        &self,
+        start_point: Point3<f32>,
+        end_point: Point3<f32>,
+        collision_groups: InternalCollisionGroups,
+        entity_to_ignore: Option<EntityId>,
+        ignore_sensors: bool,
+    ) -> Option<RayCastResult> {
+        let direction = end_point - start_point;
+        self.ray_cast2(
+            start_point,
+            direction,
+            direction.magnitude(),
+            collision_groups,
+            entity_to_ignore,
+            ignore_sensors,
+        )
+    }
+
     pub(crate) fn set_enabled_rotations(
         &mut self,
         entity_id: EntityId,
