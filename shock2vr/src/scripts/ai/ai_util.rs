@@ -335,28 +335,112 @@ pub fn play_positional_sound(
 }
 
 pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+    ray_cast_player(from_entity, world, physics).is_some()
+}
+
+pub struct VisibilityParams {
+    pub origin: Point3<f32>,
+    pub forward: Vector3<f32>,
+    pub max_distance: f32,
+    pub horizontal_fov_deg: f32,
+}
+
+pub struct VisibilityResult {
+    pub visible: bool,
+    pub direction: Vector3<f32>,
+    pub distance: f32,
+    pub horizontal_angle_deg: f32,
+}
+
+pub fn camera_player_visibility(
+    params: VisibilityParams,
+    world: &World,
+    physics: &PhysicsWorld,
+    ignore_entity: EntityId,
+) -> VisibilityResult {
+    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let player_pos = u_player.pos;
+    drop(u_player);
+
+    let to_player = player_pos - params.origin.to_vec();
+    let distance = to_player.magnitude();
+    let mut result = VisibilityResult {
+        visible: false,
+        direction: to_player.normalize(),
+        distance,
+        horizontal_angle_deg: 180.0,
+    };
+
+    if distance > params.max_distance {
+        return result;
+    }
+
+    let forward_flat = Vector3::new(params.forward.x, 0.0, params.forward.z).normalize();
+    let to_player_flat = Vector3::new(to_player.x, 0.0, to_player.z).normalize();
+
+    let dot = forward_flat.dot(to_player_flat).clamp(-1.0, 1.0);
+    let horizontal_angle = dot.acos().to_degrees();
+    result.horizontal_angle_deg = horizontal_angle;
+
+    if horizontal_angle > params.horizontal_fov_deg * 0.5 {
+        return result;
+    }
+
+    if let Some(hit) = ray_cast_player_with_override(
+        params.origin,
+        params.origin + to_player,
+        physics,
+        ignore_entity,
+    ) {
+        result.visible = hit.did_hit_player;
+    }
+
+    result
+}
+
+struct RayCastHit {
+    did_hit_player: bool,
+}
+
+fn ray_cast_player(
+    from_entity: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+) -> Option<RayCastHit> {
     let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
-    if let Ok(ent_pos) = v_current_pos.get(from_entity) {
-        let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
-        let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
-        let direction = (end_point - start_point).normalize();
-        let distance = (end_point - start_point).magnitude();
-        let result = physics.ray_cast2(
-            start_point,
-            direction,
-            distance,
-            InternalCollisionGroups::WORLD,
-            Some(from_entity),
-            true,
-        );
+    let ent_pos = v_current_pos.get(from_entity).ok()?;
+    let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+    let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
+    drop((u_player, v_current_pos));
 
-        // If we didn't hit anything - player visible!
-        // Currently, the ray cast doesn't intersect player...
-        // TODO: Check for entities, but pass-through transparent ones (ie, glass/windows)
-        return result.is_none();
-    };
+    ray_cast_player_with_override(start_point, end_point, physics, from_entity)
+}
 
-    false
+fn ray_cast_player_with_override(
+    start_point: Point3<f32>,
+    end_point: Point3<f32>,
+    physics: &PhysicsWorld,
+    ignore_entity: EntityId,
+) -> Option<RayCastHit> {
+    let direction = (end_point - start_point).normalize();
+    let distance = (end_point - start_point).magnitude();
+    let result = physics.ray_cast2(
+        start_point,
+        direction,
+        distance,
+        InternalCollisionGroups::WORLD,
+        Some(ignore_entity),
+        true,
+    );
+
+    match result {
+        None => Some(RayCastHit {
+            did_hit_player: true,
+        }),
+        Some(_) => Some(RayCastHit {
+            did_hit_player: false,
+        }),
+    }
 }
