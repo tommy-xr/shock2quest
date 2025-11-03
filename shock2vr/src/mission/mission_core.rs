@@ -209,7 +209,6 @@ impl MissionCore {
         let entity_info =
             ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
 
-        println!("entity_info: {:?}", entity_info);
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -886,7 +885,6 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
-        println!("Creating entity with template_id: {}", template_id);
         let created_entity = {
             entity_creator::create_entity_with_position(
                 template_id,
@@ -930,9 +928,7 @@ impl MissionCore {
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
 
-        println!("Entity creation result - model: {:?}", created_entity.model.is_some());
         if let Some((model, maybe_animation_player)) = created_entity.model {
-            println!("Adding model to id_to_model for entity {:?}", created_entity.entity_id);
             id_to_model.insert(created_entity.entity_id, model);
 
             if let Some(animation_player) = maybe_animation_player {
@@ -1646,34 +1642,23 @@ impl MissionCore {
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
-            let has_refs_result = has_refs(&self.world, *entity_id);
-            println!("Entity {:?} has_refs: {}", entity_id, has_refs_result);
-            if !has_refs_result {
-                println!("  Skipping render for entity {:?} due to has_refs=false", entity_id);
+            if !has_refs(&self.world, *entity_id) {
                 continue;
             }
 
             if v_render_type.contains(*entity_id) {
                 let render_type = v_render_type.get(*entity_id).unwrap();
-                println!("  Entity {:?} has render_type: {:?}", entity_id, render_type.0);
                 if render_type.0 == RenderType::EditorOnly || render_type.0 == RenderType::NoRender
                 {
-                    println!("  Skipping entity {:?} due to render_type: {:?}", entity_id, render_type.0);
                     continue;
                 };
-            } else {
-                println!("  Entity {:?} has no render_type property", entity_id);
             }
 
-            let is_visible = self.visibility_engine.is_visible(*entity_id);
-            println!("  Entity {:?} visibility check: {}", entity_id, is_visible);
-            if !is_visible {
-                println!("  Skipping entity {:?} due to visibility=false", entity_id);
+            if !self.visibility_engine.is_visible(*entity_id) {
                 continue;
             }
 
             rendered_model_count += 1;
-            println!("  Entity {:?} passed all checks, adding to scene", entity_id);
 
             let scene_objs = {
                 if let Some(player) = self.id_to_animation_player.get(entity_id) {
@@ -1684,14 +1669,11 @@ impl MissionCore {
             };
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
-                println!("  Entity {:?} has transform, adding {} scene objects", entity_id, scene_objs.len());
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
                     scene.push(xformed_obj);
                 }
-            } else {
-                println!("  Entity {:?} missing RuntimePropTransform - cannot render!", entity_id);
             }
         }
         game_log!(
