@@ -5,7 +5,12 @@ use super::CullingInfo;
 use crate::mission::SpatialQueryEngine;
 
 pub trait VisibilityEngine {
-    fn prepare(&mut self, _spatial_data: Option<&dyn SpatialQueryEngine>, _world: &World, _culling_info: &CullingInfo) {
+    fn prepare(
+        &mut self,
+        _spatial_data: Option<&dyn SpatialQueryEngine>,
+        _world: &World,
+        _culling_info: &CullingInfo,
+    ) {
     }
 
     fn is_visible(&mut self, entity_id: EntityId) -> bool;

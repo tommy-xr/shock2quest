@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use engine::render_log;
 
+use crate::mission::SpatialQueryEngine;
 use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
     mission::Cell,
     properties::{PropPhysDimensions, PropPosition},
 };
-use crate::mission::SpatialQueryEngine;
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
@@ -111,7 +111,8 @@ impl PortalVisibilityEngine {
         visited_cells.insert(current_cell.idx, current_screen_portal);
 
         for portal in &current_cell.portals {
-            let Some(target_cell) = spatial_data.get_cell_by_index(portal.target_cell_idx as usize) else {
+            let Some(target_cell) = spatial_data.get_cell_by_index(portal.target_cell_idx as usize)
+            else {
                 continue;
             };
 
@@ -217,7 +218,12 @@ fn camera_position_from_view_matrix(view_matrix: Matrix4<f32>) -> Vector3<f32> {
 }
 
 impl VisibilityEngine for PortalVisibilityEngine {
-    fn prepare(&mut self, spatial_data: Option<&dyn SpatialQueryEngine>, world: &World, culling_info: &CullingInfo) {
+    fn prepare(
+        &mut self,
+        spatial_data: Option<&dyn SpatialQueryEngine>,
+        world: &World,
+        culling_info: &CullingInfo,
+    ) {
         self.debug_portals.clear();
         let camera_position = camera_position_from_view_matrix(culling_info.view);
 

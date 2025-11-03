@@ -13,7 +13,7 @@ use cgmath::{
 use cgmath::{EuclideanSpace, Zero};
 
 use crate::mission::CullingInfo;
-use crate::mission::PortalVisibilityEngine;
+use crate::mission::VisibilityEngine;
 use crate::SpawnLocation;
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
@@ -81,11 +81,8 @@ use crate::{
     vr_config, GameOptions,
 };
 
+use crate::mission::entity_creator::{CreateEntityOptions, EntityCreationInfo};
 pub use crate::resource_path;
-use crate::{
-    mission::entity_creator::{CreateEntityOptions, EntityCreationInfo},
-    mission::visibility_engine::VisibilityEngine,
-};
 
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
@@ -154,6 +151,7 @@ pub struct MissionCore {
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
+    pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
@@ -180,6 +178,7 @@ pub struct AbstractMission {
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     pub entity_info: SystemShock2EntityInfo,
     pub obj_map: HashMap<i32, String>,
+    pub visibility_engine: Box<dyn VisibilityEngine>,
 }
 
 impl MissionCore {
@@ -205,7 +204,8 @@ impl MissionCore {
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 
-        let entity_info = ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
+        let entity_info =
+            ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -222,8 +222,12 @@ impl MissionCore {
 
         // ** Entity creation
 
-        let template_to_entity_id =
-            entity_populator.populate(&entity_info, &abstract_mission.entity_info, &abstract_mission.obj_map, &mut world);
+        let template_to_entity_id = entity_populator.populate(
+            &entity_info,
+            &abstract_mission.entity_info,
+            &abstract_mission.obj_map,
+            &mut world,
+        );
 
         // Instantiate held items
         let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
@@ -291,8 +295,7 @@ impl MissionCore {
                 asset_cache,
                 &mut script_world,
                 &entity_info,
-                // TODO:
-                &HashMap::new(),
+                &abstract_mission.obj_map,
                 &template_to_entity_id,
                 CreateEntityOptions::default(),
             );
@@ -324,8 +327,11 @@ impl MissionCore {
             make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
         };
 
-        let (start_pos, start_rotation) =
-            spawn_loc.calculate_start_position(&world, &abstract_mission.entity_info, &template_to_entity_id);
+        let (start_pos, start_rotation) = spawn_loc.calculate_start_position(
+            &world,
+            &abstract_mission.entity_info,
+            &template_to_entity_id,
+        );
 
         let player_handle = physics.create_player(start_pos, player_entity);
 
@@ -383,9 +389,10 @@ impl MissionCore {
             debug_lines: Vec::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
-            visibility_engine: Box::new(PortalVisibilityEngine::new()),
+            visibility_engine: abstract_mission.visibility_engine,
             teleport_system,
             pending_entity_triggers: Vec::new(),
+            obj_map: abstract_mission.obj_map,
         }
     }
 
@@ -886,9 +893,8 @@ impl MissionCore {
                 asset_cache,
                 &mut self.script_world,
                 &self.entity_info,
-                // TODO:
-                &HashMap::new(),
-                &HashMap::new(),
+                &self.obj_map,
+                &self.template_to_entity_id,
                 additional_options,
             )
         };
