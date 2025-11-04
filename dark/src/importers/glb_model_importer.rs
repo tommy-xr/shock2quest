@@ -5,14 +5,25 @@ use collision::Aabb3;
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
-use crate::{model::Model, ss2_skeleton::Skeleton};
-use engine::scene::{SceneObject, VertexPositionTextureNormal};
+use crate::{
+    importers::glb_animation_importer::extract_skeleton_from_document, model::Model,
+    ss2_skeleton::Skeleton,
+};
+use engine::scene::{
+    SceneObject, SkinnedMaterial, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal,
+};
 use engine::texture::{self, TextureOptions};
 use engine::texture_format::{PixelFormat, RawTextureData};
 
 // GLB data structures
+#[derive(Debug)]
+pub enum GlbVertexData {
+    Static(Vec<VertexPositionTextureNormal>),
+    Skinned(Vec<VertexPositionTextureSkinnedNormal>),
+}
+
 pub struct GlbMesh {
-    pub vertices: Vec<VertexPositionTextureNormal>,
+    pub vertex_data: GlbVertexData,
     pub indices: Vec<u32>,
     pub base_color: [f32; 4],         // RGBA base color from material
     pub texture_index: Option<usize>, // Index into images array
@@ -62,10 +73,13 @@ fn load_glb(
         cgmath::Point3::new(max_bounds.x, max_bounds.y, max_bounds.z),
     );
 
+    // Extract skeleton from GLB file (if present)
+    let skeleton = extract_skeleton_from_document(&gltf, &buffers);
+
     GlbModel {
         meshes,
         bounding_box,
-        skeleton: None, // TODO: Extract skeleton data if present
+        skeleton,
         images,
     }
 }
@@ -84,15 +98,30 @@ fn process_node(
     if let Some(mesh) = node.mesh() {
         for primitive in mesh.primitives() {
             if let Some(glb_mesh) = process_primitive(&primitive, buffers, &transform) {
-                // Update bounding box
-                for vertex in &glb_mesh.vertices {
-                    let pos = &vertex.position;
-                    min_bounds.x = min_bounds.x.min(pos.x);
-                    min_bounds.y = min_bounds.y.min(pos.y);
-                    min_bounds.z = min_bounds.z.min(pos.z);
-                    max_bounds.x = max_bounds.x.max(pos.x);
-                    max_bounds.y = max_bounds.y.max(pos.y);
-                    max_bounds.z = max_bounds.z.max(pos.z);
+                // Update bounding box based on vertex type
+                match &glb_mesh.vertex_data {
+                    GlbVertexData::Static(vertices) => {
+                        for vertex in vertices {
+                            let pos = &vertex.position;
+                            min_bounds.x = min_bounds.x.min(pos.x);
+                            min_bounds.y = min_bounds.y.min(pos.y);
+                            min_bounds.z = min_bounds.z.min(pos.z);
+                            max_bounds.x = max_bounds.x.max(pos.x);
+                            max_bounds.y = max_bounds.y.max(pos.y);
+                            max_bounds.z = max_bounds.z.max(pos.z);
+                        }
+                    }
+                    GlbVertexData::Skinned(vertices) => {
+                        for vertex in vertices {
+                            let pos = &vertex.position;
+                            min_bounds.x = min_bounds.x.min(pos.x);
+                            min_bounds.y = min_bounds.y.min(pos.y);
+                            min_bounds.z = min_bounds.z.min(pos.z);
+                            max_bounds.x = max_bounds.x.max(pos.x);
+                            max_bounds.y = max_bounds.y.max(pos.y);
+                            max_bounds.z = max_bounds.z.max(pos.z);
+                        }
+                    }
                 }
                 meshes.push(glb_mesh);
             }
@@ -132,39 +161,96 @@ fn process_primitive(
         .and_then(|accessor| extract_indices(accessor, buffers))
         .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
-    // Create vertices
-    let mut vertices = Vec::new();
-    for i in 0..positions.len() {
-        let pos = positions[i];
-        let norm = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-        let tex = texcoords.get(i).copied().unwrap_or([0.0, 0.0]);
+    // Check for skinning data
+    let joints = primitive
+        .get(&gltf::Semantic::Joints(0))
+        .and_then(|accessor| extract_joints(accessor, buffers));
 
-        // Apply transform to position and normal
-        let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
-        let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
+    let weights = primitive
+        .get(&gltf::Semantic::Weights(0))
+        .and_then(|accessor| extract_weights(accessor, buffers));
 
-        vertices.push(VertexPositionTextureNormal {
-            position: cgmath::Vector3::new(transformed_pos.x, transformed_pos.y, transformed_pos.z),
-            normal: cgmath::Vector3::new(
-                transformed_norm.x,
-                transformed_norm.y,
-                transformed_norm.z,
-            ),
-            uv: cgmath::Vector2::new(tex[0], tex[1]),
-        });
-    }
+    // Determine if this is a skinned mesh
+    let has_skinning = joints.is_some() && weights.is_some();
+
+    let vertex_data = if has_skinning {
+        let joints = joints.unwrap();
+        let weights = weights.unwrap();
+
+        println!("Processing skinned mesh with {} vertices", positions.len());
+
+        // Create skinned vertices
+        let mut skinned_vertices = Vec::new();
+        for i in 0..positions.len() {
+            let pos = positions[i];
+            let norm = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            let tex = texcoords.get(i).copied().unwrap_or([0.0, 0.0]);
+
+            // Get joint and weight data for this vertex
+            let joint_indices = joints.get(i).copied().unwrap_or([0, 0, 0, 0]);
+            let vertex_weights = weights.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 0.0]);
+
+            // TODO: Implement proper multi-bone skinning in future PR
+            // For now, use only the highest weight bone per vertex (as planned)
+            let dominant_joint = find_dominant_bone(joint_indices, vertex_weights);
+
+            // Apply transform to position and normal
+            let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
+            let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
+
+            skinned_vertices.push(VertexPositionTextureSkinnedNormal {
+                position: cgmath::Vector3::new(
+                    transformed_pos.x,
+                    transformed_pos.y,
+                    transformed_pos.z,
+                ),
+                uv: cgmath::Vector2::new(tex[0], tex[1]),
+                bone_indices: [dominant_joint as u32, 0, 0, 0], // Only dominant bone
+                normal: cgmath::Vector3::new(
+                    transformed_norm.x,
+                    transformed_norm.y,
+                    transformed_norm.z,
+                ),
+            });
+        }
+
+        GlbVertexData::Skinned(skinned_vertices)
+    } else {
+        // Create static vertices (original behavior)
+        let mut static_vertices = Vec::new();
+        for i in 0..positions.len() {
+            let pos = positions[i];
+            let norm = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            let tex = texcoords.get(i).copied().unwrap_or([0.0, 0.0]);
+
+            // Apply transform to position and normal
+            let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
+            let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
+
+            static_vertices.push(VertexPositionTextureNormal {
+                position: cgmath::Vector3::new(
+                    transformed_pos.x,
+                    transformed_pos.y,
+                    transformed_pos.z,
+                ),
+                normal: cgmath::Vector3::new(
+                    transformed_norm.x,
+                    transformed_norm.y,
+                    transformed_norm.z,
+                ),
+                uv: cgmath::Vector2::new(tex[0], tex[1]),
+            });
+        }
+
+        GlbVertexData::Static(static_vertices)
+    };
 
     // Extract material information
     let material = primitive.material();
-    let pbr = material.pbr_metallic_roughness();
-    let base_color = pbr.base_color_factor();
-
-    let texture_index = pbr
-        .base_color_texture()
-        .map(|texture_info| texture_info.texture().source().index());
+    let (base_color, texture_index) = extract_base_color_and_texture(&material);
 
     Some(GlbMesh {
-        vertices,
+        vertex_data,
         indices,
         base_color,
         texture_index,
@@ -272,55 +358,127 @@ fn extract_indices(accessor: gltf::Accessor, buffers: &[gltf::buffer::Data]) -> 
     Some(indices)
 }
 
+/// Extract joint indices from GLB accessor
+fn extract_joints(
+    accessor: gltf::Accessor,
+    buffers: &[gltf::buffer::Data],
+) -> Option<Vec<[u16; 4]>> {
+    let view = accessor.view()?;
+    let buffer = &buffers[view.buffer().index()];
+
+    let start = view.offset() + accessor.offset();
+    let component_size = match accessor.data_type() {
+        gltf::accessor::DataType::U8 => 1,
+        gltf::accessor::DataType::U16 => 2,
+        _ => return None,
+    };
+
+    let mut joints = Vec::new();
+
+    match component_size {
+        1 => {
+            // u8 joint indices
+            for i in 0..accessor.count() {
+                let offset = start + i * 4; // 4 joints per vertex
+                if offset + 3 < buffer.len() {
+                    joints.push([
+                        buffer[offset] as u16,
+                        buffer[offset + 1] as u16,
+                        buffer[offset + 2] as u16,
+                        buffer[offset + 3] as u16,
+                    ]);
+                }
+            }
+        }
+        2 => {
+            // u16 joint indices
+            for i in 0..accessor.count() {
+                let offset = start + i * 8; // 4 u16s per vertex
+                if offset + 7 < buffer.len() {
+                    let j0 = u16::from_le_bytes([buffer[offset], buffer[offset + 1]]);
+                    let j1 = u16::from_le_bytes([buffer[offset + 2], buffer[offset + 3]]);
+                    let j2 = u16::from_le_bytes([buffer[offset + 4], buffer[offset + 5]]);
+                    let j3 = u16::from_le_bytes([buffer[offset + 6], buffer[offset + 7]]);
+                    joints.push([j0, j1, j2, j3]);
+                }
+            }
+        }
+        _ => return None,
+    }
+
+    Some(joints)
+}
+
+/// Extract vertex weights from GLB accessor
+fn extract_weights(
+    accessor: gltf::Accessor,
+    buffers: &[gltf::buffer::Data],
+) -> Option<Vec<[f32; 4]>> {
+    let view = accessor.view()?;
+    let buffer = &buffers[view.buffer().index()];
+
+    let start = view.offset() + accessor.offset();
+    let end = start + accessor.count() * 16; // 4 f32s per vertex
+
+    let data = &buffer[start..end.min(buffer.len())];
+    let mut weights = Vec::new();
+
+    for chunk in data.chunks_exact(16) {
+        // 4 * 4 bytes per f32
+        if chunk.len() >= 16 {
+            let w0 = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            let w1 = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+            let w2 = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+            let w3 = f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
+            weights.push([w0, w1, w2, w3]);
+        }
+    }
+    Some(weights)
+}
+
+/// Find the dominant bone (highest weight) for simplified skinning
+/// TODO: Implement proper multi-bone skinning in future PR
+/// For now, use only the highest weight bone per vertex
+fn find_dominant_bone(joint_indices: [u16; 4], weights: [f32; 4]) -> u16 {
+    let mut max_weight = 0.0;
+    let mut dominant_joint = 0;
+
+    for i in 0..4 {
+        if weights[i] > max_weight {
+            max_weight = weights[i];
+            dominant_joint = joint_indices[i];
+        }
+    }
+
+    dominant_joint
+}
+
 fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config: &()) -> Model {
     let mut scene_objects = Vec::new();
 
     // Convert GLB meshes to SceneObjects
     for glb_mesh in glb_model.meshes.into_iter() {
-        // Create indexed geometry from vertices and indices
-        let geometry = engine::scene::indexed_mesh::create(glb_mesh.vertices, glb_mesh.indices);
+        let GlbMesh {
+            vertex_data,
+            indices,
+            base_color,
+            texture_index,
+        } = glb_mesh;
 
-        // Create material based on GLB material data
-        let material = if let Some(texture_index) = glb_mesh.texture_index {
-            if texture_index < glb_model.images.len() {
-                let image_data = &glb_model.images[texture_index];
-
-                // Create texture from memory
-                let raw_texture_data = RawTextureData {
-                    bytes: image_data.pixels.clone(),
-                    width: image_data.width,
-                    height: image_data.height,
-                    format: match image_data.format {
-                        gltf::image::Format::R8G8B8 => PixelFormat::RGB,
-                        gltf::image::Format::R8G8B8A8 => PixelFormat::RGBA,
-                        _ => PixelFormat::RGBA, // Default fallback
-                    },
-                };
-
-                let texture =
-                    texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
-
-                // Create BasicMaterial with texture
-                std::cell::RefCell::new(engine::scene::basic_material::create(
-                    Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>,
-                    1.0, // emissivity
-                    0.0, // transparency
-                ))
-            } else {
-                // Fallback to color material
-                std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-                    glb_mesh.base_color[0],
-                    glb_mesh.base_color[1],
-                    glb_mesh.base_color[2],
-                )))
+        let (geometry, is_skinned) = match vertex_data {
+            GlbVertexData::Static(vertices) => (
+                engine::scene::indexed_mesh::create(vertices, indices),
+                false,
+            ),
+            GlbVertexData::Skinned(vertices) => {
+                (engine::scene::indexed_mesh::create(vertices, indices), true)
             }
+        };
+
+        let material = if is_skinned {
+            create_skinned_material(&glb_model.images, texture_index, base_color)
         } else {
-            // No texture, use base color
-            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-                glb_mesh.base_color[0],
-                glb_mesh.base_color[1],
-                glb_mesh.base_color[2],
-            )))
+            create_static_material(&glb_model.images, texture_index, base_color)
         };
 
         let scene_object = SceneObject::create(material, Rc::new(Box::new(geometry)));
@@ -333,3 +491,137 @@ fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config
 
 pub static GLB_MODELS_IMPORTER: Lazy<AssetImporter<GlbModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_glb, process_glb_model));
+
+fn create_texture_from_image(
+    images: &[gltf::image::Data],
+    texture_index: usize,
+) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+    if texture_index >= images.len() {
+        return None;
+    }
+
+    let image_data = &images[texture_index];
+    println!(
+        "Loading texture {} ({}x{}, format: {:?})",
+        texture_index, image_data.width, image_data.height, image_data.format
+    );
+
+    let raw_texture_data = RawTextureData {
+        bytes: image_data.pixels.clone(),
+        width: image_data.width,
+        height: image_data.height,
+        format: match image_data.format {
+            gltf::image::Format::R8G8B8 => PixelFormat::RGB,
+            gltf::image::Format::R8G8B8A8 => PixelFormat::RGBA,
+            _ => PixelFormat::RGBA,
+        },
+    };
+
+    let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
+
+    Some(Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>)
+}
+
+fn create_solid_color_texture(base_color: [f32; 4]) -> Rc<dyn engine::texture::TextureTrait> {
+    let clamp = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+
+    let r = clamp(base_color[0]);
+    let g = clamp(base_color[1]);
+    let b = clamp(base_color[2]);
+    let a = clamp(base_color[3]);
+
+    let raw_texture_data = RawTextureData {
+        bytes: vec![r, g, b, a],
+        width: 1,
+        height: 1,
+        format: PixelFormat::RGBA,
+    };
+
+    let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
+
+    Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>
+}
+
+fn create_static_material(
+    images: &[gltf::image::Data],
+    texture_index: Option<usize>,
+    base_color: [f32; 4],
+) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
+    match texture_index {
+        Some(texture_index) => {
+            if let Some(texture) = create_texture_from_image(images, texture_index) {
+                return std::cell::RefCell::new(engine::scene::basic_material::create(
+                    texture, 1.0, 0.0,
+                ));
+            }
+
+            println!(
+                "Texture index {} out of range (only {} images available), using base color: {:?}",
+                texture_index,
+                images.len(),
+                base_color
+            );
+
+            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+                base_color[0],
+                base_color[1],
+                base_color[2],
+            )))
+        }
+        None => {
+            println!("No texture specified, using base color: {:?}", base_color);
+            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+                base_color[0],
+                base_color[1],
+                base_color[2],
+            )))
+        }
+    }
+}
+
+fn create_skinned_material(
+    images: &[gltf::image::Data],
+    texture_index: Option<usize>,
+    base_color: [f32; 4],
+) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
+    let texture: Rc<dyn engine::texture::TextureTrait> = if let Some(texture_index) = texture_index
+    {
+        match create_texture_from_image(images, texture_index) {
+            Some(tex) => tex,
+            None => {
+                println!(
+                    "Texture index {} out of range (only {} images available) for skinned mesh, using base color: {:?}",
+                    texture_index,
+                    images.len(),
+                    base_color
+                );
+                create_solid_color_texture(base_color)
+            }
+        }
+    } else {
+        println!(
+            "No texture specified for skinned mesh, using base color: {:?}",
+            base_color
+        );
+        create_solid_color_texture(base_color)
+    };
+
+    std::cell::RefCell::new(SkinnedMaterial::create(texture, 1.0, 0.0))
+}
+
+fn extract_base_color_and_texture(material: &gltf::Material) -> ([f32; 4], Option<usize>) {
+    if let Some(spec_gloss) = material.pbr_specular_glossiness() {
+        let diffuse_factor = spec_gloss.diffuse_factor();
+        let texture_index = spec_gloss
+            .diffuse_texture()
+            .map(|texture_info| texture_info.texture().source().index());
+        return (diffuse_factor, texture_index);
+    }
+
+    let pbr = material.pbr_metallic_roughness();
+    let base_color = pbr.base_color_factor();
+    let texture_index = pbr
+        .base_color_texture()
+        .map(|texture_info| texture_info.texture().source().index());
+    (base_color, texture_index)
+}

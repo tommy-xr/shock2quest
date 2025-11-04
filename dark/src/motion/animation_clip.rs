@@ -17,6 +17,7 @@ pub struct AnimationClip {
     pub translation: Vector3<f32>,
     pub joint_to_frame: HashMap<JointId, Vec<Matrix4<f32>>>,
     pub motion_flags: Vec<FrameFlags>,
+    pub name: Option<String>, // Added for GLB animation support
 }
 
 impl AnimationClip {
@@ -65,6 +66,7 @@ impl AnimationClip {
             sliding_velocity,
             translation: motion_stuff.translation,
             end_rotation,
+            name: Some(mps_motion.name.clone()), // Use motion name for traditional SS2 animations
         }
     }
 }

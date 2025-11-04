@@ -194,6 +194,10 @@ impl Model {
         skeleton: Option<Skeleton>,
     ) -> Model {
         if let Some(skeleton) = skeleton {
+            println!(
+                "Creating animated GLB model with {} bones",
+                skeleton.bone_count()
+            );
             // Animated model
             let hit_boxes = HashMap::new();
             Model {
@@ -206,6 +210,7 @@ impl Model {
                 }),
             }
         } else {
+            println!("Creating static GLB model (no skeleton)");
             // Static model
             Model {
                 transform: Matrix4::identity(),

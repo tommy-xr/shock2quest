@@ -9,8 +9,8 @@ use glfw::GlfwReceiver;
 
 mod scenes;
 use scenes::{
-    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene,
-    VideoPlayerScene,
+    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbAnimatedViewerScene, GlbViewerScene,
+    ToolScene, VideoPlayerScene,
 };
 use shock2vr::zip_asset_path::ZipAssetPath;
 
@@ -62,13 +62,14 @@ const SCR_HEIGHT: u32 = 600;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Shock Engine tooling viewer", long_about = None)]
 struct Cli {
-    /// Asset to preview (video .avi, object .bin, font .fon)
+    /// Asset to preview (video .avi, object .bin, font .fon, GLB .glb)
     filename: String,
 
     /// One or more animation clips, comma separated.
-    /// Paths can be provided with or without the trailing `_ .mc` suffix.
-    #[arg(long, value_delimiter = ',', value_name = "CLIP")]
-    animation: Vec<String>,
+    /// For .bin files: Paths can be provided with or without the trailing `_ .mc` suffix.
+    /// For .glb files: Animation names from within the GLB file. Use flag without value to show all.
+    #[arg(long, value_delimiter = ',', value_name = "CLIP", num_args = 0..)]
+    animation: Option<Vec<String>>,
 
     /// When true, loads assets and prints information but exits before opening a window.
     #[arg(long)]
@@ -99,15 +100,33 @@ fn normalize_clip_name(raw: &str) -> Result<String, String> {
     Ok(format!("{}_.mc", trimmed))
 }
 
-fn gather_animation_list(cli: &Cli) -> Result<Vec<String>, String> {
-    if cli.animation.is_empty() {
-        return Ok(Vec::new());
-    }
+fn gather_animation_list(cli: &Cli, filename: &str) -> Result<(Vec<String>, bool), String> {
+    let animation_flag_provided = cli.animation.is_some();
 
-    cli.animation
-        .iter()
-        .map(|raw| normalize_clip_name(raw))
-        .collect()
+    let animation_list = match &cli.animation {
+        None => return Ok((Vec::new(), false)),
+        Some(animations) => animations,
+    };
+
+    let is_glb = filename.to_ascii_lowercase().ends_with(".glb");
+
+    if is_glb {
+        // For GLB files, use animation names as-is (no .mc suffix normalization)
+        // Filter out empty strings - empty means "show all animations"
+        let filtered_animations = animation_list
+            .iter()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .collect();
+        Ok((filtered_animations, animation_flag_provided))
+    } else {
+        // For BIN files, apply the .mc suffix normalization
+        let animations = animation_list
+            .iter()
+            .map(|raw| normalize_clip_name(raw))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((animations, animation_flag_provided))
+    }
 }
 
 struct MousePosition {
@@ -183,6 +202,7 @@ fn find_video_file(filename: &str) -> Option<String> {
 fn create_scene(
     filename: &str,
     animations: &[String],
+    animation_flag_provided: bool,
     asset_cache: &mut engine::assets::asset_cache::AssetCache,
     data_resolver: fn(&str) -> String,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
@@ -210,10 +230,19 @@ fn create_scene(
         let scene = FontViewerScene::from_file(filename.to_string(), data_resolver)?;
         Ok(Box::new(scene))
     } else if lower.ends_with(".glb") {
-        let scene = GlbViewerScene::from_model(filename.to_string(), asset_cache)?;
-        Ok(Box::new(scene))
+        if animation_flag_provided {
+            let scene = GlbAnimatedViewerScene::from_model_and_animations(
+                filename.to_string(),
+                animations.to_vec(),
+                asset_cache,
+            )?;
+            Ok(Box::new(scene))
+        } else {
+            let scene = GlbViewerScene::from_model(filename.to_string(), asset_cache)?;
+            Ok(Box::new(scene))
+        }
     } else if !animations.is_empty() {
-        Err("Animation preview is only supported for .bin AI meshes.".into())
+        Err("Animation preview is only supported for .bin AI meshes and .glb models.".into())
     } else {
         Err(format!(
             "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font), .glb (GLB/GLTF 3D model)",
@@ -225,8 +254,8 @@ fn create_scene(
 
 pub fn main() {
     let cli = Cli::parse();
-    let animations = match gather_animation_list(&cli) {
-        Ok(list) => list,
+    let (animations, animation_flag_provided) = match gather_animation_list(&cli, &cli.filename) {
+        Ok((list, flag_provided)) => (list, flag_provided),
         Err(err) => {
             eprintln!("Error: {err}");
             std::process::exit(1);
@@ -292,6 +321,7 @@ pub fn main() {
         match create_scene(
             &filename,
             &animations,
+            animation_flag_provided,
             &mut game.asset_cache,
             resolve_data_path,
         ) {
@@ -304,6 +334,7 @@ pub fn main() {
     let mut scene = match create_scene(
         &filename,
         &animations,
+        animation_flag_provided,
         &mut game.asset_cache,
         resolve_data_path,
     ) {
