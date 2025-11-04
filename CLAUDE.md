@@ -159,6 +159,32 @@ if let Ok(links) = v_links.get(entity_id) {
 }
 ```
 
+## Tooling Notes
+
+### dark_query Speech Explorer
+
+Use the `dark_query` CLI to inspect speech metadata without launching the game:
+
+- List available voices and sample hints:
+
+  ```bash
+  cargo run -p dark_query -- speech
+  ```
+
+- Show all concepts and tags for a specific voice (index or alias like `voice6`):
+
+  ```bash
+  cargo run -p dark_query -- speech 2
+  ```
+
+- Query clips by tag filters (supports `+concept:name`, enum tags such as `+alertlevel:two`, and numeric ranges):
+
+  ```bash
+  cargo run -p dark_query -- speech 2 +concept:spotplayer +alertlevel:three
+  ```
+
+If no tags are supplied for a voice, the tool prints the concept list and per-tag metadata. When tags are provided, every matching schema and its samples (with frequency weights) are shown.
+
 ### Entity System Debugging
 
 #### Common Problems

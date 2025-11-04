@@ -6,10 +6,12 @@ use tracing::info;
 mod data_loader;
 mod entity_analyzer;
 mod motion_analyzer;
+mod speech_analyzer;
 
 use data_loader::load_entity_data;
 use entity_analyzer::{analyze_entities, filter_entities, EntityType, FilterCriteria};
 use motion_analyzer::MotionAnalyzer;
+use speech_analyzer::SpeechAnalyzer;
 
 #[derive(Parser)]
 #[command(name = "dark_query")]
@@ -83,6 +85,14 @@ enum Commands {
         /// Mission name to load map data for (e.g., "MEDSCI1", "MEDSCI2")
         mission: String,
     },
+    /// Query speech database by voice and tags
+    Speech {
+        /// Voice identifier (index like 0, or alias such as voice0)
+        voice: Option<String>,
+
+        /// Tags to filter speech results (e.g., "+concept:spotplayer")
+        tags: Vec<String>,
+    },
 }
 
 fn init_logging(verbose: bool) -> Result<()> {
@@ -152,6 +162,9 @@ fn main() -> Result<()> {
         }
         Commands::Maps { mission } => {
             handle_maps_command(&mission)?;
+        }
+        Commands::Speech { voice, tags } => {
+            handle_speech_command(voice.as_deref(), &tags)?;
         }
     }
 
@@ -645,6 +658,15 @@ fn handle_maps_command(mission: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_speech_command(voice: Option<&str>, tags: &[String]) -> Result<()> {
+    let analyzer = SpeechAnalyzer::new()?;
+
+    match voice {
+        None => analyzer.list_voices(),
+        Some(identifier) => analyzer.describe_voice(identifier, tags),
+    }
 }
 
 fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {
