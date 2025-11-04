@@ -1,5 +1,6 @@
 mod animation_clip;
 mod animation_player;
+mod glb_animation;
 mod motion_clip;
 mod motion_info;
 pub mod motion_query;
@@ -7,6 +8,7 @@ mod motion_schema;
 
 pub use animation_clip::*;
 pub use animation_player::*;
+pub use glb_animation::*;
 pub use motion_clip::*;
 pub use motion_info::*;
 pub use motion_query::*;
