@@ -247,12 +247,7 @@ fn process_primitive(
 
     // Extract material information
     let material = primitive.material();
-    let pbr = material.pbr_metallic_roughness();
-    let base_color = pbr.base_color_factor();
-
-    let texture_index = pbr
-        .base_color_texture()
-        .map(|texture_info| texture_info.texture().source().index());
+    let (base_color, texture_index) = extract_base_color_and_texture(&material);
 
     Some(GlbMesh {
         vertex_data,
@@ -552,27 +547,36 @@ fn create_static_material(
     texture_index: Option<usize>,
     base_color: [f32; 4],
 ) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
-    if let Some(texture_index) = texture_index {
-        if let Some(texture) = create_texture_from_image(images, texture_index) {
-            return std::cell::RefCell::new(engine::scene::basic_material::create(
-                texture, 1.0, 0.0,
-            ));
-        } else {
+    match texture_index {
+        Some(texture_index) => {
+            if let Some(texture) = create_texture_from_image(images, texture_index) {
+                return std::cell::RefCell::new(engine::scene::basic_material::create(
+                    texture, 1.0, 0.0,
+                ));
+            }
+
             println!(
                 "Texture index {} out of range (only {} images available), using base color: {:?}",
                 texture_index,
                 images.len(),
                 base_color
             );
+
+            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+                base_color[0],
+                base_color[1],
+                base_color[2],
+            )))
+        }
+        None => {
+            println!("No texture specified, using base color: {:?}", base_color);
+            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+                base_color[0],
+                base_color[1],
+                base_color[2],
+            )))
         }
     }
-
-    println!("No texture specified, using base color: {:?}", base_color);
-    std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-        base_color[0],
-        base_color[1],
-        base_color[2],
-    )))
 }
 
 fn create_skinned_material(
@@ -603,4 +607,21 @@ fn create_skinned_material(
     };
 
     std::cell::RefCell::new(SkinnedMaterial::create(texture, 1.0, 0.0))
+}
+
+fn extract_base_color_and_texture(material: &gltf::Material) -> ([f32; 4], Option<usize>) {
+    if let Some(spec_gloss) = material.pbr_specular_glossiness() {
+        let diffuse_factor = spec_gloss.diffuse_factor();
+        let texture_index = spec_gloss
+            .diffuse_texture()
+            .map(|texture_info| texture_info.texture().source().index());
+        return (diffuse_factor, texture_index);
+    }
+
+    let pbr = material.pbr_metallic_roughness();
+    let base_color = pbr.base_color_factor();
+    let texture_index = pbr
+        .base_color_texture()
+        .map(|texture_info| texture_info.texture().source().index());
+    (base_color, texture_index)
 }
