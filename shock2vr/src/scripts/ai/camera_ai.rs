@@ -1,4 +1,4 @@
-use cgmath::{Deg, Quaternion, Rotation3};
+use cgmath::{point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3};
 use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
     PropModelName, PropPosition,
@@ -34,6 +34,13 @@ struct CameraTimings {
     ignore_range: f32,
 }
 
+const ALERT_ESCALATE_SECONDS: f32 = 3.0;
+const ALERT_DECAY_SECONDS: f32 = 5.0;
+const DEFAULT_TO_TWO_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
+const DEFAULT_TO_THREE_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
+const DEFAULT_DECAY_SECONDS: f32 = ALERT_DECAY_SECONDS;
+const DEFAULT_IGNORE_SECONDS: f32 = ALERT_DECAY_SECONDS;
+
 #[derive(Clone)]
 struct CameraModels {
     green: String,
@@ -44,9 +51,9 @@ struct CameraModels {
 struct CameraState {
     current_level: AIAlertLevel,
     peak_level: AIAlertLevel,
-    time_in_state: f32,
-    descending: bool,
     current_model: Option<String>,
+    visible_time: f32,
+    hidden_time: f32,
     view_angle: f32,
 }
 
@@ -55,9 +62,9 @@ impl Default for CameraState {
         Self {
             current_level: AIAlertLevel::Lowest,
             peak_level: AIAlertLevel::Lowest,
-            time_in_state: 0.0,
-            descending: false,
             current_model: None,
+            visible_time: 0.0,
+            hidden_time: 0.0,
             view_angle: 0.0,
         }
     }
@@ -120,8 +127,8 @@ impl CameraAI {
             .ok()
             .cloned()
             .unwrap_or(PropAICamera {
-                scan_angle_1: -180.0,
-                scan_angle_2: 180.0,
+                scan_angle_1: -45.0,
+                scan_angle_2: 45.0,
                 scan_speed: 0.05,
             });
 
@@ -140,11 +147,11 @@ impl CameraAI {
             .ok()
             .cloned()
             .unwrap_or(PropAIAwareDelay {
-                to_two: 750,
-                to_three: 500,
-                two_reuse: 12_000,
-                three_reuse: 22_000,
-                ignore_range: 9,
+                to_two: (DEFAULT_TO_TWO_SECONDS * 1000.0) as u32,
+                to_three: (DEFAULT_TO_THREE_SECONDS * 1000.0) as u32,
+                two_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+                three_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+                ignore_range: (DEFAULT_IGNORE_SECONDS * 1000.0) as u32,
             });
 
         let base_model = v_model_name
@@ -189,9 +196,9 @@ impl CameraAI {
         let mut state = CameraState {
             current_level: clamp_level(initial_alertness.0, &config.alert_cap),
             peak_level: clamp_level(initial_alertness.1, &config.alert_cap),
-            time_in_state: 0.0,
-            descending: initial_alertness.0 != AIAlertLevel::Lowest,
             current_model: None,
+            visible_time: 0.0,
+            hidden_time: 0.0,
             view_angle: 0.0,
         };
 
@@ -203,84 +210,93 @@ impl CameraAI {
         Some((config, state))
     }
 
-    fn advance_alertness(
+    fn process_alertness(
         &mut self,
-        delta: f32,
         entity_id: EntityId,
-        alert_cap: &PropAIAlertCap,
-        timings: &CameraTimings,
-        models: &CameraModels,
+        visible: bool,
+        delta: f32,
+        config: &CameraConfig,
         effects: &mut Vec<Effect>,
     ) {
-        self.state.time_in_state += delta;
+        if visible {
+            self.state.visible_time += delta;
+            self.state.hidden_time = 0.0;
 
-        if self.state.descending {
             match self.state.current_level {
-                AIAlertLevel::High => {
-                    if self.state.time_in_state >= timings.three_reuse {
+                AIAlertLevel::Lowest => {
+                    if self.state.visible_time >= config.timings.to_two {
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::Moderate,
-                            alert_cap,
+                            &config.alert_cap,
                             effects,
                         ) {
-                            self.sync_model(entity_id, models, effects, false);
-                            self.state.descending = true;
+                            self.sync_model(entity_id, &config.models, effects, false);
+                            self.state.visible_time = 0.0;
                         }
                     }
                 }
-                AIAlertLevel::Moderate => {
-                    if self.state.time_in_state >= timings.two_reuse {
-                        if self.set_alert_level(entity_id, AIAlertLevel::Low, alert_cap, effects) {
-                            self.sync_model(entity_id, models, effects, false);
+                AIAlertLevel::Low | AIAlertLevel::Moderate => {
+                    if self.state.visible_time >= config.timings.to_three {
+                        if self.set_alert_level(
+                            entity_id,
+                            AIAlertLevel::High,
+                            &config.alert_cap,
+                            effects,
+                        ) {
+                            self.sync_model(entity_id, &config.models, effects, false);
+                            self.state.visible_time = 0.0;
                         }
                     }
                 }
-                AIAlertLevel::Low => {
-                    if self.state.time_in_state >= timings.ignore_range {
-                        if self.set_alert_level(entity_id, AIAlertLevel::Lowest, alert_cap, effects)
-                        {
-                            self.sync_model(entity_id, models, effects, false);
-                            self.state.descending = false;
-                        }
-                    }
-                }
-                AIAlertLevel::Lowest => {
-                    self.state.descending = false;
-                }
+                AIAlertLevel::High => {}
             }
         } else {
+            self.state.hidden_time += delta;
+            self.state.visible_time = 0.0;
+
             match self.state.current_level {
-                AIAlertLevel::Lowest => {
-                    if self.state.time_in_state >= timings.to_two {
+                AIAlertLevel::High => {
+                    if self.state.hidden_time >= config.timings.three_reuse {
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::Moderate,
-                            alert_cap,
+                            &config.alert_cap,
                             effects,
                         ) {
-                            self.sync_model(entity_id, models, effects, false);
+                            self.sync_model(entity_id, &config.models, effects, false);
+                            self.state.hidden_time = 0.0;
                         }
                     }
                 }
                 AIAlertLevel::Moderate => {
-                    if self.state.time_in_state >= timings.to_three {
-                        if self.set_alert_level(entity_id, AIAlertLevel::High, alert_cap, effects) {
-                            self.sync_model(entity_id, models, effects, false);
-                            self.state.descending = true;
+                    if self.state.hidden_time >= config.timings.two_reuse {
+                        if self.set_alert_level(
+                            entity_id,
+                            AIAlertLevel::Low,
+                            &config.alert_cap,
+                            effects,
+                        ) {
+                            self.sync_model(entity_id, &config.models, effects, false);
+                            self.state.hidden_time = 0.0;
                         }
                     }
                 }
                 AIAlertLevel::Low => {
-                    if self.state.time_in_state >= timings.to_three {
-                        if self.set_alert_level(entity_id, AIAlertLevel::High, alert_cap, effects) {
-                            self.sync_model(entity_id, models, effects, false);
-                            self.state.descending = true;
+                    if self.state.hidden_time >= config.timings.ignore_range {
+                        if self.set_alert_level(
+                            entity_id,
+                            AIAlertLevel::Lowest,
+                            &config.alert_cap,
+                            effects,
+                        ) {
+                            self.sync_model(entity_id, &config.models, effects, false);
+                            self.state.hidden_time = 0.0;
                         }
                     }
                 }
-                AIAlertLevel::High => {
-                    // Already at peak; wait for descend logic
+                AIAlertLevel::Lowest => {
+                    self.state.hidden_time = 0.0;
                 }
             }
         }
@@ -299,7 +315,6 @@ impl CameraAI {
         }
 
         self.state.current_level = clamped_level;
-        self.state.time_in_state = 0.0;
 
         if level_to_u32(clamped_level) > level_to_u32(self.state.peak_level) {
             self.state.peak_level = clamped_level;
@@ -381,39 +396,30 @@ impl Script for CameraAI {
     ) -> Effect {
         let mut effects = Vec::new();
 
-        if let Some(config) = &self.config {
-            let delta = time.elapsed.as_secs_f32();
-            let alert_cap = config.alert_cap.clone();
-            let timings = config.timings.clone();
-            let models = config.models.clone();
-            self.advance_alertness(
-                delta,
-                entity_id,
-                &alert_cap,
-                &timings,
-                &models,
-                &mut effects,
-            );
-        }
-
         let mut target_angle = time.total.as_secs_f32().sin() * 90.0;
         let mut max_delta: Option<f32> = None;
+        let mut is_visible = false;
+        let config_clone = self.config.clone();
 
-        if ai_util::is_player_visible(entity_id, world, physics) {
-            let v_pos = world.borrow::<View<PropPosition>>().unwrap();
-            if let Ok(pose) = v_pos.get(entity_id) {
-                let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-                let target_yaw = ai_util::yaw_between_vectors(pose.position, u_player.pos);
-                drop(u_player);
+        if let Some(config) = config_clone.as_ref() {
+            let delta = time.elapsed.as_secs_f32();
+            is_visible = ai_util::is_player_visible(entity_id, world, physics);
+            if is_visible {
+                let v_pos = world.borrow::<View<PropPosition>>().unwrap();
+                if let Ok(pose) = v_pos.get(entity_id) {
+                    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                    let target_yaw = ai_util::yaw_between_vectors(pose.position, u_player.pos);
+                    drop(u_player);
 
-                let current_yaw = ai_util::current_yaw(entity_id, world);
-                target_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
+                    let current_yaw = ai_util::current_yaw(entity_id, world);
+                    target_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
+                }
             }
-        }
 
-        if let Some(config) = &self.config {
             let speed_deg_per_sec = (config.camera.scan_speed * 1000.0).max(1.0);
-            max_delta = Some(speed_deg_per_sec * time.elapsed.as_secs_f32());
+            max_delta = Some(speed_deg_per_sec * delta);
+
+            self.process_alertness(entity_id, is_visible, delta, config, &mut effects);
         }
 
         let aim_angle = if let Some(delta_limit) = max_delta {
@@ -430,6 +436,14 @@ impl Script for CameraAI {
             joint_id: 1,
             transform: quat.into(),
         });
+
+        if let Some(config) = config_clone.as_ref() {
+            let debug_effect =
+                draw_debug_camera_fov(world, entity_id, aim_angle, config, is_visible);
+            if !matches!(debug_effect, Effect::NoEffect) {
+                effects.push(debug_effect);
+            }
+        }
 
         Self::combine_effects(effects)
     }
@@ -538,4 +552,65 @@ impl CameraModels {
             AIAlertLevel::Lowest => &self.green,
         }
     }
+}
+
+fn draw_debug_camera_fov(
+    world: &World,
+    entity_id: EntityId,
+    aim_angle: f32,
+    config: &CameraConfig,
+    is_visible: bool,
+) -> Effect {
+    if !cfg!(debug_assertions) {
+        return Effect::NoEffect;
+    }
+
+    let v_pos = world.borrow::<View<PropPosition>>().unwrap();
+    if let Ok(pose) = v_pos.get(entity_id) {
+        let origin = point3(pose.position.x, pose.position.y, pose.position.z);
+        let orientation = pose.rotation * Quaternion::from_angle_y(Deg(-aim_angle - 90.0));
+        let forward = orientation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize();
+
+        let up = Vector3::new(0.0, 1.0, 0.0);
+        let mut right = forward.cross(up);
+        if right.magnitude2() < 1e-4 {
+            right = Vector3::new(1.0, 0.0, 0.0);
+        } else {
+            right = right.normalize();
+        }
+
+        let fov_total = config.camera.scan_angle_2 - config.camera.scan_angle_1;
+        let fov_half_rad = (fov_total * 0.5).to_radians();
+        let cos_half = fov_half_rad.cos();
+        let sin_half = fov_half_rad.sin();
+        let rotated_left = (forward * cos_half) - (right * sin_half);
+        let rotated_right = (forward * cos_half) + (right * sin_half);
+
+        let length = 5.0;
+        let origin_point = origin + vec3(0.0, 0.5, 0.0);
+
+        let main_color = if is_visible {
+            vec4(0.0, 1.0, 0.0, 1.0)
+        } else {
+            vec4(1.0, 0.0, 0.0, 1.0)
+        };
+
+        return Effect::DrawDebugLines {
+            lines: vec![
+                (origin_point, origin_point + forward * length, main_color),
+                (
+                    origin_point,
+                    origin_point + rotated_left.normalize() * length,
+                    vec4(0.0, 0.5, 1.0, 1.0),
+                ),
+                (
+                    origin_point,
+                    origin_point + rotated_right.normalize() * length,
+                    vec4(0.0, 0.5, 1.0, 1.0),
+                ),
+            ],
+        };
+    }
+
+    Effect::NoEffect
 }
