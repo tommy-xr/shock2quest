@@ -81,6 +81,37 @@ impl TagDatabase {
         TagDatabase { data, branches }
     }
 
+    /// Collect all tag keys used within this tag database (recursively)
+    pub fn collect_all_keys(&self) -> Vec<TagDatabaseKey> {
+        let mut keys = Vec::new();
+        self.collect_all_keys_recursive(&mut keys);
+        keys
+    }
+
+    fn collect_all_keys_recursive(&self, keys: &mut Vec<TagDatabaseKey>) {
+        for (key, branch) in &self.branches {
+            keys.push(key.clone());
+            branch.collect_all_keys_recursive(keys);
+        }
+    }
+
+    /// Collect all data identifiers stored in this database (recursively)
+    pub fn collect_all_data_ids(&self) -> Vec<i32> {
+        let mut values = Vec::new();
+        self.collect_all_data_ids_recursive(&mut values);
+        values
+    }
+
+    fn collect_all_data_ids_recursive(&self, values: &mut Vec<i32>) {
+        for data in &self.data {
+            values.push(data.data);
+        }
+
+        for (_, branch) in &self.branches {
+            branch.collect_all_data_ids_recursive(values);
+        }
+    }
+
     pub fn query_match_all(&self, query: &TagQuery) -> Vec<i32> {
         // Get sorted items
         let sorted_query = query.sorted_items();

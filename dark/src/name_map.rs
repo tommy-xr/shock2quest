@@ -21,6 +21,17 @@ impl NameMap {
         self.name_to_index.len()
     }
 
+    pub fn entries(&self) -> Vec<(u32, String)> {
+        let mut entries = self
+            .index_to_name
+            .iter()
+            .map(|(index, name)| (*index, name.clone()))
+            .collect::<Vec<_>>();
+
+        entries.sort_by_key(|(index, _)| *index);
+        entries
+    }
+
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> NameMap {
         let _upper_bound = ss2_common::read_i32(reader);
         let _lower_bound = ss2_common::read_i32(reader);

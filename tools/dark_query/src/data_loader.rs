@@ -9,8 +9,8 @@ use shock2vr::paths;
 use std::{fs::File, io::BufReader};
 use tracing::info;
 
-/// Load entity data from shock2.gam only
-pub fn load_gamesys_only() -> Result<SystemShock2EntityInfo> {
+/// Load the full gamesys (shock2.gam) including speech DB and sound schema
+pub fn load_gamesys() -> Result<gamesys::Gamesys> {
     info!("Loading gamesys data from shock2.gam");
 
     let (properties, links, links_with_data) = get();
@@ -36,7 +36,13 @@ pub fn load_gamesys_only() -> Result<SystemShock2EntityInfo> {
         gamesys.entity_info.entity_to_properties.len()
     );
 
-    Ok(gamesys.entity_info)
+    Ok(gamesys)
+}
+
+/// Load entity data from shock2.gam only
+pub fn load_gamesys_only() -> Result<SystemShock2EntityInfo> {
+    let gamesys = load_gamesys()?;
+    Ok(gamesys.into_entity_info())
 }
 
 /// Load entity data from shock2.gam + specified mission file
@@ -46,23 +52,9 @@ pub fn load_gamesys_with_mission(mission_name: &str) -> Result<SystemShock2Entit
         mission_name
     );
 
-    let (properties, links, links_with_data) = get();
-
-    // Load shock2.gam file
+    let gamesys = load_gamesys()?;
     let data_root = paths::data_root();
-    let gam_path = data_root.join("shock2.gam");
-    if !gam_path.exists() {
-        return Err(anyhow::anyhow!(
-            "shock2.gam not found. Checked these directories: {}",
-            paths::search_roots().join(", ")
-        ));
-    }
-
-    let game_file =
-        File::open(&gam_path).with_context(|| format!("Failed to open {}", gam_path.display()))?;
-    let mut game_reader = BufReader::new(game_file);
-
-    let gamesys = gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
+    let (properties, links, links_with_data) = get();
 
     // Load mission file
     let mission_path = data_root.join(mission_name);
@@ -92,10 +84,6 @@ pub fn load_gamesys_with_mission(mission_name: &str) -> Result<SystemShock2Entit
     // Merge gamesys + mission data
     let merged_entity_info = merge_with_gamesys(&mission_entity_info, &gamesys);
 
-    info!(
-        "Loaded {} entities from gamesys",
-        gamesys.entity_info.entity_to_properties.len()
-    );
     info!(
         "Loaded {} entities from mission",
         mission_entity_info.entity_to_properties.len()

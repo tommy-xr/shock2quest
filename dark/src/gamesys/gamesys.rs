@@ -39,6 +39,22 @@ impl Gamesys {
 
         Some(samples[idx].sample_name.to_owned())
     }
+
+    pub fn speech_db(&self) -> &SpeechDB {
+        &self.speech_db
+    }
+
+    pub fn sound_schema(&self) -> &SoundSchema {
+        &self.sound_schema
+    }
+
+    pub fn entity_info(&self) -> &SystemShock2EntityInfo {
+        &self.entity_info
+    }
+
+    pub fn into_entity_info(self) -> SystemShock2EntityInfo {
+        self.entity_info
+    }
 }
 
 pub fn read<T: io::Read + io::Seek>(
