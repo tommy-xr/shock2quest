@@ -127,20 +127,6 @@ impl ToolScene for GlbAnimatedViewerScene {
             let (updated_player, _flags, events, _velocity) =
                 AnimationPlayer::update(&self.animation_player, elapsed);
 
-            // Debug: Check if animation player state is changing
-            static mut DEBUG_COUNTER: u32 = 0;
-            unsafe {
-                DEBUG_COUNTER += 1;
-                if DEBUG_COUNTER % 60 == 0 {
-                    // Print every 60 frames
-                    println!(
-                        "Animation player update #{}: elapsed={:.3}s",
-                        DEBUG_COUNTER,
-                        elapsed.as_secs_f32()
-                    );
-                }
-            }
-
             self.animation_player = updated_player;
 
             // Handle animation events (like completion)
