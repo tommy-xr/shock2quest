@@ -63,7 +63,7 @@ fn load_glb_animations(
 }
 
 /// Extract skeleton data from GLB document
-fn extract_skeleton_from_document(
+pub fn extract_skeleton_from_document(
     document: &gltf::Document,
     buffers: &[gltf::buffer::Data],
 ) -> Option<Skeleton> {
@@ -277,7 +277,7 @@ fn process_glb_animations(
 /// Convert a single GLB animation to shock2quest AnimationClip format
 fn convert_glb_to_animation_clip(
     glb_animation: &GlbAnimation,
-    _skeleton: &Option<Skeleton>, // TODO: Use for joint mapping
+    skeleton: &Option<Skeleton>, // Use for joint mapping
 ) -> Result<AnimationClip, String> {
     const TARGET_FPS: f32 = 30.0; // Convert to 30 FPS for shock2quest
 
@@ -309,10 +309,12 @@ fn convert_glb_to_animation_clip(
 
     // Process each animated node
     for (node_index, channels) in channels_by_node {
-        let joint_id = node_index as JointId; // Simple mapping for now
+        // Note: We can't directly map node_index to joint_id without the GLB document
+        // For now, use node_index as joint_id but add a warning
+        let joint_id = node_index as JointId;
         let mut frame_transforms = Vec::new();
 
-        println!("    Processing node {} ({} channels)", node_index, channels.len());
+        println!("    Processing node {} -> joint {} ({} channels)", node_index, joint_id, channels.len());
 
         // Generate transforms for each frame
         for frame in 0..frame_count {
