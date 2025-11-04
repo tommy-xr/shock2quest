@@ -105,7 +105,12 @@ impl Geometry for IndexedMesh {
         unsafe {
             gl::BindVertexArray(self.vao);
             // Use DrawElements instead of DrawArrays to use the index buffer
-            gl::DrawElements(gl::TRIANGLES, self.index_count, gl::UNSIGNED_INT, std::ptr::null());
+            gl::DrawElements(
+                gl::TRIANGLES,
+                self.index_count,
+                gl::UNSIGNED_INT,
+                std::ptr::null(),
+            );
         }
     }
 }

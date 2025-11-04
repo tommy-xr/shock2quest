@@ -8,7 +8,10 @@ use clap::Parser;
 use glfw::GlfwReceiver;
 
 mod scenes;
-use scenes::{BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene, VideoPlayerScene};
+use scenes::{
+    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene,
+    VideoPlayerScene,
+};
 use shock2vr::zip_asset_path::ZipAssetPath;
 
 use self::glfw::{Action, Context, Key};

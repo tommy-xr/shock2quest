@@ -1,23 +1,20 @@
 use std::rc::Rc;
 
-use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
-use once_cell::sync::Lazy;
 use cgmath::{Matrix4, Vector3};
 use collision::Aabb3;
+use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
+use once_cell::sync::Lazy;
 
-use crate::{
-    model::Model,
-    ss2_skeleton::Skeleton,
-};
+use crate::{model::Model, ss2_skeleton::Skeleton};
 use engine::scene::{SceneObject, VertexPositionTextureNormal};
 use engine::texture::{self, TextureOptions};
-use engine::texture_format::{RawTextureData, PixelFormat};
+use engine::texture_format::{PixelFormat, RawTextureData};
 
 // GLB data structures
 pub struct GlbMesh {
     pub vertices: Vec<VertexPositionTextureNormal>,
     pub indices: Vec<u32>,
-    pub base_color: [f32; 4], // RGBA base color from material
+    pub base_color: [f32; 4],         // RGBA base color from material
     pub texture_index: Option<usize>, // Index into images array
 }
 
@@ -50,7 +47,13 @@ fn load_glb(
     // Process each mesh in the GLTF scene
     for scene in gltf.scenes() {
         for node in scene.nodes() {
-            process_node(&node, &buffers, &mut meshes, &mut min_bounds, &mut max_bounds);
+            process_node(
+                &node,
+                &buffers,
+                &mut meshes,
+                &mut min_bounds,
+                &mut max_bounds,
+            );
         }
     }
 
@@ -112,17 +115,20 @@ fn process_primitive(
     let positions = extract_positions(position_accessor, buffers)?;
 
     // Get normal data (optional)
-    let normals = primitive.get(&gltf::Semantic::Normals)
+    let normals = primitive
+        .get(&gltf::Semantic::Normals)
         .and_then(|accessor| extract_normals(accessor, buffers))
         .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
     // Get texture coordinate data (optional)
-    let texcoords = primitive.get(&gltf::Semantic::TexCoords(0))
+    let texcoords = primitive
+        .get(&gltf::Semantic::TexCoords(0))
         .and_then(|accessor| extract_texcoords(accessor, buffers))
         .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
     // Get indices
-    let indices = primitive.indices()
+    let indices = primitive
+        .indices()
         .and_then(|accessor| extract_indices(accessor, buffers))
         .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
@@ -139,7 +145,11 @@ fn process_primitive(
 
         vertices.push(VertexPositionTextureNormal {
             position: cgmath::Vector3::new(transformed_pos.x, transformed_pos.y, transformed_pos.z),
-            normal: cgmath::Vector3::new(transformed_norm.x, transformed_norm.y, transformed_norm.z),
+            normal: cgmath::Vector3::new(
+                transformed_norm.x,
+                transformed_norm.y,
+                transformed_norm.z,
+            ),
             uv: cgmath::Vector2::new(tex[0], tex[1]),
         });
     }
@@ -149,7 +159,8 @@ fn process_primitive(
     let pbr = material.pbr_metallic_roughness();
     let base_color = pbr.base_color_factor();
 
-    let texture_index = pbr.base_color_texture()
+    let texture_index = pbr
+        .base_color_texture()
         .map(|texture_info| texture_info.texture().source().index());
 
     Some(GlbMesh {
@@ -173,7 +184,8 @@ fn extract_positions(
     let data = &buffer[start..end.min(buffer.len())];
     let mut positions = Vec::new();
 
-    for chunk in data.chunks_exact(12) { // 3 * 4 bytes per f32
+    for chunk in data.chunks_exact(12) {
+        // 3 * 4 bytes per f32
         if chunk.len() >= 12 {
             let x = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let y = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
@@ -204,7 +216,8 @@ fn extract_texcoords(
     let data = &buffer[start..end.min(buffer.len())];
     let mut texcoords = Vec::new();
 
-    for chunk in data.chunks_exact(8) { // 2 * 4 bytes per f32
+    for chunk in data.chunks_exact(8) {
+        // 2 * 4 bytes per f32
         if chunk.len() >= 8 {
             let u = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             let v = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
@@ -214,10 +227,7 @@ fn extract_texcoords(
     Some(texcoords)
 }
 
-fn extract_indices(
-    accessor: gltf::Accessor,
-    buffers: &[gltf::buffer::Data],
-) -> Option<Vec<u32>> {
+fn extract_indices(accessor: gltf::Accessor, buffers: &[gltf::buffer::Data]) -> Option<Vec<u32>> {
     let view = accessor.view()?;
     let buffer = &buffers[view.buffer().index()];
 
@@ -231,7 +241,8 @@ fn extract_indices(
     let mut indices = Vec::new();
 
     match component_size {
-        2 => { // u16 indices
+        2 => {
+            // u16 indices
             for i in 0..accessor.count() {
                 let offset = start + i * 2;
                 if offset + 1 < buffer.len() {
@@ -240,12 +251,16 @@ fn extract_indices(
                 }
             }
         }
-        4 => { // u32 indices
+        4 => {
+            // u32 indices
             for i in 0..accessor.count() {
                 let offset = start + i * 4;
                 if offset + 3 < buffer.len() {
                     let index = u32::from_le_bytes([
-                        buffer[offset], buffer[offset + 1], buffer[offset + 2], buffer[offset + 3]
+                        buffer[offset],
+                        buffer[offset + 1],
+                        buffer[offset + 2],
+                        buffer[offset + 3],
                     ]);
                     indices.push(index);
                 }
@@ -257,11 +272,7 @@ fn extract_indices(
     Some(indices)
 }
 
-fn process_glb_model(
-    glb_model: GlbModel,
-    _asset_cache: &mut AssetCache,
-    _config: &(),
-) -> Model {
+fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config: &()) -> Model {
     let mut scene_objects = Vec::new();
 
     // Convert GLB meshes to SceneObjects
@@ -286,7 +297,8 @@ fn process_glb_model(
                     },
                 };
 
-                let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
+                let texture =
+                    texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
 
                 // Create BasicMaterial with texture
                 std::cell::RefCell::new(engine::scene::basic_material::create(
@@ -296,21 +308,22 @@ fn process_glb_model(
                 ))
             } else {
                 // Fallback to color material
-                std::cell::RefCell::new(engine::scene::color_material::create(
-                    cgmath::vec3(glb_mesh.base_color[0], glb_mesh.base_color[1], glb_mesh.base_color[2])
-                ))
+                std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+                    glb_mesh.base_color[0],
+                    glb_mesh.base_color[1],
+                    glb_mesh.base_color[2],
+                )))
             }
         } else {
             // No texture, use base color
-            std::cell::RefCell::new(engine::scene::color_material::create(
-                cgmath::vec3(glb_mesh.base_color[0], glb_mesh.base_color[1], glb_mesh.base_color[2])
-            ))
+            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+                glb_mesh.base_color[0],
+                glb_mesh.base_color[1],
+                glb_mesh.base_color[2],
+            )))
         };
 
-        let scene_object = SceneObject::create(
-            material,
-            Rc::new(Box::new(geometry)),
-        );
+        let scene_object = SceneObject::create(material, Rc::new(Box::new(geometry)));
         scene_objects.push(scene_object);
     }
 
