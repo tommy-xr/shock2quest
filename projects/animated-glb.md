@@ -212,8 +212,34 @@ impl GlbAnimatedViewerScene {
         // Load animations from GLB_ANIMATION_IMPORTER
         let all_clips = asset_cache.get(&GLB_ANIMATION_IMPORTER, &glb_file_path);
 
+        // Print available animations for user discovery
+        println!("Available animations in {}:", glb_file_path);
+        if all_clips.is_empty() {
+            println!("  No animations found");
+        } else {
+            for (i, clip) in all_clips.iter().enumerate() {
+                println!("  {}. {} (duration: {:.2}s, frames: {})",
+                    i + 1,
+                    clip.name.as_deref().unwrap_or("Unnamed"),
+                    clip.duration.as_secs_f32(),
+                    clip.num_frames
+                );
+            }
+        }
+
         // Filter clips by requested animation names
         let selected_clips = filter_clips_by_name(all_clips, animation_names)?;
+
+        if !animation_names.is_empty() && selected_clips.is_empty() {
+            return Err(format!("No matching animations found for: {}", animation_names.join(", ")).into());
+        }
+
+        println!("Playing animations: {}",
+            selected_clips.iter()
+                .map(|clip| clip.name.as_deref().unwrap_or("Unnamed"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         // Create animation controller and player
         let mut controller = AnimationController::new(selected_clips);
@@ -331,6 +357,45 @@ VertexPositionTextureSkinned {
 - [ ] Support for common glTF animation features (translation, rotation, scale)
 - [ ] Simplified skinning works with single dominant bone per vertex
 - [ ] Clear TODO markers for future multi-bone skinning implementation
+- [ ] Available animations are listed when loading GLB files
+- [ ] Helpful error messages when requested animations are not found
+
+## Example Usage
+
+```bash
+# List all available animations
+dark_viewer robot.glb
+
+# Output:
+# Available animations in robot.glb:
+#   1. Walk (duration: 2.50s, frames: 75)
+#   2. Run (duration: 1.80s, frames: 54)
+#   3. Idle (duration: 5.00s, frames: 150)
+#   4. Jump (duration: 1.20s, frames: 36)
+# Playing animations: Walk
+
+# Play specific animations
+dark_viewer robot.glb walk,jump
+
+# Output:
+# Available animations in robot.glb:
+#   1. Walk (duration: 2.50s, frames: 75)
+#   2. Run (duration: 1.80s, frames: 54)
+#   3. Idle (duration: 5.00s, frames: 150)
+#   4. Jump (duration: 1.20s, frames: 36)
+# Playing animations: Walk, Jump
+
+# Error case
+dark_viewer robot.glb dance
+
+# Output:
+# Available animations in robot.glb:
+#   1. Walk (duration: 2.50s, frames: 75)
+#   2. Run (duration: 1.80s, frames: 54)
+#   3. Idle (duration: 5.00s, frames: 150)
+#   4. Jump (duration: 1.20s, frames: 36)
+# Error: No matching animations found for: dance
+```
 
 ## References
 
