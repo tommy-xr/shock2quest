@@ -34,6 +34,13 @@ struct CameraTimings {
     ignore_range: f32,
 }
 
+const ALERT_ESCALATE_SECONDS: f32 = 3.0;
+const ALERT_DECAY_SECONDS: f32 = 5.0;
+const DEFAULT_TO_TWO_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
+const DEFAULT_TO_THREE_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
+const DEFAULT_DECAY_SECONDS: f32 = ALERT_DECAY_SECONDS;
+const DEFAULT_IGNORE_SECONDS: f32 = ALERT_DECAY_SECONDS;
+
 #[derive(Clone)]
 struct CameraModels {
     green: String,
@@ -120,8 +127,8 @@ impl CameraAI {
             .ok()
             .cloned()
             .unwrap_or(PropAICamera {
-                scan_angle_1: -180.0,
-                scan_angle_2: 180.0,
+                scan_angle_1: -45.0,
+                scan_angle_2: 45.0,
                 scan_speed: 0.05,
             });
 
@@ -140,11 +147,11 @@ impl CameraAI {
             .ok()
             .cloned()
             .unwrap_or(PropAIAwareDelay {
-                to_two: 750,
-                to_three: 500,
-                two_reuse: 12_000,
-                three_reuse: 22_000,
-                ignore_range: 9,
+                to_two: (DEFAULT_TO_TWO_SECONDS * 1000.0) as u32,
+                to_three: (DEFAULT_TO_THREE_SECONDS * 1000.0) as u32,
+                two_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+                three_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+                ignore_range: (DEFAULT_IGNORE_SECONDS * 1000.0) as u32,
             });
 
         let base_model = v_model_name
@@ -561,7 +568,7 @@ fn draw_debug_camera_fov(
     let v_pos = world.borrow::<View<PropPosition>>().unwrap();
     if let Ok(pose) = v_pos.get(entity_id) {
         let origin = point3(pose.position.x, pose.position.y, pose.position.z);
-        let orientation = pose.rotation * Quaternion::from_angle_x(Deg(aim_angle));
+        let orientation = pose.rotation * Quaternion::from_angle_y(Deg(-aim_angle - 90.0));
         let forward = orientation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize();
 
         let up = Vector3::new(0.0, 1.0, 0.0);
