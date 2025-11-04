@@ -128,6 +128,12 @@ pub enum Effect {
         handle: AudioHandle,
         name: String,
     },
+    PlaySpeech {
+        entity_id: EntityId,
+        voice_index: usize,
+        concept: String,
+        tags: Vec<(String, String)>,
+    },
     PlayEnvironmentalSound {
         audio_handle: AudioHandle,
         query: EnvSoundQuery,
