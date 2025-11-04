@@ -9,8 +9,8 @@ use glfw::GlfwReceiver;
 
 mod scenes;
 use scenes::{
-    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, GlbAnimatedViewerScene, ToolScene,
-    VideoPlayerScene,
+    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbAnimatedViewerScene, GlbViewerScene,
+    ToolScene, VideoPlayerScene,
 };
 use shock2vr::zip_asset_path::ZipAssetPath;
 
@@ -113,7 +113,8 @@ fn gather_animation_list(cli: &Cli, filename: &str) -> Result<(Vec<String>, bool
     if is_glb {
         // For GLB files, use animation names as-is (no .mc suffix normalization)
         // Filter out empty strings - empty means "show all animations"
-        let filtered_animations = animation_list.iter()
+        let filtered_animations = animation_list
+            .iter()
             .filter(|s| !s.trim().is_empty())
             .cloned()
             .collect();

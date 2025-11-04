@@ -2,13 +2,16 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::time::Duration;
 
-use cgmath::{vec3, Deg, Matrix4, Quaternion, Vector3};
+use cgmath::{vec3, Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
 use crate::{
-    motion::{AnimationClip, GlbAnimation, GlbAnimationChannel, GlbAnimationProperty, GlbAnimationValue, GlbKeyframe, JointId},
-    ss2_skeleton::{Bone, Skeleton},
+    motion::{
+        AnimationClip, GlbAnimation, GlbAnimationChannel, GlbAnimationProperty, GlbAnimationValue,
+        GlbKeyframe, JointId,
+    },
+    ss2_skeleton::{Bone, JointRestTransform, Skeleton},
 };
 
 /// Collection of GLB animations and skeleton data from a single GLB file
@@ -30,8 +33,7 @@ fn load_glb_animations(
 
     // Parse the GLTF document
     let cursor = Cursor::new(buffer);
-    let gltf = gltf::Gltf::from_slice(cursor.get_ref())
-        .expect("Failed to parse GLB file");
+    let gltf = gltf::Gltf::from_slice(cursor.get_ref()).expect("Failed to parse GLB file");
 
     let document = gltf.document;
     let blob = gltf.blob;
@@ -40,9 +42,7 @@ fn load_glb_animations(
     let mut buffers_data = Vec::new();
     for buffer in document.buffers() {
         let data = match buffer.source() {
-            gltf::buffer::Source::Bin => blob.as_ref()
-                .expect("No binary blob in GLB file")
-                .clone(),
+            gltf::buffer::Source::Bin => blob.as_ref().expect("No binary blob in GLB file").clone(),
             gltf::buffer::Source::Uri(uri) => {
                 panic!("External buffer not supported: {}", uri);
             }
@@ -87,18 +87,62 @@ fn extract_skeleton_from_node(
     if let Some(skin) = node.skin() {
         println!("Found skin in GLB, extracting skeleton...");
 
+        let joint_nodes: Vec<gltf::Node> = skin.joints().collect();
+        let inverse_bind_matrices = extract_inverse_bind_matrices(&skin, buffers);
+
+        let mut node_to_joint = HashMap::new();
+        for (joint_index, joint_node) in joint_nodes.iter().enumerate() {
+            node_to_joint.insert(joint_node.index(), joint_index as JointId);
+        }
+
+        let mut parent_map: HashMap<JointId, JointId> = HashMap::new();
+        for (joint_index, joint_node) in joint_nodes.iter().enumerate() {
+            let parent_joint = joint_index as JointId;
+            for child in joint_node.children() {
+                if let Some(child_joint) = node_to_joint.get(&child.index()) {
+                    parent_map.insert(*child_joint, parent_joint);
+                }
+            }
+        }
+
         let mut bones = Vec::new();
+        let mut rest_transforms = HashMap::new();
 
-        // Process each joint in the skin
-        for (joint_index, joint_node) in skin.joints().enumerate() {
+        for (joint_index, joint_node) in joint_nodes.iter().enumerate() {
             let joint_id = joint_index as JointId;
+            let parent_id = parent_map.get(&joint_id).copied();
 
-            // Find parent joint (if any)
-            let parent_id = find_parent_joint(&joint_node, &skin.joints().collect::<Vec<_>>());
-
-            // Get local transform from node
             let transform_array = joint_node.transform().matrix();
             let local_transform = Matrix4::from(transform_array);
+
+            let (translation_arr, rotation_arr, scale_arr) = joint_node.transform().decomposed();
+            let translation =
+                Vector3::new(translation_arr[0], translation_arr[1], translation_arr[2]);
+            let rotation = Quaternion::new(
+                rotation_arr[3],
+                rotation_arr[0],
+                rotation_arr[1],
+                rotation_arr[2],
+            );
+            let scale = Vector3::new(scale_arr[0], scale_arr[1], scale_arr[2]);
+
+            let local_inverse = local_transform.invert().unwrap_or_else(Matrix4::identity);
+            let bind_inverse = inverse_bind_matrices
+                .get(joint_index)
+                .copied()
+                .unwrap_or_else(Matrix4::identity);
+
+            rest_transforms.insert(
+                joint_id,
+                JointRestTransform {
+                    translation,
+                    rotation,
+                    scale,
+                    local_matrix: local_transform,
+                    local_inverse,
+                    inverse_bind: bind_inverse,
+                },
+            );
 
             bones.push(Bone {
                 joint_id,
@@ -106,14 +150,19 @@ fn extract_skeleton_from_node(
                 local_transform,
             });
 
-            println!("  Joint {}: {} (parent: {:?})",
+            println!(
+                "  Joint {}: {} (parent: {:?})",
                 joint_id,
                 joint_node.name().unwrap_or("unnamed"),
                 parent_id
             );
         }
 
-        return Some(Skeleton::create_from_bones(bones));
+        return Some(Skeleton::create_from_bones_with_mapping(
+            bones,
+            node_to_joint,
+            rest_transforms,
+        ));
     }
 
     // Check child nodes
@@ -126,17 +175,60 @@ fn extract_skeleton_from_node(
     None
 }
 
-/// Find the parent joint ID for a given joint node within the skin
-/// TODO: Implement proper parent-child relationship detection
-/// For now, we'll use a simple heuristic or skip parent relationships
-fn find_parent_joint(
-    _joint_node: &gltf::Node,
-    _all_joints: &[gltf::Node],
-) -> Option<JointId> {
-    // TODO: The gltf crate might not have direct parent access
-    // For now, return None to create a flat hierarchy
-    // This can be improved in a future iteration
-    None
+fn extract_inverse_bind_matrices(
+    skin: &gltf::Skin,
+    buffers: &[gltf::buffer::Data],
+) -> Vec<Matrix4<f32>> {
+    let accessor = match skin.inverse_bind_matrices() {
+        Some(accessor) => accessor,
+        None => return Vec::new(),
+    };
+
+    let view = match accessor.view() {
+        Some(view) => view,
+        None => return Vec::new(),
+    };
+
+    let buffer = match buffers.get(view.buffer().index()) {
+        Some(data) => data,
+        None => return Vec::new(),
+    };
+
+    let stride = view.stride().unwrap_or_else(|| accessor.size());
+
+    let start = view.offset() + accessor.offset();
+    let count = accessor.count();
+
+    let mut matrices = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let base_offset = start + i * stride;
+        let mut values = [0f32; 16];
+
+        for j in 0..16 {
+            let byte_index = base_offset + j * 4;
+            if byte_index + 3 >= buffer.0.len() {
+                values[j] = 0.0;
+            } else {
+                values[j] = f32::from_le_bytes([
+                    buffer.0[byte_index],
+                    buffer.0[byte_index + 1],
+                    buffer.0[byte_index + 2],
+                    buffer.0[byte_index + 3],
+                ]);
+            }
+        }
+
+        let matrix = Matrix4::new(
+            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+            values[8], values[9], values[10], values[11], values[12], values[13], values[14],
+            values[15],
+        );
+
+        matrices.push(matrix);
+    }
+
+    matrices
 }
 
 /// Process all animations from the GLB document (ported from functor)
@@ -146,12 +238,13 @@ fn extract_glb_animations(
 ) -> Vec<GlbAnimation> {
     let mut animations = Vec::new();
 
-    println!("Processing {} GLB animations...", document.animations().count());
+    println!(
+        "Processing {} GLB animations...",
+        document.animations().count()
+    );
 
     for animation in document.animations() {
-        let animation_name = animation.name()
-            .unwrap_or("Unnamed Animation")
-            .to_owned();
+        let animation_name = animation.name().unwrap_or("Unnamed Animation").to_owned();
 
         let mut glb_animation = GlbAnimation::new(animation_name.clone());
 
@@ -217,11 +310,7 @@ fn extract_glb_animations(
                         let time = input_times[i];
                         glb_channel.add_keyframe(GlbKeyframe {
                             time,
-                            value: GlbAnimationValue::Scale(vec3(
-                                scale[0],
-                                scale[1],
-                                scale[2],
-                            )),
+                            value: GlbAnimationValue::Scale(vec3(scale[0], scale[1], scale[2])),
                         });
                     }
                 }
@@ -231,7 +320,8 @@ fn extract_glb_animations(
                 }
             }
 
-            println!("    Channel: node {} {:?} ({} keyframes)",
+            println!(
+                "    Channel: node {} {:?} ({} keyframes)",
                 node_index,
                 property,
                 glb_channel.keyframes.len()
@@ -254,12 +344,16 @@ fn process_glb_animations(
 ) -> Vec<AnimationClip> {
     let mut animation_clips = Vec::new();
 
-    println!("Converting {} GLB animations to shock2quest format...", glb_data.animations.len());
+    println!(
+        "Converting {} GLB animations to shock2quest format...",
+        glb_data.animations.len()
+    );
 
     for glb_animation in glb_data.animations {
         match convert_glb_to_animation_clip(&glb_animation, &glb_data.skeleton) {
             Ok(clip) => {
-                println!("  Converted: {} -> {} frames",
+                println!(
+                    "  Converted: {} -> {} frames",
                     clip.name.as_deref().unwrap_or("Unnamed"),
                     clip.num_frames
                 );
@@ -289,11 +383,9 @@ fn convert_glb_to_animation_clip(
     let time_per_frame = Duration::from_secs_f32(1.0 / TARGET_FPS);
     let duration = Duration::from_secs_f32(glb_animation.duration);
 
-    println!("    Converting {} -> {} frames @ {}fps (duration: {:.2}s)",
-        glb_animation.name,
-        frame_count,
-        TARGET_FPS,
-        glb_animation.duration
+    println!(
+        "    Converting {} -> {} frames @ {}fps (duration: {:.2}s)",
+        glb_animation.name, frame_count, TARGET_FPS, glb_animation.duration
     );
 
     // Group channels by target node
@@ -309,31 +401,90 @@ fn convert_glb_to_animation_clip(
 
     // Process each animated node
     for (node_index, channels) in channels_by_node {
-        // Note: We can't directly map node_index to joint_id without the GLB document
-        // For now, use node_index as joint_id but add a warning
-        let joint_id = node_index as JointId;
+        let (joint_id, used_mapping) = match skeleton.as_ref() {
+            Some(sk) => {
+                if let Some(mapped_joint) = sk.joint_for_node(node_index) {
+                    (mapped_joint, true)
+                } else {
+                    let fallback_joint = node_index as JointId;
+                    println!(
+                        "    WARN: No joint mapping for node {}. Using fallback joint {}",
+                        node_index, fallback_joint
+                    );
+                    (fallback_joint, false)
+                }
+            }
+            None => (node_index as JointId, false),
+        };
         let mut frame_transforms = Vec::new();
 
-        println!("    Processing node {} -> joint {} ({} channels)", node_index, joint_id, channels.len());
+        let rest_data = skeleton
+            .as_ref()
+            .and_then(|sk| sk.rest_transform(joint_id).cloned());
+
+        let rest_translation = rest_data
+            .as_ref()
+            .map(|rest| rest.translation)
+            .unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+
+        let rest_rotation = rest_data
+            .as_ref()
+            .map(|rest| rest.rotation)
+            .unwrap_or(Quaternion::new(1.0, 0.0, 0.0, 0.0));
+
+        let rest_scale = rest_data
+            .as_ref()
+            .map(|rest| rest.scale)
+            .unwrap_or(Vector3::new(1.0, 1.0, 1.0));
+
+        let rest_local_inverse = rest_data
+            .as_ref()
+            .map(|rest| rest.local_inverse)
+            .unwrap_or_else(Matrix4::identity);
+
+        if used_mapping {
+            println!(
+                "    Processing node {} -> joint {} ({} channels)",
+                node_index,
+                joint_id,
+                channels.len()
+            );
+        } else {
+            println!(
+                "    Processing node {} -> joint {} ({} channels, fallback mapping)",
+                node_index,
+                joint_id,
+                channels.len()
+            );
+        }
 
         // Generate transforms for each frame
         for frame in 0..frame_count {
             let time = frame as f32 / TARGET_FPS;
 
             // Get T, R, S at this time by interpolating channels
-            let translation = interpolate_property_at_time(&channels, GlbAnimationProperty::Translation, time)
-                .unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+            let translation =
+                interpolate_property_at_time(&channels, GlbAnimationProperty::Translation, time)
+                    .unwrap_or(rest_translation);
 
-            let rotation = interpolate_rotation_at_time(&channels, time)
-                .unwrap_or(Quaternion::new(1.0, 0.0, 0.0, 0.0)); // Identity quaternion
+            let rotation = interpolate_rotation_at_time(&channels, time).unwrap_or(rest_rotation);
 
             let scale = interpolate_property_at_time(&channels, GlbAnimationProperty::Scale, time)
-                .unwrap_or(Vector3::new(1.0, 1.0, 1.0));
+                .unwrap_or(rest_scale);
 
             // Compose TRS matrix (T * R * S order as per glTF spec)
-            let transform = Matrix4::from_translation(translation)
+            let animated_matrix = Matrix4::from_translation(translation)
                 * Matrix4::from(rotation)
                 * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
+
+            if frame < 3 {
+                println!(
+                    "      Frame {}: raw translation ({:.3}, {:.3}, {:.3})",
+                    frame, translation.x, translation.y, translation.z
+                );
+            }
+
+            let transform = rest_local_inverse * animated_matrix;
 
             frame_transforms.push(transform);
         }
@@ -346,7 +497,7 @@ fn convert_glb_to_animation_clip(
         time_per_frame,
         duration,
         blend_length: Duration::from_millis(250), // Default blend
-        end_rotation: Deg(0.0), // TODO: Calculate from animation data
+        end_rotation: Deg(0.0),                   // TODO: Calculate from animation data
         sliding_velocity: Vector3::new(0.0, 0.0, 0.0), // TODO: Calculate from root motion
         translation: Vector3::new(0.0, 0.0, 0.0), // TODO: Calculate from root motion
         joint_to_frame,
@@ -362,8 +513,7 @@ fn interpolate_property_at_time(
     time: f32,
 ) -> Option<Vector3<f32>> {
     // Find the channel for this property
-    let channel = channels.iter()
-        .find(|ch| ch.target_property == property)?;
+    let channel = channels.iter().find(|ch| ch.target_property == property)?;
 
     // Interpolate the value at the given time
     if let Some(value) = channel.interpolate_at_time(time) {
@@ -382,7 +532,8 @@ fn interpolate_rotation_at_time(
     time: f32,
 ) -> Option<Quaternion<f32>> {
     // Find the rotation channel
-    let channel = channels.iter()
+    let channel = channels
+        .iter()
         .find(|ch| ch.target_property == GlbAnimationProperty::Rotation)?;
 
     // Interpolate the value at the given time
@@ -393,5 +544,6 @@ fn interpolate_rotation_at_time(
     }
 }
 
-pub static GLB_ANIMATION_IMPORTER: Lazy<AssetImporter<GlbAnimationCollection, Vec<AnimationClip>, ()>> =
-    Lazy::new(|| AssetImporter::define(load_glb_animations, process_glb_animations));
+pub static GLB_ANIMATION_IMPORTER: Lazy<
+    AssetImporter<GlbAnimationCollection, Vec<AnimationClip>, ()>,
+> = Lazy::new(|| AssetImporter::define(load_glb_animations, process_glb_animations));

@@ -4,7 +4,7 @@
 use rpds as immutable;
 use std::collections::HashMap;
 
-use cgmath::{Deg, Matrix4, SquareMatrix};
+use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
 
 use crate::{
     motion::{AnimationClip, JointId},
@@ -18,6 +18,8 @@ pub struct Skeleton {
     #[allow(dead_code)]
     animation_transforms: HashMap<JointId, Matrix4<f32>>,
     global_transforms: HashMap<JointId, Matrix4<f32>>,
+    node_to_joint: HashMap<usize, JointId>,
+    rest_transforms: HashMap<JointId, JointRestTransform>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,16 @@ pub struct Bone {
     pub local_transform: Matrix4<f32>,
 }
 
+#[derive(Debug, Clone)]
+pub struct JointRestTransform {
+    pub translation: Vector3<f32>,
+    pub rotation: Quaternion<f32>,
+    pub scale: Vector3<f32>,
+    pub local_matrix: Matrix4<f32>,
+    pub local_inverse: Matrix4<f32>,
+    pub inverse_bind: Matrix4<f32>,
+}
+
 impl Skeleton {
     pub fn bone_count(&self) -> usize {
         self.bones.len()
@@ -34,11 +46,16 @@ impl Skeleton {
 
     pub fn get_transforms(&self) -> [Matrix4<f32>; 40] {
         let mut transforms = [Matrix4::identity(); 40];
-        for (joint_id, transform) in self.global_transforms.iter() {
+        for (joint_id, global_transform) in self.global_transforms.iter() {
             if joint_id >= &40 {
                 break;
             }
-            transforms[*joint_id as usize] = *transform;
+            let final_transform = if let Some(rest) = self.rest_transforms.get(joint_id) {
+                *global_transform * rest.inverse_bind
+            } else {
+                *global_transform
+            };
+            transforms[*joint_id as usize] = final_transform;
         }
         transforms
     }
@@ -58,10 +75,20 @@ impl Skeleton {
             bones: Vec::new(),
             animation_transforms: HashMap::new(),
             global_transforms: HashMap::new(),
+            node_to_joint: HashMap::new(),
+            rest_transforms: HashMap::new(),
         }
     }
 
     pub fn create_from_bones(bones: Vec<Bone>) -> Skeleton {
+        Skeleton::create_from_bones_with_mapping(bones, HashMap::new(), HashMap::new())
+    }
+
+    pub fn create_from_bones_with_mapping(
+        bones: Vec<Bone>,
+        node_to_joint: HashMap<usize, JointId>,
+        rest_transforms: HashMap<JointId, JointRestTransform>,
+    ) -> Skeleton {
         // Build global transform map
         let animation_transforms = HashMap::new();
         let mut global_transforms = HashMap::new();
@@ -78,6 +105,8 @@ impl Skeleton {
             bones,
             animation_transforms,
             global_transforms,
+            node_to_joint,
+            rest_transforms,
         }
     }
 
@@ -112,7 +141,17 @@ impl Skeleton {
             bones,
             animation_transforms,
             global_transforms,
+            node_to_joint: base_skeleton.node_to_joint.clone(),
+            rest_transforms: base_skeleton.rest_transforms.clone(),
         }
+    }
+
+    pub fn joint_for_node(&self, node_index: usize) -> Option<JointId> {
+        self.node_to_joint.get(&node_index).copied()
+    }
+
+    pub fn rest_transform(&self, joint_id: JointId) -> Option<&JointRestTransform> {
+        self.rest_transforms.get(&joint_id)
     }
 }
 
@@ -255,5 +294,7 @@ pub fn animate(
         bones,
         animation_transforms,
         global_transforms,
+        node_to_joint: base_skeleton.node_to_joint.clone(),
+        rest_transforms: base_skeleton.rest_transforms.clone(),
     }
 }

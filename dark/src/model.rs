@@ -65,28 +65,45 @@ impl AnimatedModel {
         unsafe {
             DEBUG_FRAME_COUNT += 1;
             if DEBUG_FRAME_COUNT % 60 == 0 {
-                println!("AnimatedModel: got {} bone transforms from animation player", skinning_data.len());
+                println!(
+                    "AnimatedModel: got {} bone transforms from animation player",
+                    skinning_data.len()
+                );
                 if !skinning_data.is_empty() {
                     let first_transform = &skinning_data[0];
-                    println!("  First bone: matrix diagonal = [{:.3}, {:.3}, {:.3}, {:.3}]",
-                        first_transform.x.x, first_transform.y.y, first_transform.z.z, first_transform.w.w);
+                    println!(
+                        "  First bone: matrix diagonal = [{:.3}, {:.3}, {:.3}, {:.3}]",
+                        first_transform.x.x,
+                        first_transform.y.y,
+                        first_transform.z.z,
+                        first_transform.w.w
+                    );
+                    println!(
+                        "  First bone translation = [{:.3}, {:.3}, {:.3}]",
+                        first_transform.w.x, first_transform.w.y, first_transform.w.z
+                    );
                 }
             }
         }
 
         // Check if we have any transforms and if they're identity matrices
         let mut non_identity_count = 0;
-        for (bone_id, transform) in skinning_data.iter().enumerate() {
-            let is_identity = transform.x.x.abs() - 1.0 < 0.001 &&
-                             transform.y.y.abs() - 1.0 < 0.001 &&
-                             transform.z.z.abs() - 1.0 < 0.001 &&
-                             transform.w.w.abs() - 1.0 < 0.001 &&
-                             transform.x.y.abs() < 0.001 && transform.x.z.abs() < 0.001;
+        for (_bone_id, transform) in skinning_data.iter().enumerate() {
+            let is_identity = transform.x.x.abs() - 1.0 < 0.001
+                && transform.y.y.abs() - 1.0 < 0.001
+                && transform.z.z.abs() - 1.0 < 0.001
+                && transform.w.w.abs() - 1.0 < 0.001
+                && transform.x.y.abs() < 0.001
+                && transform.x.z.abs() < 0.001;
             if !is_identity {
                 non_identity_count += 1;
             }
         }
-        println!("  {} out of {} bone transforms are non-identity", non_identity_count, skinning_data.len());
+        println!(
+            "  {} out of {} bone transforms are non-identity",
+            non_identity_count,
+            skinning_data.len()
+        );
 
         self.scene_objects
             .iter()
@@ -222,7 +239,10 @@ impl Model {
         skeleton: Option<Skeleton>,
     ) -> Model {
         if let Some(skeleton) = skeleton {
-            println!("Creating animated GLB model with {} bones", skeleton.bone_count());
+            println!(
+                "Creating animated GLB model with {} bones",
+                skeleton.bone_count()
+            );
             // Animated model
             let hit_boxes = HashMap::new();
             Model {
@@ -282,7 +302,7 @@ impl Model {
             InnerModel::Static(static_model) => {
                 println!("Rendering static GLB model (no animation)");
                 static_model.to_scene_objects().clone()
-            },
+            }
         }
     }
 

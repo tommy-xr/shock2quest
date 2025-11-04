@@ -53,20 +53,30 @@ impl GlbAnimatedViewerScene {
         println!("Loaded {} animations from GLB file:", animation_clips.len());
         for (i, clip) in animation_clips.iter().enumerate() {
             let name = clip.name.as_deref().unwrap_or("Unnamed");
-            println!("  {}: {} ({} frames, {:.2}s)", i, name, clip.num_frames, clip.duration.as_secs_f32());
+            println!(
+                "  {}: {} ({} frames, {:.2}s)",
+                i,
+                name,
+                clip.num_frames,
+                clip.duration.as_secs_f32()
+            );
         }
 
         // Filter animations by requested names (if any)
         let filtered_clips: Vec<Rc<AnimationClip>> = if animation_names.is_empty() {
             // If no specific animations requested, use all animations
-            animation_clips.iter().map(|clip| Rc::new(clip.clone())).collect()
+            animation_clips
+                .iter()
+                .map(|clip| Rc::new(clip.clone()))
+                .collect()
         } else {
             // Filter by requested animation names
             let mut filtered = Vec::new();
             for name in &animation_names {
-                if let Some(clip) = animation_clips.iter().find(|c| {
-                    c.name.as_deref().unwrap_or("").to_lowercase() == name.to_lowercase()
-                }) {
+                if let Some(clip) = animation_clips
+                    .iter()
+                    .find(|c| c.name.as_deref().unwrap_or("").to_lowercase() == name.to_lowercase())
+                {
                     filtered.push(Rc::new(clip.clone()));
                     println!("Found requested animation: {}", name);
                 } else {
@@ -79,11 +89,13 @@ impl GlbAnimatedViewerScene {
         if filtered_clips.is_empty() {
             return Err(format!(
                 "No animations found. Available animations: {}",
-                animation_clips.iter()
+                animation_clips
+                    .iter()
                     .map(|c| c.name.as_deref().unwrap_or("Unnamed"))
                     .collect::<Vec<_>>()
                     .join(", ")
-            ).into());
+            )
+            .into());
         }
 
         // Set up animation controller
@@ -92,7 +104,10 @@ impl GlbAnimatedViewerScene {
 
         // Start with the first animation
         if let Some(first_clip) = controller.take_next() {
-            println!("Starting with animation: {}", first_clip.name.as_deref().unwrap_or("Unnamed"));
+            println!(
+                "Starting with animation: {}",
+                first_clip.name.as_deref().unwrap_or("Unnamed")
+            );
             animation_player = AnimationPlayer::queue_animation(&animation_player, first_clip);
         }
 
@@ -116,9 +131,13 @@ impl ToolScene for GlbAnimatedViewerScene {
             static mut DEBUG_COUNTER: u32 = 0;
             unsafe {
                 DEBUG_COUNTER += 1;
-                if DEBUG_COUNTER % 60 == 0 { // Print every 60 frames
-                    println!("Animation player update #{}: elapsed={:.3}s",
-                        DEBUG_COUNTER, elapsed.as_secs_f32());
+                if DEBUG_COUNTER % 60 == 0 {
+                    // Print every 60 frames
+                    println!(
+                        "Animation player update #{}: elapsed={:.3}s",
+                        DEBUG_COUNTER,
+                        elapsed.as_secs_f32()
+                    );
                 }
             }
 
@@ -128,8 +147,12 @@ impl ToolScene for GlbAnimatedViewerScene {
             for event in events {
                 if matches!(event, AnimationEvent::Completed) {
                     if let Some(next_clip) = controller.take_next() {
-                        println!("Animation completed, starting: {}", next_clip.name.as_deref().unwrap_or("Unnamed"));
-                        self.animation_player = AnimationPlayer::queue_animation(&self.animation_player, next_clip);
+                        println!(
+                            "Animation completed, starting: {}",
+                            next_clip.name.as_deref().unwrap_or("Unnamed")
+                        );
+                        self.animation_player =
+                            AnimationPlayer::queue_animation(&self.animation_player, next_clip);
                     }
                 }
             }

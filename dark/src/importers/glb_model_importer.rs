@@ -5,8 +5,13 @@ use collision::Aabb3;
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
-use crate::{model::Model, ss2_skeleton::Skeleton, importers::glb_animation_importer::extract_skeleton_from_document};
-use engine::scene::{SceneObject, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal};
+use crate::{
+    importers::glb_animation_importer::extract_skeleton_from_document, model::Model,
+    ss2_skeleton::Skeleton,
+};
+use engine::scene::{
+    SceneObject, SkinnedMaterial, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal,
+};
 use engine::texture::{self, TextureOptions};
 use engine::texture_format::{PixelFormat, RawTextureData};
 
@@ -194,7 +199,11 @@ fn process_primitive(
             let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
 
             skinned_vertices.push(VertexPositionTextureSkinnedNormal {
-                position: cgmath::Vector3::new(transformed_pos.x, transformed_pos.y, transformed_pos.z),
+                position: cgmath::Vector3::new(
+                    transformed_pos.x,
+                    transformed_pos.y,
+                    transformed_pos.z,
+                ),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
                 bone_indices: [dominant_joint as u32, 0, 0, 0], // Only dominant bone
                 normal: cgmath::Vector3::new(
@@ -219,7 +228,11 @@ fn process_primitive(
             let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
 
             static_vertices.push(VertexPositionTextureNormal {
-                position: cgmath::Vector3::new(transformed_pos.x, transformed_pos.y, transformed_pos.z),
+                position: cgmath::Vector3::new(
+                    transformed_pos.x,
+                    transformed_pos.y,
+                    transformed_pos.z,
+                ),
                 normal: cgmath::Vector3::new(
                     transformed_norm.x,
                     transformed_norm.y,
@@ -450,62 +463,27 @@ fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config
 
     // Convert GLB meshes to SceneObjects
     for glb_mesh in glb_model.meshes.into_iter() {
-        // Create indexed geometry from vertex data (supporting both static and skinned)
-        let geometry = match glb_mesh.vertex_data {
-            GlbVertexData::Static(vertices) => {
-                engine::scene::indexed_mesh::create(vertices, glb_mesh.indices)
-            }
+        let GlbMesh {
+            vertex_data,
+            indices,
+            base_color,
+            texture_index,
+        } = glb_mesh;
+
+        let (geometry, is_skinned) = match vertex_data {
+            GlbVertexData::Static(vertices) => (
+                engine::scene::indexed_mesh::create(vertices, indices),
+                false,
+            ),
             GlbVertexData::Skinned(vertices) => {
-                engine::scene::indexed_mesh::create(vertices, glb_mesh.indices)
+                (engine::scene::indexed_mesh::create(vertices, indices), true)
             }
         };
 
-        // Create material based on GLB material data
-        let material = if let Some(texture_index) = glb_mesh.texture_index {
-            if texture_index < glb_model.images.len() {
-                let image_data = &glb_model.images[texture_index];
-                println!("Loading texture {} ({}x{}, format: {:?})",
-                    texture_index, image_data.width, image_data.height, image_data.format);
-
-                // Create texture from memory
-                let raw_texture_data = RawTextureData {
-                    bytes: image_data.pixels.clone(),
-                    width: image_data.width,
-                    height: image_data.height,
-                    format: match image_data.format {
-                        gltf::image::Format::R8G8B8 => PixelFormat::RGB,
-                        gltf::image::Format::R8G8B8A8 => PixelFormat::RGBA,
-                        _ => PixelFormat::RGBA, // Default fallback
-                    },
-                };
-
-                let texture =
-                    texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
-
-                // Create BasicMaterial with texture
-                std::cell::RefCell::new(engine::scene::basic_material::create(
-                    Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>,
-                    1.0, // emissivity
-                    0.0, // transparency
-                ))
-            } else {
-                // Fallback to color material
-                println!("Texture index {} out of range (only {} images available), using base color: {:?}",
-                    texture_index, glb_model.images.len(), glb_mesh.base_color);
-                std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-                    glb_mesh.base_color[0],
-                    glb_mesh.base_color[1],
-                    glb_mesh.base_color[2],
-                )))
-            }
+        let material = if is_skinned {
+            create_skinned_material(&glb_model.images, texture_index, base_color)
         } else {
-            // No texture, use base color
-            println!("No texture specified, using base color: {:?}", glb_mesh.base_color);
-            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-                glb_mesh.base_color[0],
-                glb_mesh.base_color[1],
-                glb_mesh.base_color[2],
-            )))
+            create_static_material(&glb_model.images, texture_index, base_color)
         };
 
         let scene_object = SceneObject::create(material, Rc::new(Box::new(geometry)));
@@ -518,3 +496,111 @@ fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config
 
 pub static GLB_MODELS_IMPORTER: Lazy<AssetImporter<GlbModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_glb, process_glb_model));
+
+fn create_texture_from_image(
+    images: &[gltf::image::Data],
+    texture_index: usize,
+) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+    if texture_index >= images.len() {
+        return None;
+    }
+
+    let image_data = &images[texture_index];
+    println!(
+        "Loading texture {} ({}x{}, format: {:?})",
+        texture_index, image_data.width, image_data.height, image_data.format
+    );
+
+    let raw_texture_data = RawTextureData {
+        bytes: image_data.pixels.clone(),
+        width: image_data.width,
+        height: image_data.height,
+        format: match image_data.format {
+            gltf::image::Format::R8G8B8 => PixelFormat::RGB,
+            gltf::image::Format::R8G8B8A8 => PixelFormat::RGBA,
+            _ => PixelFormat::RGBA,
+        },
+    };
+
+    let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
+
+    Some(Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>)
+}
+
+fn create_solid_color_texture(base_color: [f32; 4]) -> Rc<dyn engine::texture::TextureTrait> {
+    let clamp = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+
+    let r = clamp(base_color[0]);
+    let g = clamp(base_color[1]);
+    let b = clamp(base_color[2]);
+    let a = clamp(base_color[3]);
+
+    let raw_texture_data = RawTextureData {
+        bytes: vec![r, g, b, a],
+        width: 1,
+        height: 1,
+        format: PixelFormat::RGBA,
+    };
+
+    let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
+
+    Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>
+}
+
+fn create_static_material(
+    images: &[gltf::image::Data],
+    texture_index: Option<usize>,
+    base_color: [f32; 4],
+) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
+    if let Some(texture_index) = texture_index {
+        if let Some(texture) = create_texture_from_image(images, texture_index) {
+            return std::cell::RefCell::new(engine::scene::basic_material::create(
+                texture, 1.0, 0.0,
+            ));
+        } else {
+            println!(
+                "Texture index {} out of range (only {} images available), using base color: {:?}",
+                texture_index,
+                images.len(),
+                base_color
+            );
+        }
+    }
+
+    println!("No texture specified, using base color: {:?}", base_color);
+    std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+        base_color[0],
+        base_color[1],
+        base_color[2],
+    )))
+}
+
+fn create_skinned_material(
+    images: &[gltf::image::Data],
+    texture_index: Option<usize>,
+    base_color: [f32; 4],
+) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
+    let texture: Rc<dyn engine::texture::TextureTrait> = if let Some(texture_index) = texture_index
+    {
+        match create_texture_from_image(images, texture_index) {
+            Some(tex) => tex,
+            None => {
+                println!(
+                    "Texture index {} out of range (only {} images available) for skinned mesh, using base color: {:?}",
+                    texture_index,
+                    images.len(),
+                    base_color
+                );
+                create_solid_color_texture(base_color)
+            }
+        }
+    } else {
+        println!(
+            "No texture specified for skinned mesh, using base color: {:?}",
+            base_color
+        );
+        create_solid_color_texture(base_color)
+    };
+
+    std::cell::RefCell::new(SkinnedMaterial::create(texture, 1.0, 0.0))
+}
