@@ -47,6 +47,7 @@ struct CameraState {
     time_in_state: f32,
     descending: bool,
     current_model: Option<String>,
+    view_angle: f32,
 }
 
 impl Default for CameraState {
@@ -57,6 +58,7 @@ impl Default for CameraState {
             time_in_state: 0.0,
             descending: false,
             current_model: None,
+            view_angle: 0.0,
         }
     }
 }
@@ -190,6 +192,7 @@ impl CameraAI {
             time_in_state: 0.0,
             descending: initial_alertness.0 != AIAlertLevel::Lowest,
             current_model: None,
+            view_angle: 0.0,
         };
 
         // Ensure peak never falls below the relax floor
@@ -393,7 +396,8 @@ impl Script for CameraAI {
             );
         }
 
-        let mut aim_angle = time.total.as_secs_f32().sin() * 90.0;
+        let mut target_angle = time.total.as_secs_f32().sin() * 90.0;
+        let mut max_delta: Option<f32> = None;
 
         if ai_util::is_player_visible(entity_id, world, physics) {
             let v_pos = world.borrow::<View<PropPosition>>().unwrap();
@@ -403,9 +407,22 @@ impl Script for CameraAI {
                 drop(u_player);
 
                 let current_yaw = ai_util::current_yaw(entity_id, world);
-                aim_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
+                target_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
             }
         }
+
+        if let Some(config) = &self.config {
+            let speed_deg_per_sec = (config.camera.scan_speed * 1000.0).max(1.0);
+            max_delta = Some(speed_deg_per_sec * time.elapsed.as_secs_f32());
+        }
+
+        let aim_angle = if let Some(delta_limit) = max_delta {
+            self.state.view_angle =
+                move_towards_angle(self.state.view_angle, target_angle, delta_limit);
+            self.state.view_angle
+        } else {
+            target_angle
+        };
 
         let quat = Quaternion::from_angle_x(Deg(aim_angle));
         effects.push(Effect::SetJointTransform {
@@ -440,6 +457,18 @@ fn normalize_deg(mut angle: f32) -> f32 {
         angle += 360.0;
     }
     angle
+}
+
+fn move_towards_angle(current: f32, target: f32, max_delta: f32) -> f32 {
+    if max_delta <= 0.0 {
+        return current;
+    }
+    let delta = normalize_deg(target - current);
+    if delta.abs() <= max_delta {
+        target
+    } else {
+        normalize_deg(current + delta.signum() * max_delta)
+    }
 }
 
 fn derive_models(base_model: &str) -> CameraModels {
