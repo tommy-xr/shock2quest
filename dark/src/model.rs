@@ -188,6 +188,36 @@ impl Model {
         }
     }
 
+    pub fn from_glb(
+        scene_objects: Vec<SceneObject>,
+        bounding_box: Aabb3<f32>,
+        skeleton: Option<Skeleton>,
+    ) -> Model {
+        if let Some(skeleton) = skeleton {
+            // Animated model
+            let hit_boxes = HashMap::new();
+            Model {
+                transform: Matrix4::identity(),
+                inner: InnerModel::Animated(AnimatedModel {
+                    skeleton: Rc::new(skeleton),
+                    scene_objects,
+                    hit_boxes: Rc::new(hit_boxes),
+                    vhots: vec![],
+                }),
+            }
+        } else {
+            // Static model
+            Model {
+                transform: Matrix4::identity(),
+                inner: InnerModel::Static(StaticModel {
+                    scene_objects,
+                    bounding_box,
+                    vhots: vec![],
+                }),
+            }
+        }
+    }
+
     pub fn to_scene_objects(&self) -> &Vec<SceneObject> {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.to_scene_objects(),

@@ -13,9 +13,11 @@ pub trait ToolScene {
 pub mod bin_ai_viewer;
 pub mod bin_obj_viewer;
 pub mod font_viewer;
+pub mod glb_viewer;
 pub mod video_player;
 
 pub use bin_ai_viewer::BinAiViewerScene;
 pub use bin_obj_viewer::BinObjViewerScene;
 pub use font_viewer::FontViewerScene;
+pub use glb_viewer::GlbViewerScene;
 pub use video_player::VideoPlayerScene;

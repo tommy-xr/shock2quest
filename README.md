@@ -79,6 +79,10 @@ Some code is ported from [openDarkEngine](https://github.com/volca02/openDarkEng
 
 In addition, code in the `engine` folder is agnostic of Shock2, so is dual-licensed under the MIT license.
 
+# Credits
+
+Demo assets are from [BabylonJS Assets](https://github.com/BabylonJS/Assets).
+
 # Thanks
 
 There were several projects around the SS2 community, that served as an inspiration, or were used to help understand the internals of the dark engine and file formats, notably:
