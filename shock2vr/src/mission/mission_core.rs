@@ -64,7 +64,7 @@ use crate::{
     quest_info::QuestInfo,
     ragdoll_manager::RagdollManager,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform,
+        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropRagdoll, RuntimePropTransform,
         RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
@@ -1382,6 +1382,11 @@ impl MissionCore {
                             )
                         }
 
+                        // Check if this entity should spawn a ragdoll before removal
+                        if self.should_create_ragdoll(entity_id) {
+                            self.spawn_ragdoll_from_entity(entity_id, asset_cache);
+                        }
+
                         self.remove_entity(entity_id);
                     }
                 }
@@ -1999,6 +2004,51 @@ impl MissionCore {
             }
         }
         messages
+    }
+
+    // ============================================================================
+    // Ragdoll System Methods
+    // ============================================================================
+    /// Check if an entity should spawn a ragdoll when slain
+    pub fn should_create_ragdoll(&self, entity_id: EntityId) -> bool {
+        // Check if entity has PropCreature (is a creature) and has a model with joints
+        self.world.run(|v_creature: View<PropCreature>, v_model: View<PropModelName>| {
+            // Must be a creature with a model
+            v_creature.contains(entity_id) && v_model.contains(entity_id)
+        })
+    }
+
+    /// Spawn a ragdoll entity from a dying creature
+    pub fn spawn_ragdoll_from_entity(&mut self, entity_id: EntityId, asset_cache: &mut AssetCache) {
+        // 1. Capture final pose: read RuntimePropTransform and RuntimePropJointTransforms
+        let (final_transform, final_joint_transforms, model) = self.world.run(
+            |v_transform: View<RuntimePropTransform>,
+             v_joint_transforms: View<RuntimePropJointTransforms>,
+             v_model_name: View<PropModelName>| {
+                let transform = v_transform.get(entity_id).map(|t| t.0).unwrap_or(Matrix4::identity());
+                let joint_transforms = v_joint_transforms.get(entity_id).map(|jt| jt.0).unwrap_or([Matrix4::identity(); 40]);
+                let model_name = v_model_name.get(entity_id).ok().map(|m| m.0.clone());
+                (transform, joint_transforms, model_name)
+            },
+        );
+
+        // For now, just print debug info about the ragdoll we would create
+        println!("Creating ragdoll for entity {:?}", entity_id);
+        if let Some(model_name) = model {
+            println!("  Model: {}", model_name);
+        }
+        println!("  Transform: {:?}", final_transform);
+        println!("  Joint transforms: {} joints", final_joint_transforms.len());
+
+        // TODO: Implement full ragdoll creation:
+        // 2. Clone/derive the entity's Model for rendering
+        // 3. Remove the creature's existing physics body
+        // 4. Create ragdoll entity with components:
+        //    - PropPosition, RuntimePropTransform, RuntimePropJointTransforms
+        //    - RuntimePropRagdoll, RuntimePropDoNotSerialize
+        // 5. Create dynamic rigid bodies for each joint with hitbox
+        // 6. Author constraints between parent-child joint pairs
+        // 7. Register ragdoll with physics and ragdoll manager
     }
 }
 
