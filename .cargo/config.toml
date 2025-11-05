@@ -2,3 +2,5 @@
 dv = "run -p dark_viewer --"
 dq = "run -p dark_query --"
 dr = "run -p desktop_runtime --"
+dbgr = "run -p debug_runtime --"
+dbgc = "run -p debug_command --"

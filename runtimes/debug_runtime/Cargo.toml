@@ -1,0 +1,33 @@
+[package]
+name = "debug_runtime"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# HTTP server and async runtime
+tokio = { version = "1.0", features = ["full"] }
+axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Game engine dependencies (matching desktop_runtime)
+gl = "0.14.0"
+glfw = "0.56.0"
+engine = { path = "../../engine" }
+dark = { path = "../../dark" }
+cgmath = "0.18.0"
+clap = { version = "4.3.5", features = ["derive"] }
+
+# Logging and utilities
+tracing = "0.1.37"
+tracing-subscriber = "0.3.16"
+humantime = "2.1"
+
+# FFmpeg is disabled on Windows due to build complexity
+[target.'cfg(not(windows))'.dependencies]
+shock2vr = { path = "../../shock2vr" }
+
+[target.'cfg(windows)'.dependencies]
+shock2vr = { path = "../../shock2vr", default-features = false }
