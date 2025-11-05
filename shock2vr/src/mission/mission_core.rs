@@ -1383,8 +1383,16 @@ impl MissionCore {
                         }
 
                         // Check if this entity should spawn a ragdoll before removal
-                        if self.should_create_ragdoll(entity_id) {
+                        println!("🪦 Entity {:?} is being slayed - checking for ragdoll creation", entity_id);
+
+                        let should_create = self.should_create_ragdoll(entity_id);
+                        println!("   Should create ragdoll: {}", should_create);
+
+                        if should_create {
+                            println!("   ✅ Creating ragdoll for entity {:?}", entity_id);
                             self.spawn_ragdoll_from_entity(entity_id, asset_cache);
+                        } else {
+                            println!("   ❌ Not creating ragdoll for entity {:?} (not a creature with model)", entity_id);
                         }
 
                         self.remove_entity(entity_id);
@@ -2013,42 +2021,280 @@ impl MissionCore {
     pub fn should_create_ragdoll(&self, entity_id: EntityId) -> bool {
         // Check if entity has PropCreature (is a creature) and has a model with joints
         self.world.run(|v_creature: View<PropCreature>, v_model: View<PropModelName>| {
+            let has_creature = v_creature.contains(entity_id);
+            let has_model = v_model.contains(entity_id);
+
+            println!("     Entity {:?} - has PropCreature: {}, has PropModelName: {}", entity_id, has_creature, has_model);
+
+            if has_creature {
+                if let Ok(creature) = v_creature.get(entity_id) {
+                    println!("     Creature type: {}", creature.0);
+                }
+            }
+
+            if has_model {
+                if let Ok(model_name) = v_model.get(entity_id) {
+                    println!("     Model name: {}", model_name.0);
+                }
+            }
+
             // Must be a creature with a model
-            v_creature.contains(entity_id) && v_model.contains(entity_id)
+            has_creature && has_model
         })
     }
 
     /// Spawn a ragdoll entity from a dying creature
-    pub fn spawn_ragdoll_from_entity(&mut self, entity_id: EntityId, asset_cache: &mut AssetCache) {
-        // 1. Capture final pose: read RuntimePropTransform and RuntimePropJointTransforms
-        let (final_transform, final_joint_transforms, model) = self.world.run(
+    pub fn spawn_ragdoll_from_entity(&mut self, entity_id: EntityId, _asset_cache: &mut AssetCache) {
+        // 1. Capture final pose and creature data
+        let (final_transform, final_joint_transforms, model_name, creature_type) = self.world.run(
             |v_transform: View<RuntimePropTransform>,
              v_joint_transforms: View<RuntimePropJointTransforms>,
-             v_model_name: View<PropModelName>| {
+             v_model_name: View<PropModelName>,
+             v_creature: View<PropCreature>| {
                 let transform = v_transform.get(entity_id).map(|t| t.0).unwrap_or(Matrix4::identity());
                 let joint_transforms = v_joint_transforms.get(entity_id).map(|jt| jt.0).unwrap_or([Matrix4::identity(); 40]);
                 let model_name = v_model_name.get(entity_id).ok().map(|m| m.0.clone());
-                (transform, joint_transforms, model_name)
+                let creature_type = v_creature.get(entity_id).ok().map(|c| c.0);
+                (transform, joint_transforms, model_name, creature_type)
             },
         );
 
-        // For now, just print debug info about the ragdoll we would create
-        println!("Creating ragdoll for entity {:?}", entity_id);
-        if let Some(model_name) = model {
-            println!("  Model: {}", model_name);
-        }
-        println!("  Transform: {:?}", final_transform);
-        println!("  Joint transforms: {} joints", final_joint_transforms.len());
+        let Some(model_name) = model_name else {
+            println!("Ragdoll creation failed: no model for entity {:?}", entity_id);
+            return;
+        };
 
-        // TODO: Implement full ragdoll creation:
-        // 2. Clone/derive the entity's Model for rendering
-        // 3. Remove the creature's existing physics body
-        // 4. Create ragdoll entity with components:
-        //    - PropPosition, RuntimePropTransform, RuntimePropJointTransforms
-        //    - RuntimePropRagdoll, RuntimePropDoNotSerialize
-        // 5. Create dynamic rigid bodies for each joint with hitbox
-        // 6. Author constraints between parent-child joint pairs
-        // 7. Register ragdoll with physics and ragdoll manager
+        let Some(creature_type) = creature_type else {
+            println!("Ragdoll creation failed: not a creature entity {:?}", entity_id);
+            return;
+        };
+
+        println!("Creating ragdoll for entity {:?}, model: {}, creature type: {:?}", entity_id, model_name, creature_type);
+
+        // 2. Get creature definition for hitbox information
+        let creature_definition = match crate::creature::get_creature_definition(creature_type) {
+            Some(def) => def,
+            None => {
+                println!("Ragdoll creation failed: no creature definition for type {:?}", creature_type);
+                return;
+            }
+        };
+
+        // 3. Get the model to access skeleton and hitbox data
+        let model = self.id_to_model.get(&entity_id);
+        let Some(model) = model else {
+            println!("Ragdoll creation failed: no loaded model for entity {:?}", entity_id);
+            return;
+        };
+
+        // 4. Extract joint hierarchy from the model's skeleton
+        let joint_hierarchy = self.extract_joint_hierarchy(model);
+        let root_joint_id = self.find_root_joint(&joint_hierarchy);
+
+        // Clone model reference to avoid borrowing issues
+        let model_clone = model.clone();
+
+        // 5. Remove the creature's existing physics body
+        self.make_un_physical(entity_id);
+
+        // 6. Create ragdoll entity with rendering and physics components
+        let position = PropPosition {
+            position: final_transform.w.truncate().into(),
+            cell: 0, // Default cell
+            rotation: crate::util::get_rotation_from_matrix(&final_transform),
+        };
+
+        // Create the ragdoll entity
+        let ragdoll_entity = self.world.add_entity((
+            position,
+            RuntimePropTransform(final_transform),
+            RuntimePropJointTransforms(final_joint_transforms),
+            RuntimePropDoNotSerialize,
+        ));
+
+        // Copy the original model for rendering
+        if let Some(model) = self.id_to_model.get(&entity_id).cloned() {
+            self.id_to_model.insert(ragdoll_entity, model);
+            println!("✅ Copied model to ragdoll entity for rendering");
+        } else {
+            println!("⚠️  Warning: No model found for ragdoll rendering");
+        }
+
+        // 7. Create physics bodies for each joint with hitboxes
+        let mut joint_handles = std::collections::HashMap::new();
+        let mut joint_offsets = std::collections::HashMap::new();
+        let mut constraint_handles = Vec::new();
+
+        // Create rigid bodies for joints that have hitboxes
+        for (joint_id, hitbox_type) in creature_definition.hit_boxes.iter() {
+            if let Some(joint_transform) = final_joint_transforms.get(*joint_id as usize) {
+                // Calculate world position of this joint
+                let world_joint_transform = final_transform * joint_transform;
+                let joint_position = world_joint_transform.w.truncate();
+                let joint_rotation = crate::util::get_rotation_from_matrix(&world_joint_transform);
+
+                // Create dynamic rigid body for this joint with slightly closer positioning
+                let isometry = rapier3d::prelude::Isometry::from_parts(
+                    rapier3d::prelude::Translation::from(rapier3d::na::Vector3::new(joint_position.x, joint_position.y, joint_position.z)),
+                    rapier3d::na::UnitQuaternion::from_quaternion(rapier3d::na::Quaternion::new(joint_rotation.s, joint_rotation.v.x, joint_rotation.v.y, joint_rotation.v.z))
+                );
+
+                let rigid_body_handle = self.physics.create_dynamic_body(isometry, Some(ragdoll_entity));
+
+                // Attach collider based on hitbox type with reduced size to prevent overlap
+                self.attach_joint_collider(rigid_body_handle, *hitbox_type, &model_clone);
+
+                joint_handles.insert(*joint_id, rigid_body_handle);
+                joint_offsets.insert(*joint_id, *joint_transform);
+
+                // Verify the rigid body was created and is dynamic
+                if let Some(rigid_body) = self.physics.get_rigid_body(rigid_body_handle) {
+                    println!("✅ Created DYNAMIC rigid body for joint {} (type: {:?}) at position {:?}, handle: {:?}",
+                             joint_id, hitbox_type, joint_position, rigid_body_handle);
+                    println!("   Body type: {:?}, Mass: {}", rigid_body.body_type(), rigid_body.mass());
+                } else {
+                    println!("❌ Failed to create rigid body for joint {}", joint_id);
+                }
+            }
+        }
+
+        // 8. Create constraints between parent-child joint pairs
+        for (joint_id, parent_joint_id) in joint_hierarchy.iter() {
+            if let (Some(parent_id), Some(child_handle), Some(parent_handle)) = (
+                parent_joint_id,
+                joint_handles.get(joint_id),
+                parent_joint_id.and_then(|pid| joint_handles.get(&pid))
+            ) {
+                // Create a ball joint (spherical) constraint between parent and child
+                // This allows rotation but keeps them connected
+                let joint_params = rapier3d::prelude::SphericalJointBuilder::new()
+                    .local_anchor1(rapier3d::na::Point3::new(0.0, 0.0, 0.0)) // Parent attachment point
+                    .local_anchor2(rapier3d::na::Point3::new(0.0, 0.0, 0.0)) // Child attachment point
+                    .build();
+
+                let constraint_handle = self.physics.create_impulse_joint(*parent_handle, *child_handle, joint_params.into());
+                constraint_handles.push(constraint_handle);
+
+                println!("Created spherical joint constraint between joint {} and parent {}", joint_id, parent_id);
+            }
+        }
+
+        // 9. Create and register ragdoll component
+        let ragdoll_data = RuntimePropRagdoll {
+            parent_entity: entity_id,
+            root_joint_id,
+            joint_hierarchy,
+            joint_handles: joint_handles.clone(),
+            joint_offsets,
+            constraint_handles: constraint_handles.clone(),
+        };
+
+        // Add ragdoll component to the entity
+        self.world.add_component(ragdoll_entity, ragdoll_data.clone());
+
+        // Register with ragdoll manager
+        self.ragdoll_manager.register_ragdoll(ragdoll_entity, ragdoll_data);
+
+        // Register ragdoll handles with physics world for easy access
+        let handles_vec: Vec<rapier3d::prelude::RigidBodyHandle> = joint_handles.values().cloned().collect();
+        self.physics.register_ragdoll(ragdoll_entity, handles_vec);
+
+        // Don't apply initial impulse to prevent explosion - let gravity handle it
+        println!("🎭 Ragdoll created - letting gravity naturally affect the physics bodies");
+
+        println!("Successfully created ragdoll entity {:?} for creature {:?} with {} joints and {} constraints",
+                 ragdoll_entity, entity_id, joint_handles.len(), constraint_handles.len());
+    }
+
+    /// Extract joint hierarchy from a model's skeleton
+    fn extract_joint_hierarchy(&self, model: &dark::model::Model) -> std::collections::HashMap<u32, Option<u32>> {
+        let mut hierarchy = std::collections::HashMap::new();
+
+        // For now, create a simple linear hierarchy based on hit boxes
+        // TODO: Extract actual skeleton hierarchy when API is available
+        let hit_boxes = model.get_hit_boxes();
+        let mut joint_ids: Vec<u32> = hit_boxes.keys().cloned().collect();
+        joint_ids.sort();
+
+        // Create a simple linear hierarchy: each joint's parent is the previous one
+        for (i, joint_id) in joint_ids.iter().enumerate() {
+            if i == 0 {
+                // First joint is the root
+                hierarchy.insert(*joint_id, None);
+            } else {
+                // Each subsequent joint's parent is the previous one
+                hierarchy.insert(*joint_id, Some(joint_ids[i - 1]));
+            }
+        }
+
+        // If no hitboxes, add a single root joint
+        if hierarchy.is_empty() {
+            hierarchy.insert(0, None);
+        }
+
+        hierarchy
+    }
+
+    /// Find the root joint (the one with no parent)
+    fn find_root_joint(&self, joint_hierarchy: &std::collections::HashMap<u32, Option<u32>>) -> u32 {
+        for (joint_id, parent_id) in joint_hierarchy.iter() {
+            if parent_id.is_none() {
+                return *joint_id;
+            }
+        }
+        // Fallback to joint 0 if no explicit root found
+        0
+    }
+
+    /// Attach a collider to a rigid body based on the hitbox type
+    fn attach_joint_collider(&mut self, rigid_body_handle: rapier3d::prelude::RigidBodyHandle, hitbox_type: crate::creature::HitBoxType, _model: &dark::model::Model) {
+        use crate::creature::HitBoxType;
+
+        // Determine collider size based on hitbox type (reduced sizes to prevent overlap/explosion)
+        let (shape, density) = match hitbox_type {
+            HitBoxType::Head => {
+                let radius = 0.08; // Smaller head radius
+                (rapier3d::prelude::SharedShape::ball(radius), 1.0)
+            }
+            HitBoxType::Body => {
+                (rapier3d::prelude::SharedShape::cuboid(0.15, 0.25, 0.1), 2.0) // Smaller torso dimensions
+            }
+            HitBoxType::Limb => {
+                (rapier3d::prelude::SharedShape::cuboid(0.05, 0.12, 0.05), 1.0) // Smaller limb dimensions
+            }
+            HitBoxType::Extremity => {
+                (rapier3d::prelude::SharedShape::cuboid(0.04, 0.08, 0.04), 0.5) // Smaller hand/foot dimensions
+            }
+            HitBoxType::NoDamage => {
+                // Use a very small sphere for no-damage joints
+                let radius = 0.03;
+                (rapier3d::prelude::SharedShape::ball(radius), 0.1)
+            }
+        };
+
+        // Create collision group for ragdoll bodies - use entity group so they interact with player and world
+        let collision_group = crate::physics::CollisionGroup::entity();
+
+        // Attach the collider to the rigid body
+        self.physics.attach_collider(rigid_body_handle, shape, density, collision_group);
+    }
+
+    /// Test ragdoll physics by applying forces to all ragdolls
+    pub fn test_ragdoll_physics(&mut self, force_direction: Vector3<f32>) {
+        println!("🧪 Testing ragdoll physics with force: {:?}", force_direction);
+
+        // Apply impulse to all ragdolls
+        let ragdoll_entities: Vec<EntityId> = self.ragdoll_manager.get_all_ragdolls().keys().cloned().collect();
+        let ragdoll_count = ragdoll_entities.len();
+
+        for ragdoll_entity in &ragdoll_entities {
+            println!("   Applying force to ragdoll entity {:?}", ragdoll_entity);
+            self.physics.apply_impulse_to_ragdoll(*ragdoll_entity, force_direction * 10.0); // Scale up the force
+        }
+
+        if ragdoll_count == 0 {
+            println!("   No ragdolls found to test");
+        }
     }
 }
 

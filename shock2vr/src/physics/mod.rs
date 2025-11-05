@@ -987,6 +987,31 @@ impl PhysicsWorld {
         self.rigid_body_set.get(handle).map(|body| *body.position())
     }
 
+    /// Get a rigid body for debugging
+    pub fn get_rigid_body(&self, handle: RigidBodyHandle) -> Option<&RigidBody> {
+        self.rigid_body_set.get(handle)
+    }
+
+    /// Apply a force to a rigid body
+    pub fn apply_force_to_body(&mut self, handle: RigidBodyHandle, force: Vector3<f32>) {
+        if let Some(rigid_body) = self.rigid_body_set.get_mut(handle) {
+            let rapier_force = Vector::new(force.x, force.y, force.z);
+            rigid_body.add_force(rapier_force, true);
+        }
+    }
+
+    /// Apply impulse to all ragdoll bodies (for testing)
+    pub fn apply_impulse_to_ragdoll(&mut self, ragdoll_entity_id: EntityId, impulse: Vector3<f32>) {
+        if let Some(handles) = self.ragdoll_handles.get(&ragdoll_entity_id) {
+            let rapier_impulse = Vector::new(impulse.x, impulse.y, impulse.z);
+            for &handle in handles {
+                if let Some(rigid_body) = self.rigid_body_set.get_mut(handle) {
+                    rigid_body.apply_impulse(rapier_impulse, true);
+                }
+            }
+        }
+    }
+
     /// Track ragdoll handles for a given entity
     pub fn register_ragdoll(&mut self, ragdoll_entity_id: EntityId, handles: Vec<RigidBodyHandle>) {
         self.ragdoll_handles.insert(ragdoll_entity_id, handles);

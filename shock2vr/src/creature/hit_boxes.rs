@@ -26,7 +26,7 @@ pub struct RuntimePropHitBox {
     pub hit_box_type: HitBoxType,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum HitBoxType {
     Head,
     Body,

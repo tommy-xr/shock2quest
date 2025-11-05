@@ -216,14 +216,11 @@ impl DebugRagdollScene {
             entities_to_kill
         });
 
-        // Kill all found pipe hybrid entities with massive damage (outside the world.run closure)
+        // Kill all found pipe hybrid entities with SlayEntity (outside the world.run closure)
         for entity_id in entities_to_kill {
-            // Apply massive damage (-1000 HP) to trigger proper death animation
-            let damage_effect = Effect::AdjustHitPoints {
-                entity_id,
-                delta: -1000, // Large negative value should kill any creature
-            };
-            let effects = vec![damage_effect];
+            // Use SlayEntity directly to trigger our ragdoll hook
+            let slay_effect = Effect::SlayEntity { entity_id };
+            let effects = vec![slay_effect];
             let _global_effects = self.core.handle_effects(
                 effects,
                 global_context,
@@ -232,7 +229,7 @@ impl DebugRagdollScene {
                 audio_context,
             );
             println!(
-                "Applied massive damage to pipe hybrid entity {:?} for ragdoll testing",
+                "Applied SlayEntity to pipe hybrid entity {:?} for ragdoll testing",
                 entity_id
             );
         }
@@ -255,17 +252,32 @@ impl GameScene for DebugRagdollScene {
         game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
-        // For now, we'll just delegate to core and handle spawning/slaying in handle_effects
-        // This avoids the issue of needing GlobalContext and AudioContext in update()
+        // Handle ragdoll physics testing input (VR-based)
+        let mut additional_effects = Vec::new();
+
+        // For VR testing: use trigger buttons to apply forces to ragdolls
+        if input_context.right_hand.trigger_value > 0.8 {
+            println!("🚀 Right trigger pressed - applying force to ragdolls!");
+            self.core.test_ragdoll_physics(vec3(2.0, 5.0, 2.0)); // Upward + sideways force
+        }
+
+        if input_context.left_hand.trigger_value > 0.8 {
+            println!("🚀 Left trigger pressed - applying big force to ragdolls!");
+            self.core.test_ragdoll_physics(vec3(0.0, 15.0, 5.0)); // Big upward + forward force
+        }
 
         // Delegate to core
-        self.core.update(
+        let mut core_effects = self.core.update(
             time,
             asset_cache,
             input_context,
             game_options,
             command_effects,
-        )
+        );
+
+        // Combine effects
+        additional_effects.append(&mut core_effects);
+        additional_effects
     }
 
     fn render(

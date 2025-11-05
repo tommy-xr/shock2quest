@@ -40,7 +40,7 @@ pub struct RuntimePropDoNotSerialize;
 pub struct RuntimePropProxyEntity(pub shipyard::EntityId);
 
 // RuntimePropRagdoll - ragdoll physics component for entities with ragdoll death animations
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct RuntimePropRagdoll {
     /// Parent creature entity (for bookkeeping)
     pub parent_entity: shipyard::EntityId,
