@@ -318,19 +318,22 @@ impl AnimationPlayer {
             additional_joint_transforms,
         );
 
-        let mut transforms = animated_skeleton.get_transforms();
-        let frame_ratio = if clip.num_frames > 0 {
-            frame as f32 / clip.num_frames as f32
-        } else {
-            0.0
-        };
+        // TODO: We're not handling whatever this vertical translation is correctly right now
+        // let mut transforms = animated_skeleton.get_transforms();
+        // let frame_ratio = if clip.num_frames > 0 {
+        //     frame as f32 / clip.num_frames as f32
+        // } else {
+        //     0.0
+        // };
 
-        for matrix in transforms.iter_mut() {
-            *matrix = Matrix4::from_translation(frame_ratio * vec3(0.0, clip.translation.y, 0.0))
-                * *matrix;
-        }
+        // for matrix in transforms.iter_mut() {
+        //     *matrix = Matrix4::from_translation(frame_ratio * vec3(0.0, clip.translation.y, 0.0))
+        //         * *matrix;
+        // }
 
-        transforms
+        // transforms
+
+        animated_skeleton.get_transforms()
     }
 
     fn blend_transforms(
