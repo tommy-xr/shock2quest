@@ -11,6 +11,7 @@ use cgmath::{
     SquareMatrix, Transform, Vector2, Vector3,
 };
 use cgmath::{EuclideanSpace, Zero};
+use collision::{Aabb, Aabb3};
 
 use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
@@ -555,6 +556,9 @@ impl MissionCore {
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
         // from physics
         self.synchronize_physics_positions();
+
+        // Update ragdoll joint transforms from physics bodies
+        self.update_ragdoll_transforms();
 
         // Update scripts
         let mut script_effects = profile!(
@@ -2071,6 +2075,9 @@ impl MissionCore {
 
         println!("Creating ragdoll for entity {:?}, model: {}, creature type: {:?}", entity_id, model_name, creature_type);
 
+        // Remove original hitboxes to prevent multiple physics body clusters
+        self.hit_boxes.remove_entity(entity_id, &mut self.world, &mut self.script_world, &mut self.physics, &mut self.id_to_physics);
+
         // 2. Get creature definition for hitbox information
         let creature_definition = match crate::creature::get_creature_definition(creature_type) {
             Some(def) => def,
@@ -2088,7 +2095,7 @@ impl MissionCore {
         };
 
         // 4. Extract joint hierarchy from the model's skeleton
-        let joint_hierarchy = self.extract_joint_hierarchy(model);
+        let joint_hierarchy = self.extract_joint_hierarchy(entity_id, model);
         let root_joint_id = self.find_root_joint(&joint_hierarchy);
 
         // Clone model reference to avoid borrowing issues
@@ -2142,7 +2149,7 @@ impl MissionCore {
                 let rigid_body_handle = self.physics.create_dynamic_body(isometry, Some(ragdoll_entity));
 
                 // Attach collider based on hitbox type with reduced size to prevent overlap
-                self.attach_joint_collider(rigid_body_handle, *hitbox_type, &model_clone);
+                self.attach_joint_collider(rigid_body_handle, *hitbox_type, *joint_id, &model_clone);
 
                 joint_handles.insert(*joint_id, rigid_body_handle);
                 joint_offsets.insert(*joint_id, *joint_transform);
@@ -2158,31 +2165,87 @@ impl MissionCore {
             }
         }
 
-        // 8. Create constraints between parent-child joint pairs
+        // 8. Create constraints between parent-child joint pairs using proper joint anchor positions
+        println!("🔗 Creating {} physics constraints for ragdoll", joint_hierarchy.len());
         for (joint_id, parent_joint_id) in joint_hierarchy.iter() {
             if let (Some(parent_id), Some(child_handle), Some(parent_handle)) = (
                 parent_joint_id,
                 joint_handles.get(joint_id),
                 parent_joint_id.and_then(|pid| joint_handles.get(&pid))
             ) {
-                // Create a ball joint (spherical) constraint between parent and child
-                // This allows rotation but keeps them connected
+                println!("   Creating constraint: joint {} (child) -> joint {} (parent)", joint_id, parent_id);
+
+                // Use proper joint offsets as anchors
+                // joint_offsets contains the difference between rigid body frame (hitbox center) and skeleton joint origin
+
+                // For child body: the anchor is the offset from the child's rigid body center to the child's joint position
+                let child_joint_offset = joint_offsets.get(joint_id).cloned().unwrap_or(Matrix4::identity());
+                let child_joint_pos = crate::util::get_position_from_matrix(&child_joint_offset);
+                let local_anchor2 = rapier3d::na::Point3::new(child_joint_pos.x, child_joint_pos.y, child_joint_pos.z);
+
+                // For parent body: the constraint should connect to the child's joint position, which means
+                // we need to compute where the child's joint is relative to the parent's rigid body center
+                // Since the constraint connects parent body to child's joint, we need the offset from parent body to child joint
+
+                // Get child joint position in world space
+                let child_joint_world_pos = if let Some(child_transform) = final_joint_transforms.get(*joint_id as usize) {
+                    let world_transform = final_transform * child_transform;
+                    crate::util::get_position_from_matrix(&world_transform)
+                } else {
+                    cgmath::Point3::new(0.0, 0.0, 0.0)
+                };
+
+                // Get parent body position in world space
+                let parent_body_world_pos = if let Some(parent_transform) = final_joint_transforms.get(*parent_id as usize) {
+                    let world_transform = final_transform * parent_transform;
+                    crate::util::get_position_from_matrix(&world_transform)
+                } else {
+                    cgmath::Point3::new(0.0, 0.0, 0.0)
+                };
+
+                // Local anchor for parent body: offset from parent body center to child joint position
+                let parent_to_child_joint = child_joint_world_pos - parent_body_world_pos;
+                let local_anchor1 = rapier3d::na::Point3::new(parent_to_child_joint.x, parent_to_child_joint.y, parent_to_child_joint.z);
+
+                println!("   Anchors: parent={:?}, child={:?}", local_anchor1, local_anchor2);
+
                 let joint_params = rapier3d::prelude::SphericalJointBuilder::new()
-                    .local_anchor1(rapier3d::na::Point3::new(0.0, 0.0, 0.0)) // Parent attachment point
-                    .local_anchor2(rapier3d::na::Point3::new(0.0, 0.0, 0.0)) // Child attachment point
+                    .local_anchor1(local_anchor1)
+                    .local_anchor2(local_anchor2)
                     .build();
 
                 let constraint_handle = self.physics.create_impulse_joint(*parent_handle, *child_handle, joint_params.into());
                 constraint_handles.push(constraint_handle);
 
-                println!("Created spherical joint constraint between joint {} and parent {}", joint_id, parent_id);
+                println!("   ✅ Created constraint handle: {:?}", constraint_handle);
+            } else {
+                println!("   ❌ Skipping joint {} - missing handles (parent_id: {:?}, child_handle: {:?}, parent_handle: {:?})",
+                         joint_id, parent_joint_id, joint_handles.get(joint_id).is_some(), parent_joint_id.and_then(|pid| joint_handles.get(&pid)).is_some());
             }
         }
 
-        // 9. Create and register ragdoll component
+        println!("🔗 Total constraints created: {}", constraint_handles.len());
+
+        // 9. Find the actual root body handle (may differ from root_joint_id if that joint has no physics body)
+        let root_body_handle = joint_handles.get(&root_joint_id)
+            .copied()
+            .or_else(|| {
+                // If root joint has no physics body, find the first available body
+                joint_handles.values().next().copied()
+            })
+            .unwrap_or_else(|| {
+                // This should never happen if we have any physics bodies
+                panic!("No physics bodies created for ragdoll - cannot determine root body handle")
+            });
+
+        println!("✅ Root body handle: {:?} (root joint: {}, has body: {})",
+                 root_body_handle, root_joint_id, joint_handles.contains_key(&root_joint_id));
+
+        // Create and register ragdoll component
         let ragdoll_data = RuntimePropRagdoll {
             parent_entity: entity_id,
             root_joint_id,
+            root_body_handle,
             joint_hierarchy,
             joint_handles: joint_handles.clone(),
             joint_offsets,
@@ -2206,24 +2269,38 @@ impl MissionCore {
                  ragdoll_entity, entity_id, joint_handles.len(), constraint_handles.len());
     }
 
-    /// Extract joint hierarchy from a model's skeleton
-    fn extract_joint_hierarchy(&self, model: &dark::model::Model) -> std::collections::HashMap<u32, Option<u32>> {
+    /// Extract joint hierarchy from the model's actual skeleton data
+    fn extract_joint_hierarchy(&self, _entity_id: EntityId, model: &dark::model::Model) -> std::collections::HashMap<u32, Option<u32>> {
         let mut hierarchy = std::collections::HashMap::new();
 
-        // For now, create a simple linear hierarchy based on hit boxes
-        // TODO: Extract actual skeleton hierarchy when API is available
+        // Get the actual bone hierarchy from the skeleton
+        let skeleton_hierarchy = model.get_bone_hierarchy();
         let hit_boxes = model.get_hit_boxes();
-        let mut joint_ids: Vec<u32> = hit_boxes.keys().cloned().collect();
-        joint_ids.sort();
 
-        // Create a simple linear hierarchy: each joint's parent is the previous one
-        for (i, joint_id) in joint_ids.iter().enumerate() {
-            if i == 0 {
-                // First joint is the root
-                hierarchy.insert(*joint_id, None);
+        println!("   Extracting joint hierarchy from skeleton with {} bones", skeleton_hierarchy.len());
+        println!("   Available hitboxes for joints: {:?}", hit_boxes.keys().collect::<Vec<_>>());
+
+        // Only include joints that have hitboxes (are part of the ragdoll)
+        for joint_id in hit_boxes.keys() {
+            if let Some(parent_joint_id) = skeleton_hierarchy.get(joint_id) {
+                // Check if parent also has a hitbox (is part of ragdoll)
+                let ragdoll_parent = if let Some(parent_id) = parent_joint_id {
+                    if hit_boxes.contains_key(parent_id) {
+                        Some(*parent_id)
+                    } else {
+                        // Parent doesn't have hitbox, find nearest ancestor that does
+                        find_ragdoll_ancestor(*parent_id, &skeleton_hierarchy, &hit_boxes)
+                    }
+                } else {
+                    None // This is a root joint
+                };
+
+                hierarchy.insert(*joint_id, ragdoll_parent);
+                println!("   Joint {} -> parent {:?} (skeleton: {:?})", joint_id, ragdoll_parent, parent_joint_id);
             } else {
-                // Each subsequent joint's parent is the previous one
-                hierarchy.insert(*joint_id, Some(joint_ids[i - 1]));
+                // Joint not found in skeleton, treat as root
+                hierarchy.insert(*joint_id, None);
+                println!("   Joint {} -> root (not in skeleton)", joint_id);
             }
         }
 
@@ -2246,37 +2323,61 @@ impl MissionCore {
         0
     }
 
-    /// Attach a collider to a rigid body based on the hitbox type
-    fn attach_joint_collider(&mut self, rigid_body_handle: rapier3d::prelude::RigidBodyHandle, hitbox_type: crate::creature::HitBoxType, _model: &dark::model::Model) {
+    /// Attach a collider to a rigid body using actual hitbox dimensions from the model
+    fn attach_joint_collider(&mut self, rigid_body_handle: rapier3d::prelude::RigidBodyHandle, hitbox_type: crate::creature::HitBoxType, joint_id: u32, model: &dark::model::Model) {
         use crate::creature::HitBoxType;
 
-        // Determine collider size based on hitbox type (reduced sizes to prevent overlap/explosion)
-        let (shape, density) = match hitbox_type {
-            HitBoxType::Head => {
-                let radius = 0.08; // Smaller head radius
-                (rapier3d::prelude::SharedShape::ball(radius), 1.0)
-            }
-            HitBoxType::Body => {
-                (rapier3d::prelude::SharedShape::cuboid(0.15, 0.25, 0.1), 2.0) // Smaller torso dimensions
-            }
-            HitBoxType::Limb => {
-                (rapier3d::prelude::SharedShape::cuboid(0.05, 0.12, 0.05), 1.0) // Smaller limb dimensions
-            }
-            HitBoxType::Extremity => {
-                (rapier3d::prelude::SharedShape::cuboid(0.04, 0.08, 0.04), 0.5) // Smaller hand/foot dimensions
-            }
-            HitBoxType::NoDamage => {
-                // Use a very small sphere for no-damage joints
-                let radius = 0.03;
-                (rapier3d::prelude::SharedShape::ball(radius), 0.1)
-            }
-        };
+        // Get the actual hitbox dimensions from the model
+        let hit_boxes = model.get_hit_boxes();
+        if let Some(hitbox_aabb) = hit_boxes.get(&joint_id) {
+            // Calculate hitbox dimensions (half-extents for Rapier)
+            let dims = hitbox_aabb.dim();
+            let half_x = dims.x * 0.5 * 0.8; // Scale down slightly to prevent overlap
+            let half_y = dims.y * 0.5 * 0.8;
+            let half_z = dims.z * 0.5 * 0.8;
 
-        // Create collision group for ragdoll bodies - use entity group so they interact with player and world
-        let collision_group = crate::physics::CollisionGroup::entity();
+            // Choose density based on hitbox type for realistic mass distribution
+            let density = match hitbox_type {
+                HitBoxType::Head => 0.8,       // Head should be lighter
+                HitBoxType::Body => 2.0,       // Body/torso is denser
+                HitBoxType::Limb => 1.0,       // Arms/legs medium density
+                HitBoxType::Extremity => 0.5,  // Hands/feet lighter
+                HitBoxType::NoDamage => 0.1,   // Very light for non-damage parts
+            };
 
-        // Attach the collider to the rigid body
-        self.physics.attach_collider(rigid_body_handle, shape, density, collision_group);
+            // Create shape based on hitbox type and actual dimensions
+            let shape = match hitbox_type {
+                HitBoxType::Head => {
+                    // Use sphere for head based on average dimension
+                    let radius = (half_x + half_y + half_z) / 3.0;
+                    rapier3d::prelude::SharedShape::ball(radius.max(0.02)) // Minimum radius
+                }
+                _ => {
+                    // Use box collider for all other parts with actual dimensions
+                    let min_size = 0.02; // Minimum size to prevent degenerate colliders
+                    rapier3d::prelude::SharedShape::cuboid(
+                        half_x.max(min_size),
+                        half_y.max(min_size),
+                        half_z.max(min_size)
+                    )
+                }
+            };
+
+            println!("   Attaching collider to joint {} ({:?}) with dims: ({:.3}, {:.3}, {:.3}), density: {:.1}",
+                     joint_id, hitbox_type, half_x * 2.0, half_y * 2.0, half_z * 2.0, density);
+
+            // Create collision group for ragdoll bodies - use entity group so they interact with player and world
+            let collision_group = crate::physics::CollisionGroup::entity();
+
+            // Attach the collider to the rigid body
+            self.physics.attach_collider(rigid_body_handle, shape, density, collision_group);
+        } else {
+            // Fallback to small default dimensions if hitbox not found
+            println!("   Warning: No hitbox found for joint {}, using default small collider", joint_id);
+            let shape = rapier3d::prelude::SharedShape::cuboid(0.03, 0.03, 0.03);
+            let collision_group = crate::physics::CollisionGroup::entity();
+            self.physics.attach_collider(rigid_body_handle, shape, 0.5, collision_group);
+        }
     }
 
     /// Test ragdoll physics by applying forces to all ragdolls
@@ -2296,6 +2397,169 @@ impl MissionCore {
             println!("   No ragdolls found to test");
         }
     }
+
+    /// Update ragdoll joint transforms from physics body positions
+    /// This syncs the visual model with the physics simulation by updating AnimationPlayer
+    fn update_ragdoll_transforms(&mut self) {
+        // Get all ragdoll entities and their physics data
+        let ragdoll_updates = self.world.run(|v_ragdoll: View<RuntimePropRagdoll>| {
+            let mut updates = Vec::new();
+
+            for (ragdoll_entity, ragdoll_data) in v_ragdoll.iter().with_id() {
+                // Get current absolute transforms from physics bodies
+                let mut absolute_transforms = std::collections::HashMap::new();
+
+                // Collect all absolute physics transforms
+                for (joint_id, rigid_body_handle) in &ragdoll_data.joint_handles {
+                    if let Some(rigid_body) = self.physics.get_rigid_body(*rigid_body_handle) {
+                        // Get physics body position and rotation
+                        let position = rigid_body.translation();
+                        let rotation = rigid_body.rotation();
+
+                        // Convert to cgmath types
+                        let pos_vec = vec3(position.x, position.y, position.z);
+                        let quat_cgmath = Quaternion::new(rotation.w, rotation.i, rotation.j, rotation.k);
+
+                        // Create absolute transform matrix from physics body pose
+                        let absolute_transform = Matrix4::from_translation(pos_vec) * Matrix4::from(quat_cgmath);
+                        absolute_transforms.insert(*joint_id, absolute_transform);
+                    }
+                }
+
+                if !absolute_transforms.is_empty() {
+                    // Use the cached root body handle for consistent root transform calculations
+                    let root_transform = if let Some(rigid_body) = self.physics.get_rigid_body(ragdoll_data.root_body_handle) {
+                        let position = rigid_body.translation();
+                        let rotation = rigid_body.rotation();
+                        let pos_vec = vec3(position.x, position.y, position.z);
+                        let quat_cgmath = Quaternion::new(rotation.w, rotation.i, rotation.j, rotation.k);
+                        Matrix4::from_translation(pos_vec) * Matrix4::from(quat_cgmath)
+                    } else {
+                        Matrix4::identity()
+                    };
+
+                    let root_inverse = root_transform.invert().unwrap_or(Matrix4::from_scale(1.0));
+
+                    // Convert each physics body position to entity-relative space for AnimationPlayer
+                    // AND apply the inverse_bind multiplication for proper skinning
+                    let mut joint_overrides = std::collections::HashMap::new();
+
+                    // Get the model to access rest transforms
+                    if let Some(model) = self.id_to_model.get(&ragdoll_entity) {
+                        if let Some(rest_transforms) = model.get_rest_transforms() {
+                            for (joint_id, absolute_transform) in &absolute_transforms {
+                                // Convert from world space to entity root space
+                                let entity_relative_transform = root_inverse * absolute_transform;
+
+                                // Apply the inverse_bind multiplication like normal animation system
+                                let final_transform = if let Some(rest) = rest_transforms.get(joint_id) {
+                                    entity_relative_transform * rest.inverse_bind
+                                } else {
+                                    entity_relative_transform
+                                };
+
+                                joint_overrides.insert(*joint_id, final_transform);
+                                println!("   Joint {} physics transform with inverse_bind applied", joint_id);
+                            }
+                        } else {
+                            println!("   Warning: No rest transforms available for model");
+                            // Fallback without inverse_bind
+                            for (joint_id, absolute_transform) in &absolute_transforms {
+                                let entity_relative_transform = root_inverse * absolute_transform;
+                                joint_overrides.insert(*joint_id, entity_relative_transform);
+                            }
+                        }
+                    } else {
+                        println!("   Warning: No model found for ragdoll entity {:?}", ragdoll_entity);
+                        // Fallback without inverse_bind
+                        for (joint_id, absolute_transform) in &absolute_transforms {
+                            let entity_relative_transform = root_inverse * absolute_transform;
+                            joint_overrides.insert(*joint_id, entity_relative_transform);
+                        }
+                    }
+
+                    updates.push((ragdoll_entity, joint_overrides, root_transform));
+                }
+            }
+
+            updates
+        });
+
+        // Update AnimationPlayer for each ragdoll with physics-driven joint transforms
+        for (ragdoll_entity, joint_overrides, root_transform) in ragdoll_updates {
+            // Update the entity's root transform
+            self.world.add_component(ragdoll_entity, RuntimePropTransform(root_transform));
+
+            // Update the AnimationPlayer with physics-driven joint overrides
+            if let Some(animation_player) = self.id_to_animation_player.get(&ragdoll_entity) {
+                let mut updated_player = animation_player.clone();
+
+                // DEBUGGING: First test if AnimationPlayer overrides work at all
+                // Set a few test transforms to see if they affect rendering
+                let test_transform = Matrix4::from_translation(vec3(1.0, 0.0, 0.0)); // Move 1 unit in X
+                updated_player = dark::motion::AnimationPlayer::set_additional_joint_transform(
+                    &updated_player,
+                    0, // Try index 0
+                    test_transform,
+                );
+                updated_player = dark::motion::AnimationPlayer::set_additional_joint_transform(
+                    &updated_player,
+                    1, // Try index 1
+                    test_transform,
+                );
+                updated_player = dark::motion::AnimationPlayer::set_additional_joint_transform(
+                    &updated_player,
+                    2, // Try index 2
+                    test_transform,
+                );
+
+                // Also try the actual physics transforms but let's see the mapping issue first
+                let joint_count = joint_overrides.len();
+                println!("🎭 Physics joint overrides: {:?}", joint_overrides.keys().collect::<Vec<_>>());
+
+                for (joint_id, transform) in joint_overrides {
+                    println!("   Setting joint_id {} to transform", joint_id);
+                    updated_player = dark::motion::AnimationPlayer::set_additional_joint_transform(
+                        &updated_player,
+                        joint_id,
+                        transform,
+                    );
+                }
+
+                // Store the updated animation player
+                self.id_to_animation_player.insert(ragdoll_entity, updated_player);
+                println!("🎭 Updated AnimationPlayer for ragdoll entity {:?} with {} joint overrides + test transforms", ragdoll_entity, joint_count);
+            } else {
+                println!("⚠️  No AnimationPlayer found for ragdoll entity {:?}", ragdoll_entity);
+            }
+        }
+    }
+}
+
+/// Helper function to find the nearest ancestor joint that has a hitbox (is part of ragdoll)
+fn find_ragdoll_ancestor(
+    joint_id: u32,
+    skeleton_hierarchy: &std::collections::HashMap<u32, Option<u32>>,
+    hit_boxes: &std::collections::HashMap<u32, Aabb3<f32>>,
+) -> Option<u32> {
+    let mut current_joint = joint_id;
+
+    // Walk up the skeleton hierarchy to find an ancestor with a hitbox
+    for _ in 0..20 { // Prevent infinite loops with max depth
+        if let Some(parent_id) = skeleton_hierarchy.get(&current_joint).and_then(|p| *p) {
+            if hit_boxes.contains_key(&parent_id) {
+                // Found an ancestor with a hitbox
+                return Some(parent_id);
+            }
+            current_joint = parent_id;
+        } else {
+            // Reached root without finding ragdoll ancestor
+            break;
+        }
+    }
+
+    // No ragdoll ancestor found, this joint becomes a root
+    None
 }
 
 fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, EntityMetadata> {

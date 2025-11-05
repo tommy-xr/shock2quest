@@ -44,6 +44,20 @@ impl Skeleton {
         self.bones.len()
     }
 
+    /// Get the bone hierarchy as a map of joint_id -> parent_joint_id
+    pub fn get_bone_hierarchy(&self) -> std::collections::HashMap<crate::motion::JointId, Option<crate::motion::JointId>> {
+        let mut hierarchy = std::collections::HashMap::new();
+        for bone in &self.bones {
+            hierarchy.insert(bone.joint_id, bone.parent_id);
+        }
+        hierarchy
+    }
+
+    /// Get the rest transforms for computing proper skinning matrices
+    pub fn get_rest_transforms(&self) -> &std::collections::HashMap<crate::motion::JointId, JointRestTransform> {
+        &self.rest_transforms
+    }
+
     pub fn get_transforms(&self) -> [Matrix4<f32>; 40] {
         let mut transforms = [Matrix4::identity(); 40];
         for (joint_id, global_transform) in self.global_transforms.iter() {

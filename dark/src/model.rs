@@ -297,6 +297,26 @@ impl Model {
         }
     }
 
+    /// Get the actual bone hierarchy from the skeleton (joint_id -> parent_joint_id)
+    pub fn get_bone_hierarchy(&self) -> std::collections::HashMap<u32, Option<u32>> {
+        match &self.inner {
+            InnerModel::Static(_) => std::collections::HashMap::new(),
+            InnerModel::Animated(animated_model) => {
+                animated_model.skeleton.get_bone_hierarchy()
+            }
+        }
+    }
+
+    /// Get the rest transforms for computing proper skinning matrices
+    pub fn get_rest_transforms(&self) -> Option<&std::collections::HashMap<u32, crate::ss2_skeleton::JointRestTransform>> {
+        match &self.inner {
+            InnerModel::Static(_) => None,
+            InnerModel::Animated(animated_model) => {
+                Some(animated_model.skeleton.get_rest_transforms())
+            }
+        }
+    }
+
     pub fn is_animated(&self) -> bool {
         match &self.inner {
             InnerModel::Static(_) => false,

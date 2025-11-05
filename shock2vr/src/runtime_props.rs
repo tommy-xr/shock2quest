@@ -48,6 +48,11 @@ pub struct RuntimePropRagdoll {
     /// Root joint ID in the skeleton hierarchy
     pub root_joint_id: u32,
 
+    /// Cached root rigid body handle for consistent transform calculations
+    /// This is the actual body used as the root, which may differ from root_joint_id
+    /// if that joint doesn't have a physics body
+    pub root_body_handle: rapier3d::prelude::RigidBodyHandle,
+
     /// Joint hierarchy map: joint -> parent joint (None for root)
     pub joint_hierarchy: std::collections::HashMap<u32, Option<u32>>,
 
