@@ -27,7 +27,7 @@ impl Command for SpawnItemCommand {
         let pos = vec3_to_point3(player.pos);
         let rot = player.rotation * self.head_rotation;
 
-        let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -5.0 / SCALE_FACTOR);
+        let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -10.0 / SCALE_FACTOR);
 
         Effect::CreateEntity {
             // Pistol: -17
@@ -36,7 +36,11 @@ impl Command for SpawnItemCommand {
             // assault flash: -2653,
             // vent parts: -1998, -1999, -2000
             // template_id: -22,
-            template_id: -22,
+            // grunt og-pipe: -397
+            // grunt og-shotgun: -175
+            // grunt og-grenade: -176
+            // monkey - red: -1432
+            template_id: -1432,
             position: pos + forward,
             orientation: rot,
             root_transform: Matrix4::identity(),
