@@ -142,6 +142,9 @@ pub struct PhysicsWorld {
 
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
 
+    // Ragdoll tracking - maps ragdoll entity ID to all its rigid body handles
+    ragdoll_handles: HashMap<EntityId, Vec<RigidBodyHandle>>,
+
     // TODO:
     // physics_hooks: Box<dyn PhysicsHooks>,
     // event_handler: Box<dyn EventHandler>,
@@ -532,6 +535,10 @@ impl PhysicsWorld {
             );
         }
         self.entity_id_to_body.remove(&entity_id);
+
+        // Properly clean up ragdoll if this entity was a ragdoll
+        // This will remove all associated rigid bodies and joints from Rapier
+        self.remove_ragdoll(entity_id);
     }
 
     pub fn create_player(
@@ -622,6 +629,7 @@ impl PhysicsWorld {
             // physics_hooks: Box::new(physics_hooks),
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
+            ragdoll_handles: HashMap::new(),
 
             debug_pipeline,
 
@@ -922,5 +930,90 @@ impl PhysicsWorld {
                 rigid_body.set_enabled_rotations(arg_1, arg_2, arg_3, true);
             }
         }
+    }
+
+    // ============================================================================
+    // Ragdoll Physics Utilities
+    // ============================================================================
+
+    /// Create a dynamic rigid body without requiring an EntityId
+    /// Returns the handle for use in ragdoll systems
+    pub fn create_dynamic_body(
+        &mut self,
+        isometry: Isometry<Real>,
+        user_tag: Option<EntityId>,
+    ) -> RigidBodyHandle {
+        let mut rigid_body = RigidBodyBuilder::dynamic().position(isometry).build();
+
+        // Set user data if provided
+        if let Some(entity_id) = user_tag {
+            rigid_body.user_data = entity_id.inner() as u128;
+        }
+
+        self.rigid_body_set.insert(rigid_body)
+    }
+
+    /// Attach a collider to an existing rigid body
+    pub fn attach_collider(
+        &mut self,
+        handle: RigidBodyHandle,
+        shape: SharedShape,
+        density: f32,
+        collision_group: CollisionGroup,
+    ) {
+        let collider = ColliderBuilder::new(shape)
+            .density(density)
+            .collision_groups(collision_group.0)
+            .active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
+            .build();
+
+        self.collider_set
+            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+    }
+
+    /// Create an impulse joint between two rigid bodies
+    pub fn create_impulse_joint(
+        &mut self,
+        parent: RigidBodyHandle,
+        child: RigidBodyHandle,
+        joint_params: GenericJoint,
+    ) -> ImpulseJointHandle {
+        self.impulse_joint_set
+            .insert(parent, child, joint_params, true)
+    }
+
+    /// Get the transform (position and rotation) of a rigid body by handle
+    pub fn get_body_transform(&self, handle: RigidBodyHandle) -> Option<Isometry<Real>> {
+        self.rigid_body_set.get(handle).map(|body| *body.position())
+    }
+
+    /// Track ragdoll handles for a given entity
+    pub fn register_ragdoll(&mut self, ragdoll_entity_id: EntityId, handles: Vec<RigidBodyHandle>) {
+        self.ragdoll_handles.insert(ragdoll_entity_id, handles);
+    }
+
+    /// Remove ragdoll and all its associated rigid bodies and joints
+    pub fn remove_ragdoll(&mut self, ragdoll_entity_id: EntityId) {
+        if let Some(handles) = self.ragdoll_handles.remove(&ragdoll_entity_id) {
+            // Remove all rigid bodies associated with this ragdoll
+            for handle in handles {
+                self.rigid_body_set.remove(
+                    handle,
+                    &mut self.island_manager,
+                    &mut self.collider_set,
+                    &mut self.impulse_joint_set,
+                    &mut self.multibody_joint_set,
+                    true,
+                );
+            }
+        }
+    }
+
+    /// Get all ragdoll handles for a given entity
+    pub fn get_ragdoll_handles(
+        &self,
+        ragdoll_entity_id: EntityId,
+    ) -> Option<&Vec<RigidBodyHandle>> {
+        self.ragdoll_handles.get(&ragdoll_entity_id)
     }
 }
