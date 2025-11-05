@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod effect;
+pub mod speech_registry;
 
 mod base_button;
 mod base_elevator;

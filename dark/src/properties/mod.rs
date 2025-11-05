@@ -1048,6 +1048,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$SpchVoice",
+            read_prop_string,
+            PropSpeechVoice,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$ObjSoundN",
             read_prop_string,
             |name| PropObjectSound { name },

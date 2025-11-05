@@ -75,6 +75,7 @@ use crate::{
         self,
         internal_fast_projectile::InternalFastProjectileScript,
         script_util::{get_all_links_with_template, get_environmental_sound_query},
+        speech_registry::SpeechVoiceRegistry,
         Effect, GlobalEffect, Message, MessagePayload,
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
@@ -211,6 +212,8 @@ impl MissionCore {
         let entity_info =
             ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
 
+        let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info);
+
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
 
@@ -223,6 +226,7 @@ impl MissionCore {
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
+        world.add_unique(speech_registry);
 
         // ** Entity creation
 
@@ -1353,6 +1357,7 @@ impl MissionCore {
                     concept,
                     tags,
                 } => {
+                    println!("Playing speech: {} {} {:?}", voice_index, concept, tags);
                     if let Some(sample_name) = resolve_speech_sample(
                         &global_context.gamesys,
                         voice_index,
