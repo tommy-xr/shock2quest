@@ -62,6 +62,7 @@ use crate::{
     mission::{entity_populator::EntityPopulator, SpatialQueryEngine},
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
+    ragdoll_manager::RagdollManager,
     runtime_props::{
         RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform,
         RuntimePropVhots,
@@ -138,6 +139,7 @@ pub struct MissionCore {
     pub level_name: String,
     pub gui: GuiManager,
     pub hit_boxes: HitBoxManager,
+    pub ragdoll_manager: RagdollManager,
     pub debug_lines: Vec<DebugLine>,
     pub entity_info: SystemShock2EntityInfo,
     pub physics: PhysicsWorld,
@@ -389,6 +391,7 @@ impl MissionCore {
             debug_lines: Vec::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
+            ragdoll_manager: RagdollManager::new(),
             visibility_engine: abstract_mission.visibility_engine,
             teleport_system,
             pending_entity_triggers: Vec::new(),

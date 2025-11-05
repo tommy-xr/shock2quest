@@ -15,6 +15,7 @@ mod mission;
 pub mod paths;
 mod physics;
 mod quest_info;
+mod ragdoll_manager;
 mod runtime_props;
 mod scripts;
 mod systems;
