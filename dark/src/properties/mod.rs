@@ -29,6 +29,7 @@ mod prop_room_gravity;
 mod prop_service;
 mod prop_trip_flags;
 mod prop_tweq;
+mod prop_voice;
 
 use num_derive::{FromPrimitive, ToPrimitive};
 pub use prop_ai::*;
@@ -61,6 +62,7 @@ pub use prop_room_gravity::*;
 pub use prop_service::*;
 pub use prop_trip_flags::*;
 pub use prop_tweq::*;
+pub use prop_voice::*;
 
 use num_traits::FromPrimitive;
 use serde::{
@@ -1037,6 +1039,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ObjShort",
             read_variable_length_string,
             PropObjShortName,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$VoiceIdx",
+            PropVoiceIndex::read,
+            identity,
             accumulator::latest,
         ),
         define_prop(

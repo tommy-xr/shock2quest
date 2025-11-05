@@ -1,18 +1,35 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use anyhow::{anyhow, bail, Result};
 use dark::{
     gamesys::{self, SpeechDB, Voice},
+    properties::{PropVoiceIndex, Property},
+    ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
 };
+use shipyard::{Get, View, World};
 use tracing::info;
 
-use crate::data_loader::load_gamesys;
+use crate::{data_loader::load_gamesys, entity_analyzer::extract_names_public};
 
 const MAX_ENUM_VALUES_PREVIEW: usize = 8;
 
 pub struct SpeechAnalyzer {
     gamesys: gamesys::Gamesys,
+}
+
+struct VoiceResolution {
+    index: usize,
+    template: Option<TemplateResolution>,
+}
+
+struct TemplateResolution {
+    input: String,
+    template_sym: String,
+    template_id: i32,
 }
 
 impl SpeechAnalyzer {
@@ -52,7 +69,16 @@ impl SpeechAnalyzer {
     }
 
     pub fn describe_voice(&self, voice_identifier: &str, tags: &[String]) -> Result<()> {
-        let voice_idx = self.parse_voice_identifier(voice_identifier)?;
+        let voice_resolution = self.parse_voice_identifier(voice_identifier)?;
+        let voice_idx = voice_resolution.index;
+
+        if let Some(template) = &voice_resolution.template {
+            println!(
+                "Resolved '{}' to template '{}' (ID {}) with VoiceIdx {}",
+                template.input, template.template_sym, template.template_id, voice_idx
+            );
+        }
+
         let speech_db = self.gamesys.speech_db();
         let voice = speech_db
             .voices
@@ -240,7 +266,7 @@ impl SpeechAnalyzer {
         Ok(())
     }
 
-    fn parse_voice_identifier(&self, voice: &str) -> Result<usize> {
+    fn parse_voice_identifier(&self, voice: &str) -> Result<VoiceResolution> {
         let trimmed = voice.trim();
         if trimmed.is_empty() {
             bail!("Voice identifier cannot be empty");
@@ -251,7 +277,10 @@ impl SpeechAnalyzer {
 
         if let Ok(idx) = trimmed.parse::<usize>() {
             if idx < voice_count {
-                return Ok(idx);
+                return Ok(VoiceResolution {
+                    index: idx,
+                    template: None,
+                });
             }
             bail!(
                 "Voice index {} out of range. Expected 0..{}",
@@ -264,7 +293,10 @@ impl SpeechAnalyzer {
         if let Some(rest) = lowered.strip_prefix("voice") {
             if let Ok(idx) = rest.parse::<usize>() {
                 if idx < voice_count {
-                    return Ok(idx);
+                    return Ok(VoiceResolution {
+                        index: idx,
+                        template: None,
+                    });
                 }
                 bail!(
                     "Voice index {} out of range. Expected 0..{}",
@@ -274,10 +306,106 @@ impl SpeechAnalyzer {
             }
         }
 
+        let entity_info = self.gamesys.entity_info();
+        let mut candidate_names = Vec::new();
+        if !lowered.starts_with('v') {
+            candidate_names.push(format!("v{}", lowered));
+        }
+        candidate_names.push(lowered.clone());
+
+        for candidate in candidate_names {
+            if let Some((template_id, template_sym)) =
+                self.find_template_by_sym(&candidate, entity_info)
+            {
+                if let Some(idx) = Self::resolve_voice_index_for_template(template_id, entity_info)
+                {
+                    if idx < 0 {
+                        bail!(
+                            "Template '{}' (ID {}) has negative VoiceIdx value {}",
+                            template_sym,
+                            template_id,
+                            idx
+                        );
+                    }
+
+                    return Ok(VoiceResolution {
+                        index: idx as usize,
+                        template: Some(TemplateResolution {
+                            input: trimmed.to_string(),
+                            template_sym,
+                            template_id,
+                        }),
+                    });
+                } else {
+                    bail!(
+                        "Template '{}' (ID {}) does not define P$VoiceIdx",
+                        template_sym,
+                        template_id
+                    );
+                }
+            }
+        }
+
         bail!(
-            "Unknown voice identifier '{}'. Use an index like 0 or voice0.",
+            "Unknown voice identifier '{}'. Use an index like 0, voice0, or a template name (camera/vcamera).",
             voice
         );
+    }
+
+    fn find_template_by_sym(
+        &self,
+        desired_sym: &str,
+        entity_info: &SystemShock2EntityInfo,
+    ) -> Option<(i32, String)> {
+        for (id, properties) in &entity_info.entity_to_properties {
+            let names = extract_names_public(properties);
+            if let Some(sym_name) = names.sym_name {
+                if sym_name.eq_ignore_ascii_case(desired_sym) {
+                    return Some((*id, sym_name));
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_voice_index_for_template(
+        template_id: i32,
+        entity_info: &SystemShock2EntityInfo,
+    ) -> Option<i32> {
+        if let Some(properties) = entity_info.entity_to_properties.get(&template_id) {
+            if let Some(idx) = Self::extract_voice_index_from_properties(properties) {
+                return Some(idx);
+            }
+        }
+
+        let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+        let ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
+        for ancestor in ancestors.iter().rev() {
+            if let Some(properties) = entity_info.entity_to_properties.get(ancestor) {
+                if let Some(idx) = Self::extract_voice_index_from_properties(properties) {
+                    return Some(idx);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_voice_index_from_properties(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+
+        for prop in properties {
+            prop.initialize(&mut world, entity);
+        }
+
+        if let Ok(view) = world.borrow::<View<PropVoiceIndex>>() {
+            if let Ok(prop) = view.get(entity) {
+                return Some(prop.0);
+            }
+        }
+
+        None
     }
 
     fn parse_tags(&self, tags: &[String], speech_db: &SpeechDB) -> Result<ParsedSpeechQuery> {
