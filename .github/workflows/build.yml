@@ -96,3 +96,23 @@ jobs:
         run: cargo test --verbose -p dark_query
         env:
           RUSTFLAGS: "-D warnings"
+
+      # Build and test debug_runtime
+      - name: Build debug_runtime
+        run: cargo build --verbose --release -p debug_runtime
+        env:
+          RUSTFLAGS: "-D warnings"
+      - name: Run debug_runtime tests
+        run: cargo test --verbose -p debug_runtime
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      # Build and test debug_command CLI tool
+      - name: Build debug_command CLI
+        run: cargo build --verbose --release -p debug_command
+        env:
+          RUSTFLAGS: "-D warnings"
+      - name: Run debug_command tests
+        run: cargo test --verbose -p debug_command
+        env:
+          RUSTFLAGS: "-D warnings"
