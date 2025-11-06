@@ -27,8 +27,8 @@ use shock2vr::{
 };
 
 // Property imports for state queries
-use dark::properties::{PropPosition, PropTemplateId, PropSymName, PropModelName};
-use shipyard::{View, IntoWithId, IntoIter, Get};
+use dark::properties::{PropModelName, PropPosition, PropSymName, PropTemplateId};
+use shipyard::{Get, IntoIter, IntoWithId, View};
 
 // Screen dimensions for the debug window
 const SCR_WIDTH: u32 = 800;
@@ -524,45 +524,56 @@ fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
     let world = game.world();
 
     // Query entity count by getting all entities with template IDs
-    let entity_count = world.run(|v_template_id: View<PropTemplateId>| {
-        v_template_id.iter().with_id().count()
-    });
+    let entity_count =
+        world.run(|v_template_id: View<PropTemplateId>| v_template_id.iter().with_id().count());
 
     // Log a sample of entities for debugging
-    let _sample_entities: Vec<String> = world.run(|v_template_id: View<PropTemplateId>,
-                                                   v_position: View<PropPosition>,
-                                                   v_symname: View<PropSymName>,
-                                                   v_model: View<PropModelName>| {
-        v_template_id.iter()
-            .with_id()
-            .take(10) // Limit to first 10 entities
-            .map(|(entity_id, template_id)| {
-                let pos_str = if let Ok(pos) = v_position.get(entity_id) {
-                    format!("pos:[{:.2},{:.2},{:.2}]", pos.position.x, pos.position.y, pos.position.z)
-                } else {
-                    "pos:none".to_string()
-                };
+    let _sample_entities: Vec<String> = world.run(
+        |v_template_id: View<PropTemplateId>,
+         v_position: View<PropPosition>,
+         v_symname: View<PropSymName>,
+         v_model: View<PropModelName>| {
+            v_template_id
+                .iter()
+                .with_id()
+                .take(10) // Limit to first 10 entities
+                .map(|(entity_id, template_id)| {
+                    let pos_str = if let Ok(pos) = v_position.get(entity_id) {
+                        format!(
+                            "pos:[{:.2},{:.2},{:.2}]",
+                            pos.position.x, pos.position.y, pos.position.z
+                        )
+                    } else {
+                        "pos:none".to_string()
+                    };
 
-                let name_str = if let Ok(symname) = v_symname.get(entity_id) {
-                    format!("name:{}", symname.0)
-                } else {
-                    "name:none".to_string()
-                };
+                    let name_str = if let Ok(symname) = v_symname.get(entity_id) {
+                        format!("name:{}", symname.0)
+                    } else {
+                        "name:none".to_string()
+                    };
 
-                let model_str = if let Ok(model) = v_model.get(entity_id) {
-                    format!("model:{}", model.0)
-                } else {
-                    "model:none".to_string()
-                };
+                    let model_str = if let Ok(model) = v_model.get(entity_id) {
+                        format!("model:{}", model.0)
+                    } else {
+                        "model:none".to_string()
+                    };
 
-                let entity_info = format!("entity_id:{} template_id:{} {} {} {}",
-                                        entity_id.inner(), template_id.template_id, name_str, pos_str, model_str);
+                    let entity_info = format!(
+                        "entity_id:{} template_id:{} {} {} {}",
+                        entity_id.inner(),
+                        template_id.template_id,
+                        name_str,
+                        pos_str,
+                        model_str
+                    );
 
-                tracing::info!("Entity: {}", entity_info);
-                entity_info
-            })
-            .collect()
-    });
+                    tracing::info!("Entity: {}", entity_info);
+                    entity_info
+                })
+                .collect()
+        },
+    );
 
     // TODO: Find player entity specifically
     // TODO: Get actual mission name from game scene
