@@ -945,6 +945,22 @@ impl PhysicsWorld {
         self.rigid_body_set.insert(rigid_body)
     }
 
+    /// Create a static (fixed) rigid body without requiring an EntityId
+    /// Returns the handle for use in ragdoll systems
+    pub fn create_static_body(
+        &mut self,
+        isometry: Isometry<Real>,
+        user_tag: Option<EntityId>,
+    ) -> RigidBodyHandle {
+        let mut rigid_body = RigidBodyBuilder::fixed().position(isometry).build();
+
+        if let Some(entity_id) = user_tag {
+            rigid_body.user_data = entity_id.inner() as u128;
+        }
+
+        self.rigid_body_set.insert(rigid_body)
+    }
+
     /// Attach a collider to an existing rigid body
     pub fn attach_collider(
         &mut self,
