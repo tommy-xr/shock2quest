@@ -1,7 +1,7 @@
 use cgmath::{point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3};
 use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
-    PropModelName, PropPosition,
+    PropClassTag, PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
 };
 use num_traits::{FromPrimitive, ToPrimitive};
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -9,7 +9,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
-    scripts::{ai::ai_util, AIPropertyUpdate, Effect},
+    scripts::{ai::ai_util, speech_registry::SpeechVoiceRegistry, AIPropertyUpdate, Effect},
     time::Time,
 };
 
@@ -23,6 +23,7 @@ struct CameraConfig {
     alert_cap: PropAIAlertCap,
     timings: CameraTimings,
     models: CameraModels,
+    voice_index: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -41,6 +42,9 @@ const DEFAULT_TO_THREE_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
 const DEFAULT_DECAY_SECONDS: f32 = ALERT_DECAY_SECONDS;
 const DEFAULT_IGNORE_SECONDS: f32 = ALERT_DECAY_SECONDS;
 
+const CAMERA_SPEECH_LOOP_DELAY: f32 = 1.5;
+const CAMERA_SPEECH_MIN_INTERVAL: f32 = 1.0;
+
 #[derive(Clone)]
 struct CameraModels {
     green: String,
@@ -55,6 +59,9 @@ struct CameraState {
     visible_time: f32,
     hidden_time: f32,
     view_angle: f32,
+    time_since_level_change: f32,
+    time_since_last_speech: f32,
+    played_at_level_line: bool,
 }
 
 impl Default for CameraState {
@@ -66,7 +73,21 @@ impl Default for CameraState {
             visible_time: 0.0,
             hidden_time: 0.0,
             view_angle: 0.0,
+            time_since_level_change: 0.0,
+            time_since_last_speech: CAMERA_SPEECH_MIN_INTERVAL,
+            played_at_level_line: true,
         }
+    }
+}
+
+impl CameraState {
+    fn reset_for_level(&mut self, level: AIAlertLevel) {
+        self.time_since_level_change = 0.0;
+        self.played_at_level_line = !matches!(level, AIAlertLevel::Moderate | AIAlertLevel::High);
+    }
+
+    fn record_speech(&mut self) {
+        self.time_since_last_speech = 0.0;
     }
 }
 
@@ -91,14 +112,125 @@ impl CameraAI {
         }
     }
 
+    fn enqueue_speech(
+        &mut self,
+        entity_id: EntityId,
+        config: &CameraConfig,
+        concept: &str,
+        tags: &[(String, String)],
+        effects: &mut Vec<Effect>,
+    ) -> bool {
+        let voice_index = match config.voice_index {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        let concept_key = concept.to_ascii_lowercase();
+        let prepared_tags = tags
+            .iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), v.to_ascii_lowercase()))
+            .collect::<Vec<_>>();
+
+        effects.push(Effect::PlaySpeech {
+            entity_id,
+            voice_index,
+            concept: concept_key,
+            tags: prepared_tags,
+        });
+        self.state.record_speech();
+        true
+    }
+
+    fn on_alert_level_changed(
+        &mut self,
+        entity_id: EntityId,
+        config: &CameraConfig,
+        previous_level: AIAlertLevel,
+        was_visible: bool,
+        effects: &mut Vec<Effect>,
+    ) {
+        self.state.reset_for_level(self.state.current_level);
+
+        if config.voice_index.is_none() {
+            println!("voice index is none");
+            return;
+        }
+
+        let previous_rank = level_to_u32(previous_level);
+        let new_rank = level_to_u32(self.state.current_level);
+
+        if new_rank > previous_rank {
+            let concept = match self.state.current_level {
+                AIAlertLevel::Low => Some("tolevelone"),
+                AIAlertLevel::Moderate => Some("toleveltwo"),
+                AIAlertLevel::High => Some("tolevelthree"),
+                AIAlertLevel::Lowest => None,
+            };
+
+            if let Some(concept) = concept {
+                self.enqueue_speech(entity_id, config, concept, &[], effects);
+            }
+        } else {
+            if previous_level == AIAlertLevel::High
+                && self.state.current_level == AIAlertLevel::Moderate
+                && !was_visible
+            {
+                self.enqueue_speech(entity_id, config, "lostcontact", &[], effects);
+            }
+
+            if self.state.current_level == AIAlertLevel::Lowest {
+                self.enqueue_speech(entity_id, config, "backtozero", &[], effects);
+            }
+        }
+    }
+
+    fn maybe_play_level_sustain(
+        &mut self,
+        entity_id: EntityId,
+        config: &CameraConfig,
+        effects: &mut Vec<Effect>,
+    ) {
+        if config.voice_index.is_none() {
+            return;
+        }
+
+        let concept = match self.state.current_level {
+            AIAlertLevel::Moderate => Some("atleveltwo"),
+            AIAlertLevel::High => Some("atlevelthree"),
+            _ => None,
+        };
+
+        if let Some(concept) = concept {
+            if !self.state.played_at_level_line
+                && self.state.time_since_level_change >= CAMERA_SPEECH_LOOP_DELAY
+                && self.state.time_since_last_speech >= CAMERA_SPEECH_MIN_INTERVAL
+            {
+                if self.enqueue_speech(entity_id, config, concept, &[], effects) {
+                    self.state.played_at_level_line = true;
+                }
+            }
+        }
+    }
+
     fn build_config(world: &World, entity_id: EntityId) -> Option<(CameraConfig, CameraState)> {
-        let (v_device, v_camera, v_alert_cap, v_alertness, v_aware_delay, v_model_name): (
+        let (
+            v_device,
+            v_camera,
+            v_alert_cap,
+            v_alertness,
+            v_aware_delay,
+            v_model_name,
+            v_voice_index,
+            v_voice_label,
+        ): (
             View<PropAIDevice>,
             View<PropAICamera>,
             View<PropAIAlertCap>,
             View<PropAIAlertness>,
             View<PropAIAwareDelay>,
             View<PropModelName>,
+            View<PropVoiceIndex>,
+            View<PropSpeechVoice>,
         ) = world
             .borrow::<(
                 View<PropAIDevice>,
@@ -107,6 +239,8 @@ impl CameraAI {
                 View<PropAIAlertness>,
                 View<PropAIAwareDelay>,
                 View<PropModelName>,
+                View<PropVoiceIndex>,
+                View<PropSpeechVoice>,
             )>()
             .ok()?;
 
@@ -166,6 +300,17 @@ impl CameraAI {
             .map(|v| (v.level, v.peak))
             .unwrap_or((AIAlertLevel::Lowest, AIAlertLevel::Lowest));
 
+        let voice_index_direct = v_voice_index
+            .get(entity_id)
+            .ok()
+            .map(|v| v.0)
+            .and_then(|idx| if idx >= 0 { Some(idx as usize) } else { None });
+
+        let voice_label = v_voice_label
+            .get(entity_id)
+            .ok()
+            .map(|label| label.0.clone());
+
         drop((
             v_device,
             v_camera,
@@ -173,7 +318,31 @@ impl CameraAI {
             v_alertness,
             v_aware_delay,
             v_model_name,
+            v_voice_index,
+            v_voice_label,
         ));
+
+        let mut voice_index = voice_index_direct;
+
+        if voice_index.is_none() {
+            if let Some(label) = voice_label.as_deref() {
+                voice_index = lookup_voice_index_by_label(world, label);
+            }
+        }
+
+        if let Some(idx) = voice_index {
+            tracing::debug!("camera entity {:?} resolved voice index {}", entity_id, idx);
+        } else {
+            tracing::warn!(
+                "camera entity {:?} missing voice index despite labels {:?}",
+                entity_id,
+                voice_label
+            );
+        }
+
+        if voice_index.is_none() {
+            voice_index = infer_voice_index_from_creature_type(world, entity_id);
+        }
 
         let timings = CameraTimings {
             to_two: ms_to_seconds(aware_delay.to_two),
@@ -191,6 +360,7 @@ impl CameraAI {
             alert_cap,
             timings,
             models,
+            voice_index,
         };
 
         let mut state = CameraState {
@@ -200,12 +370,17 @@ impl CameraAI {
             visible_time: 0.0,
             hidden_time: 0.0,
             view_angle: 0.0,
+            time_since_level_change: 0.0,
+            time_since_last_speech: CAMERA_SPEECH_MIN_INTERVAL,
+            played_at_level_line: true,
         };
 
         // Ensure peak never falls below the relax floor
         if level_to_u32(state.peak_level) < level_to_u32(config.alert_cap.min_relax) {
             state.peak_level = config.alert_cap.min_relax;
         }
+
+        state.reset_for_level(state.current_level);
 
         Some((config, state))
     }
@@ -225,6 +400,7 @@ impl CameraAI {
             match self.state.current_level {
                 AIAlertLevel::Lowest => {
                     if self.state.visible_time >= config.timings.to_two {
+                        let previous_level = self.state.current_level;
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::Moderate,
@@ -232,12 +408,20 @@ impl CameraAI {
                             effects,
                         ) {
                             self.sync_model(entity_id, &config.models, effects, false);
+                            self.on_alert_level_changed(
+                                entity_id,
+                                config,
+                                previous_level,
+                                true,
+                                effects,
+                            );
                             self.state.visible_time = 0.0;
                         }
                     }
                 }
                 AIAlertLevel::Low | AIAlertLevel::Moderate => {
                     if self.state.visible_time >= config.timings.to_three {
+                        let previous_level = self.state.current_level;
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::High,
@@ -245,6 +429,13 @@ impl CameraAI {
                             effects,
                         ) {
                             self.sync_model(entity_id, &config.models, effects, false);
+                            self.on_alert_level_changed(
+                                entity_id,
+                                config,
+                                previous_level,
+                                true,
+                                effects,
+                            );
                             self.state.visible_time = 0.0;
                         }
                     }
@@ -258,6 +449,7 @@ impl CameraAI {
             match self.state.current_level {
                 AIAlertLevel::High => {
                     if self.state.hidden_time >= config.timings.three_reuse {
+                        let previous_level = self.state.current_level;
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::Moderate,
@@ -265,12 +457,20 @@ impl CameraAI {
                             effects,
                         ) {
                             self.sync_model(entity_id, &config.models, effects, false);
+                            self.on_alert_level_changed(
+                                entity_id,
+                                config,
+                                previous_level,
+                                false,
+                                effects,
+                            );
                             self.state.hidden_time = 0.0;
                         }
                     }
                 }
                 AIAlertLevel::Moderate => {
                     if self.state.hidden_time >= config.timings.two_reuse {
+                        let previous_level = self.state.current_level;
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::Low,
@@ -278,12 +478,20 @@ impl CameraAI {
                             effects,
                         ) {
                             self.sync_model(entity_id, &config.models, effects, false);
+                            self.on_alert_level_changed(
+                                entity_id,
+                                config,
+                                previous_level,
+                                false,
+                                effects,
+                            );
                             self.state.hidden_time = 0.0;
                         }
                     }
                 }
                 AIAlertLevel::Low => {
                     if self.state.hidden_time >= config.timings.ignore_range {
+                        let previous_level = self.state.current_level;
                         if self.set_alert_level(
                             entity_id,
                             AIAlertLevel::Lowest,
@@ -291,6 +499,13 @@ impl CameraAI {
                             effects,
                         ) {
                             self.sync_model(entity_id, &config.models, effects, false);
+                            self.on_alert_level_changed(
+                                entity_id,
+                                config,
+                                previous_level,
+                                false,
+                                effects,
+                            );
                             self.state.hidden_time = 0.0;
                         }
                     }
@@ -395,6 +610,7 @@ impl Script for CameraAI {
         time: &Time,
     ) -> Effect {
         let mut effects = Vec::new();
+        let delta = time.elapsed.as_secs_f32();
 
         let mut target_angle = time.total.as_secs_f32().sin() * 90.0;
         let mut max_delta: Option<f32> = None;
@@ -402,7 +618,6 @@ impl Script for CameraAI {
         let config_clone = self.config.clone();
 
         if let Some(config) = config_clone.as_ref() {
-            let delta = time.elapsed.as_secs_f32();
             is_visible = ai_util::is_player_visible(entity_id, world, physics);
             if is_visible {
                 let v_pos = world.borrow::<View<PropPosition>>().unwrap();
@@ -422,6 +637,9 @@ impl Script for CameraAI {
             self.process_alertness(entity_id, is_visible, delta, config, &mut effects);
         }
 
+        self.state.time_since_level_change += delta;
+        self.state.time_since_last_speech += delta;
+
         let aim_angle = if let Some(delta_limit) = max_delta {
             self.state.view_angle =
                 move_towards_angle(self.state.view_angle, target_angle, delta_limit);
@@ -438,6 +656,8 @@ impl Script for CameraAI {
         });
 
         if let Some(config) = config_clone.as_ref() {
+            self.maybe_play_level_sustain(entity_id, config, &mut effects);
+
             let debug_effect =
                 draw_debug_camera_fov(world, entity_id, aim_angle, config, is_visible);
             if !matches!(debug_effect, Effect::NoEffect) {
@@ -552,6 +772,29 @@ impl CameraModels {
             AIAlertLevel::Lowest => &self.green,
         }
     }
+}
+
+fn lookup_voice_index_by_label(world: &World, label: &str) -> Option<usize> {
+    world
+        .borrow::<UniqueView<SpeechVoiceRegistry>>()
+        .ok()
+        .and_then(|registry| registry.lookup(label))
+}
+
+fn infer_voice_index_from_creature_type(world: &World, entity_id: EntityId) -> Option<usize> {
+    if let Ok(class_tags) = world.borrow::<View<PropClassTag>>() {
+        if let Ok(tags) = class_tags.get(entity_id) {
+            for (tag, value) in tags.class_tags() {
+                if tag.eq_ignore_ascii_case("creaturetype") {
+                    let label = format!("v{}", value);
+                    drop(class_tags);
+                    return lookup_voice_index_by_label(world, &label);
+                }
+            }
+        }
+        drop(class_tags);
+    }
+    None
 }
 
 fn draw_debug_camera_fov(

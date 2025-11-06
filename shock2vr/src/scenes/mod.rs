@@ -13,12 +13,14 @@ use crate::{
     GameOptions, QuestInfo, SpawnLocation,
 };
 
+pub mod debug_camera;
 pub mod debug_entity_playground;
 pub mod debug_hud;
 pub mod debug_map;
 pub mod debug_minimal;
 pub mod debug_ragdoll;
 
+pub use debug_camera::DebugCameraScene;
 pub use debug_entity_playground::DebugEntityPlaygroundScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_map::DebugMapScene;
@@ -49,6 +51,18 @@ pub fn create_initial_scene(
     {
         return SceneInitResult {
             scene: Box::new(DebugEntityPlaygroundScene::new(
+                global_context,
+                options,
+                asset_cache,
+                audio_context,
+            )),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_camera") {
+        return SceneInitResult {
+            scene: Box::new(DebugCameraScene::new(
                 global_context,
                 options,
                 asset_cache,

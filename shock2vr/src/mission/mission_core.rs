@@ -33,6 +33,7 @@ use dark::{
         PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
+    tag_database::{TagQuery, TagQueryItem},
     BitmapAnimation, SCALE_FACTOR,
 };
 use engine::{
@@ -45,6 +46,9 @@ use engine::{
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
+use rand::{
+    distributions::WeightedIndex, prelude::Distribution, seq::SliceRandom, thread_rng, Rng,
+};
 use rapier3d::prelude::{Collider, RigidBodyHandle};
 use scripts::ScriptWorld;
 
@@ -71,6 +75,7 @@ use crate::{
         self,
         internal_fast_projectile::InternalFastProjectileScript,
         script_util::{get_all_links_with_template, get_environmental_sound_query},
+        speech_registry::SpeechVoiceRegistry,
         Effect, GlobalEffect, Message, MessagePayload,
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
@@ -207,6 +212,8 @@ impl MissionCore {
         let entity_info =
             ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
 
+        let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info);
+
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
 
@@ -219,6 +226,7 @@ impl MissionCore {
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
+        world.add_unique(speech_registry);
 
         // ** Entity creation
 
@@ -1343,6 +1351,46 @@ impl MissionCore {
                         warn!("Unable to load clip: {}", name)
                     }
                 }
+                Effect::PlaySpeech {
+                    entity_id,
+                    voice_index,
+                    concept,
+                    tags,
+                } => {
+                    if let Some(sample_name) = resolve_speech_sample(
+                        &global_context.gamesys,
+                        voice_index,
+                        concept.as_str(),
+                        &tags,
+                    ) {
+                        let audio_path = format!("{sample_name}.wav");
+                        if let Some(audio_clip) = asset_cache.get_opt(&AUDIO_IMPORTER, &audio_path)
+                        {
+                            let handle = AudioHandle::new();
+                            if let Some(position) = get_entity_position(&self.world, entity_id) {
+                                engine::audio::play_spatial_audio(
+                                    audio_context,
+                                    position,
+                                    handle,
+                                    None,
+                                    audio_clip,
+                                );
+                            } else {
+                                engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                            }
+                        } else {
+                            warn!(
+                                "Unable to load speech clip '{}' for concept '{}'",
+                                audio_path, concept
+                            );
+                        }
+                    } else {
+                        warn!(
+                            "Failed to resolve speech for voice {} concept '{}'",
+                            voice_index, concept
+                        );
+                    }
+                }
                 Effect::PlayEnvironmentalSound {
                     query,
                     position,
@@ -2150,6 +2198,15 @@ pub fn make_un_physical2(
     id_to_physics.remove(&entity_id);
 }
 
+fn get_entity_position(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
+    if let Ok(positions) = world.borrow::<View<PropPosition>>() {
+        if let Ok(prop) = positions.get(entity_id) {
+            return Some(prop.position);
+        }
+    }
+    None
+}
+
 fn resolve_schema(global_context: &GlobalContext, name: &str) -> String {
     let sound_schema = &global_context.gamesys.sound_schema;
     let ret = sound_schema
@@ -2157,6 +2214,75 @@ fn resolve_schema(global_context: &GlobalContext, name: &str) -> String {
         .unwrap_or_else(|| name.to_owned());
     trace!("resolved sound schema {} to {}", name, ret);
     ret
+}
+
+fn resolve_speech_sample(
+    gamesys: &Gamesys,
+    voice_index: usize,
+    concept: &str,
+    tags: &[(String, String)],
+) -> Option<String> {
+    let speech_db = gamesys.speech_db();
+    if voice_index >= speech_db.voices.len() {
+        return None;
+    }
+
+    let concept_key = concept.to_ascii_lowercase();
+    let concept_idx = speech_db.concept_map.get_index(&concept_key)? as usize;
+
+    let voice = &speech_db.voices[voice_index];
+    if concept_idx >= voice.tag_maps.len() {
+        return None;
+    }
+
+    let tag_db = &voice.tag_maps[concept_idx];
+
+    let mut query_items = Vec::new();
+    for (tag, value) in tags {
+        let lowered_tag = tag.to_ascii_lowercase();
+        let lowered_value = value.to_ascii_lowercase();
+        let tag_idx = speech_db.tag_map.get_index(&lowered_tag);
+        let value_idx = speech_db
+            .value_map
+            .get_index(&lowered_value)
+            .map(|idx| idx as u8);
+
+        if let (Some(tag_id), Some(value_id)) = (tag_idx, value_idx) {
+            query_items.push(TagQueryItem::KeyWithEnumValue(tag_id, value_id, false));
+        }
+    }
+
+    let schema_candidates = if query_items.is_empty() {
+        tag_db.collect_all_data_ids()
+    } else {
+        let query = TagQuery::from_items(query_items);
+        tag_db.query_match_all(&query)
+    };
+
+    if schema_candidates.is_empty() {
+        return None;
+    }
+
+    let mut rng = thread_rng();
+    let schema_id = *schema_candidates
+        .choose(&mut rng)
+        .unwrap_or(&schema_candidates[0]);
+
+    let samples = gamesys.sound_schema.id_to_samples.get(&schema_id)?;
+    if samples.is_empty() {
+        return None;
+    }
+
+    let weights: Vec<f64> = samples
+        .iter()
+        .map(|sample| f64::from(sample.frequency.max(1)))
+        .collect();
+
+    let selected_index = WeightedIndex::new(weights)
+        .map(|dist| dist.sample(&mut rng))
+        .unwrap_or_else(|_| rng.gen_range(0..samples.len()));
+
+    Some(samples[selected_index].sample_name.clone())
 }
 
 fn play_environmental_sound(
