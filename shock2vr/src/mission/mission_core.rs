@@ -1340,6 +1340,7 @@ impl MissionCore {
                     drop(quests);
                 }
                 Effect::PlaySound { handle, name } => {
+                    println!("Trying to play sound: {}", &name);
                     let audio_file = resolve_schema(global_context, &name.to_string());
                     let maybe_audio_clip =
                         asset_cache.get_opt(&AUDIO_IMPORTER, &format!("{audio_file}.wav"));
