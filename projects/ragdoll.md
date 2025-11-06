@@ -111,3 +111,134 @@
 2. Implement `RuntimePropRagdoll` and spawn pipeline for one creature archetype.
 3. Hook pose synchronization into the mission update loop and confirm rendering matches physics.
 4. Iterate on constraint tuning, collider shapes, and cleanup before rolling out to all creatures.
+
+
+Unfortunately, we weren't able to implement this in our initial iteration.
+
+## Claude's feedback: 
+
+
+⏺ You're absolutely right - this ragdoll implementation has proven much more complex than anticipated. Let me analyze the key challenges
+  and suggest architectural improvements.
+
+  Biggest Challenges & Points of Confusion
+
+  1. Coordinate System Complexity
+
+  - Multiple transform spaces: World space, entity space, joint space, physics body space
+  - Matrix multiplication order: Getting entity_relative_transform * rest.inverse_bind right
+  - Joint offset calculations: Understanding what joint_offsets actually represents vs what constraints need
+
+  2. Dark Engine Legacy Data Structures
+
+  - Joint hierarchy confusion: CreatureDefinition remap vs actual skeleton hierarchy
+  - Hitbox positioning: Unclear relationship between hitboxes and joint positions
+  - Animation system integration: Complex interaction between AnimationPlayer and physics
+
+  3. Physics Engine Integration
+
+  - Rapier constraint anchors: Local vs world space anchor calculations
+  - Body positioning: Physics bodies at hitbox centers vs joint positions
+  - Constraint types: Spherical joints may not be the right choice
+
+  4. Debugging Difficulty
+
+  - Visual feedback gaps: Hard to see what's actually happening with constraints
+  - Transform debugging: Matrix calculations are opaque
+  - Physics visualization: No way to see constraint anchor points
+
+  Architectural Improvements
+
+  Option 1: Simplified Physics-Only Ragdolls
+
+  Instead of trying to sync visual models, use physics bodies as the visual representation:
+
+  // Replace visual model with debug physics body rendering
+  pub struct SimpleRagdoll {
+      pub physics_bodies: Vec<RigidBodyHandle>,
+      pub constraints: Vec<ImpulseJointHandle>,
+      // No visual model sync - just render the physics bodies directly
+  }
+
+  Benefits:
+  - Eliminates transform synchronization complexity
+  - Debugging is much easier (see exactly what physics sees)
+  - Fewer coordinate systems to manage
+
+  Option 2: Constraint-Free Ragdolls
+
+  Use independent physics bodies without joint constraints:
+
+  pub struct LooseRagdoll {
+      pub body_parts: HashMap<u32, RigidBodyHandle>,
+      // No constraints - just independent falling pieces
+  }
+
+  Benefits:
+  - Much simpler physics setup
+  - Still provides satisfying death effects
+  - Eliminates constraint anchor calculations
+
+  Option 3: Pre-Baked Ragdoll Data
+
+  Create a tool to pre-calculate and validate ragdoll setups:
+
+  // CLI tool: cargo run -p ragdoll_baker -- pipe_hybrid.bin
+  pub struct BakedRagdollData {
+      pub validated_anchors: Vec<(Point3<f32>, Point3<f32>)>,
+      pub tested_constraints: Vec<ConstraintParams>,
+      pub visual_sync_matrices: HashMap<u32, Matrix4<f32>>,
+  }
+
+  Benefits:
+  - Move complexity to build-time tool
+  - Runtime becomes simple data loading
+  - Easier debugging and iteration
+
+  Option 4: Physics Visualization Tools
+
+  Add debug rendering to understand what's happening:
+
+  pub struct RagdollDebugRenderer {
+      pub show_constraint_anchors: bool,
+      pub show_joint_hierarchies: bool,
+      pub show_transform_spaces: bool,
+  }
+
+  Benefits:
+  - Makes debugging much easier
+  - Could reveal the actual issues
+  - Useful for future physics work
+
+  Recommended Next Steps
+
+  Given the time investment vs complexity, I'd suggest:
+
+  1. Immediate: Implement Option 1 (Physics-Only) for quick wins
+  2. Medium-term: Add Option 4 (Debug Visualization) for future physics work
+  3. Long-term: Consider Option 3 (Pre-Baked Data) for production quality
+
+  The core issue seems to be that ragdoll physics requires deep understanding of the Dark Engine's animation system, which has many
+  undocumented assumptions about coordinate spaces and transform hierarchies.
+
+  Would you like me to implement the simplified physics-only approach, or would you prefer to explore the debug visualization tools first
+   to better understand what's going wrong?
+
+## Codex's feedback
+
+• - I’ve exhausted the current iteration: even after driving the skinning overrides (shock2vr/src/mission/mission_core.rs:2512) and
+    upgrading constraint anchors (shock2vr/src/mission/mission_core.rs:2231), the mesh still drifts into the bind pose and the link lengths
+    collapse. The blockers remain the same—so I stopped short of more speculative surgery.
+  - I’m convinced we need a cleaner architecture rather than more patches. Two concrete ideas:
+      - Build a dedicated “ragdoll rig” source of truth alongside the loader: for each skeleton, precompute the bone hierarchy, rest-
+        space offsets, collider geometry, and mass distribution once (in dark). That single structure could hand the game both the render
+        skinning data and the physics setup, eliminating the ad‑hoc conversions we’re doing now.
+      - Split animated/render rigs from physics rigs. Right now we push Rapier poses back through AnimationPlayer while update_animations
+        overwrites those transforms every frame. A specific ragdoll system that bypasses AnimationPlayer (or tells update_animations to
+        skip ragdolls) would stop the tug‑of‑war and keep the data flow clear.
+  - The hardest parts here came from ambiguous coordinate spaces: hitbox IDs don’t line up with skeleton joints, joint_offsets store global
+    matrices when the joints need local anchors, and the render pipeline expects global * inverse_bind. Those mismatches made every fix
+    feel like guesswork. On top of that, several systems mutate the same components (RuntimePropJointTransforms) each frame, so it wasn’t
+    obvious who “owns” the data.
+
+  I’ll pause here so we can decide on the larger refactor path rather than continue iterating inside the current constraints.
