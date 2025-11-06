@@ -16,7 +16,9 @@ extern crate glfw;
 use self::glfw::{Context, WindowEvent};
 use cgmath::{vec2, vec3, Quaternion};
 use dark::SCALE_FACTOR;
-use engine::{profile, scene::Scene, util::compute_view_matrix_from_render_context, EngineRenderContext};
+use engine::{
+    profile, scene::Scene, util::compute_view_matrix_from_render_context, EngineRenderContext,
+};
 use shock2vr::{
     command::Command, input_context::InputContext, time::Time, Game, GameOptions, SpawnLocation,
 };
@@ -100,8 +102,7 @@ fn main() -> anyhow::Result<()> {
 
     info!(
         "Starting debug runtime on port {} with mission: {}",
-        args.port,
-        args.mission
+        args.port, args.mission
     );
 
     // Create a tokio runtime for the HTTP server
@@ -145,7 +146,6 @@ async fn start_http_server(port: u16) -> anyhow::Result<()> {
 
     Ok(())
 }
-
 
 /// Run the game loop (blocking)
 fn run_game_blocking(args: Args) -> anyhow::Result<()> {
@@ -241,11 +241,9 @@ fn run_game_blocking(args: Args) -> anyhow::Result<()> {
                 WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) => {
                     window.set_should_close(true);
                 }
-                WindowEvent::FramebufferSize(width, height) => {
-                    unsafe {
-                        gl::Viewport(0, 0, width, height);
-                    }
-                }
+                WindowEvent::FramebufferSize(width, height) => unsafe {
+                    gl::Viewport(0, 0, width, height);
+                },
                 _ => {}
             }
         }
