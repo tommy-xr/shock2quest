@@ -19,6 +19,7 @@ engine = { path = "../../engine" }
 dark = { path = "../../dark" }
 cgmath = "0.18.0"
 clap = { version = "4.3.5", features = ["derive"] }
+shipyard = "0.6"
 
 # Logging and utilities
 tracing = "0.1.37"

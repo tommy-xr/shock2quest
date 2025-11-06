@@ -4,12 +4,15 @@
 // enabling LLMs and automation scripts to test gameplay, debug issues, and
 // validate changes without requiring human interaction.
 
-use axum::{response::Json, routing::get, Router};
+use axum::{extract::State, response::Json, routing::get, Router};
 use clap::Parser;
 use serde_json::{json, Value};
 use std::{collections::HashSet, net::SocketAddr, time::Duration};
-use tokio::signal;
+use tokio::{signal, sync::mpsc, sync::oneshot};
 use tracing::info;
+
+mod commands;
+use commands::*;
 
 // Game engine imports
 extern crate glfw;
@@ -22,6 +25,10 @@ use engine::{
 use shock2vr::{
     command::Command, input_context::InputContext, time::Time, Game, GameOptions, SpawnLocation,
 };
+
+// Property imports for state queries
+use dark::properties::{PropPosition, PropTemplateId, PropSymName, PropModelName};
+use shipyard::{View, IntoWithId, IntoIter, Get};
 
 // Screen dimensions for the debug window
 const SCR_WIDTH: u32 = 800;
@@ -108,11 +115,14 @@ fn main() -> anyhow::Result<()> {
     // Create a tokio runtime for the HTTP server
     let rt = tokio::runtime::Runtime::new()?;
 
+    // Create command channel for communication between HTTP server and game loop
+    let (command_tx, command_rx) = mpsc::unbounded_channel::<RuntimeCommand>();
+
     // Start the HTTP server in a background task
-    let server_handle = rt.spawn(start_http_server(args.port));
+    let server_handle = rt.spawn(start_http_server(args.port, command_tx));
 
     // Run the game on the main thread (required for GLFW)
-    let game_result = run_game_blocking(args);
+    let game_result = run_game_blocking(args, command_rx);
 
     // If game exits, shutdown the server
     server_handle.abort();
@@ -123,9 +133,16 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Start the HTTP server
-async fn start_http_server(port: u16) -> anyhow::Result<()> {
+async fn start_http_server(
+    port: u16,
+    command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+) -> anyhow::Result<()> {
     // Create the router with health endpoint
-    let app = Router::new().route("/v1/health", get(health_check));
+    let app = Router::new()
+        .route("/v1/health", get(health_check))
+        .route("/v1/info", get(get_info))
+        .route("/v1/step", axum::routing::post(step_frame))
+        .with_state(command_tx);
 
     // Bind to localhost only for security
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -134,9 +151,13 @@ async fn start_http_server(port: u16) -> anyhow::Result<()> {
     // Log available endpoints
     info!("Available endpoints:");
     info!("  GET  /v1/health           - Health check and server status");
+    info!("  GET  /v1/info             - Get current game state snapshot");
+    info!("  POST /v1/step             - Step the simulation forward");
     info!("  (More endpoints coming in Phase 2)");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
+    info!("Test with: curl http://{}/v1/info", addr);
+    info!("Test with: curl -X POST http://{}/v1/step", addr);
 
     // Start the server with graceful shutdown
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -148,7 +169,10 @@ async fn start_http_server(port: u16) -> anyhow::Result<()> {
 }
 
 /// Run the game loop (blocking)
-fn run_game_blocking(args: Args) -> anyhow::Result<()> {
+fn run_game_blocking(
+    args: Args,
+    mut command_rx: mpsc::UnboundedReceiver<RuntimeCommand>,
+) -> anyhow::Result<()> {
     info!("Initializing game engine...");
 
     // Initialize GLFW
@@ -225,7 +249,13 @@ fn run_game_blocking(args: Args) -> anyhow::Result<()> {
     let mut last_time = glfw.get_time() as f32;
     let start_time = last_time;
 
+    // Debug runtime execution control
+    let mut is_paused = true; // Start paused by default
+    let mut step_requested = false;
+    let mut accumulated_time = 0.0f32;
+
     info!("Starting main game loop...");
+    info!("Game is PAUSED by default - use /v1/step to advance frames");
 
     // Main game loop
     while !window.should_close() {
@@ -271,16 +301,57 @@ fn run_game_blocking(args: Args) -> anyhow::Result<()> {
             },
         };
 
-        let time = Time {
+        let game_time = Time {
             elapsed: Duration::from_secs_f32(delta_time),
             total: Duration::from_secs_f32(time - start_time),
         };
 
+        // Process commands from HTTP server
+        while let Ok(command) = command_rx.try_recv() {
+            match &command {
+                RuntimeCommand::Step(_, _) => {
+                    step_requested = true;
+                    is_paused = false; // Allow this frame to execute
+                }
+                _ => {}
+            }
+            process_command(command, &game, &game_time);
+        }
+
         // No commands for now
         let commands: Vec<Box<dyn Command>> = vec![];
 
-        // Update the game
-        profile!("game.update", game.update(&time, &input_context, commands));
+        // Only update the game if not paused or if step was requested
+        let actual_game_time = if !is_paused || step_requested {
+            profile!(
+                "game.update",
+                game.update(&game_time, &input_context, commands)
+            );
+
+            if step_requested {
+                // Reset after stepping one frame
+                step_requested = false;
+                is_paused = true;
+                accumulated_time += game_time.elapsed.as_secs_f32();
+                tracing::info!(
+                    "Stepped 1 frame, game paused again. Total time: {:.3}s",
+                    accumulated_time
+                );
+            }
+            accumulated_time
+        } else {
+            // When paused, use zero delta time to prevent any updates
+            let zero_time = Time {
+                elapsed: Duration::from_secs_f32(0.0),
+                total: Duration::from_secs_f32(accumulated_time),
+            };
+            // Still call update with zero time to maintain state consistency
+            profile!(
+                "game.update",
+                game.update(&zero_time, &input_context, commands)
+            );
+            accumulated_time // Use accumulated time, not real time
+        };
 
         // Render the game
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
@@ -293,7 +364,7 @@ fn run_game_blocking(args: Args) -> anyhow::Result<()> {
 
         // Create a simple render context for debug view
         let render_context = EngineRenderContext {
-            time: glfw.get_time() as f32,
+            time: actual_game_time, // Use accumulated game time, not real time
             camera_offset: pawn_offset,
             camera_rotation: pawn_rotation,
             head_offset: vec3(0.0, 1.6 / SCALE_FACTOR, 0.0), // Default head height
@@ -346,6 +417,197 @@ fn run_game_blocking(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Process a command from the HTTP server
+fn process_command(command: RuntimeCommand, game: &Game, time: &Time) {
+    match command {
+        RuntimeCommand::GetInfo(reply) => {
+            let snapshot = capture_frame_snapshot(game, time);
+            if let Err(_) = reply.send(snapshot) {
+                tracing::warn!("Failed to send frame snapshot - receiver dropped");
+            }
+        }
+        RuntimeCommand::Step(_spec, reply) => {
+            // Step command will be handled by the game loop logic above
+            // Just return the result with current timing information
+            let result = StepResult {
+                frames_advanced: 1,
+                time_advanced: time.elapsed.as_secs_f32(),
+                new_frame_index: 0, // TODO: Track actual frame counter
+                new_total_time: time.total.as_secs_f32(),
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send step result - receiver dropped");
+            }
+        }
+        RuntimeCommand::Screenshot(spec, reply) => {
+            // TODO: Implement screenshot logic
+            let result = ScreenshotResult {
+                filename: spec
+                    .filename
+                    .unwrap_or_else(|| "screenshot.png".to_string()),
+                full_path: "/tmp/screenshot.png".to_string(),
+                resolution: [SCR_WIDTH, SCR_HEIGHT],
+                size_bytes: 0,
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send screenshot result - receiver dropped");
+            }
+        }
+        RuntimeCommand::RayCast(request, reply) => {
+            // TODO: Implement raycast logic
+            let result = RayCastResult {
+                hit: false,
+                hit_point: None,
+                hit_normal: None,
+                distance: None,
+                entity_id: None,
+                entity_name: None,
+                collision_group: None,
+                is_sensor: false,
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send raycast result - receiver dropped");
+            }
+        }
+        RuntimeCommand::SetInput(_patch) => {
+            // TODO: Implement input modification
+            tracing::info!("Input modification not yet implemented");
+        }
+        RuntimeCommand::MovePlayer(_position) => {
+            // TODO: Implement player movement
+            tracing::info!("Player movement not yet implemented");
+        }
+        RuntimeCommand::RunGameCommand(_command, _args, reply) => {
+            // TODO: Implement game command execution
+            let result = CommandResult {
+                success: false,
+                message: "Game commands not yet implemented".to_string(),
+                data: None,
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send command result - receiver dropped");
+            }
+        }
+        RuntimeCommand::ListEntities { limit: _, reply } => {
+            // TODO: Implement entity listing
+            let result = EntityListResult {
+                entities: vec![],
+                total_count: 0,
+                player_position: [0.0, 0.0, 0.0],
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send entity list - receiver dropped");
+            }
+        }
+        RuntimeCommand::EntityDetail { id: _, reply } => {
+            // TODO: Implement entity detail
+            let result = EntityDetailResult {
+                entity_id: 0,
+                name: "Unknown".to_string(),
+                template_id: 0,
+                position: [0.0, 0.0, 0.0],
+                rotation: [1.0, 0.0, 0.0, 0.0],
+                inheritance_chain: vec![],
+                properties: vec![],
+                outgoing_links: vec![],
+                incoming_links: vec![],
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send entity detail - receiver dropped");
+            }
+        }
+    }
+}
+
+/// Capture current game state as a frame snapshot
+fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
+    let world = game.world();
+
+    // Query entity count by getting all entities with template IDs
+    let entity_count = world.run(|v_template_id: View<PropTemplateId>| {
+        v_template_id.iter().with_id().count()
+    });
+
+    // Log a sample of entities for debugging
+    let _sample_entities: Vec<String> = world.run(|v_template_id: View<PropTemplateId>,
+                                                   v_position: View<PropPosition>,
+                                                   v_symname: View<PropSymName>,
+                                                   v_model: View<PropModelName>| {
+        v_template_id.iter()
+            .with_id()
+            .take(10) // Limit to first 10 entities
+            .map(|(entity_id, template_id)| {
+                let pos_str = if let Ok(pos) = v_position.get(entity_id) {
+                    format!("pos:[{:.2},{:.2},{:.2}]", pos.position.x, pos.position.y, pos.position.z)
+                } else {
+                    "pos:none".to_string()
+                };
+
+                let name_str = if let Ok(symname) = v_symname.get(entity_id) {
+                    format!("name:{}", symname.0)
+                } else {
+                    "name:none".to_string()
+                };
+
+                let model_str = if let Ok(model) = v_model.get(entity_id) {
+                    format!("model:{}", model.0)
+                } else {
+                    "model:none".to_string()
+                };
+
+                let entity_info = format!("entity_id:{} template_id:{} {} {} {}",
+                                        entity_id.inner(), template_id.template_id, name_str, pos_str, model_str);
+
+                tracing::info!("Entity: {}", entity_info);
+                entity_info
+            })
+            .collect()
+    });
+
+    // TODO: Find player entity specifically
+    // TODO: Get actual mission name from game scene
+    // TODO: Track frame counter
+
+    FrameSnapshot {
+        frame_index: 0, // TODO: Get actual frame counter
+        time: TimeInfo {
+            elapsed_ms: time.elapsed.as_millis() as f32,
+            total_ms: time.total.as_millis() as f32,
+        },
+        mission: "earth.mis".to_string(), // TODO: Get actual mission name
+        player: PlayerInfo {
+            entity_id: None,                       // TODO: Get player entity ID
+            position: [0.0, 0.0, 0.0],             // TODO: Get player position
+            rotation: [1.0, 0.0, 0.0, 0.0],        // TODO: Get player rotation
+            camera_offset: [0.0, 1.6, 0.0],        // TODO: Get camera offset
+            camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
+        },
+        entity_count,
+        debug_features: vec![], // TODO: List active debug features
+        inputs: InputSnapshot {
+            head_rotation: [1.0, 0.0, 0.0, 0.0],
+            hands: HandsSnapshot {
+                left: HandSnapshot {
+                    position: [0.0, 0.0, 0.0],
+                    rotation: [1.0, 0.0, 0.0, 0.0],
+                    thumbstick: [0.0, 0.0],
+                    trigger: 0.0,
+                    squeeze: 0.0,
+                    a: 0.0,
+                },
+                right: HandSnapshot {
+                    position: [0.0, 0.0, 0.0],
+                    rotation: [1.0, 0.0, 0.0, 0.0],
+                    thumbstick: [0.0, 0.0],
+                    trigger: 0.0,
+                    squeeze: 0.0,
+                    a: 0.0,
+                },
+            },
+        },
+    }
+}
+
 /// Health check endpoint
 async fn health_check() -> Json<Value> {
     Json(json!({
@@ -354,6 +616,63 @@ async fn health_check() -> Json<Value> {
         "version": "0.1.0",
         "timestamp": chrono::Utc::now().to_rfc3339()
     }))
+}
+
+/// Get current game state snapshot
+async fn get_info(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<FrameSnapshot> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::GetInfo(reply_tx)) {
+        tracing::error!("Failed to send GetInfo command - game loop receiver dropped");
+        return Json(FrameSnapshot::new());
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(snapshot) => Json(snapshot),
+        Err(_) => {
+            tracing::error!("Failed to receive frame snapshot - sender dropped");
+            Json(FrameSnapshot::new())
+        }
+    }
+}
+
+/// Step the simulation forward by one frame
+async fn step_frame(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<StepResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Create a simple step spec for 1 frame
+    let step_spec = StepSpec::Frames { frames: 1 };
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::Step(step_spec, reply_tx)) {
+        tracing::error!("Failed to send Step command - game loop receiver dropped");
+        return Json(StepResult {
+            frames_advanced: 0,
+            time_advanced: 0.0,
+            new_frame_index: 0,
+            new_total_time: 0.0,
+        });
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive step result - sender dropped");
+            Json(StepResult {
+                frames_advanced: 0,
+                time_advanced: 0.0,
+                new_frame_index: 0,
+                new_total_time: 0.0,
+            })
+        }
+    }
 }
 
 /// Wait for shutdown signal (Ctrl+C)
