@@ -1688,6 +1688,10 @@ impl MissionCore {
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
         let v_render_type = self.world.borrow::<View<PropRenderType>>().unwrap();
+        let v_joint_transforms = self
+            .world
+            .borrow::<View<RuntimePropJointTransforms>>()
+            .unwrap();
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
@@ -1728,7 +1732,26 @@ impl MissionCore {
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
+                    if options.debug_skeletons {
+                        xformed_obj.set_debug_alpha(0.35);
+                        xformed_obj.set_depth_write(false);
+                    } else {
+                        xformed_obj.clear_debug_alpha();
+                        xformed_obj.set_depth_write(true);
+                    }
                     scene.push(xformed_obj);
+                }
+
+                if options.debug_skeletons {
+                    if let Ok(joint_transforms) = v_joint_transforms.get(*entity_id) {
+                        let world_joints: Vec<Matrix4<f32>> = joint_transforms
+                            .0
+                            .iter()
+                            .map(|joint| xform * *joint)
+                            .collect();
+                        let mut debug_skeleton = objs.draw_debug_skeleton(&world_joints);
+                        scene.append(&mut debug_skeleton);
+                    }
                 }
             }
         }

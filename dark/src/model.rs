@@ -304,6 +304,15 @@ impl Model {
         }
     }
 
+    pub fn draw_debug_skeleton(&self, global_transforms: &[Matrix4<f32>]) -> Vec<SceneObject> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => {
+                animated_model.skeleton.debug_draw(global_transforms)
+            }
+            InnerModel::Static(_) => Vec::new(),
+        }
+    }
+
     pub fn transform(model: &Model, transform: Matrix4<f32>) -> Model {
         match &model.inner {
             InnerModel::Static(static_model) => Model {

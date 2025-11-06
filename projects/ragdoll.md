@@ -44,6 +44,8 @@ __Status__: ✅ Implemented. The new debug mission (`shock2vr/src/scenes/debug_j
 
 Deliverable: We can run an existing mission (like debug_ragdoll) with `debug-skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
 
+__Status__: ✅ Implemented. Desktop/debug runtimes accept `--debug-skeletons`, `Ss2Skeleton::debug_draw` + `Model::draw_debug_skeleton` build the bone spheres and link lines, and `MissionCore::render` emits them whenever the option is enabled.
+
 ## Part 3: Clone the skeleton
 
 The goal for this deliverable is, when we run the `debug_ragdoll` scene, once the applydamage effect is done, we _clone_ the skeleton into a static ragdoll 1 unit above the current item. This will allow us to visualize that the layout is correct.
