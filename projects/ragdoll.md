@@ -7,6 +7,13 @@
 - Spawn a dedicated ragdoll entity on death that inherits the deceased model pose, then simulate it using Rapier rigid bodies and joints.
 - Keep visual skinning and hit detection in sync with the simulated skeleton so the corpse interacts believably with the world.
 
+## Files To Reference
+- shock2vr/src/physics/mod.rs
+- dark/src/ss2_skeleton.rs
+- shock2vr/src/creature/hit_boxes.rs
+- dark/src/model.rs
+- shock2vr/src/scenes/debug_ragdoll.rs
+
 ## Previous Implementation
 
 A previous attempt was tried in ragdoll-failed-attempt-1.md, and some learnings are collected there. Because of the challenges, I'm proposing a new incremental plan.
@@ -28,9 +35,9 @@ Deliverable: We can run `--mission=debug_joint_constraint`, see the joints and r
 
 ## Part 2: Add debug visualization for skeletons
 1. For desktop_runtime, add a `--debug-skeletons` command.
-2. Add a function to ss2_skeleton.rs that is `debug_draw()`. This function should return a scene object for each bone, lines that connect bones to show the parent-child relationship
-    a. To accomplish this, we'll iterate across the `bones` vec, which includes the relationship and the index (`joint_id`). From there, we'll place a sphere scene object at `global_transforms[bone.joint_id]`, and draw a line between `global_transforms[bone.joint_id]` and `global_transforms[bone.parent_id]]
-3. Add a function to `model.rs` that is `draw_debug_skeleton()` - for an animated model, this 
+2. In `ss2_skeleton.rs`, add `debug_draw(&self, global_transforms: &[Matrix4]) -> Vec<SceneObject>`. The `global_transforms` slice is the same per-joint world matrix array we already compute when evaluating the skeleton each frame, so this helper just consumes that existing data to emit debug geometry.
+    a. Iterate across `self.bones`, which already contains the joint IDs and parent relationships. For each bone, place a sphere at `global_transforms[bone.joint_id]` and draw a line to `global_transforms[bone.parent_id]` to visualize the hierarchy.
+3. Add a function to `model.rs` that is `draw_debug_skeleton()` - for an animated model, this will call into the skeleton helper above and push the returned scene objects into the mission debug renderer.
 4. When `--debug-skeletons` is active, draw all active skeletons in `mission_core` for each model
 
 Deliverable: We can run a mission with `debug_skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
@@ -50,16 +57,16 @@ The `RagDollManager` will be instantiated and owned by `mission_core`, and will 
 `RagDoll` - state kept by rag doll manager
 - `bones: Vec<Bone>` - an array of bones, to understand the parent/child relationships
 - `initial_global_transforms: Vec<Matrix4>` - the initial global transforms 
-- `physics_entities` - the list of physics entities that were created as part of the ragdoll. These may be created via `create_dynamic_body`, `attach_collider` and `create_impulse_joint`
-- `physics_entity_to_bone: HashMap<JointId, PhysicsEntity>` - a dictionary that tracks the phsyics entity that should correspond to the transform. 
+- `physics_entities` - the list of physics entities that were created as part of the ragdoll. These may be created via `create_dynamic_body`, `create_impulse_joint` in PhysicsWorld.
+- `physics_entity_to_bone: HashMap<JointId, RigidBodyHandle>` - a dictionary that tracks the phsyics entity that should correspond to the transform. 
 - `latest_global_transforms: Vec<Matrix4>` - the latest global transforms, which are synced from the physics entities. Initially, this will just be taken from initial_global_transforms.
 
 `RagDollManager`
 - `new` -> create an empty instance
-- `update` -> update the rag doll manager. For each managed ragdoll, we'll synchronize the _global_ (world) positions. **This will be implemented in a a later phase**
+- `update` -> update the rag doll manager. For each managed ragdoll, we'll synchronize the _global_ (world) positions. **This will be implemented in phase 4**
 - `add_ragdoll` -> given an entity, model, and physics world, this will add a ragdoll. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. The flow will be as follows:
     1. For the passed in model, call `to_rag_doll`
-    2. Create all of the physics entities as appropriate, by calling `create_static_body`, `attach_collider`, `create_impulse_joint`, etc.
+    2. Create all of the physics entities as appropriate, by calling `create_static_body`, `attach_collider`, `create_impulse_joint`, etc. These APIs already exist in physics world.
     3. These physics entities - along with the `RagDollInfo` that the model returns - will be stored in the `RagDoll` state.
 - `remove_entity` ->  remove the rag doll entity completely from the physics
 - `render` -> this will render all the ragdolls (producing sceneobjects and calling set_skinning_data). **This will be implemented in a later phase**
@@ -70,11 +77,21 @@ The `RagDollManager` will be instantiated and owned by `mission_core`, and will 
 
 For this phase, for `add_ragdoll`, we'll have a completely minimal implementation - we'll create _static_ (kinematic?) rigid bodies for all of the bones
 
-__Deliverable:__ When we run `debug_ragdoll` scene, once the entity is destroyed, we'll see a static ragdoll of the skeleton with appropriate joints, where it was standing.
+To exercise this path in the `debug_ragdoll` scene we will:
+1. Update `kill_spawned_entity` so that right after it queues the `ApplyDamage` effect it synchronously calls a new mission helper, `spawn_debug_ragdoll(entity_id)`.
+2. `spawn_debug_ragdoll` will:
+    - Look up the `Model` via `mission_core.id_to_model` and bail if `can_create_rag_doll` is false.
+    - Pull the current `RuntimePropTransform` and `RuntimePropJointTransforms` for the dying entity so we have the final pose.
+    - Call `model.to_rag_doll()` to get the `RagDollInfo`, then forward everything to `RagDollManager::add_ragdoll`.
+3. `RagDollManager::add_ragdoll` will apply the 1-unit Y offset to the root transform before creating the static/kinematic bodies, store the source `EntityId` for cleanup, and keep the returned `RagDoll` in its map.
+
+__Deliverable:__ When we run `debug_ragdoll` scene, once the entity is destroyed, the explicit call chain above spawns a static ragdoll (with joints) one unit above the corpse, proving the cloning flow works end-to-end.
 
 ## Part 4: Connect model visualization
 
 TBD, but the goal of this implementation is to verify we can properly connect the world-space physics bodies with rendering. In order to avoid the issues we ran into previously, we'll create the scene objects directly and call set_skinning_data with the _global_ transforms (and use an identity matrix for the world transform). This should avoid all the awkard coordinate transforms - we're relying on the fact that, for ss2 models, there is no bind pose, all of the parts are at the origin.
+
+We'll implement `update` for `RagDollManager`
 
 On each `update` for `RagDollManager`, we'll synchronize the transforms from the physics objects to `latest_global_transforms` for every RagDoll. This willr equire, for each bone, reading back the global transform of the physics entity in `physics_entity_to_bone`t with `get_position` and `get_rotation`, create a transform matrix
 
@@ -83,4 +100,3 @@ In order to accomplish this, we'll need to add a `model: Vec<SceneObject>` to `R
 ## Part 5: Full ragdoll implementation
 
 TBD, but convert the ragdoll entities from kinematic to real physics bodies, so we can finally see the ragdoll in all its glory.
-
