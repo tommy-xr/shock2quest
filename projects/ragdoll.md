@@ -43,16 +43,30 @@ To do this, we'll create a new `ragdoll_manager` and `ragdoll` struct. We'll cre
 
 The `RagDollManager` will be instantiated and owned by `mission_core`, and will be responsible for creating the ragdolls. It will store a `HashMap` of `<EntityId, RagDoll>`. 
 
-`RagDoll`
+`RagDollInfo`
 - `bones: Vec<Bone>` - an array of bones, to understand the parent/child relationships
 - `initial_global_transforms: Vec<Matrix4>` - the initial global transforms 
+
+`RagDoll` - state kept by rag doll manager
+- `bones: Vec<Bone>` - an array of bones, to understand the parent/child relationships
+- `initial_global_transforms: Vec<Matrix4>` - the initial global transforms 
+- `physics_entities` - the list of physics entities that were created as part of the ragdoll. These may be created via `create_dynamic_body`, `attach_collider` and `create_impulse_joint`
+- `physics_entity_to_bone: HashMap<JointId, PhysicsEntity>` - a dictionary that tracks the phsyics entity that should correspond to the transform. 
+- `latest_global_transforms: Vec<Matrix4>` - the latest global transforms, which are synced from the physics entities. Initially, this will just be taken from initial_global_transforms.
 
 `RagDollManager`
 - `new` -> create an empty instance
 - `update` -> update the rag doll manager. For each managed ragdoll, we'll synchronize the _global_ (world) positions. **This will be implemented in a a later phase**
-- `add_ragdoll` -> given an entity, model, and physics world, this will add a ragdoll. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints
+- `add_ragdoll` -> given an entity, model, and physics world, this will add a ragdoll. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. The flow will be as follows:
+    1. For the passed in model, call `to_rag_doll`
+    2. Create all of the physics entities as appropriate, by calling `create_static_body`, `attach_collider`, `create_impulse_joint`, etc.
+    3. These physics entities - along with the `RagDollInfo` that the model returns - will be stored in the `RagDoll` state.
 - `remove_entity` ->  remove the rag doll entity completely from the physics
 - `render` -> this will render all the ragdolls (producing sceneobjects and calling set_skinning_data). **This will be implemented in a later phase**
+
+`Model`
+- `Model` will add a new function `to_rag_doll`, that returns the `RagDollInfo`, porting over the bones and initial global transforms.  
+- `Model` will add a new function `can_create_rag_doll` that only returns true for animated models.
 
 For this phase, for `add_ragdoll`, we'll have a completely minimal implementation - we'll create _static_ (kinematic?) rigid bodies for all of the bones
 
@@ -60,7 +74,11 @@ __Deliverable:__ When we run `debug_ragdoll` scene, once the entity is destroyed
 
 ## Part 4: Connect model visualization
 
-TBD, but the goal of this implementation is to verify we can properly connect the world-space physics bodies with rendering. In order to avoid the issues we ran into previously, we'll create the scene objects directly and call set_skinning_data with the _global_ transforms (and use an identity matrix for the world transform). This should avoid all the awkard coordinate transforms - we're relying on the fact that, for ss2 models, there is no bind pose, all of the parts are at the origin
+TBD, but the goal of this implementation is to verify we can properly connect the world-space physics bodies with rendering. In order to avoid the issues we ran into previously, we'll create the scene objects directly and call set_skinning_data with the _global_ transforms (and use an identity matrix for the world transform). This should avoid all the awkard coordinate transforms - we're relying on the fact that, for ss2 models, there is no bind pose, all of the parts are at the origin.
+
+On each `update` for `RagDollManager`, we'll synchronize the transforms from the physics objects to `latest_global_transforms` for every RagDoll. This willr equire, for each bone, reading back the global transform of the physics entity in `physics_entity_to_bone`t with `get_position` and `get_rotation`, create a transform matrix
+
+In order to accomplish this, we'll need to add a `model: Vec<SceneObject>` to `RagDoll`. Then, when we render, we'll iterate through each scene object, and call `set_skinning_data` with the `latest_global_transforms`.
 
 ## Part 5: Full ragdoll implementation
 
