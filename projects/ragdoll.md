@@ -60,9 +60,9 @@ __Deliverable:__ When we run `debug_ragdoll` scene, once the entity is destroyed
 
 ## Part 4: Connect model visualization
 
-TBD
+TBD, but the goal of this implementation is to verify we can properly connect the world-space physics bodies with rendering. In order to avoid the issues we ran into previously, we'll create the scene objects directly and call set_skinning_data with the _global_ transforms (and use an identity matrix for the world transform). This should avoid all the awkard coordinate transforms - we're relying on the fact that, for ss2 models, there is no bind pose, all of the parts are at the origin
 
 ## Part 5: Full ragdoll implementation
 
-TBD
+TBD, but convert the ragdoll entities from kinematic to real physics bodies, so we can finally see the ragdoll in all its glory.
 
