@@ -57,16 +57,18 @@ The `RagDollManager` will be instantiated and owned by `mission_core`, and will 
 `RagDoll` - state kept by rag doll manager
 - `bones: Vec<Bone>` - an array of bones, to understand the parent/child relationships
 - `initial_global_transforms: Vec<Matrix4>` - the initial global transforms 
-- `physics_entities` - the list of physics entities that were created as part of the ragdoll. These may be created via `create_dynamic_body`, `create_impulse_joint` in PhysicsWorld.
-- `physics_entity_to_bone: HashMap<JointId, RigidBodyHandle>` - a dictionary that tracks the phsyics entity that should correspond to the transform. 
+- `physics_entities` - the list of Rapier handles (rigid bodies + joints) that were created as part of the ragdoll.
+- `physics_entity_to_bone: HashMap<JointId, RigidBodyHandle>` - a dictionary that tracks the rigid body handle that should correspond to each bone transform. 
+- `bone_frame_offsets: HashMap<JointId, Matrix4>` - captures the transform between the rigid body frame (often centered within a hitbox) and the actual bone/joint origin used for skinning so we can translate rigid body poses back to joint poses.
 - `latest_global_transforms: Vec<Matrix4>` - the latest global transforms, which are synced from the physics entities. Initially, this will just be taken from initial_global_transforms.
+- `scene_objects: Vec<SceneObject>` - cloned renderables from the original model so the manager can push them to the renderer without keeping an `AnimationPlayer`.
 
 `RagDollManager`
 - `new` -> create an empty instance
 - `update` -> update the rag doll manager. For each managed ragdoll, we'll synchronize the _global_ (world) positions. **This will be implemented in phase 4**
 - `add_ragdoll` -> given an entity, model, and physics world, this will add a ragdoll. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. We'll have to create the appropriate physics entities given the skeleton (and hitboxes, potentially?), with proper constraints. The flow will be as follows:
     1. For the passed in model, call `to_rag_doll`
-    2. Create all of the physics entities as appropriate, by calling `create_static_body`, `attach_collider`, `create_impulse_joint`, etc. These APIs already exist in physics world.
+    2. Create all of the physics entities as appropriate, by calling `create_static_body`, `attach_collider`, `create_impulse_joint`, etc. These APIs already exist in physics world. As each rigid body is built, compute and store the transform from the bone’s joint origin to the collider center so `bone_frame_offsets` can later move poses back to joint space.
     3. These physics entities - along with the `RagDollInfo` that the model returns - will be stored in the `RagDoll` state.
 - `remove_entity` ->  remove the rag doll entity completely from the physics
 - `render` -> this will render all the ragdolls (producing sceneobjects and calling set_skinning_data). **This will be implemented in a later phase**
@@ -89,14 +91,31 @@ __Deliverable:__ When we run `debug_ragdoll` scene, once the entity is destroyed
 
 ## Part 4: Connect model visualization
 
-TBD, but the goal of this implementation is to verify we can properly connect the world-space physics bodies with rendering. In order to avoid the issues we ran into previously, we'll create the scene objects directly and call set_skinning_data with the _global_ transforms (and use an identity matrix for the world transform). This should avoid all the awkard coordinate transforms - we're relying on the fact that, for ss2 models, there is no bind pose, all of the parts are at the origin.
+Goal: keep the ragdoll mesh in sync with the physics pose every frame and render it without relying on `AnimationPlayer`.
 
-We'll implement `update` for `RagDollManager`
+1. **Extend `RagDollManager::add_ragdoll`** so it clones the model’s scene objects up front (`model.build_scene_objects(identity_world)` or equivalent) and stores them in the `scene_objects` field. Each object should start with an identity world matrix so all motion comes from skinning data.
+2. **Implement `RagDollManager::update(&mut self, physics_world: &PhysicsWorld)`** and call it immediately after `physics_world.step()` in `Mission::update` (before hitboxes/render collection):
+    - For each ragdoll, pick a canonical root (pelvis) handle from `physics_entity_to_bone`. Call `physics_world.get_body_transform(handle)` to obtain an `Isometry`.
+    - Convert the isometry to a `Matrix4`, multiply by the stored `bone_frame_offsets[root_joint]` (so the pelvis center lines up with the bone origin), and store it as the ragdoll’s root/global transform (applying any spawn offset captured during `add_ragdoll`).
+    - For every bone, fetch its rigid body handle from `physics_entity_to_bone`. If present, call `get_body_transform`, convert to `Matrix4`, multiply by `bone_frame_offsets[joint_id]`, and write the result into `latest_global_transforms[joint_id]`. If a handle is missing (e.g., optional bones), fall back to the previous or initial transform so the array always stays populated.
+    - Store the updated matrices so render code can consume them without touching Rapier again.
+3. **Render hook**: when `Mission::gather_scene_objects` runs, iterate over all managed ragdolls and:
+    - For each cached `scene_object`, set its world transform to identity (ragdoll meshes live in world space already) and call `set_skinning_data(&latest_global_transforms)`.
+    - Submit the scene objects to the renderer or a dedicated debug pass. This bypasses `AnimationPlayer` entirely, proving the render pathway works with world-space matrices.
+4. Add a debug overlay toggle (ex: `--debug-ragdoll-poses`) that renders both the rigid body centers and the corrected bone poses, drawing a short line segment that visualizes each `bone_frame_offset`. This confirms colliders that sit between joints still drive the right skinning transform.
+5. Feed the same `latest_global_transforms` into `HitBoxManager` so post-mortem hit tests line up with the mesh. This can be a follow-up if needed.
 
-On each `update` for `RagDollManager`, we'll synchronize the transforms from the physics objects to `latest_global_transforms` for every RagDoll. This willr equire, for each bone, reading back the global transform of the physics entity in `physics_entity_to_bone`t with `get_position` and `get_rotation`, create a transform matrix
-
-In order to accomplish this, we'll need to add a `model: Vec<SceneObject>` to `RagDoll`. Then, when we render, we'll iterate through each scene object, and call `set_skinning_data` with the `latest_global_transforms`.
+__Deliverable__: spawning the debug ragdoll now shows the original creature mesh posed with the static physics rig, matching bone positions frame-to-frame.
 
 ## Part 5: Full ragdoll implementation
 
-TBD, but convert the ragdoll entities from kinematic to real physics bodies, so we can finally see the ragdoll in all its glory.
+Now that rendering is wired, convert the placeholder rig into a fully simulated ragdoll:
+
+1. **Dynamic bodies**: switch the rigid bodies created in `RagDollManager::add_ragdoll` from `create_static_body` to `create_dynamic_body`, configuring mass, damping, and gravity scale per bone (lighter hands/feet, heavier torso). Keep `user_tag` set so debugging tools can identify them.
+2. **Collider shapes**: derive capsules or oriented boxes from the existing hitbox data. Store per-bone offsets so the collider’s local origin matches the joint pivot used for skinning.
+3. **Joint constraints**: for each parent/child bone pair, build `GenericJoint` or `SphericalJoint` descriptors with sensible angular limits (hinge knees, cone shoulders, twist limits for spine). Persist the resulting `ImpulseJointHandle`s so `remove_entity` can clean them up.
+4. **Mission integration**: when a real creature dies (not just the debug scene), disable its original capsule/hitboxes, spawn a ragdoll entity via the manager, and route any lingering script references to the new entity if needed. Gate this behind a developer flag until tuning is complete.
+5. **Update loop**: reuse the Part 4 `update` path so rendering and (optional) hitboxes follow the simulated pose every frame. Add stability helpers (e.g., wake/sleep control, optional pose blending) if the ragdoll jitters.
+6. **Lifecycle**: ensure `Mission::remove_entity` tears down ragdolls by removing all stored rigid bodies, colliders, and joints. Consider adding a timeout/limit to despawn old corpses and avoid unbounded physics cost.
+
+__Deliverable__: killing a creature causes its mesh to transition into a fully dynamic ragdoll that falls under gravity, collides with the level, and remains visually in sync without animator involvement.
