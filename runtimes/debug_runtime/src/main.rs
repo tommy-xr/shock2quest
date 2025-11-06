@@ -257,6 +257,9 @@ fn run_game_blocking(
     let mut step_requested = false;
     let mut accumulated_time = 0.0f32;
     let mut shutdown_requested = false;
+    let mut frame_counter = 0u64;
+    let mut frames_to_step = 0u32;
+    let mut target_step_time: Option<f32> = None;
 
     info!("Starting main game loop...");
     info!("Game is PAUSED by default - use /v1/step to advance frames");
@@ -313,9 +316,32 @@ fn run_game_blocking(
         // Process commands from HTTP server
         while let Ok(command) = command_rx.try_recv() {
             match &command {
-                RuntimeCommand::Step(_, _) => {
-                    step_requested = true;
-                    is_paused = false; // Allow this frame to execute
+                RuntimeCommand::Step(step_spec, _) => {
+                    match step_spec {
+                        StepSpec::Frames { frames } => {
+                            frames_to_step = *frames;
+                            target_step_time = None;
+                            step_requested = true;
+                            is_paused = false;
+                            tracing::info!("Starting step: {} frames", frames);
+                        }
+                        StepSpec::Duration { duration } => {
+                            // Parse duration string using humantime
+                            match duration.parse::<humantime::Duration>() {
+                                Ok(parsed_duration) => {
+                                    let duration_secs = parsed_duration.as_secs_f32();
+                                    target_step_time = Some(accumulated_time + duration_secs);
+                                    frames_to_step = 0;
+                                    step_requested = true;
+                                    is_paused = false;
+                                    tracing::info!("Starting step: {} ({:.3}s)", duration, duration_secs);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to parse duration '{}': {}", duration, e);
+                                }
+                            }
+                        }
+                    }
                 }
                 RuntimeCommand::Shutdown => {
                     shutdown_requested = true;
@@ -323,7 +349,7 @@ fn run_game_blocking(
                 }
                 _ => {}
             }
-            process_command(command, &game, &game_time);
+            process_command(command, &game, &game_time, frame_counter);
         }
 
         // No commands for now
@@ -337,14 +363,49 @@ fn run_game_blocking(
             );
 
             if step_requested {
-                // Reset after stepping one frame
-                step_requested = false;
-                is_paused = true;
+                // Increment frame counter and accumulated time
+                frame_counter += 1;
                 accumulated_time += game_time.elapsed.as_secs_f32();
-                tracing::info!(
-                    "Stepped 1 frame, game paused again. Total time: {:.3}s",
-                    accumulated_time
-                );
+
+                // Check if we should continue stepping or pause
+                let should_continue = if let Some(target_time) = target_step_time {
+                    // Time-based stepping
+                    if accumulated_time >= target_time {
+                        tracing::info!(
+                            "Time-based step completed: reached {:.3}s after {} frames",
+                            accumulated_time, frame_counter
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                } else if frames_to_step > 0 {
+                    // Frame-based stepping
+                    frames_to_step -= 1;
+                    if frames_to_step == 0 {
+                        tracing::info!(
+                            "Frame-based step completed: {} frames, total time: {:.3}s",
+                            frame_counter, accumulated_time
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    // Single frame step (legacy behavior)
+                    tracing::info!(
+                        "Stepped 1 frame, game paused again. Frame: {}, Total time: {:.3}s",
+                        frame_counter, accumulated_time
+                    );
+                    false
+                };
+
+                if !should_continue {
+                    step_requested = false;
+                    is_paused = true;
+                    target_step_time = None;
+                    frames_to_step = 0;
+                }
             }
             accumulated_time
         } else {
@@ -430,21 +491,31 @@ fn run_game_blocking(
 }
 
 /// Process a command from the HTTP server
-fn process_command(command: RuntimeCommand, game: &Game, time: &Time) {
+fn process_command(command: RuntimeCommand, game: &Game, time: &Time, frame_counter: u64) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
-            let snapshot = capture_frame_snapshot(game, time);
+            let snapshot = capture_frame_snapshot(game, time, frame_counter);
             if let Err(_) = reply.send(snapshot) {
                 tracing::warn!("Failed to send frame snapshot - receiver dropped");
             }
         }
-        RuntimeCommand::Step(_spec, reply) => {
+        RuntimeCommand::Step(spec, reply) => {
             // Step command will be handled by the game loop logic above
-            // Just return the result with current timing information
+            // Return result based on the step specification
+            let (frames_requested, time_requested) = match spec {
+                StepSpec::Frames { frames } => (frames, None),
+                StepSpec::Duration { duration } => {
+                    let parsed_time = duration.parse::<humantime::Duration>()
+                        .map(|d| d.as_secs_f32())
+                        .unwrap_or(0.0);
+                    (0, Some(parsed_time))
+                }
+            };
+
             let result = StepResult {
-                frames_advanced: 1,
-                time_advanced: time.elapsed.as_secs_f32(),
-                new_frame_index: 0, // TODO: Track actual frame counter
+                frames_advanced: frames_requested.max(1), // At least 1 frame will be processed
+                time_advanced: time_requested.unwrap_or(0.016), // Default ~60fps frame time
+                new_frame_index: frame_counter,
                 new_total_time: time.total.as_secs_f32(),
             };
             if let Err(_) = reply.send(result) {
@@ -536,7 +607,7 @@ fn process_command(command: RuntimeCommand, game: &Game, time: &Time) {
 }
 
 /// Capture current game state as a frame snapshot
-fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
+fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> FrameSnapshot {
     let world = game.world();
 
     // Query entity count by getting all entities with template IDs
@@ -596,7 +667,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
     // TODO: Track frame counter
 
     FrameSnapshot {
-        frame_index: 0, // TODO: Get actual frame counter
+        frame_index: frame_counter,
         time: TimeInfo {
             elapsed_ms: time.elapsed.as_millis() as f32,
             total_ms: time.total.as_millis() as f32,
@@ -667,14 +738,12 @@ async fn get_info(
     }
 }
 
-/// Step the simulation forward by one frame
+/// Step the simulation forward by one frame or time duration
 async fn step_frame(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(step_spec): Json<StepSpec>,
 ) -> Json<StepResult> {
     let (reply_tx, reply_rx) = oneshot::channel();
-
-    // Create a simple step spec for 1 frame
-    let step_spec = StepSpec::Frames { frames: 1 };
 
     // Send command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::Step(step_spec, reply_tx)) {
