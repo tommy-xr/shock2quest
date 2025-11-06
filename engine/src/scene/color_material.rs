@@ -7,6 +7,7 @@ use c_string::*;
 use cgmath::prelude::*;
 use cgmath::{Matrix4, Vector3};
 use once_cell::sync::OnceCell;
+use std::any::Any;
 
 const VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
@@ -49,6 +50,14 @@ pub struct ColorMaterial {
 }
 
 impl Material for ColorMaterial {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         self.has_initialized
     }

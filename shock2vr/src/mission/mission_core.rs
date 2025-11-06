@@ -1727,17 +1727,18 @@ impl MissionCore {
                     objs.to_scene_objects().clone()
                 }
             };
+            let is_animated_model = objs.is_animated();
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
-                    if options.debug_skeletons {
-                        xformed_obj.set_debug_alpha(0.35);
+                    if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
+                        xformed_obj.set_skinned_transparency(Some(0.35));
                     } else {
-                        xformed_obj.clear_debug_alpha();
                         xformed_obj.set_depth_write(true);
+                        xformed_obj.set_skinned_transparency(None);
                     }
                     scene.push(xformed_obj);
                 }

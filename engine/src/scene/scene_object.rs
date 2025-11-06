@@ -26,6 +26,7 @@ use std::rc::Rc;
 use super::basic_material;
 use super::mesh;
 use super::quad;
+use super::skinned_material::SkinnedMaterial;
 use super::TextVertex;
 use crate::materials;
 
@@ -36,7 +37,6 @@ pub struct SceneObject {
     pub transform: Matrix4<f32>,
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; 40],
-    pub debug_alpha: Option<f32>,
     pub depth_write: bool,
 }
 
@@ -207,7 +207,6 @@ impl SceneObject {
             transform,
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
-            debug_alpha: None,
             depth_write: true,
         }
     }
@@ -226,16 +225,6 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
-        let restore_alpha = if let Some(alpha) = self.debug_alpha {
-            unsafe {
-                gl::BlendColor(0.0, 0.0, 0.0, alpha);
-                gl::BlendFunc(gl::CONSTANT_ALPHA, gl::ONE_MINUS_CONSTANT_ALPHA);
-            }
-            true
-        } else {
-            false
-        };
-
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
         }
@@ -252,13 +241,6 @@ impl SceneObject {
 
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::TRUE) };
-        }
-
-        if restore_alpha {
-            unsafe {
-                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
-                gl::BlendColor(0.0, 0.0, 0.0, 0.0);
-            }
         }
     }
     pub fn draw_transparent(
@@ -312,7 +294,6 @@ impl SceneObject {
             transform: Matrix4::identity(),
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
-            debug_alpha: None,
             depth_write: true,
         }
     }
@@ -324,20 +305,25 @@ impl SceneObject {
             transform: self.transform,
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
-            debug_alpha: self.debug_alpha,
             depth_write: self.depth_write,
         }
     }
 
-    pub fn set_debug_alpha(&mut self, alpha: f32) {
-        self.debug_alpha = Some(alpha);
-    }
-
-    pub fn clear_debug_alpha(&mut self) {
-        self.debug_alpha = None;
-    }
-
     pub fn set_depth_write(&mut self, enabled: bool) {
         self.depth_write = enabled;
+    }
+
+    pub fn set_skinned_transparency(&mut self, transparency: Option<f32>) {
+        if let Some(material) = self
+            .material
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<SkinnedMaterial>()
+        {
+            match transparency {
+                Some(value) => material.set_transparency_override(value),
+                None => material.reset_transparency(),
+            }
+        }
     }
 }

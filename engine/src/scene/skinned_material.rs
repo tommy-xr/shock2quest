@@ -13,6 +13,7 @@ use cgmath::prelude::*;
 use cgmath::Matrix4;
 
 use once_cell::sync::OnceCell;
+use std::any::Any;
 
 // Unified shader for single-pass lighting with up to 6 spotlights (skinned version)
 const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
@@ -157,11 +158,20 @@ pub struct SkinnedMaterial {
     diffuse_texture: Rc<dyn TextureTrait>,
     emissivity: f32,
     transparency: f32,
+    base_transparency: f32,
 }
 
 impl SkinnedMaterial {
     pub fn is_transparent(&self) -> bool {
         self.transparency > 0.01
+    }
+
+    pub fn set_transparency_override(&mut self, transparency: f32) {
+        self.transparency = transparency.clamp(0.0, 1.0);
+    }
+
+    pub fn reset_transparency(&mut self) {
+        self.transparency = self.base_transparency;
     }
 
     pub fn draw_unified(
@@ -241,6 +251,14 @@ impl SkinnedMaterial {
     }
 }
 impl Material for SkinnedMaterial {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         self.has_initialized
     }
@@ -478,6 +496,7 @@ impl SkinnedMaterial {
             has_initialized: false,
             emissivity,
             transparency,
+            base_transparency: transparency,
         })
     }
 }

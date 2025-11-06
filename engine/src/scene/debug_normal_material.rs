@@ -6,6 +6,7 @@ use crate::shader_program::ShaderProgram;
 use c_string::*;
 use cgmath::{Matrix, Matrix4};
 use once_cell::sync::OnceCell;
+use std::any::Any;
 use std::ffi::CString;
 
 // Debug material that visualizes normals as RGB colors for validation
@@ -53,6 +54,14 @@ impl DebugNormalMaterial {
 }
 
 impl Material for DebugNormalMaterial {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         self.initialized
     }
@@ -167,6 +176,14 @@ impl DebugNormalSkinnedMaterial {
 }
 
 impl Material for DebugNormalSkinnedMaterial {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         self.initialized
     }
