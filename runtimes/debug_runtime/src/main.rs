@@ -26,6 +26,10 @@ use shock2vr::{
     command::Command, input_context::InputContext, time::Time, Game, GameOptions, SpawnLocation,
 };
 
+// Property imports for state queries
+use dark::properties::{PropPosition, PropTemplateId, PropSymName, PropModelName};
+use shipyard::{View, IntoWithId, IntoIter, Get};
+
 // Screen dimensions for the debug window
 const SCR_WIDTH: u32 = 800;
 const SCR_HEIGHT: u32 = 600;
@@ -517,7 +521,53 @@ fn process_command(command: RuntimeCommand, game: &Game, time: &Time) {
 
 /// Capture current game state as a frame snapshot
 fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
-    // TODO: Extract real game state information
+    let world = game.world();
+
+    // Query entity count by getting all entities with template IDs
+    let entity_count = world.run(|v_template_id: View<PropTemplateId>| {
+        v_template_id.iter().with_id().count()
+    });
+
+    // Log a sample of entities for debugging
+    let _sample_entities: Vec<String> = world.run(|v_template_id: View<PropTemplateId>,
+                                                   v_position: View<PropPosition>,
+                                                   v_symname: View<PropSymName>,
+                                                   v_model: View<PropModelName>| {
+        v_template_id.iter()
+            .with_id()
+            .take(10) // Limit to first 10 entities
+            .map(|(entity_id, template_id)| {
+                let pos_str = if let Ok(pos) = v_position.get(entity_id) {
+                    format!("pos:[{:.2},{:.2},{:.2}]", pos.position.x, pos.position.y, pos.position.z)
+                } else {
+                    "pos:none".to_string()
+                };
+
+                let name_str = if let Ok(symname) = v_symname.get(entity_id) {
+                    format!("name:{}", symname.0)
+                } else {
+                    "name:none".to_string()
+                };
+
+                let model_str = if let Ok(model) = v_model.get(entity_id) {
+                    format!("model:{}", model.0)
+                } else {
+                    "model:none".to_string()
+                };
+
+                let entity_info = format!("entity_id:{} template_id:{} {} {} {}",
+                                        entity_id.inner(), template_id.template_id, name_str, pos_str, model_str);
+
+                tracing::info!("Entity: {}", entity_info);
+                entity_info
+            })
+            .collect()
+    });
+
+    // TODO: Find player entity specifically
+    // TODO: Get actual mission name from game scene
+    // TODO: Track frame counter
+
     FrameSnapshot {
         frame_index: 0, // TODO: Get actual frame counter
         time: TimeInfo {
@@ -532,7 +582,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
             camera_offset: [0.0, 1.6, 0.0],        // TODO: Get camera offset
             camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
         },
-        entity_count: 0,        // TODO: Get actual entity count
+        entity_count,
         debug_features: vec![], // TODO: List active debug features
         inputs: InputSnapshot {
             head_rotation: [1.0, 0.0, 0.0, 0.0],

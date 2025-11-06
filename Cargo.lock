@@ -1008,6 +1008,7 @@ dependencies = [
  "humantime",
  "serde",
  "serde_json",
+ "shipyard",
  "shock2vr",
  "tokio",
  "tracing",

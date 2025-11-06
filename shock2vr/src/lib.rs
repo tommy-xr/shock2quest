@@ -180,6 +180,11 @@ impl Game {
         }
     }
 
+    /// Get access to the world for debugging purposes
+    pub fn world(&self) -> &shipyard::World {
+        self.active_game_scene.world()
+    }
+
     pub fn init(options: GameOptions, bundle_root_path: String) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
