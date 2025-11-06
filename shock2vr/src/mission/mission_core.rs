@@ -1357,7 +1357,6 @@ impl MissionCore {
                     concept,
                     tags,
                 } => {
-                    println!("Playing speech: {} {} {:?}", voice_index, concept, tags);
                     if let Some(sample_name) = resolve_speech_sample(
                         &global_context.gamesys,
                         voice_index,

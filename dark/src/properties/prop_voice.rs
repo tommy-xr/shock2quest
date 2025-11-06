@@ -20,7 +20,8 @@ pub struct PropSpeechVoice(pub String);
 
 impl PropSpeechVoice {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> PropSpeechVoice {
-        let value = read_string_with_size(reader, len as usize);
-        PropSpeechVoice(value.to_ascii_lowercase())
+        let raw = read_string_with_size(reader, len as usize);
+        let cleaned = raw.trim_end_matches('\0').to_ascii_lowercase();
+        PropSpeechVoice(cleaned)
     }
 }
