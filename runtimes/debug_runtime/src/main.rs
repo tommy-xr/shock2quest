@@ -4,11 +4,7 @@
 // enabling LLMs and automation scripts to test gameplay, debug issues, and
 // validate changes without requiring human interaction.
 
-use axum::{
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{response::Json, routing::get, Router};
 use clap::Parser;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -42,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "debug_runtime=info".into())
+                .unwrap_or_else(|_| "debug_runtime=info".into()),
         )
         .init();
 
@@ -55,8 +51,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Create the router with health endpoint
-    let app = Router::new()
-        .route("/v1/health", get(health_check));
+    let app = Router::new().route("/v1/health", get(health_check));
 
     // Bind to localhost only for security
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
