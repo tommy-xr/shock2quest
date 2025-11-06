@@ -2308,6 +2308,286 @@ fn play_environmental_sound(
 }
 
 // Implementation of GameScene trait for Mission
+// ============================================================================
+// DebuggableScene Implementation for MissionCore
+// ============================================================================
+
+impl crate::game_scene::DebuggableScene for MissionCore {
+    fn list_entities(
+        &self,
+        limit: Option<usize>,
+        filter: Option<&str>,
+    ) -> Vec<crate::game_scene::DebugEntitySummary> {
+        use crate::game_scene::DebugEntitySummary;
+        use shipyard::*;
+
+        let player_pos = self.player_position();
+        let mut entities = Vec::new();
+
+        // Query all entities with position
+        self.world.run(
+            |_entities_iter: EntitiesView,
+             v_pos: View<dark::properties::PropPosition>,
+             v_sym_name: View<dark::properties::PropSymName>,
+             v_scripts: View<dark::properties::PropScripts>,
+             v_links: View<dark::properties::Links>| {
+                for (entity_id, pos) in v_pos.iter().with_id() {
+                    let name = v_sym_name
+                        .get(entity_id)
+                        .map(|s| s.0.clone())
+                        .unwrap_or_else(|_| format!("Entity_{}", entity_id.inner()));
+
+                    // Apply filter if provided
+                    if let Some(filter_str) = filter {
+                        if !wildcard_match(&name, filter_str) {
+                            continue;
+                        }
+                    }
+
+                    let position = [pos.position.x, pos.position.y, pos.position.z];
+                    let distance = (cgmath::Vector3::from(position) - player_pos).magnitude();
+
+                    let script_count = v_scripts
+                        .get(entity_id)
+                        .map(|scripts| scripts.scripts.len())
+                        .unwrap_or(0);
+
+                    let link_count = v_links
+                        .get(entity_id)
+                        .map(|links| links.to_links.len())
+                        .unwrap_or(0);
+
+                    // Get template ID from entity ID (negative for templates, positive for instances)
+                    let template_id = entity_id.inner() as i32;
+
+                    entities.push(DebugEntitySummary {
+                        id: entity_id.inner() as i32,
+                        name,
+                        template_id,
+                        position,
+                        distance,
+                        script_count,
+                        link_count,
+                    });
+                }
+            },
+        );
+
+        // Sort by distance from player
+        entities.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Apply limit if provided
+        if let Some(limit) = limit {
+            entities.truncate(limit);
+        }
+
+        entities
+    }
+
+    fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
+        use crate::game_scene::{DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo};
+        use shipyard::*;
+
+        self.world.run(
+            |v_pos: View<dark::properties::PropPosition>,
+             v_sym_name: View<dark::properties::PropSymName>,
+             v_scripts: View<dark::properties::PropScripts>,
+             v_links: View<dark::properties::Links>| {
+                let position = v_pos.get(id).ok()?;
+                let rotation_array = [
+                    position.rotation.v.x,
+                    position.rotation.v.y,
+                    position.rotation.v.z,
+                    position.rotation.s,
+                ];
+
+                let name = v_sym_name
+                    .get(id)
+                    .map(|s| s.0.clone())
+                    .unwrap_or_else(|_| format!("Entity_{}", id.inner()));
+
+                let template_id = id.inner() as i32;
+
+                // Build properties list
+                let mut properties = Vec::new();
+
+                // Add position
+                properties.push(DebugPropertyInfo {
+                    name: "Position".to_string(),
+                    value: format!(
+                        "[{:.2}, {:.2}, {:.2}]",
+                        position.position.x, position.position.y, position.position.z
+                    ),
+                });
+
+                // Add rotation
+                properties.push(DebugPropertyInfo {
+                    name: "Rotation".to_string(),
+                    value: format!(
+                        "[{:.3}, {:.3}, {:.3}, {:.3}]",
+                        rotation_array[0], rotation_array[1], rotation_array[2], rotation_array[3]
+                    ),
+                });
+
+                // Add scripts
+                if let Ok(scripts) = v_scripts.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "Scripts".to_string(),
+                        value: scripts.scripts.join(", "),
+                    });
+                }
+
+                // Build links
+                let mut outgoing_links = Vec::new();
+                let incoming_links = Vec::new();
+
+                if let Ok(links) = v_links.get(id) {
+                    for link in &links.to_links {
+                        if let Some(target_entity) = link.to_entity_id {
+                            outgoing_links.push(DebugLinkInfo {
+                                link_type: format!("{:?}", link.link),
+                                target_id: target_entity.0.inner() as i32,
+                                target_name: v_sym_name
+                                    .get(target_entity.0)
+                                    .map(|s| s.0.clone())
+                                    .unwrap_or_else(|_| {
+                                        format!("Entity_{}", target_entity.0.inner())
+                                    }),
+                            });
+                        }
+                    }
+                    // TODO: Incoming links require scanning all entities - simplified for now
+                }
+
+                Some(DebugEntityDetail {
+                    entity_id: id.inner() as i32,
+                    name,
+                    template_id,
+                    position: [
+                        position.position.x,
+                        position.position.y,
+                        position.position.z,
+                    ],
+                    rotation: rotation_array,
+                    inheritance_chain: vec![], // TODO: Implement inheritance chain lookup
+                    properties,
+                    outgoing_links,
+                    incoming_links,
+                })
+            },
+        )
+    }
+
+    fn raycast(
+        &self,
+        start: cgmath::Point3<f32>,
+        end: cgmath::Point3<f32>,
+        mask: crate::game_scene::RaycastMask,
+    ) -> crate::game_scene::DebugRayHit {
+        use crate::game_scene::DebugRayHit;
+
+        // Convert mask to collision groups
+        let collision_groups = if mask.groups.contains(&"all".to_string()) {
+            crate::physics::InternalCollisionGroups::ALL
+        } else {
+            let mut groups = crate::physics::InternalCollisionGroups::empty();
+            for group_name in &mask.groups {
+                match group_name.as_str() {
+                    "world" => groups |= crate::physics::InternalCollisionGroups::WORLD,
+                    "entity" => groups |= crate::physics::InternalCollisionGroups::ENTITY,
+                    "selectable" => groups |= crate::physics::InternalCollisionGroups::SELECTABLE,
+                    "player" => groups |= crate::physics::InternalCollisionGroups::PLAYER,
+                    "ui" => groups |= crate::physics::InternalCollisionGroups::UI,
+                    "hitbox" => groups |= crate::physics::InternalCollisionGroups::HITBOX,
+                    "raycast" => groups |= crate::physics::InternalCollisionGroups::RAYCAST,
+                    _ => {} // Ignore unknown groups
+                }
+            }
+            groups
+        };
+
+        // Perform raycast using existing physics system
+        match self
+            .physics
+            .ray_cast3(start, end, collision_groups, None, false)
+        {
+            Some(hit) => {
+                let entity_name = hit.maybe_entity_id.and_then(|id| {
+                    self.world.run(
+                        |v_sym_name: shipyard::View<dark::properties::PropSymName>| {
+                            v_sym_name.get(id).ok().map(|s| s.0.clone())
+                        },
+                    )
+                });
+
+                DebugRayHit {
+                    hit: true,
+                    hit_point: Some([hit.hit_point.x, hit.hit_point.y, hit.hit_point.z]),
+                    hit_normal: Some([hit.hit_normal.x, hit.hit_normal.y, hit.hit_normal.z]),
+                    distance: Some((end - start).magnitude()),
+                    entity_id: hit.maybe_entity_id.map(|id| id.inner() as i32),
+                    entity_name,
+                    collision_group: None, // TODO: Add collision group info
+                    is_sensor: hit.is_sensor,
+                }
+            }
+            None => DebugRayHit {
+                hit: false,
+                hit_point: None,
+                hit_normal: None,
+                distance: None,
+                entity_id: None,
+                entity_name: None,
+                collision_group: None,
+                is_sensor: false,
+            },
+        }
+    }
+
+    fn teleport_player(&mut self, position: cgmath::Vector3<f32>) -> Result<(), String> {
+        // Apply the teleportation by directly updating player position
+        self.world
+            .run(|mut player_info: shipyard::UniqueViewMut<PlayerInfo>| {
+                player_info.pos = position;
+            });
+
+        Ok(())
+    }
+
+    fn player_position(&self) -> cgmath::Vector3<f32> {
+        // Get player position from PlayerInfo unique component
+        self.world
+            .run(|player_info: shipyard::UniqueView<PlayerInfo>| player_info.pos)
+    }
+}
+
+// Helper function for wildcard matching
+fn wildcard_match(text: &str, pattern: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+
+    let text = text.to_lowercase();
+    let pattern = pattern.to_lowercase();
+
+    if pattern.starts_with('*') && pattern.ends_with('*') {
+        let inner = &pattern[1..pattern.len() - 1];
+        text.contains(inner)
+    } else if pattern.starts_with('*') {
+        let suffix = &pattern[1..];
+        text.ends_with(suffix)
+    } else if pattern.ends_with('*') {
+        let prefix = &pattern[..pattern.len() - 1];
+        text.starts_with(prefix)
+    } else {
+        text.contains(&pattern)
+    }
+}
+
 impl crate::game_scene::GameScene for MissionCore {
     fn update(
         &mut self,

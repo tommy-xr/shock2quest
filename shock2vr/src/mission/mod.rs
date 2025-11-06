@@ -207,6 +207,49 @@ impl crate::game_scene::GameScene for Mission {
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.mission_core.queue_entity_trigger(entity_name);
     }
+
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+// ============================================================================
+// DebuggableScene Implementation for Mission
+// ============================================================================
+
+impl crate::game_scene::DebuggableScene for Mission {
+    fn list_entities(
+        &self,
+        limit: Option<usize>,
+        filter: Option<&str>,
+    ) -> Vec<crate::game_scene::DebugEntitySummary> {
+        self.mission_core.list_entities(limit, filter)
+    }
+
+    fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
+        self.mission_core.entity_detail(id)
+    }
+
+    fn raycast(
+        &self,
+        start: cgmath::Point3<f32>,
+        end: cgmath::Point3<f32>,
+        mask: crate::game_scene::RaycastMask,
+    ) -> crate::game_scene::DebugRayHit {
+        self.mission_core.raycast(start, end, mask)
+    }
+
+    fn teleport_player(&mut self, position: Vector3<f32>) -> Result<(), String> {
+        self.mission_core.teleport_player(position)
+    }
+
+    fn player_position(&self) -> Vector3<f32> {
+        self.mission_core.player_position()
+    }
 }
 
 /// Creates a physics collider from level geometry
