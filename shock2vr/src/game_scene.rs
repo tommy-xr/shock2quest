@@ -208,6 +208,47 @@ impl RaycastMask {
     }
 }
 
+/// Summary information about a physics body for debug listing
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugPhysicsBodySummary {
+    pub body_id: u32,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub body_type: String, // "dynamic", "static", "kinematic"
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // quaternion
+    pub mass: Option<f32>,
+    pub velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub collision_groups: Vec<String>,
+    pub is_sensor: bool,
+    pub is_enabled: bool,
+}
+
+/// Detailed information about a physics body for debug inspection
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugPhysicsBodyDetail {
+    pub body_id: u32,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub body_type: String,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // quaternion
+    pub linear_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub mass: Option<f32>,
+    pub center_of_mass: [f32; 3],
+    pub moment_of_inertia: Option<[f32; 3]>,
+    pub gravity_scale: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub collision_groups: Vec<String>,
+    pub is_sensor: bool,
+    pub is_enabled: bool,
+    pub is_sleeping: bool,
+    pub contact_count: usize,
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -277,4 +318,29 @@ pub trait DebuggableScene {
     /// # Returns
     /// Player position in world coordinates
     fn player_position(&self) -> Vector3<f32>;
+
+    /// List physics rigid bodies in the scene
+    ///
+    /// Returns a list of physics body summaries with basic information
+    /// suitable for debug listing. Includes position, velocity, and
+    /// associated entity information.
+    ///
+    /// # Arguments
+    /// * `limit` - Optional maximum number of bodies to return
+    ///
+    /// # Returns
+    /// Vector of physics body summaries
+    fn list_physics_bodies(&self, limit: Option<usize>) -> Vec<DebugPhysicsBodySummary>;
+
+    /// Get detailed information about a specific physics body
+    ///
+    /// Returns comprehensive physics body information including mass,
+    /// inertia, damping, collision groups, and contact information.
+    ///
+    /// # Arguments
+    /// * `body_id` - Physics body handle/ID to inspect
+    ///
+    /// # Returns
+    /// Detailed physics body information, or None if body doesn't exist
+    fn physics_body_detail(&self, body_id: u32) -> Option<DebugPhysicsBodyDetail>;
 }

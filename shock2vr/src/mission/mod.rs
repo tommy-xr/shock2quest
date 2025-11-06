@@ -250,6 +250,14 @@ impl crate::game_scene::DebuggableScene for Mission {
     fn player_position(&self) -> Vector3<f32> {
         self.mission_core.player_position()
     }
+
+    fn list_physics_bodies(&self, limit: Option<usize>) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
+        self.mission_core.list_physics_bodies(limit)
+    }
+
+    fn physics_body_detail(&self, body_id: u32) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
+        self.mission_core.physics_body_detail(body_id)
+    }
 }
 
 /// Creates a physics collider from level geometry

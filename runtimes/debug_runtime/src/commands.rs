@@ -48,6 +48,18 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Option<EntityDetailResult>>,
     },
 
+    /// List physics rigid bodies
+    ListPhysicsBodies {
+        limit: Option<usize>,
+        reply: oneshot::Sender<PhysicsBodyListResult>,
+    },
+
+    /// Get detailed information about a physics body
+    PhysicsBodyDetail {
+        id: u32,
+        reply: oneshot::Sender<Option<PhysicsBodyDetailResult>>,
+    },
+
     /// Shutdown the debug runtime gracefully
     Shutdown,
 }
@@ -106,6 +118,55 @@ pub struct RayCastResult {
     pub entity_name: Option<String>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
+}
+
+/// List of physics rigid bodies
+#[derive(Debug, Serialize)]
+pub struct PhysicsBodyListResult {
+    pub bodies: Vec<PhysicsBodySummary>,
+    pub total_count: usize,
+    pub player_position: [f32; 3],
+}
+
+/// Summary information about a physics body
+#[derive(Debug, Serialize)]
+pub struct PhysicsBodySummary {
+    pub body_id: u32,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub body_type: String, // "dynamic", "static", "kinematic"
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // quaternion
+    pub mass: Option<f32>,
+    pub velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub collision_groups: Vec<String>,
+    pub is_sensor: bool,
+    pub is_enabled: bool,
+}
+
+/// Detailed information about a physics body
+#[derive(Debug, Serialize)]
+pub struct PhysicsBodyDetailResult {
+    pub body_id: u32,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub body_type: String,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // quaternion
+    pub linear_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub mass: Option<f32>,
+    pub center_of_mass: [f32; 3],
+    pub moment_of_inertia: Option<[f32; 3]>,
+    pub gravity_scale: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub collision_groups: Vec<String>,
+    pub is_sensor: bool,
+    pub is_enabled: bool,
+    pub is_sleeping: bool,
+    pub contact_count: usize,
 }
 
 /// Input channel modifications
