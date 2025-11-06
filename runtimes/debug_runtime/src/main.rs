@@ -334,10 +334,18 @@ fn run_game_blocking(
                                     frames_to_step = 0;
                                     step_requested = true;
                                     is_paused = false;
-                                    tracing::info!("Starting step: {} ({:.3}s)", duration, duration_secs);
+                                    tracing::info!(
+                                        "Starting step: {} ({:.3}s)",
+                                        duration,
+                                        duration_secs
+                                    );
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to parse duration '{}': {}", duration, e);
+                                    tracing::error!(
+                                        "Failed to parse duration '{}': {}",
+                                        duration,
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -373,7 +381,8 @@ fn run_game_blocking(
                     if accumulated_time >= target_time {
                         tracing::info!(
                             "Time-based step completed: reached {:.3}s after {} frames",
-                            accumulated_time, frame_counter
+                            accumulated_time,
+                            frame_counter
                         );
                         false
                     } else {
@@ -385,7 +394,8 @@ fn run_game_blocking(
                     if frames_to_step == 0 {
                         tracing::info!(
                             "Frame-based step completed: {} frames, total time: {:.3}s",
-                            frame_counter, accumulated_time
+                            frame_counter,
+                            accumulated_time
                         );
                         false
                     } else {
@@ -395,7 +405,8 @@ fn run_game_blocking(
                     // Single frame step (legacy behavior)
                     tracing::info!(
                         "Stepped 1 frame, game paused again. Frame: {}, Total time: {:.3}s",
-                        frame_counter, accumulated_time
+                        frame_counter,
+                        accumulated_time
                     );
                     false
                 };
@@ -505,7 +516,8 @@ fn process_command(command: RuntimeCommand, game: &Game, time: &Time, frame_coun
             let (frames_requested, time_requested) = match spec {
                 StepSpec::Frames { frames } => (frames, None),
                 StepSpec::Duration { duration } => {
-                    let parsed_time = duration.parse::<humantime::Duration>()
+                    let parsed_time = duration
+                        .parse::<humantime::Duration>()
                         .map(|d| d.as_secs_f32())
                         .unwrap_or(0.0);
                     (0, Some(parsed_time))
