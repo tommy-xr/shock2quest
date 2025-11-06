@@ -301,6 +301,12 @@ impl PhysicsWorld {
         }
     }
 
+    pub fn apply_impulse(&mut self, handle: RigidBodyHandle, impulse: Vector3<f32>) {
+        if let Some(rigid_body) = self.rigid_body_set.get_mut(handle) {
+            rigid_body.apply_impulse(vec_to_nvec(impulse), true);
+        }
+    }
+
     pub fn apply_torque(&mut self, handle: RigidBodyHandle, force: Vector3<f32>) {
         let maybe_rigid_body = self.rigid_body_set.get_mut(handle);
 

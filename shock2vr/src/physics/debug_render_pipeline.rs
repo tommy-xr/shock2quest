@@ -83,6 +83,13 @@ impl DebugRenderBackend for DebugRenderer {
                     );
                 }
             }
+            DebugRenderObject::ImpulseJoint(_, _) => {
+                vcolor = vec3(
+                    OrderedFloat::from(1.0),
+                    OrderedFloat::from(0.75),
+                    OrderedFloat::from(0.0),
+                );
+            }
             _ => return,
         }
 
