@@ -4,10 +4,15 @@
 // enabling LLMs and automation scripts to test gameplay, debug issues, and
 // validate changes without requiring human interaction.
 
-use axum::{extract::{Path, Query, State}, response::Json, routing::get, Router};
+use axum::{
+    extract::{Path, Query, State},
+    response::Json,
+    routing::get,
+    Router,
+};
 use cgmath::Vector3;
 use clap::Parser;
-use serde::{Deserialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashSet, net::SocketAddr, time::Duration};
 use tokio::{signal, sync::mpsc, sync::oneshot};
@@ -622,22 +627,29 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
                 tracing::warn!("Failed to send command result - receiver dropped");
             }
         }
-        RuntimeCommand::ListEntities { limit, filter, reply } => {
+        RuntimeCommand::ListEntities {
+            limit,
+            filter,
+            reply,
+        } => {
             if let Some(debug_scene) = game.debug_scene() {
                 let entities = debug_scene.list_entities(limit, filter.as_deref());
                 let player_pos = debug_scene.player_position();
                 let result = EntityListResult {
                     total_count: entities.len(),
                     player_position: [player_pos.x, player_pos.y, player_pos.z],
-                    entities: entities.into_iter().map(|e| EntitySummary {
-                        id: e.id,
-                        name: e.name,
-                        template_id: e.template_id,
-                        position: e.position,
-                        distance: e.distance,
-                        script_count: e.script_count,
-                        link_count: e.link_count,
-                    }).collect(),
+                    entities: entities
+                        .into_iter()
+                        .map(|e| EntitySummary {
+                            id: e.id,
+                            name: e.name,
+                            template_id: e.template_id,
+                            position: e.position,
+                            distance: e.distance,
+                            script_count: e.script_count,
+                            link_count: e.link_count,
+                        })
+                        .collect(),
                 };
                 if let Err(_) = reply.send(result) {
                     tracing::warn!("Failed to send entity list - receiver dropped");
@@ -657,28 +669,42 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             let result = if let Some(debug_scene) = game.debug_scene() {
                 // Convert i32 id to EntityId
                 let entity_id = EntityId::new_from_index_and_gen(id as u64, 0);
-                debug_scene.entity_detail(entity_id).map(|detail| EntityDetailResult {
-                    entity_id: detail.entity_id,
-                    name: detail.name,
-                    template_id: detail.template_id,
-                    position: detail.position,
-                    rotation: detail.rotation,
-                    inheritance_chain: detail.inheritance_chain,
-                    properties: detail.properties.into_iter().map(|p| PropertyInfo {
-                        name: p.name,
-                        value: p.value,
-                    }).collect(),
-                    outgoing_links: detail.outgoing_links.into_iter().map(|l| LinkInfo {
-                        link_type: l.link_type,
-                        target_id: l.target_id,
-                        target_name: l.target_name,
-                    }).collect(),
-                    incoming_links: detail.incoming_links.into_iter().map(|l| LinkInfo {
-                        link_type: l.link_type,
-                        target_id: l.target_id,
-                        target_name: l.target_name,
-                    }).collect(),
-                })
+                debug_scene
+                    .entity_detail(entity_id)
+                    .map(|detail| EntityDetailResult {
+                        entity_id: detail.entity_id,
+                        name: detail.name,
+                        template_id: detail.template_id,
+                        position: detail.position,
+                        rotation: detail.rotation,
+                        inheritance_chain: detail.inheritance_chain,
+                        properties: detail
+                            .properties
+                            .into_iter()
+                            .map(|p| PropertyInfo {
+                                name: p.name,
+                                value: p.value,
+                            })
+                            .collect(),
+                        outgoing_links: detail
+                            .outgoing_links
+                            .into_iter()
+                            .map(|l| LinkInfo {
+                                link_type: l.link_type,
+                                target_id: l.target_id,
+                                target_name: l.target_name,
+                            })
+                            .collect(),
+                        incoming_links: detail
+                            .incoming_links
+                            .into_iter()
+                            .map(|l| LinkInfo {
+                                link_type: l.link_type,
+                                target_id: l.target_id,
+                                target_name: l.target_name,
+                            })
+                            .collect(),
+                    })
             } else {
                 None
             };
@@ -932,7 +958,10 @@ async fn get_entity_detail(
     let (reply_tx, reply_rx) = oneshot::channel();
 
     // Send command to game loop
-    if let Err(_) = command_tx.send(RuntimeCommand::EntityDetail { id, reply: reply_tx }) {
+    if let Err(_) = command_tx.send(RuntimeCommand::EntityDetail {
+        id,
+        reply: reply_tx,
+    }) {
         tracing::error!("Failed to send EntityDetail command - game loop receiver dropped");
         return Json(None);
     }
