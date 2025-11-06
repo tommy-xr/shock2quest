@@ -27,8 +27,8 @@ use shock2vr::{
 };
 
 // Property imports for state queries
-use dark::properties::{PropPosition, PropTemplateId, PropSymName, PropModelName};
-use shipyard::{View, IntoWithId, IntoIter, Get};
+use dark::properties::{PropModelName, PropPosition, PropSymName, PropTemplateId};
+use shipyard::{Get, IntoIter, IntoWithId, View};
 
 // Screen dimensions for the debug window
 const SCR_WIDTH: u32 = 800;
@@ -142,6 +142,7 @@ async fn start_http_server(
         .route("/v1/health", get(health_check))
         .route("/v1/info", get(get_info))
         .route("/v1/step", axum::routing::post(step_frame))
+        .route("/v1/shutdown", axum::routing::post(shutdown_server))
         .with_state(command_tx);
 
     // Bind to localhost only for security
@@ -153,11 +154,13 @@ async fn start_http_server(
     info!("  GET  /v1/health           - Health check and server status");
     info!("  GET  /v1/info             - Get current game state snapshot");
     info!("  POST /v1/step             - Step the simulation forward");
+    info!("  POST /v1/shutdown         - Shutdown the debug runtime gracefully");
     info!("  (More endpoints coming in Phase 2)");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
     info!("Test with: curl http://{}/v1/info", addr);
     info!("Test with: curl -X POST http://{}/v1/step", addr);
+    info!("Test with: curl -X POST http://{}/v1/shutdown", addr);
 
     // Start the server with graceful shutdown
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -253,12 +256,13 @@ fn run_game_blocking(
     let mut is_paused = true; // Start paused by default
     let mut step_requested = false;
     let mut accumulated_time = 0.0f32;
+    let mut shutdown_requested = false;
 
     info!("Starting main game loop...");
     info!("Game is PAUSED by default - use /v1/step to advance frames");
 
     // Main game loop
-    while !window.should_close() {
+    while !window.should_close() && !shutdown_requested {
         // Calculate delta time
         let time = glfw.get_time() as f32;
         let delta_time = time - last_time;
@@ -312,6 +316,10 @@ fn run_game_blocking(
                 RuntimeCommand::Step(_, _) => {
                     step_requested = true;
                     is_paused = false; // Allow this frame to execute
+                }
+                RuntimeCommand::Shutdown => {
+                    shutdown_requested = true;
+                    tracing::info!("Shutdown requested via API");
                 }
                 _ => {}
             }
@@ -413,7 +421,11 @@ fn run_game_blocking(
         window.swap_buffers();
     }
 
-    info!("Game loop ended");
+    if shutdown_requested {
+        info!("Game loop ended due to shutdown request");
+    } else {
+        info!("Game loop ended due to window close");
+    }
     Ok(())
 }
 
@@ -516,6 +528,10 @@ fn process_command(command: RuntimeCommand, game: &Game, time: &Time) {
                 tracing::warn!("Failed to send entity detail - receiver dropped");
             }
         }
+        RuntimeCommand::Shutdown => {
+            // Shutdown is handled in the main loop, this is just for completeness
+            tracing::info!("Processing shutdown command");
+        }
     }
 }
 
@@ -524,45 +540,56 @@ fn capture_frame_snapshot(game: &Game, time: &Time) -> FrameSnapshot {
     let world = game.world();
 
     // Query entity count by getting all entities with template IDs
-    let entity_count = world.run(|v_template_id: View<PropTemplateId>| {
-        v_template_id.iter().with_id().count()
-    });
+    let entity_count =
+        world.run(|v_template_id: View<PropTemplateId>| v_template_id.iter().with_id().count());
 
     // Log a sample of entities for debugging
-    let _sample_entities: Vec<String> = world.run(|v_template_id: View<PropTemplateId>,
-                                                   v_position: View<PropPosition>,
-                                                   v_symname: View<PropSymName>,
-                                                   v_model: View<PropModelName>| {
-        v_template_id.iter()
-            .with_id()
-            .take(10) // Limit to first 10 entities
-            .map(|(entity_id, template_id)| {
-                let pos_str = if let Ok(pos) = v_position.get(entity_id) {
-                    format!("pos:[{:.2},{:.2},{:.2}]", pos.position.x, pos.position.y, pos.position.z)
-                } else {
-                    "pos:none".to_string()
-                };
+    let _sample_entities: Vec<String> = world.run(
+        |v_template_id: View<PropTemplateId>,
+         v_position: View<PropPosition>,
+         v_symname: View<PropSymName>,
+         v_model: View<PropModelName>| {
+            v_template_id
+                .iter()
+                .with_id()
+                .take(10) // Limit to first 10 entities
+                .map(|(entity_id, template_id)| {
+                    let pos_str = if let Ok(pos) = v_position.get(entity_id) {
+                        format!(
+                            "pos:[{:.2},{:.2},{:.2}]",
+                            pos.position.x, pos.position.y, pos.position.z
+                        )
+                    } else {
+                        "pos:none".to_string()
+                    };
 
-                let name_str = if let Ok(symname) = v_symname.get(entity_id) {
-                    format!("name:{}", symname.0)
-                } else {
-                    "name:none".to_string()
-                };
+                    let name_str = if let Ok(symname) = v_symname.get(entity_id) {
+                        format!("name:{}", symname.0)
+                    } else {
+                        "name:none".to_string()
+                    };
 
-                let model_str = if let Ok(model) = v_model.get(entity_id) {
-                    format!("model:{}", model.0)
-                } else {
-                    "model:none".to_string()
-                };
+                    let model_str = if let Ok(model) = v_model.get(entity_id) {
+                        format!("model:{}", model.0)
+                    } else {
+                        "model:none".to_string()
+                    };
 
-                let entity_info = format!("entity_id:{} template_id:{} {} {} {}",
-                                        entity_id.inner(), template_id.template_id, name_str, pos_str, model_str);
+                    let entity_info = format!(
+                        "entity_id:{} template_id:{} {} {} {}",
+                        entity_id.inner(),
+                        template_id.template_id,
+                        name_str,
+                        pos_str,
+                        model_str
+                    );
 
-                tracing::info!("Entity: {}", entity_info);
-                entity_info
-            })
-            .collect()
-    });
+                    tracing::info!("Entity: {}", entity_info);
+                    entity_info
+                })
+                .collect()
+        },
+    );
 
     // TODO: Find player entity specifically
     // TODO: Get actual mission name from game scene
@@ -673,6 +700,29 @@ async fn step_frame(
             })
         }
     }
+}
+
+/// Shutdown the debug runtime gracefully
+async fn shutdown_server(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<Value> {
+    tracing::info!("Shutdown request received via HTTP API");
+
+    // Send shutdown command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::Shutdown) {
+        tracing::error!("Failed to send Shutdown command - game loop receiver dropped");
+        return Json(json!({
+            "status": "error",
+            "message": "Failed to send shutdown command to game loop",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        }));
+    }
+
+    Json(json!({
+        "status": "shutting_down",
+        "message": "Debug runtime shutdown initiated",
+        "timestamp": chrono::Utc::now().to_rfc3339()
+    }))
 }
 
 /// Wait for shutdown signal (Ctrl+C)
