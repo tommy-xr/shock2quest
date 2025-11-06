@@ -43,6 +43,9 @@ pub enum RuntimeCommand {
         id: i32,
         reply: oneshot::Sender<EntityDetailResult>,
     },
+
+    /// Shutdown the debug runtime gracefully
+    Shutdown,
 }
 
 /// Specification for stepping the simulation
