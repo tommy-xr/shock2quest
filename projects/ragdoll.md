@@ -42,7 +42,7 @@ __Status__: ✅ Implemented. The new debug mission (`shock2vr/src/scenes/debug_j
 3. Add a function to `model.rs` that is `draw_debug_skeleton()` - for an animated model, this will call into the skeleton helper above and push the returned scene objects into the mission debug renderer.
 4. When `--debug-skeletons` is active, draw all active skeletons in `mission_core` for each model
 
-Deliverable: We can run a mission with `debug_skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
+Deliverable: We can run an existing mission (like debug_ragdoll) with `debug-skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
 
 ## Part 3: Clone the skeleton
 
