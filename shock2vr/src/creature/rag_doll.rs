@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Quaternion, SquareMatrix, Vector3};
-use dark::model::Model;
+use cgmath::{vec3, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3};
+use dark::{model::Model, ss2_skeleton::Bone};
 use engine::scene::SceneObject;
 use rapier3d::{
-    na::Translation3,
+    na::{Point3, Translation3},
     prelude::{
         GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, RigidBodyHandle,
         SharedShape,
@@ -23,6 +23,7 @@ pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
     joint_handles: Vec<ImpulseJointHandle>,
     joint_to_body: HashMap<u32, RigidBodyHandle>,
+    bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
     latest_global_transforms: [Matrix4<f32>; 40],
     scene_objects: Vec<SceneObject>,
 }
@@ -33,12 +34,14 @@ impl RagDoll {
         physics_bodies: Vec<RigidBodyHandle>,
         joint_handles: Vec<ImpulseJointHandle>,
         initial_world: [Matrix4<f32>; 40],
+        bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
         scene_objects: Vec<SceneObject>,
     ) -> Self {
         Self {
             physics_bodies,
             joint_handles,
             joint_to_body,
+            bone_frame_offsets,
             latest_global_transforms: initial_world,
             scene_objects,
         }
@@ -50,7 +53,12 @@ impl RagDoll {
                 let world = matrix_from_isometry(isometry);
                 let idx = *joint_id as usize;
                 if idx < self.latest_global_transforms.len() {
-                    self.latest_global_transforms[idx] = world;
+                    let offset = self
+                        .bone_frame_offsets
+                        .get(joint_id)
+                        .copied()
+                        .unwrap_or_else(Matrix4::identity);
+                    self.latest_global_transforms[idx] = world * offset;
                 }
             }
         }
@@ -112,6 +120,8 @@ impl RagDollManager {
         let mut body_handles = Vec::new();
         let mut joint_handles = Vec::new();
         let mut joint_to_body = HashMap::new();
+        let mut bone_offsets = HashMap::new();
+        let mut joint_positions = vec![Vector3::new(0.0, 0.0, 0.0); world_joint_transforms.len()];
 
         for bone in &bones {
             let joint_idx = bone.joint_id as usize;
@@ -120,11 +130,12 @@ impl RagDollManager {
             }
 
             let world_matrix = world_joint_transforms[joint_idx];
-            let position = point3_to_vec3(get_position_from_matrix(&world_matrix));
+            let pos_vec = point3_to_vec3(get_position_from_matrix(&world_matrix));
+            joint_positions[joint_idx] = pos_vec;
             let rotation = get_rotation_from_matrix(&world_matrix);
-            let isometry = isometry_from_parts(position, rotation);
+            let isometry = isometry_from_parts(pos_vec, rotation);
 
-            let handle = physics.create_static_body(isometry, Some(entity_id));
+            let handle = physics.create_dynamic_body(isometry, Some(entity_id));
             physics.attach_collider(
                 handle,
                 SharedShape::ball(DEFAULT_JOINT_RADIUS),
@@ -133,6 +144,7 @@ impl RagDollManager {
             );
 
             joint_to_body.insert(bone.joint_id as u32, handle);
+            bone_offsets.insert(bone.joint_id as u32, Matrix4::identity());
             body_handles.push(handle);
         }
 
@@ -147,7 +159,27 @@ impl RagDollManager {
                     None => continue,
                 };
 
-                let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_FIXED_AXES).build();
+                let parent_idx = parent_id as usize;
+                let child_idx = bone.joint_id as usize;
+                if parent_idx >= joint_positions.len() || child_idx >= joint_positions.len() {
+                    continue;
+                }
+
+                let parent_pos = joint_positions[parent_idx];
+                let child_pos = joint_positions[child_idx];
+                let child_world = world_joint_transforms[child_idx];
+                let child_rot = get_rotation_from_matrix(&child_world);
+                let child_to_parent = parent_pos - child_pos;
+                let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
+
+                let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
+                    .local_anchor1(Point3::origin())
+                    .local_anchor2(Point3::new(
+                        child_local_anchor.x,
+                        child_local_anchor.y,
+                        child_local_anchor.z,
+                    ))
+                    .build();
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);
             }
@@ -158,6 +190,7 @@ impl RagDollManager {
             body_handles,
             joint_handles,
             world_joint_transforms,
+            bone_offsets,
             model.clone_scene_objects(),
         );
         self.ragdolls.insert(entity_id, ragdoll);
