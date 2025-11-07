@@ -33,6 +33,8 @@ The revised implementation has two improvements over the prior implementation:
 
 Deliverable: We can run `--mission=debug_joint_constraint`, see the joints and rigid bodies bound with the joint, and apply forces to verify that the joint works. This validates that we fully understand how to create forces in the engine and that piece is working correctly.
 
+__Status__: ✅ Implemented. The new debug mission (`shock2vr/src/scenes/debug_joint_constraint.rs`) spawns a five-link impulse-jointed chain, exposes force/impulse controls, and the physics debug renderer now colors `DebugRenderObject::ImpulseJoint` lines so the constraints are clearly visible (`shock2vr/src/physics/debug_render_pipeline.rs`).
+
 ## Part 2: Add debug visualization for skeletons
 1. For desktop_runtime, add a `--debug-skeletons` command.
 2. In `ss2_skeleton.rs`, add `debug_draw(&self, global_transforms: &[Matrix4]) -> Vec<SceneObject>`. The `global_transforms` slice is the same per-joint world matrix array we already compute when evaluating the skeleton each frame, so this helper just consumes that existing data to emit debug geometry.
@@ -40,7 +42,7 @@ Deliverable: We can run `--mission=debug_joint_constraint`, see the joints and r
 3. Add a function to `model.rs` that is `draw_debug_skeleton()` - for an animated model, this will call into the skeleton helper above and push the returned scene objects into the mission debug renderer.
 4. When `--debug-skeletons` is active, draw all active skeletons in `mission_core` for each model
 
-Deliverable: We can run a mission with `debug_skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
+Deliverable: We can run an existing mission (like debug_ragdoll) with `debug-skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
 
 ## Part 3: Clone the skeleton
 
