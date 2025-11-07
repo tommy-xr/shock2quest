@@ -1,10 +1,12 @@
-use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
+use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
     scene::{light::SpotLight, SceneObject},
 };
+use serde::Serialize;
 use shipyard::{EntityId, World};
+use std::any::Any;
 
 use crate::{
     input_context::InputContext,
@@ -110,4 +112,169 @@ pub trait GameScene {
         // Default implementation for scenes that don't support entity triggering
         let _ = entity_name;
     }
+
+    /// Downcast to Any for debugging purposes
+    fn as_any(&self) -> Option<&dyn Any> {
+        None
+    }
+
+    /// Downcast to Any (mutable) for debugging purposes
+    fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
+        None
+    }
+}
+
+// ============================================================================
+// Debug Scene Trait and Support Types for Remote Debugging
+// ============================================================================
+
+/// Summary information about an entity for debug listing
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugEntitySummary {
+    pub id: i32,
+    pub name: String,
+    pub template_id: i32,
+    pub position: [f32; 3],
+    pub distance: f32,
+    pub script_count: usize,
+    pub link_count: usize,
+}
+
+/// Detailed information about an entity for debug inspection
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugEntityDetail {
+    pub entity_id: i32,
+    pub name: String,
+    pub template_id: i32,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // quaternion
+    pub inheritance_chain: Vec<String>,
+    pub properties: Vec<DebugPropertyInfo>,
+    pub outgoing_links: Vec<DebugLinkInfo>,
+    pub incoming_links: Vec<DebugLinkInfo>,
+}
+
+/// Property information for debug display
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugPropertyInfo {
+    pub name: String,
+    pub value: String,
+}
+
+/// Link information for debug display
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugLinkInfo {
+    pub link_type: String,
+    pub target_id: i32,
+    pub target_name: String,
+}
+
+/// Raycast hit result for debug queries
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugRayHit {
+    pub hit: bool,
+    pub hit_point: Option<[f32; 3]>,
+    pub hit_normal: Option<[f32; 3]>,
+    pub distance: Option<f32>,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub collision_group: Option<String>,
+    pub is_sensor: bool,
+}
+
+/// Raycast mask for collision group filtering
+#[derive(Debug, Clone)]
+pub struct RaycastMask {
+    pub groups: Vec<String>,
+}
+
+impl RaycastMask {
+    pub fn new(groups: Vec<String>) -> Self {
+        Self { groups }
+    }
+
+    pub fn all() -> Self {
+        Self {
+            groups: vec![
+                "world".to_string(),
+                "entity".to_string(),
+                "selectable".to_string(),
+                "player".to_string(),
+                "ui".to_string(),
+                "hitbox".to_string(),
+                "raycast".to_string(),
+            ],
+        }
+    }
+}
+
+/// Debug scene trait for remote debugging capabilities
+///
+/// This trait provides debugging and inspection capabilities for game scenes,
+/// allowing remote control and analysis through the debug runtime HTTP API.
+///
+/// It is designed to be optionally implemented by scenes that support debugging,
+/// such as Mission scenes during development and testing.
+pub trait DebuggableScene {
+    /// List entities in the scene, sorted by distance from player
+    ///
+    /// Returns a list of entity summaries with basic information suitable
+    /// for debug listing. The results are sorted by distance from the player
+    /// position to make nearby entities easier to find.
+    ///
+    /// # Arguments
+    /// * `limit` - Optional maximum number of entities to return
+    /// * `filter` - Optional name pattern filter (supports wildcards)
+    ///
+    /// # Returns
+    /// Vector of entity summaries sorted by distance from player
+    fn list_entities(&self, limit: Option<usize>, filter: Option<&str>) -> Vec<DebugEntitySummary>;
+
+    /// Get detailed information about a specific entity
+    ///
+    /// Returns comprehensive entity information including properties, links,
+    /// inheritance chain, and other debug-relevant data.
+    ///
+    /// # Arguments
+    /// * `id` - Entity ID to inspect
+    ///
+    /// # Returns
+    /// Detailed entity information, or None if entity doesn't exist
+    fn entity_detail(&self, id: EntityId) -> Option<DebugEntityDetail>;
+
+    /// Perform a physics raycast for debugging
+    ///
+    /// Executes a raycast using the scene's physics system with full collision
+    /// group support. Results include hit information and entity details.
+    ///
+    /// # Arguments
+    /// * `start` - Ray starting position in world coordinates
+    /// * `end` - Ray ending position (direction and distance calculated from start)
+    /// * `mask` - Collision groups to test against
+    ///
+    /// # Returns
+    /// Raycast hit result with entity and collision information
+    fn raycast(&self, start: Point3<f32>, end: Point3<f32>, mask: RaycastMask) -> DebugRayHit;
+
+    /// Teleport the player to a specific position
+    ///
+    /// Moves the player entity to the specified world coordinates. This is
+    /// useful for testing different areas of the level and debugging
+    /// position-dependent behavior.
+    ///
+    /// # Arguments
+    /// * `position` - Target position in world coordinates
+    ///
+    /// # Returns
+    /// Ok(()) on success, or error message if teleportation fails
+    fn teleport_player(&mut self, position: Vector3<f32>) -> Result<(), String>;
+
+    /// Get the current player position for distance calculations
+    ///
+    /// Returns the player's current world position, used for sorting
+    /// entities by distance and other spatial queries.
+    ///
+    /// # Returns
+    /// Player position in world coordinates
+    fn player_position(&self) -> Vector3<f32>;
 }

@@ -185,6 +185,34 @@ impl Game {
         self.active_game_scene.world()
     }
 
+    /// Get access to the debug scene interface if available
+    ///
+    /// Returns a reference to the current scene as a DebuggableScene trait object
+    /// if the scene supports debugging capabilities. This provides access to
+    /// entity inspection, raycasting, and other debug functionality.
+    ///
+    /// Returns None if the current scene doesn't implement DebuggableScene.
+    pub fn debug_scene(&self) -> Option<&dyn game_scene::DebuggableScene> {
+        self.active_game_scene
+            .as_any()
+            .and_then(|any| any.downcast_ref::<mission::Mission>())
+            .map(|mission| mission as &dyn game_scene::DebuggableScene)
+    }
+
+    /// Get mutable access to the debug scene interface if available
+    ///
+    /// Returns a mutable reference to the current scene as a DebuggableScene
+    /// trait object if the scene supports debugging capabilities. This allows
+    /// modifying scene state such as teleporting the player.
+    ///
+    /// Returns None if the current scene doesn't implement DebuggableScene.
+    pub fn debug_scene_mut(&mut self) -> Option<&mut dyn game_scene::DebuggableScene> {
+        self.active_game_scene
+            .as_any_mut()
+            .and_then(|any| any.downcast_mut::<mission::Mission>())
+            .map(|mission| mission as &mut dyn game_scene::DebuggableScene)
+    }
+
     pub fn init(options: GameOptions, bundle_root_path: String) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
