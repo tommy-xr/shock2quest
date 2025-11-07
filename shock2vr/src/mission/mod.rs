@@ -294,5 +294,9 @@ pub fn create_physics_collider(level: &dark::mission::SystemShock2Level) -> Opti
         }
     }
 
-    Some(ColliderBuilder::trimesh(vertices, indices).build())
+    Some(
+        ColliderBuilder::trimesh(vertices, indices)
+            .expect("valid mission geometry mesh")
+            .build(),
+    )
 }
