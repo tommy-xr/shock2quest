@@ -461,6 +461,7 @@ impl MissionCore {
 
         // Clear forces
         self.physics.clear_forces();
+        self.rag_doll_manager.update(&self.physics);
 
         let (left_hand_entity_id, right_hand_entity_id) = {
             (
@@ -1800,6 +1801,9 @@ impl MissionCore {
             rendered_model_count,
             total_model_count
         );
+
+        scene.extend(self.rag_doll_manager.render_scene_objects());
+
         // Render bitmap_animation
         for (entity_id, objs) in &self.id_to_bitmap {
             if !self.visibility_engine.is_visible(*entity_id) {

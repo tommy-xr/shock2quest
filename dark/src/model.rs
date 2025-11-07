@@ -230,6 +230,13 @@ impl Model {
         }
     }
 
+    pub fn clone_scene_objects(&self) -> Vec<SceneObject> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.to_scene_objects().clone(),
+            InnerModel::Static(static_model) => static_model.to_scene_objects().clone(),
+        }
+    }
+
     pub fn vhots(&self) -> Vec<Vhot> {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.vhots.clone(),
