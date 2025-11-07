@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Quaternion, SquareMatrix, Vector3};
+use cgmath::{vec3, Matrix4, Quaternion, SquareMatrix, Vector3};
 use dark::model::Model;
-use dark::ss2_skeleton::Bone;
+use engine::scene::SceneObject;
 use rapier3d::{
     na::Translation3,
     prelude::{
@@ -20,25 +20,52 @@ use crate::{
 const DEFAULT_JOINT_RADIUS: f32 = 0.06;
 
 pub struct RagDoll {
-    bones: Vec<Bone>,
-    initial_global_transforms: Vec<Matrix4<f32>>,
     physics_bodies: Vec<RigidBodyHandle>,
     joint_handles: Vec<ImpulseJointHandle>,
+    joint_to_body: HashMap<u32, RigidBodyHandle>,
+    latest_global_transforms: [Matrix4<f32>; 40],
+    scene_objects: Vec<SceneObject>,
 }
 
 impl RagDoll {
     fn new(
-        bones: Vec<Bone>,
-        transforms: Vec<Matrix4<f32>>,
+        joint_to_body: HashMap<u32, RigidBodyHandle>,
         physics_bodies: Vec<RigidBodyHandle>,
         joint_handles: Vec<ImpulseJointHandle>,
+        initial_world: [Matrix4<f32>; 40],
+        scene_objects: Vec<SceneObject>,
     ) -> Self {
         Self {
-            bones,
-            initial_global_transforms: transforms,
             physics_bodies,
             joint_handles,
+            joint_to_body,
+            latest_global_transforms: initial_world,
+            scene_objects,
         }
+    }
+
+    fn update(&mut self, physics: &PhysicsWorld) {
+        for (joint_id, handle) in &self.joint_to_body {
+            if let Some(isometry) = physics.get_body_transform(*handle) {
+                let world = matrix_from_isometry(isometry);
+                let idx = *joint_id as usize;
+                if idx < self.latest_global_transforms.len() {
+                    self.latest_global_transforms[idx] = world;
+                }
+            }
+        }
+    }
+
+    fn renderables(&self) -> Vec<SceneObject> {
+        self.scene_objects
+            .iter()
+            .map(|obj| {
+                let mut clone = obj.clone();
+                clone.set_transform(Matrix4::identity());
+                clone.set_skinning_data(self.latest_global_transforms);
+                clone
+            })
+            .collect()
     }
 }
 
@@ -66,18 +93,20 @@ impl RagDollManager {
             return false;
         }
 
-        let (bones, _bind_transforms) = match model.ragdoll_source() {
+        let (bones, _) = match model.ragdoll_source() {
             Some(data) => data,
             None => return false,
         };
 
         let offset_transform = Matrix4::from_translation(root_offset) * root_transform;
-        let mut world_joint_transforms = vec![Matrix4::identity(); joint_transforms.len()];
-        for (i, joint) in joint_transforms.iter().enumerate() {
-            world_joint_transforms[i] = offset_transform * *joint;
+        let mut world_joint_transforms = [Matrix4::identity(); 40];
+        for bone in &bones {
+            let idx = bone.joint_id as usize;
+            if idx < world_joint_transforms.len() {
+                world_joint_transforms[idx] = offset_transform * joint_transforms[idx];
+            }
         }
 
-        // Remove any existing ragdoll for this entity before adding a new one.
         self.remove_entity(entity_id, physics);
 
         let mut body_handles = Vec::new();
@@ -103,17 +132,17 @@ impl RagDollManager {
                 CollisionGroup::selectable(),
             );
 
-            joint_to_body.insert(bone.joint_id, handle);
+            joint_to_body.insert(bone.joint_id as u32, handle);
             body_handles.push(handle);
         }
 
         for bone in &bones {
             if let Some(parent_id) = bone.parent_id {
-                let parent_handle = match joint_to_body.get(&parent_id) {
+                let parent_handle = match joint_to_body.get(&(parent_id as u32)) {
                     Some(handle) => *handle,
                     None => continue,
                 };
-                let child_handle = match joint_to_body.get(&bone.joint_id) {
+                let child_handle = match joint_to_body.get(&(bone.joint_id as u32)) {
                     Some(handle) => *handle,
                     None => continue,
                 };
@@ -124,9 +153,29 @@ impl RagDollManager {
             }
         }
 
-        let ragdoll = RagDoll::new(bones, world_joint_transforms, body_handles, joint_handles);
+        let ragdoll = RagDoll::new(
+            joint_to_body,
+            body_handles,
+            joint_handles,
+            world_joint_transforms,
+            model.clone_scene_objects(),
+        );
         self.ragdolls.insert(entity_id, ragdoll);
         true
+    }
+
+    pub fn update(&mut self, physics: &PhysicsWorld) {
+        for ragdoll in self.ragdolls.values_mut() {
+            ragdoll.update(physics);
+        }
+    }
+
+    pub fn render_scene_objects(&self) -> Vec<SceneObject> {
+        let mut scene = Vec::new();
+        for ragdoll in self.ragdolls.values() {
+            scene.extend(ragdoll.renderables());
+        }
+        scene
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId, physics: &mut PhysicsWorld) {
@@ -146,4 +195,19 @@ fn isometry_from_parts(position: Vector3<f32>, rotation: Quaternion<f32>) -> Iso
         Translation3::new(position.x, position.y, position.z),
         quat_to_nquat(rotation),
     )
+}
+
+fn matrix_from_isometry(iso: Isometry<f32>) -> Matrix4<f32> {
+    let translation = Matrix4::from_translation(vec3(
+        iso.translation.x,
+        iso.translation.y,
+        iso.translation.z,
+    ));
+    let rotation = Matrix4::from(Quaternion::new(
+        iso.rotation.w,
+        iso.rotation.i,
+        iso.rotation.j,
+        iso.rotation.k,
+    ));
+    translation * rotation
 }

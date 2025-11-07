@@ -116,6 +116,8 @@ Goal: keep the ragdoll mesh in sync with the physics pose every frame and render
 
 __Deliverable__: spawning the debug ragdoll now shows the original creature mesh posed with the static physics rig, matching bone positions frame-to-frame.
 
+__Status__: ✅ Implemented. `RagDollManager` clones the model scene objects, syncs their skinning data from physics each frame, and `MissionCore::render` always appends the ragdoll meshes so they’re visible alongside the static rigid-body hierarchy.
+
 ## Part 5: Full ragdoll implementation
 
 Now that rendering is wired, convert the placeholder rig into a fully simulated ragdoll:
