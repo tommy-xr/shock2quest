@@ -1,4 +1,5 @@
 extern crate gl;
+use std::any::Any;
 use std::ops::Deref;
 
 use crate::engine::EngineRenderContext;
@@ -128,8 +129,16 @@ where
 }
 impl<T> Material for BillboardMaterial<T>
 where
-    T: Deref<Target = dyn TextureTrait>,
+    T: Deref<Target = dyn TextureTrait> + 'static,
 {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         self.has_initialized
     }

@@ -10,6 +10,7 @@ use cgmath::prelude::*;
 
 use cgmath::Matrix4;
 use once_cell::sync::OnceCell;
+use std::any::Any;
 use std::rc::Rc;
 
 // Unified shader for single-pass lighting with lightmaps + 6 dynamic spotlights
@@ -247,6 +248,14 @@ impl LightmapMaterial {
 }
 
 impl Material for LightmapMaterial {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         self.has_initialized
     }

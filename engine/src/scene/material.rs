@@ -1,8 +1,11 @@
 use crate::engine::EngineRenderContext;
 use crate::scene::light::LightArray;
 use cgmath::Matrix4;
+use std::any::Any;
 
-pub trait Material {
+pub trait Material: Any {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn has_initialized(&self) -> bool;
     fn initialize(&mut self, is_opengl_es: bool);
 

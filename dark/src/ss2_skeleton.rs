@@ -5,6 +5,7 @@ use rpds as immutable;
 use std::collections::HashMap;
 
 use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
+use engine::scene::{color_material, cube, lines_mesh, SceneObject, VertexPosition};
 
 use crate::{
     motion::{AnimationClip, JointId},
@@ -153,6 +154,56 @@ impl Skeleton {
     pub fn rest_transform(&self, joint_id: JointId) -> Option<&JointRestTransform> {
         self.rest_transforms.get(&joint_id)
     }
+
+    pub fn debug_draw(&self, global_transforms: &[Matrix4<f32>]) -> Vec<SceneObject> {
+        if global_transforms.is_empty() || self.bones.is_empty() {
+            return Vec::new();
+        }
+
+        let mut debug_objects = Vec::new();
+        let mut line_vertices = Vec::new();
+
+        let joint_template = SceneObject::new(
+            color_material::create(Vector3::new(0.95, 0.6, 0.2)),
+            Box::new(cube::create()),
+        );
+
+        for bone in &self.bones {
+            let joint_idx = bone.joint_id as usize;
+            if joint_idx >= global_transforms.len() {
+                continue;
+            }
+
+            let joint_position = translation_from_matrix(&global_transforms[joint_idx]);
+
+            let mut joint_obj = joint_template.clone();
+            let joint_transform = Matrix4::from_translation(joint_position)
+                * Matrix4::from_nonuniform_scale(0.05, 0.05, 0.05);
+            joint_obj.set_transform(joint_transform);
+            debug_objects.push(joint_obj);
+
+            if let Some(parent_id) = bone.parent_id {
+                let parent_idx = parent_id as usize;
+                if parent_idx < global_transforms.len() {
+                    let parent_position = translation_from_matrix(&global_transforms[parent_idx]);
+                    line_vertices.push(VertexPosition {
+                        position: parent_position,
+                    });
+                    line_vertices.push(VertexPosition {
+                        position: joint_position,
+                    });
+                }
+            }
+        }
+
+        if !line_vertices.is_empty() {
+            let lines_mat = color_material::create(Vector3::new(0.2, 0.8, 1.0));
+            let line_obj = SceneObject::new(lines_mat, Box::new(lines_mesh::create(line_vertices)));
+            debug_objects.push(line_obj);
+        }
+
+        debug_objects
+    }
 }
 
 pub fn create(cal: SystemShock2Cal) -> Skeleton {
@@ -297,4 +348,8 @@ pub fn animate(
         node_to_joint: base_skeleton.node_to_joint.clone(),
         rest_transforms: base_skeleton.rest_transforms.clone(),
     }
+}
+
+fn translation_from_matrix(matrix: &Matrix4<f32>) -> Vector3<f32> {
+    matrix.w.truncate()
 }

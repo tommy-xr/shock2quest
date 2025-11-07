@@ -1,4 +1,5 @@
 extern crate gl;
+use std::any::Any;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
@@ -100,6 +101,14 @@ impl ScreenSpaceMaterial {
     }
 }
 impl Material for ScreenSpaceMaterial {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn has_initialized(&self) -> bool {
         false
     }

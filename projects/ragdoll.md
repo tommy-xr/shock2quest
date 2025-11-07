@@ -41,8 +41,11 @@ __Status__: ✅ Implemented. The new debug mission (`shock2vr/src/scenes/debug_j
     a. Iterate across `self.bones`, which already contains the joint IDs and parent relationships. For each bone, place a sphere at `global_transforms[bone.joint_id]` and draw a line to `global_transforms[bone.parent_id]` to visualize the hierarchy.
 3. Add a function to `model.rs` that is `draw_debug_skeleton()` - for an animated model, this will call into the skeleton helper above and push the returned scene objects into the mission debug renderer.
 4. When `--debug-skeletons` is active, draw all active skeletons in `mission_core` for each model
+5. Also when `--debug-skeletons` is active, fade animated model meshes and disable their depth writes so the debug skeletons remain visible through the geometry.
 
 Deliverable: We can run an existing mission (like debug_ragdoll) with `debug-skeletons` and see the skeleton and parent-child relationship visualized. This ensures we understand the world-space transforms and the parent-child relationship of the hierarchy.
+
+__Status__: ✅ Implemented. Desktop/debug runtimes accept `--debug-skeletons`, `Ss2Skeleton::debug_draw` + `Model::draw_debug_skeleton` build the bone spheres and link lines, `MissionCore::render` injects them, and skinned meshes are automatically faded (with depth writes disabled) so the skeleton overlay is easy to see.
 
 ## Part 3: Clone the skeleton
 

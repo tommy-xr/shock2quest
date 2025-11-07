@@ -419,6 +419,7 @@ fn main() {
         render_particles: false,
         mission: "medsci2.mis".to_string(),
         experimental_features,
+        debug_skeletons: false,
         ..GameOptions::default()
     };
     let mut game = shock2vr::Game::init(options, "".to_string()); // Android assets root

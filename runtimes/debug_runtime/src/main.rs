@@ -62,6 +62,10 @@ struct Args {
     #[arg(long)]
     debug_show_ids: bool,
 
+    /// Enable skeleton visualization
+    #[arg(long)]
+    debug_skeletons: bool,
+
     /// Save file to load
     #[arg(short, long)]
     save_file: Option<String>,
@@ -236,6 +240,7 @@ fn run_game_blocking(
         debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
+        debug_skeletons: args.debug_skeletons,
         render_particles: true,
         experimental_features,
         ..GameOptions::default()

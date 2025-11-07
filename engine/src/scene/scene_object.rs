@@ -1,3 +1,5 @@
+extern crate gl;
+
 use crate::render_log;
 use crate::Font;
 // pub trait SceneObject {
@@ -24,6 +26,7 @@ use std::rc::Rc;
 use super::basic_material;
 use super::mesh;
 use super::quad;
+use super::skinned_material::SkinnedMaterial;
 use super::TextVertex;
 use crate::materials;
 
@@ -34,6 +37,7 @@ pub struct SceneObject {
     pub transform: Matrix4<f32>,
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; 40],
+    pub depth_write: bool,
 }
 
 impl SceneObject {
@@ -203,6 +207,7 @@ impl SceneObject {
             transform,
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
+            depth_write: true,
         }
     }
 
@@ -220,6 +225,10 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
+        if !self.depth_write {
+            unsafe { gl::DepthMask(gl::FALSE) };
+        }
+
         if self.material.borrow().draw_opaque(
             render_context,
             view,
@@ -228,6 +237,10 @@ impl SceneObject {
             lights,
         ) {
             self.geometry.draw();
+        }
+
+        if !self.depth_write {
+            unsafe { gl::DepthMask(gl::TRUE) };
         }
     }
     pub fn draw_transparent(
@@ -281,6 +294,7 @@ impl SceneObject {
             transform: Matrix4::identity(),
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
+            depth_write: true,
         }
     }
 
@@ -291,6 +305,25 @@ impl SceneObject {
             transform: self.transform,
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
+            depth_write: self.depth_write,
+        }
+    }
+
+    pub fn set_depth_write(&mut self, enabled: bool) {
+        self.depth_write = enabled;
+    }
+
+    pub fn set_skinned_transparency(&mut self, transparency: Option<f32>) {
+        if let Some(material) = self
+            .material
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<SkinnedMaterial>()
+        {
+            match transparency {
+                Some(value) => material.set_transparency_override(value),
+                None => material.reset_transparency(),
+            }
         }
     }
 }

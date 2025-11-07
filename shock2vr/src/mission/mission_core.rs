@@ -1688,6 +1688,10 @@ impl MissionCore {
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
         let v_render_type = self.world.borrow::<View<PropRenderType>>().unwrap();
+        let v_joint_transforms = self
+            .world
+            .borrow::<View<RuntimePropJointTransforms>>()
+            .unwrap();
 
         // Start with built in scene objects
         let mut scene = self.scene_objects.clone();
@@ -1723,12 +1727,32 @@ impl MissionCore {
                     objs.to_scene_objects().clone()
                 }
             };
+            let is_animated_model = objs.is_animated();
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
+                    if options.debug_skeletons && is_animated_model {
+                        xformed_obj.set_depth_write(false);
+                        xformed_obj.set_skinned_transparency(Some(0.35));
+                    } else {
+                        xformed_obj.set_depth_write(true);
+                        xformed_obj.set_skinned_transparency(None);
+                    }
                     scene.push(xformed_obj);
+                }
+
+                if options.debug_skeletons {
+                    if let Ok(joint_transforms) = v_joint_transforms.get(*entity_id) {
+                        let world_joints: Vec<Matrix4<f32>> = joint_transforms
+                            .0
+                            .iter()
+                            .map(|joint| xform * *joint)
+                            .collect();
+                        let mut debug_skeleton = objs.draw_debug_skeleton(&world_joints);
+                        scene.append(&mut debug_skeleton);
+                    }
                 }
             }
         }
