@@ -750,7 +750,7 @@ impl PhysicsWorld {
         let mut collision_events = Vec::new();
         let mut current_sensor_intersections = HashSet::new();
         profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
-            &self.query_pipeline.intersections_with_shape(
+            self.query_pipeline.intersections_with_shape(
                 &self.rigid_body_set,
                 &self.collider_set,
                 &original_position,
