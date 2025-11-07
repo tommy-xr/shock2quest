@@ -57,7 +57,7 @@ use shipyard::{self, View, World};
 use tracing::{info, trace, warn};
 
 use crate::{
-    creature::{get_creature_definition, HitBoxManager},
+    creature::{get_creature_definition, HitBoxManager, RagDollManager},
     game_scene::AmbientAudioState,
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
@@ -143,6 +143,7 @@ pub struct MissionCore {
     pub level_name: String,
     pub gui: GuiManager,
     pub hit_boxes: HitBoxManager,
+    pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
     pub entity_info: SystemShock2EntityInfo,
     pub physics: PhysicsWorld,
@@ -397,6 +398,7 @@ impl MissionCore {
             debug_lines: Vec::new(),
             gui: GuiManager::new(),
             hit_boxes: HitBoxManager::new(),
+            rag_doll_manager: RagDollManager::new(),
             visibility_engine: abstract_mission.visibility_engine,
             teleport_system,
             pending_entity_triggers: Vec::new(),
@@ -982,6 +984,8 @@ impl MissionCore {
             &mut self.physics,
             &mut self.id_to_physics,
         );
+        self.rag_doll_manager
+            .remove_entity(entity_id, &mut self.physics);
 
         self.script_world.remove_entity(entity_id);
         self.id_to_bitmap.remove(&entity_id);
@@ -990,6 +994,40 @@ impl MissionCore {
         self.physics.remove(entity_id);
 
         self.world.delete_entity(entity_id);
+    }
+
+    pub fn spawn_debug_ragdoll(&mut self, entity_id: EntityId) {
+        let model = match self.id_to_model.get(&entity_id) {
+            Some(model) if model.can_create_rag_doll() => model,
+            _ => return,
+        };
+
+        let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+        let v_joint_transforms = self
+            .world
+            .borrow::<View<RuntimePropJointTransforms>>()
+            .unwrap();
+
+        let root_transform = match v_transform.get(entity_id) {
+            Ok(transform) => transform.0,
+            Err(_) => return,
+        };
+        let joint_transforms = match v_joint_transforms.get(entity_id) {
+            Ok(joints) => joints.0,
+            Err(_) => return,
+        };
+
+        let offset = vec3(0.0, 1.0, 0.0);
+        if self.rag_doll_manager.add_ragdoll(
+            entity_id,
+            model,
+            root_transform,
+            &joint_transforms,
+            offset,
+            &mut self.physics,
+        ) {
+            println!("Spawned debug ragdoll for entity {:?}", entity_id);
+        }
     }
 
     pub fn handle_effects(

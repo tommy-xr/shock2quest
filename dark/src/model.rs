@@ -4,7 +4,7 @@ use crate::{
     motion::{AnimationClip, AnimationPlayer},
     ss2_bin_ai_loader::{self, SystemShock2AIMesh},
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
-    ss2_skeleton::{self, AnimationInfo, Skeleton},
+    ss2_skeleton::{self, AnimationInfo, Bone, Skeleton},
 };
 use cgmath::{Matrix4, SquareMatrix};
 use collision::Aabb3;
@@ -311,6 +311,25 @@ impl Model {
             }
             InnerModel::Static(_) => Vec::new(),
         }
+    }
+
+    pub fn ragdoll_source(&self) -> Option<(Vec<Bone>, Vec<Matrix4<f32>>)> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => {
+                let bones = animated_model.skeleton.bones().to_vec();
+                let world = animated_model
+                    .skeleton
+                    .world_transforms()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                Some((bones, world))
+            }
+            InnerModel::Static(_) => None,
+        }
+    }
+
+    pub fn can_create_rag_doll(&self) -> bool {
+        matches!(self.inner, InnerModel::Animated(_))
     }
 
     pub fn transform(model: &Model, transform: Matrix4<f32>) -> Model {

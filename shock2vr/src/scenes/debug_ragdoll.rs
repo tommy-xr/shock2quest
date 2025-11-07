@@ -231,6 +231,7 @@ impl DebugRagdollScene {
                 asset_cache,
                 audio_context,
             );
+            self.core.spawn_debug_ragdoll(entity_id);
             println!(
                 "Applied massive damage to pipe hybrid entity {:?} for ragdoll testing",
                 entity_id

@@ -78,6 +78,8 @@ The `RagDollManager` will be instantiated and owned by `mission_core`, and will 
 - `remove_entity` ->  remove the rag doll entity completely from the physics
 - `render` -> this will render all the ragdolls (producing sceneobjects and calling set_skinning_data). **This will be implemented in a later phase**
 
+_Note:_ Integrating hitbox-derived collider shapes is deferred to a later phase; for Part 3 we'll use simple primitive bodies just to validate the hierarchy.
+
 `Model`
 - `Model` will add a new function `to_rag_doll`, that returns the `RagDollInfo`, porting over the bones and initial global transforms.  
 - `Model` will add a new function `can_create_rag_doll` that only returns true for animated models.
@@ -93,6 +95,8 @@ To exercise this path in the `debug_ragdoll` scene we will:
 3. `RagDollManager::add_ragdoll` will apply the 1-unit Y offset to the root transform before creating the static/kinematic bodies, store the source `EntityId` for cleanup, and keep the returned `RagDoll` in its map.
 
 __Deliverable:__ When we run `debug_ragdoll` scene, once the entity is destroyed, the explicit call chain above spawns a static ragdoll (with joints) one unit above the corpse, proving the cloning flow works end-to-end.
+
+__Status__: ✅ Implemented. `RagDollManager` now tracks per-entity ragdolls, `Model` exposes the skeleton data needed to seed them, and the `debug_ragdoll` scene calls `MissionCore::spawn_debug_ragdoll` after slaying the pipe hybrid, creating a chain of static joint bodies offset one unit above the corpse.
 
 ## Part 4: Connect model visualization
 
