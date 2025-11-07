@@ -130,3 +130,5 @@ Now that rendering is wired, convert the placeholder rig into a fully simulated 
 6. **Lifecycle**: ensure `Mission::remove_entity` tears down ragdolls by removing all stored rigid bodies, colliders, and joints. Consider adding a timeout/limit to despawn old corpses and avoid unbounded physics cost.
 
 __Deliverable__: killing a creature causes its mesh to transition into a fully dynamic ragdoll that falls under gravity, collides with the level, and remains visually in sync without animator involvement.
+
+__Status__: ✅ Implemented. `RagDollManager` now spawns dynamic Rapier bodies with spherical joints, syncs their poses every frame, and MissionCore renders them so the debug ragdoll collapses under physics instead of staying frozen.
