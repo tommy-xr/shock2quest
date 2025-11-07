@@ -3,9 +3,8 @@
 // This module defines the command interface between the HTTP server and game loop,
 // allowing remote control of the running game through a request/response pattern.
 
-use cgmath::{Point3, Quaternion, Vector3};
+use cgmath::Vector3;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tokio::sync::oneshot;
 
 /// Commands that can be sent from HTTP handlers to the game loop
@@ -22,6 +21,9 @@ pub enum RuntimeCommand {
 
     /// Perform a physics raycast
     RayCast(RayCastRequest, oneshot::Sender<RayCastResult>),
+
+    /// Get current input state
+    GetInput(oneshot::Sender<InputState>),
 
     /// Set input channel values
     SetInput(InputPatch),
@@ -174,6 +176,60 @@ pub struct PhysicsBodyDetailResult {
 pub struct InputPatch {
     pub channel: String,
     pub value: serde_json::Value,
+}
+
+/// Complete input state for reading/setting
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InputState {
+    pub head: InputHead,
+    pub left_hand: InputHand,
+    pub right_hand: InputHand,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InputHead {
+    pub rotation: [f32; 4], // Quaternion [x, y, z, w]
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InputHand {
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // Quaternion [x, y, z, w]
+    pub thumbstick: [f32; 2],
+    pub trigger_value: f32,
+    pub squeeze_value: f32,
+    pub a_value: f32,
+}
+
+impl Default for InputState {
+    fn default() -> Self {
+        Self {
+            head: InputHead::default(),
+            left_hand: InputHand::default(),
+            right_hand: InputHand::default(),
+        }
+    }
+}
+
+impl Default for InputHead {
+    fn default() -> Self {
+        Self {
+            rotation: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
+        }
+    }
+}
+
+impl Default for InputHand {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
+            thumbstick: [0.0, 0.0],
+            trigger_value: 0.0,
+            squeeze_value: 0.0,
+            a_value: 0.0,
+        }
+    }
 }
 
 /// Result of executing a game command

@@ -6,6 +6,7 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::Json,
     routing::get,
     Router,
@@ -161,6 +162,8 @@ async fn start_http_server(
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
+        .route("/v1/control/input", get(get_input_state))
+        .route("/v1/control/input", axum::routing::post(set_input_channel))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
@@ -843,6 +846,83 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
                 tracing::warn!("Failed to send physics body detail - receiver dropped");
             }
         }
+        RuntimeCommand::GetInput(reply) => {
+            // Get current input state from the debug scene
+            if let Some(debuggable) = game.debug_scene() {
+                let input_context = debuggable.get_input_state();
+                let input_state = commands::InputState {
+                    head: commands::InputHead {
+                        rotation: [
+                            input_context.head.rotation.v.x,
+                            input_context.head.rotation.v.y,
+                            input_context.head.rotation.v.z,
+                            input_context.head.rotation.s,
+                        ],
+                    },
+                    left_hand: commands::InputHand {
+                        position: [
+                            input_context.left_hand.position.x,
+                            input_context.left_hand.position.y,
+                            input_context.left_hand.position.z,
+                        ],
+                        rotation: [
+                            input_context.left_hand.rotation.v.x,
+                            input_context.left_hand.rotation.v.y,
+                            input_context.left_hand.rotation.v.z,
+                            input_context.left_hand.rotation.s,
+                        ],
+                        thumbstick: [
+                            input_context.left_hand.thumbstick.x,
+                            input_context.left_hand.thumbstick.y,
+                        ],
+                        trigger_value: input_context.left_hand.trigger_value,
+                        squeeze_value: input_context.left_hand.squeeze_value,
+                        a_value: input_context.left_hand.a_value,
+                    },
+                    right_hand: commands::InputHand {
+                        position: [
+                            input_context.right_hand.position.x,
+                            input_context.right_hand.position.y,
+                            input_context.right_hand.position.z,
+                        ],
+                        rotation: [
+                            input_context.right_hand.rotation.v.x,
+                            input_context.right_hand.rotation.v.y,
+                            input_context.right_hand.rotation.v.z,
+                            input_context.right_hand.rotation.s,
+                        ],
+                        thumbstick: [
+                            input_context.right_hand.thumbstick.x,
+                            input_context.right_hand.thumbstick.y,
+                        ],
+                        trigger_value: input_context.right_hand.trigger_value,
+                        squeeze_value: input_context.right_hand.squeeze_value,
+                        a_value: input_context.right_hand.a_value,
+                    },
+                };
+                if let Err(_) = reply.send(input_state) {
+                    tracing::warn!("Failed to send input state - receiver dropped");
+                }
+            } else {
+                tracing::warn!("Current scene is not a debuggable mission scene");
+                if let Err(_) = reply.send(commands::InputState::default()) {
+                    tracing::warn!("Failed to send default input state - receiver dropped");
+                }
+            }
+        }
+        RuntimeCommand::SetInput(patch) => {
+            // Set input channel value on the debug scene
+            if let Some(debuggable) = game.debug_scene_mut() {
+                let success = debuggable.set_input(&patch.channel, patch.value);
+                if success {
+                    tracing::info!("Successfully set input channel '{}' via remote control", patch.channel);
+                } else {
+                    tracing::warn!("Failed to set input channel '{}'", patch.channel);
+                }
+            } else {
+                tracing::warn!("Current scene is not a debuggable mission scene - cannot set input");
+            }
+        }
         RuntimeCommand::Shutdown => {
             // Shutdown is handled in the main loop, this is just for completeness
             tracing::info!("Processing shutdown command");
@@ -1396,6 +1476,39 @@ fn capture_screenshot(path: &std::path::Path, width: u32, height: u32) -> Result
         let metadata = std::fs::metadata(path)?;
         Ok(metadata.len())
     }
+}
+
+/// HTTP endpoint handler: Get current input state
+async fn get_input_state(
+    State(command_tx): State<tokio::sync::mpsc::UnboundedSender<commands::RuntimeCommand>>,
+) -> Result<Json<commands::InputState>, StatusCode> {
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+
+    if command_tx.send(commands::RuntimeCommand::GetInput(reply_tx)).is_err() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(input_state) => Ok(Json(input_state)),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// HTTP endpoint handler: Set input channel value
+async fn set_input_channel(
+    State(command_tx): State<tokio::sync::mpsc::UnboundedSender<commands::RuntimeCommand>>,
+    Json(patch): Json<commands::InputPatch>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if command_tx.send(commands::RuntimeCommand::SetInput(patch)).is_err() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // SetInput doesn't return a value, so just return success
+    let response = serde_json::json!({
+        "success": true,
+        "message": "Input channel updated"
+    });
+    Ok(Json(response))
 }
 
 /// Wait for shutdown signal (Ctrl+C)
