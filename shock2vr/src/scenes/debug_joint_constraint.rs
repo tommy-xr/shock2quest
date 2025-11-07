@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Point3, Quaternion, Vector2, Vector3};
+use cgmath::{vec3, Matrix4, Quaternion, Vector2, Vector3};
 use dark::{
     mission::{room_database::RoomDatabase, SongParams},
     ss2_entity_info::SystemShock2EntityInfo,

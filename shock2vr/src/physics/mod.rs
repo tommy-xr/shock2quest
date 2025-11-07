@@ -1,6 +1,6 @@
 mod debug_render_pipeline;
 mod physics_events;
-mod util;
+pub(crate) mod util;
 
 use collision::Aabb3;
 use engine::profile;
@@ -305,6 +305,21 @@ impl PhysicsWorld {
         if let Some(rigid_body) = self.rigid_body_set.get_mut(handle) {
             rigid_body.apply_impulse(vec_to_nvec(impulse), true);
         }
+    }
+
+    pub fn remove_rigid_body_handle(&mut self, handle: RigidBodyHandle) {
+        self.rigid_body_set.remove(
+            handle,
+            &mut self.island_manager,
+            &mut self.collider_set,
+            &mut self.impulse_joint_set,
+            &mut self.multibody_joint_set,
+            true,
+        );
+    }
+
+    pub fn remove_impulse_joint(&mut self, handle: ImpulseJointHandle) {
+        self.impulse_joint_set.remove(handle, true);
     }
 
     pub fn apply_torque(&mut self, handle: RigidBodyHandle, force: Vector3<f32>) {

@@ -45,6 +45,10 @@ impl Skeleton {
         self.bones.len()
     }
 
+    pub fn bones(&self) -> &[Bone] {
+        &self.bones
+    }
+
     pub fn get_transforms(&self) -> [Matrix4<f32>; 40] {
         let mut transforms = [Matrix4::identity(); 40];
         for (joint_id, global_transform) in self.global_transforms.iter() {
@@ -57,6 +61,18 @@ impl Skeleton {
                 *global_transform
             };
             transforms[*joint_id as usize] = final_transform;
+        }
+        transforms
+    }
+
+    pub fn world_transforms(&self) -> [Matrix4<f32>; 40] {
+        let mut transforms = [Matrix4::identity(); 40];
+        for bone in &self.bones {
+            if bone.joint_id < 40 {
+                if let Some(global) = self.global_transforms.get(&bone.joint_id) {
+                    transforms[bone.joint_id as usize] = *global;
+                }
+            }
         }
         transforms
     }
