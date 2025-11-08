@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Vector3};
+use cgmath::{Vector3, vec3};
 use engine::scene::{SceneObject, VertexPosition};
 use ordered_float::*;
 use rapier3d::prelude::*;
 
-use super::{util::*, InternalCollisionGroups};
+use super::{InternalCollisionGroups, util::*};
 
 pub struct DebugRenderer {
     lines: HashMap<Vector3<OrderedFloat<f32>>, Vec<VertexPosition>>,

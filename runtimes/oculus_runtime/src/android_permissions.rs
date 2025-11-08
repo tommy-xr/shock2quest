@@ -97,8 +97,8 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
     Ok(false)
 }
 use std::sync::{
-    mpsc::{sync_channel, SyncSender},
     RwLock,
+    mpsc::{SyncSender, sync_channel},
 };
 
 lazy_static::lazy_static! {

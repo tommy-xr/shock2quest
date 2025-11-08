@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cgmath::{vec2, vec3, Deg, Matrix4, Point2, Vector2};
+use cgmath::{Deg, Matrix4, Point2, Vector2, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureTrait};
 use shipyard::EntityId;

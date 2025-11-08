@@ -1,11 +1,11 @@
 #![allow(unused_imports)]
 
 use super::ToolScene;
-use cgmath::{vec3, Deg, Matrix4, Quaternion, Rad};
+use cgmath::{Deg, Matrix4, Quaternion, Rad, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::motion::AnimationPlayer;
 use engine::assets::asset_cache::AssetCache;
-use engine::scene::{color_material, Scene, SceneObject};
+use engine::scene::{Scene, SceneObject, color_material};
 use std::time::Duration;
 
 pub struct BinObjViewerScene {

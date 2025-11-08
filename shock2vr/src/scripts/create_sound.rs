@@ -1,7 +1,7 @@
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, World};
 
-use super::{script_util::play_environmental_sound, Effect, Script};
+use super::{Effect, Script, script_util::play_environmental_sound};
 
 pub struct CreateSound;
 impl CreateSound {

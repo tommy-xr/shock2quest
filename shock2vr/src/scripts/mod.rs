@@ -63,7 +63,7 @@ use dark::motion::MotionFlags;
 pub use effect::*;
 
 use shipyard::{EntityId, World};
-use tracing::{info, span, warn, Level};
+use tracing::{Level, info, span, warn};
 
 use crate::util::debug_entity;
 use crate::vr_config::Handedness;

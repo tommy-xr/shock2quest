@@ -3,10 +3,10 @@ use std::io;
 use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 
 use crate::{
+    EnvMap, EnvSoundQuery, SoundSchema, SpeechDB, TagDatabase,
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},
     ss2_chunk_file_reader::{self},
     ss2_entity_info::{self, SystemShock2EntityInfo},
-    EnvMap, EnvSoundQuery, SoundSchema, SpeechDB, TagDatabase,
 };
 
 pub struct Gamesys {

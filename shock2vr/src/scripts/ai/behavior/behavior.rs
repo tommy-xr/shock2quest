@@ -8,8 +8,8 @@ use shipyard::*;
 use crate::{
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{Steering, SteeringOutput},
         Effect, MessagePayload,
+        ai::steering::{Steering, SteeringOutput},
     },
     time::Time,
 };

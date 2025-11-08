@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3};
-use dark::{model::Model, ss2_skeleton::Bone};
+use cgmath::{EuclideanSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use collision::Aabb;
+use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
     na::{Point3, Translation3},
@@ -13,15 +14,18 @@ use rapier3d::{
 use shipyard::EntityId;
 
 use crate::{
-    physics::{util::quat_to_nquat, CollisionGroup, PhysicsWorld},
+    physics::{CollisionGroup, PhysicsWorld, util::quat_to_nquat},
     util::{get_position_from_matrix, get_rotation_from_matrix, point3_to_vec3},
 };
 
 const DEFAULT_JOINT_RADIUS: f32 = 0.06;
+const MIN_HITBOX_EXTENT: f32 = 0.001;
 
 pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
     joint_handles: Vec<ImpulseJointHandle>,
+    hitbox_bodies: Vec<RigidBodyHandle>,
+    hitbox_joint_handles: Vec<ImpulseJointHandle>,
     joint_to_body: HashMap<u32, RigidBodyHandle>,
     bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
     latest_global_transforms: [Matrix4<f32>; 40],
@@ -33,6 +37,8 @@ impl RagDoll {
         joint_to_body: HashMap<u32, RigidBodyHandle>,
         physics_bodies: Vec<RigidBodyHandle>,
         joint_handles: Vec<ImpulseJointHandle>,
+        hitbox_bodies: Vec<RigidBodyHandle>,
+        hitbox_joint_handles: Vec<ImpulseJointHandle>,
         initial_world: [Matrix4<f32>; 40],
         bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
         scene_objects: Vec<SceneObject>,
@@ -40,6 +46,8 @@ impl RagDoll {
         Self {
             physics_bodies,
             joint_handles,
+            hitbox_bodies,
+            hitbox_joint_handles,
             joint_to_body,
             bone_frame_offsets,
             latest_global_transforms: initial_world,
@@ -122,6 +130,12 @@ impl RagDollManager {
         let mut joint_to_body = HashMap::new();
         let mut bone_offsets = HashMap::new();
         let mut joint_positions = vec![Vector3::new(0.0, 0.0, 0.0); world_joint_transforms.len()];
+        let mut joint_parent_map = HashMap::new();
+        for bone in &bones {
+            if let Some(parent) = bone.parent_id {
+                joint_parent_map.insert(bone.joint_id as u32, parent as u32);
+            }
+        }
 
         for bone in &bones {
             let joint_idx = bone.joint_id as usize;
@@ -185,10 +199,85 @@ impl RagDollManager {
             }
         }
 
+        let hit_boxes = model.get_hit_boxes();
+        let mut hitbox_bodies = Vec::new();
+        let mut hitbox_joint_handles = Vec::new();
+        for (joint_id, bbox) in hit_boxes.iter() {
+            let joint_idx = *joint_id as usize;
+            if joint_idx >= world_joint_transforms.len() {
+                continue;
+            }
+
+            let dims = bbox.dim();
+            if dims.x <= MIN_HITBOX_EXTENT
+                || dims.y <= MIN_HITBOX_EXTENT
+                || dims.z <= MIN_HITBOX_EXTENT
+            {
+                continue;
+            }
+
+            let joint_world = world_joint_transforms[joint_idx];
+            let local_center = bbox.center().to_vec();
+            let hitbox_world = joint_world * Matrix4::from_translation(local_center);
+            let hitbox_position = point3_to_vec3(get_position_from_matrix(&hitbox_world));
+            let hitbox_rotation = get_rotation_from_matrix(&hitbox_world);
+            let hitbox_isometry = isometry_from_parts(hitbox_position, hitbox_rotation);
+
+            let hitbox_handle = physics.create_static_body(hitbox_isometry, Some(entity_id));
+            physics.attach_collider(
+                hitbox_handle,
+                SharedShape::cuboid(dims.x * 0.5, dims.y * 0.5, dims.z * 0.5),
+                1.0,
+                CollisionGroup::selectable(),
+            );
+
+            if let Some(&joint_handle) = joint_to_body.get(&(*joint_id as u32)) {
+                let joint_position = joint_positions[joint_idx];
+                let offset_world = joint_position - hitbox_position;
+                let local_anchor = hitbox_rotation.conjugate().rotate_vector(offset_world);
+
+                let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_FIXED_AXES)
+                    .local_anchor1(Point3::new(local_anchor.x, local_anchor.y, local_anchor.z))
+                    .local_anchor2(Point3::origin())
+                    .build();
+                let constraint_handle =
+                    physics.create_impulse_joint(hitbox_handle, joint_handle, joint);
+                hitbox_joint_handles.push(constraint_handle);
+            }
+
+            if let Some(parent_joint_id) = joint_parent_map.get(&(*joint_id as u32)) {
+                let parent_idx = *parent_joint_id as usize;
+                if parent_idx < joint_positions.len() {
+                    if let Some(&parent_handle) = joint_to_body.get(parent_joint_id) {
+                        let parent_position = joint_positions[parent_idx];
+                        let parent_offset = parent_position - hitbox_position;
+                        let parent_local_anchor =
+                            hitbox_rotation.conjugate().rotate_vector(parent_offset);
+
+                        let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_FIXED_AXES)
+                            .local_anchor1(Point3::new(
+                                parent_local_anchor.x,
+                                parent_local_anchor.y,
+                                parent_local_anchor.z,
+                            ))
+                            .local_anchor2(Point3::origin())
+                            .build();
+                        let constraint_handle =
+                            physics.create_impulse_joint(hitbox_handle, parent_handle, joint);
+                        hitbox_joint_handles.push(constraint_handle);
+                    }
+                }
+            }
+
+            hitbox_bodies.push(hitbox_handle);
+        }
+
         let ragdoll = RagDoll::new(
             joint_to_body,
             body_handles,
             joint_handles,
+            hitbox_bodies,
+            hitbox_joint_handles,
             world_joint_transforms,
             bone_offsets,
             model.clone_scene_objects(),
@@ -216,7 +305,13 @@ impl RagDollManager {
             for joint in ragdoll.joint_handles {
                 physics.remove_impulse_joint(joint);
             }
+            for joint in ragdoll.hitbox_joint_handles {
+                physics.remove_impulse_joint(joint);
+            }
             for body in ragdoll.physics_bodies {
+                physics.remove_rigid_body_handle(body);
+            }
+            for body in ragdoll.hitbox_bodies {
                 physics.remove_rigid_body_handle(body);
             }
         }

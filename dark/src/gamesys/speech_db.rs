@@ -1,9 +1,9 @@
 use std::io;
 
 use crate::{
+    NameMap, TagDatabase,
     ss2_chunk_file_reader::ChunkFileTableOfContents,
     ss2_common::{read_bytes, read_u32},
-    NameMap, TagDatabase,
 };
 
 #[derive(Debug, Clone)]

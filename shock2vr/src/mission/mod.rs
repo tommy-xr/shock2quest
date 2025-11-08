@@ -19,13 +19,14 @@ use rapier3d::prelude::{Collider, ColliderBuilder};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{light::SpotLight, SceneObject},
+    scene::{SceneObject, light::SpotLight},
 };
 
 use shipyard::World;
 use shipyard::*;
 
 use crate::{
+    GameOptions,
     game_scene::AmbientAudioState,
     input_context::{self, InputContext},
     mission::entity_populator::EntityPopulator,
@@ -33,7 +34,6 @@ use crate::{
     save_load::HeldItemSaveData,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    GameOptions,
 };
 
 pub struct Mission {

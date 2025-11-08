@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::{physics::PhysicsWorld, scripts::script_util::template_id_string, time::Time};
 
-use super::{script_util::send_to_all_switch_links, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::send_to_all_switch_links};
 
 pub struct TrapDelay {
     delay_time_in_seconds: f32,

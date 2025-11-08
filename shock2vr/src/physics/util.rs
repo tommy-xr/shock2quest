@@ -1,4 +1,4 @@
-use cgmath::{vec3, Point3, Quaternion, Vector3};
+use cgmath::{Point3, Quaternion, Vector3, vec3};
 use rapier3d::{na::UnitQuaternion, prelude::*};
 
 pub fn nvec_to_cgmath(vec: Vector<Real>) -> Vector3<f32> {

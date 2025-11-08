@@ -8,14 +8,14 @@ use engine::scene::VertexPosition;
 use engine::texture_atlas::TexturePackResult;
 
 use byteorder::ReadBytesExt;
-use cgmath::{vec3, Vector3};
+use cgmath::{Vector3, vec3};
 use engine::texture_atlas::TexturePacker;
 
 use std::f32;
 use std::io;
 
-use crate::ss2_common::read_vec3;
 use crate::SCALE_FACTOR;
+use crate::ss2_common::read_vec3;
 
 use super::CellPortal;
 use super::Plane;

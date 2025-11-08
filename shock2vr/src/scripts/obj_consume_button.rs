@@ -4,7 +4,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::{physics::PhysicsWorld, scripts::script_util::play_environmental_sound};
 
-use super::{script_util::send_to_all_switch_links_and_self, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::send_to_all_switch_links_and_self};
 
 pub struct ObjConsumeButton;
 impl ObjConsumeButton {

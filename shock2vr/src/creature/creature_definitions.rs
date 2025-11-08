@@ -10,9 +10,9 @@
 /// with dynamically loaded data.
 use std::{collections::HashMap, sync::Arc};
 
-use cgmath::{vec3, Vector3};
+use cgmath::{Vector3, vec3};
 
-use dark::{properties::PropCreature, SCALE_FACTOR};
+use dark::{SCALE_FACTOR, properties::PropCreature};
 use num_derive::{FromPrimitive, ToPrimitive};
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};

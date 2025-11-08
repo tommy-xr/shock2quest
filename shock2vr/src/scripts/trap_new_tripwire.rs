@@ -9,8 +9,8 @@ use tracing::info;
 use crate::physics::PhysicsWorld;
 
 use super::{
-    script_util::{get_all_switch_links, invert, send_to_all_switch_links},
     Effect, MessagePayload, Script,
+    script_util::{get_all_switch_links, invert, send_to_all_switch_links},
 };
 
 pub fn is_player(world: &World, entity_id: EntityId) -> bool {
@@ -154,13 +154,10 @@ impl Script for TrapNewTripwire {
 
                 let has_keys_now = !self.entity_in_trap.is_empty();
 
-                info!("sensor end intersect for {:?} - did_teleport: {} has_keys_now: {} had_keys_before: {} trip_flags: {:?}",
-                with,
-                did_teleport,
-                has_keys_now,
-                had_keys_before,
-                trip_flags
-            );
+                info!(
+                    "sensor end intersect for {:?} - did_teleport: {} has_keys_now: {} had_keys_before: {} trip_flags: {:?}",
+                    with, did_teleport, has_keys_now, had_keys_before, trip_flags
+                );
 
                 if !did_teleport
                     && !has_keys_now

@@ -1,9 +1,9 @@
-use cgmath::{vec3, Quaternion, Rotation3};
+use cgmath::{Quaternion, Rotation3, vec3};
 
 use dark::SCALE_FACTOR;
 use shipyard::{UniqueView, World};
 
-use crate::{scripts::Effect, PlayerInfo};
+use crate::{PlayerInfo, scripts::Effect};
 
 use super::Command;
 // SpawnItemCommand

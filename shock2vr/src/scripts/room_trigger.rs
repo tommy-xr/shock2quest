@@ -3,8 +3,8 @@ use shipyard::{EntityId, World};
 use crate::physics::PhysicsWorld;
 
 use super::{
-    script_util::send_to_all_switch_links, trap_new_tripwire::TrapNewTripwire, Effect,
-    MessagePayload, Script,
+    Effect, MessagePayload, Script, script_util::send_to_all_switch_links,
+    trap_new_tripwire::TrapNewTripwire,
 };
 
 pub struct RoomTrigger {

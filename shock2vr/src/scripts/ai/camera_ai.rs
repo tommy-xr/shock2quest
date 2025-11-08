@@ -1,4 +1,4 @@
-use cgmath::{point3, vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3, point3, vec3, vec4};
 use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
     PropClassTag, PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
@@ -9,7 +9,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
-    scripts::{ai::ai_util, speech_registry::SpeechVoiceRegistry, AIPropertyUpdate, Effect},
+    scripts::{AIPropertyUpdate, Effect, ai::ai_util, speech_registry::SpeechVoiceRegistry},
     time::Time,
 };
 

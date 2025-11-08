@@ -1,8 +1,8 @@
 pub mod config;
 pub mod macros;
 
-pub use config::{init_logging, LogConfig};
-pub use tracing::{debug, error, info, trace, warn, Level};
+pub use config::{LogConfig, init_logging};
+pub use tracing::{Level, debug, error, info, trace, warn};
 
 use once_cell::sync::Lazy;
 use std::sync::OnceLock;

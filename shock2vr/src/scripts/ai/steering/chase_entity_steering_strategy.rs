@@ -1,4 +1,4 @@
-use cgmath::{vec4, Deg};
+use cgmath::{Deg, vec4};
 use dark::properties::PropPosition;
 
 use shipyard::{EntityId, Get, View, World};

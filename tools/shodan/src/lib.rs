@@ -12,7 +12,7 @@ pub use agent::{AgentKind, AgentOutput, AutomationAgent, GitChanges, SessionStat
 pub use claude_code::ClaudeCodeManager;
 pub use codex::CodexCodeManager;
 pub use config::Config;
-pub use error::{retry_operation, RetryConfig, ShodanError, ShodanResult};
+pub use error::{RetryConfig, ShodanError, ShodanResult, retry_operation};
 pub use git::{GitStatus, PullRequest, RepositoryState};
 pub use github::{CheckStatus, MergeStatus, PRMonitor, PullRequestStatus};
 pub use orchestrator::{OrchestrationCycle, OrchestrationState, Orchestrator};

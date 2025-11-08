@@ -1,6 +1,6 @@
 use dark::{
-    properties::{PropClassTag, PropPosition},
     EnvSoundQuery,
+    properties::{PropClassTag, PropPosition},
 };
 use engine::audio::AudioHandle;
 use engine::script_log;

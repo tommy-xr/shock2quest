@@ -8,9 +8,9 @@ use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;
 use c_string::*;
-use cgmath::prelude::*;
 use cgmath::Matrix4;
 use cgmath::Vector4;
+use cgmath::prelude::*;
 
 use once_cell::sync::OnceCell;
 

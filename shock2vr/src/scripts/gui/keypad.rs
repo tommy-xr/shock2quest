@@ -1,4 +1,4 @@
-use cgmath::{vec2, Vector2, Vector3};
+use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropKeypadCode;
 use engine::audio::AudioHandle;
 
@@ -6,7 +6,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::gui::{self, ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor};
 
-use crate::scripts::{script_util::*, Effect, MessagePayload};
+use crate::scripts::{Effect, MessagePayload, script_util::*};
 
 pub struct KeyPadGui;
 

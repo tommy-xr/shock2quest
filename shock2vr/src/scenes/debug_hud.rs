@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Deg, Euler, Quaternion, Vector3};
+use cgmath::{Deg, Euler, Quaternion, Vector3, vec3};
 use dark::properties::{PropHitPoints, PropMaxHitPoints};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{light::SpotLight, SceneObject},
+    scene::{SceneObject, light::SpotLight},
 };
 use shipyard::{UniqueViewMut, World};
 
 use crate::{
+    GameOptions,
     game_scene::GameScene,
     hud::create_arm_hud_panels,
     input_context::InputContext,
@@ -17,7 +18,6 @@ use crate::{
     quest_info::QuestInfo,
     scripts::Effect,
     time::Time,
-    GameOptions,
 };
 
 /// Debug HUD positioning constants

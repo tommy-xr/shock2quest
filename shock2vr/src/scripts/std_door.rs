@@ -6,7 +6,7 @@ use tracing::trace;
 
 use crate::{physics::PhysicsWorld, time::Time};
 
-use super::{script_util::play_environmental_sound, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::play_environmental_sound};
 
 pub struct StdDoor {
     audio_handle: AudioHandle,
@@ -59,9 +59,7 @@ impl Script for StdDoor {
 
                 trace!(
                     "desired: {:?} current: {:?} dir: {:?}",
-                    self.desired_position,
-                    self.current_position,
-                    normalized
+                    self.desired_position, self.current_position, normalized
                 );
 
                 self.current_position += normalized * time.elapsed.as_secs_f32() * trans_door.speed;

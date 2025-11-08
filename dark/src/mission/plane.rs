@@ -3,8 +3,8 @@ use std::io;
 use cgmath::{InnerSpace, Vector3};
 
 use crate::{
-    ss2_common::{read_single, read_vec3},
     SCALE_FACTOR,
+    ss2_common::{read_single, read_vec3},
 };
 
 #[derive(Clone, Debug)]

@@ -1,35 +1,35 @@
 use std::collections::HashMap;
 
 use cgmath::{
-    point3, vec3, Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3,
+    Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3, point3, vec3,
 };
 use dark::{
-    mission::{room_database::RoomDatabase, SongParams},
-    ss2_entity_info::SystemShock2EntityInfo,
     SCALE_FACTOR,
+    mission::{SongParams, room_database::RoomDatabase},
+    ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{color_material, light::SpotLight, SceneObject},
+    scene::{SceneObject, color_material, light::SpotLight},
 };
 use rapier3d::prelude::{Collider, ColliderBuilder};
 use shipyard::EntityId;
 use tracing::info;
 
 use crate::{
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     mission::{
+        AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
         entity_creator::CreateEntityOptions,
         entity_populator::empty_entity_populator::EmptyEntityPopulator, mission_core::MissionCore,
-        AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    GameOptions,
 };
 
 const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);

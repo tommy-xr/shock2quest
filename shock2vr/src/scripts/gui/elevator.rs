@@ -1,4 +1,4 @@
-use cgmath::{vec2, Vector2, Vector3};
+use cgmath::{Vector2, Vector3, vec2};
 
 use shipyard::{EntityId, World};
 
@@ -40,9 +40,11 @@ impl Gui<ElevatorGuiState, ElevatorGuiMsg> for ElevatorGui {
             ("eng1.mis", "elev10.pcx", "elev11.pcx", "1: Engineering"),
         ];
 
-        let mut components: Vec<GuiComponent<ElevatorGuiMsg>> = vec![gui::image("elev.pcx")
-            .with_position(vec2(0.0, 0.0))
-            .with_size(vec2(188.0, 296.0))];
+        let mut components: Vec<GuiComponent<ElevatorGuiMsg>> = vec![
+            gui::image("elev.pcx")
+                .with_position(vec2(0.0, 0.0))
+                .with_size(vec2(188.0, 296.0)),
+        ];
 
         for (i, (level, up_texture, _down_texture, label)) in stops.iter().enumerate() {
             let button_y = initial_padding_y + (button_height + button_padding) * i as f32;

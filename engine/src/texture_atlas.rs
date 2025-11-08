@@ -186,7 +186,10 @@ where
 
         let bounds_y = self.current_atlas_pixel_y + height;
         if bounds_y >= self.pixel_height {
-            panic!("need to start a new atlas here (ran out of space trying to reserve space for width: {} height: {}, bounds_x: {} bounds_y: {})...", width, height, bounds_x, bounds_y);
+            panic!(
+                "need to start a new atlas here (ran out of space trying to reserve space for width: {} height: {}, bounds_x: {} bounds_y: {})...",
+                width, height, bounds_x, bounds_y
+            );
         }
     }
 

@@ -5,8 +5,8 @@ use tracing::info;
 use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{
-    script_util::{is_message_turnon_or_turnoff, send_to_all_switch_links},
     Effect, MessagePayload, Script,
+    script_util::{is_message_turnon_or_turnoff, send_to_all_switch_links},
 };
 
 pub struct TrapQBFilter {}

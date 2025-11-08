@@ -4,7 +4,7 @@ use tokio::process::Command as TokioCommand;
 use tracing::{debug, info, warn};
 
 use crate::config::Config;
-use crate::error::{retry_operation, RetryConfig, ShodanError, ShodanResult};
+use crate::error::{RetryConfig, ShodanError, ShodanResult, retry_operation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
@@ -451,7 +451,8 @@ pub async fn ensure_clean_working_directory(
     if !active_sessions.is_empty() {
         return Err(anyhow::anyhow!(
             "Active sessions detected for identifier '{}': {:?}. Please close them before running Shodan.",
-            process_identifier, active_sessions
+            process_identifier,
+            active_sessions
         ));
     }
 

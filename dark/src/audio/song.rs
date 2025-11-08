@@ -85,9 +85,7 @@ impl Song {
 
         trace!(
             "header: {} song_name: {} contact: {}",
-            _unk_header,
-            &song_name,
-            &contact
+            _unk_header, &song_name, &contact
         );
 
         let num_sections = read_u32(reader);
@@ -164,11 +162,7 @@ fn read_section<T: Read + Seek>(reader: &mut T) -> SongSection {
 
     trace!(
         "- reading section {} with wav: {}, {} options (unk1: {}, unk2: {}):",
-        name,
-        wav_file,
-        num_options,
-        _unk1,
-        _unk2
+        name, wav_file, num_options, _unk1, _unk2
     );
 
     let mut options = Vec::new();
@@ -190,8 +184,7 @@ fn read_section_option<T: Read + Seek>(reader: &mut T) -> SongSectionOption {
 
     trace!(
         "-- reading section option - schema: {}, sub options: {}",
-        schema,
-        sub_option_count,
+        schema, sub_option_count,
     );
 
     let mut sub_options = Vec::new();
@@ -209,8 +202,7 @@ fn read_sub_option<T: Read + Seek>(reader: &mut T) -> SubOption {
     let probability = read_u32(reader);
     trace!(
         "--- reading sub option - next_index: {}, probability: {}",
-        next_index,
-        probability,
+        next_index, probability,
     );
     SubOption {
         next_index,

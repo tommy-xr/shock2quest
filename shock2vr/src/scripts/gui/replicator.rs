@@ -1,4 +1,4 @@
-use cgmath::{vec2, vec3, Vector2, Vector3};
+use cgmath::{Vector2, Vector3, vec2, vec3};
 use dark::properties::PropReplicatorContents;
 use engine::audio::AudioHandle;
 use num_traits::ToPrimitive;
@@ -13,7 +13,7 @@ use crate::{
 
 use crate::gui;
 
-use crate::scripts::{script_util::*, Effect};
+use crate::scripts::{Effect, script_util::*};
 
 pub struct ReplicatorGui;
 
@@ -53,9 +53,11 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
             alpha: 0.5,
         };
 
-        let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![gui::image("replic.pcx")
-            .with_position(vec2(0.0, 0.0))
-            .with_size(vec2(188.0, 296.0))];
+        let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![
+            gui::image("replic.pcx")
+                .with_position(vec2(0.0, 0.0))
+                .with_size(vec2(188.0, 296.0)),
+        ];
         for i in 0..6 {
             let float_i = i.to_f32().unwrap();
 

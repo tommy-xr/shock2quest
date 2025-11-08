@@ -4,9 +4,9 @@
 // enabling LLMs and automation scripts to test gameplay, debug issues, and
 // validate changes without requiring human interaction.
 
-use axum::{extract::State, response::Json, routing::get, Router};
+use axum::{Router, extract::State, response::Json, routing::get};
 use clap::Parser;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::HashSet, net::SocketAddr, time::Duration};
 use tokio::{signal, sync::mpsc, sync::oneshot};
 use tracing::info;
@@ -17,13 +17,13 @@ use commands::*;
 // Game engine imports
 extern crate glfw;
 use self::glfw::{Context, WindowEvent};
-use cgmath::{vec2, vec3, Quaternion};
+use cgmath::{Quaternion, vec2, vec3};
 use dark::SCALE_FACTOR;
 use engine::{
-    profile, scene::Scene, util::compute_view_matrix_from_render_context, EngineRenderContext,
+    EngineRenderContext, profile, scene::Scene, util::compute_view_matrix_from_render_context,
 };
 use shock2vr::{
-    command::Command, input_context::InputContext, time::Time, Game, GameOptions, SpawnLocation,
+    Game, GameOptions, SpawnLocation, command::Command, input_context::InputContext, time::Time,
 };
 
 // Property imports for state queries

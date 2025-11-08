@@ -2,13 +2,13 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     env,
-    io::{prelude::*, SeekFrom},
+    io::{SeekFrom, prelude::*},
     rc::Rc,
     time::Duration,
 };
 
-use cgmath::{point3, prelude::*, vec3, Point3};
-use cgmath::{vec4, Matrix4, Vector2, Vector3, Vector4};
+use cgmath::{Matrix4, Vector2, Vector3, Vector4, vec4};
+use cgmath::{Point3, point3, prelude::*, vec3};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
@@ -19,15 +19,15 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 
 use crate::{
+    SCALE_FACTOR,
     importers::TEXTURE_IMPORTER,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
         self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_packed_normal,
-        read_point3, read_single, read_string_with_size, read_u16, read_u32, read_u8, read_vec3,
+        read_point3, read_single, read_string_with_size, read_u8, read_u16, read_u32, read_vec3,
     },
     ss2_skeleton::{Bone, Skeleton},
     util::load_multiple_textures_for_model,
-    SCALE_FACTOR,
 };
 
 #[derive(FromPrimitive, ToPrimitive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
