@@ -3,9 +3,9 @@ use std::io;
 use tracing::trace;
 
 use crate::{
+    TagDatabase,
     ss2_chunk_file_reader::ChunkFileTableOfContents,
     ss2_common::{read_bytes, read_u32},
-    TagDatabase,
 };
 
 pub struct EnvMap {}

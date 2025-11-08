@@ -8,17 +8,17 @@
 ///
 use std::{collections::HashMap, io, rc::Rc};
 
-use cgmath::{vec2, Vector2};
+use cgmath::{Vector2, vec2};
 use engine::{
-    scene::{mesh, Mesh, TextVertex},
+    FontCharacterInfo,
+    scene::{Mesh, TextVertex, mesh},
     texture::{Texture, TextureTrait},
     texture_atlas::{TexturePackResult, TexturePacker},
-    FontCharacterInfo,
 };
 use image::ImageBuffer;
 use tracing::info;
 
-use crate::ss2_common::{read_bytes, read_i16, read_u16, read_u32, read_u8};
+use crate::ss2_common::{read_bytes, read_i16, read_u8, read_u16, read_u32};
 
 pub struct Font {
     pub char_to_info: HashMap<char, CharInfo>,

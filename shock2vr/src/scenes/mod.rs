@@ -4,13 +4,13 @@ use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::EntityId;
 
 use crate::{
+    GameOptions, QuestInfo, SpawnLocation,
     game_scene::GameScene,
     mission::{
-        entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator},
         GlobalContext, Mission,
+        entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator},
     },
     save_load::{EntitySaveData, HeldItemSaveData, SaveData},
-    GameOptions, QuestInfo, SpawnLocation,
 };
 
 pub mod debug_camera;

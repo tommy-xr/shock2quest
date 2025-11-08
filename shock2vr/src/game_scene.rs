@@ -2,19 +2,19 @@ use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{light::SpotLight, SceneObject},
+    scene::{SceneObject, light::SpotLight},
 };
 use serde::Serialize;
 use shipyard::{EntityId, World};
 use std::any::Any;
 
 use crate::{
+    GameOptions,
     input_context::InputContext,
     mission::GlobalContext,
     quest_info::QuestInfo,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    GameOptions,
 };
 
 #[derive(Clone, Debug)]

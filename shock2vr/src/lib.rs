@@ -23,10 +23,10 @@ mod virtual_hand;
 mod vr_config;
 pub mod zip_asset_path;
 
-use scenes::{create_initial_scene, load_mission_from_save_data, SceneInitResult};
+use scenes::{SceneInitResult, create_initial_scene, load_mission_from_save_data};
 
-pub use mission::visibility_engine::CullingInfo;
 pub use mission::SpawnLocation;
+pub use mission::visibility_engine::CullingInfo;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -35,7 +35,7 @@ use std::{
     rc::Rc,
 };
 
-use cgmath::{vec3, Matrix4, Quaternion, Vector2, Vector3};
+use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
 use command::Command;
 use dark::{
     gamesys,
@@ -56,7 +56,7 @@ use save_load::{EntitySaveData, GlobalData, SaveData};
 use scripts::GlobalEffect;
 use shipyard::*;
 use time::Time;
-use tracing::{info, span, trace, warn, Level};
+use tracing::{Level, info, span, trace, warn};
 
 use crate::{
     game_scene::GameScene,

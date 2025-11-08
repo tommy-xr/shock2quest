@@ -1,20 +1,20 @@
 use std::f32::consts::PI;
 
 use cgmath::{
-    point3, vec3, vec4, Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad,
-    Rotation3, SquareMatrix, Transform, Vector3,
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation3, SquareMatrix,
+    Transform, Vector3, point3, vec3, vec4,
 };
-use dark::{properties::*, EnvSoundQuery, SCALE_FACTOR};
+use dark::{EnvSoundQuery, SCALE_FACTOR, properties::*};
 use engine::audio::AudioHandle;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
-    mission::{entity_creator::CreateEntityOptions, PlayerInfo},
+    mission::{PlayerInfo, entity_creator::CreateEntityOptions},
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
-    scripts::{script_util::get_first_link_with_template_and_data, Effect},
+    scripts::{Effect, script_util::get_first_link_with_template_and_data},
     util,
 };
 

@@ -1,6 +1,6 @@
 use crate::{
-    ss2_common::{read_i16, read_i32, read_plane, read_single, read_u32, read_vec3},
     SCALE_FACTOR,
+    ss2_common::{read_i16, read_i32, read_plane, read_single, read_u32, read_vec3},
 };
 
 use cgmath::{Point3, Vector3};

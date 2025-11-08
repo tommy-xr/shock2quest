@@ -1,9 +1,9 @@
-use cgmath::{point3, Transform};
+use cgmath::{Transform, point3};
 use dark::{
+    EnvSoundQuery,
     properties::{
         Link, Links, PropClassTag, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
     },
-    EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use dark::properties::{PropSymName, PropVoiceIndex};
-use shipyard::{track::Untracked, Get, Unique, View, World};
+use shipyard::{Get, Unique, View, World, track::Untracked};
 
 pub struct SpeechVoiceRegistry {
     label_to_index: HashMap<String, usize>,

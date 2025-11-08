@@ -3,7 +3,7 @@ use dark::{
     gamesys::{self},
     properties::get,
     ss2_chunk_file_reader,
-    ss2_entity_info::{self, merge_with_gamesys, SystemShock2EntityInfo},
+    ss2_entity_info::{self, SystemShock2EntityInfo, merge_with_gamesys},
 };
 use shock2vr::paths;
 use std::{fs::File, io::BufReader};

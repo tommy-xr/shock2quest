@@ -10,7 +10,7 @@ use crate::codex::CodexCodeManager;
 use crate::config::Config;
 use crate::git::{detect_active_sessions, ensure_clean_working_directory};
 use crate::github::PRMonitor;
-use crate::prompts::{discover_prompts, select_random_prompt, Prompt};
+use crate::prompts::{Prompt, discover_prompts, select_random_prompt};
 
 /// Main orchestrator that manages the autonomous agent execution cycle
 pub struct Orchestrator {

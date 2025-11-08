@@ -1,7 +1,7 @@
+use crate::Gamesys;
 use crate::properties::{AnimTexFlags, PropAnimTex, PropRenderType, RenderType};
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
 use crate::ss2_entity_info::{self, SystemShock2EntityInfo};
-use crate::Gamesys;
 use byteorder::ReadBytesExt;
 use shipyard::{Get, View, World};
 use tracing::{info, warn};

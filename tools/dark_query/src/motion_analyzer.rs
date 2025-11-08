@@ -184,7 +184,10 @@ impl MotionAnalyzer {
             return Ok(id);
         }
 
-        anyhow::bail!("Unknown creature type: {}. Use a number (0, 1, 2...) or name (human, midwife, grunt, ninja)", creature_type_str);
+        anyhow::bail!(
+            "Unknown creature type: {}. Use a number (0, 1, 2...) or name (human, midwife, grunt, ninja)",
+            creature_type_str
+        );
     }
 }
 
@@ -228,5 +231,7 @@ fn find_motiondb_file() -> Result<std::path::PathBuf> {
         }
     }
 
-    anyhow::bail!("Could not find motiondb.bin. Please run from project root or ensure motiondb.bin is in the current directory or Data/ subdirectory.");
+    anyhow::bail!(
+        "Could not find motiondb.bin. Please run from project root or ensure motiondb.bin is in the current directory or Data/ subdirectory."
+    );
 }

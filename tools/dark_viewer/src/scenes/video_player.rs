@@ -4,8 +4,8 @@
 use super::ToolScene;
 use cgmath::Matrix4;
 use engine::audio::{AudioClip, AudioContext, AudioHandle};
-use engine::scene::{basic_material, cube, Scene, SceneObject};
-use engine::texture::{init_from_memory2, TextureOptions, TextureTrait};
+use engine::scene::{Scene, SceneObject, basic_material, cube};
+use engine::texture::{TextureOptions, TextureTrait, init_from_memory2};
 use engine::texture_format::{PixelFormat, RawTextureData};
 use std::rc::Rc;
 use std::time::Duration;

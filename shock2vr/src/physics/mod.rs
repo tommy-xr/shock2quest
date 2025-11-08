@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use util::*;
 
 use bitflags::bitflags;
-use cgmath::{point3, InnerSpace, Point3, Quaternion, Vector3};
-use dark::{mission::SystemShock2Level, SCALE_FACTOR};
+use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3};
+use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
     control::{CharacterAutostep, CharacterLength, KinematicCharacterController},
@@ -750,7 +750,7 @@ impl PhysicsWorld {
         let mut collision_events = Vec::new();
         let mut current_sensor_intersections = HashSet::new();
         profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
-            &self.query_pipeline.intersections_with_shape(
+            self.query_pipeline.intersections_with_shape(
                 &self.rigid_body_set,
                 &self.collider_set,
                 &original_position,

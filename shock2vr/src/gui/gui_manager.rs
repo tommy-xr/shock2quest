@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, EuclideanSpace, Matrix4, Vector2, Vector3};
+use cgmath::{EuclideanSpace, Matrix4, Vector2, Vector3, vec3};
 
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use rapier3d::prelude::RigidBodyHandle;

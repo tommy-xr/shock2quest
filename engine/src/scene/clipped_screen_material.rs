@@ -3,8 +3,8 @@ use std::any::Any;
 use std::ops::Deref;
 
 use crate::engine::EngineRenderContext;
-use crate::scene::light::LightArray;
 use crate::scene::Material;
+use crate::scene::light::LightArray;
 use crate::shader_program::ShaderProgram;
 use crate::texture::TextureTrait;
 use c_string::*;

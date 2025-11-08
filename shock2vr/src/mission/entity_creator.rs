@@ -10,10 +10,11 @@ use crate::{
 use engine::physics_log;
 
 use cgmath::{
-    num_traits::abs, vec3, EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform,
-    Vector3, Zero,
+    EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform, Vector3, Zero,
+    num_traits::abs, vec3,
 };
 use dark::{
+    BitmapAnimation, SCALE_FACTOR,
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
     model::Model,
     motion::AnimationPlayer,
@@ -24,7 +25,7 @@ use dark::{
         PropPhysDimensions, PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScale,
         PropSymName, PropTemplateId, PropTripFlags, RenderType, TemplateLinks, WrappedEntityId,
     },
-    ss2_entity_info, BitmapAnimation, SCALE_FACTOR,
+    ss2_entity_info,
 };
 use engine::assets::asset_cache::AssetCache;
 use rapier3d::prelude::RigidBodyHandle;

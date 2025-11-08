@@ -7,7 +7,7 @@ use tracing::trace;
 use crate::{
     properties::{PropSymName, PropTemplateId},
     ss2_chunk_file_reader::ChunkFileTableOfContents,
-    ss2_common::{read_i32, read_string_with_size, read_u32, read_u8},
+    ss2_common::{read_i32, read_string_with_size, read_u8, read_u32},
     ss2_entity_info::SystemShock2EntityInfo,
 };
 

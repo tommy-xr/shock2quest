@@ -16,10 +16,10 @@ pub use plane::*;
 
 use crate::properties::LinkDefinitionWithData;
 
-use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
-use crate::ss2_common::read_bytes;
 use crate::Gamesys;
 use crate::SCALE_FACTOR;
+use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
+use crate::ss2_common::read_bytes;
 use render_params::*;
 use room_database::*;
 
@@ -31,8 +31,8 @@ use crate::ss2_common::read_i32;
 
 use crate::importers::TEXTURE_IMPORTER;
 use crate::ss2_common::read_u32;
-use cgmath::vec4;
 use cgmath::Vector4;
+use cgmath::vec4;
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::VertexPositionTextureLightmapAtlasNormal;
 pub use scene_builder::to_scene;
@@ -46,7 +46,7 @@ use engine::texture_atlas::TexturePackResult;
 
 use byteorder::ReadBytesExt;
 use cgmath::InnerSpace;
-use cgmath::{vec2, vec3, Vector3};
+use cgmath::{Vector3, vec2, vec3};
 use engine::texture_atlas::TexturePacker;
 use std::collections::HashMap;
 

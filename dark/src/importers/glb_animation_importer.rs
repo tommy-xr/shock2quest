@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::time::Duration;
 
-use cgmath::{vec3, Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
+use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3, vec3};
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 

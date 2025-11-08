@@ -5,10 +5,10 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{
+    Effect, MessagePayload, Script,
     script_util::{
         play_environmental_sound, send_to_all_switch_links, send_to_all_switch_links_and_self,
     },
-    Effect, MessagePayload, Script,
 };
 
 pub struct BaseButton {}

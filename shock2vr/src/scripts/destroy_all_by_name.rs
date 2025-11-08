@@ -3,7 +3,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{script_util, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util};
 
 pub struct DestroyAllByName {}
 impl DestroyAllByName {

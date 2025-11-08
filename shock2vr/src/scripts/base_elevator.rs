@@ -9,8 +9,8 @@ use tracing::{info, trace};
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    script_util::{get_first_link_of_type, get_first_link_with_data},
     Effect, MessagePayload, Script,
+    script_util::{get_first_link_of_type, get_first_link_with_data},
 };
 
 pub struct BaseElevator {
@@ -112,9 +112,7 @@ impl Script for BaseElevator {
 
             trace!(
                 "desired: {:?} current: {:?} dir: {:?}",
-                self.desired_position,
-                self.current_position,
-                normalized
+                self.desired_position, self.current_position, normalized
             );
 
             self.is_moving = true;

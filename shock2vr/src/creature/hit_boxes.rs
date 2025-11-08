@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, EuclideanSpace, Matrix4};
+use cgmath::{EuclideanSpace, Matrix4, vec3};
 use collision::{Aabb, Aabb3};
 use dark::{model::Model, motion::JointId, properties::PropPosition};
 use rapier3d::prelude::RigidBodyHandle;

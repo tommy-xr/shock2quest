@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3};
-use dark::{model::Model, ss2_skeleton::Bone};
+use cgmath::{Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
     na::{Point3, Translation3},
@@ -13,7 +13,7 @@ use rapier3d::{
 use shipyard::EntityId;
 
 use crate::{
-    physics::{util::quat_to_nquat, CollisionGroup, PhysicsWorld},
+    physics::{CollisionGroup, PhysicsWorld, util::quat_to_nquat},
     util::{get_position_from_matrix, get_rotation_from_matrix, point3_to_vec3},
 };
 

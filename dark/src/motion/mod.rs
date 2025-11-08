@@ -13,15 +13,14 @@ pub use motion_clip::*;
 pub use motion_info::*;
 pub use motion_query::*;
 pub use motion_schema::*;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 
 use crate::{
-    ss2_chunk_file_reader,
+    NameMap, SCALE_FACTOR, TagDatabase, ss2_chunk_file_reader,
     ss2_common::{
-        self, read_bool, read_bytes, read_i32, read_single, read_string_with_size, read_u32,
-        read_u8,
+        self, read_bool, read_bytes, read_i32, read_single, read_string_with_size, read_u8,
+        read_u32,
     },
-    NameMap, TagDatabase, SCALE_FACTOR,
 };
 use cgmath::{Deg, Vector3};
 

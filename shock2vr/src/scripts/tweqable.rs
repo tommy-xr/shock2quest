@@ -2,7 +2,7 @@ use shipyard::{EntityId, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{script_util::change_to_last_model, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::change_to_last_model};
 
 pub struct Tweqable {}
 impl Tweqable {

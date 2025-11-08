@@ -17,11 +17,11 @@ use shock2vr::zip_asset_path::ZipAssetPath;
 use self::glfw::{Action, Context, Key};
 use engine::audio::{self, AudioClip, AudioContext, AudioHandle};
 
-use cgmath::point3;
 use cgmath::Decomposed;
 use cgmath::Deg;
 use cgmath::Matrix4;
 use cgmath::Rad;
+use cgmath::point3;
 #[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::AudioPlayer;
 
@@ -31,19 +31,19 @@ use engine::assets::asset_paths::AssetPath;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
+use shock2vr::GameOptions;
 use shock2vr::command::Command;
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
 use shock2vr::command::TransitionLevelCommand;
 use shock2vr::paths;
-use shock2vr::GameOptions;
 use tracing::trace;
 
 extern crate gl;
 
 use cgmath::prelude::*;
 use cgmath::vec2;
-use cgmath::{vec3, Quaternion, Vector3};
+use cgmath::{Quaternion, Vector3, vec3};
 use shock2vr::input_context::InputContext;
 use shock2vr::time::Time;
 use shock2vr::zip_asset_path;
@@ -195,7 +195,11 @@ fn find_video_file(filename: &str) -> Option<String> {
         }
     }
 
-    println!("Could not find video file {} in any of the expected locations (searched under {} and current directory)", filename, data_root.display());
+    println!(
+        "Could not find video file {} in any of the expected locations (searched under {} and current directory)",
+        filename,
+        data_root.display()
+    );
     None
 }
 

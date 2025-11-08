@@ -1,7 +1,7 @@
+use crate::EngineRenderContext;
 use crate::texture_format;
 use crate::texture_format::RawTextureData;
 use crate::texture_format::TextureFormat;
-use crate::EngineRenderContext;
 use gl::types;
 
 use std::os::raw::c_void;
@@ -114,7 +114,7 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
     unsafe {
         gl::GenTextures(1, &mut texture);
         gl::BindTexture(gl::TEXTURE_2D, texture); // all upcoming GL_TEXTURE_2D operations now have effect on this texture object
-                                                  // set the texture wrapping parameters
+        // set the texture wrapping parameters
 
         let wrap = if options.wrap {
             gl::REPEAT
@@ -145,7 +145,10 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
         raw_texture_data.bytes.len()
             == (raw_texture_data.width * raw_texture_data.height * pixel_size_in_bytes) as usize,
         "Texture data size does not match width and height - width: {} height: {} pixel_size_in_bytes: {} actual_bytes: {}",
-        raw_texture_data.width, raw_texture_data.height, pixel_size_in_bytes, raw_texture_data.bytes.len()
+        raw_texture_data.width,
+        raw_texture_data.height,
+        pixel_size_in_bytes,
+        raw_texture_data.bytes.len()
     );
 
     unsafe {

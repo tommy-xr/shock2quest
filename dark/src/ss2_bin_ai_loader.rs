@@ -17,16 +17,16 @@ use engine::{
 use tracing::trace;
 
 use crate::{
+    SCALE_FACTOR,
     importers::TEXTURE_IMPORTER,
     motion::JointId,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
-        read_bytes, read_i16, read_i32, read_i8, read_packed_normal, read_point3, read_single,
-        read_string_with_size, read_u16, read_u32, read_u8, read_vec2, read_vec3,
+        read_bytes, read_i8, read_i16, read_i32, read_packed_normal, read_point3, read_single,
+        read_string_with_size, read_u8, read_u16, read_u32, read_vec2, read_vec3,
     },
     ss2_skeleton::Skeleton,
     util::load_multiple_textures_for_model,
-    SCALE_FACTOR,
 };
 
 #[derive(Clone)]
@@ -67,9 +67,9 @@ pub fn read_header<T: Read + Seek>(reader: &mut T) -> AIMeshHeader {
     let _zero2 = read_u32(reader); // app data
 
     let _unk1 = read_u8(reader); // layout
-                                 // segs: https://github.com/infernuslord/DarkEngine/blob/c8542d03825bc650bfd6944dc03da5b793c92c19/tech/libsrc/mm/mms.h#L28
-                                 // mm_segment_list:
-                                 // - https://github.com/infernuslord/DarkEngine/blob/c8542d03825bc650bfd6944dc03da5b793c92c19/tech/libsrc/mp/mpupdate.c
+    // segs: https://github.com/infernuslord/DarkEngine/blob/c8542d03825bc650bfd6944dc03da5b793c92c19/tech/libsrc/mm/mms.h#L28
+    // mm_segment_list:
+    // - https://github.com/infernuslord/DarkEngine/blob/c8542d03825bc650bfd6944dc03da5b793c92c19/tech/libsrc/mp/mpupdate.c
     let num_mappers = read_u8(reader);
     let num_mats = read_u8(reader);
     let num_joints = read_u8(reader);

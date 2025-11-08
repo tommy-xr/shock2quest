@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, InnerSpace, Matrix3, Matrix4, Quaternion, Vector3};
+use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector3, vec3};
 use dark::SCALE_FACTOR;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{light::SpotLight, SceneObject, VertexPosition},
+    scene::{SceneObject, VertexPosition, light::SpotLight},
 };
 use shipyard::{UniqueViewMut, World};
 
 use crate::{
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
@@ -16,7 +17,6 @@ use crate::{
     quest_info::QuestInfo,
     scripts::Effect,
     time::Time,
-    GameOptions,
 };
 
 /// Minimal debug scene that keeps the player anchored and renders a single cube

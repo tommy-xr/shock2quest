@@ -2,7 +2,7 @@ use shipyard::{EntityId, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{script_util, Effect, Message, MessagePayload, Script};
+use super::{Effect, Message, MessagePayload, Script, script_util};
 
 pub struct SetupInitialDebriefScript {}
 

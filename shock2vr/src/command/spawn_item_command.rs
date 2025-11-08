@@ -1,10 +1,10 @@
-use cgmath::{vec3, Matrix4, Quaternion, SquareMatrix};
+use cgmath::{Matrix4, Quaternion, SquareMatrix, vec3};
 
 use dark::SCALE_FACTOR;
 use shipyard::{UniqueView, World};
 
 use crate::{
-    mission::entity_creator::CreateEntityOptions, scripts::Effect, util::vec3_to_point3, PlayerInfo,
+    PlayerInfo, mission::entity_creator::CreateEntityOptions, scripts::Effect, util::vec3_to_point3,
 };
 
 use super::Command;

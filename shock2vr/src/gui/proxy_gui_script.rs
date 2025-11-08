@@ -1,4 +1,4 @@
-use cgmath::{point2, Transform, Vector2};
+use cgmath::{Transform, Vector2, point2};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{

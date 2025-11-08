@@ -1,13 +1,12 @@
-use cgmath::{vec3, Deg, Matrix4, Quaternion, Rotation3};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3};
 
 use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    ai_util,
+    Effect, MessagePayload, Script, ai_util,
     steering::{ChasePlayerSteeringStrategy, SteeringStrategy},
-    Effect, MessagePayload, Script,
 };
 
 pub enum TurretState {

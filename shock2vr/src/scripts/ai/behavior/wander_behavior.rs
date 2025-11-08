@@ -5,8 +5,8 @@ use shipyard::{EntityId, World};
 use crate::{
     physics::PhysicsWorld,
     scripts::{
-        ai::steering::{CollisionAvoidanceSteeringStrategy, SteeringOutput, SteeringStrategy},
         Effect,
+        ai::steering::{CollisionAvoidanceSteeringStrategy, SteeringOutput, SteeringStrategy},
     },
     time::Time,
 };

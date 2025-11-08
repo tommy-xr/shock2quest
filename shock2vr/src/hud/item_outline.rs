@@ -1,4 +1,4 @@
-use cgmath::{point2, vec2, vec3, Matrix4, Vector2};
+use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{FONT_IMPORTER, TEXTURE_IMPORTER},

@@ -643,8 +643,10 @@ impl PRMonitor {
 
                         if matches {
                             if let Some(run_id) = run["databaseId"].as_u64() {
-                                debug!("Found matching failed run: '{}' from workflow '{}' on branch '{}'",
-                                       run_name, workflow_name, head_branch);
+                                debug!(
+                                    "Found matching failed run: '{}' from workflow '{}' on branch '{}'",
+                                    run_name, workflow_name, head_branch
+                                );
 
                                 let mut logs =
                                     self.get_run_failure_logs(&run_id.to_string()).await?;

@@ -8,6 +8,7 @@ use shipyard::{EntityId, World};
 use tracing::trace;
 
 use crate::{
+    Gamesys,
     properties::{
         LinkDefinition, LinkDefinitionWithData, PropSymName, PropTemplateId, Property,
         PropertyDefinition, TemplateLinks, ToTemplateLinkInfo,
@@ -15,7 +16,6 @@ use crate::{
     ss2_chunk_file_reader::ChunkFileTableOfContents,
     ss2_common::{read_bytes, read_i32, read_u16, read_u32},
     util::merge_maps,
-    Gamesys,
 };
 
 #[derive(Debug, Clone)]
@@ -413,9 +413,7 @@ pub fn read_link_data<T: io::Read + io::Seek>(
         if let Some(chunk_pos) = toc.get_chunk(link_data_chunk_name.to_owned()) {
             trace!(
                 "reading chunk: {} length: {}, count: {}",
-                link_data_chunk_name,
-                chunk_pos.length,
-                count
+                link_data_chunk_name, chunk_pos.length, count
             );
             reader.seek(SeekFrom::Start(chunk_pos.offset)).unwrap();
 

@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, InnerSpace, Matrix3, Quaternion, Vector3};
+use cgmath::{InnerSpace, Matrix3, Quaternion, Vector3, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{light::SpotLight, SceneObject},
+    scene::{SceneObject, light::SpotLight},
 };
 use shipyard::{UniqueViewMut, World};
 
 use crate::{
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
@@ -16,7 +17,6 @@ use crate::{
     quest_info::QuestInfo,
     scripts::Effect,
     time::Time,
-    GameOptions,
 };
 
 /// Debug scene constants
