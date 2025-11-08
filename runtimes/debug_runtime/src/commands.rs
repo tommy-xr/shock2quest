@@ -29,19 +29,23 @@ pub enum RuntimeCommand {
     /// Move the player to a position
     MovePlayer(Vector3<f32>),
 
+    /// Get current player position
+    GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
+
     /// Execute a game command (spawn, save, etc.)
     RunGameCommand(String, Vec<String>, oneshot::Sender<CommandResult>),
 
     /// List entities near the player
     ListEntities {
         limit: Option<usize>,
+        filter: Option<String>,
         reply: oneshot::Sender<EntityListResult>,
     },
 
     /// Get detailed information about an entity
     EntityDetail {
         id: i32,
-        reply: oneshot::Sender<EntityDetailResult>,
+        reply: oneshot::Sender<Option<EntityDetailResult>>,
     },
 
     /// Shutdown the debug runtime gracefully

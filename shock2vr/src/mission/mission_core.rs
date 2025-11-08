@@ -2615,11 +2615,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn teleport_player(&mut self, position: cgmath::Vector3<f32>) -> Result<(), String> {
-        // Apply the teleportation by directly updating player position
+        // Apply the teleportation using the same logic as Effect::SetPlayerPosition
+        self.physics
+            .set_player_translation(position, &mut self.player_handle);
+
+        // Get the player entity and add the PropTeleported component
+        let player_entity = {
+            let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player_info.entity_id
+        };
+
         self.world
-            .run(|mut player_info: shipyard::UniqueViewMut<PlayerInfo>| {
-                player_info.pos = position;
-            });
+            .add_component(player_entity, PropTeleported::new());
 
         Ok(())
     }

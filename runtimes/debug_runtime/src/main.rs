@@ -4,8 +4,15 @@
 // enabling LLMs and automation scripts to test gameplay, debug issues, and
 // validate changes without requiring human interaction.
 
-use axum::{extract::State, response::Json, routing::get, Router};
+use axum::{
+    extract::{Path, Query, State},
+    response::Json,
+    routing::get,
+    Router,
+};
+use cgmath::Vector3;
 use clap::Parser;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashSet, net::SocketAddr, time::Duration};
 use tokio::{signal, sync::mpsc, sync::oneshot};
@@ -28,7 +35,7 @@ use shock2vr::{
 
 // Property imports for state queries
 use dark::properties::{PropModelName, PropPosition, PropSymName, PropTemplateId};
-use shipyard::{Get, IntoIter, IntoWithId, View};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View};
 
 // Screen dimensions for the debug window
 const SCR_WIDTH: u32 = 800;
@@ -147,6 +154,10 @@ async fn start_http_server(
         .route("/v1/info", get(get_info))
         .route("/v1/step", axum::routing::post(step_frame))
         .route("/v1/shutdown", axum::routing::post(shutdown_server))
+        .route("/v1/entities", get(list_entities))
+        .route("/v1/entities/:id", get(get_entity_detail))
+        .route("/v1/player/position", get(get_player_position))
+        .route("/v1/player/teleport", axum::routing::post(teleport_player))
         .with_state(command_tx);
 
     // Bind to localhost only for security
@@ -159,7 +170,10 @@ async fn start_http_server(
     info!("  GET  /v1/info             - Get current game state snapshot");
     info!("  POST /v1/step             - Step the simulation forward");
     info!("  POST /v1/shutdown         - Shutdown the debug runtime gracefully");
-    info!("  (More endpoints coming in Phase 2)");
+    info!("  GET  /v1/entities         - List entities with optional limit and filter");
+    info!("  GET  /v1/entities/{{id}}    - Get detailed entity information");
+    info!("  GET  /v1/player/position  - Get current player position");
+    info!("  POST /v1/player/teleport  - Teleport player to coordinates");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
     info!("Test with: curl http://{}/v1/info", addr);
@@ -362,7 +376,7 @@ fn run_game_blocking(
                 }
                 _ => {}
             }
-            process_command(command, &game, &game_time, frame_counter);
+            process_command(command, &mut game, &game_time, frame_counter);
         }
 
         // No commands for now
@@ -507,7 +521,7 @@ fn run_game_blocking(
 }
 
 /// Process a command from the HTTP server
-fn process_command(command: RuntimeCommand, game: &Game, time: &Time, frame_counter: u64) {
+fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_counter: u64) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
             let snapshot = capture_frame_snapshot(game, time, frame_counter);
@@ -573,9 +587,34 @@ fn process_command(command: RuntimeCommand, game: &Game, time: &Time, frame_coun
             // TODO: Implement input modification
             tracing::info!("Input modification not yet implemented");
         }
-        RuntimeCommand::MovePlayer(_position) => {
-            // TODO: Implement player movement
-            tracing::info!("Player movement not yet implemented");
+        RuntimeCommand::MovePlayer(position) => {
+            tracing::info!("Teleporting player to position: {:?}", position);
+            if let Some(debug_scene) = game.debug_scene_mut() {
+                match debug_scene.teleport_player(position) {
+                    Ok(()) => {
+                        tracing::info!("Player teleported successfully to {:?}", position);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to teleport player: {}", e);
+                    }
+                }
+            } else {
+                tracing::error!("No debuggable scene available for player movement");
+            }
+        }
+        RuntimeCommand::GetPlayerPosition(reply) => {
+            if let Some(debug_scene) = game.debug_scene() {
+                let position = debug_scene.player_position();
+                tracing::debug!("Retrieved player position: {:?}", position);
+                if let Err(_) = reply.send(position) {
+                    tracing::warn!("Failed to send player position - receiver dropped");
+                }
+            } else {
+                tracing::error!("No debuggable scene available for getting player position");
+                if let Err(_) = reply.send(Vector3::new(0.0, 0.0, 0.0)) {
+                    tracing::warn!("Failed to send default player position - receiver dropped");
+                }
+            }
         }
         RuntimeCommand::RunGameCommand(_command, _args, reply) => {
             // TODO: Implement game command execution
@@ -588,30 +627,88 @@ fn process_command(command: RuntimeCommand, game: &Game, time: &Time, frame_coun
                 tracing::warn!("Failed to send command result - receiver dropped");
             }
         }
-        RuntimeCommand::ListEntities { limit: _, reply } => {
-            // TODO: Implement entity listing
-            let result = EntityListResult {
-                entities: vec![],
-                total_count: 0,
-                player_position: [0.0, 0.0, 0.0],
-            };
-            if let Err(_) = reply.send(result) {
-                tracing::warn!("Failed to send entity list - receiver dropped");
+        RuntimeCommand::ListEntities {
+            limit,
+            filter,
+            reply,
+        } => {
+            if let Some(debug_scene) = game.debug_scene() {
+                let entities = debug_scene.list_entities(limit, filter.as_deref());
+                let player_pos = debug_scene.player_position();
+                let result = EntityListResult {
+                    total_count: entities.len(),
+                    player_position: [player_pos.x, player_pos.y, player_pos.z],
+                    entities: entities
+                        .into_iter()
+                        .map(|e| EntitySummary {
+                            id: e.id,
+                            name: e.name,
+                            template_id: e.template_id,
+                            position: e.position,
+                            distance: e.distance,
+                            script_count: e.script_count,
+                            link_count: e.link_count,
+                        })
+                        .collect(),
+                };
+                if let Err(_) = reply.send(result) {
+                    tracing::warn!("Failed to send entity list - receiver dropped");
+                }
+            } else {
+                let result = EntityListResult {
+                    entities: vec![],
+                    total_count: 0,
+                    player_position: [0.0, 0.0, 0.0],
+                };
+                if let Err(_) = reply.send(result) {
+                    tracing::warn!("No debug scene available");
+                }
             }
         }
-        RuntimeCommand::EntityDetail { id: _, reply } => {
-            // TODO: Implement entity detail
-            let result = EntityDetailResult {
-                entity_id: 0,
-                name: "Unknown".to_string(),
-                template_id: 0,
-                position: [0.0, 0.0, 0.0],
-                rotation: [1.0, 0.0, 0.0, 0.0],
-                inheritance_chain: vec![],
-                properties: vec![],
-                outgoing_links: vec![],
-                incoming_links: vec![],
+        RuntimeCommand::EntityDetail { id, reply } => {
+            let result = if let Some(debug_scene) = game.debug_scene() {
+                // Convert i32 id to EntityId
+                let entity_id = EntityId::new_from_index_and_gen(id as u64, 0);
+                debug_scene
+                    .entity_detail(entity_id)
+                    .map(|detail| EntityDetailResult {
+                        entity_id: detail.entity_id,
+                        name: detail.name,
+                        template_id: detail.template_id,
+                        position: detail.position,
+                        rotation: detail.rotation,
+                        inheritance_chain: detail.inheritance_chain,
+                        properties: detail
+                            .properties
+                            .into_iter()
+                            .map(|p| PropertyInfo {
+                                name: p.name,
+                                value: p.value,
+                            })
+                            .collect(),
+                        outgoing_links: detail
+                            .outgoing_links
+                            .into_iter()
+                            .map(|l| LinkInfo {
+                                link_type: l.link_type,
+                                target_id: l.target_id,
+                                target_name: l.target_name,
+                            })
+                            .collect(),
+                        incoming_links: detail
+                            .incoming_links
+                            .into_iter()
+                            .map(|l| LinkInfo {
+                                link_type: l.link_type,
+                                target_id: l.target_id,
+                                target_name: l.target_name,
+                            })
+                            .collect(),
+                    })
+            } else {
+                None
             };
+
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send entity detail - receiver dropped");
             }
@@ -809,6 +906,166 @@ async fn shutdown_server(
         "message": "Debug runtime shutdown initiated",
         "timestamp": chrono::Utc::now().to_rfc3339()
     }))
+}
+
+/// Query parameters for entity listing
+#[derive(Deserialize)]
+struct EntityQueryParams {
+    limit: Option<usize>,
+    filter: Option<String>,
+}
+
+/// List entities with optional filtering and limiting
+async fn list_entities(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<EntityQueryParams>,
+) -> Json<EntityListResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::ListEntities {
+        limit: params.limit,
+        filter: params.filter,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send ListEntities command - game loop receiver dropped");
+        return Json(EntityListResult {
+            entities: vec![],
+            total_count: 0,
+            player_position: [0.0, 0.0, 0.0],
+        });
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive entity list - sender dropped");
+            Json(EntityListResult {
+                entities: vec![],
+                total_count: 0,
+                player_position: [0.0, 0.0, 0.0],
+            })
+        }
+    }
+}
+
+/// Get detailed information about a specific entity
+async fn get_entity_detail(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Path(id): Path<i32>,
+) -> Json<Option<EntityDetailResult>> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::EntityDetail {
+        id,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send EntityDetail command - game loop receiver dropped");
+        return Json(None);
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive entity detail - sender dropped");
+            Json(None)
+        }
+    }
+}
+
+/// Request structure for player teleportation
+#[derive(serde::Deserialize)]
+struct TeleportRequest {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+/// Response structure for player teleportation
+#[derive(serde::Serialize)]
+struct TeleportResponse {
+    success: bool,
+    message: String,
+    new_position: [f32; 3],
+}
+
+/// Response structure for player position
+#[derive(serde::Serialize)]
+struct PositionResponse {
+    position: [f32; 3],
+}
+
+/// HTTP handler for getting player position
+async fn get_player_position(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<PositionResponse> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::GetPlayerPosition(reply_tx)) {
+        tracing::error!("Failed to send GetPlayerPosition command - game loop receiver dropped");
+        return Json(PositionResponse {
+            position: [0.0, 0.0, 0.0],
+        });
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(position) => Json(PositionResponse {
+            position: [position.x, position.y, position.z],
+        }),
+        Err(_) => {
+            tracing::error!("Failed to receive player position - sender dropped");
+            Json(PositionResponse {
+                position: [0.0, 0.0, 0.0],
+            })
+        }
+    }
+}
+
+/// HTTP handler for teleporting player
+async fn teleport_player(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<TeleportRequest>,
+) -> Json<TeleportResponse> {
+    let target_position = Vector3::new(request.x, request.y, request.z);
+
+    // Send teleport command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::MovePlayer(target_position)) {
+        tracing::error!("Failed to send MovePlayer command - game loop receiver dropped");
+        return Json(TeleportResponse {
+            success: false,
+            message: "Failed to send teleport command".to_string(),
+            new_position: [0.0, 0.0, 0.0],
+        });
+    }
+
+    // Get the new position to confirm the teleport
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if let Err(_) = command_tx.send(RuntimeCommand::GetPlayerPosition(reply_tx)) {
+        tracing::error!("Failed to send GetPlayerPosition command after teleport");
+        return Json(TeleportResponse {
+            success: true,
+            message: "Teleport command sent but unable to verify position".to_string(),
+            new_position: [request.x, request.y, request.z],
+        });
+    }
+
+    match reply_rx.await {
+        Ok(position) => Json(TeleportResponse {
+            success: true,
+            message: format!("Player teleported successfully"),
+            new_position: [position.x, position.y, position.z],
+        }),
+        Err(_) => Json(TeleportResponse {
+            success: true,
+            message: "Teleport command sent but unable to verify position".to_string(),
+            new_position: [request.x, request.y, request.z],
+        }),
+    }
 }
 
 /// Wait for shutdown signal (Ctrl+C)
