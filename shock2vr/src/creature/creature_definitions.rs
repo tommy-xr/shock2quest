@@ -51,7 +51,7 @@ impl CreatureDefinition {
 
 pub const HUMAN_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
 pub const HUMAN_WIDTH: f32 = 3.5 / SCALE_FACTOR;
-pub const HUMAN_PHYS_OFFSET: f32 = 0.0 / SCALE_FACTOR;
+pub const HUMAN_PHYS_OFFSET: f32 = 1.0 / SCALE_FACTOR;
 
 pub const DROID_HEIGHT: f32 = 7.0 / SCALE_FACTOR;
 pub const DROID_WIDTH: f32 = 5.0 / SCALE_FACTOR;
