@@ -1,10 +1,10 @@
 use std::{cell::RefCell, collections::HashSet};
 
-use cgmath::{vec3, vec4, Deg, MetricSpace, Quaternion, Rotation3};
+use cgmath::{Deg, MetricSpace, Quaternion, Rotation3, vec3, vec4};
 use dark::{
+    SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
     properties::{Link, PropAISignalResponse, PropPosition},
-    SCALE_FACTOR,
 };
 use shipyard::{EntityId, Get, View, World};
 
@@ -16,10 +16,10 @@ use crate::{
 };
 
 use super::{
+    Effect, Message, MessagePayload, Script,
     ai_util::*,
     behavior::*,
     steering::{Steering, SteeringOutput},
-    Effect, Message, MessagePayload, Script,
 };
 pub struct AnimatedMonsterAI {
     last_hit_sensor: Option<EntityId>,

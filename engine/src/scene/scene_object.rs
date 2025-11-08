@@ -1,7 +1,7 @@
 extern crate gl;
 
-use crate::render_log;
 use crate::Font;
+use crate::render_log;
 // pub trait SceneObject {
 //     fn init(&self) -> ();
 //     fn draw(&self) -> ();
@@ -9,12 +9,12 @@ use crate::Font;
 // }
 use crate::engine::EngineRenderContext;
 use crate::texture::TextureTrait;
+use cgmath::Matrix4;
+use cgmath::Vector2;
 use cgmath::prelude::*;
 use cgmath::vec2;
 use cgmath::vec3;
 use cgmath::vec4;
-use cgmath::Matrix4;
-use cgmath::Vector2;
 
 pub use crate::scene::Geometry;
 pub use crate::scene::Material;
@@ -23,11 +23,11 @@ use crate::gl_engine::OpenGLEngine;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::TextVertex;
 use super::basic_material;
 use super::mesh;
 use super::quad;
 use super::skinned_material::SkinnedMaterial;
-use super::TextVertex;
 use crate::materials;
 
 #[derive(Clone)]

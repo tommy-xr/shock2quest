@@ -1,17 +1,17 @@
 extern crate gl;
 extern crate khronos_egl as egl;
 
-use cgmath::vec2;
 use cgmath::Quaternion;
+use cgmath::vec2;
 use dark::mission;
 use dark::mission::TextureSize;
 use engine::profile;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use openxr as xr;
-use shock2vr::input_context::InputContext;
 use shock2vr::Game;
 use shock2vr::GameOptions;
+use shock2vr::input_context::InputContext;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -845,7 +845,7 @@ fn main() {
     //     }
 }
 
-use cgmath::{prelude::*, vec3, Vector3};
+use cgmath::{Vector3, prelude::*, vec3};
 use libm::*;
 fn create_projection_matrix(fov: &xr::Fovf, near_z: f32, far_z: f32) -> cgmath::Matrix4<f32> {
     let tan_left = tanf(fov.angle_left);

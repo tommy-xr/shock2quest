@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use engine::render_log;
 
 use crate::mission::SpatialQueryEngine;
-use cgmath::{point2, vec3, Matrix4, Point3, SquareMatrix, Vector3};
+use cgmath::{Matrix4, Point3, SquareMatrix, Vector3, point2, vec3};
 use collision::{Aabb2, Contains, Frustum, Relation, Union};
 use dark::{
     mission::Cell,

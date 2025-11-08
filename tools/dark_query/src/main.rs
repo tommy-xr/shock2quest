@@ -9,7 +9,7 @@ mod motion_analyzer;
 mod speech_analyzer;
 
 use data_loader::load_entity_data;
-use entity_analyzer::{analyze_entities, filter_entities, EntityType, FilterCriteria};
+use entity_analyzer::{EntityType, FilterCriteria, analyze_entities, filter_entities};
 use motion_analyzer::MotionAnalyzer;
 use speech_analyzer::SpeechAnalyzer;
 

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use cgmath::{Deg, InnerSpace};
-use dark::{motion::MotionQueryItem, properties::PropPosition, SCALE_FACTOR};
+use dark::{SCALE_FACTOR, motion::MotionQueryItem, properties::PropPosition};
 use rand::Rng;
 use shipyard::*;
 
@@ -9,11 +9,11 @@ use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{
+        Effect,
         ai::steering::{
             self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, SteeringOutput,
             SteeringStrategy,
         },
-        Effect,
     },
     time::Time,
 };

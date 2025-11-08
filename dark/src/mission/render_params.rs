@@ -1,6 +1,6 @@
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
 use crate::ss2_common::read_single;
-use cgmath::{vec3, Vector3};
+use cgmath::{Vector3, vec3};
 
 use std::f32;
 use std::io;

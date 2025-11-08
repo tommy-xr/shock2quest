@@ -1,4 +1,4 @@
-use cgmath::{point2, vec2, Point2};
+use cgmath::{Point2, point2, vec2};
 use shipyard::{EntityId, World};
 
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
     time::Time,
 };
 
-use super::{GuiCursor, GUI_PIXEL_TO_WORLD_SIZE};
+use super::{GUI_PIXEL_TO_WORLD_SIZE, GuiCursor};
 
 pub struct GuiScript<TState, TMsg>
 where

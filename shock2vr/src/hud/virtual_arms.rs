@@ -1,4 +1,4 @@
-use cgmath::{vec3, Deg, Euler, Matrix4, Quaternion, Rotation, Vector3};
+use cgmath::{Deg, Euler, Matrix4, Quaternion, Rotation, Vector3, vec3};
 use dark::{
     importers::TEXTURE_IMPORTER,
     properties::{PropHitPoints, PropMaxHitPoints},

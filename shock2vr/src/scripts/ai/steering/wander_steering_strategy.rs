@@ -4,7 +4,7 @@ use shipyard::{EntityId, World};
 
 use crate::{
     physics::PhysicsWorld,
-    scripts::{ai::ai_util::random_binomial, Effect},
+    scripts::{Effect, ai::ai_util::random_binomial},
     time::Time,
 };
 

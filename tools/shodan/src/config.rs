@@ -301,9 +301,11 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.shodan.interval, "1h");
         assert_eq!(config.shodan.main_branch, "main");
-        assert!(config
-            .shodan
-            .prompt_weights
-            .contains_key("iterate-on-projects.md"));
+        assert!(
+            config
+                .shodan
+                .prompt_weights
+                .contains_key("iterate-on-projects.md")
+        );
     }
 }

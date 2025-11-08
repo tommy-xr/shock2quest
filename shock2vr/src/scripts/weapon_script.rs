@@ -1,4 +1,4 @@
-use cgmath::{point3, Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform, point3};
 use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
@@ -11,11 +11,11 @@ use crate::{
 };
 
 use super::{
+    Effect, MessagePayload, Script,
     script_util::{
         get_all_links_with_template, get_first_link_with_template_and_data,
         play_environmental_sound,
     },
-    Effect, MessagePayload, Script,
 };
 
 pub struct WeaponScript;

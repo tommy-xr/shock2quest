@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::io::Cursor;
 use std::rc::Rc;
 
-use cgmath::{vec3, Vector3};
+use cgmath::{Vector3, vec3};
 use rodio::buffer::SamplesBuffer;
 use rodio::source::{Buffered, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};

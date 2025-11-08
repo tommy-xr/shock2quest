@@ -1,16 +1,17 @@
 use std::{cell::RefCell, time::Duration};
 
-use cgmath::{vec3, Deg, InnerSpace};
+use cgmath::{Deg, InnerSpace, vec3};
 use dark::{
+    SCALE_FACTOR,
     motion::MotionQueryItem,
     properties::{AIScriptedAction, AIScriptedActionType, PropPosition},
-    SCALE_FACTOR,
 };
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::PhysicsWorld,
     scripts::{
+        Effect, Message,
         ai::{
             ai_util,
             steering::{
@@ -18,7 +19,7 @@ use crate::{
                 SteeringOutput, SteeringStrategy,
             },
         },
-        script_util, Effect, Message,
+        script_util,
     },
     time::Time,
 };

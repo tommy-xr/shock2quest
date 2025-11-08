@@ -3,7 +3,7 @@ use tracing::info;
 
 use crate::physics::PhysicsWorld;
 
-use super::{script_util::get_all_switch_links, Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::get_all_switch_links};
 
 pub struct TrapDestroyer {}
 impl TrapDestroyer {

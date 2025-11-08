@@ -1,8 +1,8 @@
 use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, Vector4};
 use dark::{
+    EnvSoundQuery,
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
     properties::{AIAlertLevel, AIMode, KeyCard, QuestBitValue},
-    EnvSoundQuery,
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;

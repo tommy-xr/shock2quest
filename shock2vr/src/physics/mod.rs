@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use util::*;
 
 use bitflags::bitflags;
-use cgmath::{point3, InnerSpace, Point3, Quaternion, Vector3};
-use dark::{mission::SystemShock2Level, SCALE_FACTOR};
+use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3};
+use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
     control::{CharacterAutostep, CharacterLength, KinematicCharacterController},

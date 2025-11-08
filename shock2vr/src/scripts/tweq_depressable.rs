@@ -3,8 +3,8 @@ use shipyard::{EntityId, World};
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    script_util::{change_to_first_model, change_to_last_model},
     Effect, MessagePayload, Script,
+    script_util::{change_to_first_model, change_to_last_model},
 };
 
 pub struct TweqDepressable {

@@ -1,33 +1,33 @@
 use std::collections::HashMap;
 
-use cgmath::{vec3, Matrix4, Point3, Quaternion, Vector2, Vector3};
+use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, vec3};
 use dark::{
-    mission::{room_database::RoomDatabase, SongParams},
+    SCALE_FACTOR,
+    mission::{SongParams, room_database::RoomDatabase},
     properties::PropTemplateId,
     ss2_entity_info::SystemShock2EntityInfo,
-    SCALE_FACTOR,
 };
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{color_material, light::SpotLight, SceneObject},
+    scene::{SceneObject, color_material, light::SpotLight},
 };
 use rapier3d::prelude::{Collider, ColliderBuilder};
 use shipyard::{EntityId, IntoIter, IntoWithId};
 
 use crate::{
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     mission::{
+        AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
         entity_creator::CreateEntityOptions,
         entity_populator::empty_entity_populator::EmptyEntityPopulator, mission_core::MissionCore,
-        AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    GameOptions,
 };
 
 const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
@@ -243,7 +243,9 @@ impl DebugRagdollScene {
 impl Default for DebugRagdollScene {
     fn default() -> Self {
         // This won't work without required parameters, but satisfies the trait
-        panic!("DebugRagdollScene requires GlobalContext, AssetCache, and AudioContext - use new() instead")
+        panic!(
+            "DebugRagdollScene requires GlobalContext, AssetCache, and AudioContext - use new() instead"
+        )
     }
 }
 

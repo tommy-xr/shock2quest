@@ -2,7 +2,7 @@ use cgmath::{Quaternion, Vector3};
 use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{basic_material, color_material, SceneObject, UI2DRenderer},
+    scene::{SceneObject, UI2DRenderer, basic_material, color_material},
 };
 
 /// Map rendering constants

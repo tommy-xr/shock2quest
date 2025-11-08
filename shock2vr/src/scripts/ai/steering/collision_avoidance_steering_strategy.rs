@@ -1,4 +1,4 @@
-use cgmath::{vec3, vec4, Deg, InnerSpace, Quaternion, Rotation, Rotation3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, vec3, vec4};
 use dark::SCALE_FACTOR;
 
 use shipyard::{EntityId, World};
@@ -6,8 +6,8 @@ use shipyard::{EntityId, World};
 use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::{
-        ai::ai_util::{self},
         Effect,
+        ai::ai_util::{self},
     },
     time::Time,
     util::{get_position_from_transform, get_rotation_from_transform},

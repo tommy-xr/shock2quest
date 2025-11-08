@@ -1,4 +1,4 @@
-use cgmath::{vec2, Vector2, Vector3};
+use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{Link, PropInventoryDimensions, PropObjIcon};
 
 use shipyard::{EntityId, Get, View, World};
@@ -6,7 +6,7 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{
     gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
     inventory::Inventory,
-    scripts::{script_util, Message},
+    scripts::{Message, script_util},
 };
 
 use crate::gui;
@@ -67,10 +67,11 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         world: &World,
         _state: &ContainerGuiState,
     ) -> Vec<GuiComponent<ContainerGuiMsg>> {
-        let mut components: Vec<GuiComponent<ContainerGuiMsg>> =
-            vec![gui::image(self.background_image.as_str())
+        let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![
+            gui::image(self.background_image.as_str())
                 .with_position(vec2(0.0, 0.0))
-                .with_size(vec2(self.width, self.height))];
+                .with_size(vec2(self.width, self.height)),
+        ];
 
         let mut contained_entities =
             script_util::get_all_links_with_data(world, entity_id, |link| match link {

@@ -15,8 +15,8 @@ use shipyard::{EntityId, World};
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    ai_util::{self},
     Effect,
+    ai_util::{self},
 };
 
 pub struct SteeringOutput {

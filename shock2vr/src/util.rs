@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{point3, vec3, InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Transform, Vector3};
+use cgmath::{InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Transform, Vector3, point3, vec3};
 
 use dark::properties::{PropHasRefs, PropPosition};
 use engine::game_log;

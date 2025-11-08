@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{point3, vec3, Matrix4, Quaternion, Rotation, Vector3, Zero};
+use cgmath::{Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 use engine::scene::SceneObject;
 use engine::script_log;

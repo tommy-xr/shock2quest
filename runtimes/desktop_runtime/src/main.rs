@@ -1,7 +1,7 @@
 extern crate glfw;
 use self::glfw::{Action, Context, Key};
-use cgmath::point3;
 use cgmath::Decomposed;
+use cgmath::point3;
 
 use clap::Parser;
 
@@ -26,7 +26,7 @@ extern crate gl;
 
 use cgmath::prelude::*;
 use cgmath::vec2;
-use cgmath::{vec3, Quaternion, Vector3};
+use cgmath::{Quaternion, Vector3, vec3};
 use shock2vr::command::Command;
 
 use glfw::MouseButton;
@@ -165,11 +165,7 @@ fn camera_rotation(camera: &CameraContext) -> Quaternion<f32> {
 }
 
 fn f32_from_bool(v: bool) -> f32 {
-    if v {
-        1.0
-    } else {
-        0.0
-    }
+    if v { 1.0 } else { 0.0 }
 }
 
 pub enum Mode {

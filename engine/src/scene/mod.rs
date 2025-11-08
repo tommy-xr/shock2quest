@@ -21,8 +21,8 @@ pub use scene_object::SceneObject;
 
 pub mod renderable;
 pub use renderable::{
-    create_transform_group, flatten_renderables, scene_objects_to_renderables, Renderable,
-    TransformSceneObject,
+    Renderable, TransformSceneObject, create_transform_group, flatten_renderables,
+    scene_objects_to_renderables,
 };
 
 pub mod ui_2d_renderer;
@@ -35,10 +35,10 @@ pub mod cube;
 pub use cube::Cube;
 
 pub mod quad;
-pub use quad::{create as create_quad, Quad};
+pub use quad::{Quad, create as create_quad};
 
 pub mod quad_unit;
-pub use quad_unit::{create as create_quad_unit, QuadUnit};
+pub use quad_unit::{QuadUnit, create as create_quad_unit};
 
 pub mod plane;
 pub use plane::Plane;
@@ -69,8 +69,8 @@ pub use color_material::ColorMaterial;
 
 pub mod debug_normal_material;
 pub use debug_normal_material::{
-    create as create_debug_normal_material, create_skinned as create_skinned_debug_normal_material,
-    DebugNormalMaterial, DebugNormalSkinnedMaterial,
+    DebugNormalMaterial, DebugNormalSkinnedMaterial, create as create_debug_normal_material,
+    create_skinned as create_skinned_debug_normal_material,
 };
 
 pub mod clipped_screen_material;

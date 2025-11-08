@@ -1,4 +1,4 @@
-use cgmath::{vec3, Matrix4, Vector3};
+use cgmath::{Matrix4, Vector3, vec3};
 
 use super::{Material, Renderable, SceneObject, TransformSceneObject};
 use crate::scene::quad_unit;

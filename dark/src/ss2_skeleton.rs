@@ -5,12 +5,12 @@ use rpds as immutable;
 use std::collections::HashMap;
 
 use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
-use engine::scene::{color_material, cube, lines_mesh, SceneObject, VertexPosition};
+use engine::scene::{SceneObject, VertexPosition, color_material, cube, lines_mesh};
 
 use crate::{
+    SCALE_FACTOR,
     motion::{AnimationClip, JointId},
     ss2_cal_loader::SystemShock2Cal,
-    SCALE_FACTOR,
 };
 
 #[derive(Debug, Clone)]

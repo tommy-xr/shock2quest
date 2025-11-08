@@ -5,16 +5,16 @@
 // validate changes without requiring human interaction.
 
 use axum::{
+    Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::get,
-    Router,
 };
 use cgmath::Vector3;
 use clap::Parser;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::HashSet, net::SocketAddr, time::Duration};
 use tokio::{signal, sync::mpsc, sync::oneshot};
 use tracing::info;
@@ -25,13 +25,13 @@ use commands::*;
 // Game engine imports
 extern crate glfw;
 use self::glfw::{Context, WindowEvent};
-use cgmath::{vec2, vec3, Quaternion};
+use cgmath::{Quaternion, vec2, vec3};
 use dark::SCALE_FACTOR;
 use engine::{
-    profile, scene::Scene, util::compute_view_matrix_from_render_context, EngineRenderContext,
+    EngineRenderContext, profile, scene::Scene, util::compute_view_matrix_from_render_context,
 };
 use shock2vr::{
-    command::Command, input_context::InputContext, time::Time, Game, GameOptions, SpawnLocation,
+    Game, GameOptions, SpawnLocation, command::Command, input_context::InputContext, time::Time,
 };
 
 // Property imports for state queries
@@ -562,9 +562,12 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             }
         }
         RuntimeCommand::Screenshot(spec, reply) => {
-            let filename = spec
-                .filename
-                .unwrap_or_else(|| format!("screenshot_{}.png", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
+            let filename = spec.filename.unwrap_or_else(|| {
+                format!(
+                    "screenshot_{}.png",
+                    chrono::Utc::now().format("%Y%m%d_%H%M%S")
+                )
+            });
 
             // Create directory if it doesn't exist
             let screenshots_dir = std::path::Path::new("/tmp/claude");
@@ -609,7 +612,9 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
                 let start = Point3::new(request.start[0], request.start[1], request.start[2]);
                 let end = Point3::new(request.end[0], request.end[1], request.end[2]);
                 let mask = RaycastMask {
-                    groups: request.collision_groups.unwrap_or_else(|| vec!["entity".to_string(), "level".to_string()]),
+                    groups: request
+                        .collision_groups
+                        .unwrap_or_else(|| vec!["entity".to_string(), "level".to_string()]),
                 };
 
                 // Perform the raycast
@@ -915,12 +920,17 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             if let Some(debuggable) = game.debug_scene_mut() {
                 let success = debuggable.set_input(&patch.channel, patch.value);
                 if success {
-                    tracing::info!("Successfully set input channel '{}' via remote control", patch.channel);
+                    tracing::info!(
+                        "Successfully set input channel '{}' via remote control",
+                        patch.channel
+                    );
                 } else {
                     tracing::warn!("Failed to set input channel '{}'", patch.channel);
                 }
             } else {
-                tracing::warn!("Current scene is not a debuggable mission scene - cannot set input");
+                tracing::warn!(
+                    "Current scene is not a debuggable mission scene - cannot set input"
+                );
             }
         }
         RuntimeCommand::Shutdown => {
@@ -1367,7 +1377,10 @@ async fn get_physics_body_detail(
     let (reply_tx, reply_rx) = oneshot::channel();
 
     // Send command to game loop
-    if let Err(_) = command_tx.send(RuntimeCommand::PhysicsBodyDetail { id, reply: reply_tx }) {
+    if let Err(_) = command_tx.send(RuntimeCommand::PhysicsBodyDetail {
+        id,
+        reply: reply_tx,
+    }) {
         tracing::error!("Failed to send PhysicsBodyDetail command - game loop receiver dropped");
         return Json(None);
     }
@@ -1426,14 +1439,22 @@ async fn take_screenshot(
 }
 
 /// Capture the current OpenGL framebuffer and save it as a PNG
-fn capture_screenshot(path: &std::path::Path, width: u32, height: u32) -> Result<u64, Box<dyn std::error::Error>> {
-
+fn capture_screenshot(
+    path: &std::path::Path,
+    width: u32,
+    height: u32,
+) -> Result<u64, Box<dyn std::error::Error>> {
     unsafe {
         // Query the current viewport to see what size it actually is
         let mut viewport: [i32; 4] = [0; 4];
         gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
-        tracing::info!("Current viewport: x={}, y={}, width={}, height={}",
-                       viewport[0], viewport[1], viewport[2], viewport[3]);
+        tracing::info!(
+            "Current viewport: x={}, y={}, width={}, height={}",
+            viewport[0],
+            viewport[1],
+            viewport[2],
+            viewport[3]
+        );
 
         // Use actual viewport size for screenshot
         let actual_width = viewport[2] as u32;
@@ -1484,7 +1505,10 @@ async fn get_input_state(
 ) -> Result<Json<commands::InputState>, StatusCode> {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
-    if command_tx.send(commands::RuntimeCommand::GetInput(reply_tx)).is_err() {
+    if command_tx
+        .send(commands::RuntimeCommand::GetInput(reply_tx))
+        .is_err()
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -1499,7 +1523,10 @@ async fn set_input_channel(
     State(command_tx): State<tokio::sync::mpsc::UnboundedSender<commands::RuntimeCommand>>,
     Json(patch): Json<commands::InputPatch>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if command_tx.send(commands::RuntimeCommand::SetInput(patch)).is_err() {
+    if command_tx
+        .send(commands::RuntimeCommand::SetInput(patch))
+        .is_err()
+    {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 

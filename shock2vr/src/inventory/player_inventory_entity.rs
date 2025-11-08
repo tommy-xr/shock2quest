@@ -1,4 +1,4 @@
-use cgmath::{vec3, Matrix4, Quaternion, Vector3};
+use cgmath::{Matrix4, Quaternion, Vector3, vec3};
 use dark::properties::{Links, PropPosition, PropScripts, PropTemplateId};
 use engine::scene::SceneObject;
 use shipyard::{Component, EntityId, IntoIter, View, ViewMut, World};

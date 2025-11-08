@@ -6,7 +6,7 @@ use engine::{
 };
 use once_cell::sync::Lazy;
 
-use crate::{importers::load_texture, util::load_multiple_textures_for_model, BitmapAnimation};
+use crate::{BitmapAnimation, importers::load_texture, util::load_multiple_textures_for_model};
 
 fn load_bitmap_animation(
     name: String,

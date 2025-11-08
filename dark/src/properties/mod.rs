@@ -66,8 +66,8 @@ pub use prop_voice::*;
 
 use num_traits::FromPrimitive;
 use serde::{
-    de::{DeserializeOwned, Error},
     Deserialize, Serialize,
+    de::{DeserializeOwned, Error},
 };
 
 use std::{
@@ -78,8 +78,8 @@ use std::{
     time::Duration,
 };
 
-use crate::{ss2_common::*, SCALE_FACTOR};
-use cgmath::{vec3, Deg, Quaternion, Rotation3, Vector3};
+use crate::{SCALE_FACTOR, ss2_common::*};
+use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
 use shipyard::{
     Component, EntityId, Get, IntoIter, IntoWithId, TupleAddComponent, View, ViewMut, World,
 };

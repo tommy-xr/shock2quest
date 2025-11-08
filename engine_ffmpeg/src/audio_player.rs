@@ -1,8 +1,8 @@
 extern crate ffmpeg_the_third as ffmpeg;
 
 use engine::audio::AudioClip;
-use ffmpeg::media::Type;
 use ffmpeg::ChannelLayout;
+use ffmpeg::media::Type;
 
 pub struct AudioPlayer;
 

@@ -4,8 +4,9 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
+    Effect, MessagePayload, NoopScript, Script,
     ai::{AnimatedMonsterAI, CameraAI, TurretAI},
-    script_util, Effect, MessagePayload, NoopScript, Script,
+    script_util,
 };
 
 pub struct BaseMonster {

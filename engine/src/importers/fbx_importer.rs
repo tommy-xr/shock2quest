@@ -1,8 +1,8 @@
 use fbxcel_dom::{
     any::AnyDocument,
     v7400::{
-        object::{model::TypedModelHandle, TypedObjectHandle},
         Document,
+        object::{TypedObjectHandle, model::TypedModelHandle},
     },
 };
 use once_cell::sync::Lazy;

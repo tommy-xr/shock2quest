@@ -19,13 +19,14 @@ use rapier3d::prelude::{Collider, ColliderBuilder};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{light::SpotLight, SceneObject},
+    scene::{SceneObject, light::SpotLight},
 };
 
 use shipyard::World;
 use shipyard::*;
 
 use crate::{
+    GameOptions,
     game_scene::AmbientAudioState,
     input_context::{self, InputContext},
     mission::entity_populator::EntityPopulator,
@@ -33,7 +34,6 @@ use crate::{
     save_load::HeldItemSaveData,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    GameOptions,
 };
 
 pub struct Mission {
@@ -251,11 +251,17 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.player_position()
     }
 
-    fn list_physics_bodies(&self, limit: Option<usize>) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
+    fn list_physics_bodies(
+        &self,
+        limit: Option<usize>,
+    ) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
         self.mission_core.list_physics_bodies(limit)
     }
 
-    fn physics_body_detail(&self, body_id: u32) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
+    fn physics_body_detail(
+        &self,
+        body_id: u32,
+    ) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
         self.mission_core.physics_body_detail(body_id)
     }
 

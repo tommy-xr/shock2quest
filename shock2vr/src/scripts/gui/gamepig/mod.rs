@@ -1,4 +1,4 @@
-use cgmath::{vec2, Vector2, Vector3};
+use cgmath::{Vector2, Vector3, vec2};
 
 use shipyard::{EntityId, World};
 
@@ -38,10 +38,12 @@ impl Gui<GamePigGuiState, GamePigGuiMsg> for GamePigGui {
             ("eng1.mis", "elev10.pcx", "elev11.pcx", "1: Engineering"),
         ];
 
-        let mut components: Vec<GuiComponent<GamePigGuiMsg>> = vec![gui::image("gameback.pcx")
-            .with_position(vec2(0.0, 0.0))
-            .with_size(vec2(64.0, 96.0))
-            .with_alpha(1.0)];
+        let mut components: Vec<GuiComponent<GamePigGuiMsg>> = vec![
+            gui::image("gameback.pcx")
+                .with_position(vec2(0.0, 0.0))
+                .with_size(vec2(64.0, 96.0))
+                .with_alpha(1.0),
+        ];
 
         components.push(
             gui::text("GamePig")

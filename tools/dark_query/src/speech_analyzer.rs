@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use dark::{
     gamesys::{self, SpeechDB, Voice},
     properties::{PropVoiceIndex, Property},

@@ -4,7 +4,7 @@ use once_cell::sync::OnceCell;
 
 pub use crate::scene::Geometry;
 
-use super::{mesh, Mesh, VertexPositionTextureNormal};
+use super::{Mesh, VertexPositionTextureNormal, mesh};
 
 pub struct QuadUnit;
 

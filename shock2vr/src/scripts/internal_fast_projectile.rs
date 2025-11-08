@@ -1,7 +1,7 @@
 use cgmath::{
-    vec3, vec4, Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3,
+    Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, vec3, vec4,
 };
-use dark::{properties::Link, SCALE_FACTOR};
+use dark::{SCALE_FACTOR, properties::Link};
 
 use shipyard::{EntityId, Get, View, World};
 
@@ -11,8 +11,8 @@ use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::RuntimePropTransform,
     scripts::{
-        ai::ai_util::does_entity_have_hitboxes, script_util::get_first_link_with_template_and_data,
-        Message,
+        Message, ai::ai_util::does_entity_have_hitboxes,
+        script_util::get_first_link_with_template_and_data,
     },
     time::Time,
     util::{get_position_from_transform, get_rotation_from_forward_vector},

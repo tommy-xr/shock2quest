@@ -1,4 +1,4 @@
-use cgmath::{point2, Matrix4, Point3, Vector2, Vector3, Vector4};
+use cgmath::{Matrix4, Point3, Vector2, Vector3, Vector4, point2};
 use collision::{Aabb2, Sphere};
 
 use crate::util::compute_bounding_sphere;

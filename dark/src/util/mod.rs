@@ -1,6 +1,6 @@
 mod merge_maps;
 
-use cgmath::{point3, InnerSpace, Point3};
+use cgmath::{InnerSpace, Point3, point3};
 use collision::Sphere;
 pub use merge_maps::*;
 

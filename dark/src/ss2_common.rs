@@ -1,10 +1,10 @@
 use byteorder::ReadBytesExt;
-use cgmath::point3;
-use cgmath::vec2;
-use cgmath::vec3;
 use cgmath::Decomposed;
 use cgmath::Deg;
 use cgmath::InnerSpace;
+use cgmath::point3;
+use cgmath::vec2;
+use cgmath::vec3;
 
 use cgmath::Point3;
 use cgmath::Quaternion;
@@ -106,11 +106,7 @@ pub fn read_duration<T: io::Read>(reader: &mut T) -> Duration {
 pub fn read_single<T: io::Read>(reader: &mut T) -> f32 {
     let v = reader.read_f32::<byteorder::LittleEndian>().unwrap();
 
-    if v.is_nan() {
-        0.0
-    } else {
-        v
-    }
+    if v.is_nan() { 0.0 } else { v }
 }
 pub fn read_u8<T: io::Read>(reader: &mut T) -> u8 {
     reader.read_u8().unwrap()
