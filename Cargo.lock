@@ -1006,6 +1006,7 @@ dependencies = [
  "gl",
  "glfw",
  "humantime",
+ "image 0.24.7",
  "serde",
  "serde_json",
  "shipyard",

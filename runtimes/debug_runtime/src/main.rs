@@ -161,6 +161,7 @@ async fn start_http_server(
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
+        .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
     // Bind to localhost only for security
@@ -558,15 +559,40 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             }
         }
         RuntimeCommand::Screenshot(spec, reply) => {
-            // TODO: Implement screenshot logic
-            let result = ScreenshotResult {
-                filename: spec
-                    .filename
-                    .unwrap_or_else(|| "screenshot.png".to_string()),
-                full_path: "/tmp/screenshot.png".to_string(),
-                resolution: [SCR_WIDTH, SCR_HEIGHT],
-                size_bytes: 0,
+            let filename = spec
+                .filename
+                .unwrap_or_else(|| format!("screenshot_{}.png", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
+
+            // Create directory if it doesn't exist
+            let screenshots_dir = std::path::Path::new("/tmp/claude");
+            std::fs::create_dir_all(screenshots_dir).unwrap_or_else(|e| {
+                tracing::warn!("Failed to create screenshots directory: {}", e);
+            });
+
+            let full_path = screenshots_dir.join(&filename);
+
+            // Capture OpenGL framebuffer
+            let result = match capture_screenshot(&full_path, SCR_WIDTH, SCR_HEIGHT) {
+                Ok(size_bytes) => {
+                    tracing::info!("Screenshot saved to: {}", full_path.display());
+                    ScreenshotResult {
+                        filename: filename.clone(),
+                        full_path: full_path.to_string_lossy().to_string(),
+                        resolution: [SCR_WIDTH, SCR_HEIGHT],
+                        size_bytes,
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to capture screenshot: {}", e);
+                    ScreenshotResult {
+                        filename: filename.clone(),
+                        full_path: full_path.to_string_lossy().to_string(),
+                        resolution: [0, 0],
+                        size_bytes: 0,
+                    }
+                }
             };
+
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send screenshot result - receiver dropped");
             }
@@ -1273,6 +1299,102 @@ async fn get_physics_body_detail(
             tracing::error!("Failed to receive physics body detail - sender dropped");
             Json(None)
         }
+    }
+}
+
+/// Request structure for screenshot capture
+#[derive(serde::Deserialize)]
+struct ScreenshotRequest {
+    filename: Option<String>,
+}
+
+/// HTTP handler for taking screenshots
+async fn take_screenshot(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<ScreenshotRequest>,
+) -> Json<ScreenshotResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    let spec = ScreenshotSpec {
+        filename: request.filename,
+    };
+
+    // Send screenshot command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::Screenshot(spec, reply_tx)) {
+        tracing::error!("Failed to send Screenshot command - game loop receiver dropped");
+        return Json(ScreenshotResult {
+            filename: "error.png".to_string(),
+            full_path: "/tmp/error.png".to_string(),
+            resolution: [0, 0],
+            size_bytes: 0,
+        });
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive screenshot result - sender dropped");
+            Json(ScreenshotResult {
+                filename: "error.png".to_string(),
+                full_path: "/tmp/error.png".to_string(),
+                resolution: [0, 0],
+                size_bytes: 0,
+            })
+        }
+    }
+}
+
+/// Capture the current OpenGL framebuffer and save it as a PNG
+fn capture_screenshot(path: &std::path::Path, width: u32, height: u32) -> Result<u64, Box<dyn std::error::Error>> {
+
+    unsafe {
+        // Query the current viewport to see what size it actually is
+        let mut viewport: [i32; 4] = [0; 4];
+        gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
+        tracing::info!("Current viewport: x={}, y={}, width={}, height={}",
+                       viewport[0], viewport[1], viewport[2], viewport[3]);
+
+        // Use actual viewport size for screenshot
+        let actual_width = viewport[2] as u32;
+        let actual_height = viewport[3] as u32;
+
+        // Read pixels from the framebuffer using actual viewport size
+        let mut pixels: Vec<u8> = vec![0; (actual_width * actual_height * 3) as usize];
+        gl::ReadPixels(
+            0,
+            0,
+            actual_width as i32,
+            actual_height as i32,
+            gl::RGB,
+            gl::UNSIGNED_BYTE,
+            pixels.as_mut_ptr() as *mut gl::types::GLvoid,
+        );
+
+        // Check for OpenGL errors
+        let error = gl::GetError();
+        if error != gl::NO_ERROR {
+            return Err(format!("OpenGL error during ReadPixels: {}", error).into());
+        }
+
+        // Flip the image vertically (OpenGL origin is bottom-left, PNG is top-left)
+        let mut flipped_pixels: Vec<u8> = vec![0; pixels.len()];
+        for y in 0..actual_height {
+            let src_row = y as usize * actual_width as usize * 3;
+            let dst_row = (actual_height - 1 - y) as usize * actual_width as usize * 3;
+            flipped_pixels[dst_row..dst_row + actual_width as usize * 3]
+                .copy_from_slice(&pixels[src_row..src_row + actual_width as usize * 3]);
+        }
+
+        // Create image and save as PNG using actual dimensions
+        let img = image::RgbImage::from_vec(actual_width, actual_height, flipped_pixels)
+            .ok_or("Failed to create image from pixel data")?;
+
+        img.save(path)?;
+
+        // Calculate file size
+        let metadata = std::fs::metadata(path)?;
+        Ok(metadata.len())
     }
 }
 
