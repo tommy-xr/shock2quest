@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use cgmath::{EuclideanSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use collision::Aabb;
 use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
@@ -18,6 +19,7 @@ use crate::{
 };
 
 const DEFAULT_JOINT_RADIUS: f32 = 0.06;
+const MIN_HITBOX_HALF_EXTENT: f32 = 0.01;
 
 pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
@@ -105,6 +107,7 @@ impl RagDollManager {
             Some(data) => data,
             None => return false,
         };
+        let hit_boxes = model.get_hit_boxes();
 
         let offset_transform = Matrix4::from_translation(root_offset) * root_transform;
         let mut world_joint_transforms = [Matrix4::identity(); 40];
@@ -121,7 +124,7 @@ impl RagDollManager {
         let mut joint_handles = Vec::new();
         let mut joint_to_body = HashMap::new();
         let mut bone_offsets = HashMap::new();
-        let mut joint_positions = vec![Vector3::new(0.0, 0.0, 0.0); world_joint_transforms.len()];
+        let mut body_world_transforms = HashMap::new();
 
         for bone in &bones {
             let joint_idx = bone.joint_id as usize;
@@ -129,22 +132,38 @@ impl RagDollManager {
                 continue;
             }
 
-            let world_matrix = world_joint_transforms[joint_idx];
-            let pos_vec = point3_to_vec3(get_position_from_matrix(&world_matrix));
-            joint_positions[joint_idx] = pos_vec;
-            let rotation = get_rotation_from_matrix(&world_matrix);
-            let isometry = isometry_from_parts(pos_vec, rotation);
+            let world_joint = world_joint_transforms[joint_idx];
+            let mut body_matrix = world_joint;
+            let mut collider_shape = SharedShape::ball(DEFAULT_JOINT_RADIUS);
+            let mut offset_matrix = Matrix4::identity();
+
+            if let Some(bbox) = hit_boxes.get(&(bone.joint_id as u32)) {
+                let center_translation = Matrix4::from_translation(bbox.center().to_vec());
+                body_matrix = world_joint * center_translation;
+                offset_matrix = body_matrix
+                    .invert()
+                    .map(|inv| inv * world_joint)
+                    .unwrap_or_else(Matrix4::identity);
+                let sizes = bbox.dim();
+                let half_extents = vec3(
+                    (sizes.x / 2.0).max(MIN_HITBOX_HALF_EXTENT),
+                    (sizes.y / 2.0).max(MIN_HITBOX_HALF_EXTENT),
+                    (sizes.z / 2.0).max(MIN_HITBOX_HALF_EXTENT),
+                );
+                collider_shape =
+                    SharedShape::cuboid(half_extents.x, half_extents.y, half_extents.z);
+            }
+
+            let position = point3_to_vec3(get_position_from_matrix(&body_matrix));
+            let rotation = get_rotation_from_matrix(&body_matrix);
+            let isometry = isometry_from_parts(position, rotation);
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
-            physics.attach_collider(
-                handle,
-                SharedShape::ball(DEFAULT_JOINT_RADIUS),
-                1.0,
-                CollisionGroup::selectable(),
-            );
+            physics.attach_collider(handle, collider_shape, 1.0, CollisionGroup::selectable());
 
             joint_to_body.insert(bone.joint_id as u32, handle);
-            bone_offsets.insert(bone.joint_id as u32, Matrix4::identity());
+            bone_offsets.insert(bone.joint_id as u32, offset_matrix);
+            body_world_transforms.insert(bone.joint_id as u32, body_matrix);
             body_handles.push(handle);
         }
 
@@ -160,25 +179,40 @@ impl RagDollManager {
                 };
 
                 let parent_idx = parent_id as usize;
-                let child_idx = bone.joint_id as usize;
-                if parent_idx >= joint_positions.len() || child_idx >= joint_positions.len() {
+                if parent_idx >= world_joint_transforms.len() {
                     continue;
                 }
 
-                let parent_pos = joint_positions[parent_idx];
-                let child_pos = joint_positions[child_idx];
-                let child_world = world_joint_transforms[child_idx];
-                let child_rot = get_rotation_from_matrix(&child_world);
-                let child_to_parent = parent_pos - child_pos;
-                let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
+                let parent_body_matrix = match body_world_transforms.get(&(parent_id as u32)) {
+                    Some(matrix) => *matrix,
+                    None => continue,
+                };
+                let child_body_matrix = match body_world_transforms.get(&(bone.joint_id as u32)) {
+                    Some(matrix) => *matrix,
+                    None => continue,
+                };
+
+                let parent_joint_world = world_joint_transforms[parent_idx];
+                let pivot_world = point3_to_vec3(get_position_from_matrix(&parent_joint_world));
+                let parent_body_pos = point3_to_vec3(get_position_from_matrix(&parent_body_matrix));
+                let child_body_pos = point3_to_vec3(get_position_from_matrix(&child_body_matrix));
+                let parent_rot = get_rotation_from_matrix(&parent_body_matrix);
+                let child_rot = get_rotation_from_matrix(&child_body_matrix);
+
+                let parent_anchor = parent_rot
+                    .conjugate()
+                    .rotate_vector(pivot_world - parent_body_pos);
+                let child_anchor = child_rot
+                    .conjugate()
+                    .rotate_vector(pivot_world - child_body_pos);
 
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
-                    .local_anchor1(Point3::origin())
-                    .local_anchor2(Point3::new(
-                        child_local_anchor.x,
-                        child_local_anchor.y,
-                        child_local_anchor.z,
+                    .local_anchor1(Point3::new(
+                        parent_anchor.x,
+                        parent_anchor.y,
+                        parent_anchor.z,
                     ))
+                    .local_anchor2(Point3::new(child_anchor.x, child_anchor.y, child_anchor.z))
                     .build();
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);

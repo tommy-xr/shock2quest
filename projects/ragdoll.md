@@ -132,3 +132,16 @@ Now that rendering is wired, convert the placeholder rig into a fully simulated 
 __Deliverable__: killing a creature causes its mesh to transition into a fully dynamic ragdoll that falls under gravity, collides with the level, and remains visually in sync without animator involvement.
 
 __Status__: ✅ Implemented. `RagDollManager` now spawns dynamic Rapier bodies with spherical joints, syncs their poses every frame, and MissionCore renders them so the debug ragdoll collapses under physics instead of staying frozen.
+
+## Part 6: Use hitboxes for rigid bodies
+
+Previously each ragdoll body was centered directly on a skeleton joint with a spherical collider, which made the physical volume much smaller than the creature’s real hitboxes. The next stage migrates the rigid bodies to use the per-joint hitbox data exported with the AI meshes.
+
+1. When building a ragdoll, query `Model::get_hit_boxes()` and, for every bone, create the rigid body at the hitbox center in world space (falling back to the joint if no hitbox exists).
+2. Attach an oriented box collider derived from the hitbox extents instead of a sphere so collision volumes mirror gameplay hit detection.
+3. Record the matrix offset between each collider’s center of mass and the original joint so the ragdoll update step can recover proper bone transforms for skinning.
+4. Update joint constraint anchors so they reference the correct pivot point inside each box-based body, preventing the ragdoll from tearing when the COM no longer sits on the joint.
+
+__Deliverable__: ragdolls behave the same visually, but their physics bodies now line up with the gameplay hitboxes, producing more believable collisions and paving the way for reusing those same bodies for post-mortem hit detection.
+
+__Status__: ✅ Implemented. `RagDollManager::add_ragdoll` now spawns hitbox-aligned cuboids (with stored offsets) and the joint builder attaches them using the correct local anchors, so the simulated skeleton follows the larger bodies without drifting.
