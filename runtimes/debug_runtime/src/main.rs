@@ -158,6 +158,9 @@ async fn start_http_server(
         .route("/v1/entities/:id", get(get_entity_detail))
         .route("/v1/player/position", get(get_player_position))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
+        .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
+        .route("/v1/physics/bodies", get(list_physics_bodies))
+        .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .with_state(command_tx);
 
     // Bind to localhost only for security
@@ -174,6 +177,7 @@ async fn start_http_server(
     info!("  GET  /v1/entities/{{id}}    - Get detailed entity information");
     info!("  GET  /v1/player/position  - Get current player position");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates");
+    info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
     info!("Test with: curl http://{}/v1/info", addr);
@@ -568,17 +572,45 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             }
         }
         RuntimeCommand::RayCast(request, reply) => {
-            // TODO: Implement raycast logic
-            let result = RayCastResult {
-                hit: false,
-                hit_point: None,
-                hit_normal: None,
-                distance: None,
-                entity_id: None,
-                entity_name: None,
-                collision_group: None,
-                is_sensor: false,
+            let result = if let Some(debug_scene) = game.debug_scene() {
+                use cgmath::Point3;
+                use shock2vr::game_scene::RaycastMask;
+
+                // Convert request to raycast parameters
+                let start = Point3::new(request.start[0], request.start[1], request.start[2]);
+                let end = Point3::new(request.end[0], request.end[1], request.end[2]);
+                let mask = RaycastMask {
+                    groups: request.collision_groups.unwrap_or_else(|| vec!["entity".to_string(), "level".to_string()]),
+                };
+
+                // Perform the raycast
+                let hit = debug_scene.raycast(start, end, mask);
+
+                // Convert result
+                RayCastResult {
+                    hit: hit.hit,
+                    hit_point: hit.hit_point,
+                    hit_normal: hit.hit_normal,
+                    distance: hit.distance,
+                    entity_id: hit.entity_id,
+                    entity_name: hit.entity_name,
+                    collision_group: hit.collision_group,
+                    is_sensor: hit.is_sensor,
+                }
+            } else {
+                tracing::error!("No debug scene available for raycast");
+                RayCastResult {
+                    hit: false,
+                    hit_point: None,
+                    hit_normal: None,
+                    distance: None,
+                    entity_id: None,
+                    entity_name: None,
+                    collision_group: None,
+                    is_sensor: false,
+                }
             };
+
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send raycast result - receiver dropped");
             }
@@ -711,6 +743,78 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
 
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send entity detail - receiver dropped");
+            }
+        }
+        RuntimeCommand::ListPhysicsBodies { limit, reply } => {
+            if let Some(debug_scene) = game.debug_scene() {
+                let bodies = debug_scene.list_physics_bodies(limit);
+                let player_pos = debug_scene.player_position();
+                let result = PhysicsBodyListResult {
+                    total_count: bodies.len(),
+                    player_position: [player_pos.x, player_pos.y, player_pos.z],
+                    bodies: bodies
+                        .into_iter()
+                        .map(|b| PhysicsBodySummary {
+                            body_id: b.body_id,
+                            entity_id: b.entity_id,
+                            entity_name: b.entity_name,
+                            body_type: b.body_type,
+                            position: b.position,
+                            rotation: b.rotation,
+                            mass: b.mass,
+                            velocity: b.velocity,
+                            angular_velocity: b.angular_velocity,
+                            collision_groups: b.collision_groups,
+                            is_sensor: b.is_sensor,
+                            is_enabled: b.is_enabled,
+                        })
+                        .collect(),
+                };
+                if let Err(_) = reply.send(result) {
+                    tracing::warn!("Failed to send physics body list - receiver dropped");
+                }
+            } else {
+                let result = PhysicsBodyListResult {
+                    bodies: vec![],
+                    total_count: 0,
+                    player_position: [0.0, 0.0, 0.0],
+                };
+                if let Err(_) = reply.send(result) {
+                    tracing::warn!("No debug scene available for physics body listing");
+                }
+            }
+        }
+        RuntimeCommand::PhysicsBodyDetail { id, reply } => {
+            let result = if let Some(debug_scene) = game.debug_scene() {
+                debug_scene
+                    .physics_body_detail(id)
+                    .map(|detail| PhysicsBodyDetailResult {
+                        body_id: detail.body_id,
+                        entity_id: detail.entity_id,
+                        entity_name: detail.entity_name,
+                        body_type: detail.body_type,
+                        position: detail.position,
+                        rotation: detail.rotation,
+                        linear_velocity: detail.linear_velocity,
+                        angular_velocity: detail.angular_velocity,
+                        mass: detail.mass,
+                        center_of_mass: detail.center_of_mass,
+                        moment_of_inertia: detail.moment_of_inertia,
+                        gravity_scale: detail.gravity_scale,
+                        linear_damping: detail.linear_damping,
+                        angular_damping: detail.angular_damping,
+                        collision_groups: detail.collision_groups,
+                        is_sensor: detail.is_sensor,
+                        is_enabled: detail.is_enabled,
+                        is_sleeping: detail.is_sleeping,
+                        contact_count: detail.contact_count,
+                    })
+            } else {
+                None
+            };
+
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send physics body detail - receiver dropped");
             }
         }
         RuntimeCommand::Shutdown => {
@@ -1065,6 +1169,110 @@ async fn teleport_player(
             message: "Teleport command sent but unable to verify position".to_string(),
             new_position: [request.x, request.y, request.z],
         }),
+    }
+}
+
+/// HTTP handler for physics raycast
+async fn perform_raycast(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<RayCastRequest>,
+) -> Json<RayCastResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send raycast command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::RayCast(request, reply_tx)) {
+        tracing::error!("Failed to send RayCast command - game loop receiver dropped");
+        return Json(RayCastResult {
+            hit: false,
+            hit_point: None,
+            hit_normal: None,
+            distance: None,
+            entity_id: None,
+            entity_name: None,
+            collision_group: None,
+            is_sensor: false,
+        });
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive raycast result - sender dropped");
+            Json(RayCastResult {
+                hit: false,
+                hit_point: None,
+                hit_normal: None,
+                distance: None,
+                entity_id: None,
+                entity_name: None,
+                collision_group: None,
+                is_sensor: false,
+            })
+        }
+    }
+}
+
+/// Query parameters for physics body listing
+#[derive(Deserialize)]
+struct PhysicsBodyQueryParams {
+    limit: Option<usize>,
+}
+
+/// HTTP handler for listing physics bodies
+async fn list_physics_bodies(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<PhysicsBodyQueryParams>,
+) -> Json<PhysicsBodyListResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::ListPhysicsBodies {
+        limit: params.limit,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send ListPhysicsBodies command - game loop receiver dropped");
+        return Json(PhysicsBodyListResult {
+            bodies: vec![],
+            total_count: 0,
+            player_position: [0.0, 0.0, 0.0],
+        });
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive physics body list - sender dropped");
+            Json(PhysicsBodyListResult {
+                bodies: vec![],
+                total_count: 0,
+                player_position: [0.0, 0.0, 0.0],
+            })
+        }
+    }
+}
+
+/// HTTP handler for getting detailed physics body information
+async fn get_physics_body_detail(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Path(id): Path<u32>,
+) -> Json<Option<PhysicsBodyDetailResult>> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    // Send command to game loop
+    if let Err(_) = command_tx.send(RuntimeCommand::PhysicsBodyDetail { id, reply: reply_tx }) {
+        tracing::error!("Failed to send PhysicsBodyDetail command - game loop receiver dropped");
+        return Json(None);
+    }
+
+    // Wait for response
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive physics body detail - sender dropped");
+            Json(None)
+        }
     }
 }
 

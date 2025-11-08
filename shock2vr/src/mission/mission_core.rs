@@ -2636,6 +2636,22 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         self.world
             .run(|player_info: shipyard::UniqueView<PlayerInfo>| player_info.pos)
     }
+
+    fn list_physics_bodies(&self, limit: Option<usize>) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
+        use crate::game_scene::DebugPhysicsBodySummary;
+
+        // TODO: Implement physics body enumeration
+        // For now, return empty list as placeholder
+        tracing::warn!("Physics body enumeration not yet implemented");
+        vec![]
+    }
+
+    fn physics_body_detail(&self, _body_id: u32) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
+        // TODO: Implement physics body detail inspection
+        // For now, return None as placeholder
+        tracing::warn!("Physics body detail inspection not yet implemented");
+        None
+    }
 }
 
 // Helper function for wildcard matching
