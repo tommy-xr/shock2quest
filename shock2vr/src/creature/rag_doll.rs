@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use cgmath::{EuclideanSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use collision::Aabb;
 use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
@@ -117,11 +118,15 @@ impl RagDollManager {
 
         self.remove_entity(entity_id, physics);
 
+        // Get hitbox data from the model
+        let hit_boxes = model.get_hit_boxes();
+
         let mut body_handles = Vec::new();
         let mut joint_handles = Vec::new();
         let mut joint_to_body = HashMap::new();
         let mut bone_offsets = HashMap::new();
         let mut joint_positions = vec![Vector3::new(0.0, 0.0, 0.0); world_joint_transforms.len()];
+        let mut collider_positions = vec![Vector3::new(0.0, 0.0, 0.0); world_joint_transforms.len()];
 
         for bone in &bones {
             let joint_idx = bone.joint_id as usize;
@@ -130,21 +135,51 @@ impl RagDollManager {
             }
 
             let world_matrix = world_joint_transforms[joint_idx];
-            let pos_vec = point3_to_vec3(get_position_from_matrix(&world_matrix));
-            joint_positions[joint_idx] = pos_vec;
+            let joint_pos = point3_to_vec3(get_position_from_matrix(&world_matrix));
+            joint_positions[joint_idx] = joint_pos;
             let rotation = get_rotation_from_matrix(&world_matrix);
-            let isometry = isometry_from_parts(pos_vec, rotation);
+
+            // Get hitbox for this joint, or use default sphere if no hitbox exists
+            let (collider_shape, collider_offset) = if let Some(hitbox) = hit_boxes.get(&(bone.joint_id as u32)) {
+                let dimensions = hitbox.dim();
+                let hitbox_center = hitbox.center().to_vec();
+
+                // Create a capsule or box collider from hitbox dimensions
+                let collider = if dimensions.x.max(dimensions.z) > dimensions.y * 0.8 {
+                    // Use capsule for elongated hitboxes (limbs)
+                    let radius = dimensions.x.min(dimensions.z) * 0.4;
+                    let half_height = dimensions.y * 0.4;
+                    SharedShape::capsule_y(half_height, radius)
+                } else {
+                    // Use box for more cubic hitboxes (torso)
+                    let half_extents = dimensions * 0.4;
+                    SharedShape::cuboid(half_extents.x, half_extents.y, half_extents.z)
+                };
+
+                // Calculate offset from joint to hitbox center
+                let offset = Matrix4::from_translation(hitbox_center);
+                (collider, offset)
+            } else {
+                // Fallback to sphere collider
+                (SharedShape::ball(DEFAULT_JOINT_RADIUS), Matrix4::identity())
+            };
+
+            // Position the rigid body at the hitbox center, not the joint
+            let collider_pos = joint_pos + point3_to_vec3(get_position_from_matrix(&collider_offset));
+            collider_positions[joint_idx] = collider_pos;
+            let isometry = isometry_from_parts(collider_pos, rotation);
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
             physics.attach_collider(
                 handle,
-                SharedShape::ball(DEFAULT_JOINT_RADIUS),
+                collider_shape,
                 1.0,
                 CollisionGroup::selectable(),
             );
 
             joint_to_body.insert(bone.joint_id as u32, handle);
-            bone_offsets.insert(bone.joint_id as u32, Matrix4::identity());
+            // Store the inverse offset to convert from collider space back to joint space
+            bone_offsets.insert(bone.joint_id as u32, collider_offset.invert().unwrap_or(Matrix4::identity()));
             body_handles.push(handle);
         }
 
@@ -161,15 +196,15 @@ impl RagDollManager {
 
                 let parent_idx = parent_id as usize;
                 let child_idx = bone.joint_id as usize;
-                if parent_idx >= joint_positions.len() || child_idx >= joint_positions.len() {
+                if parent_idx >= collider_positions.len() || child_idx >= collider_positions.len() {
                     continue;
                 }
 
-                let parent_pos = joint_positions[parent_idx];
-                let child_pos = joint_positions[child_idx];
+                let parent_collider_pos = collider_positions[parent_idx];
+                let child_collider_pos = collider_positions[child_idx];
                 let child_world = world_joint_transforms[child_idx];
                 let child_rot = get_rotation_from_matrix(&child_world);
-                let child_to_parent = parent_pos - child_pos;
+                let child_to_parent = parent_collider_pos - child_collider_pos;
                 let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
 
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
