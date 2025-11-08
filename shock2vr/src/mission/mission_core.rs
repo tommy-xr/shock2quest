@@ -6,22 +6,23 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use cgmath::{
-    num_traits::ToPrimitive, vec3, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3,
-    SquareMatrix, Transform, Vector2, Vector3,
-};
 use cgmath::{EuclideanSpace, Zero};
+use cgmath::{
+    InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, SquareMatrix, Transform, Vector2,
+    Vector3, num_traits::ToPrimitive, vec3,
+};
 
+use crate::SpawnLocation;
 use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
-use crate::SpawnLocation;
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
+    BitmapAnimation, SCALE_FACTOR,
     audio::SongPlayer,
     gamesys::Gamesys,
     importers::{ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER},
-    mission::{room_database::RoomDatabase, SongParams},
+    mission::{SongParams, room_database::RoomDatabase},
     model::Model,
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
@@ -34,20 +35,19 @@ use dark::{
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
-    BitmapAnimation, SCALE_FACTOR,
 };
 use engine::{
     assets::asset_cache::AssetCache,
     audio::{AudioChannel, AudioContext, AudioHandle},
     game_log, profile,
     scene::{
-        light::SpotLight, quad, BillboardMaterial, ParticleSystem, SceneObject, VertexPosition,
+        BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight, quad,
     },
     texture::TextureTrait,
 };
 use physics::PhysicsWorld;
 use rand::{
-    distributions::WeightedIndex, prelude::Distribution, seq::SliceRandom, thread_rng, Rng,
+    Rng, distributions::WeightedIndex, prelude::Distribution, seq::SliceRandom, thread_rng,
 };
 use rapier3d::prelude::{Collider, RigidBodyHandle};
 use scripts::ScriptWorld;
@@ -57,13 +57,14 @@ use shipyard::{self, View, World};
 use tracing::{info, trace, warn};
 
 use crate::{
-    creature::{get_creature_definition, HitBoxManager, RagDollManager},
+    GameOptions,
+    creature::{HitBoxManager, RagDollManager, get_creature_definition},
     game_scene::AmbientAudioState,
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
     input_context::{self, InputContext},
     inventory::PlayerInventoryEntity,
-    mission::{entity_populator::EntityPopulator, SpatialQueryEngine},
+    mission::{SpatialQueryEngine, entity_populator::EntityPopulator},
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
@@ -72,18 +73,17 @@ use crate::{
     },
     save_load::HeldItemSaveData,
     scripts::{
-        self,
+        self, Effect, GlobalEffect, Message, MessagePayload,
         internal_fast_projectile::InternalFastProjectileScript,
         script_util::{get_all_links_with_template, get_environmental_sound_query},
         speech_registry::SpeechVoiceRegistry,
-        Effect, GlobalEffect, Message, MessagePayload,
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     teleport::TeleportSystem,
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::{VirtualHand, VirtualHandEffect},
-    vr_config, GameOptions,
+    vr_config,
 };
 
 use crate::mission::entity_creator::{CreateEntityOptions, EntityCreationInfo};
@@ -2637,16 +2637,20 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .run(|player_info: shipyard::UniqueView<PlayerInfo>| player_info.pos)
     }
 
-    fn list_physics_bodies(&self, limit: Option<usize>) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
-        use crate::game_scene::DebugPhysicsBodySummary;
-
+    fn list_physics_bodies(
+        &self,
+        _limit: Option<usize>,
+    ) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
         // TODO: Implement physics body enumeration
         // For now, return empty list as placeholder
         tracing::warn!("Physics body enumeration not yet implemented");
         vec![]
     }
 
-    fn physics_body_detail(&self, _body_id: u32) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
+    fn physics_body_detail(
+        &self,
+        _body_id: u32,
+    ) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
         // TODO: Implement physics body detail inspection
         // For now, return None as placeholder
         tracing::warn!("Physics body detail inspection not yet implemented");
@@ -2663,7 +2667,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     fn set_input(&mut self, channel: &str, _value: serde_json::Value) -> bool {
         // MissionCore doesn't manage InputContext directly - this needs to be handled
         // at the debug runtime level where InputContext is maintained
-        tracing::warn!("set_input called on MissionCore for channel '{}' - not implemented", channel);
+        tracing::warn!(
+            "set_input called on MissionCore for channel '{}' - not implemented",
+            channel
+        );
         false
     }
 }
