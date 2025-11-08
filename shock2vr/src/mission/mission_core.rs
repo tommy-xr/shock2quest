@@ -2652,6 +2652,20 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         tracing::warn!("Physics body detail inspection not yet implemented");
         None
     }
+
+    fn get_input_state(&self) -> crate::input_context::InputContext {
+        // MissionCore doesn't store InputContext directly - it's passed to update()
+        // For debugging purposes, return a default state
+        tracing::warn!("get_input_state called on MissionCore - returning default state");
+        crate::input_context::InputContext::default()
+    }
+
+    fn set_input(&mut self, channel: &str, _value: serde_json::Value) -> bool {
+        // MissionCore doesn't manage InputContext directly - this needs to be handled
+        // at the debug runtime level where InputContext is maintained
+        tracing::warn!("set_input called on MissionCore for channel '{}' - not implemented", channel);
+        false
+    }
 }
 
 // Helper function for wildcard matching

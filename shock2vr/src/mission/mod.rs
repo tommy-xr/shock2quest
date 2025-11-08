@@ -258,6 +258,14 @@ impl crate::game_scene::DebuggableScene for Mission {
     fn physics_body_detail(&self, body_id: u32) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
         self.mission_core.physics_body_detail(body_id)
     }
+
+    fn get_input_state(&self) -> crate::input_context::InputContext {
+        self.mission_core.get_input_state()
+    }
+
+    fn set_input(&mut self, channel: &str, value: serde_json::Value) -> bool {
+        self.mission_core.set_input(channel, value)
+    }
 }
 
 /// Creates a physics collider from level geometry

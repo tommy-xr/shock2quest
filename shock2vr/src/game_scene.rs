@@ -343,4 +343,33 @@ pub trait DebuggableScene {
     /// # Returns
     /// Detailed physics body information, or None if body doesn't exist
     fn physics_body_detail(&self, body_id: u32) -> Option<DebugPhysicsBodyDetail>;
+
+    /// Get current input context state
+    ///
+    /// Returns the current input state including head rotation, hand positions,
+    /// and controller values. Used for debugging input issues and understanding
+    /// current control state.
+    ///
+    /// # Returns
+    /// Current input context state as a serializable structure
+    fn get_input_state(&self) -> crate::input_context::InputContext;
+
+    /// Set or modify input context values
+    ///
+    /// Allows remote control of input channels for testing and debugging.
+    /// Can be used to simulate controller input, head rotation, and hand positions
+    /// without requiring physical VR hardware.
+    ///
+    /// # Arguments
+    /// * `channel` - Input channel to modify (e.g., "head.rotation", "left_hand.trigger_value")
+    /// * `value` - New value for the channel (format depends on channel type)
+    ///
+    /// # Returns
+    /// true if the channel was successfully modified, false if channel doesn't exist
+    ///
+    /// # Examples
+    /// - `set_input("head.rotation", [0.0, 0.707, 0.0, 0.707])` - Set head rotation
+    /// - `set_input("right_hand.trigger_value", 1.0)` - Full trigger press
+    /// - `set_input("left_hand.thumbstick", [0.5, -0.8])` - Thumbstick input
+    fn set_input(&mut self, channel: &str, value: serde_json::Value) -> bool;
 }
