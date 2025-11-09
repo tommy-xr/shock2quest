@@ -3,6 +3,7 @@
 
 use rpds as immutable;
 use std::collections::HashMap;
+use log::warn;
 
 use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
 use engine::scene::{SceneObject, VertexPosition, color_material, cube, lines_mesh};
@@ -231,8 +232,8 @@ pub fn create(cal: SystemShock2Cal) -> Skeleton {
 
     // First torso should be root (parent == -1)
     if cal.torsos[0].parent != -1 {
-        eprintln!(
-            "Warning: First torso doesn't have parent == -1, got parent = {}",
+        warn!(
+            "First torso doesn't have parent == -1, got parent = {}",
             cal.torsos[0].parent
         );
     }
@@ -250,8 +251,8 @@ pub fn create(cal: SystemShock2Cal) -> Skeleton {
             // Parent is index into torsos array - get that torso's joint ID
             Some(cal.torsos[torso.parent as usize].joint)
         } else {
-            eprintln!(
-                "Warning: Invalid torso parent index {} for torso {}, treating as root",
+            warn!(
+                "Invalid torso parent index {} for torso {}, treating as root",
                 torso.parent, i
             );
             None
