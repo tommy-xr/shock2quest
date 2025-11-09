@@ -263,14 +263,20 @@ impl Skeleton {
             debug_objects.push(joint_obj);
 
             // Project joint position to screen space for text overlay
-            let screen_pos = util::project(view, projection, joint_position, screen_size.x, screen_size.y);
+            let screen_pos = util::project(
+                view,
+                projection,
+                joint_position,
+                screen_size.x,
+                screen_size.y,
+            );
 
             // Create text object with joint ID
             let joint_id_text = SceneObject::screen_space_text(
                 &bone.joint_id.to_string(),
                 font.clone(),
-                12.0,  // font size
-                1.0,   // transparency
+                12.0,                // font size
+                1.0,                 // transparency
                 screen_pos.x + 10.0, // offset to the right of joint
                 screen_pos.y - 5.0,  // offset slightly above joint
             );

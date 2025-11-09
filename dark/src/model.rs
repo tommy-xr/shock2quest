@@ -329,15 +329,13 @@ impl Model {
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
         match &self.inner {
-            InnerModel::Animated(animated_model) => {
-                animated_model.skeleton.debug_draw_with_text(
-                    global_transforms,
-                    asset_cache,
-                    view,
-                    projection,
-                    screen_size
-                )
-            }
+            InnerModel::Animated(animated_model) => animated_model.skeleton.debug_draw_with_text(
+                global_transforms,
+                asset_cache,
+                view,
+                projection,
+                screen_size,
+            ),
             InnerModel::Static(_) => Vec::new(),
         }
     }
