@@ -199,7 +199,8 @@ fn process_primitive(
             ];
 
             // Normalize weights to ensure they sum to 1.0
-            let weight_sum = vertex_weights[0] + vertex_weights[1] + vertex_weights[2] + vertex_weights[3];
+            let weight_sum =
+                vertex_weights[0] + vertex_weights[1] + vertex_weights[2] + vertex_weights[3];
             let normalized_weights = if weight_sum > 0.0 {
                 [
                     vertex_weights[0] / weight_sum,
@@ -222,7 +223,7 @@ fn process_primitive(
                     transformed_pos.z,
                 ),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
-                bone_indices, // All 4 bone indices
+                bone_indices,                     // All 4 bone indices
                 bone_weights: normalized_weights, // Normalized multi-bone weights
                 normal: cgmath::Vector3::new(
                     transformed_norm.x,
