@@ -164,6 +164,7 @@ async fn start_http_server(
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
+        .route("/v1/control/command", axum::routing::post(run_game_command))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
@@ -182,6 +183,10 @@ async fn start_http_server(
     info!("  GET  /v1/player/position  - Get current player position");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates");
     info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
+    info!("  GET  /v1/control/input    - Retrieve controller/input state");
+    info!("  POST /v1/control/input    - Update controller/input channels");
+    info!("  POST /v1/control/command  - Execute gameplay commands (save, spawn, etc.)");
+    info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
     info!("Test with: curl http://{}/v1/info", addr);
@@ -605,12 +610,25 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
         }
         RuntimeCommand::RayCast(request, reply) => {
             let result = if let Some(debug_scene) = game.debug_scene() {
-                use cgmath::Point3;
+                use cgmath::{InnerSpace, Point3};
                 use shock2vr::game_scene::RaycastMask;
 
                 // Convert request to raycast parameters
                 let start = Point3::new(request.start[0], request.start[1], request.start[2]);
-                let end = Point3::new(request.end[0], request.end[1], request.end[2]);
+                let mut end = Point3::new(request.end[0], request.end[1], request.end[2]);
+
+                if let Some(max_distance) = request.max_distance {
+                    if max_distance > 0.0 {
+                        let direction = end - start;
+                        let length = direction.magnitude();
+                        if length > 0.0 {
+                            let clamped = length.min(max_distance);
+                            let normalized = direction / length;
+                            end = start + normalized * clamped;
+                        }
+                    }
+                }
+
                 let mask = RaycastMask {
                     groups: request
                         .collision_groups
@@ -648,10 +666,6 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send raycast result - receiver dropped");
             }
-        }
-        RuntimeCommand::SetInput(_patch) => {
-            // TODO: Implement input modification
-            tracing::info!("Input modification not yet implemented");
         }
         RuntimeCommand::MovePlayer(position) => {
             tracing::info!("Teleporting player to position: {:?}", position);
@@ -1218,6 +1232,14 @@ struct PositionResponse {
     position: [f32; 3],
 }
 
+/// Request payload for executing a gameplay command
+#[derive(serde::Deserialize)]
+struct GameCommandRequest {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
 /// HTTP handler for getting player position
 async fn get_player_position(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
@@ -1456,9 +1478,25 @@ fn capture_screenshot(
             viewport[3]
         );
 
-        // Use actual viewport size for screenshot
-        let actual_width = viewport[2] as u32;
-        let actual_height = viewport[3] as u32;
+        // Use actual viewport size for screenshot, falling back to requested size if needed
+        let actual_width = if viewport[2] > 0 {
+            viewport[2] as u32
+        } else {
+            tracing::warn!(
+                "Viewport width unavailable, using requested width {}",
+                width
+            );
+            width
+        };
+        let actual_height = if viewport[3] > 0 {
+            viewport[3] as u32
+        } else {
+            tracing::warn!(
+                "Viewport height unavailable, using requested height {}",
+                height
+            );
+            height
+        };
 
         // Read pixels from the framebuffer using actual viewport size
         let mut pixels: Vec<u8> = vec![0; (actual_width * actual_height * 3) as usize];
@@ -1536,6 +1574,34 @@ async fn set_input_channel(
         "message": "Input channel updated"
     });
     Ok(Json(response))
+}
+
+/// HTTP endpoint handler: Execute a gameplay command via the runtime
+async fn run_game_command(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<GameCommandRequest>,
+) -> Result<Json<CommandResult>, StatusCode> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::RunGameCommand(
+            request.command,
+            request.args,
+            reply_tx,
+        ))
+        .is_err()
+    {
+        tracing::error!("Failed to send RunGameCommand - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive RunGameCommand result - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 /// Wait for shutdown signal (Ctrl+C)
