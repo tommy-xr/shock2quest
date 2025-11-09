@@ -1636,6 +1636,43 @@ impl MissionCore {
 
         ret.extend(self.visibility_engine.debug_render(asset_cache));
 
+        // Render debug skeletons with joint ID text overlays
+        if options.debug_skeletons {
+            let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+            let v_joint_transforms = self
+                .world
+                .borrow::<View<RuntimePropJointTransforms>>()
+                .unwrap();
+
+            for (entity_id, objs) in &self.id_to_model {
+                if !has_refs(&self.world, *entity_id) {
+                    continue;
+                }
+
+                if !self.visibility_engine.is_visible(*entity_id) {
+                    continue;
+                }
+
+                if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                    if let Ok(joint_transforms) = v_joint_transforms.get(*entity_id) {
+                        let world_joints: Vec<Matrix4<f32>> = joint_transforms
+                            .0
+                            .iter()
+                            .map(|joint| xform * *joint)
+                            .collect();
+                        let mut debug_skeleton_with_text = objs.draw_debug_skeleton_with_text(
+                            &world_joints,
+                            asset_cache,
+                            view,
+                            projection,
+                            screen_size,
+                        );
+                        ret.append(&mut debug_skeleton_with_text);
+                    }
+                }
+            }
+        }
+
         ret
     }
 
