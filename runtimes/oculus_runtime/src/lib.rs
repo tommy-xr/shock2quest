@@ -3,8 +3,6 @@ extern crate khronos_egl as egl;
 
 use cgmath::Quaternion;
 use cgmath::vec2;
-use dark::mission;
-use dark::mission::TextureSize;
 use engine::profile;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
@@ -12,16 +10,13 @@ use openxr as xr;
 use shock2vr::Game;
 use shock2vr::GameOptions;
 use shock2vr::input_context::InputContext;
+use shock2vr::paths;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use std::cell::RefCell;
 use std::env;
-use std::fs::File;
-use std::io::BufReader;
-use std::rc::Rc;
 
-use ndk::asset::{Asset, AssetManager};
 use tracing;
 
 mod android_permissions;
@@ -32,7 +27,7 @@ use tokio::runtime::Runtime;
 // - https://github.com/RustAudio/cpal/issues/563
 // - https://github.com/rust-mobile/cargo-apk/issues/13
 #[cfg_attr(target_os = "android", link(name = "c++_shared"))]
-extern "C" {}
+unsafe extern "C" {}
 
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main() {
@@ -43,27 +38,47 @@ fn main() {
         .expect("couldn't find the OpenXR loader; try enabling the \"static\" feature");
 
     #[cfg(target_os = "android")]
-    entry.initialize_android_loader();
-    let mut rt = Runtime::new().unwrap();
-    rt.block_on(async move {
+    let _ = entry.initialize_android_loader();
+    let rt = Runtime::new().unwrap();
+    let permission_granted = rt.block_on(async move {
         println!("hello from the async block");
-        tokio::spawn(async { android_permissions::request_permission().await });
-
-        //bonus, you could spawn tasks too
-        // tokio::spawn(async { async_function("task1").await });
-
-        // tokio::spawn(async { async_function("task2").await });
+        let result = android_permissions::request_permission().await;
+        match result {
+            Ok(granted) => {
+                if granted {
+                    println!("Permissions granted!");
+                    true
+                } else {
+                    println!("Permissions denied!");
+                    false
+                }
+            }
+            Err(e) => {
+                println!("Error requesting permissions: {:?}", e);
+                false
+            }
+        }
     });
+
+    if !permission_granted {
+        println!("Cannot access storage without permissions");
+        return;
+    }
+
     println!(
         "after async: {}",
         env::current_dir().unwrap().to_str().unwrap()
     );
 
-    //std::fs::create_dir("/mnt/sdcard/shock2quest").unwrap();
+    let test_dir = paths::data_root().join("res/obj/txt16");
+    println!("Trying to read directory: {}", test_dir.display());
 
-    let paths = std::fs::read_dir("/mnt/sdcard/shock2quest/res/obj/txt16").unwrap();
-    for path in paths {
-        println!("Name: {}", path.unwrap().path().display())
+    if let Ok(paths) = std::fs::read_dir(&test_dir) {
+        for path in paths {
+            println!("Name: {}", path.unwrap().path().display())
+        }
+    } else {
+        println!("Failed to read directory: {}", test_dir.display());
     }
 
     // println!("Trying to read file...");
@@ -150,7 +165,7 @@ fn main() {
         egl::DynamicInstance::<egl::EGL1_4>::load_required_from(lib)
             .expect("unable to load libEGL.so.1")
     };
-    let attributes = [
+    let _attributes = [
         egl::RED_SIZE,
         8,
         egl::GREEN_SIZE,
@@ -173,7 +188,7 @@ fn main() {
 
     let mut configs = Vec::with_capacity(1024);
 
-    egl.get_configs(egl_display, &mut configs);
+    let _ = egl.get_configs(egl_display, &mut configs);
     println!("configs: {:?}", &configs);
     let attributes = [
         egl::RED_SIZE,
@@ -216,48 +231,46 @@ fn main() {
 
     // Create a test pbuffer
     let surface_attributes = [egl::WIDTH, 16, egl::HEIGHT, 16, egl::NONE];
-    let tinySurface = egl
+    let tiny_surface = egl
         .create_pbuffer_surface(egl_display, config, &surface_attributes)
         .unwrap();
     println!("Created surface!");
 
     egl.make_current(
         egl_display,
-        Some(tinySurface),
-        Some(tinySurface),
+        Some(tiny_surface),
+        Some(tiny_surface),
         Some(context),
     )
     .unwrap();
 
     unsafe {
-        let mut majorVersion = 0;
-        let mut minorVersion = 0;
+        let mut major_version = 0;
+        let mut minor_version = 0;
         gl::load_with(|s| match egl.get_proc_address(s) {
             None => 0 as *const _,
             Some(v) => v as *const _,
         });
-        gl::GetIntegerv(gl::MAJOR_VERSION, &mut majorVersion);
-        gl::GetIntegerv(gl::MINOR_VERSION, &mut minorVersion);
-        println!("Major: {} Minor: {}", majorVersion, minorVersion);
+        gl::GetIntegerv(gl::MAJOR_VERSION, &mut major_version);
+        gl::GetIntegerv(gl::MINOR_VERSION, &mut minor_version);
+        println!("Major: {} Minor: {}", major_version, minor_version);
     }
 
-    let systemId = xr_instance
+    let system_id = xr_instance
         .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
         .unwrap();
-    println!("System ID: {:?}", systemId);
+    println!("System ID: {:?}", system_id);
     // A session represents this application's desire to display things! This is where we hook
     // up our graphics API. This does not start the session; for that, you'll need a call to
     // Session::begin, which we do in 'main_loop below.
-    let sessionCreateInfo = unsafe {
-        &xr::opengles::SessionCreateInfo::Android {
-            context: context.as_ptr(),
-            display: egl_display.as_ptr(),
-            config: config.as_ptr(),
-        }
+    let session_create_info = &xr::opengles::SessionCreateInfo::Android {
+        context: context.as_ptr(),
+        display: egl_display.as_ptr(),
+        config: config.as_ptr(),
     };
     let (session, mut frame_wait, mut frame_stream) = unsafe {
         xr_instance
-            .create_session::<xr::OpenGLES>(system, sessionCreateInfo)
+            .create_session::<xr::OpenGLES>(system, session_create_info)
             .unwrap()
     };
 
@@ -270,11 +283,11 @@ fn main() {
         .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
         .unwrap();
 
-    let local_space = session
+    let _local_space = session
         .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
         .unwrap();
 
-    let right_hand_path = xr_instance.string_to_path("/user/hand/right").unwrap();
+    let _right_hand_path = xr_instance.string_to_path("/user/hand/right").unwrap();
     let action_set = xr_instance
         .create_action_set("main", "main action set", 0)
         .unwrap();
@@ -424,9 +437,9 @@ fn main() {
     };
     let mut game = shock2vr::Game::init(options, "".to_string()); // Android assets root
 
-    let mut camera_pos = vec3(0.0, 5.0, 10.0);
+    let _camera_pos = vec3(0.0, 5.0, 10.0);
 
-    let mut render_time = Instant::now();
+    let render_time = Instant::now();
     let mut last_update_time = render_time;
     'main_loop: loop {
         frame = frame + 1;
@@ -447,7 +460,7 @@ fn main() {
                         xr::SessionState::READY => {
                             session.begin(VIEW_TYPE).unwrap();
                             session_running = true;
-                            let refresh_rate = session.get_display_refresh_rate().unwrap();
+                            let _refresh_rate = session.get_display_refresh_rate().unwrap();
 
                             // let available_rates =
                             //     session.enumerate_display_refresh_rates().unwrap();
@@ -535,7 +548,7 @@ fn main() {
             .unwrap()
             .current_state;
 
-        let speed = 50.0;
+        let _speed = 50.0;
 
         // let forward_xr = right_aim_location.pose.orientation;
         // //let forward_xr = views[0].pose.orientation;
@@ -703,7 +716,7 @@ fn main() {
                                     gl::RENDERBUFFER,
                                     depth_buffer,
                                 );
-                                let result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
+                                let _result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
                                 // This app was originally written with the presumption that
                                 // its swapchains and compositor front buffer were RGB.
                                 // In order to have the colors the same now that its compositing
@@ -738,7 +751,7 @@ fn main() {
             .locate_views(VIEW_TYPE, xr_frame_state.predicted_display_time, &stage)
             .unwrap();
 
-        let (_, eyes) = session
+        let (_, _eyes) = session
             .locate_views(
                 VIEW_TYPE,
                 xr_frame_state.predicted_display_time,
@@ -845,7 +858,7 @@ fn main() {
     //     }
 }
 
-use cgmath::{Vector3, prelude::*, vec3};
+use cgmath::{Vector3, vec3};
 use libm::*;
 fn create_projection_matrix(fov: &xr::Fovf, near_z: f32, far_z: f32) -> cgmath::Matrix4<f32> {
     let tan_left = tanf(fov.angle_left);
@@ -899,15 +912,15 @@ fn render_swapchain(
     swapchain: &Swapchain,
     time: f32,
     view: &xr::View,
-    log: bool,
+    _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
 ) -> () {
-    let mut xrSwapchain = swapchain.handle.borrow_mut();
-    let image_index1 = xrSwapchain.acquire_image().unwrap();
+    let mut xr_swapchain = swapchain.handle.borrow_mut();
+    let image_index1 = xr_swapchain.acquire_image().unwrap();
     // Wait until the image is available to render to. The compositor could still be
     // reading from it.
-    xrSwapchain.wait_image(xr::Duration::INFINITE).unwrap();
+    xr_swapchain.wait_image(xr::Duration::INFINITE).unwrap();
 
     let framebuffer = swapchain.framebuffers.get(image_index1 as usize).unwrap();
 
@@ -980,13 +993,14 @@ fn render_swapchain(
     }
 
     println!("-- Finished rendering");
-    xrSwapchain.release_image().unwrap();
+    xr_swapchain.release_image().unwrap();
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 pub const VIEW_COUNT: u32 = 2;
 
 //#[derive(Debug)]
+#[allow(dead_code)]
 struct Swapchain {
     width: i32,
     height: i32,
@@ -998,6 +1012,7 @@ struct Swapchain {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct Framebuffer {
     image: u32,
     depth_buffer: gl::types::GLuint,

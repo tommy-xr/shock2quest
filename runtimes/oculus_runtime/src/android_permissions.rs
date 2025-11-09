@@ -35,10 +35,10 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
     let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.unwrap();
     let jnienv = vm.attach_current_thread_as_daemon().unwrap();
 
-    let READ_PERMISSION = jnienv
+    let read_permission = jnienv
         .new_string("android.permission.READ_EXTERNAL_STORAGE")
         .unwrap();
-    let WRITE_PERMISSION = jnienv
+    let write_permission = jnienv
         .new_string("android.permission.WRITE_EXTERNAL_STORAGE")
         .unwrap();
 
@@ -56,7 +56,7 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
         ndk_context::android_context().context().cast(),
         method_check_self_permission,
         JavaType::Primitive(Primitive::Int),
-        &[READ_PERMISSION.into()],
+        &[read_permission.into()],
     )?;
 
     tracing::debug!(
@@ -77,8 +77,8 @@ fn request_permission_inner() -> Result<bool, jni::errors::Error> {
         jnienv.new_string(String::new())?,
     )?;
 
-    jnienv.set_object_array_element(array_permissions, 0, READ_PERMISSION);
-    jnienv.set_object_array_element(array_permissions, 1, WRITE_PERMISSION);
+    let _ = jnienv.set_object_array_element(array_permissions, 0, read_permission);
+    let _ = jnienv.set_object_array_element(array_permissions, 1, write_permission);
     let class_activity = jnienv.find_class("android/app/Activity")?;
     tracing::info!("Requesting Android permissions...");
     let method_request_permissions = jnienv.get_method_id(
@@ -127,6 +127,7 @@ pub async fn request_permission() -> Result<bool, jni::errors::Error> {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn on_request_permission_result(
     permission: String,
     granted: bool,
