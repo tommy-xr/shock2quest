@@ -6,7 +6,7 @@ use crate::{
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
     ss2_skeleton::{self, AnimationInfo, Bone, Skeleton},
 };
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{Matrix4, SquareMatrix, Vector2};
 use collision::Aabb3;
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 
@@ -316,6 +316,26 @@ impl Model {
             InnerModel::Animated(animated_model) => {
                 animated_model.skeleton.debug_draw(global_transforms)
             }
+            InnerModel::Static(_) => Vec::new(),
+        }
+    }
+
+    pub fn draw_debug_skeleton_with_text(
+        &self,
+        global_transforms: &[Matrix4<f32>],
+        asset_cache: &mut AssetCache,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.skeleton.debug_draw_with_text(
+                global_transforms,
+                asset_cache,
+                view,
+                projection,
+                screen_size,
+            ),
             InnerModel::Static(_) => Vec::new(),
         }
     }

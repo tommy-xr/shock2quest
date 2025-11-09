@@ -4,11 +4,16 @@
 use rpds as immutable;
 use std::collections::HashMap;
 
-use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
-use engine::scene::{SceneObject, VertexPosition, color_material, cube, lines_mesh};
+use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector2, Vector3};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{SceneObject, VertexPosition, color_material, cube, lines_mesh},
+    util,
+};
 
 use crate::{
     SCALE_FACTOR,
+    importers::FONT_IMPORTER,
     motion::{AnimationClip, JointId},
     ss2_cal_loader::SystemShock2Cal,
 };
@@ -197,6 +202,85 @@ impl Skeleton {
                 * Matrix4::from_nonuniform_scale(0.05, 0.05, 0.05);
             joint_obj.set_transform(joint_transform);
             debug_objects.push(joint_obj);
+
+            if let Some(parent_id) = bone.parent_id {
+                let parent_idx = parent_id as usize;
+                if parent_idx < global_transforms.len() {
+                    let parent_position = translation_from_matrix(&global_transforms[parent_idx]);
+                    line_vertices.push(VertexPosition {
+                        position: parent_position,
+                    });
+                    line_vertices.push(VertexPosition {
+                        position: joint_position,
+                    });
+                }
+            }
+        }
+
+        if !line_vertices.is_empty() {
+            let lines_mat = color_material::create(Vector3::new(0.2, 0.8, 1.0));
+            let line_obj = SceneObject::new(lines_mat, Box::new(lines_mesh::create(line_vertices)));
+            debug_objects.push(line_obj);
+        }
+
+        debug_objects
+    }
+
+    pub fn debug_draw_with_text(
+        &self,
+        global_transforms: &[Matrix4<f32>],
+        asset_cache: &mut AssetCache,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
+        if global_transforms.is_empty() || self.bones.is_empty() {
+            return Vec::new();
+        }
+
+        let mut debug_objects = Vec::new();
+        let mut line_vertices = Vec::new();
+
+        let joint_template = SceneObject::new(
+            color_material::create(Vector3::new(0.95, 0.6, 0.2)),
+            Box::new(cube::create()),
+        );
+
+        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
+
+        for bone in &self.bones {
+            let joint_idx = bone.joint_id as usize;
+            if joint_idx >= global_transforms.len() {
+                continue;
+            }
+
+            let joint_position = translation_from_matrix(&global_transforms[joint_idx]);
+
+            let mut joint_obj = joint_template.clone();
+            let joint_transform = Matrix4::from_translation(joint_position)
+                * Matrix4::from_nonuniform_scale(0.05, 0.05, 0.05);
+            joint_obj.set_transform(joint_transform);
+            debug_objects.push(joint_obj);
+
+            // Project joint position to screen space for text overlay
+            let screen_pos = util::project(
+                view,
+                projection,
+                joint_position,
+                screen_size.x,
+                screen_size.y,
+            );
+
+            // Create text object with joint ID
+            let joint_id_text = SceneObject::screen_space_text(
+                &bone.joint_id.to_string(),
+                font.clone(),
+                12.0,                // font size
+                1.0,                 // transparency
+                screen_pos.x + 10.0, // offset to the right of joint
+                screen_pos.y - 5.0,  // offset slightly above joint
+            );
+            debug_objects.push(joint_id_text);
 
             if let Some(parent_id) = bone.parent_id {
                 let parent_idx = parent_id as usize;
