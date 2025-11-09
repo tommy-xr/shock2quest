@@ -1,7 +1,7 @@
 // ss2_skeleton.rs
 // Helper class to work with skeletons in AI meshes
 
-use log::warn;
+use tracing::warn;
 use rpds as immutable;
 use std::collections::HashMap;
 
