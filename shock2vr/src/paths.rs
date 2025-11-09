@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(not(target_os = "android"))]
+use std::path::PathBuf;
 
 #[cfg(not(target_os = "android"))]
 use std::sync::OnceLock;
@@ -8,12 +11,12 @@ use tracing::warn;
 
 #[cfg(target_os = "android")]
 pub fn data_root() -> &'static Path {
-    Path::new("/mnt/sdcard/shock2quest")
+    Path::new("/sdcard/shock2quest")
 }
 
 #[cfg(target_os = "android")]
 pub fn search_roots() -> &'static [&'static str] {
-    &["/mnt/sdcard/shock2quest"]
+    &["/sdcard/shock2quest"]
 }
 
 #[cfg(not(target_os = "android"))]

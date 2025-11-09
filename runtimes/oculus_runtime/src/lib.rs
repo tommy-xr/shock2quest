@@ -10,6 +10,7 @@ use openxr as xr;
 use shock2vr::Game;
 use shock2vr::GameOptions;
 use shock2vr::input_context::InputContext;
+use shock2vr::paths;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -39,25 +40,45 @@ fn main() {
     #[cfg(target_os = "android")]
     entry.initialize_android_loader();
     let rt = Runtime::new().unwrap();
-    rt.block_on(async move {
+    let permission_granted = rt.block_on(async move {
         println!("hello from the async block");
-        tokio::spawn(async { android_permissions::request_permission().await });
-
-        //bonus, you could spawn tasks too
-        // tokio::spawn(async { async_function("task1").await });
-
-        // tokio::spawn(async { async_function("task2").await });
+        let result = android_permissions::request_permission().await;
+        match result {
+            Ok(granted) => {
+                if granted {
+                    println!("Permissions granted!");
+                    true
+                } else {
+                    println!("Permissions denied!");
+                    false
+                }
+            }
+            Err(e) => {
+                println!("Error requesting permissions: {:?}", e);
+                false
+            }
+        }
     });
+
+    if !permission_granted {
+        println!("Cannot access storage without permissions");
+        return;
+    }
+
     println!(
         "after async: {}",
         env::current_dir().unwrap().to_str().unwrap()
     );
 
-    //std::fs::create_dir("/mnt/sdcard/shock2quest").unwrap();
+    let test_dir = paths::data_root().join("res/obj/txt16");
+    println!("Trying to read directory: {}", test_dir.display());
 
-    let paths = std::fs::read_dir("/mnt/sdcard/shock2quest/res/obj/txt16").unwrap();
-    for path in paths {
-        println!("Name: {}", path.unwrap().path().display())
+    if let Ok(paths) = std::fs::read_dir(&test_dir) {
+        for path in paths {
+            println!("Name: {}", path.unwrap().path().display())
+        }
+    } else {
+        println!("Failed to read directory: {}", test_dir.display());
     }
 
     // println!("Trying to read file...");
