@@ -71,6 +71,10 @@ struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "CLIP", num_args = 0..)]
     animation: Option<Vec<String>>,
 
+    /// Scale factor for the model (default: 1.0)
+    #[arg(long, default_value = "1.0")]
+    scale: f32,
+
     /// When true, loads assets and prints information but exits before opening a window.
     #[arg(long)]
     debug_no_render: bool,
@@ -207,6 +211,7 @@ fn create_scene(
     filename: &str,
     animations: &[String],
     animation_flag_provided: bool,
+    scale: f32,
     asset_cache: &mut engine::assets::asset_cache::AssetCache,
     data_resolver: fn(&str) -> String,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
@@ -238,11 +243,12 @@ fn create_scene(
             let scene = GlbAnimatedViewerScene::from_model_and_animations(
                 filename.to_string(),
                 animations.to_vec(),
+                scale,
                 asset_cache,
             )?;
             Ok(Box::new(scene))
         } else {
-            let scene = GlbViewerScene::from_model(filename.to_string(), asset_cache)?;
+            let scene = GlbViewerScene::from_model(filename.to_string(), scale, asset_cache)?;
             Ok(Box::new(scene))
         }
     } else if !animations.is_empty() {
@@ -326,6 +332,7 @@ pub fn main() {
             &filename,
             &animations,
             animation_flag_provided,
+            cli.scale,
             &mut game.asset_cache,
             resolve_data_path,
         ) {
@@ -339,6 +346,7 @@ pub fn main() {
         &filename,
         &animations,
         animation_flag_provided,
+        cli.scale,
         &mut game.asset_cache,
         resolve_data_path,
     ) {
