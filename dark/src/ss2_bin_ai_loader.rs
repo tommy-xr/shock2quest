@@ -530,9 +530,29 @@ pub fn to_vertices(
             let normal1 = uvs[tri.vert_index1 as usize].normal;
             let normal2 = uvs[tri.vert_index2 as usize].normal;
 
-            verts.push(build_vertex(v0, uv0, normal0, [*j1, 0, 0, 0]));
-            verts.push(build_vertex(v1, uv1, normal1, [*j2, 0, 0, 0]));
-            verts.push(build_vertex(v2, uv2, normal2, [*j3, 0, 0, 0]));
+            // For now, use simple single-bone weighting (1.0 for primary bone, 0.0 for others)
+            // TODO: Implement proper multi-bone weighting from AI mesh weight data
+            verts.push(build_vertex(
+                v0,
+                uv0,
+                normal0,
+                [*j1, 0, 0, 0],
+                [1.0, 0.0, 0.0, 0.0],
+            ));
+            verts.push(build_vertex(
+                v1,
+                uv1,
+                normal1,
+                [*j2, 0, 0, 0],
+                [1.0, 0.0, 0.0, 0.0],
+            ));
+            verts.push(build_vertex(
+                v2,
+                uv2,
+                normal2,
+                [*j3, 0, 0, 0],
+                [1.0, 0.0, 0.0, 0.0],
+            ));
         }
         material_to_verts.push((name.to_owned(), verts));
     }
@@ -557,11 +577,13 @@ fn build_vertex(
     uv: Vector2<f32>,
     normal: Vector3<f32>,
     bone_indices: [u32; 4],
+    bone_weights: [f32; 4],
 ) -> VertexPositionTextureSkinnedNormal {
     VertexPositionTextureSkinnedNormal {
         position: vec.to_vec(),
         uv,
         bone_indices,
+        bone_weights,
         normal,
     }
 }
