@@ -549,12 +549,14 @@ impl MissionCore {
 
         self.update_animations(time);
 
-        self.hit_boxes.update(
+        // Update hitboxes, but skip entities that have active ragdolls
+        self.hit_boxes.update_excluding_ragdolls(
             &mut self.world,
             &mut self.physics,
             &mut self.script_world,
             &self.id_to_model,
             &mut self.id_to_physics,
+            Some(&self.rag_doll_manager),
         );
 
         self.update_avatar_hands(asset_cache, player_pos, player_rot, input_context);

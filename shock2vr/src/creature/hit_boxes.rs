@@ -16,7 +16,7 @@ use crate::{
     util::{get_position_from_matrix, get_rotation_from_matrix, point3_to_vec3},
 };
 
-use super::{get_entity_creature, hit_box_script::HitBoxScript};
+use super::{get_entity_creature, hit_box_script::HitBoxScript, rag_doll::RagDollManager};
 
 #[derive(Component)]
 pub struct RuntimePropHitBox {
@@ -56,6 +56,18 @@ impl HitBoxManager {
         id_to_model: &HashMap<EntityId, Model>,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
+        self.update_excluding_ragdolls(world, physics, script_world, id_to_model, id_to_physics, None);
+    }
+
+    pub fn update_excluding_ragdolls(
+        &mut self,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        script_world: &mut ScriptWorld,
+        id_to_model: &HashMap<EntityId, Model>,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+        ragdoll_manager: Option<&RagDollManager>,
+    ) {
         let joint_updates = {
             let v_position = world.borrow::<View<PropPosition>>().unwrap();
             let v_runtime_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
@@ -74,6 +86,14 @@ impl HitBoxManager {
                     .iter()
                     .with_id()
             {
+                // Skip entities that have active ragdolls
+                if let Some(manager) = ragdoll_manager {
+                    if manager.has_ragdoll(parent_entity_id) {
+                        println!("Skipping hitbox update for ragdoll entity {:?}", parent_entity_id);
+                        continue;
+                    }
+                }
+
                 let maybe_creature_type = get_entity_creature(world, parent_entity_id);
                 if maybe_creature_type.is_none() {
                     continue;

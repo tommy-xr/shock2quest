@@ -60,7 +60,15 @@ impl RagDoll {
                         .copied()
                         .unwrap_or_else(Matrix4::identity);
                     self.latest_global_transforms[idx] = world * offset;
+
+                    // Debug Joint 8 specifically
+                    if *joint_id == 8 {
+                        let pos = point3_to_vec3(get_position_from_matrix(&world));
+                        println!("Joint 8 physics position: {:?} (handle: {:?})", pos, handle);
+                    }
                 }
+            } else {
+                println!("WARNING: Could not get transform for joint {} handle {:?}", joint_id, handle);
             }
         }
     }
@@ -134,34 +142,58 @@ impl RagDollManager {
                 continue;
             }
 
+            // Skip if we've already created a rigid body for this joint
+            if joint_to_body.contains_key(&(bone.joint_id as u32)) {
+                continue;
+            }
+
             let world_matrix = world_joint_transforms[joint_idx];
             let joint_pos = point3_to_vec3(get_position_from_matrix(&world_matrix));
             joint_positions[joint_idx] = joint_pos;
             let rotation = get_rotation_from_matrix(&world_matrix);
 
-            // Get hitbox for this joint, or use default sphere if no hitbox exists
+            // Get hitbox for this joint
             let (collider_shape, collider_offset) = if let Some(hitbox) = hit_boxes.get(&(bone.joint_id as u32)) {
                 let dimensions = hitbox.dim();
                 let hitbox_center = hitbox.center().to_vec();
 
+                if bone.joint_id == 8 {
+                    println!("Joint 8 has hitbox: dimensions {:?}, center {:?}", dimensions, hitbox_center);
+                }
+
+                // Check for zero-dimension hitboxes and use default size
+                let effective_dimensions = if dimensions.x <= 0.001 && dimensions.y <= 0.001 && dimensions.z <= 0.001 {
+                    if bone.joint_id == 8 {
+                        println!("Joint 8 hitbox has zero dimensions - using default size");
+                    }
+                    Vector3::new(0.3, 0.3, 0.3) // Default size for zero-dimension hitboxes
+                } else {
+                    dimensions
+                };
+
                 // Create a capsule or box collider from hitbox dimensions
-                let collider = if dimensions.x.max(dimensions.z) > dimensions.y * 0.8 {
+                let collider = if effective_dimensions.x.max(effective_dimensions.z) > effective_dimensions.y * 0.8 {
                     // Use capsule for elongated hitboxes (limbs)
-                    let radius = dimensions.x.min(dimensions.z) * 0.4;
-                    let half_height = dimensions.y * 0.4;
+                    let radius = effective_dimensions.x.min(effective_dimensions.z) * 0.4;
+                    let half_height = effective_dimensions.y * 0.4;
                     SharedShape::capsule_y(half_height, radius)
                 } else {
                     // Use box for more cubic hitboxes (torso)
-                    let half_extents = dimensions * 0.4;
+                    let half_extents = effective_dimensions * 0.4;
                     SharedShape::cuboid(half_extents.x, half_extents.y, half_extents.z)
                 };
 
                 // Calculate offset from joint to hitbox center
                 let offset = Matrix4::from_translation(hitbox_center);
                 (collider, offset)
+            } else if bone.joint_id == 8 {
+                // Always create a rigid body for the root bone (joint 8) even without hitbox
+                println!("Joint 8 has no hitbox - creating default rigid body");
+                let default_size = 0.15; // Reasonable default size for root
+                (SharedShape::cuboid(default_size, default_size, default_size), Matrix4::identity())
             } else {
-                // Fallback to sphere collider
-                (SharedShape::ball(DEFAULT_JOINT_RADIUS), Matrix4::identity())
+                // Skip other bones without hitboxes
+                continue;
             };
 
             // Position the rigid body at the hitbox center, not the joint
@@ -170,12 +202,34 @@ impl RagDollManager {
             let isometry = isometry_from_parts(collider_pos, rotation);
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
+
+
+            println!("Joint {} created as dynamic body with handle {:?}", bone.joint_id, handle);
+
+            // Verify the body was actually created by checking if we can get its transform
+            if let Some(transform) = physics.get_body_transform(handle) {
+                println!("  ✓ Physics body verified for joint {}", bone.joint_id);
+            } else {
+                println!("  ✗ WARNING: Could not verify physics body for joint {}", bone.joint_id);
+            }
+
+            // Adjust mass based on bone type - heavier torso, lighter extremities
+            let mass = if bone.joint_id == 0 {
+                2.0 // Heavier root/torso
+            } else if bone.joint_id < 5 {
+                1.5 // Upper body bones
+            } else {
+                1.0 // Limbs and extremities
+            };
+
             physics.attach_collider(
                 handle,
                 collider_shape,
-                1.0,
+                mass,
                 CollisionGroup::selectable(),
             );
+
+            println!("Created dynamic body for joint {} with mass {} at position {:?}", bone.joint_id, mass, collider_pos);
 
             joint_to_body.insert(bone.joint_id as u32, handle);
             // Store the inverse offset to convert from collider space back to joint space
@@ -183,16 +237,71 @@ impl RagDollManager {
             body_handles.push(handle);
         }
 
+        // Create a lookup table for efficient parent finding
+        let mut bone_lookup = HashMap::new();
         for bone in &bones {
-            if let Some(parent_id) = bone.parent_id {
-                let parent_handle = match joint_to_body.get(&(parent_id as u32)) {
-                    Some(handle) => *handle,
-                    None => continue,
+            bone_lookup.insert(bone.joint_id, bone);
+        }
+
+        // Track which joints already have constraints to prevent duplicates
+        let mut joints_with_constraints = std::collections::HashSet::new();
+
+        for bone in &bones {
+            // Skip if this bone doesn't have a rigid body
+            let child_handle = match joint_to_body.get(&(bone.joint_id as u32)) {
+                Some(handle) => *handle,
+                None => continue, // Child has no hitbox, skip this constraint
+            };
+
+            // Skip if we've already created a constraint for this joint
+            if joints_with_constraints.contains(&bone.joint_id) {
+                continue;
+            }
+
+            // Skip bones that have no parent (true root bones)
+            if bone.parent_id.is_none() {
+                continue;
+            }
+
+            if let Some(mut parent_id) = bone.parent_id {
+                // Find the nearest ancestor that has a rigid body
+                let mut parent_handle = None;
+                let mut current_parent_id = parent_id;
+
+                // Walk up the hierarchy to find an ancestor with a hitbox
+                let mut search_depth = 0;
+                for _ in 0..10 { // Limit search depth to prevent infinite loops
+                    if let Some(handle) = joint_to_body.get(&(current_parent_id as u32)) {
+                        parent_handle = Some(*handle);
+                        parent_id = current_parent_id; // Update parent_id for position calculations
+                        break;
+                    }
+
+                    // Move to the next parent up the hierarchy
+                    if let Some(ancestor_bone) = bone_lookup.get(&current_parent_id) {
+                        if let Some(grandparent_id) = ancestor_bone.parent_id {
+                            current_parent_id = grandparent_id;
+                            search_depth += 1;
+
+                            // Limit how far we search to prevent long-distance constraints
+                            if search_depth > 3 {
+                                break; // Too far up the hierarchy
+                            }
+                        } else {
+                            break; // Reached root without finding a parent with hitbox
+                        }
+                    } else {
+                        break; // Invalid joint ID
+                    }
+                }
+
+                let parent_handle = match parent_handle {
+                    Some(handle) => handle,
+                    None => continue, // No ancestor with hitbox found
                 };
-                let child_handle = match joint_to_body.get(&(bone.joint_id as u32)) {
-                    Some(handle) => *handle,
-                    None => continue,
-                };
+
+                // Mark this joint as having a constraint
+                joints_with_constraints.insert(bone.joint_id);
 
                 let parent_idx = parent_id as usize;
                 let child_idx = bone.joint_id as usize;
@@ -207,6 +316,9 @@ impl RagDollManager {
                 let child_to_parent = parent_collider_pos - child_collider_pos;
                 let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
 
+                // Debug output to track constraint creation
+                println!("Creating constraint: child joint {} -> parent joint {} (search depth: {})", bone.joint_id, parent_id, search_depth);
+
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
                     .local_anchor1(Point3::origin())
                     .local_anchor2(Point3::new(
@@ -218,6 +330,61 @@ impl RagDollManager {
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);
             }
+        }
+
+        // Debug: Print all created rigid bodies
+        println!("=== Created Rigid Bodies ===");
+        for (joint_id, handle) in &joint_to_body {
+            println!("Joint {} has rigid body handle {:?}", joint_id, handle);
+        }
+        println!("=== End Rigid Bodies ===");
+
+        // Debug: Print complete bone hierarchy
+        println!("=== Complete Bone Hierarchy ===");
+        for bone in &bones {
+            if let Some(parent_id) = bone.parent_id {
+                println!("Bone {} -> parent {}", bone.joint_id, parent_id);
+            } else {
+                println!("Bone {} -> ROOT (no parent)", bone.joint_id);
+            }
+        }
+        println!("=== End Bone Hierarchy ===");
+
+        // Debug: Check which joints have no parent constraints
+        println!("=== Joints without parent constraints (potential roots) ===");
+        for (joint_id, _handle) in &joint_to_body {
+            let mut has_parent_constraint = false;
+            for bone in &bones {
+                if bone.joint_id as u32 == *joint_id {
+                    if bone.parent_id.is_some() && joints_with_constraints.contains(&(bone.joint_id as u32)) {
+                        has_parent_constraint = true;
+                        break;
+                    }
+                }
+            }
+            if !has_parent_constraint {
+                println!("Joint {} has no parent constraint - acting as root!", joint_id);
+                // Show why this joint has no parent constraint
+                for bone in &bones {
+                    if bone.joint_id as u32 == *joint_id {
+                        if let Some(parent_id) = bone.parent_id {
+                            if !joint_to_body.contains_key(&(parent_id as u32)) {
+                                println!("  -> Parent {} has no rigid body (no hitbox)", parent_id);
+                            }
+                        } else {
+                            println!("  -> This is the true skeleton root");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        println!("=== End Root Joints ===");
+
+        // Apply impulse to the root joint (Joint 8) to initiate physics simulation
+        if let Some(root_handle) = joint_to_body.get(&8) {
+            physics.apply_impulse(*root_handle, vec3(0.0, -2.0, 0.0));
+            println!("Applied downward impulse to root joint 8");
         }
 
         let ragdoll = RagDoll::new(
@@ -255,6 +422,10 @@ impl RagDollManager {
                 physics.remove_rigid_body_handle(body);
             }
         }
+    }
+
+    pub fn has_ragdoll(&self, entity_id: EntityId) -> bool {
+        self.ragdolls.contains_key(&entity_id)
     }
 }
 
