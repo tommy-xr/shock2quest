@@ -1,9 +1,9 @@
 // ss2_skeleton.rs
 // Helper class to work with skeletons in AI meshes
 
-use tracing::warn;
 use rpds as immutable;
 use std::collections::HashMap;
+use tracing::warn;
 
 use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector3};
 use engine::scene::{SceneObject, VertexPosition, color_material, cube, lines_mesh};
