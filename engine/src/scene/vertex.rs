@@ -128,6 +128,7 @@ pub struct VertexPositionTextureSkinnedNormal {
     pub position: Vector3<f32>,
     pub uv: Vector2<f32>,
     pub bone_indices: [u32; 4],
+    pub bone_weights: [f32; 4],
     pub normal: Vector3<f32>,
 }
 
@@ -277,6 +278,11 @@ impl Vertex for VertexPositionTextureSkinnedNormal {
             VertexAttribute {
                 attribute_type: VertexAttributeType::Int,
                 offset: offset_of!(VertexPositionTextureSkinnedNormal, bone_indices),
+                size: 4,
+            },
+            VertexAttribute {
+                attribute_type: VertexAttributeType::Float,
+                offset: offset_of!(VertexPositionTextureSkinnedNormal, bone_weights),
                 size: 4,
             },
             VertexAttribute {

@@ -206,6 +206,7 @@ fn process_primitive(
                 ),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
                 bone_indices: [dominant_joint as u32, 0, 0, 0], // Only dominant bone
+                bone_weights: [1.0, 0.0, 0.0, 0.0], // Single bone weighting for GLB files
                 normal: cgmath::Vector3::new(
                     transformed_norm.x,
                     transformed_norm.y,

@@ -20,7 +20,8 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         layout (location = 0) in vec3 inPos;
         layout (location = 1) in vec2 inTex;
         layout (location = 2) in ivec4 bone_ids;
-        layout (location = 3) in vec3 inNormal;
+        layout (location = 3) in vec4 bone_weights;
+        layout (location = 4) in vec3 inNormal;
 
         uniform mat4 world;
         uniform mat4 view;
@@ -34,9 +35,31 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         void main() {
             texCoord = inTex;
 
-            // Apply bone transformations to position and normal
-            vec4 mod_position = bone_matrices[bone_ids.x] * vec4(inPos, 1.0);
-            vec3 mod_normal = mat3(bone_matrices[bone_ids.x]) * inNormal;
+            // Apply weighted bone transformations to position and normal
+            vec4 skinnedPos = vec4(0.0);
+            vec3 skinnedNormal = vec3(0.0);
+
+            // Blend up to 4 bones based on weights
+            if (bone_weights.x > 0.0) {
+                skinnedPos += bone_weights.x * (bone_matrices[bone_ids.x] * vec4(inPos, 1.0));
+                skinnedNormal += bone_weights.x * (mat3(bone_matrices[bone_ids.x]) * inNormal);
+            }
+            if (bone_weights.y > 0.0) {
+                skinnedPos += bone_weights.y * (bone_matrices[bone_ids.y] * vec4(inPos, 1.0));
+                skinnedNormal += bone_weights.y * (mat3(bone_matrices[bone_ids.y]) * inNormal);
+            }
+            if (bone_weights.z > 0.0) {
+                skinnedPos += bone_weights.z * (bone_matrices[bone_ids.z] * vec4(inPos, 1.0));
+                skinnedNormal += bone_weights.z * (mat3(bone_matrices[bone_ids.z]) * inNormal);
+            }
+            if (bone_weights.w > 0.0) {
+                skinnedPos += bone_weights.w * (bone_matrices[bone_ids.w] * vec4(inPos, 1.0));
+                skinnedNormal += bone_weights.w * (mat3(bone_matrices[bone_ids.w]) * inNormal);
+            }
+
+            // Fallback to original position if no valid bones
+            vec4 mod_position = (skinnedPos.w > 0.0) ? skinnedPos : vec4(inPos, 1.0);
+            vec3 mod_normal = (length(skinnedNormal) > 0.0) ? normalize(skinnedNormal) : inNormal;
 
             // Transform to world space
             vec4 worldPosition = world * mod_position;
