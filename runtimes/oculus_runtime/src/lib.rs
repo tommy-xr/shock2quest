@@ -38,7 +38,7 @@ fn main() {
         .expect("couldn't find the OpenXR loader; try enabling the \"static\" feature");
 
     #[cfg(target_os = "android")]
-    entry.initialize_android_loader();
+    let _ = entry.initialize_android_loader();
     let rt = Runtime::new().unwrap();
     let permission_granted = rt.block_on(async move {
         println!("hello from the async block");
@@ -188,7 +188,7 @@ fn main() {
 
     let mut configs = Vec::with_capacity(1024);
 
-    egl.get_configs(egl_display, &mut configs);
+    let _ = egl.get_configs(egl_display, &mut configs);
     println!("configs: {:?}", &configs);
     let attributes = [
         egl::RED_SIZE,
@@ -231,46 +231,46 @@ fn main() {
 
     // Create a test pbuffer
     let surface_attributes = [egl::WIDTH, 16, egl::HEIGHT, 16, egl::NONE];
-    let tinySurface = egl
+    let tiny_surface = egl
         .create_pbuffer_surface(egl_display, config, &surface_attributes)
         .unwrap();
     println!("Created surface!");
 
     egl.make_current(
         egl_display,
-        Some(tinySurface),
-        Some(tinySurface),
+        Some(tiny_surface),
+        Some(tiny_surface),
         Some(context),
     )
     .unwrap();
 
     unsafe {
-        let mut majorVersion = 0;
-        let mut minorVersion = 0;
+        let mut major_version = 0;
+        let mut minor_version = 0;
         gl::load_with(|s| match egl.get_proc_address(s) {
             None => 0 as *const _,
             Some(v) => v as *const _,
         });
-        gl::GetIntegerv(gl::MAJOR_VERSION, &mut majorVersion);
-        gl::GetIntegerv(gl::MINOR_VERSION, &mut minorVersion);
-        println!("Major: {} Minor: {}", majorVersion, minorVersion);
+        gl::GetIntegerv(gl::MAJOR_VERSION, &mut major_version);
+        gl::GetIntegerv(gl::MINOR_VERSION, &mut minor_version);
+        println!("Major: {} Minor: {}", major_version, minor_version);
     }
 
-    let systemId = xr_instance
+    let system_id = xr_instance
         .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
         .unwrap();
-    println!("System ID: {:?}", systemId);
+    println!("System ID: {:?}", system_id);
     // A session represents this application's desire to display things! This is where we hook
     // up our graphics API. This does not start the session; for that, you'll need a call to
     // Session::begin, which we do in 'main_loop below.
-    let sessionCreateInfo = &xr::opengles::SessionCreateInfo::Android {
+    let session_create_info = &xr::opengles::SessionCreateInfo::Android {
         context: context.as_ptr(),
         display: egl_display.as_ptr(),
         config: config.as_ptr(),
     };
     let (session, mut frame_wait, mut frame_stream) = unsafe {
         xr_instance
-            .create_session::<xr::OpenGLES>(system, sessionCreateInfo)
+            .create_session::<xr::OpenGLES>(system, session_create_info)
             .unwrap()
     };
 
@@ -916,11 +916,11 @@ fn render_swapchain(
     scene: &Vec<SceneObject>,
     is_last: bool,
 ) -> () {
-    let mut xrSwapchain = swapchain.handle.borrow_mut();
-    let image_index1 = xrSwapchain.acquire_image().unwrap();
+    let mut xr_swapchain = swapchain.handle.borrow_mut();
+    let image_index1 = xr_swapchain.acquire_image().unwrap();
     // Wait until the image is available to render to. The compositor could still be
     // reading from it.
-    xrSwapchain.wait_image(xr::Duration::INFINITE).unwrap();
+    xr_swapchain.wait_image(xr::Duration::INFINITE).unwrap();
 
     let framebuffer = swapchain.framebuffers.get(image_index1 as usize).unwrap();
 
@@ -993,13 +993,14 @@ fn render_swapchain(
     }
 
     println!("-- Finished rendering");
-    xrSwapchain.release_image().unwrap();
+    xr_swapchain.release_image().unwrap();
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 pub const VIEW_COUNT: u32 = 2;
 
 //#[derive(Debug)]
+#[allow(dead_code)]
 struct Swapchain {
     width: i32,
     height: i32,
@@ -1011,6 +1012,7 @@ struct Swapchain {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct Framebuffer {
     image: u32,
     depth_buffer: gl::types::GLuint,
