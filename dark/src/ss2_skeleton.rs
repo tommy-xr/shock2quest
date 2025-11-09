@@ -231,7 +231,10 @@ pub fn create(cal: SystemShock2Cal) -> Skeleton {
 
     // First torso should be root (parent == -1)
     if cal.torsos[0].parent != -1 {
-        eprintln!("Warning: First torso doesn't have parent == -1, got parent = {}", cal.torsos[0].parent);
+        eprintln!(
+            "Warning: First torso doesn't have parent == -1, got parent = {}",
+            cal.torsos[0].parent
+        );
     }
 
     // Create bones from torsos
@@ -247,7 +250,10 @@ pub fn create(cal: SystemShock2Cal) -> Skeleton {
             // Parent is index into torsos array - get that torso's joint ID
             Some(cal.torsos[torso.parent as usize].joint)
         } else {
-            eprintln!("Warning: Invalid torso parent index {} for torso {}, treating as root", torso.parent, i);
+            eprintln!(
+                "Warning: Invalid torso parent index {} for torso {}, treating as root",
+                torso.parent, i
+            );
             None
         };
 
