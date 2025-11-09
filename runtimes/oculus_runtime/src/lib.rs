@@ -3,8 +3,6 @@ extern crate khronos_egl as egl;
 
 use cgmath::Quaternion;
 use cgmath::vec2;
-use dark::mission;
-use dark::mission::TextureSize;
 use engine::profile;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
@@ -17,11 +15,7 @@ use std::time::{Duration, Instant};
 
 use std::cell::RefCell;
 use std::env;
-use std::fs::File;
-use std::io::BufReader;
-use std::rc::Rc;
 
-use ndk::asset::{Asset, AssetManager};
 use tracing;
 
 mod android_permissions;
@@ -32,7 +26,7 @@ use tokio::runtime::Runtime;
 // - https://github.com/RustAudio/cpal/issues/563
 // - https://github.com/rust-mobile/cargo-apk/issues/13
 #[cfg_attr(target_os = "android", link(name = "c++_shared"))]
-extern "C" {}
+unsafe extern "C" {}
 
 #[cfg_attr(target_os = "android", ndk_glue::main)]
 fn main() {
@@ -44,7 +38,7 @@ fn main() {
 
     #[cfg(target_os = "android")]
     entry.initialize_android_loader();
-    let mut rt = Runtime::new().unwrap();
+    let rt = Runtime::new().unwrap();
     rt.block_on(async move {
         println!("hello from the async block");
         tokio::spawn(async { android_permissions::request_permission().await });
@@ -150,7 +144,7 @@ fn main() {
         egl::DynamicInstance::<egl::EGL1_4>::load_required_from(lib)
             .expect("unable to load libEGL.so.1")
     };
-    let attributes = [
+    let _attributes = [
         egl::RED_SIZE,
         8,
         egl::GREEN_SIZE,
@@ -248,12 +242,10 @@ fn main() {
     // A session represents this application's desire to display things! This is where we hook
     // up our graphics API. This does not start the session; for that, you'll need a call to
     // Session::begin, which we do in 'main_loop below.
-    let sessionCreateInfo = unsafe {
-        &xr::opengles::SessionCreateInfo::Android {
-            context: context.as_ptr(),
-            display: egl_display.as_ptr(),
-            config: config.as_ptr(),
-        }
+    let sessionCreateInfo = &xr::opengles::SessionCreateInfo::Android {
+        context: context.as_ptr(),
+        display: egl_display.as_ptr(),
+        config: config.as_ptr(),
     };
     let (session, mut frame_wait, mut frame_stream) = unsafe {
         xr_instance
@@ -270,11 +262,11 @@ fn main() {
         .create_reference_space(xr::ReferenceSpaceType::VIEW, xr::Posef::IDENTITY)
         .unwrap();
 
-    let local_space = session
+    let _local_space = session
         .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
         .unwrap();
 
-    let right_hand_path = xr_instance.string_to_path("/user/hand/right").unwrap();
+    let _right_hand_path = xr_instance.string_to_path("/user/hand/right").unwrap();
     let action_set = xr_instance
         .create_action_set("main", "main action set", 0)
         .unwrap();
@@ -424,9 +416,9 @@ fn main() {
     };
     let mut game = shock2vr::Game::init(options, "".to_string()); // Android assets root
 
-    let mut camera_pos = vec3(0.0, 5.0, 10.0);
+    let _camera_pos = vec3(0.0, 5.0, 10.0);
 
-    let mut render_time = Instant::now();
+    let render_time = Instant::now();
     let mut last_update_time = render_time;
     'main_loop: loop {
         frame = frame + 1;
@@ -447,7 +439,7 @@ fn main() {
                         xr::SessionState::READY => {
                             session.begin(VIEW_TYPE).unwrap();
                             session_running = true;
-                            let refresh_rate = session.get_display_refresh_rate().unwrap();
+                            let _refresh_rate = session.get_display_refresh_rate().unwrap();
 
                             // let available_rates =
                             //     session.enumerate_display_refresh_rates().unwrap();
@@ -535,7 +527,7 @@ fn main() {
             .unwrap()
             .current_state;
 
-        let speed = 50.0;
+        let _speed = 50.0;
 
         // let forward_xr = right_aim_location.pose.orientation;
         // //let forward_xr = views[0].pose.orientation;
@@ -703,7 +695,7 @@ fn main() {
                                     gl::RENDERBUFFER,
                                     depth_buffer,
                                 );
-                                let result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
+                                let _result = gl::CheckFramebufferStatus(gl::DRAW_FRAMEBUFFER);
                                 // This app was originally written with the presumption that
                                 // its swapchains and compositor front buffer were RGB.
                                 // In order to have the colors the same now that its compositing
@@ -738,7 +730,7 @@ fn main() {
             .locate_views(VIEW_TYPE, xr_frame_state.predicted_display_time, &stage)
             .unwrap();
 
-        let (_, eyes) = session
+        let (_, _eyes) = session
             .locate_views(
                 VIEW_TYPE,
                 xr_frame_state.predicted_display_time,
@@ -845,7 +837,7 @@ fn main() {
     //     }
 }
 
-use cgmath::{Vector3, prelude::*, vec3};
+use cgmath::{Vector3, vec3};
 use libm::*;
 fn create_projection_matrix(fov: &xr::Fovf, near_z: f32, far_z: f32) -> cgmath::Matrix4<f32> {
     let tan_left = tanf(fov.angle_left);
@@ -899,7 +891,7 @@ fn render_swapchain(
     swapchain: &Swapchain,
     time: f32,
     view: &xr::View,
-    log: bool,
+    _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
 ) -> () {

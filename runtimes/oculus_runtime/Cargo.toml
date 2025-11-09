@@ -48,6 +48,9 @@ categories = [
 path = "./develop.keystore"
 keystore_password = "tommyshock"
 
+[features]
+linked = []
+
 # This dependency will only be included when targeting Android
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-glue = "0.6.2"
