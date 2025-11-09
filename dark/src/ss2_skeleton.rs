@@ -3,6 +3,7 @@
 
 use rpds as immutable;
 use std::collections::HashMap;
+use tracing::warn;
 
 use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector2, Vector3};
 use engine::{
@@ -307,14 +308,37 @@ impl Skeleton {
 }
 
 pub fn create(cal: SystemShock2Cal) -> Skeleton {
+    // Validate CAL file structure
+    if cal.torsos.is_empty() {
+        eprintln!("Warning: CAL file has no torsos");
+        return Skeleton::empty();
+    }
+
+    // First torso should be root (parent == -1)
+    if cal.torsos[0].parent != -1 {
+        warn!(
+            "First torso doesn't have parent == -1, got parent = {}",
+            cal.torsos[0].parent
+        );
+    }
+
     // Create bones from torsos
     let mut bones = Vec::new();
     for i in 0..cal.num_torsos {
         let torso = &cal.torsos[i as usize];
 
-        let parent_id = if torso.parent >= 0 {
-            Some(torso.parent as JointId)
+        // Fix: torso.parent is a torso array index, not a joint ID
+        let parent_id = if torso.parent == -1 {
+            // Root torso has no parent
+            None
+        } else if torso.parent >= 0 && (torso.parent as usize) < cal.torsos.len() {
+            // Parent is index into torsos array - get that torso's joint ID
+            Some(cal.torsos[torso.parent as usize].joint)
         } else {
+            warn!(
+                "Invalid torso parent index {} for torso {}, treating as root",
+                torso.parent, i
+            );
             None
         };
 
@@ -323,7 +347,7 @@ pub fn create(cal: SystemShock2Cal) -> Skeleton {
             parent_id,
             local_transform: Matrix4::from_angle_y(Deg(90.0)),
         };
-        // Push root bone
+        // Push torso root bone
         bones.push(torso_bone);
 
         // Iterate through and push torso joints
