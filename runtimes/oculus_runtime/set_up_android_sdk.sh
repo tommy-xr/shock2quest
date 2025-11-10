@@ -6,8 +6,8 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jre/Contents/Home"
 export NDK="${SDK}/ndk/24.0.8215888"
 export ANDROID_NDK_ROOT="${NDK}"
 export ARM64_TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/darwin-x86_64"
-export CC="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang"
-export CCP="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang++"
+export CC="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang"
+export CCP="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang++"
 export SYSROOT="${ARM64_TOOLCHAIN}/sysroot"
 
 # Set target-specific versions for cargo (don't set global CFLAGS to avoid affecting host compilation)
