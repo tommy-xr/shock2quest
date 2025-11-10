@@ -1,4 +1,4 @@
-extern crate ffmpeg_the_third as ffmpeg;
+extern crate ffmpeg_next as ffmpeg;
 
 use engine::texture_format::{PixelFormat, RawTextureData};
 use ffmpeg::format::{Pixel, input};
@@ -81,7 +81,7 @@ impl VideoPlayer {
                 Ok(())
             };
 
-        for (stream, packet) in ictx.packets().filter_map(Result::ok) {
+        for (stream, packet) in ictx.packets() {
             if stream.index() == video_stream_index {
                 match decoder.send_packet(&packet) {
                     Ok(()) => receive_and_process_decoded_frames(&mut decoder).unwrap(),
