@@ -139,7 +139,7 @@ fn gather_animation_list(cli: &Cli, filename: &str) -> Result<(Vec<String>, bool
 
 fn supports_debug_skeletons(filename: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
-    lower.ends_with(".bin") || lower.ends_with(".ai")
+    lower.ends_with(".bin") || lower.ends_with(".ai") || lower.ends_with(".glb")
 }
 
 struct MousePosition {
@@ -257,10 +257,12 @@ fn create_scene(
                 animations.to_vec(),
                 scale,
                 asset_cache,
+                debug_skeletons,
             )?;
             Ok(Box::new(scene))
         } else {
-            let scene = GlbViewerScene::from_model(filename.to_string(), scale, asset_cache)?;
+            let scene =
+                GlbViewerScene::from_model(filename.to_string(), asset_cache, debug_skeletons)?;
             Ok(Box::new(scene))
         }
     } else if !animations.is_empty() {
@@ -290,7 +292,7 @@ pub fn main() {
             true
         } else {
             eprintln!(
-                "Warning: --debug-skeletons is only available for .bin or .ai files. Ignoring flag."
+                "Warning: --debug-skeletons is only available for .bin, .ai, or .glb files. Ignoring flag."
             );
             false
         }
