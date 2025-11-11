@@ -190,9 +190,27 @@ fn process_primitive(
             let joint_indices = joints.get(i).copied().unwrap_or([0, 0, 0, 0]);
             let vertex_weights = weights.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 0.0]);
 
-            // TODO: Implement proper multi-bone skinning in future PR
-            // For now, use only the highest weight bone per vertex (as planned)
-            let dominant_joint = find_dominant_bone(joint_indices, vertex_weights);
+            // Convert joint indices to u32 and normalize weights
+            let bone_indices = [
+                joint_indices[0] as u32,
+                joint_indices[1] as u32,
+                joint_indices[2] as u32,
+                joint_indices[3] as u32,
+            ];
+
+            // Normalize weights to ensure they sum to 1.0
+            let weight_sum =
+                vertex_weights[0] + vertex_weights[1] + vertex_weights[2] + vertex_weights[3];
+            let normalized_weights = if weight_sum > 0.0 {
+                [
+                    vertex_weights[0] / weight_sum,
+                    vertex_weights[1] / weight_sum,
+                    vertex_weights[2] / weight_sum,
+                    vertex_weights[3] / weight_sum,
+                ]
+            } else {
+                [1.0, 0.0, 0.0, 0.0] // Fallback to first bone if no weights
+            };
 
             // Apply transform to position and normal
             let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
@@ -205,8 +223,8 @@ fn process_primitive(
                     transformed_pos.z,
                 ),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
-                bone_indices: [dominant_joint as u32, 0, 0, 0], // Only dominant bone
-                bone_weights: [1.0, 0.0, 0.0, 0.0], // Single bone weighting for GLB files
+                bone_indices,                     // All 4 bone indices
+                bone_weights: normalized_weights, // Normalized multi-bone weights
                 normal: cgmath::Vector3::new(
                     transformed_norm.x,
                     transformed_norm.y,
@@ -438,21 +456,6 @@ fn extract_weights(
 }
 
 /// Find the dominant bone (highest weight) for simplified skinning
-/// TODO: Implement proper multi-bone skinning in future PR
-/// For now, use only the highest weight bone per vertex
-fn find_dominant_bone(joint_indices: [u16; 4], weights: [f32; 4]) -> u16 {
-    let mut max_weight = 0.0;
-    let mut dominant_joint = 0;
-
-    for i in 0..4 {
-        if weights[i] > max_weight {
-            max_weight = weights[i];
-            dominant_joint = joint_indices[i];
-        }
-    }
-
-    dominant_joint
-}
 
 fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config: &()) -> Model {
     let mut scene_objects = Vec::new();

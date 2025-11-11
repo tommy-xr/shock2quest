@@ -10,6 +10,7 @@ use std::time::Duration;
 
 pub struct GlbViewerScene {
     model_name: String,
+    scale: f32,
     total_time: Duration,
     animation_player: AnimationPlayer,
 }
@@ -17,6 +18,7 @@ pub struct GlbViewerScene {
 impl GlbViewerScene {
     pub fn from_model(
         model_name: String,
+        scale: f32,
         _asset_cache: &AssetCache,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // We don't load the model here, we'll load it during render using the asset cache
@@ -24,6 +26,7 @@ impl GlbViewerScene {
 
         Ok(GlbViewerScene {
             model_name,
+            scale,
             total_time: Duration::ZERO,
             animation_player,
         })
@@ -38,7 +41,13 @@ impl ToolScene for GlbViewerScene {
 
     fn render(&self, asset_cache: &mut AssetCache) -> Scene {
         let model = asset_cache.get(&GLB_MODELS_IMPORTER, &self.model_name);
-        let scene_objects = model.to_animated_scene_objects(&self.animation_player);
+        let mut scene_objects = model.to_animated_scene_objects(&self.animation_player);
+
+        // Apply scale transformation to all scene objects
+        let scale_matrix = Matrix4::from_scale(self.scale);
+        for scene_object in &mut scene_objects {
+            scene_object.transform = scale_matrix * scene_object.transform;
+        }
 
         Scene::from_objects(scene_objects)
     }

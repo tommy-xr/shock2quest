@@ -1,4 +1,5 @@
 use super::ToolScene;
+use cgmath::Matrix4;
 use dark::importers::{GLB_ANIMATION_IMPORTER, GLB_MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
@@ -37,6 +38,7 @@ impl GlbAnimationController {
 
 pub struct GlbAnimatedViewerScene {
     model_name: String,
+    scale: f32,
     animation_player: AnimationPlayer,
     animation_controller: Option<GlbAnimationController>,
 }
@@ -45,6 +47,7 @@ impl GlbAnimatedViewerScene {
     pub fn from_model_and_animations(
         model_name: String,
         animation_names: Vec<String>,
+        scale: f32,
         asset_cache: &mut AssetCache,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load animations from the GLB file
@@ -113,6 +116,7 @@ impl GlbAnimatedViewerScene {
 
         Ok(GlbAnimatedViewerScene {
             model_name,
+            scale,
             animation_player,
             animation_controller: Some(controller),
         })
@@ -148,7 +152,13 @@ impl ToolScene for GlbAnimatedViewerScene {
     fn render(&self, asset_cache: &mut AssetCache) -> Scene {
         // Load the GLB model and render with current animation state
         let model = asset_cache.get(&GLB_MODELS_IMPORTER, &self.model_name);
-        let scene_objects = model.to_animated_scene_objects(&self.animation_player);
+        let mut scene_objects = model.to_animated_scene_objects(&self.animation_player);
+
+        // Apply scale transformation to all scene objects
+        let scale_matrix = Matrix4::from_scale(self.scale);
+        for scene_object in &mut scene_objects {
+            scene_object.transform = scale_matrix * scene_object.transform;
+        }
 
         Scene::from_objects(scene_objects)
     }
