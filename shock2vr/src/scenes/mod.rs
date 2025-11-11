@@ -21,6 +21,7 @@ use crate::{
 pub mod cutscene_player;
 pub mod debug_camera;
 pub mod debug_entity_playground;
+pub mod debug_gloves;
 pub mod debug_hud;
 pub mod debug_joint_constraint;
 pub mod debug_map;
@@ -30,6 +31,7 @@ pub mod debug_ragdoll;
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_entity_playground::DebugEntityPlaygroundScene;
+pub use debug_gloves::DebugGlovesScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_joint_constraint::DebugJointConstraintScene;
 pub use debug_map::DebugMapScene;
@@ -105,6 +107,18 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("debug_hud") {
         return SceneInitResult {
             scene: Box::new(DebugHudScene::new()),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_gloves") {
+        return SceneInitResult {
+            scene: Box::new(DebugGlovesScene::new(
+                global_context,
+                options,
+                asset_cache,
+                audio_context,
+            )),
             mission_save_data: HashMap::new(),
         };
     }
