@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, Vector2, Vector3, vec3};
 use dark::{
     SCALE_FACTOR,
     mission::{SongParams, room_database::RoomDatabase},
@@ -33,12 +33,17 @@ use crate::{
 const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 
+const IMPULSE_STRENGTH: f32 = 1.0;
+const PULL_FORCE: f32 = 1.0;
+
 /// Debug scene for testing ragdoll physics implementation
 /// Based on debug_entity_playground but focused on spawning and slaying creatures for ragdoll testing
 pub struct DebugRagdollScene {
     core: MissionCore,
     pipe_hybrid_spawned: bool,
     slay_timer: f32,
+    last_left_impulse: bool,
+    last_right_pull: bool,
 }
 
 impl DebugRagdollScene {
@@ -68,10 +73,18 @@ impl DebugRagdollScene {
             game_options,
         );
 
+        println!(
+            "[debug_ragdoll] Controls:\n\
+             - Left mouse button (trigger) to apply upward impulse to ragdoll\n\
+             - Right mouse button (squeeze) to pull ragdoll toward center with continuous force"
+        );
+
         Self {
             core,
             pipe_hybrid_spawned: false,
             slay_timer: 0.0,
+            last_left_impulse: false,
+            last_right_pull: false,
         }
     }
 
@@ -238,6 +251,52 @@ impl DebugRagdollScene {
             );
         }
     }
+
+    fn handle_ragdoll_input(&mut self, input_context: &InputContext) {
+        let ragdoll_bodies = self.core.rag_doll_manager.get_ragdoll_bodies();
+
+        if ragdoll_bodies.is_empty() {
+            return;
+        }
+
+        // Left mouse button (trigger) - Apply upward impulse (one-shot)
+        let left_impulse_pressed =
+            input_context.left_hand.trigger_value > 0.5 && !self.last_left_impulse;
+
+        if left_impulse_pressed {
+            // Apply upward impulse to the first ragdoll body (like head/torso)
+            if let Some(first_body) = self.core.rag_doll_manager.get_first_ragdoll_body() {
+                let impulse = vec3(0.0, IMPULSE_STRENGTH / SCALE_FACTOR, 0.0);
+                self.core.physics.apply_impulse(first_body, impulse);
+                println!("Applied upward impulse to ragdoll");
+            }
+        }
+
+        // Right mouse button (squeeze) - Pull ragdoll upward and toward center (continuous force)
+        if input_context.right_hand.squeeze_value > 0.05 {
+            // Apply pulling force to all ragdoll bodies - upward and toward a central point
+            let center_position = vec3(0.0, 3.0 / SCALE_FACTOR, 0.0); // Pull toward center above floor
+
+            for &body_handle in &ragdoll_bodies {
+                if let Some(body_transform) = self.core.physics.get_body_transform(body_handle) {
+                    let body_position = vec3(
+                        body_transform.translation.x,
+                        body_transform.translation.y,
+                        body_transform.translation.z,
+                    );
+
+                    // Calculate direction from body toward center point
+                    let pull_direction = (center_position - body_position).normalize();
+                    let pull_force = pull_direction * PULL_FORCE / SCALE_FACTOR;
+
+                    self.core.physics.apply_force(body_handle, pull_force);
+                }
+            }
+        }
+
+        self.last_left_impulse = input_context.left_hand.trigger_value > 0.5;
+        self.last_right_pull = input_context.right_hand.squeeze_value > 0.05;
+    }
 }
 
 impl Default for DebugRagdollScene {
@@ -258,8 +317,8 @@ impl GameScene for DebugRagdollScene {
         game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
-        // For now, we'll just delegate to core and handle spawning/slaying in handle_effects
-        // This avoids the issue of needing GlobalContext and AudioContext in update()
+        // Handle ragdoll physics interactions
+        self.handle_ragdoll_input(input_context);
 
         // Delegate to core
         self.core.update(

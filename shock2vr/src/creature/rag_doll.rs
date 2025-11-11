@@ -221,6 +221,22 @@ impl RagDollManager {
             }
         }
     }
+
+    pub fn get_ragdoll_bodies(&self) -> Vec<RigidBodyHandle> {
+        let mut all_bodies = Vec::new();
+        for ragdoll in self.ragdolls.values() {
+            all_bodies.extend(&ragdoll.physics_bodies);
+        }
+        all_bodies
+    }
+
+    pub fn get_first_ragdoll_body(&self) -> Option<RigidBodyHandle> {
+        self.ragdolls
+            .values()
+            .next()
+            .and_then(|ragdoll| ragdoll.physics_bodies.first())
+            .copied()
+    }
 }
 
 fn isometry_from_parts(position: Vector3<f32>, rotation: Quaternion<f32>) -> Isometry<f32> {
