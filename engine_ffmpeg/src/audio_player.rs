@@ -1,4 +1,4 @@
-extern crate ffmpeg_the_third as ffmpeg;
+extern crate ffmpeg_next as ffmpeg;
 
 use engine::audio::AudioClip;
 use ffmpeg::ChannelLayout;
@@ -41,24 +41,23 @@ impl AudioPlayer {
         let target_sample_fmt = ffmpeg::format::Sample::I16(ffmpeg::format::sample::Type::Packed);
 
         // Set up the resampler
-        let mut swr = ffmpeg::software::resampler2(
+        let mut swr = ffmpeg::software::resampler(
             (source_sample_fmt, ChannelLayout::STEREO, source_sample_rate),
             (target_sample_fmt, target_channel_layout, target_sample_rate),
-            //(target_sample_fmt, target_channel_layout, target_sample_rate),
         )
         .unwrap();
 
         // 5. Decode audio packets
         let mut decoded_audio_samples: Vec<i16> = Vec::new();
 
-        for (stream, packet) in ictx.packets().filter_map(Result::ok) {
+        for (stream, packet) in ictx.packets() {
             if stream.index() == audio_stream_index {
                 audio_decoder.send_packet(&packet).unwrap();
                 let mut audio_frame = ffmpeg::util::frame::audio::Audio::empty();
 
                 while audio_decoder.receive_frame(&mut audio_frame).is_ok() {
                     let mut decoded_audio_frame = ffmpeg::util::frame::audio::Audio::empty();
-                    audio_frame.set_ch_layout(ChannelLayout::STEREO);
+                    audio_frame.set_channel_layout(ChannelLayout::STEREO);
                     let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
 
                     let _plane_count = decoded_audio_frame.planes();

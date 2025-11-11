@@ -2,13 +2,14 @@ name: Build Android
 
 on:
   push:
-    branches: ["main"]
+    branches: ["**"]
     paths-ignore:
       - '**/*.md'
-  pull_request:
-    branches: ["main"]
-    paths-ignore:
-      - '**/*.md'
+  # Not needed with wildcard branches
+  # pull_request:
+  #   branches: ["main"]
+  #   paths-ignore:
+  #     - '**/*.md'
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,9 +21,9 @@ jobs:
       - uses: actions/checkout@v3
 
       # Install Linux-specific dependencies
-      - name: Install ALSA (Linux only)
+      - name: Install ALSA and libclang (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libclang-dev llvm-dev
 
       # Cache cargo build artifacts
       - name: Cache cargo registry
@@ -62,7 +63,81 @@ jobs:
       - name: Install Rustup target
         run: rustup target add aarch64-linux-android
 
+      # Fix pkgconfig files for CI environment and set up ffmpeg environment
+      - name: Set up FFmpeg environment
+        run: |
+          cd runtimes/oculus_runtime
+
+          # Fix pkgconfig files to use CI paths instead of local hardcoded paths
+          CI_WORKSPACE="/home/runner/work/shock2quest/shock2quest/runtimes/oculus_runtime"
+          sed -i "s|prefix=.*|prefix=${CI_WORKSPACE}/ffmpeg|g" ffmpeg/pkgconfig/*.pc
+          sed -i "s|libdir=.*|libdir=${CI_WORKSPACE}/lib/arm64-v8a|g" ffmpeg/pkgconfig/*.pc
+          sed -i "s|includedir=.*|includedir=${CI_WORKSPACE}/ffmpeg/include|g" ffmpeg/pkgconfig/*.pc
+
+          # Set Android SDK paths to match GitHub Actions environment
+          export SDK="$ANDROID_HOME"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export BUILD_TOOLS="${SDK}/build-tools/33.0.0"
+          export PLATFORM="${SDK}/platforms/android-26"
+          export NDK="${SDK}/ndk/24.0.8215888"
+          export ANDROID_NDK_ROOT="${NDK}"
+          export ARM64_TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64"
+
+          # Set up ffmpeg environment variables
+          export FFMPEG_ROOT="$(pwd)/ffmpeg"
+          export PKG_CONFIG_ALLOW_CROSS=1
+          export PKG_CONFIG_PATH="${FFMPEG_ROOT}/pkgconfig"
+          export PKG_CONFIG_SYSROOT_DIR="${FFMPEG_ROOT}"
+          export PKG_CONFIG_ALLOW_CROSS_aarch64_linux_android=1
+          export PKG_CONFIG_PATH_aarch64_linux_android="${FFMPEG_ROOT}/pkgconfig"
+          export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="${FFMPEG_ROOT}"
+
+          # Set target-specific compiler settings
+          export CC_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang"
+          export CXX_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang++"
+          export CFLAGS_aarch64_linux_android="--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC"
+          export CXXFLAGS_aarch64_linux_android="--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC"
+
+          # Set host compiler settings for build scripts (to find ffmpeg headers)
+          export CFLAGS_x86_64_unknown_linux_gnu="-I${FFMPEG_ROOT}/include"
+          export CXXFLAGS_x86_64_unknown_linux_gnu="-I${FFMPEG_ROOT}/include"
+
+          # Set bindgen environment for header discovery
+          export FFMPEG_INCLUDE_DIR="${FFMPEG_ROOT}/include"
+          export BINDGEN_EXTRA_CLANG_ARGS="-I${FFMPEG_ROOT}/include --sysroot=${ARM64_TOOLCHAIN}/sysroot --target=aarch64-linux-android"
+
+          # Find libclang path dynamically
+          LIBCLANG_PATH=$(find /usr/lib -name "libclang*.so*" -type f 2>/dev/null | head -1 | xargs dirname)
+          if [ -z "$LIBCLANG_PATH" ]; then
+            # Fallback: look for llvm directories
+            LIBCLANG_PATH=$(find /usr/lib -name "llvm-*" -type d 2>/dev/null | head -1)/lib
+          fi
+          export LIBCLANG_PATH
+
+          # Save environment for next step
+          echo "SDK=${SDK}" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
+          echo "NDK=${NDK}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=${NDK}" >> $GITHUB_ENV
+          echo "ARM64_TOOLCHAIN=${ARM64_TOOLCHAIN}" >> $GITHUB_ENV
+          echo "FFMPEG_ROOT=${FFMPEG_ROOT}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${FFMPEG_ROOT}/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR=${FFMPEG_ROOT}" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS_aarch64_linux_android=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH_aarch64_linux_android=${FFMPEG_ROOT}/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android=${FFMPEG_ROOT}" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang++" >> $GITHUB_ENV
+          echo "CFLAGS_aarch64_linux_android=--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC" >> $GITHUB_ENV
+          echo "CXXFLAGS_aarch64_linux_android=--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC" >> $GITHUB_ENV
+          echo "CFLAGS_x86_64_unknown_linux_gnu=-I${FFMPEG_ROOT}/include" >> $GITHUB_ENV
+          echo "CXXFLAGS_x86_64_unknown_linux_gnu=-I${FFMPEG_ROOT}/include" >> $GITHUB_ENV
+          echo "FFMPEG_INCLUDE_DIR=${FFMPEG_ROOT}/include" >> $GITHUB_ENV
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I${FFMPEG_ROOT}/include --sysroot=${ARM64_TOOLCHAIN}/sysroot --target=aarch64-linux-android" >> $GITHUB_ENV
+          echo "LIBCLANG_PATH=${LIBCLANG_PATH}" >> $GITHUB_ENV
+
       # Actual build steps
-      - name: Build
+      - name: Build Android APK
         run: cargo apk build
         working-directory: runtimes/oculus_runtime

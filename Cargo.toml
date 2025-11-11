@@ -22,3 +22,6 @@ members = [
 # This is a known issue with the num_derive crate and is safe to suppress
 # See: https://github.com/rust-num/num-derive/issues
 non_local_definitions = "allow"
+
+[patch.crates-io]
+ffmpeg-sys-next = { path = "vendor/ffmpeg-sys-next" }

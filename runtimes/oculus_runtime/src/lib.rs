@@ -430,7 +430,7 @@ fn main() {
     experimental_features.insert("gui".to_owned());
     let options: GameOptions = GameOptions {
         render_particles: false,
-        mission: "medsci2.mis".to_string(),
+        mission: "cs1.avi".to_string(),
         experimental_features,
         debug_skeletons: false,
         ..GameOptions::default()

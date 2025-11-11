@@ -1,0 +1,14 @@
+prefix=/Users/bryphe/shock2quest/runtimes/oculus_runtime/ffmpeg
+exec_prefix=${prefix}
+libdir=/Users/bryphe/shock2quest/runtimes/oculus_runtime/lib/arm64-v8a
+includedir=/Users/bryphe/shock2quest/runtimes/oculus_runtime/ffmpeg/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 59.8.100
+Requires: 
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavutil 
+Libs.private: 
+Cflags: -I${includedir}
