@@ -37,7 +37,7 @@ pub struct GlbModel {
 }
 
 fn load_glb(
-    _name: String,
+    name: String,
     reader: &mut Box<dyn engine::assets::asset_paths::ReadableAndSeekable>,
     _assets: &mut AssetCache,
     _config: &(),
@@ -46,8 +46,71 @@ fn load_glb(
     let mut buffer = Vec::new();
     let _ = std::io::copy(reader, &mut buffer);
 
-    // Parse the GLTF document
-    let (gltf, buffers, images) = gltf::import_slice(&buffer).expect("Failed to parse GLB file");
+    // Parse the GLTF document - use manual parsing to handle external references
+    let gltf = gltf::Gltf::from_slice(&buffer).expect("Failed to parse GLB file");
+    let document = gltf.document;
+    let blob = gltf.blob;
+
+    // Manually process buffers
+    let mut buffers = Vec::new();
+    for buffer_obj in document.buffers() {
+        let data = match buffer_obj.source() {
+            gltf::buffer::Source::Bin => blob.as_ref().expect("No binary blob in GLB file").clone(),
+            gltf::buffer::Source::Uri(uri) => {
+                eprintln!(
+                    "Warning: GLB file '{}' contains external buffer reference: {}",
+                    name, uri
+                );
+                eprintln!("Using empty buffer as fallback");
+                vec![]
+            }
+        };
+        buffers.push(gltf::buffer::Data(data));
+    }
+
+    // Manually process images with checkerboard fallback
+    let mut images = Vec::new();
+    for image in document.images() {
+        let image_data = match image.source() {
+            gltf::image::Source::View { view, .. } => {
+                // Get data from buffer view
+                let buffer = &buffers[view.buffer().index()];
+                let start = view.offset();
+                let end = start + view.length();
+                let buf = buffer[start..end].to_vec();
+
+                match image::load_from_memory(&buf) {
+                    Ok(loaded_image) => {
+                        // Convert to RGBA8 format
+                        let rgba_image = loaded_image.to_rgba8();
+                        let width = rgba_image.width();
+                        let height = rgba_image.height();
+                        gltf::image::Data {
+                            pixels: rgba_image.into_raw(),
+                            format: gltf::image::Format::R8G8B8A8,
+                            width,
+                            height,
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Warning: Could not decode embedded image, using checkerboard fallback"
+                        );
+                        create_checkerboard_image_data()
+                    }
+                }
+            }
+            gltf::image::Source::Uri { uri, .. } => {
+                eprintln!(
+                    "Warning: GLB file '{}' contains external image reference: {}",
+                    name, uri
+                );
+                eprintln!("Using checkerboard pattern as fallback");
+                create_checkerboard_image_data()
+            }
+        };
+        images.push(image_data);
+    }
 
     let mut meshes = Vec::new();
     let mut min_bounds = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
@@ -56,7 +119,7 @@ fn load_glb(
     // Materials will be processed directly from primitives
 
     // Process each mesh in the GLTF scene
-    for scene in gltf.scenes() {
+    for scene in document.scenes() {
         for node in scene.nodes() {
             process_node(
                 &node,
@@ -74,13 +137,40 @@ fn load_glb(
     );
 
     // Extract skeleton from GLB file (if present)
-    let skeleton = extract_skeleton_from_document(&gltf, &buffers);
+    let skeleton = extract_skeleton_from_document(&document, &buffers);
 
     GlbModel {
         meshes,
         bounding_box,
         skeleton,
         images,
+    }
+}
+
+/// Create a checkerboard pattern as fallback for missing textures
+fn create_checkerboard_image_data() -> gltf::image::Data {
+    // Create a 4x4 magenta/black checkerboard pattern
+    let width = 4;
+    let height = 4;
+    let mut pixels = Vec::with_capacity(width * height * 4); // RGBA
+
+    for y in 0..height {
+        for x in 0..width {
+            if (x + y) % 2 == 0 {
+                // Magenta
+                pixels.extend_from_slice(&[255, 0, 255, 255]);
+            } else {
+                // Black
+                pixels.extend_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+    }
+
+    gltf::image::Data {
+        pixels,
+        format: gltf::image::Format::R8G8B8A8,
+        width: width as u32,
+        height: height as u32,
     }
 }
 
