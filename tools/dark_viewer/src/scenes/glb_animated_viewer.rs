@@ -1,4 +1,4 @@
-use super::ToolScene;
+use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
 use cgmath::Matrix4;
 use dark::importers::{GLB_ANIMATION_IMPORTER, GLB_MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
@@ -41,6 +41,7 @@ pub struct GlbAnimatedViewerScene {
     scale: f32,
     animation_player: AnimationPlayer,
     animation_controller: Option<GlbAnimationController>,
+    debug_skeletons: bool,
 }
 
 impl GlbAnimatedViewerScene {
@@ -49,6 +50,7 @@ impl GlbAnimatedViewerScene {
         animation_names: Vec<String>,
         scale: f32,
         asset_cache: &mut AssetCache,
+        debug_skeletons: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load animations from the GLB file
         let animation_clips = asset_cache.get(&GLB_ANIMATION_IMPORTER, &model_name);
@@ -119,6 +121,7 @@ impl GlbAnimatedViewerScene {
             scale,
             animation_player,
             animation_controller: Some(controller),
+            debug_skeletons,
         })
     }
 }
@@ -160,6 +163,11 @@ impl ToolScene for GlbAnimatedViewerScene {
             scene_object.transform = scale_matrix * scene_object.transform;
         }
 
-        Scene::from_objects(scene_objects)
+        build_model_scene_with_debug_skeletons(
+            model.as_ref(),
+            Some(&self.animation_player),
+            scene_objects,
+            self.debug_skeletons,
+        )
     }
 }

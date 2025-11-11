@@ -78,6 +78,10 @@ struct Cli {
     /// When true, loads assets and prints information but exits before opening a window.
     #[arg(long)]
     debug_no_render: bool,
+
+    /// Overlay skeleton joints for supported model files (.bin/.ai).
+    #[arg(long)]
+    debug_skeletons: bool,
 }
 
 fn resolve_data_path(resource: &str) -> String {
@@ -131,6 +135,11 @@ fn gather_animation_list(cli: &Cli, filename: &str) -> Result<(Vec<String>, bool
             .collect::<Result<Vec<_>, _>>()?;
         Ok((animations, animation_flag_provided))
     }
+}
+
+fn supports_debug_skeletons(filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    lower.ends_with(".bin") || lower.ends_with(".ai") || lower.ends_with(".glb")
 }
 
 struct MousePosition {
@@ -214,6 +223,7 @@ fn create_scene(
     scale: f32,
     asset_cache: &mut engine::assets::asset_cache::AssetCache,
     data_resolver: fn(&str) -> String,
+    debug_skeletons: bool,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
     let lower = filename.to_ascii_lowercase();
     if lower.ends_with(".avi") {
@@ -225,13 +235,15 @@ fn create_scene(
         }
     } else if lower.ends_with(".bin") {
         if animations.is_empty() {
-            let scene = BinObjViewerScene::from_model(filename.to_string(), asset_cache)?;
+            let scene =
+                BinObjViewerScene::from_model(filename.to_string(), asset_cache, debug_skeletons)?;
             Ok(Box::new(scene))
         } else {
             let scene = BinAiViewerScene::from_clips(
                 filename.to_string(),
                 animations.to_vec(),
                 asset_cache,
+                debug_skeletons,
             )?;
             Ok(Box::new(scene))
         }
@@ -245,10 +257,16 @@ fn create_scene(
                 animations.to_vec(),
                 scale,
                 asset_cache,
+                debug_skeletons,
             )?;
             Ok(Box::new(scene))
         } else {
-            let scene = GlbViewerScene::from_model(filename.to_string(), scale, asset_cache)?;
+            let scene = GlbViewerScene::from_model(
+                filename.to_string(),
+                scale,
+                asset_cache,
+                debug_skeletons,
+            )?;
             Ok(Box::new(scene))
         }
     } else if !animations.is_empty() {
@@ -273,6 +291,18 @@ pub fn main() {
     };
 
     let filename = cli.filename.clone();
+    let debug_skeletons = if cli.debug_skeletons {
+        if supports_debug_skeletons(&filename) {
+            true
+        } else {
+            eprintln!(
+                "Warning: --debug-skeletons is only available for .bin, .ai, or .glb files. Ignoring flag."
+            );
+            false
+        }
+    } else {
+        false
+    };
 
     if animations.is_empty() {
         println!("Loading {}", filename);
@@ -335,6 +365,7 @@ pub fn main() {
             cli.scale,
             &mut game.asset_cache,
             resolve_data_path,
+            debug_skeletons,
         ) {
             Ok(_) => println!("Scene creation succeeded."),
             Err(err) => println!("Error creating scene: {err}"),
@@ -349,6 +380,7 @@ pub fn main() {
         cli.scale,
         &mut game.asset_cache,
         resolve_data_path,
+        debug_skeletons,
     ) {
         Ok(scene) => scene,
         Err(err) => {

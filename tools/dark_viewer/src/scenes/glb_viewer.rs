@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use super::ToolScene;
+use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
 use cgmath::{Deg, Matrix4, Quaternion, Rad, vec3};
 use dark::importers::GLB_MODELS_IMPORTER;
 use dark::motion::AnimationPlayer;
@@ -13,6 +13,7 @@ pub struct GlbViewerScene {
     scale: f32,
     total_time: Duration,
     animation_player: AnimationPlayer,
+    debug_skeletons: bool,
 }
 
 impl GlbViewerScene {
@@ -20,6 +21,7 @@ impl GlbViewerScene {
         model_name: String,
         scale: f32,
         _asset_cache: &AssetCache,
+        debug_skeletons: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // We don't load the model here, we'll load it during render using the asset cache
         let animation_player = AnimationPlayer::empty();
@@ -29,6 +31,7 @@ impl GlbViewerScene {
             scale,
             total_time: Duration::ZERO,
             animation_player,
+            debug_skeletons,
         })
     }
 }
@@ -49,6 +52,11 @@ impl ToolScene for GlbViewerScene {
             scene_object.transform = scale_matrix * scene_object.transform;
         }
 
-        Scene::from_objects(scene_objects)
+        build_model_scene_with_debug_skeletons(
+            model.as_ref(),
+            Some(&self.animation_player),
+            scene_objects,
+            self.debug_skeletons,
+        )
     }
 }

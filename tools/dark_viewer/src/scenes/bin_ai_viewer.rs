@@ -1,4 +1,4 @@
-use super::ToolScene;
+use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
 use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
@@ -40,6 +40,7 @@ pub struct BinAiViewerScene {
     model: Rc<dark::model::Model>,
     animation_player: AnimationPlayer,
     animation_controller: Option<AnimationController>,
+    debug_skeletons: bool,
 }
 
 impl BinAiViewerScene {
@@ -47,6 +48,7 @@ impl BinAiViewerScene {
         mesh_file_path: String,
         clip_names: Vec<String>,
         asset_cache: &mut AssetCache,
+        debug_skeletons: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let model = asset_cache.get(&MODELS_IMPORTER, mesh_file_path.as_str());
 
@@ -64,6 +66,7 @@ impl BinAiViewerScene {
             model,
             animation_player,
             animation_controller: Some(controller),
+            debug_skeletons,
         })
     }
 }
@@ -90,7 +93,12 @@ impl ToolScene for BinAiViewerScene {
 
     fn render(&self, _asset_cache: &mut AssetCache) -> Scene {
         let objects = self.model.to_animated_scene_objects(&self.animation_player);
-        Scene::from_objects(objects)
+        build_model_scene_with_debug_skeletons(
+            self.model.as_ref(),
+            Some(&self.animation_player),
+            objects,
+            self.debug_skeletons,
+        )
     }
 }
 

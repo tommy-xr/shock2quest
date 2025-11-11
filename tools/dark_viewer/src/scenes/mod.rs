@@ -15,6 +15,7 @@ pub mod bin_obj_viewer;
 pub mod font_viewer;
 pub mod glb_animated_viewer;
 pub mod glb_viewer;
+mod render_helpers;
 pub mod video_player;
 
 pub use bin_ai_viewer::BinAiViewerScene;
