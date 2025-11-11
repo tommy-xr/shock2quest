@@ -261,8 +261,12 @@ fn create_scene(
             )?;
             Ok(Box::new(scene))
         } else {
-            let scene =
-                GlbViewerScene::from_model(filename.to_string(), asset_cache, debug_skeletons)?;
+            let scene = GlbViewerScene::from_model(
+                filename.to_string(),
+                scale,
+                asset_cache,
+                debug_skeletons,
+            )?;
             Ok(Box::new(scene))
         }
     } else if !animations.is_empty() {

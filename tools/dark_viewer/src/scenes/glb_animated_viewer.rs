@@ -1,4 +1,5 @@
 use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
+use cgmath::Matrix4;
 use dark::importers::{GLB_ANIMATION_IMPORTER, GLB_MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
