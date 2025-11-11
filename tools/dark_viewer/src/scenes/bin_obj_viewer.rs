@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use super::ToolScene;
+use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
 use cgmath::{Deg, Matrix4, Quaternion, Rad, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::motion::AnimationPlayer;
@@ -12,12 +12,14 @@ pub struct BinObjViewerScene {
     model_name: String,
     total_time: Duration,
     animation_player: AnimationPlayer,
+    debug_skeletons: bool,
 }
 
 impl BinObjViewerScene {
     pub fn from_model(
         model_name: String,
         _asset_cache: &AssetCache,
+        debug_skeletons: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // We don't load the model here, we'll load it during render using the asset cache
         let mut animation_player = AnimationPlayer::empty();
@@ -31,6 +33,7 @@ impl BinObjViewerScene {
             model_name,
             total_time: Duration::ZERO,
             animation_player,
+            debug_skeletons,
         })
     }
 }
@@ -57,6 +60,11 @@ impl ToolScene for BinObjViewerScene {
         let turret = asset_cache.get(&MODELS_IMPORTER, &self.model_name);
         let turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
 
-        Scene::from_objects(turret_scene_objects)
+        build_model_scene_with_debug_skeletons(
+            turret.as_ref(),
+            Some(&self.animation_player),
+            turret_scene_objects,
+            self.debug_skeletons,
+        )
     }
 }
