@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fs::OpenOptions};
+use std::{
+    collections::HashMap,
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+};
 
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::EntityId;
@@ -10,9 +14,11 @@ use crate::{
         GlobalContext, Mission,
         entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator},
     },
+    paths,
     save_load::{EntitySaveData, HeldItemSaveData, SaveData},
 };
 
+pub mod cutscene_player;
 pub mod debug_camera;
 pub mod debug_entity_playground;
 pub mod debug_hud;
@@ -21,6 +27,7 @@ pub mod debug_map;
 pub mod debug_minimal;
 pub mod debug_ragdoll;
 
+pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_entity_playground::DebugEntityPlaygroundScene;
 pub use debug_hud::DebugHudScene;
@@ -40,6 +47,27 @@ pub fn create_initial_scene(
     global_context: &GlobalContext,
     options: &GameOptions,
 ) -> SceneInitResult {
+    if is_cutscene_mission(&options.mission) {
+        let mission_name = options.mission.clone();
+        let cutscene_path = resolve_cutscene_path(&mission_name);
+        let cutscene_path_string = cutscene_path.to_string_lossy().into_owned();
+        let cutscene = CutscenePlayerScene::new(
+            mission_name.clone(),
+            cutscene_path_string.clone(),
+            audio_context,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "Failed to initialize cutscene '{}' from '{}': {}",
+                mission_name, cutscene_path_string, err
+            )
+        });
+        return SceneInitResult {
+            scene: Box::new(cutscene),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
     if options.mission.eq_ignore_ascii_case("debug_minimal") {
         return SceneInitResult {
             scene: Box::new(DebugMinimalScene::new()),
@@ -190,4 +218,23 @@ pub fn load_mission_from_save_data(
     );
 
     (active_mission, save_data.level_data)
+}
+
+fn is_cutscene_mission(name: &str) -> bool {
+    name.trim().to_ascii_lowercase().ends_with(".avi")
+}
+
+fn resolve_cutscene_path(name: &str) -> PathBuf {
+    let trimmed = name.trim();
+    let raw_path = Path::new(trimmed);
+
+    if raw_path.is_absolute() {
+        return raw_path.to_path_buf();
+    }
+
+    if raw_path.components().count() == 1 {
+        paths::data_root().join("cutscenes").join(raw_path)
+    } else {
+        paths::data_root().join(raw_path)
+    }
 }

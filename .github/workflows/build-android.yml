@@ -93,8 +93,8 @@ jobs:
           export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="${FFMPEG_ROOT}"
 
           # Set target-specific compiler settings
-          export CC_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang"
-          export CXX_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang++"
+          export CC_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang++"
           export CFLAGS_aarch64_linux_android="--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC"
           export CXXFLAGS_aarch64_linux_android="--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC"
 
@@ -106,12 +106,59 @@ jobs:
           export FFMPEG_INCLUDE_DIR="${FFMPEG_ROOT}/include"
           export BINDGEN_EXTRA_CLANG_ARGS="-I${FFMPEG_ROOT}/include --sysroot=${ARM64_TOOLCHAIN}/sysroot --target=aarch64-linux-android"
 
-          # Find libclang path dynamically
-          LIBCLANG_PATH=$(find /usr/lib -name "libclang*.so*" -type f 2>/dev/null | head -1 | xargs dirname)
+          # Find libclang path dynamically with better fallbacks
+          echo "Searching for libclang..."
+
+          # Try multiple common locations
+          LIBCLANG_PATH=""
+          for search_dir in "/usr/lib" "/usr/local/lib" "/opt" "/usr/lib/x86_64-linux-gnu"; do
+            echo "Searching in $search_dir..."
+            # Look specifically for the actual libclang shared library
+            FOUND_FILE=$(find "$search_dir" -name "libclang.so*" -o -name "libclang-*.so*" 2>/dev/null | head -1)
+            if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
+              LIBCLANG_PATH=$(dirname "$FOUND_FILE")
+              echo "Found libclang.so in: $LIBCLANG_PATH (file: $FOUND_FILE)"
+              break
+            fi
+          done
+
+          # Fallback to llvm directories
           if [ -z "$LIBCLANG_PATH" ]; then
-            # Fallback: look for llvm directories
-            LIBCLANG_PATH=$(find /usr/lib -name "llvm-*" -type d 2>/dev/null | head -1)/lib
+            echo "Searching for LLVM directories..."
+            for search_dir in "/usr/lib" "/usr/local/lib"; do
+              for llvm_dir in $(find "$search_dir" -name "llvm-*" -type d 2>/dev/null); do
+                echo "Checking LLVM directory: $llvm_dir"
+                # Look for libclang.so in the LLVM lib directory
+                if [ -f "$llvm_dir/lib/libclang.so" ] || [ -f "$llvm_dir/lib/libclang-*.so" ]; then
+                  LIBCLANG_PATH="$llvm_dir/lib"
+                  echo "Found libclang in LLVM directory: $LIBCLANG_PATH"
+                  break 2
+                fi
+              done
+            done
           fi
+
+          # Final fallback
+          if [ -z "$LIBCLANG_PATH" ]; then
+            echo "No libclang found, using default path"
+            LIBCLANG_PATH="/usr/lib/llvm-14/lib"
+          fi
+
+          echo "Using LIBCLANG_PATH: $LIBCLANG_PATH"
+
+          # Verify the path exists and contains libclang.so
+          if [ -d "$LIBCLANG_PATH" ]; then
+            echo "LIBCLANG_PATH directory exists: $LIBCLANG_PATH"
+            echo "Looking for libclang.so files:"
+            ls -la "$LIBCLANG_PATH"/libclang*.so* 2>/dev/null || echo "No libclang.so files found!"
+            echo "Directory contents:"
+            ls -la "$LIBCLANG_PATH" | head -5
+          else
+            echo "WARNING: LIBCLANG_PATH directory does not exist!"
+            echo "Available LLVM directories in /usr/lib:"
+            ls -la /usr/lib | grep llvm || echo "No LLVM directories found"
+          fi
+
           export LIBCLANG_PATH
 
           # Save environment for next step
@@ -127,8 +174,8 @@ jobs:
           echo "PKG_CONFIG_ALLOW_CROSS_aarch64_linux_android=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH_aarch64_linux_android=${FFMPEG_ROOT}/pkgconfig" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android=${FFMPEG_ROOT}" >> $GITHUB_ENV
-          echo "CC_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang" >> $GITHUB_ENV
-          echo "CXX_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android23-clang++" >> $GITHUB_ENV
+          echo "CC_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64_linux_android=${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang++" >> $GITHUB_ENV
           echo "CFLAGS_aarch64_linux_android=--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC" >> $GITHUB_ENV
           echo "CXXFLAGS_aarch64_linux_android=--sysroot=${ARM64_TOOLCHAIN}/sysroot -fPIC" >> $GITHUB_ENV
           echo "CFLAGS_x86_64_unknown_linux_gnu=-I${FFMPEG_ROOT}/include" >> $GITHUB_ENV
