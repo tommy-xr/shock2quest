@@ -10,6 +10,7 @@ use dark::{
     mission::{SongParams, room_database::RoomDatabase},
     model::Model,
     ss2_entity_info::SystemShock2EntityInfo,
+    ss2_skeleton::Skeleton,
 };
 use engine::{
     assets::asset_cache::AssetCache,
@@ -38,6 +39,7 @@ const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 const GLOVE_POSITION: Point3<f32> = point3(0.0, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
 const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
+const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -76,7 +78,8 @@ impl DebugGlovesScene {
         // Load the VR glove model once and instantiate it as needed.
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
         let glove_template = Self::load_glove_template(asset_cache);
-        let static_glove_objects = Self::create_static_glove_objects(&glove_template);
+        let static_glove_objects =
+            Self::create_static_glove_objects(&glove_template, glove_model.skeleton());
 
         info!(
             "Created debug gloves scene with {} glove nodes in template",
@@ -143,13 +146,69 @@ impl DebugGlovesScene {
         scene_objects
     }
 
-    fn create_static_glove_objects(template: &[SceneObject]) -> Vec<SceneObject> {
+    fn create_static_glove_objects(
+        template: &[SceneObject],
+        skeleton: Option<&Skeleton>,
+    ) -> Vec<SceneObject> {
         let transform =
             Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
                 * Matrix4::from_angle_y(Deg(0.0))
                 * Matrix4::from_scale(GLOVE_SCALE);
 
-        Self::clone_with_transform(template, transform)
+        let mut objects = Self::clone_with_transform(template, transform);
+
+        if let Some(skeleton) = skeleton {
+            objects.extend(Self::create_manual_skinning_glove_objects(
+                template, skeleton,
+            ));
+        }
+
+        objects
+    }
+
+    fn create_manual_skinning_glove_objects(
+        template: &[SceneObject],
+        skeleton: &Skeleton,
+    ) -> Vec<SceneObject> {
+        // Nudge the manual-skin glove next to the debug cubes for visual comparison.
+        let manual_transform = Matrix4::from_translation(vec3(
+            GLOVE_POSITION.x + SECOND_GLOVE_OFFSET_X,
+            GLOVE_POSITION.y,
+            GLOVE_POSITION.z,
+        )) * Matrix4::from_angle_y(Deg(0.0))
+            * Matrix4::from_scale(1.0);
+
+        let skinning_data = Self::manual_skinning_data(skeleton);
+
+        template
+            .iter()
+            .map(|object| {
+                let mut clone = object.clone();
+                clone.set_transform(manual_transform);
+                clone.set_skinning_data(skinning_data);
+                clone
+            })
+            .collect()
+    }
+
+    fn manual_skinning_data(skeleton: &Skeleton) -> [Matrix4<f32>; 40] {
+        let world_transforms = skeleton.world_transforms();
+        let mut skinning_data = [Matrix4::identity(); 40];
+
+        for (joint_index, world_transform) in world_transforms.iter().enumerate() {
+            if world_transform == &Matrix4::identity() {
+                continue;
+            }
+
+            let inverse_bind = skeleton
+                .rest_transform(joint_index as u32)
+                .map(|rest| rest.inverse_bind)
+                .unwrap_or_else(Matrix4::identity);
+
+            skinning_data[joint_index] = *world_transform * inverse_bind;
+        }
+
+        skinning_data
     }
 
     fn hand_transform(position: Vector3<f32>, rotation: Quaternion<f32>) -> Matrix4<f32> {
