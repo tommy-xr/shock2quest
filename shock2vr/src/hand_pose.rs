@@ -1,4 +1,4 @@
-use cgmath::{Vector3, Quaternion, Matrix4, SquareMatrix};
+use cgmath::{Matrix4, Quaternion, SquareMatrix, Vector3};
 use std::collections::HashMap;
 
 /// Joint indices for hand bones
@@ -42,11 +42,11 @@ pub mod joint_indices {
     pub const PINKY_TIP: usize = 25;
 
     // Additional thumb bones (26-30)
-    pub const THUMB_AUX_1: usize = 26;
-    pub const THUMB_AUX_2: usize = 27;
-    pub const THUMB_AUX_3: usize = 28;
-    pub const THUMB_AUX_4: usize = 29;
-    pub const THUMB_AUX_5: usize = 30;
+    pub const THUMB_AUX: usize = 26;
+    pub const INDEX_AUX: usize = 27;
+    pub const MIDDLE_AUX: usize = 28;
+    pub const RING_AUX: usize = 29;
+    pub const PINKY_AUX: usize = 30;
 }
 
 /// Creates a map of joint relationships where key is child joint index and value is parent joint index
@@ -93,11 +93,11 @@ pub fn joint_relationships() -> HashMap<usize, usize> {
     relationships.insert(PINKY_TIP, PINKY_DISTAL);
 
     // Additional thumb bones (assuming they chain from thumb tip)
-    relationships.insert(THUMB_AUX_1, THUMB_DISTAL);
-    relationships.insert(THUMB_AUX_2, THUMB_AUX_1);
-    relationships.insert(THUMB_AUX_3, THUMB_AUX_2);
-    relationships.insert(THUMB_AUX_4, THUMB_AUX_3);
-    relationships.insert(THUMB_AUX_5, THUMB_AUX_4);
+    relationships.insert(THUMB_AUX, THUMB_DISTAL);
+    relationships.insert(RING_AUX, RING_DISTAL);
+    relationships.insert(PINKY_AUX, PINKY_DISTAL);
+    relationships.insert(INDEX_AUX, INDEX_DISTAL);
+    relationships.insert(MIDDLE_AUX, MIDDLE_DISTAL);
 
     relationships
 }
@@ -106,37 +106,37 @@ pub fn joint_relationships() -> HashMap<usize, usize> {
 /// This mapping reflects the order bones appear in the Unity pose data
 pub fn pose_joint_map() -> Vec<&'static str> {
     vec![
-        "wrist_r",                          // 0
-        "finger_thumb_0_r",                 // 1 - forearm stub -> thumb metacarpal
-        "finger_thumb_1_r",                 // 2 - thumb metacarpal
-        "finger_thumb_2_r",                 // 3 - thumb proximal
-        "finger_thumb_r_end",               // 4 - thumb intermediate
-        "finger_thumb_r_end_end",           // 5 - thumb distal
-        "finger_index_meta_r",              // 6 - index metacarpal
-        "finger_index_0_r",                 // 7 - index proximal
-        "finger_index_1_r",                 // 8 - index intermediate
-        "finger_index_2_r",                 // 9 - index distal
-        "finger_index_r_end",               // 10 - index tip
-        "finger_middle_meta_r",             // 11 - middle metacarpal
-        "finger_middle_0_r",                // 12 - middle proximal
-        "finger_middle_1_r",                // 13 - middle intermediate
-        "finger_middle_2_r",                // 14 - middle distal
-        "finger_middle_r_end",              // 15 - middle tip
-        "finger_ring_meta_r",               // 16 - ring metacarpal
-        "finger_ring_0_r",                  // 17 - ring proximal
-        "finger_ring_1_r",                  // 18 - ring intermediate
-        "finger_ring_2_r",                  // 19 - ring distal
-        "finger_ring_r_end",                // 20 - ring tip
-        "finger_pinky_meta_r",              // 21 - pinky metacarpal
-        "finger_pinky_0_r",                 // 22 - pinky proximal
-        "finger_pinky_1_r",                 // 23 - pinky intermediate
-        "finger_pinky_2_r",                 // 24 - pinky distal
-        "finger_pinky_r_end",               // 25 - pinky tip
-        "finger_thumb_r_aux",               // 26 - thumb aux bones
-        "finger_index_r_aux",               // 27
-        "finger_middle_r_aux",              // 28
-        "finger_ring_r_aux",                // 29
-        "finger_pinky_r_aux",               // 30
+        "wrist_r",                // 0
+        "finger_thumb_0_r",       // 1 - forearm stub -> thumb metacarpal
+        "finger_thumb_1_r",       // 2 - thumb metacarpal
+        "finger_thumb_2_r",       // 3 - thumb proximal
+        "finger_thumb_r_end",     // 4 - thumb intermediate
+        "finger_thumb_r_end_end", // 5 - thumb distal
+        "finger_index_meta_r",    // 6 - index metacarpal
+        "finger_index_0_r",       // 7 - index proximal
+        "finger_index_1_r",       // 8 - index intermediate
+        "finger_index_2_r",       // 9 - index distal
+        "finger_index_r_end",     // 10 - index tip
+        "finger_middle_meta_r",   // 11 - middle metacarpal
+        "finger_middle_0_r",      // 12 - middle proximal
+        "finger_middle_1_r",      // 13 - middle intermediate
+        "finger_middle_2_r",      // 14 - middle distal
+        "finger_middle_r_end",    // 15 - middle tip
+        "finger_ring_meta_r",     // 16 - ring metacarpal
+        "finger_ring_0_r",        // 17 - ring proximal
+        "finger_ring_1_r",        // 18 - ring intermediate
+        "finger_ring_2_r",        // 19 - ring distal
+        "finger_ring_r_end",      // 20 - ring tip
+        "finger_pinky_meta_r",    // 21 - pinky metacarpal
+        "finger_pinky_0_r",       // 22 - pinky proximal
+        "finger_pinky_1_r",       // 23 - pinky intermediate
+        "finger_pinky_2_r",       // 24 - pinky distal
+        "finger_pinky_r_end",     // 25 - pinky tip
+        "finger_thumb_r_aux",     // 26 - thumb aux bones
+        "finger_index_r_aux",     // 27
+        "finger_middle_r_aux",    // 28
+        "finger_ring_r_aux",      // 29
+        "finger_pinky_r_aux",     // 30
     ]
 }
 
@@ -152,7 +152,10 @@ pub struct Pose {
 impl Pose {
     /// Creates a new pose from lists of bone positions and rotations
     pub fn new(bone_positions: Vec<Vector3<f32>>, bone_rotations: Vec<Quaternion<f32>>) -> Self {
-        Self { bone_positions, bone_rotations }
+        Self {
+            bone_positions,
+            bone_rotations,
+        }
     }
 
     /// Computes global transforms for all bones by accumulating through the hierarchy
@@ -197,7 +200,8 @@ impl Pose {
                     // Create local transform from position and rotation
                     let local_position = pose.bone_positions[bone_index];
                     let local_rotation = pose.bone_rotations[bone_index];
-                    let local_transform = Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
+                    let local_transform =
+                        Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
 
                     // Multiply by parent's global transform
                     let parent_global = global_transforms[parent_index];
@@ -209,14 +213,16 @@ impl Pose {
                     // Invalid parent index, treat as root
                     let local_position = pose.bone_positions[bone_index];
                     let local_rotation = pose.bone_rotations[bone_index];
-                    global_transforms[bone_index] = Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
+                    global_transforms[bone_index] =
+                        Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
                     global_positions[bone_index] = local_position;
                 }
             } else {
                 // Root bone - use local transform as global
                 let local_position = pose.bone_positions[bone_index];
                 let local_rotation = pose.bone_rotations[bone_index];
-                global_transforms[bone_index] = Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
+                global_transforms[bone_index] =
+                    Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
                 global_positions[bone_index] = local_position;
             }
 
@@ -250,7 +256,6 @@ impl Pose {
         self.compute_global_transforms().1
     }
 }
-
 
 /// Returns the open hand pose for the right hand
 pub fn open_right_hand() -> Pose {
