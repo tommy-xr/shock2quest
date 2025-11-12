@@ -164,8 +164,9 @@ impl DebugGlovesScene {
 
         if let Some(skeleton) = skeleton {
             let mut joint_transforms = HashMap::new();
-            let rotation_transform = Matrix4::from_angle_z(Deg(-20.0));
+            let rotation_transform = Matrix4::from_angle_z(Deg(45.0));
             joint_transforms.insert(6u32, rotation_transform);
+            joint_transforms.insert(7u32, rotation_transform);
 
             let skeleton = Skeleton::set_joint_transforms(skeleton, &joint_transforms);
             objects.extend(Self::create_manual_skinning_glove_objects(
@@ -645,8 +646,9 @@ impl GameScene for DebugGlovesScene {
         if let Some(skeleton) = self.glove_model.skeleton() {
             // Test new set_joint_transforms function by  rotating joint 5 by 90 degrees on Y-axis
             let mut joint_transforms = HashMap::new();
-            let rotation_transform = Matrix4::from_angle_z(Deg(90.0));
+            let rotation_transform = Matrix4::from_angle_z(Deg(45.0));
             joint_transforms.insert(6u32, rotation_transform);
+            joint_transforms.insert(7u32, rotation_transform);
 
             let skeleton = Skeleton::set_joint_transforms(skeleton, &joint_transforms);
             let static_transform = Matrix4::from_translation(vec3(
