@@ -1,5 +1,6 @@
 pub mod command;
 pub mod game_scene;
+pub mod hand_pose;
 pub mod input_context;
 pub mod inventory;
 pub mod map_renderer;
