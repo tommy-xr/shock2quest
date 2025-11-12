@@ -302,24 +302,14 @@ fn process_primitive(
                 [1.0, 0.0, 0.0, 0.0] // Fallback to first bone if no weights
             };
 
-            // Apply transform to position and normal
-            let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
-            let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
-
+            // For skinned meshes, keep positions and normals in bind space
+            // The transform will be handled by the skeleton system instead
             skinned_vertices.push(VertexPositionTextureSkinnedNormal {
-                position: cgmath::Vector3::new(
-                    transformed_pos.x,
-                    transformed_pos.y,
-                    transformed_pos.z,
-                ),
+                position: cgmath::Vector3::new(pos[0], pos[1], pos[2]),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
                 bone_indices,                     // All 4 bone indices
                 bone_weights: normalized_weights, // Normalized multi-bone weights
-                normal: cgmath::Vector3::new(
-                    transformed_norm.x,
-                    transformed_norm.y,
-                    transformed_norm.z,
-                ),
+                normal: cgmath::Vector3::new(norm[0], norm[1], norm[2]),
             });
         }
 
