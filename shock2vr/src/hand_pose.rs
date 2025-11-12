@@ -105,44 +105,6 @@ pub fn joint_relationships() -> HashMap<usize, usize> {
     relationships
 }
 
-/// Maps pose indices to SteamVR skeletal joint names based on the handFingers mask
-/// This mapping reflects the order bones appear in the Unity pose data
-pub fn pose_joint_map() -> Vec<&'static str> {
-    vec![
-        "wrist_r",                // 0
-        "finger_thumb_0_r",       // 1 - forearm stub -> thumb metacarpal
-        "finger_thumb_1_r",       // 2 - thumb metacarpal
-        "finger_thumb_2_r",       // 3 - thumb proximal
-        "finger_thumb_r_end",     // 4 - thumb intermediate
-        "finger_thumb_r_end_end", // 5 - thumb distal
-        "finger_index_meta_r",    // 6 - index metacarpal
-        "finger_index_0_r",       // 7 - index proximal
-        "finger_index_1_r",       // 8 - index intermediate
-        "finger_index_2_r",       // 9 - index distal
-        "finger_index_r_end",     // 10 - index tip
-        "finger_middle_meta_r",   // 11 - middle metacarpal
-        "finger_middle_0_r",      // 12 - middle proximal
-        "finger_middle_1_r",      // 13 - middle intermediate
-        "finger_middle_2_r",      // 14 - middle distal
-        "finger_middle_r_end",    // 15 - middle tip
-        "finger_ring_meta_r",     // 16 - ring metacarpal
-        "finger_ring_0_r",        // 17 - ring proximal
-        "finger_ring_1_r",        // 18 - ring intermediate
-        "finger_ring_2_r",        // 19 - ring distal
-        "finger_ring_r_end",      // 20 - ring tip
-        "finger_pinky_meta_r",    // 21 - pinky metacarpal
-        "finger_pinky_0_r",       // 22 - pinky proximal
-        "finger_pinky_1_r",       // 23 - pinky intermediate
-        "finger_pinky_2_r",       // 24 - pinky distal
-        "finger_pinky_r_end",     // 25 - pinky tip
-        "finger_thumb_r_aux",     // 26 - thumb aux bones
-        "finger_index_r_aux",     // 27
-        "finger_middle_r_aux",    // 28
-        "finger_ring_r_aux",      // 29
-        "finger_pinky_r_aux",     // 30
-    ]
-}
-
 /// Represents a hand pose with bone positions and rotations
 #[derive(Debug, Clone)]
 pub struct Pose {
