@@ -163,8 +163,13 @@ impl DebugGlovesScene {
         let mut objects = Self::clone_with_transform(template, transform);
 
         if let Some(skeleton) = skeleton {
+            let mut joint_transforms = HashMap::new();
+            let rotation_transform = Matrix4::from_angle_z(Deg(-20.0));
+            joint_transforms.insert(6u32, rotation_transform);
+
+            let skeleton = Skeleton::set_joint_transforms(skeleton, &joint_transforms);
             objects.extend(Self::create_manual_skinning_glove_objects(
-                template, skeleton,
+                template, &skeleton,
             ));
         }
 
@@ -638,6 +643,12 @@ impl GameScene for DebugGlovesScene {
 
         // Add custom bone visualization for the static glove
         if let Some(skeleton) = self.glove_model.skeleton() {
+            // Test new set_joint_transforms function by  rotating joint 5 by 90 degrees on Y-axis
+            let mut joint_transforms = HashMap::new();
+            let rotation_transform = Matrix4::from_angle_z(Deg(90.0));
+            joint_transforms.insert(6u32, rotation_transform);
+
+            let skeleton = Skeleton::set_joint_transforms(skeleton, &joint_transforms);
             let static_transform = Matrix4::from_translation(vec3(
                 GLOVE_POSITION.x,
                 GLOVE_POSITION.y,
@@ -683,72 +694,6 @@ impl GameScene for DebugGlovesScene {
         scene_objects.extend(Self::create_open_pose_debug_cubes());
 
         (scene_objects, camera_position, camera_rotation)
-    }
-
-    fn render_per_eye(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        view: Matrix4<f32>,
-        projection: Matrix4<f32>,
-        screen_size: Vector2<f32>,
-        options: &GameOptions,
-    ) -> Vec<SceneObject> {
-        let mut scene_objects =
-            self.core
-                .render_per_eye(asset_cache, view, projection, screen_size, options);
-
-        // Add the glove objects to the per-eye render as well
-        scene_objects.extend(self.static_glove_objects.clone());
-        scene_objects.extend(self.hand_glove_objects());
-        scene_objects.extend(self.pose_glove_objects());
-
-        // Add custom bone visualization for the static glove
-        if let Some(skeleton) = self.glove_model.skeleton() {
-            let static_transform = Matrix4::from_translation(vec3(
-                GLOVE_POSITION.x,
-                GLOVE_POSITION.y,
-                GLOVE_POSITION.z,
-            )) * Matrix4::from_scale(GLOVE_SCALE);
-
-            let world_transforms = skeleton.world_transforms();
-
-            // Create a cube for each bone position
-            for (bone_index, bone_transform) in world_transforms
-                .iter()
-                .enumerate()
-                .take(DEBUG_RENDER_BONE_COUNT)
-            {
-                // Skip identity transforms (unused bones)
-                if bone_transform != &Matrix4::identity() {
-                    let bone_position = bone_transform.w.truncate();
-
-                    // Create cube at bone position with joint-specific color
-                    let cube_color = Self::joint_debug_color(bone_index);
-                    let cube_material = color_material::create(cube_color);
-                    let mut bone_cube =
-                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
-
-                    // Scale cube small and position it at the bone location (moved up 1 unit)
-                    let cube_size = 0.02 / SCALE_FACTOR; // Small cube
-                    let bone_cube_transform = static_transform
-                        * Matrix4::from_translation(
-                            bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0),
-                        )
-                        * Matrix4::from_scale(cube_size);
-
-                    bone_cube.set_transform(bone_cube_transform);
-                    scene_objects.push(bone_cube);
-                }
-            }
-        }
-
-        // Add hand pose debug cubes
-        scene_objects.extend(Self::create_hand_pose_debug_cubes());
-
-        // Add open pose debug cubes
-        scene_objects.extend(Self::create_open_pose_debug_cubes());
-
-        scene_objects
     }
 
     fn finish_render(
