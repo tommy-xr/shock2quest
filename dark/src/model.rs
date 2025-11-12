@@ -359,6 +359,13 @@ impl Model {
         matches!(self.inner, InnerModel::Animated(_))
     }
 
+    pub fn skeleton(&self) -> Option<&Skeleton> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => Some(&animated_model.skeleton),
+            InnerModel::Static(_) => None,
+        }
+    }
+
     pub fn transform(model: &Model, transform: Matrix4<f32>) -> Model {
         match &model.inner {
             InnerModel::Static(static_model) => Model {
