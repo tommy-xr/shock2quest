@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use cgmath::{
-    Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3, point3, vec3,
+    Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3,
+    point3, vec3,
 };
 use dark::{
     SCALE_FACTOR,
@@ -312,19 +313,21 @@ impl DebugGlovesScene {
 
     fn create_hand_pose_debug_cubes() -> Vec<SceneObject> {
         let pose = hand_pose::point_right_hand();
-        let mut cubes = Vec::new();
+        let relationships = hand_pose::joint_relationships();
+        let mut objects = Vec::new();
 
         // Position the pose cubes to the right of the current debug rendering
         let pose_offset = vec3(4.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
         let pose_scale = 1.0;
 
+        // Create cubes for each bone position
         for (bone_index, bone_position) in pose.bone_positions.iter().enumerate() {
             // bone_position is already cgmath::Vector3<f32>
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
-            let cube_color = if bone_index == 7 {
-                Vector3::new(1.0, 0.0, 0.0) // Red for bone index 1
+            let cube_color = if bone_index == 0 {
+                Vector3::new(1.0, 0.0, 0.0) // Red for bone index 7
             } else {
                 Vector3::new(0.0, 1.0, 0.5) // Cyan-green for other bones
             };
@@ -340,10 +343,153 @@ impl DebugGlovesScene {
                 * Matrix4::from_scale(cube_size);
 
             pose_cube.set_transform(cube_transform);
-            cubes.push(pose_cube);
+            objects.push(pose_cube);
         }
 
-        cubes
+        // Create debug lines connecting parent and child bones
+        for (&child_index, &parent_index) in &relationships {
+            if child_index < pose.bone_positions.len() && parent_index < pose.bone_positions.len() {
+                let child_pos = pose.bone_positions[child_index];
+                let parent_pos = pose.bone_positions[parent_index];
+
+                // Create a thin cylinder to represent the connection line
+                let line_material = color_material::create(Vector3::new(1.0, 1.0, 0.0)); // Yellow lines
+                let mut line_object = SceneObject::new(
+                    line_material,
+                    Box::new(engine::scene::cube::create()), // Using cube as a thin line
+                );
+
+                // Calculate the line properties
+                let direction = child_pos - parent_pos;
+                let length = direction.magnitude();
+
+                if length > 0.0 {
+                    let midpoint = parent_pos + direction * 0.5;
+                    let normalized_direction = direction / length;
+
+                    // Create transform for the line
+                    let line_thickness = 0.005 / SCALE_FACTOR; // Very thin line
+
+                    // Create a rotation matrix to align the line with the bone direction
+                    // Default cube extends along Z-axis, so we rotate to align with our direction
+                    let up = Vector3::unit_z();
+                    let rotation_matrix = if (normalized_direction.dot(up)).abs() < 0.99 {
+                        // Safe to use cross product
+                        let right = normalized_direction.cross(up).normalize();
+                        let actual_up = right.cross(normalized_direction);
+                        Matrix4::from_cols(
+                            right.extend(0.0),
+                            actual_up.extend(0.0),
+                            normalized_direction.extend(0.0),
+                            Vector3::new(0.0, 0.0, 0.0).extend(1.0),
+                        )
+                    } else {
+                        // Direction is parallel to up vector, use a different approach
+                        Matrix4::identity()
+                    };
+
+                    let line_transform = Matrix4::from_translation(pose_offset)
+                        * Matrix4::from_scale(pose_scale)
+                        * Matrix4::from_translation(midpoint)
+                        * rotation_matrix
+                        * Matrix4::from_nonuniform_scale(line_thickness, line_thickness, length);
+
+                    line_object.set_transform(line_transform);
+                    objects.push(line_object);
+                }
+            }
+        }
+
+        objects
+    }
+
+
+    fn create_open_pose_debug_cubes() -> Vec<SceneObject> {
+        let pose = hand_pose::open_right_hand();
+        let relationships = hand_pose::joint_relationships();
+        let mut objects = Vec::new();
+
+        // Position the open pose cubes even further to the right
+        let pose_offset = vec3(12.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+        let pose_scale = 1.0;
+
+        // Create cubes for each bone position
+        for (bone_index, bone_position) in pose.bone_positions.iter().enumerate() {
+            let bone_pos_cgmath = *bone_position;
+
+            // Create a small cube for each bone position
+            let cube_color = if bone_index == 0 {
+                Vector3::new(1.0, 0.0, 0.0) // Red for wrist (bone index 0)
+            } else {
+                Vector3::new(0.0, 0.8, 0.8) // Teal for other bones to distinguish from other poses
+            };
+            let cube_material = color_material::create(cube_color);
+            let mut pose_cube =
+                SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
+
+            // Scale and position the cube
+            let cube_size = 0.03 / SCALE_FACTOR;
+            let cube_transform = Matrix4::from_translation(pose_offset)
+                * Matrix4::from_scale(pose_scale)
+                * Matrix4::from_translation(bone_pos_cgmath)
+                * Matrix4::from_scale(cube_size);
+
+            pose_cube.set_transform(cube_transform);
+            objects.push(pose_cube);
+        }
+
+        // Create debug lines connecting parent and child bones
+        for (&child_index, &parent_index) in &relationships {
+            if child_index < pose.bone_positions.len() && parent_index < pose.bone_positions.len() {
+                let child_pos = pose.bone_positions[child_index];
+                let parent_pos = pose.bone_positions[parent_index];
+
+                // Create a thin cylinder to represent the connection line
+                let line_material = color_material::create(Vector3::new(0.0, 1.0, 1.0)); // Cyan lines for open pose
+                let mut line_object = SceneObject::new(
+                    line_material,
+                    Box::new(engine::scene::cube::create()),
+                );
+
+                // Calculate the line properties
+                let direction = child_pos - parent_pos;
+                let length = direction.magnitude();
+
+                if length > 0.0 {
+                    let midpoint = parent_pos + direction * 0.5;
+                    let normalized_direction = direction / length;
+
+                    // Create transform for the line
+                    let line_thickness = 0.005 / SCALE_FACTOR;
+
+                    // Create a rotation matrix to align the line with the bone direction
+                    let up = Vector3::unit_z();
+                    let rotation_matrix = if (normalized_direction.dot(up)).abs() < 0.99 {
+                        let right = normalized_direction.cross(up).normalize();
+                        let actual_up = right.cross(normalized_direction);
+                        Matrix4::from_cols(
+                            right.extend(0.0),
+                            actual_up.extend(0.0),
+                            normalized_direction.extend(0.0),
+                            Vector3::new(0.0, 0.0, 0.0).extend(1.0),
+                        )
+                    } else {
+                        Matrix4::identity()
+                    };
+
+                    let line_transform = Matrix4::from_translation(pose_offset)
+                        * Matrix4::from_scale(pose_scale)
+                        * Matrix4::from_translation(midpoint)
+                        * rotation_matrix
+                        * Matrix4::from_nonuniform_scale(line_thickness, line_thickness, length);
+
+                    line_object.set_transform(line_transform);
+                    objects.push(line_object);
+                }
+            }
+        }
+
+        objects
     }
 }
 
@@ -415,6 +561,9 @@ impl GameScene for DebugGlovesScene {
         // Add hand pose debug cubes
         scene_objects.extend(Self::create_hand_pose_debug_cubes());
 
+        // Add open pose debug cubes
+        scene_objects.extend(Self::create_open_pose_debug_cubes());
+
         (scene_objects, camera_position, camera_rotation)
     }
 
@@ -471,6 +620,9 @@ impl GameScene for DebugGlovesScene {
 
         // Add hand pose debug cubes
         scene_objects.extend(Self::create_hand_pose_debug_cubes());
+
+        // Add open pose debug cubes
+        scene_objects.extend(Self::create_open_pose_debug_cubes());
 
         scene_objects
     }
