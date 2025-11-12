@@ -328,7 +328,7 @@ impl DebugGlovesScene {
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
-            let cube_color = if bone_index == 0 {
+            let cube_color = if bone_index == 26 {
                 Vector3::new(1.0, 0.0, 0.0) // Red for bone index 7
             } else {
                 Vector3::new(0.0, 1.0, 0.5) // Cyan-green for other bones
@@ -405,7 +405,6 @@ impl DebugGlovesScene {
         objects
     }
 
-
     fn create_open_pose_debug_cubes() -> Vec<SceneObject> {
         let pose = hand_pose::open_right_hand();
         let relationships = hand_pose::joint_relationships();
@@ -451,10 +450,8 @@ impl DebugGlovesScene {
 
                 // Create a thin cylinder to represent the connection line
                 let line_material = color_material::create(Vector3::new(0.0, 1.0, 1.0)); // Cyan lines for open pose
-                let mut line_object = SceneObject::new(
-                    line_material,
-                    Box::new(engine::scene::cube::create()),
-                );
+                let mut line_object =
+                    SceneObject::new(line_material, Box::new(engine::scene::cube::create()));
 
                 // Calculate the line properties
                 let direction = child_pos - parent_pos;
