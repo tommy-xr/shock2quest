@@ -316,13 +316,15 @@ impl DebugGlovesScene {
         let relationships = hand_pose::joint_relationships();
         let mut objects = Vec::new();
 
+        // Get global positions by transforming through the bone hierarchy
+        let global_positions = pose.global_bone_positions();
+
         // Position the pose cubes to the right of the current debug rendering
         let pose_offset = vec3(4.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
         let pose_scale = 1.0;
 
         // Create cubes for each bone position
-        for (bone_index, bone_position) in pose.bone_positions.iter().enumerate() {
-            // bone_position is already cgmath::Vector3<f32>
+        for (bone_index, bone_position) in global_positions.iter().enumerate() {
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
@@ -348,9 +350,9 @@ impl DebugGlovesScene {
 
         // Create debug lines connecting parent and child bones
         for (&child_index, &parent_index) in &relationships {
-            if child_index < pose.bone_positions.len() && parent_index < pose.bone_positions.len() {
-                let child_pos = pose.bone_positions[child_index];
-                let parent_pos = pose.bone_positions[parent_index];
+            if child_index < global_positions.len() && parent_index < global_positions.len() {
+                let child_pos = global_positions[child_index];
+                let parent_pos = global_positions[parent_index];
 
                 // Create a thin cylinder to represent the connection line
                 let line_material = color_material::create(Vector3::new(1.0, 1.0, 0.0)); // Yellow lines
@@ -409,12 +411,15 @@ impl DebugGlovesScene {
         let relationships = hand_pose::joint_relationships();
         let mut objects = Vec::new();
 
+        // Get global positions by transforming through the bone hierarchy
+        let global_positions = pose.global_bone_positions();
+
         // Position the open pose cubes even further to the right
-        let pose_offset = vec3(12.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+        let pose_offset = vec3(8.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
         let pose_scale = 1.0;
 
         // Create cubes for each bone position
-        for (bone_index, bone_position) in pose.bone_positions.iter().enumerate() {
+        for (bone_index, bone_position) in global_positions.iter().enumerate() {
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
@@ -440,9 +445,9 @@ impl DebugGlovesScene {
 
         // Create debug lines connecting parent and child bones
         for (&child_index, &parent_index) in &relationships {
-            if child_index < pose.bone_positions.len() && parent_index < pose.bone_positions.len() {
-                let child_pos = pose.bone_positions[child_index];
-                let parent_pos = pose.bone_positions[parent_index];
+            if child_index < global_positions.len() && parent_index < global_positions.len() {
+                let child_pos = global_positions[child_index];
+                let parent_pos = global_positions[parent_index];
 
                 // Create a thin cylinder to represent the connection line
                 let line_material = color_material::create(Vector3::new(0.0, 1.0, 1.0)); // Cyan lines for open pose
