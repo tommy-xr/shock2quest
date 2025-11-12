@@ -1,4 +1,4 @@
-use cgmath::{Vector3, Quaternion};
+use cgmath::{Vector3, Quaternion, Matrix4, SquareMatrix};
 use std::collections::HashMap;
 
 /// Joint indices for hand bones
@@ -153,6 +153,101 @@ impl Pose {
     /// Creates a new pose from lists of bone positions and rotations
     pub fn new(bone_positions: Vec<Vector3<f32>>, bone_rotations: Vec<Quaternion<f32>>) -> Self {
         Self { bone_positions, bone_rotations }
+    }
+
+    /// Computes global transforms for all bones by accumulating through the hierarchy
+    /// Returns (global_positions, global_transforms) where positions are world space
+    /// and transforms are full 4x4 matrices for each bone
+    pub fn compute_global_transforms(&self) -> (Vec<Vector3<f32>>, Vec<Matrix4<f32>>) {
+        let relationships = joint_relationships();
+        let mut global_positions = vec![Vector3::new(0.0, 0.0, 0.0); self.bone_positions.len()];
+        let mut global_transforms = vec![Matrix4::identity(); self.bone_positions.len()];
+
+        // Build a map from child to parent for quick lookup
+        let mut child_to_parent = HashMap::new();
+        for (&child, &parent) in &relationships {
+            child_to_parent.insert(child, parent);
+        }
+
+        // Process bones in dependency order using a recursive approach
+        fn compute_bone_transform(
+            bone_index: usize,
+            pose: &Pose,
+            child_to_parent: &HashMap<usize, usize>,
+            global_positions: &mut Vec<Vector3<f32>>,
+            global_transforms: &mut Vec<Matrix4<f32>>,
+            computed: &mut Vec<bool>,
+        ) {
+            if computed[bone_index] {
+                return;
+            }
+
+            // First, ensure parent is computed
+            if let Some(&parent_index) = child_to_parent.get(&bone_index) {
+                if parent_index < pose.bone_positions.len() {
+                    compute_bone_transform(
+                        parent_index,
+                        pose,
+                        child_to_parent,
+                        global_positions,
+                        global_transforms,
+                        computed,
+                    );
+
+                    // Create local transform from position and rotation
+                    let local_position = pose.bone_positions[bone_index];
+                    let local_rotation = pose.bone_rotations[bone_index];
+                    let local_transform = Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
+
+                    // Multiply by parent's global transform
+                    let parent_global = global_transforms[parent_index];
+                    global_transforms[bone_index] = parent_global * local_transform;
+
+                    // Extract global position from the transform matrix
+                    global_positions[bone_index] = global_transforms[bone_index].w.truncate();
+                } else {
+                    // Invalid parent index, treat as root
+                    let local_position = pose.bone_positions[bone_index];
+                    let local_rotation = pose.bone_rotations[bone_index];
+                    global_transforms[bone_index] = Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
+                    global_positions[bone_index] = local_position;
+                }
+            } else {
+                // Root bone - use local transform as global
+                let local_position = pose.bone_positions[bone_index];
+                let local_rotation = pose.bone_rotations[bone_index];
+                global_transforms[bone_index] = Matrix4::from_translation(local_position) * Matrix4::from(local_rotation);
+                global_positions[bone_index] = local_position;
+            }
+
+            computed[bone_index] = true;
+        }
+
+        let mut computed = vec![false; self.bone_positions.len()];
+
+        // Compute transforms for all bones
+        for bone_index in 0..self.bone_positions.len() {
+            compute_bone_transform(
+                bone_index,
+                self,
+                &child_to_parent,
+                &mut global_positions,
+                &mut global_transforms,
+                &mut computed,
+            );
+        }
+
+        (global_positions, global_transforms)
+    }
+
+    /// Returns global bone positions transformed through the hierarchy
+    pub fn global_bone_positions(&self) -> Vec<Vector3<f32>> {
+        self.compute_global_transforms().0
+    }
+
+    /// Returns global bone transforms as 4x4 matrices
+    pub fn global_bone_transforms(&self) -> Vec<Matrix4<f32>> {
+        self.compute_global_transforms().1
     }
 }
 
