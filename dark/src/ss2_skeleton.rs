@@ -177,6 +177,32 @@ impl Skeleton {
         self.rest_transforms.get(&joint_id)
     }
 
+    pub fn set_joint_transforms(
+        base_skeleton: &Skeleton,
+        joint_transforms: &HashMap<JointId, Matrix4<f32>>,
+    ) -> Skeleton {
+        let bones = base_skeleton.bones.clone();
+        let animation_transforms = joint_transforms.clone();
+        let mut global_transforms = HashMap::new();
+
+        for bone in &bones {
+            let _ignored = calc_and_cache_global_transform(
+                bone.joint_id,
+                &animation_transforms,
+                &mut global_transforms,
+                &bones,
+            );
+        }
+
+        Skeleton {
+            bones,
+            animation_transforms,
+            global_transforms,
+            node_to_joint: base_skeleton.node_to_joint.clone(),
+            rest_transforms: base_skeleton.rest_transforms.clone(),
+        }
+    }
+
     pub fn debug_draw(&self, global_transforms: &[Matrix4<f32>]) -> Vec<SceneObject> {
         if global_transforms.is_empty() || self.bones.is_empty() {
             return Vec::new();
