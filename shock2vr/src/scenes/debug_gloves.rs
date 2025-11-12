@@ -283,8 +283,11 @@ impl GameScene for DebugGlovesScene {
 
         // Add custom bone visualization for the static glove
         if let Some(skeleton) = self.glove_model.skeleton() {
-            let static_transform = Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
-                * Matrix4::from_scale(GLOVE_SCALE);
+            let static_transform = Matrix4::from_translation(vec3(
+                GLOVE_POSITION.x,
+                GLOVE_POSITION.y,
+                GLOVE_POSITION.z,
+            )) * Matrix4::from_scale(GLOVE_SCALE);
 
             let world_transforms = skeleton.world_transforms();
 
@@ -296,15 +299,15 @@ impl GameScene for DebugGlovesScene {
 
                     // Create cube at bone position
                     let cube_material = color_material::create(Vector3::new(1.0, 0.5, 0.0)); // Orange color
-                    let mut bone_cube = SceneObject::new(
-                        cube_material,
-                        Box::new(engine::scene::cube::create())
-                    );
+                    let mut bone_cube =
+                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
                     // Scale cube small and position it at the bone location (moved up 1 unit)
                     let cube_size = 0.02 / SCALE_FACTOR; // Small cube
                     let bone_cube_transform = static_transform
-                        * Matrix4::from_translation(bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0))
+                        * Matrix4::from_translation(
+                            bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0),
+                        )
                         * Matrix4::from_scale(cube_size);
 
                     bone_cube.set_transform(bone_cube_transform);
@@ -334,8 +337,11 @@ impl GameScene for DebugGlovesScene {
 
         // Add custom bone visualization for the static glove
         if let Some(skeleton) = self.glove_model.skeleton() {
-            let static_transform = Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
-                * Matrix4::from_scale(GLOVE_SCALE);
+            let static_transform = Matrix4::from_translation(vec3(
+                GLOVE_POSITION.x,
+                GLOVE_POSITION.y,
+                GLOVE_POSITION.z,
+            )) * Matrix4::from_scale(GLOVE_SCALE);
 
             let world_transforms = skeleton.world_transforms();
 
@@ -347,15 +353,15 @@ impl GameScene for DebugGlovesScene {
 
                     // Create cube at bone position
                     let cube_material = color_material::create(Vector3::new(1.0, 0.5, 0.0)); // Orange color
-                    let mut bone_cube = SceneObject::new(
-                        cube_material,
-                        Box::new(engine::scene::cube::create())
-                    );
+                    let mut bone_cube =
+                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
                     // Scale cube small and position it at the bone location (moved up 1 unit)
                     let cube_size = 0.02 / SCALE_FACTOR; // Small cube
                     let bone_cube_transform = static_transform
-                        * Matrix4::from_translation(bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0))
+                        * Matrix4::from_translation(
+                            bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0),
+                        )
                         * Matrix4::from_scale(cube_size);
 
                     bone_cube.set_transform(bone_cube_transform);
