@@ -269,6 +269,22 @@ impl DebugGlovesScene {
         pose_offset + vec3(0.0, POSE_GLOVE_VERTICAL_OFFSET, 0.0)
     }
 
+    /// Returns the debug color for a specific joint index
+    fn joint_debug_color(joint_index: usize) -> Vector3<f32> {
+        use hand_pose::joint_indices::*;
+
+        match joint_index {
+            WRIST => Vector3::new(1.0, 1.0, 1.0),        // White for wrist
+            FOREARM_STUB => Vector3::new(1.0, 1.0, 0.0), // Yellow for forearm_stub
+            THUMB_DISTAL => Vector3::new(0.0, 1.0, 1.0), // Cyan for thumb_distal
+            INDEX_TIP => Vector3::new(1.0, 0.0, 0.0),    // Red for index_tip
+            MIDDLE_TIP => Vector3::new(0.0, 1.0, 0.0),   // Green for middle_tip
+            RING_TIP => Vector3::new(0.0, 0.0, 1.0),     // Blue for ring_tip
+            PINKY_TIP => Vector3::new(1.0, 0.0, 1.0),    // Magenta for pinky_tip
+            _ => Vector3::new(0.7, 0.7, 0.7),            // Light gray for other joints
+        }
+    }
+
     fn create_debug_mission() -> AbstractMission {
         let scene_objects = Self::create_floor_scene_objects();
         let physics_geometry = Self::create_floor_physics();
@@ -346,12 +362,8 @@ impl DebugGlovesScene {
         {
             let bone_pos_cgmath = *bone_position;
 
-            // Create a small cube for each bone position
-            let cube_color = if bone_index == hand_pose::joint_indices::INDEX_PROXIMAL {
-                Vector3::new(1.0, 0.0, 0.0) // Red for index proximal joint
-            } else {
-                Vector3::new(0.0, 1.0, 0.5) // Cyan-green for other bones
-            };
+            // Create a small cube for each bone position with joint-specific color
+            let cube_color = Self::joint_debug_color(bone_index);
             let cube_material = color_material::create(cube_color);
             let mut pose_cube =
                 SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
@@ -448,12 +460,8 @@ impl DebugGlovesScene {
         {
             let bone_pos_cgmath = *bone_position;
 
-            // Create a small cube for each bone position
-            let cube_color = if bone_index == 0 {
-                Vector3::new(1.0, 0.0, 0.0) // Red for wrist (bone index 0)
-            } else {
-                Vector3::new(0.0, 0.8, 0.8) // Teal for other bones to distinguish from other poses
-            };
+            // Create a small cube for each bone position with joint-specific color
+            let cube_color = Self::joint_debug_color(bone_index);
             let cube_material = color_material::create(cube_color);
             let mut pose_cube =
                 SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
@@ -577,7 +585,7 @@ impl DebugGlovesScene {
 
         for bone_index in 0..pose_bone_count {
             let joint_id = bone_index as u32;
-            let mut pose_transform = global_transforms[bone_index - offset];
+            let mut pose_transform = global_transforms[bone_index];
 
             // Apply 100x scale to match skeleton coordinate system
             pose_transform.x *= 100.0;
@@ -639,13 +647,18 @@ impl GameScene for DebugGlovesScene {
             let world_transforms = skeleton.world_transforms();
 
             // Create a cube for each bone position
-            for bone_transform in world_transforms.iter().take(DEBUG_RENDER_BONE_COUNT) {
+            for (bone_index, bone_transform) in world_transforms
+                .iter()
+                .enumerate()
+                .take(DEBUG_RENDER_BONE_COUNT)
+            {
                 // Skip identity transforms (unused bones)
                 if bone_transform != &Matrix4::identity() {
                     let bone_position = bone_transform.w.truncate();
 
-                    // Create cube at bone position
-                    let cube_material = color_material::create(Vector3::new(1.0, 0.5, 0.0)); // Orange color
+                    // Create cube at bone position with joint-specific color
+                    let cube_color = Self::joint_debug_color(bone_index);
+                    let cube_material = color_material::create(cube_color);
                     let mut bone_cube =
                         SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
@@ -700,13 +713,18 @@ impl GameScene for DebugGlovesScene {
             let world_transforms = skeleton.world_transforms();
 
             // Create a cube for each bone position
-            for bone_transform in world_transforms.iter().take(DEBUG_RENDER_BONE_COUNT) {
+            for (bone_index, bone_transform) in world_transforms
+                .iter()
+                .enumerate()
+                .take(DEBUG_RENDER_BONE_COUNT)
+            {
                 // Skip identity transforms (unused bones)
                 if bone_transform != &Matrix4::identity() {
                     let bone_position = bone_transform.w.truncate();
 
-                    // Create cube at bone position
-                    let cube_material = color_material::create(Vector3::new(1.0, 0.5, 0.0)); // Orange color
+                    // Create cube at bone position with joint-specific color
+                    let cube_color = Self::joint_debug_color(bone_index);
+                    let cube_material = color_material::create(cube_color);
                     let mut bone_cube =
                         SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
