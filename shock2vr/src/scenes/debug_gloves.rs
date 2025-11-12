@@ -24,6 +24,7 @@ use tracing::info;
 use crate::{
     GameOptions,
     game_scene::GameScene,
+    hand_pose,
     input_context::InputContext,
     mission::{
         AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
@@ -308,6 +309,42 @@ impl DebugGlovesScene {
         )
         .build()
     }
+
+    fn create_hand_pose_debug_cubes() -> Vec<SceneObject> {
+        let pose = hand_pose::point_right_hand();
+        let mut cubes = Vec::new();
+
+        // Position the pose cubes to the right of the current debug rendering
+        let pose_offset = vec3(4.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+        let pose_scale = 1.0;
+
+        for (bone_index, bone_position) in pose.bone_positions.iter().enumerate() {
+            // bone_position is already cgmath::Vector3<f32>
+            let bone_pos_cgmath = *bone_position;
+
+            // Create a small cube for each bone position
+            let cube_color = if bone_index == 7 {
+                Vector3::new(1.0, 0.0, 0.0) // Red for bone index 1
+            } else {
+                Vector3::new(0.0, 1.0, 0.5) // Cyan-green for other bones
+            };
+            let cube_material = color_material::create(cube_color);
+            let mut pose_cube =
+                SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
+
+            // Scale and position the cube
+            let cube_size = 0.03 / SCALE_FACTOR; // Slightly larger than bone cubes for visibility
+            let cube_transform = Matrix4::from_translation(pose_offset)
+                * Matrix4::from_scale(pose_scale)
+                * Matrix4::from_translation(bone_pos_cgmath)
+                * Matrix4::from_scale(cube_size);
+
+            pose_cube.set_transform(cube_transform);
+            cubes.push(pose_cube);
+        }
+
+        cubes
+    }
 }
 
 impl GameScene for DebugGlovesScene {
@@ -375,6 +412,9 @@ impl GameScene for DebugGlovesScene {
             }
         }
 
+        // Add hand pose debug cubes
+        scene_objects.extend(Self::create_hand_pose_debug_cubes());
+
         (scene_objects, camera_position, camera_rotation)
     }
 
@@ -428,6 +468,9 @@ impl GameScene for DebugGlovesScene {
                 }
             }
         }
+
+        // Add hand pose debug cubes
+        scene_objects.extend(Self::create_hand_pose_debug_cubes());
 
         scene_objects
     }
