@@ -44,6 +44,7 @@ const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
 const DEBUG_RENDER_BONE_COUNT: usize = hand_pose::AUX_BONE_START_INDEX;
 const MAX_DEBUG_BONE_INDEX: usize = DEBUG_RENDER_BONE_COUNT - 1;
+const POSE_GLOVE_VERTICAL_OFFSET: f32 = -1.5 / SCALE_FACTOR;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -256,6 +257,18 @@ impl DebugGlovesScene {
         gloves
     }
 
+    fn pointing_pose_offset() -> Vector3<f32> {
+        vec3(4.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR)
+    }
+
+    fn open_pose_offset() -> Vector3<f32> {
+        vec3(8.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR)
+    }
+
+    fn glove_translation_for_pose(pose_offset: Vector3<f32>) -> Vector3<f32> {
+        pose_offset + vec3(0.0, POSE_GLOVE_VERTICAL_OFFSET, 0.0)
+    }
+
     fn create_debug_mission() -> AbstractMission {
         let scene_objects = Self::create_floor_scene_objects();
         let physics_geometry = Self::create_floor_physics();
@@ -322,7 +335,7 @@ impl DebugGlovesScene {
         let global_positions = pose.global_bone_positions();
 
         // Position the pose cubes to the right of the current debug rendering
-        let pose_offset = vec3(4.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+        let pose_offset = Self::pointing_pose_offset();
         let pose_scale = 1.0;
 
         // Create cubes for each bone position
@@ -334,8 +347,8 @@ impl DebugGlovesScene {
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
-            let cube_color = if bone_index == hand_pose::joint_indices::FOREARM_STUB {
-                Vector3::new(1.0, 0.0, 0.0) // Red for bone index 7
+            let cube_color = if bone_index == hand_pose::joint_indices::INDEX_PROXIMAL {
+                Vector3::new(1.0, 0.0, 0.0) // Red for index proximal joint
             } else {
                 Vector3::new(0.0, 1.0, 0.5) // Cyan-green for other bones
             };
@@ -424,7 +437,7 @@ impl DebugGlovesScene {
         let global_positions = pose.global_bone_positions();
 
         // Position the open pose cubes even further to the right
-        let pose_offset = vec3(8.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+        let pose_offset = Self::open_pose_offset();
         let pose_scale = 1.0;
 
         // Create cubes for each bone position
@@ -511,6 +524,72 @@ impl DebugGlovesScene {
 
         objects
     }
+
+    fn pose_glove_objects(&self) -> Vec<SceneObject> {
+        let mut pose_gloves = Vec::new();
+        let skeleton = match self.glove_model.skeleton() {
+            Some(skeleton) => skeleton,
+            None => return pose_gloves,
+        };
+
+        let pointing_pose = hand_pose::point_right_hand();
+        pose_gloves.extend(self.create_pose_glove_objects(
+            skeleton,
+            &pointing_pose,
+            Self::pointing_pose_offset(),
+        ));
+
+        let open_pose = hand_pose::open_right_hand();
+        pose_gloves.extend(self.create_pose_glove_objects(
+            skeleton,
+            &open_pose,
+            Self::open_pose_offset(),
+        ));
+
+        pose_gloves
+    }
+
+    fn create_pose_glove_objects(
+        &self,
+        skeleton: &Skeleton,
+        pose: &hand_pose::Pose,
+        pose_offset: Vector3<f32>,
+    ) -> Vec<SceneObject> {
+        let glove_translation = Self::glove_translation_for_pose(pose_offset);
+        let pose_transform =
+            Matrix4::from_translation(glove_translation) * Matrix4::from_scale(GLOVE_SCALE);
+        let mut glove_objects = Self::clone_with_transform(&self.glove_template, pose_transform);
+        let skinning_data = Self::pose_skinning_data(skeleton, pose);
+
+        for glove_object in glove_objects.iter_mut() {
+            glove_object.set_skinning_data(skinning_data);
+        }
+
+        glove_objects
+    }
+
+    fn pose_skinning_data(skeleton: &Skeleton, pose: &hand_pose::Pose) -> [Matrix4<f32>; 40] {
+        let global_transforms = pose.global_bone_transforms();
+        let mut skinning_data = [Matrix4::identity(); 40];
+
+        let skeleton_bone_count = skeleton.bone_count().min(40);
+        let pose_bone_count = global_transforms.len().min(skeleton_bone_count);
+
+        for bone_index in 0..pose_bone_count {
+            let joint_id = bone_index as u32;
+            let mut final_transform = global_transforms[bone_index];
+
+            if let Some(rest) = skeleton.rest_transform(joint_id) {
+                final_transform = final_transform * rest.inverse_bind;
+            } else {
+                panic!("no rest pose");
+            }
+
+            skinning_data[bone_index] = final_transform;
+        }
+
+        skinning_data
+    }
 }
 
 impl GameScene for DebugGlovesScene {
@@ -542,6 +621,7 @@ impl GameScene for DebugGlovesScene {
         // Add the static and per-hand glove objects to the scene
         scene_objects.extend(self.static_glove_objects.clone());
         scene_objects.extend(self.hand_glove_objects());
+        scene_objects.extend(self.pose_glove_objects());
 
         // Add custom bone visualization for the static glove
         if let Some(skeleton) = self.glove_model.skeleton() {
@@ -602,6 +682,7 @@ impl GameScene for DebugGlovesScene {
         // Add the glove objects to the per-eye render as well
         scene_objects.extend(self.static_glove_objects.clone());
         scene_objects.extend(self.hand_glove_objects());
+        scene_objects.extend(self.pose_glove_objects());
 
         // Add custom bone visualization for the static glove
         if let Some(skeleton) = self.glove_model.skeleton() {
