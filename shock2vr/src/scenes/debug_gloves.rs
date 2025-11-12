@@ -44,7 +44,7 @@ const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
 const DEBUG_RENDER_BONE_COUNT: usize = hand_pose::AUX_BONE_START_INDEX;
 const MAX_DEBUG_BONE_INDEX: usize = DEBUG_RENDER_BONE_COUNT - 1;
-const POSE_GLOVE_VERTICAL_OFFSET: f32 = -1.5 / SCALE_FACTOR;
+const POSE_GLOVE_VERTICAL_OFFSET: f32 = -0.5 / SCALE_FACTOR;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -577,15 +577,20 @@ impl DebugGlovesScene {
 
         for bone_index in 0..pose_bone_count {
             let joint_id = bone_index as u32;
-            let mut final_transform = global_transforms[bone_index];
+            let mut pose_transform = global_transforms[bone_index - offset];
+
+            // Apply 100x scale to match skeleton coordinate system
+            pose_transform.x *= 100.0;
+            pose_transform.y *= 100.0;
+            pose_transform.z *= 100.0;
 
             if let Some(rest) = skeleton.rest_transform(joint_id) {
-                final_transform = final_transform * rest.inverse_bind;
+                pose_transform = pose_transform * rest.inverse_bind;
             } else {
                 panic!("no rest pose");
             }
 
-            skinning_data[bone_index] = final_transform;
+            skinning_data[bone_index] = pose_transform;
         }
 
         skinning_data
