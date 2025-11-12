@@ -42,6 +42,8 @@ const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 const GLOVE_POSITION: Point3<f32> = point3(0.0, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
 const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
+const DEBUG_RENDER_BONE_COUNT: usize = hand_pose::AUX_BONE_START_INDEX;
+const MAX_DEBUG_BONE_INDEX: usize = DEBUG_RENDER_BONE_COUNT - 1;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -324,11 +326,15 @@ impl DebugGlovesScene {
         let pose_scale = 1.0;
 
         // Create cubes for each bone position
-        for (bone_index, bone_position) in global_positions.iter().enumerate() {
+        for (bone_index, bone_position) in global_positions
+            .iter()
+            .enumerate()
+            .take(DEBUG_RENDER_BONE_COUNT)
+        {
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
-            let cube_color = if bone_index == 26 {
+            let cube_color = if bone_index == hand_pose::joint_indices::FOREARM_STUB {
                 Vector3::new(1.0, 0.0, 0.0) // Red for bone index 7
             } else {
                 Vector3::new(0.0, 1.0, 0.5) // Cyan-green for other bones
@@ -350,6 +356,10 @@ impl DebugGlovesScene {
 
         // Create debug lines connecting parent and child bones
         for (&child_index, &parent_index) in &relationships {
+            if child_index > MAX_DEBUG_BONE_INDEX || parent_index > MAX_DEBUG_BONE_INDEX {
+                continue;
+            }
+
             if child_index < global_positions.len() && parent_index < global_positions.len() {
                 let child_pos = global_positions[child_index];
                 let parent_pos = global_positions[parent_index];
@@ -418,7 +428,11 @@ impl DebugGlovesScene {
         let pose_scale = 1.0;
 
         // Create cubes for each bone position
-        for (bone_index, bone_position) in global_positions.iter().enumerate() {
+        for (bone_index, bone_position) in global_positions
+            .iter()
+            .enumerate()
+            .take(DEBUG_RENDER_BONE_COUNT)
+        {
             let bone_pos_cgmath = *bone_position;
 
             // Create a small cube for each bone position
@@ -444,6 +458,10 @@ impl DebugGlovesScene {
 
         // Create debug lines connecting parent and child bones
         for (&child_index, &parent_index) in &relationships {
+            if child_index > MAX_DEBUG_BONE_INDEX || parent_index > MAX_DEBUG_BONE_INDEX {
+                continue;
+            }
+
             if child_index < global_positions.len() && parent_index < global_positions.len() {
                 let child_pos = global_positions[child_index];
                 let parent_pos = global_positions[parent_index];
@@ -536,7 +554,7 @@ impl GameScene for DebugGlovesScene {
             let world_transforms = skeleton.world_transforms();
 
             // Create a cube for each bone position
-            for (_bone_index, bone_transform) in world_transforms.iter().enumerate() {
+            for bone_transform in world_transforms.iter().take(DEBUG_RENDER_BONE_COUNT) {
                 // Skip identity transforms (unused bones)
                 if bone_transform != &Matrix4::identity() {
                     let bone_position = bone_transform.w.truncate();
@@ -596,7 +614,7 @@ impl GameScene for DebugGlovesScene {
             let world_transforms = skeleton.world_transforms();
 
             // Create a cube for each bone position
-            for (_bone_index, bone_transform) in world_transforms.iter().enumerate() {
+            for bone_transform in world_transforms.iter().take(DEBUG_RENDER_BONE_COUNT) {
                 // Skip identity transforms (unused bones)
                 if bone_transform != &Matrix4::identity() {
                     let bone_position = bone_transform.w.truncate();

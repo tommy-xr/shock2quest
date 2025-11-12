@@ -49,6 +49,9 @@ pub mod joint_indices {
     pub const PINKY_AUX: usize = 30;
 }
 
+/// Bones at or beyond this index are auxiliary and skipped in debug rendering.
+pub const AUX_BONE_START_INDEX: usize = joint_indices::THUMB_AUX;
+
 /// Creates a map of joint relationships where key is child joint index and value is parent joint index
 pub fn joint_relationships() -> HashMap<usize, usize> {
     use joint_indices::*;
@@ -56,7 +59,7 @@ pub fn joint_relationships() -> HashMap<usize, usize> {
     let mut relationships = HashMap::new();
 
     // Forearm stub connects to wrist
-    relationships.insert(FOREARM_STUB, WRIST);
+    relationships.insert(WRIST, FOREARM_STUB);
 
     // Thumb chain (starts from wrist)
     relationships.insert(THUMB_METACARPAL, WRIST);
