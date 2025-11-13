@@ -51,11 +51,11 @@ impl CutscenePlayerScene {
 
         #[cfg(feature = "ffmpeg")]
         {
-            use engine::audio::{AudioHandle, test_audio};
+            use engine::audio::{AudioHandle, play_audio};
 
             let video_player = VideoPlayer::from_filename(&video_path)?;
             let audio_clip = Rc::new(AudioPlayer::from_filename(&video_path)?);
-            test_audio(audio_context, AudioHandle::new(), None, audio_clip);
+            play_audio(audio_context, AudioHandle::new(), None, audio_clip);
 
             return Ok(Self {
                 world,
