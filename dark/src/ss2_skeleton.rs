@@ -182,7 +182,13 @@ impl Skeleton {
         joint_transforms: &HashMap<JointId, Matrix4<f32>>,
     ) -> Skeleton {
         let bones = base_skeleton.bones.clone();
-        let animation_transforms = joint_transforms.clone();
+        let mut animation_transforms = HashMap::new();
+
+        for (joint_id, transform) in joint_transforms.iter() {
+            let converted =
+                convert_joint_transform_for_animation(&bones, *joint_id, *transform);
+            animation_transforms.insert(*joint_id, converted);
+        }
         let mut global_transforms = HashMap::new();
 
         for bone in &bones {
@@ -477,7 +483,9 @@ pub fn animate(
     // Have joint transforms completely override animation transforms
     // TODO: Are there cases where joint transforms need to be used in the context of an animation transform? Maybe head rotation?
     for (joint, transform) in additional_joint_transforms {
-        animation_transforms.insert(*joint, *transform);
+        let converted =
+            convert_joint_transform_for_animation(&bones, *joint, *transform);
+        animation_transforms.insert(*joint, converted);
     }
 
     let mut global_transforms = HashMap::new();
@@ -502,4 +510,18 @@ pub fn animate(
 
 fn translation_from_matrix(matrix: &Matrix4<f32>) -> Vector3<f32> {
     matrix.w.truncate()
+}
+
+fn convert_joint_transform_for_animation(
+    bones: &[Bone],
+    joint_id: JointId,
+    transform: Matrix4<f32>,
+) -> Matrix4<f32> {
+    if let Some(bone) = bones.iter().find(|bone| bone.joint_id == joint_id) {
+        if let Some(local_inverse) = bone.local_transform.invert() {
+            return local_inverse * transform * bone.local_transform;
+        }
+    }
+
+    transform
 }
