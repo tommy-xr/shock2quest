@@ -151,6 +151,23 @@ impl DebugGlovesScene {
         scene_objects
     }
 
+    fn apply_joint_overrides(skeleton: &Skeleton) -> Skeleton {
+        let mut joint_transforms = HashMap::new();
+
+        // Get rotations from the point pose
+        let point_pose = hand_pose::point_right_hand();
+
+        // Apply all bone rotations from the pose
+        for (bone_index, &rotation) in point_pose.bone_positions.iter().enumerate() {
+            if (bone_index >= 0) {
+                let rotation_matrix = Matrix4::from(rotation);
+                joint_transforms.insert(bone_index as u32, rotation_matrix);
+            }
+        }
+
+        Skeleton::set_joint_transforms(skeleton, &joint_transforms)
+    }
+
     fn create_static_glove_objects(
         template: &[SceneObject],
         skeleton: Option<&Skeleton>,
@@ -163,12 +180,7 @@ impl DebugGlovesScene {
         let mut objects = Self::clone_with_transform(template, transform);
 
         if let Some(skeleton) = skeleton {
-            let mut joint_transforms = HashMap::new();
-            let rotation_transform = Matrix4::from_angle_z(Deg(45.0));
-            joint_transforms.insert(6u32, rotation_transform);
-            joint_transforms.insert(7u32, rotation_transform);
-
-            let skeleton = Skeleton::set_joint_transforms(skeleton, &joint_transforms);
+            let skeleton = Self::apply_joint_overrides(skeleton);
             objects.extend(Self::create_manual_skinning_glove_objects(
                 template, &skeleton,
             ));
@@ -644,13 +656,7 @@ impl GameScene for DebugGlovesScene {
 
         // Add custom bone visualization for the static glove
         if let Some(skeleton) = self.glove_model.skeleton() {
-            // Test new set_joint_transforms function by  rotating joint 5 by 90 degrees on Y-axis
-            let mut joint_transforms = HashMap::new();
-            let rotation_transform = Matrix4::from_angle_z(Deg(45.0));
-            joint_transforms.insert(6u32, rotation_transform);
-            joint_transforms.insert(7u32, rotation_transform);
-
-            let skeleton = Skeleton::set_joint_transforms(skeleton, &joint_transforms);
+            let skeleton = Self::apply_joint_overrides(skeleton);
             let static_transform = Matrix4::from_translation(vec3(
                 GLOVE_POSITION.x,
                 GLOVE_POSITION.y,
