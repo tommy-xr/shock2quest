@@ -587,7 +587,9 @@ impl PhysicsWorld {
             max_height: CharacterLength::Relative(0.5),
             min_width: CharacterLength::Relative(1.0),
         });
-        controller.offset = CharacterLength::Absolute(0.5 / SCALE_FACTOR);
+        // controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
+        // controller.snap_to_ground = Some(CharacterLength::Absolute(0.2));
+        // controller.normal_nudge_factor = 0.1;
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);
@@ -721,21 +723,24 @@ impl PhysicsWorld {
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let _character_mass = character_body.mass();
 
+        let movement_with_upward = desired_movement + Vector::y() * 0.25;
+
         let mut gravity = -0.5 / SCALE_FACTOR;
         gravity *= character_body.gravity_scale();
 
-        let movement_with_gravity = desired_movement + Vector::y() * gravity;
+        let graivty_moment = Vector::y() * gravity - Vector::y() * 0.25;
 
         //let mut collisions = vec![];
-        let mvt = profile!(scope: "physics", level: TRACE, "physics.move_player", {
-            player_handle.controller.move_shape(
+        let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
+            // First, move the player horizontally
+            (player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &self.rigid_body_set,
                 &self.collider_set,
                 &self.query_pipeline,
                 character_collider.shape(),
                 character_collider.position(),
-                movement_with_gravity.cast::<Real>(),
+                movement_with_upward.cast::<Real>(),
                 QueryFilter::new()
                     .groups(InteractionGroups::new(
                         InternalCollisionGroups::PLAYER.bits.into(),
@@ -745,7 +750,26 @@ impl PhysicsWorld {
                     .exclude_sensors(),
                 |_c| (),
                 //|c| collisions.push(c),
-            )
+            ),
+
+            player_handle.controller.move_shape(
+                self.integration_parameters.dt,
+                &self.rigid_body_set,
+                &self.collider_set,
+                &self.query_pipeline,
+                character_collider.shape(),
+                character_collider.position(),
+                graivty_moment.cast::<Real>(),
+                QueryFilter::new()
+                    .groups(InteractionGroups::new(
+                        InternalCollisionGroups::PLAYER.bits.into(),
+                        InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                    ))
+                    .exclude_rigid_body(player_handle.character_handle)
+                    .exclude_sensors(),
+                |_c| (),
+                //|c| collisions.push(c),
+            ))
         });
 
         let mut collision_events = Vec::new();
@@ -825,7 +849,9 @@ impl PhysicsWorld {
         let character_body = &mut self.rigid_body_set[player_handle.character_handle];
         let _original_pos = character_body.position().translation.vector;
         let pos = character_body.position();
-        character_body.set_next_kinematic_translation(pos.translation.vector + mvt.translation);
+        character_body.set_next_kinematic_translation(
+            pos.translation.vector + mvt1.translation + mvt2.translation,
+        );
         (collision_events, character_body)
     }
 
