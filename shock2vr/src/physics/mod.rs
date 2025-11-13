@@ -12,7 +12,7 @@ use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3};
 use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
-    control::{CharacterAutostep, CharacterLength, KinematicCharacterController},
+    control::{CharacterLength, KinematicCharacterController},
     na::UnitQuaternion,
     prelude::*,
 };
