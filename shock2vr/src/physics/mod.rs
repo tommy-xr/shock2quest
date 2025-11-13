@@ -22,7 +22,7 @@ use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
 
-const MOVEMENT_STEP_SIZE: f32 = 0.25;
+const MOVEMENT_STEP_SIZE: f32 = 20.0;
 
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
@@ -719,17 +719,19 @@ impl PhysicsWorld {
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let _character_mass = character_body.mass();
 
+        let step_size = Vector::y() * MOVEMENT_STEP_SIZE * self.integration_parameters.dt;
+
         // We do our player movement in two passes
         // First: move the player forward and a bit upwards
         // Second: Drop the player down for gravity
         // This wasn't necessary until upgrading to rapier v0.19.0 - when we upgraded to that version,
         // we started to snag on geometry.
-        let movement_with_upward = desired_movement + Vector::y() * MOVEMENT_STEP_SIZE;
+        let movement_with_upward = desired_movement + step_size;
 
         let mut gravity = -0.5 / SCALE_FACTOR;
         gravity *= character_body.gravity_scale();
 
-        let gravity_movement = Vector::y() * gravity - Vector::y() * MOVEMENT_STEP_SIZE;
+        let gravity_movement = Vector::y() * gravity - step_size;
 
         //let mut collisions = vec![];
         let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
