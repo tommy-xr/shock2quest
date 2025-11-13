@@ -128,11 +128,11 @@ impl Pose {
 
 pub fn closed_fist_pose() -> Pose {
     let no_rotation = Quaternion::zero();
-    let inward_rotation_1 = Quaternion::from_angle_y(Deg(20.0)); // Try X rotation for finger curl
-    let inward_rotation_2 = Quaternion::from_angle_y(Deg(30.0));
-    let inward_rotation_3 = Quaternion::from_angle_y(Deg(40.0));
-    let inward_rotation_4 = Quaternion::from_angle_y(Deg(30.0)); // Smaller angles
-    let inward_rotation_5 = Quaternion::from_angle_y(Deg(20.0));
+    let inward_rotation_1 = Quaternion::from_angle_x(Deg(20.0)); // Try X rotation for finger curl
+    let inward_rotation_2 = Quaternion::from_angle_x(Deg(30.0));
+    let inward_rotation_3 = Quaternion::from_angle_x(Deg(40.0));
+    let inward_rotation_4 = Quaternion::from_angle_x(Deg(30.0)); // Smaller angles
+    let inward_rotation_5 = Quaternion::from_angle_x(Deg(20.0));
     let bone_rotations: Vec<Quaternion<f32>> = vec![
         // Root and wrist
         no_rotation,

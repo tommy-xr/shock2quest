@@ -182,12 +182,7 @@ impl Skeleton {
         joint_transforms: &HashMap<JointId, Matrix4<f32>>,
     ) -> Skeleton {
         let bones = base_skeleton.bones.clone();
-        let mut animation_transforms = HashMap::new();
-
-        for (joint_id, transform) in joint_transforms.iter() {
-            let converted = convert_joint_transform_for_animation(&bones, *joint_id, *transform);
-            animation_transforms.insert(*joint_id, converted);
-        }
+        let animation_transforms = joint_transforms.clone();
         let mut global_transforms = HashMap::new();
 
         for bone in &bones {
