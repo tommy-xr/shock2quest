@@ -39,7 +39,8 @@ use crate::{
 
 const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
-const GLOVE_POSITION: Point3<f32> = point3(0.0, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+const GLOVE_POSITION: Point3<f32> =
+    point3(0.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
 const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
 const DEBUG_RENDER_BONE_COUNT: usize = hand_pose::AUX_BONE_START_INDEX;
@@ -52,7 +53,7 @@ pub struct DebugGlovesScene {
     core: MissionCore,
     glove_template: Vec<SceneObject>,
     glove_model: Rc<Model>,
-    static_glove_objects: Vec<SceneObject>,
+    glove_skeleton: Skeleton,
 }
 
 impl DebugGlovesScene {
@@ -71,8 +72,8 @@ impl DebugGlovesScene {
             audio_context,
             global_context,
             SpawnLocation::PositionRotation(
-                vec3(0.0, 5.0 / SCALE_FACTOR, -5.0 / SCALE_FACTOR),
-                Quaternion::from_angle_y(Deg(0.0)),
+                vec3(0.0, 5.0 / SCALE_FACTOR, 0.0 / SCALE_FACTOR),
+                Quaternion::from_angle_y(Deg(90.0)),
             ),
             QuestInfo::new(),
             Box::new(EmptyEntityPopulator {}),
@@ -83,8 +84,7 @@ impl DebugGlovesScene {
         // Load the VR glove model once and instantiate it as needed.
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
         let glove_template = Self::load_glove_template(asset_cache);
-        let static_glove_objects =
-            Self::create_static_glove_objects(&glove_template, glove_model.skeleton());
+        let glove_skeleton = glove_model.skeleton().unwrap().clone();
 
         info!(
             "Created debug gloves scene with {} glove nodes in template",
@@ -94,8 +94,8 @@ impl DebugGlovesScene {
         Self {
             core,
             glove_template,
+            glove_skeleton,
             glove_model,
-            static_glove_objects,
         }
     }
 
@@ -152,25 +152,23 @@ impl DebugGlovesScene {
     }
 
     fn apply_joint_overrides(skeleton: &Skeleton) -> Skeleton {
-        let mut joint_transforms = HashMap::new();
+        skeleton.clone()
+        // let mut joint_transforms = HashMap::new();
 
-        // Get rotations from the point pose
-        let point_pose = hand_pose::point_right_hand();
+        // // Apply all bone rotations from the pose
+        // for (bone_index, &rotation) in point_pose.bone_rotations.iter().enumerate() {
+        //     if (bone_index == 0) {
+        //         let rotation_matrix = Matrix4::from(rotation);
+        //         joint_transforms.insert(bone_index as u32, rotation_matrix);
+        //     }
+        // }
 
-        // Apply all bone rotations from the pose
-        for (bone_index, &rotation) in point_pose.bone_positions.iter().enumerate() {
-            if (bone_index >= 0) {
-                let rotation_matrix = Matrix4::from(rotation);
-                joint_transforms.insert(bone_index as u32, rotation_matrix);
-            }
-        }
-
-        Skeleton::set_joint_transforms(skeleton, &joint_transforms)
+        // Skeleton::set_joint_transforms(skeleton, &joint_transforms)
     }
 
     fn create_static_glove_objects(
         template: &[SceneObject],
-        skeleton: Option<&Skeleton>,
+        skeleton: &Skeleton,
     ) -> Vec<SceneObject> {
         let transform =
             Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
@@ -179,12 +177,10 @@ impl DebugGlovesScene {
 
         let mut objects = Self::clone_with_transform(template, transform);
 
-        if let Some(skeleton) = skeleton {
-            let skeleton = Self::apply_joint_overrides(skeleton);
-            objects.extend(Self::create_manual_skinning_glove_objects(
-                template, &skeleton,
-            ));
-        }
+        let skeleton = Self::apply_joint_overrides(skeleton);
+        objects.extend(Self::create_manual_skinning_glove_objects(
+            template, &skeleton,
+        ));
 
         objects
     }
@@ -208,27 +204,27 @@ impl DebugGlovesScene {
             .map(|object| {
                 let mut clone = object.clone();
                 clone.set_transform(manual_transform);
-                clone.set_skinning_data(skinning_data);
+                // clone.set_skinning_data(skinning_data);
                 clone
             })
             .collect()
     }
 
     fn manual_skinning_data(skeleton: &Skeleton) -> [Matrix4<f32>; 40] {
-        let world_transforms = skeleton.world_transforms();
+        let world_transforms = skeleton.get_transforms();
         let mut skinning_data = [Matrix4::identity(); 40];
 
         for (joint_index, world_transform) in world_transforms.iter().enumerate() {
-            if world_transform == &Matrix4::identity() {
-                continue;
-            }
+            // if world_transform == &Matrix4::identity() {
+            //     continue;
+            // }
 
-            let inverse_bind = skeleton
-                .rest_transform(joint_index as u32)
-                .map(|rest| rest.inverse_bind)
-                .unwrap_or_else(Matrix4::identity);
+            // let inverse_bind = skeleton
+            //     .rest_transform(joint_index as u32)
+            //     .map(|rest| rest.inverse_bind)
+            //     .unwrap_or_else(Matrix4::identity);
 
-            skinning_data[joint_index] = *world_transform * inverse_bind;
+            skinning_data[joint_index] = *world_transform;
         }
 
         skinning_data
@@ -360,240 +356,6 @@ impl DebugGlovesScene {
         .build()
     }
 
-    fn create_hand_pose_debug_cubes() -> Vec<SceneObject> {
-        let pose = hand_pose::point_right_hand();
-        let relationships = hand_pose::joint_relationships();
-        let mut objects = Vec::new();
-
-        // Get global positions by transforming through the bone hierarchy
-        let global_positions = pose.global_bone_positions();
-
-        // Position the pose cubes to the right of the current debug rendering
-        let pose_offset = Self::pointing_pose_offset();
-        let pose_scale = 1.0;
-
-        // Create cubes for each bone position
-        for (bone_index, bone_position) in global_positions
-            .iter()
-            .enumerate()
-            .take(DEBUG_RENDER_BONE_COUNT)
-        {
-            let bone_pos_cgmath = *bone_position;
-
-            // Create a small cube for each bone position with joint-specific color
-            let cube_color = Self::joint_debug_color(bone_index);
-            let cube_material = color_material::create(cube_color);
-            let mut pose_cube =
-                SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
-
-            // Scale and position the cube
-            let cube_size = 0.03 / SCALE_FACTOR; // Slightly larger than bone cubes for visibility
-            let cube_transform = Matrix4::from_translation(pose_offset)
-                * Matrix4::from_scale(pose_scale)
-                * Matrix4::from_translation(bone_pos_cgmath)
-                * Matrix4::from_scale(cube_size);
-
-            pose_cube.set_transform(cube_transform);
-            objects.push(pose_cube);
-        }
-
-        // Create debug lines connecting parent and child bones
-        for (&child_index, &parent_index) in &relationships {
-            if child_index > MAX_DEBUG_BONE_INDEX || parent_index > MAX_DEBUG_BONE_INDEX {
-                continue;
-            }
-
-            if child_index < global_positions.len() && parent_index < global_positions.len() {
-                let child_pos = global_positions[child_index];
-                let parent_pos = global_positions[parent_index];
-
-                // Create a thin cylinder to represent the connection line
-                let line_material = color_material::create(Vector3::new(1.0, 1.0, 0.0)); // Yellow lines
-                let mut line_object = SceneObject::new(
-                    line_material,
-                    Box::new(engine::scene::cube::create()), // Using cube as a thin line
-                );
-
-                // Calculate the line properties
-                let direction = child_pos - parent_pos;
-                let length = direction.magnitude();
-
-                if length > 0.0 {
-                    let midpoint = parent_pos + direction * 0.5;
-                    let normalized_direction = direction / length;
-
-                    // Create transform for the line
-                    let line_thickness = 0.005 / SCALE_FACTOR; // Very thin line
-
-                    // Create a rotation matrix to align the line with the bone direction
-                    // Default cube extends along Z-axis, so we rotate to align with our direction
-                    let up = Vector3::unit_z();
-                    let rotation_matrix = if (normalized_direction.dot(up)).abs() < 0.99 {
-                        // Safe to use cross product
-                        let right = normalized_direction.cross(up).normalize();
-                        let actual_up = right.cross(normalized_direction);
-                        Matrix4::from_cols(
-                            right.extend(0.0),
-                            actual_up.extend(0.0),
-                            normalized_direction.extend(0.0),
-                            Vector3::new(0.0, 0.0, 0.0).extend(1.0),
-                        )
-                    } else {
-                        // Direction is parallel to up vector, use a different approach
-                        Matrix4::identity()
-                    };
-
-                    let line_transform = Matrix4::from_translation(pose_offset)
-                        * Matrix4::from_scale(pose_scale)
-                        * Matrix4::from_translation(midpoint)
-                        * rotation_matrix
-                        * Matrix4::from_nonuniform_scale(line_thickness, line_thickness, length);
-
-                    line_object.set_transform(line_transform);
-                    objects.push(line_object);
-                }
-            }
-        }
-
-        objects
-    }
-
-    fn create_open_pose_debug_cubes() -> Vec<SceneObject> {
-        let pose = hand_pose::open_right_hand();
-        let relationships = hand_pose::joint_relationships();
-        let mut objects = Vec::new();
-
-        // Get global positions by transforming through the bone hierarchy
-        let global_positions = pose.global_bone_positions();
-
-        // Position the open pose cubes even further to the right
-        let pose_offset = Self::open_pose_offset();
-        let pose_scale = 1.0;
-
-        // Create cubes for each bone position
-        for (bone_index, bone_position) in global_positions
-            .iter()
-            .enumerate()
-            .take(DEBUG_RENDER_BONE_COUNT)
-        {
-            let bone_pos_cgmath = *bone_position;
-
-            // Create a small cube for each bone position with joint-specific color
-            let cube_color = Self::joint_debug_color(bone_index);
-            let cube_material = color_material::create(cube_color);
-            let mut pose_cube =
-                SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
-
-            // Scale and position the cube
-            let cube_size = 0.03 / SCALE_FACTOR;
-            let cube_transform = Matrix4::from_translation(pose_offset)
-                * Matrix4::from_scale(pose_scale)
-                * Matrix4::from_translation(bone_pos_cgmath)
-                * Matrix4::from_scale(cube_size);
-
-            pose_cube.set_transform(cube_transform);
-            objects.push(pose_cube);
-        }
-
-        // Create debug lines connecting parent and child bones
-        for (&child_index, &parent_index) in &relationships {
-            if child_index > MAX_DEBUG_BONE_INDEX || parent_index > MAX_DEBUG_BONE_INDEX {
-                continue;
-            }
-
-            if child_index < global_positions.len() && parent_index < global_positions.len() {
-                let child_pos = global_positions[child_index];
-                let parent_pos = global_positions[parent_index];
-
-                // Create a thin cylinder to represent the connection line
-                let line_material = color_material::create(Vector3::new(0.0, 1.0, 1.0)); // Cyan lines for open pose
-                let mut line_object =
-                    SceneObject::new(line_material, Box::new(engine::scene::cube::create()));
-
-                // Calculate the line properties
-                let direction = child_pos - parent_pos;
-                let length = direction.magnitude();
-
-                if length > 0.0 {
-                    let midpoint = parent_pos + direction * 0.5;
-                    let normalized_direction = direction / length;
-
-                    // Create transform for the line
-                    let line_thickness = 0.005 / SCALE_FACTOR;
-
-                    // Create a rotation matrix to align the line with the bone direction
-                    let up = Vector3::unit_z();
-                    let rotation_matrix = if (normalized_direction.dot(up)).abs() < 0.99 {
-                        let right = normalized_direction.cross(up).normalize();
-                        let actual_up = right.cross(normalized_direction);
-                        Matrix4::from_cols(
-                            right.extend(0.0),
-                            actual_up.extend(0.0),
-                            normalized_direction.extend(0.0),
-                            Vector3::new(0.0, 0.0, 0.0).extend(1.0),
-                        )
-                    } else {
-                        Matrix4::identity()
-                    };
-
-                    let line_transform = Matrix4::from_translation(pose_offset)
-                        * Matrix4::from_scale(pose_scale)
-                        * Matrix4::from_translation(midpoint)
-                        * rotation_matrix
-                        * Matrix4::from_nonuniform_scale(line_thickness, line_thickness, length);
-
-                    line_object.set_transform(line_transform);
-                    objects.push(line_object);
-                }
-            }
-        }
-
-        objects
-    }
-
-    fn pose_glove_objects(&self) -> Vec<SceneObject> {
-        let mut pose_gloves = Vec::new();
-        let skeleton = match self.glove_model.skeleton() {
-            Some(skeleton) => skeleton,
-            None => return pose_gloves,
-        };
-
-        let pointing_pose = hand_pose::point_right_hand();
-        pose_gloves.extend(self.create_pose_glove_objects(
-            skeleton,
-            &pointing_pose,
-            Self::pointing_pose_offset(),
-        ));
-
-        let open_pose = hand_pose::open_right_hand();
-        pose_gloves.extend(self.create_pose_glove_objects(
-            skeleton,
-            &open_pose,
-            Self::open_pose_offset(),
-        ));
-
-        pose_gloves
-    }
-
-    fn create_pose_glove_objects(
-        &self,
-        skeleton: &Skeleton,
-        pose: &hand_pose::Pose,
-        pose_offset: Vector3<f32>,
-    ) -> Vec<SceneObject> {
-        let glove_translation = Self::glove_translation_for_pose(pose_offset);
-        let pose_transform =
-            Matrix4::from_translation(glove_translation) * Matrix4::from_scale(GLOVE_SCALE);
-        let mut glove_objects = Self::clone_with_transform(&self.glove_template, pose_transform);
-        let skinning_data = Self::pose_skinning_data(skeleton, pose);
-
-        for glove_object in glove_objects.iter_mut() {
-            glove_object.set_skinning_data(skinning_data);
-        }
-
-        glove_objects
-    }
-
     fn pose_skinning_data(skeleton: &Skeleton, pose: &hand_pose::Pose) -> [Matrix4<f32>; 40] {
         let global_transforms = pose.global_bone_transforms();
         let mut skinning_data = [Matrix4::identity(); 40];
@@ -649,57 +411,46 @@ impl GameScene for DebugGlovesScene {
         let (mut scene_objects, camera_position, camera_rotation) =
             self.core.render(asset_cache, options);
 
+        let static_glove_objects =
+            Self::create_static_glove_objects(&self.glove_template, &self.glove_skeleton);
+
         // Add the static and per-hand glove objects to the scene
-        scene_objects.extend(self.static_glove_objects.clone());
-        scene_objects.extend(self.hand_glove_objects());
-        scene_objects.extend(self.pose_glove_objects());
+        scene_objects.extend(static_glove_objects);
 
         // Add custom bone visualization for the static glove
-        if let Some(skeleton) = self.glove_model.skeleton() {
-            let skeleton = Self::apply_joint_overrides(skeleton);
-            let static_transform = Matrix4::from_translation(vec3(
-                GLOVE_POSITION.x,
-                GLOVE_POSITION.y,
-                GLOVE_POSITION.z,
-            )) * Matrix4::from_scale(GLOVE_SCALE);
+        let skeleton = self.glove_skeleton.clone();
+        let static_transform =
+            Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
+                * Matrix4::from_scale(GLOVE_SCALE);
 
-            let world_transforms = skeleton.world_transforms();
+        let world_transforms = skeleton.world_transforms();
 
-            // Create a cube for each bone position
-            for (bone_index, bone_transform) in world_transforms
-                .iter()
-                .enumerate()
-                .take(DEBUG_RENDER_BONE_COUNT)
-            {
-                // Skip identity transforms (unused bones)
-                if bone_transform != &Matrix4::identity() {
-                    let bone_position = bone_transform.w.truncate();
+        // Create a cube for each bone position
+        for (bone_index, bone_transform) in world_transforms
+            .iter()
+            .enumerate()
+            .take(DEBUG_RENDER_BONE_COUNT)
+        {
+            // Skip identity transforms (unused bones)
+            if bone_transform != &Matrix4::identity() {
+                let bone_position = bone_transform.w.truncate();
 
-                    // Create cube at bone position with joint-specific color
-                    let cube_color = Self::joint_debug_color(bone_index);
-                    let cube_material = color_material::create(cube_color);
-                    let mut bone_cube =
-                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
+                // Create cube at bone position with joint-specific color
+                let cube_color = Self::joint_debug_color(bone_index);
+                let cube_material = color_material::create(cube_color);
+                let mut bone_cube =
+                    SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
-                    // Scale cube small and position it at the bone location (moved up 1 unit)
-                    let cube_size = 0.02 / SCALE_FACTOR; // Small cube
-                    let bone_cube_transform = static_transform
-                        * Matrix4::from_translation(
-                            bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0),
-                        )
-                        * Matrix4::from_scale(cube_size);
+                // Scale cube small and position it at the bone location (moved up 1 unit)
+                let cube_size = 0.02 / SCALE_FACTOR; // Small cube
+                let bone_cube_transform = static_transform
+                    * Matrix4::from_translation(bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0))
+                    * Matrix4::from_scale(cube_size);
 
-                    bone_cube.set_transform(bone_cube_transform);
-                    scene_objects.push(bone_cube);
-                }
+                bone_cube.set_transform(bone_cube_transform);
+                scene_objects.push(bone_cube);
             }
         }
-
-        // Add hand pose debug cubes
-        scene_objects.extend(Self::create_hand_pose_debug_cubes());
-
-        // Add open pose debug cubes
-        scene_objects.extend(Self::create_open_pose_debug_cubes());
 
         (scene_objects, camera_position, camera_rotation)
     }
