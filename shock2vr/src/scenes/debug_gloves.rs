@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use cgmath::{
-    Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3,
-    point3, vec3,
+    Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3, point3, vec3,
 };
 use dark::{
     SCALE_FACTOR,
@@ -43,8 +42,6 @@ const GLOVE_POSITION: Point3<f32> =
     point3(0.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
 const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
-const DEBUG_RENDER_BONE_COUNT: usize = hand_pose::AUX_BONE_START_INDEX;
-const MAX_DEBUG_BONE_INDEX: usize = DEBUG_RENDER_BONE_COUNT - 1;
 const POSE_GLOVE_VERTICAL_OFFSET: f32 = -0.5 / SCALE_FACTOR;
 
 /// Debug scene that displays the VR glove model with replaced textures
@@ -152,16 +149,11 @@ impl DebugGlovesScene {
     }
 
     fn apply_joint_overrides(skeleton: &Skeleton) -> Skeleton {
-        // skeleton.clone()
-        let mut joint_transforms = HashMap::new();
+        let closed_fist = hand_pose::closed_fist_pose();
+        let joint_transforms = closed_fist.to_joint_transforms();
 
-        // // Apply all bone rotations from the pose
-        let rotation = Quaternion::from_angle_z(Deg(30.0));
-        let rotation_matrix = Matrix4::from(rotation);
-        joint_transforms.insert(6u32, rotation_matrix);
-
+        // Use the new joint rotation method to avoid bone stretching
         Skeleton::set_joint_transforms(skeleton, &joint_transforms)
-        // skeleton.clone()
     }
 
     fn create_static_glove_objects(
@@ -311,34 +303,6 @@ impl DebugGlovesScene {
         )
         .build()
     }
-
-    fn pose_skinning_data(skeleton: &Skeleton, pose: &hand_pose::Pose) -> [Matrix4<f32>; 40] {
-        let global_transforms = pose.global_bone_transforms();
-        let mut skinning_data = [Matrix4::identity(); 40];
-
-        let skeleton_bone_count = skeleton.bone_count().min(40);
-        let pose_bone_count = global_transforms.len().min(skeleton_bone_count);
-
-        for bone_index in 0..pose_bone_count {
-            let joint_id = bone_index as u32;
-            let mut pose_transform = global_transforms[bone_index];
-
-            // Apply 100x scale to match skeleton coordinate system
-            pose_transform.x *= 100.0;
-            pose_transform.y *= 100.0;
-            pose_transform.z *= 100.0;
-
-            if let Some(rest) = skeleton.rest_transform(joint_id) {
-                pose_transform = pose_transform * rest.inverse_bind;
-            } else {
-                panic!("no rest pose");
-            }
-
-            skinning_data[bone_index] = pose_transform;
-        }
-
-        skinning_data
-    }
 }
 
 impl GameScene for DebugGlovesScene {
@@ -382,11 +346,7 @@ impl GameScene for DebugGlovesScene {
         let world_transforms = skeleton.world_transforms();
 
         // Create a cube for each bone position
-        for (bone_index, bone_transform) in world_transforms
-            .iter()
-            .enumerate()
-            .take(DEBUG_RENDER_BONE_COUNT)
-        {
+        for (bone_index, bone_transform) in world_transforms.iter().enumerate() {
             // Skip identity transforms (unused bones)
             if bone_transform != &Matrix4::identity() {
                 let bone_position = bone_transform.w.truncate();
