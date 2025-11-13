@@ -185,8 +185,7 @@ impl Skeleton {
         let mut animation_transforms = HashMap::new();
 
         for (joint_id, transform) in joint_transforms.iter() {
-            let converted =
-                convert_joint_transform_for_animation(&bones, *joint_id, *transform);
+            let converted = convert_joint_transform_for_animation(&bones, *joint_id, *transform);
             animation_transforms.insert(*joint_id, converted);
         }
         let mut global_transforms = HashMap::new();
@@ -483,8 +482,7 @@ pub fn animate(
     // Have joint transforms completely override animation transforms
     // TODO: Are there cases where joint transforms need to be used in the context of an animation transform? Maybe head rotation?
     for (joint, transform) in additional_joint_transforms {
-        let converted =
-            convert_joint_transform_for_animation(&bones, *joint, *transform);
+        let converted = convert_joint_transform_for_animation(&bones, *joint, *transform);
         animation_transforms.insert(*joint, converted);
     }
 
