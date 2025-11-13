@@ -179,56 +179,10 @@ fn extract_inverse_bind_matrices(
     skin: &gltf::Skin,
     buffers: &[gltf::buffer::Data],
 ) -> Vec<Matrix4<f32>> {
-    let accessor = match skin.inverse_bind_matrices() {
-        Some(accessor) => accessor,
-        None => return Vec::new(),
-    };
-
-    let view = match accessor.view() {
-        Some(view) => view,
-        None => return Vec::new(),
-    };
-
-    let buffer = match buffers.get(view.buffer().index()) {
-        Some(data) => data,
-        None => return Vec::new(),
-    };
-
-    let stride = view.stride().unwrap_or_else(|| accessor.size());
-
-    let start = view.offset() + accessor.offset();
-    let count = accessor.count();
-
-    let mut matrices = Vec::with_capacity(count);
-
-    for i in 0..count {
-        let base_offset = start + i * stride;
-        let mut values = [0f32; 16];
-
-        for j in 0..16 {
-            let byte_index = base_offset + j * 4;
-            if byte_index + 3 >= buffer.0.len() {
-                values[j] = 0.0;
-            } else {
-                values[j] = f32::from_le_bytes([
-                    buffer.0[byte_index],
-                    buffer.0[byte_index + 1],
-                    buffer.0[byte_index + 2],
-                    buffer.0[byte_index + 3],
-                ]);
-            }
-        }
-
-        let matrix = Matrix4::new(
-            values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7],
-            values[8], values[9], values[10], values[11], values[12], values[13], values[14],
-            values[15],
-        );
-
-        matrices.push(matrix);
-    }
-
-    matrices
+    skin.reader(|buffer| Some(&buffers[buffer.index()]))
+        .read_inverse_bind_matrices()
+        .map(|iter| iter.map(Matrix4::from).collect::<Vec<_>>())
+        .unwrap_or_default()
 }
 
 /// Process all animations from the GLB document (ported from functor)

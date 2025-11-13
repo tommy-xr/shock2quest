@@ -229,43 +229,84 @@ fn process_primitive(
     buffers: &[gltf::buffer::Data],
     transform: &Matrix4<f32>,
 ) -> Option<GlbMesh> {
-    // Get position data
-    let position_accessor = primitive.get(&gltf::Semantic::Positions)?;
-    let positions = extract_positions(position_accessor, buffers)?;
+    let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
-    // Get normal data (optional)
-    let normals = primitive
-        .get(&gltf::Semantic::Normals)
-        .and_then(|accessor| extract_normals(accessor, buffers))
+    let positions: Vec<[f32; 3]> = reader.read_positions()?.collect();
+
+    let normals: Vec<[f32; 3]> = reader
+        .read_normals()
+        .map(|iter| iter.collect())
         .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
 
-    // Get texture coordinate data (optional)
-    let texcoords = primitive
-        .get(&gltf::Semantic::TexCoords(0))
-        .and_then(|accessor| extract_texcoords(accessor, buffers))
+    let texcoords: Vec<[f32; 2]> = reader
+        .read_tex_coords(0)
+        .map(|coords| match coords {
+            gltf::mesh::util::ReadTexCoords::F32(iter) => iter.collect(),
+            gltf::mesh::util::ReadTexCoords::U16(iter) => iter
+                .map(|uv| {
+                    [
+                        uv[0] as f32 / u16::MAX as f32,
+                        uv[1] as f32 / u16::MAX as f32,
+                    ]
+                })
+                .collect(),
+            gltf::mesh::util::ReadTexCoords::U8(iter) => iter
+                .map(|uv| [uv[0] as f32 / u8::MAX as f32, uv[1] as f32 / u8::MAX as f32])
+                .collect(),
+        })
         .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
-    // Get indices
-    let indices = primitive
-        .indices()
-        .and_then(|accessor| extract_indices(accessor, buffers))
+    let indices = reader
+        .read_indices()
+        .map(|read_indices| read_indices.into_u32().collect())
         .unwrap_or_else(|| (0..positions.len() as u32).collect());
 
-    // Check for skinning data
-    let joints = primitive
-        .get(&gltf::Semantic::Joints(0))
-        .and_then(|accessor| extract_joints(accessor, buffers));
+    let joints = reader.read_joints(0).map(|read_joints| match read_joints {
+        gltf::mesh::util::ReadJoints::U8(iter) => iter
+            .map(|joint| {
+                [
+                    joint[0] as u16,
+                    joint[1] as u16,
+                    joint[2] as u16,
+                    joint[3] as u16,
+                ]
+            })
+            .collect(),
+        gltf::mesh::util::ReadJoints::U16(iter) => iter.collect(),
+    });
 
-    let weights = primitive
-        .get(&gltf::Semantic::Weights(0))
-        .and_then(|accessor| extract_weights(accessor, buffers));
+    let weights = reader
+        .read_weights(0)
+        .map(|read_weights| match read_weights {
+            gltf::mesh::util::ReadWeights::F32(iter) => iter.collect(),
+            gltf::mesh::util::ReadWeights::U16(iter) => iter
+                .map(|weight| {
+                    [
+                        weight[0] as f32 / u16::MAX as f32,
+                        weight[1] as f32 / u16::MAX as f32,
+                        weight[2] as f32 / u16::MAX as f32,
+                        weight[3] as f32 / u16::MAX as f32,
+                    ]
+                })
+                .collect(),
+            gltf::mesh::util::ReadWeights::U8(iter) => iter
+                .map(|weight| {
+                    [
+                        weight[0] as f32 / u8::MAX as f32,
+                        weight[1] as f32 / u8::MAX as f32,
+                        weight[2] as f32 / u8::MAX as f32,
+                        weight[3] as f32 / u8::MAX as f32,
+                    ]
+                })
+                .collect(),
+        });
 
     // Determine if this is a skinned mesh
     let has_skinning = joints.is_some() && weights.is_some();
 
     let vertex_data = if has_skinning {
-        let joints = joints.unwrap();
-        let weights = weights.unwrap();
+        let joints: Vec<[u16; 4]> = joints.unwrap();
+        let weights: Vec<[f32; 4]> = weights.unwrap();
 
         println!("Processing skinned mesh with {} vertices", positions.len());
 
@@ -302,14 +343,24 @@ fn process_primitive(
                 [1.0, 0.0, 0.0, 0.0] // Fallback to first bone if no weights
             };
 
-            // For skinned meshes, keep positions and normals in bind space
-            // The transform will be handled by the skeleton system instead
+            // Apply node transform to skinned meshes as well
+            let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
+            let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
+
             skinned_vertices.push(VertexPositionTextureSkinnedNormal {
-                position: cgmath::Vector3::new(pos[0], pos[1], pos[2]),
+                position: cgmath::Vector3::new(
+                    transformed_pos.x,
+                    transformed_pos.y,
+                    transformed_pos.z,
+                ),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
                 bone_indices,                     // All 4 bone indices
                 bone_weights: normalized_weights, // Normalized multi-bone weights
-                normal: cgmath::Vector3::new(norm[0], norm[1], norm[2]),
+                normal: cgmath::Vector3::new(
+                    transformed_norm.x,
+                    transformed_norm.y,
+                    transformed_norm.z,
+                ),
             });
         }
 
@@ -355,187 +406,6 @@ fn process_primitive(
         texture_index,
     })
 }
-
-fn extract_positions(
-    accessor: gltf::Accessor,
-    buffers: &[gltf::buffer::Data],
-) -> Option<Vec<[f32; 3]>> {
-    let view = accessor.view()?;
-    let buffer = &buffers[view.buffer().index()];
-
-    let start = view.offset() + accessor.offset();
-    let end = start + accessor.count() * 12; // 3 f32s per position
-
-    let data = &buffer[start..end.min(buffer.len())];
-    let mut positions = Vec::new();
-
-    for chunk in data.chunks_exact(12) {
-        // 3 * 4 bytes per f32
-        if chunk.len() >= 12 {
-            let x = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            let y = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
-            let z = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
-            positions.push([x, y, z]);
-        }
-    }
-    Some(positions)
-}
-
-fn extract_normals(
-    accessor: gltf::Accessor,
-    buffers: &[gltf::buffer::Data],
-) -> Option<Vec<[f32; 3]>> {
-    extract_positions(accessor, buffers) // Same format as positions
-}
-
-fn extract_texcoords(
-    accessor: gltf::Accessor,
-    buffers: &[gltf::buffer::Data],
-) -> Option<Vec<[f32; 2]>> {
-    let view = accessor.view()?;
-    let buffer = &buffers[view.buffer().index()];
-
-    let start = view.offset() + accessor.offset();
-    let end = start + accessor.count() * 8; // 2 f32s per texcoord
-
-    let data = &buffer[start..end.min(buffer.len())];
-    let mut texcoords = Vec::new();
-
-    for chunk in data.chunks_exact(8) {
-        // 2 * 4 bytes per f32
-        if chunk.len() >= 8 {
-            let u = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            let v = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
-            texcoords.push([u, v]);
-        }
-    }
-    Some(texcoords)
-}
-
-fn extract_indices(accessor: gltf::Accessor, buffers: &[gltf::buffer::Data]) -> Option<Vec<u32>> {
-    let view = accessor.view()?;
-    let buffer = &buffers[view.buffer().index()];
-
-    let start = view.offset() + accessor.offset();
-    let component_size = match accessor.data_type() {
-        gltf::accessor::DataType::U16 => 2,
-        gltf::accessor::DataType::U32 => 4,
-        _ => return None,
-    };
-
-    let mut indices = Vec::new();
-
-    match component_size {
-        2 => {
-            // u16 indices
-            for i in 0..accessor.count() {
-                let offset = start + i * 2;
-                if offset + 1 < buffer.len() {
-                    let index = u16::from_le_bytes([buffer[offset], buffer[offset + 1]]) as u32;
-                    indices.push(index);
-                }
-            }
-        }
-        4 => {
-            // u32 indices
-            for i in 0..accessor.count() {
-                let offset = start + i * 4;
-                if offset + 3 < buffer.len() {
-                    let index = u32::from_le_bytes([
-                        buffer[offset],
-                        buffer[offset + 1],
-                        buffer[offset + 2],
-                        buffer[offset + 3],
-                    ]);
-                    indices.push(index);
-                }
-            }
-        }
-        _ => return None,
-    }
-
-    Some(indices)
-}
-
-/// Extract joint indices from GLB accessor
-fn extract_joints(
-    accessor: gltf::Accessor,
-    buffers: &[gltf::buffer::Data],
-) -> Option<Vec<[u16; 4]>> {
-    let view = accessor.view()?;
-    let buffer = &buffers[view.buffer().index()];
-
-    let start = view.offset() + accessor.offset();
-    let component_size = match accessor.data_type() {
-        gltf::accessor::DataType::U8 => 1,
-        gltf::accessor::DataType::U16 => 2,
-        _ => return None,
-    };
-
-    let mut joints = Vec::new();
-
-    match component_size {
-        1 => {
-            // u8 joint indices
-            for i in 0..accessor.count() {
-                let offset = start + i * 4; // 4 joints per vertex
-                if offset + 3 < buffer.len() {
-                    joints.push([
-                        buffer[offset] as u16,
-                        buffer[offset + 1] as u16,
-                        buffer[offset + 2] as u16,
-                        buffer[offset + 3] as u16,
-                    ]);
-                }
-            }
-        }
-        2 => {
-            // u16 joint indices
-            for i in 0..accessor.count() {
-                let offset = start + i * 8; // 4 u16s per vertex
-                if offset + 7 < buffer.len() {
-                    let j0 = u16::from_le_bytes([buffer[offset], buffer[offset + 1]]);
-                    let j1 = u16::from_le_bytes([buffer[offset + 2], buffer[offset + 3]]);
-                    let j2 = u16::from_le_bytes([buffer[offset + 4], buffer[offset + 5]]);
-                    let j3 = u16::from_le_bytes([buffer[offset + 6], buffer[offset + 7]]);
-                    joints.push([j0, j1, j2, j3]);
-                }
-            }
-        }
-        _ => return None,
-    }
-
-    Some(joints)
-}
-
-/// Extract vertex weights from GLB accessor
-fn extract_weights(
-    accessor: gltf::Accessor,
-    buffers: &[gltf::buffer::Data],
-) -> Option<Vec<[f32; 4]>> {
-    let view = accessor.view()?;
-    let buffer = &buffers[view.buffer().index()];
-
-    let start = view.offset() + accessor.offset();
-    let end = start + accessor.count() * 16; // 4 f32s per vertex
-
-    let data = &buffer[start..end.min(buffer.len())];
-    let mut weights = Vec::new();
-
-    for chunk in data.chunks_exact(16) {
-        // 4 * 4 bytes per f32
-        if chunk.len() >= 16 {
-            let w0 = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            let w1 = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
-            let w2 = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
-            let w3 = f32::from_le_bytes([chunk[12], chunk[13], chunk[14], chunk[15]]);
-            weights.push([w0, w1, w2, w3]);
-        }
-    }
-    Some(weights)
-}
-
-/// Find the dominant bone (highest weight) for simplified skinning
 
 fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config: &()) -> Model {
     let mut scene_objects = Vec::new();
