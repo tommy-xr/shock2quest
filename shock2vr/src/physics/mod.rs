@@ -22,7 +22,7 @@ use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
 
-const MOVEMENT_STEP_SIZE: f32 = 20.0;
+const MOVEMENT_STEP_SIZE: f32 = 0.0;
 
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
@@ -584,8 +584,8 @@ impl PhysicsWorld {
         let mut controller = KinematicCharacterController::default();
 
         controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
-        controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
-        controller.normal_nudge_factor = 0.1;
+        // controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
+        // controller.normal_nudge_factor = 0.1;
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);

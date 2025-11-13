@@ -152,18 +152,16 @@ impl DebugGlovesScene {
     }
 
     fn apply_joint_overrides(skeleton: &Skeleton) -> Skeleton {
-        skeleton.clone()
-        // let mut joint_transforms = HashMap::new();
+        // skeleton.clone()
+        let mut joint_transforms = HashMap::new();
 
         // // Apply all bone rotations from the pose
-        // for (bone_index, &rotation) in point_pose.bone_rotations.iter().enumerate() {
-        //     if (bone_index == 0) {
-        //         let rotation_matrix = Matrix4::from(rotation);
-        //         joint_transforms.insert(bone_index as u32, rotation_matrix);
-        //     }
-        // }
+        let rotation = Quaternion::from_angle_z(Deg(30.0));
+        let rotation_matrix = Matrix4::from(rotation);
+        joint_transforms.insert(6u32, rotation_matrix);
 
-        // Skeleton::set_joint_transforms(skeleton, &joint_transforms)
+        Skeleton::set_joint_transforms(skeleton, &joint_transforms)
+        // skeleton.clone()
     }
 
     fn create_static_glove_objects(
@@ -195,7 +193,7 @@ impl DebugGlovesScene {
             GLOVE_POSITION.y,
             GLOVE_POSITION.z,
         )) * Matrix4::from_angle_y(Deg(0.0))
-            * Matrix4::from_scale(1.0);
+            * Matrix4::from_scale(0.01);
 
         let skinning_data = Self::manual_skinning_data(skeleton);
 
@@ -204,7 +202,7 @@ impl DebugGlovesScene {
             .map(|object| {
                 let mut clone = object.clone();
                 clone.set_transform(manual_transform);
-                // clone.set_skinning_data(skinning_data);
+                clone.set_skinning_data(skinning_data);
                 clone
             })
             .collect()
@@ -230,12 +228,6 @@ impl DebugGlovesScene {
         skinning_data
     }
 
-    fn hand_transform(position: Vector3<f32>, rotation: Quaternion<f32>) -> Matrix4<f32> {
-        Matrix4::from_translation(position)
-            * Matrix4::from(rotation)
-            * Matrix4::from_scale(GLOVE_SCALE)
-    }
-
     fn clone_with_transform(template: &[SceneObject], transform: Matrix4<f32>) -> Vec<SceneObject> {
         template
             .iter()
@@ -245,42 +237,6 @@ impl DebugGlovesScene {
                 clone
             })
             .collect()
-    }
-
-    fn hand_glove_objects(&self) -> Vec<SceneObject> {
-        let mut gloves = Vec::new();
-
-        let left_transform = Self::hand_transform(
-            self.core.left_hand.get_position(),
-            self.core.left_hand.get_rotation(),
-        );
-        gloves.extend(Self::clone_with_transform(
-            &self.glove_template,
-            left_transform,
-        ));
-
-        let right_transform = Self::hand_transform(
-            self.core.right_hand.get_position(),
-            self.core.right_hand.get_rotation(),
-        );
-        gloves.extend(Self::clone_with_transform(
-            &self.glove_template,
-            right_transform,
-        ));
-
-        gloves
-    }
-
-    fn pointing_pose_offset() -> Vector3<f32> {
-        vec3(4.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR)
-    }
-
-    fn open_pose_offset() -> Vector3<f32> {
-        vec3(8.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR)
-    }
-
-    fn glove_translation_for_pose(pose_offset: Vector3<f32>) -> Vector3<f32> {
-        pose_offset + vec3(0.0, POSE_GLOVE_VERTICAL_OFFSET, 0.0)
     }
 
     /// Returns the debug color for a specific joint index
