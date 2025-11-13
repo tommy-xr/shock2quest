@@ -12,7 +12,7 @@ use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3};
 use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
-    control::{CharacterAutostep, CharacterLength, KinematicCharacterController},
+    control::{CharacterLength, KinematicCharacterController},
     na::UnitQuaternion,
     prelude::*,
 };
@@ -21,6 +21,8 @@ use shipyard::EntityId;
 use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
+
+const MOVEMENT_STEP_SIZE: f32 = 20.0;
 
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
@@ -129,7 +131,7 @@ pub struct PhysicsWorld {
     integration_parameters: IntegrationParameters,
     physics_pipeline: PhysicsPipeline,
     island_manager: IslandManager,
-    broad_phase: BroadPhase,
+    broad_phase: BroadPhaseMultiSap,
     narrow_phase: NarrowPhase,
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
@@ -564,29 +566,26 @@ impl PhysicsWorld {
             .translation(vec_to_nvec(start_pos))
             .ccd_enabled(true)
             .build();
-        //rigid_body.ccd_enabled(true);
+
         let player_entity_user_data = player_entity.inner() as u128;
         rigid_body.user_data = player_entity_user_data;
         let character_handle = self.rigid_body_set.insert(rigid_body);
         let mut collider =
             ColliderBuilder::cuboid(0.8 / SCALE_FACTOR, 2.4 / SCALE_FACTOR, 0.8 / SCALE_FACTOR);
-        //let mut collider = ColliderBuilder::capsule_y(2.4 / SCALE_FACTOR, 0.8 / SCALE_FACTOR);
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
         ));
         collider = collider.user_data(player_entity_user_data);
 
-        //collider.user_data = player_entity_user_data;
         self.collider_set
             .insert_with_parent(collider, character_handle, &mut self.rigid_body_set);
 
         let mut controller = KinematicCharacterController::default();
-        controller.autostep = Some(CharacterAutostep {
-            include_dynamic_bodies: true,
-            ..CharacterAutostep::default()
-        });
-        controller.offset = CharacterLength::Absolute(0.2 / SCALE_FACTOR);
+
+        controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
+        controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
+        controller.normal_nudge_factor = 0.1;
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);
@@ -609,7 +608,7 @@ impl PhysicsWorld {
         };
         let physics_pipeline = PhysicsPipeline::new();
         let island_manager = IslandManager::new();
-        let broad_phase = BroadPhase::new();
+        let broad_phase = BroadPhaseMultiSap::new();
         let narrow_phase = NarrowPhase::new();
         let impulse_joint_set = ImpulseJointSet::new();
         let multibody_joint_set = MultibodyJointSet::new();
@@ -720,21 +719,33 @@ impl PhysicsWorld {
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let _character_mass = character_body.mass();
 
+        let step_size = Vector::y() * MOVEMENT_STEP_SIZE * self.integration_parameters.dt;
+
+        // We do our player movement in two passes
+        // First: move the player forward and a bit upwards
+        // Second: Drop the player down for gravity
+        // This wasn't necessary until upgrading to rapier v0.19.0 - when we upgraded to that version,
+        // we started to snag on geometry.
+        let movement_with_upward = desired_movement + step_size;
+
         let mut gravity = -0.5 / SCALE_FACTOR;
         gravity *= character_body.gravity_scale();
 
-        let movement_with_gravity = desired_movement + Vector::y() * gravity;
+        let gravity_movement = Vector::y() * gravity - step_size;
 
         //let mut collisions = vec![];
-        let mvt = profile!(scope: "physics", level: TRACE, "physics.move_player", {
-            player_handle.controller.move_shape(
+        let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
+            // HACK: For rapier v0.19.0, our previous strategy of combining the movement + gravity
+            // caused us to snag on physics geometry. In order to counter this, we'll do the movement in two phases
+            // a forward phase to move and then an application of gravity
+            (player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &self.rigid_body_set,
                 &self.collider_set,
                 &self.query_pipeline,
                 character_collider.shape(),
                 character_collider.position(),
-                movement_with_gravity.cast::<Real>(),
+                movement_with_upward.cast::<Real>(),
                 QueryFilter::new()
                     .groups(InteractionGroups::new(
                         InternalCollisionGroups::PLAYER.bits.into(),
@@ -744,7 +755,27 @@ impl PhysicsWorld {
                     .exclude_sensors(),
                 |_c| (),
                 //|c| collisions.push(c),
-            )
+            ),
+
+            // Second pass: Apply gravity and undo our step size
+            player_handle.controller.move_shape(
+                self.integration_parameters.dt,
+                &self.rigid_body_set,
+                &self.collider_set,
+                &self.query_pipeline,
+                character_collider.shape(),
+                character_collider.position(),
+                gravity_movement.cast::<Real>(),
+                QueryFilter::new()
+                    .groups(InteractionGroups::new(
+                        InternalCollisionGroups::PLAYER.bits.into(),
+                        InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                    ))
+                    .exclude_rigid_body(player_handle.character_handle)
+                    .exclude_sensors(),
+                |_c| (),
+                //|c| collisions.push(c),
+            ))
         });
 
         let mut collision_events = Vec::new();
@@ -824,7 +855,9 @@ impl PhysicsWorld {
         let character_body = &mut self.rigid_body_set[player_handle.character_handle];
         let _original_pos = character_body.position().translation.vector;
         let pos = character_body.position();
-        character_body.set_next_kinematic_translation(pos.translation.vector + mvt.translation);
+        character_body.set_next_kinematic_translation(
+            pos.translation.vector + mvt1.translation + mvt2.translation,
+        );
         (collision_events, character_body)
     }
 
@@ -873,7 +906,7 @@ impl PhysicsWorld {
         ) {
             // This is similar to `QueryPipeline::cast_ray` illustrated above except
             // that it also returns the normal of the collider shape at the hit point.
-            let hit_point = ray.point_at(intersection.toi);
+            let hit_point = ray.point_at(intersection.time_of_impact);
             let hit_normal = intersection.normal;
             let collider = self.collider_set.get(handle).unwrap();
             let maybe_rigid_body_handle = collider.parent();
