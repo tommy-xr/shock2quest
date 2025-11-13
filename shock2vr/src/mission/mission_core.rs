@@ -1369,7 +1369,7 @@ impl MissionCore {
                         quests.mark_email_as_played(&email_file);
                         let audio_clip =
                             asset_cache.get(&AUDIO_IMPORTER, &format!("{email_file}.wav"));
-                        engine::audio::test_audio(
+                        engine::audio::play_audio(
                             audio_context,
                             AudioHandle::new(),
                             Some(AudioChannel::new("email".to_owned())),
@@ -1386,7 +1386,7 @@ impl MissionCore {
 
                     if let Some(audio_clip) = maybe_audio_clip {
                         info!("Playing clip: {} handle: {:?}", name, &handle);
-                        engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                        engine::audio::play_audio(audio_context, handle, None, audio_clip);
                     } else {
                         warn!("Unable to load clip: {}", name)
                     }
@@ -1416,7 +1416,7 @@ impl MissionCore {
                                     audio_clip,
                                 );
                             } else {
-                                engine::audio::test_audio(audio_context, handle, None, audio_clip);
+                                engine::audio::play_audio(audio_context, handle, None, audio_clip);
                             }
                         } else {
                             warn!(

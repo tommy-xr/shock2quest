@@ -368,7 +368,8 @@ pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     }
 }
 
-pub fn test_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+/// Plays audio at the listener origin (non-spatial).
+pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,

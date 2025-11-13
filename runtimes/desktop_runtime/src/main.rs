@@ -444,7 +444,7 @@ fn process_events(
                 //effects.push(Effect::SwitchToGameplayMode)
             }
             // glfw::WindowEvent::Key(Key::Space, _, Action::Press, _) => {
-            //     engine::audio::test_audio(audio)
+            //     engine::audio::play_audio(audio)
             // }
             glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
                 window.set_should_close(true)

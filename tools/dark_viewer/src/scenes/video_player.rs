@@ -47,7 +47,7 @@ impl VideoPlayerScene {
     #[cfg(feature = "ffmpeg")]
     pub fn init_audio(&self, audio_context: &mut AudioContext<(), String>) {
         let handle = AudioHandle::new();
-        engine::audio::test_audio(audio_context, handle, None, self.audio_clip.clone());
+        engine::audio::play_audio(audio_context, handle, None, self.audio_clip.clone());
     }
 }
 
