@@ -149,11 +149,19 @@ impl DebugGlovesScene {
     }
 
     fn apply_joint_overrides(skeleton: &Skeleton) -> Skeleton {
-        let closed_fist = hand_pose::closed_fist_pose();
+        let closed_fist = hand_pose::open_right_hand();
         let joint_transforms = closed_fist.to_joint_transforms();
 
+        let mut overrides = HashMap::new();
+
+        for (bone_index, xform) in joint_transforms.iter() {
+            if let Some(derp) = skeleton.rest_transform(*bone_index) {
+                overrides.insert(*bone_index, derp.local_inverse * *xform);
+            }
+        }
+
         // Use the new joint rotation method to avoid bone stretching
-        Skeleton::set_joint_transforms(skeleton, &joint_transforms)
+        Skeleton::set_joint_transforms(skeleton, &overrides)
     }
 
     fn create_static_glove_objects(
@@ -185,7 +193,7 @@ impl DebugGlovesScene {
             GLOVE_POSITION.y,
             GLOVE_POSITION.z,
         )) * Matrix4::from_angle_y(Deg(0.0))
-            * Matrix4::from_scale(0.01);
+            * Matrix4::from_scale(1.01);
 
         let skinning_data = Self::manual_skinning_data(skeleton);
 

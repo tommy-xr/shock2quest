@@ -1,4 +1,4 @@
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3};
 use num::Zero;
 use std::collections::HashMap;
 
@@ -94,6 +94,7 @@ pub fn joint_relationships() -> HashMap<usize, usize> {
 pub struct Pose {
     /// Bone rotations as quaternions
     pub bone_rotations: Vec<Quaternion<f32>>,
+    pub bone_positions: Vec<Vector3<f32>>,
 }
 
 impl Pose {
@@ -117,8 +118,10 @@ impl Pose {
                 // TODO: This may cause bone stretching because the rotation gets applied
                 // to the bone's local translation. A proper fix would modify the skeleton
                 // system to handle joint rotations correctly.
+                let translation_matrix = Matrix4::from_translation(self.bone_positions[bone_index]);
                 let rotation_matrix = Matrix4::from(rotation);
-                joint_transforms.insert(bone_index as u32, rotation_matrix);
+                let xform = translation_matrix * rotation_matrix;
+                joint_transforms.insert(bone_index as u32, xform);
             }
         }
 
@@ -126,124 +129,127 @@ impl Pose {
     }
 }
 
-pub fn closed_fist_pose() -> Pose {
-    let no_rotation = Quaternion::zero();
-    let inward_rotation_1 = Quaternion::from_angle_x(Deg(20.0)); // Try X rotation for finger curl
-    let inward_rotation_2 = Quaternion::from_angle_x(Deg(30.0));
-    let inward_rotation_3 = Quaternion::from_angle_x(Deg(40.0));
-    let inward_rotation_4 = Quaternion::from_angle_x(Deg(30.0)); // Smaller angles
-    let inward_rotation_5 = Quaternion::from_angle_x(Deg(20.0));
-    let bone_rotations: Vec<Quaternion<f32>> = vec![
-        // Root and wrist
-        no_rotation,
-        no_rotation,
-        // Thumb (2-5)
-        no_rotation,
-        no_rotation,
-        no_rotation,
-        no_rotation,
-        // Index finger (6-10)
-        inward_rotation_1,
-        inward_rotation_2,
-        inward_rotation_3,
-        inward_rotation_4,
-        inward_rotation_5,
-        // Middle finger (11-15)
-        inward_rotation_1,
-        inward_rotation_2,
-        inward_rotation_3,
-        inward_rotation_4,
-        inward_rotation_5,
-        // Ring finger (16-20)
-        inward_rotation_1,
-        inward_rotation_2,
-        inward_rotation_3,
-        inward_rotation_4,
-        inward_rotation_5,
-        // Pinky finger (21-25)
-        inward_rotation_1,
-        inward_rotation_2,
-        inward_rotation_3,
-        inward_rotation_4,
-        inward_rotation_5,
-    ];
+// pub fn closed_fist_pose() -> Pose {
+//     let no_rotation = Quaternion::zero();
+//     let inward_rotation_1 = Quaternion::from_angle_x(Deg(20.0)); // Try X rotation for finger curl
+//     let inward_rotation_2 = Quaternion::from_angle_x(Deg(30.0));
+//     let inward_rotation_3 = Quaternion::from_angle_x(Deg(40.0));
+//     let inward_rotation_4 = Quaternion::from_angle_x(Deg(30.0)); // Smaller angles
+//     let inward_rotation_5 = Quaternion::from_angle_x(Deg(20.0));
+//     let bone_rotations: Vec<Quaternion<f32>> = vec![
+//         // Root and wrist
+//         no_rotation,
+//         no_rotation,
+//         // Thumb (2-5)
+//         no_rotation,
+//         no_rotation,
+//         no_rotation,
+//         no_rotation,
+//         // Index finger (6-10)
+//         inward_rotation_1,
+//         inward_rotation_2,
+//         inward_rotation_3,
+//         inward_rotation_4,
+//         inward_rotation_5,
+//         // Middle finger (11-15)
+//         inward_rotation_1,
+//         inward_rotation_2,
+//         inward_rotation_3,
+//         inward_rotation_4,
+//         inward_rotation_5,
+//         // Ring finger (16-20)
+//         inward_rotation_1,
+//         inward_rotation_2,
+//         inward_rotation_3,
+//         inward_rotation_4,
+//         inward_rotation_5,
+//         // Pinky finger (21-25)
+//         inward_rotation_1,
+//         inward_rotation_2,
+//         inward_rotation_3,
+//         inward_rotation_4,
+//         inward_rotation_5,
+//     ];
 
-    Pose { bone_rotations }
-}
+//     Pose { bone_rotations }
+// }
 
 // Old poses:
 // /// Returns the open hand pose for the right hand
-// pub fn open_right_hand() -> Pose {
-//     let positions = vec![
-//         Vector3::new(0.0, 0.0, 0.0),
-//         Vector3::new(-0.034037687, 0.03650266, 0.16472164),
-//         Vector3::new(-0.012083233, 0.028070247, 0.025049694),
-//         Vector3::new(0.040405963, -0.000000051561553, 0.000000045447194),
-//         Vector3::new(0.032516792, -0.000000051137583, -0.000000012933195),
-//         Vector3::new(0.030463902, 0.00000016269207, 0.0000000792839),
-//         Vector3::new(0.0006324522, 0.026866155, 0.015001948),
-//         Vector3::new(0.074204385, 0.005002201, -0.00023377323),
-//         Vector3::new(0.043930072, 0.000000059567498, 0.00000018367103),
-//         Vector3::new(0.02869547, -0.00000009398158, -0.00000012649753),
-//         Vector3::new(0.022821384, -0.00000014365155, 0.00000007651614),
-//         Vector3::new(0.0021773134, 0.007119544, 0.016318738),
-//         Vector3::new(0.07095288, -0.00077883265, -0.000997186),
-//         Vector3::new(0.043108486, -0.00000009950596, -0.0000000067041825),
-//         Vector3::new(0.033266045, -0.00000001320567, -0.000000021670374),
-//         Vector3::new(0.025892371, 0.00000009984198, -0.0000000020352908),
-//         Vector3::new(0.0005134356, -0.0065451227, 0.016347693),
-//         Vector3::new(0.06587581, -0.0017857892, -0.00069344096),
-//         Vector3::new(0.04069671, -0.000000095347104, -0.000000022934731),
-//         Vector3::new(0.028746964, 0.00000010089892, 0.000000045306827),
-//         Vector3::new(0.022430236, 0.00000010846127, -0.000000017428562),
-//         Vector3::new(-0.002478151, -0.01898137, 0.015213584),
-//         Vector3::new(0.0628784, -0.0028440945, -0.0003315112),
-//         Vector3::new(0.030219711, -0.00000003418319, -0.00000009332872),
-//         Vector3::new(0.018186597, -0.0000000050220166, -0.00000020934549),
-//         Vector3::new(0.01801794, -0.0000000200012, 0.0000000659746),
-//         Vector3::new(-0.0060591106, 0.05628522, 0.060063843),
-//         Vector3::new(-0.04041555, -0.043017667, 0.019344581),
-//         Vector3::new(-0.03935372, -0.07567404, 0.047048334),
-//         Vector3::new(-0.038340144, -0.09098663, 0.08257892),
-//         Vector3::new(-0.031805996, -0.08721431, 0.12101539),
-//     ];
+pub fn open_right_hand() -> Pose {
+    let positions = vec![
+        Vector3::new(0.0, 0.0, 0.0),
+        Vector3::new(-0.034037687, 0.03650266, 0.16472164),
+        Vector3::new(-0.012083233, 0.028070247, 0.025049694),
+        Vector3::new(0.040405963, -0.000000051561553, 0.000000045447194),
+        Vector3::new(0.032516792, -0.000000051137583, -0.000000012933195),
+        Vector3::new(0.030463902, 0.00000016269207, 0.0000000792839),
+        Vector3::new(0.0006324522, 0.026866155, 0.015001948),
+        Vector3::new(0.074204385, 0.005002201, -0.00023377323),
+        Vector3::new(0.043930072, 0.000000059567498, 0.00000018367103),
+        Vector3::new(0.02869547, -0.00000009398158, -0.00000012649753),
+        Vector3::new(0.022821384, -0.00000014365155, 0.00000007651614),
+        Vector3::new(0.0021773134, 0.007119544, 0.016318738),
+        Vector3::new(0.07095288, -0.00077883265, -0.000997186),
+        Vector3::new(0.043108486, -0.00000009950596, -0.0000000067041825),
+        Vector3::new(0.033266045, -0.00000001320567, -0.000000021670374),
+        Vector3::new(0.025892371, 0.00000009984198, -0.0000000020352908),
+        Vector3::new(0.0005134356, -0.0065451227, 0.016347693),
+        Vector3::new(0.06587581, -0.0017857892, -0.00069344096),
+        Vector3::new(0.04069671, -0.000000095347104, -0.000000022934731),
+        Vector3::new(0.028746964, 0.00000010089892, 0.000000045306827),
+        Vector3::new(0.022430236, 0.00000010846127, -0.000000017428562),
+        Vector3::new(-0.002478151, -0.01898137, 0.015213584),
+        Vector3::new(0.0628784, -0.0028440945, -0.0003315112),
+        Vector3::new(0.030219711, -0.00000003418319, -0.00000009332872),
+        Vector3::new(0.018186597, -0.0000000050220166, -0.00000020934549),
+        Vector3::new(0.01801794, -0.0000000200012, 0.0000000659746),
+        Vector3::new(-0.0060591106, 0.05628522, 0.060063843),
+        Vector3::new(-0.04041555, -0.043017667, 0.019344581),
+        Vector3::new(-0.03935372, -0.07567404, 0.047048334),
+        Vector3::new(-0.038340144, -0.09098663, 0.08257892),
+        Vector3::new(-0.031805996, -0.08721431, 0.12101539),
+    ];
 
-//     let rotations = vec![
-//         Quaternion::new(-0.00000004371139, -6.123234e-17, 1.0, 6.123234e-17),
-//         Quaternion::new(-0.055146642, -0.078608155, -0.92027926, 0.3792963),
-//         Quaternion::new(0.5674181, -0.46411175, -0.623374, 0.2721063),
-//         Quaternion::new(0.9948384, 0.08293856, -0.019454371, -0.055129882),
-//         Quaternion::new(0.9747928, -0.0032133153, -0.021866836, 0.22201493),
-//         Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
-//         Quaternion::new(0.42197865, -0.6442515, -0.42213318, -0.4782025),
-//         Quaternion::new(0.9953317, 0.0070068412, 0.039123755, -0.08794935),
-//         Quaternion::new(0.9978909, 0.045808382, -0.0021422536, 0.0459431),
-//         Quaternion::new(0.9996488, 0.0018504566, 0.022782495, 0.013409463),
-//         Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
-//         Quaternion::new(0.54127645, -0.546723, -0.46074906, -0.44252017),
-//         Quaternion::new(0.9802945, -0.16726136, 0.0789587, -0.06936778),
-//         Quaternion::new(0.99794674, 0.018492563, -0.013192348, -0.05988611),
-//         Quaternion::new(0.9973939, -0.003327809, 0.028225154, 0.066315144),
-//         Quaternion::new(0.9991947, 0.0, 0.0, -0.040125635),
-//         Quaternion::new(0.5501435, -0.5166922, -0.4298879, -0.49554786),
-//         Quaternion::new(0.9904201, -0.058696117, 0.10181952, -0.072495356),
-//         Quaternion::new(0.999545, -0.0022397265, -0.0000039300317, -0.030081047),
-//         Quaternion::new(0.9991019, -0.00072132144, 0.012692659, -0.040420394),
-//         Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
-//         Quaternion::new(0.52394, -0.5269183, -0.32674035, -0.5840246),
-//         Quaternion::new(0.9866093, -0.059614867, 0.13516304, -0.06913207),
-//         Quaternion::new(0.99431664, 0.0018961236, 0.00013150928, -0.10644623),
-//         Quaternion::new(0.99593055, -0.00201019, 0.052079126, 0.073525675),
-//         Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
-//         Quaternion::new(0.73723847, 0.20274544, 0.59426665, 0.2494411),
-//         Quaternion::new(-0.29033053, 0.6235274, -0.66380864, -0.29373443),
-//         Quaternion::new(-0.18704711, 0.6780625, -0.6592852, -0.26568344),
-//         Quaternion::new(-0.18303718, 0.7367927, -0.6347571, -0.14393571),
-//         Quaternion::new(-0.0036594148, 0.7584072, -0.6393418, -0.12667806),
-//     ];
+    let rotations = vec![
+        Quaternion::new(-0.00000004371139, -6.123234e-17, 1.0, 6.123234e-17),
+        Quaternion::new(-0.055146642, -0.078608155, -0.92027926, 0.3792963),
+        Quaternion::new(0.5674181, -0.46411175, -0.623374, 0.2721063),
+        Quaternion::new(0.9948384, 0.08293856, -0.019454371, -0.055129882),
+        Quaternion::new(0.9747928, -0.0032133153, -0.021866836, 0.22201493),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
+        Quaternion::new(0.42197865, -0.6442515, -0.42213318, -0.4782025),
+        Quaternion::new(0.9953317, 0.0070068412, 0.039123755, -0.08794935),
+        Quaternion::new(0.9978909, 0.045808382, -0.0021422536, 0.0459431),
+        Quaternion::new(0.9996488, 0.0018504566, 0.022782495, 0.013409463),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
+        Quaternion::new(0.54127645, -0.546723, -0.46074906, -0.44252017),
+        Quaternion::new(0.9802945, -0.16726136, 0.0789587, -0.06936778),
+        Quaternion::new(0.99794674, 0.018492563, -0.013192348, -0.05988611),
+        Quaternion::new(0.9973939, -0.003327809, 0.028225154, 0.066315144),
+        Quaternion::new(0.9991947, 0.0, 0.0, -0.040125635),
+        Quaternion::new(0.5501435, -0.5166922, -0.4298879, -0.49554786),
+        Quaternion::new(0.9904201, -0.058696117, 0.10181952, -0.072495356),
+        Quaternion::new(0.999545, -0.0022397265, -0.0000039300317, -0.030081047),
+        Quaternion::new(0.9991019, -0.00072132144, 0.012692659, -0.040420394),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
+        Quaternion::new(0.52394, -0.5269183, -0.32674035, -0.5840246),
+        Quaternion::new(0.9866093, -0.059614867, 0.13516304, -0.06913207),
+        Quaternion::new(0.99431664, 0.0018961236, 0.00013150928, -0.10644623),
+        Quaternion::new(0.99593055, -0.00201019, 0.052079126, 0.073525675),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity quaternion
+        Quaternion::new(0.73723847, 0.20274544, 0.59426665, 0.2494411),
+        Quaternion::new(-0.29033053, 0.6235274, -0.66380864, -0.29373443),
+        Quaternion::new(-0.18704711, 0.6780625, -0.6592852, -0.26568344),
+        Quaternion::new(-0.18303718, 0.7367927, -0.6347571, -0.14393571),
+        Quaternion::new(-0.0036594148, 0.7584072, -0.6393418, -0.12667806),
+    ];
 
-//     Pose::new(positions, rotations)
-// }
+    Pose {
+        bone_rotations: rotations,
+        bone_positions: positions,
+    }
+}
 
 // /// Returns the pointing pose for the right hand
 // pub fn point_right_hand() -> Pose {
