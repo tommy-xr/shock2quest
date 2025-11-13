@@ -129,7 +129,7 @@ pub struct PhysicsWorld {
     integration_parameters: IntegrationParameters,
     physics_pipeline: PhysicsPipeline,
     island_manager: IslandManager,
-    broad_phase: BroadPhase,
+    broad_phase: BroadPhaseMultiSap,
     narrow_phase: NarrowPhase,
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
@@ -584,9 +584,10 @@ impl PhysicsWorld {
         let mut controller = KinematicCharacterController::default();
         controller.autostep = Some(CharacterAutostep {
             include_dynamic_bodies: true,
-            ..CharacterAutostep::default()
+            max_height: CharacterLength::Relative(0.5),
+            min_width: CharacterLength::Relative(1.0),
         });
-        controller.offset = CharacterLength::Absolute(0.2 / SCALE_FACTOR);
+        controller.offset = CharacterLength::Absolute(0.5 / SCALE_FACTOR);
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);
@@ -609,7 +610,7 @@ impl PhysicsWorld {
         };
         let physics_pipeline = PhysicsPipeline::new();
         let island_manager = IslandManager::new();
-        let broad_phase = BroadPhase::new();
+        let broad_phase = BroadPhaseMultiSap::new();
         let narrow_phase = NarrowPhase::new();
         let impulse_joint_set = ImpulseJointSet::new();
         let multibody_joint_set = MultibodyJointSet::new();
@@ -873,7 +874,7 @@ impl PhysicsWorld {
         ) {
             // This is similar to `QueryPipeline::cast_ray` illustrated above except
             // that it also returns the normal of the collider shape at the hit point.
-            let hit_point = ray.point_at(intersection.toi);
+            let hit_point = ray.point_at(intersection.time_of_impact);
             let hit_normal = intersection.normal;
             let collider = self.collider_set.get(handle).unwrap();
             let maybe_rigid_body_handle = collider.parent();
