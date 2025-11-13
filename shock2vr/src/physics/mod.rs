@@ -22,6 +22,8 @@ use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
 
+const MOVEMENT_STEP_SIZE: f32 = 0.25;
+
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
         const WORLD = 1 << 0; // 1
@@ -564,32 +566,26 @@ impl PhysicsWorld {
             .translation(vec_to_nvec(start_pos))
             .ccd_enabled(true)
             .build();
-        //rigid_body.ccd_enabled(true);
+
         let player_entity_user_data = player_entity.inner() as u128;
         rigid_body.user_data = player_entity_user_data;
         let character_handle = self.rigid_body_set.insert(rigid_body);
         let mut collider =
             ColliderBuilder::cuboid(0.8 / SCALE_FACTOR, 2.4 / SCALE_FACTOR, 0.8 / SCALE_FACTOR);
-        //let mut collider = ColliderBuilder::capsule_y(2.4 / SCALE_FACTOR, 0.8 / SCALE_FACTOR);
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
         ));
         collider = collider.user_data(player_entity_user_data);
 
-        //collider.user_data = player_entity_user_data;
         self.collider_set
             .insert_with_parent(collider, character_handle, &mut self.rigid_body_set);
 
         let mut controller = KinematicCharacterController::default();
-        controller.autostep = Some(CharacterAutostep {
-            include_dynamic_bodies: true,
-            max_height: CharacterLength::Relative(0.5),
-            min_width: CharacterLength::Relative(1.0),
-        });
-        // controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
-        // controller.snap_to_ground = Some(CharacterLength::Absolute(0.2));
-        // controller.normal_nudge_factor = 0.1;
+
+        controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
+        controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
+        controller.normal_nudge_factor = 0.1;
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);
@@ -723,16 +719,23 @@ impl PhysicsWorld {
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let _character_mass = character_body.mass();
 
-        let movement_with_upward = desired_movement + Vector::y() * 0.25;
+        // We do our player movement in two passes
+        // First: move the player forward and a bit upwards
+        // Second: Drop the player down for gravity
+        // This wasn't necessary until upgrading to rapier v0.19.0 - when we upgraded to that version,
+        // we started to snag on geometry.
+        let movement_with_upward = desired_movement + Vector::y() * MOVEMENT_STEP_SIZE;
 
         let mut gravity = -0.5 / SCALE_FACTOR;
         gravity *= character_body.gravity_scale();
 
-        let graivty_moment = Vector::y() * gravity - Vector::y() * 0.25;
+        let gravity_movement = Vector::y() * gravity - Vector::y() * MOVEMENT_STEP_SIZE;
 
         //let mut collisions = vec![];
         let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
-            // First, move the player horizontally
+            // HACK: For rapier v0.19.0, our previous strategy of combining the movement + gravity
+            // caused us to snag on physics geometry. In order to counter this, we'll do the movement in two phases
+            // a forward phase to move and then an application of gravity
             (player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &self.rigid_body_set,
@@ -752,6 +755,7 @@ impl PhysicsWorld {
                 //|c| collisions.push(c),
             ),
 
+            // Second pass: Apply gravity and undo our step size
             player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &self.rigid_body_set,
@@ -759,7 +763,7 @@ impl PhysicsWorld {
                 &self.query_pipeline,
                 character_collider.shape(),
                 character_collider.position(),
-                graivty_moment.cast::<Real>(),
+                gravity_movement.cast::<Real>(),
                 QueryFilter::new()
                     .groups(InteractionGroups::new(
                         InternalCollisionGroups::PLAYER.bits.into(),
