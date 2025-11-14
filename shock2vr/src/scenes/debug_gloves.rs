@@ -277,10 +277,10 @@ impl DebugGlovesScene {
                 let parent_pos = parent_transform.w.truncate();
 
                 // Debug: print the connection being drawn
-                println!(
-                    "Drawing line: parent {} -> child {} (positions: {:?} -> {:?})",
-                    parent_index, child_index, parent_pos, child_pos
-                );
+                // println!(
+                //     "Drawing line: parent {} -> child {} (positions: {:?} -> {:?})",
+                //     parent_index, child_index, parent_pos, child_pos
+                // );
 
                 // Apply the same coordinate scaling as the cubes
                 let scaled_parent_pos = parent_pos * 1.0; // Same as cube positioning
@@ -355,20 +355,6 @@ impl DebugGlovesScene {
                 clone
             })
             .collect()
-    }
-
-    /// Returns the debug color for a specific joint index
-    fn joint_debug_color(joint_index: usize) -> Vector3<f32> {
-        match joint_index {
-            0 => Vector3::new(1.0, 1.0, 1.0), // White for first bone (likely wrist)
-            1 => Vector3::new(1.0, 1.0, 0.0), // Yellow for second bone
-            2 => Vector3::new(0.0, 1.0, 1.0), // Cyan for third bone
-            3 => Vector3::new(1.0, 0.0, 0.0), // Red for fourth bone
-            4 => Vector3::new(0.0, 1.0, 0.0), // Green for fifth bone
-            5 => Vector3::new(0.0, 0.0, 1.0), // Blue for sixth bone
-            6 => Vector3::new(1.0, 0.0, 1.0), // Magenta for seventh bone
-            _ => Vector3::new(0.7, 0.7, 0.7), // Light gray for other joints
-        }
     }
 
     fn create_debug_mission() -> AbstractMission {
@@ -461,11 +447,10 @@ impl GameScene for DebugGlovesScene {
 
         // Add the static and posed glove objects to the scene
         scene_objects.extend(original_glove);
-        // scene_objects.extend(posed_glove); + 2
 
         // Create posed model for debug visualization
         let mut posed_model = Self::create_posed_glove(&self.glove_model);
-        // scene_objects.extend(posed_model.to_scene_objects_with_skinning());
+        scene_objects.extend(posed_model.to_scene_objects_with_skinning());
 
         // Add debug cubes for original glove (using original model)
         let original_transform =
