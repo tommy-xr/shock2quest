@@ -6,11 +6,11 @@ use cgmath::{
 };
 use dark::{
     SCALE_FACTOR,
+    glb_model::GlbModel,
+    glb_skeleton::GlbSkeleton,
     importers::GLB_MODELS_IMPORTER,
     mission::{SongParams, room_database::RoomDatabase},
-    model::Model,
     ss2_entity_info::SystemShock2EntityInfo,
-    ss2_skeleton::Skeleton,
 };
 use engine::{
     assets::asset_cache::AssetCache,
@@ -37,17 +37,19 @@ use crate::{
 
 const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
-const GLOVE_POSITION: Point3<f32> = point3(0.0, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
+const GLOVE_POSITION: Point3<f32> =
+    point3(0.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
 const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
+const POSE_GLOVE_VERTICAL_OFFSET: f32 = -0.5 / SCALE_FACTOR;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
 pub struct DebugGlovesScene {
     core: MissionCore,
     glove_template: Vec<SceneObject>,
-    glove_model: Rc<Model>,
-    static_glove_objects: Vec<SceneObject>,
+    glove_model: Rc<GlbModel>,
+    glove_skeleton: GlbSkeleton,
 }
 
 impl DebugGlovesScene {
@@ -66,8 +68,8 @@ impl DebugGlovesScene {
             audio_context,
             global_context,
             SpawnLocation::PositionRotation(
-                vec3(0.0, 5.0 / SCALE_FACTOR, -5.0 / SCALE_FACTOR),
-                Quaternion::from_angle_y(Deg(0.0)),
+                vec3(0.0, 5.0 / SCALE_FACTOR, 0.0 / SCALE_FACTOR),
+                Quaternion::from_angle_y(Deg(90.0)),
             ),
             QuestInfo::new(),
             Box::new(EmptyEntityPopulator {}),
@@ -78,8 +80,7 @@ impl DebugGlovesScene {
         // Load the VR glove model once and instantiate it as needed.
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
         let glove_template = Self::load_glove_template(asset_cache);
-        let static_glove_objects =
-            Self::create_static_glove_objects(&glove_template, glove_model.skeleton());
+        let glove_skeleton = glove_model.skeleton().clone();
 
         info!(
             "Created debug gloves scene with {} glove nodes in template",
@@ -89,8 +90,8 @@ impl DebugGlovesScene {
         Self {
             core,
             glove_template,
+            glove_skeleton,
             glove_model,
-            static_glove_objects,
         }
     }
 
@@ -146,9 +147,15 @@ impl DebugGlovesScene {
         scene_objects
     }
 
+    fn apply_joint_overrides(skeleton: &GlbSkeleton) -> GlbSkeleton {
+        // TODO: Implement GLB hand pose application using the new GLB API
+        // This will use skeleton.set_node_transform() directly with hand pose transforms
+        skeleton.clone()
+    }
+
     fn create_static_glove_objects(
         template: &[SceneObject],
-        skeleton: Option<&Skeleton>,
+        skeleton: &GlbSkeleton,
     ) -> Vec<SceneObject> {
         let transform =
             Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
@@ -157,18 +164,17 @@ impl DebugGlovesScene {
 
         let mut objects = Self::clone_with_transform(template, transform);
 
-        if let Some(skeleton) = skeleton {
-            objects.extend(Self::create_manual_skinning_glove_objects(
-                template, skeleton,
-            ));
-        }
+        let skeleton = Self::apply_joint_overrides(skeleton);
+        objects.extend(Self::create_manual_skinning_glove_objects(
+            template, &skeleton,
+        ));
 
         objects
     }
 
     fn create_manual_skinning_glove_objects(
         template: &[SceneObject],
-        skeleton: &Skeleton,
+        skeleton: &GlbSkeleton,
     ) -> Vec<SceneObject> {
         // Nudge the manual-skin glove next to the debug cubes for visual comparison.
         let manual_transform = Matrix4::from_translation(vec3(
@@ -176,7 +182,7 @@ impl DebugGlovesScene {
             GLOVE_POSITION.y,
             GLOVE_POSITION.z,
         )) * Matrix4::from_angle_y(Deg(0.0))
-            * Matrix4::from_scale(1.0);
+            * Matrix4::from_scale(1.01);
 
         let skinning_data = Self::manual_skinning_data(skeleton);
 
@@ -191,30 +197,12 @@ impl DebugGlovesScene {
             .collect()
     }
 
-    fn manual_skinning_data(skeleton: &Skeleton) -> [Matrix4<f32>; 40] {
-        let world_transforms = skeleton.world_transforms();
-        let mut skinning_data = [Matrix4::identity(); 40];
+    fn manual_skinning_data(skeleton: &GlbSkeleton) -> [Matrix4<f32>; 40] {
+        // For GLB skeleton, we need to create an animation state to get transforms
+        use dark::glb_skeleton::GlbAnimationState;
 
-        for (joint_index, world_transform) in world_transforms.iter().enumerate() {
-            if world_transform == &Matrix4::identity() {
-                continue;
-            }
-
-            let inverse_bind = skeleton
-                .rest_transform(joint_index as u32)
-                .map(|rest| rest.inverse_bind)
-                .unwrap_or_else(Matrix4::identity);
-
-            skinning_data[joint_index] = *world_transform * inverse_bind;
-        }
-
-        skinning_data
-    }
-
-    fn hand_transform(position: Vector3<f32>, rotation: Quaternion<f32>) -> Matrix4<f32> {
-        Matrix4::from_translation(position)
-            * Matrix4::from(rotation)
-            * Matrix4::from_scale(GLOVE_SCALE)
+        let mut animation_state = GlbAnimationState::new(skeleton.clone());
+        animation_state.get_skinning_matrices()
     }
 
     fn clone_with_transform(template: &[SceneObject], transform: Matrix4<f32>) -> Vec<SceneObject> {
@@ -228,28 +216,18 @@ impl DebugGlovesScene {
             .collect()
     }
 
-    fn hand_glove_objects(&self) -> Vec<SceneObject> {
-        let mut gloves = Vec::new();
-
-        let left_transform = Self::hand_transform(
-            self.core.left_hand.get_position(),
-            self.core.left_hand.get_rotation(),
-        );
-        gloves.extend(Self::clone_with_transform(
-            &self.glove_template,
-            left_transform,
-        ));
-
-        let right_transform = Self::hand_transform(
-            self.core.right_hand.get_position(),
-            self.core.right_hand.get_rotation(),
-        );
-        gloves.extend(Self::clone_with_transform(
-            &self.glove_template,
-            right_transform,
-        ));
-
-        gloves
+    /// Returns the debug color for a specific joint index
+    fn joint_debug_color(joint_index: usize) -> Vector3<f32> {
+        match joint_index {
+            0 => Vector3::new(1.0, 1.0, 1.0),  // White for first bone (likely wrist)
+            1 => Vector3::new(1.0, 1.0, 0.0),  // Yellow for second bone
+            2 => Vector3::new(0.0, 1.0, 1.0),  // Cyan for third bone
+            3 => Vector3::new(1.0, 0.0, 0.0),  // Red for fourth bone
+            4 => Vector3::new(0.0, 1.0, 0.0),  // Green for fifth bone
+            5 => Vector3::new(0.0, 0.0, 1.0),  // Blue for sixth bone
+            6 => Vector3::new(1.0, 0.0, 1.0),  // Magenta for seventh bone
+            _ => Vector3::new(0.7, 0.7, 0.7),  // Light gray for other joints
+        }
     }
 
     fn create_debug_mission() -> AbstractMission {
@@ -336,100 +314,46 @@ impl GameScene for DebugGlovesScene {
         let (mut scene_objects, camera_position, camera_rotation) =
             self.core.render(asset_cache, options);
 
+        let static_glove_objects =
+            Self::create_static_glove_objects(&self.glove_template, &self.glove_skeleton);
+
         // Add the static and per-hand glove objects to the scene
-        scene_objects.extend(self.static_glove_objects.clone());
-        scene_objects.extend(self.hand_glove_objects());
+        scene_objects.extend(static_glove_objects);
 
         // Add custom bone visualization for the static glove
-        if let Some(skeleton) = self.glove_model.skeleton() {
-            let static_transform = Matrix4::from_translation(vec3(
-                GLOVE_POSITION.x,
-                GLOVE_POSITION.y,
-                GLOVE_POSITION.z,
-            )) * Matrix4::from_scale(GLOVE_SCALE);
+        let skeleton = self.glove_skeleton.clone();
+        let static_transform =
+            Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
+                * Matrix4::from_scale(GLOVE_SCALE);
 
-            let world_transforms = skeleton.world_transforms();
+        // Create animation state to get bone positions
+        let mut animation_state = dark::glb_skeleton::GlbAnimationState::new(skeleton.clone());
+        let bone_transforms = animation_state.get_skinning_matrices();
 
-            // Create a cube for each bone position
-            for (_bone_index, bone_transform) in world_transforms.iter().enumerate() {
-                // Skip identity transforms (unused bones)
-                if bone_transform != &Matrix4::identity() {
-                    let bone_position = bone_transform.w.truncate();
+        // Create a cube for each bone position
+        for (bone_index, bone_transform) in bone_transforms.iter().enumerate() {
+            // Skip identity transforms (unused bones)
+            if bone_transform != &Matrix4::identity() {
+                let bone_position = bone_transform.w.truncate();
 
-                    // Create cube at bone position
-                    let cube_material = color_material::create(Vector3::new(1.0, 0.5, 0.0)); // Orange color
-                    let mut bone_cube =
-                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
+                // Create cube at bone position with joint-specific color
+                let cube_color = Self::joint_debug_color(bone_index);
+                let cube_material = color_material::create(cube_color);
+                let mut bone_cube =
+                    SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
-                    // Scale cube small and position it at the bone location (moved up 1 unit)
-                    let cube_size = 0.02 / SCALE_FACTOR; // Small cube
-                    let bone_cube_transform = static_transform
-                        * Matrix4::from_translation(
-                            bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0),
-                        )
-                        * Matrix4::from_scale(cube_size);
+                // Scale cube small and position it at the bone location (moved up 1 unit)
+                let cube_size = 0.02 / SCALE_FACTOR; // Small cube
+                let bone_cube_transform = static_transform
+                    * Matrix4::from_translation(bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0))
+                    * Matrix4::from_scale(cube_size);
 
-                    bone_cube.set_transform(bone_cube_transform);
-                    scene_objects.push(bone_cube);
-                }
+                bone_cube.set_transform(bone_cube_transform);
+                scene_objects.push(bone_cube);
             }
         }
 
         (scene_objects, camera_position, camera_rotation)
-    }
-
-    fn render_per_eye(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        view: Matrix4<f32>,
-        projection: Matrix4<f32>,
-        screen_size: Vector2<f32>,
-        options: &GameOptions,
-    ) -> Vec<SceneObject> {
-        let mut scene_objects =
-            self.core
-                .render_per_eye(asset_cache, view, projection, screen_size, options);
-
-        // Add the glove objects to the per-eye render as well
-        scene_objects.extend(self.static_glove_objects.clone());
-        scene_objects.extend(self.hand_glove_objects());
-
-        // Add custom bone visualization for the static glove
-        if let Some(skeleton) = self.glove_model.skeleton() {
-            let static_transform = Matrix4::from_translation(vec3(
-                GLOVE_POSITION.x,
-                GLOVE_POSITION.y,
-                GLOVE_POSITION.z,
-            )) * Matrix4::from_scale(GLOVE_SCALE);
-
-            let world_transforms = skeleton.world_transforms();
-
-            // Create a cube for each bone position
-            for (_bone_index, bone_transform) in world_transforms.iter().enumerate() {
-                // Skip identity transforms (unused bones)
-                if bone_transform != &Matrix4::identity() {
-                    let bone_position = bone_transform.w.truncate();
-
-                    // Create cube at bone position
-                    let cube_material = color_material::create(Vector3::new(1.0, 0.5, 0.0)); // Orange color
-                    let mut bone_cube =
-                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
-
-                    // Scale cube small and position it at the bone location (moved up 1 unit)
-                    let cube_size = 0.02 / SCALE_FACTOR; // Small cube
-                    let bone_cube_transform = static_transform
-                        * Matrix4::from_translation(
-                            bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0),
-                        )
-                        * Matrix4::from_scale(cube_size);
-
-                    bone_cube.set_transform(bone_cube_transform);
-                    scene_objects.push(bone_cube);
-                }
-            }
-        }
-
-        scene_objects
     }
 
     fn finish_render(

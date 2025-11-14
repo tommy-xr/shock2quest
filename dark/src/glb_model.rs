@@ -1,7 +1,6 @@
 // glb_model.rs
 // Standalone GLB model that doesn't depend on SS2 Model abstractions
 
-use std::rc::Rc;
 use cgmath::Matrix4;
 use collision::Aabb3;
 use engine::scene::SceneObject;
