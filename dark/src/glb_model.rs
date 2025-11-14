@@ -114,6 +114,16 @@ impl GlbModel {
     pub fn get_global_transform(&mut self, node_index: usize) -> Option<Matrix4<f32>> {
         self.animation_state.get_global_transform(node_index)
     }
+
+    /// Set a transform for a specific joint (uses joint index, not node index)
+    pub fn set_joint_transform(&mut self, joint_index: usize, transform: Matrix4<f32>) {
+        self.animation_state.set_joint_transform(joint_index, transform);
+    }
+
+    /// Get the current local transform for a joint (uses joint index)
+    pub fn get_joint_transform(&self, joint_index: usize) -> Option<Matrix4<f32>> {
+        self.animation_state.get_joint_transform(joint_index)
+    }
 }
 
 // Add empty skeleton support to GlbSkeleton

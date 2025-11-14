@@ -262,6 +262,20 @@ impl GlbAnimationState {
             .position(|n| n.index == node_index)?;
         self.global_transforms.get(pos).copied()
     }
+
+    /// Set a transform for a specific joint (uses joint index, not node index)
+    pub fn set_joint_transform(&mut self, joint_index: usize, transform: Matrix4<f32>) {
+        // Convert joint index to node index
+        if let Some(node_index) = self.skeleton.node_index_for_joint(joint_index) {
+            self.set_node_transform(node_index, transform);
+        }
+    }
+
+    /// Get the current local transform for a joint (uses joint index)
+    pub fn get_joint_transform(&self, joint_index: usize) -> Option<Matrix4<f32>> {
+        let node_index = self.skeleton.node_index_for_joint(joint_index)?;
+        self.get_node_transform(node_index)
+    }
 }
 
 // Helper trait extension for Matrix4 to calculate magnitude
