@@ -153,24 +153,25 @@ impl DebugGlovesScene {
         skeleton.clone()
     }
 
-    fn create_static_glove_objects(
-        template: &[SceneObject],
-        skeleton: &GlbSkeleton,
-    ) -> Vec<SceneObject> {
-        let transform =
-            Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
-                * Matrix4::from_angle_y(Deg(0.0))
-                * Matrix4::from_scale(GLOVE_SCALE);
+    // fn create_static_glove_objects(
+    //     template: &[SceneObject],
+    //     skeleton: &GlbSkeleton,
+    // ) -> Vec<SceneObject> {
+    //     let transform =
+    //         Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
+    //             * Matrix4::from_angle_y(Deg(0.0))
+    //             * Matrix4::from_scale(GLOVE_SCALE);
 
-        let mut objects = Self::clone_with_transform(template, transform);
+    //     // let mut objects = Self::clone_with_transform(template, transform);
 
-        let skeleton = Self::apply_joint_overrides(skeleton);
-        objects.extend(Self::create_manual_skinning_glove_objects(
-            template, &skeleton,
-        ));
+    //     let skeleton = Self::apply_joint_overrides(skeleton);
+    //     // TODO: Bring back
+    //     // objects.extend(Self::create_manual_skinning_glove_objects(
+    //     //     template, &skeleton,
+    //     // ));
 
-        objects
-    }
+    //     // objects
+    // }
 
     fn create_manual_skinning_glove_objects(
         template: &[SceneObject],
@@ -219,14 +220,14 @@ impl DebugGlovesScene {
     /// Returns the debug color for a specific joint index
     fn joint_debug_color(joint_index: usize) -> Vector3<f32> {
         match joint_index {
-            0 => Vector3::new(1.0, 1.0, 1.0),  // White for first bone (likely wrist)
-            1 => Vector3::new(1.0, 1.0, 0.0),  // Yellow for second bone
-            2 => Vector3::new(0.0, 1.0, 1.0),  // Cyan for third bone
-            3 => Vector3::new(1.0, 0.0, 0.0),  // Red for fourth bone
-            4 => Vector3::new(0.0, 1.0, 0.0),  // Green for fifth bone
-            5 => Vector3::new(0.0, 0.0, 1.0),  // Blue for sixth bone
-            6 => Vector3::new(1.0, 0.0, 1.0),  // Magenta for seventh bone
-            _ => Vector3::new(0.7, 0.7, 0.7),  // Light gray for other joints
+            0 => Vector3::new(1.0, 1.0, 1.0), // White for first bone (likely wrist)
+            1 => Vector3::new(1.0, 1.0, 0.0), // Yellow for second bone
+            2 => Vector3::new(0.0, 1.0, 1.0), // Cyan for third bone
+            3 => Vector3::new(1.0, 0.0, 0.0), // Red for fourth bone
+            4 => Vector3::new(0.0, 1.0, 0.0), // Green for fifth bone
+            5 => Vector3::new(0.0, 0.0, 1.0), // Blue for sixth bone
+            6 => Vector3::new(1.0, 0.0, 1.0), // Magenta for seventh bone
+            _ => Vector3::new(0.7, 0.7, 0.7), // Light gray for other joints
         }
     }
 
@@ -314,11 +315,22 @@ impl GameScene for DebugGlovesScene {
         let (mut scene_objects, camera_position, camera_rotation) =
             self.core.render(asset_cache, options);
 
-        let static_glove_objects =
-            Self::create_static_glove_objects(&self.glove_template, &self.glove_skeleton);
+        let transform =
+            Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
+                * Matrix4::from_angle_y(Deg(0.0))
+                * Matrix4::from_scale(GLOVE_SCALE);
+
+        let original_glove = Self::clone_with_transform(&self.glove_template, transform);
+
+        let manually_skinned_glove =
+            Self::create_manual_skinning_glove_objects(&self.glove_template, &self.glove_skeleton);
+
+        // let static_glove_objects =
+        //     Self::create_static_glove_objects(&self.glove_template, &self.glove_skeleton);
 
         // Add the static and per-hand glove objects to the scene
-        scene_objects.extend(static_glove_objects);
+        scene_objects.extend(original_glove);
+        scene_objects.extend(manually_skinned_glove);
 
         // Add custom bone visualization for the static glove
         let skeleton = self.glove_skeleton.clone();
@@ -328,24 +340,22 @@ impl GameScene for DebugGlovesScene {
 
         // Create animation state to get bone positions
         let mut animation_state = dark::glb_skeleton::GlbAnimationState::new(skeleton.clone());
-        let bone_transforms = animation_state.get_skinning_matrices();
 
-        // Create a cube for each bone position
-        for (bone_index, bone_transform) in bone_transforms.iter().enumerate() {
-            // Skip identity transforms (unused bones)
-            if bone_transform != &Matrix4::identity() {
-                let bone_position = bone_transform.w.truncate();
+        // Create a cube for each node (not just joints)
+        for node_index in 0..skeleton.nodes().len() {
+            if let Some(global_transform) = animation_state.get_global_transform(node_index) {
+                let bone_position = global_transform.w.truncate();
 
                 // Create cube at bone position with joint-specific color
-                let cube_color = Self::joint_debug_color(bone_index);
+                let cube_color = Self::joint_debug_color(node_index);
                 let cube_material = color_material::create(cube_color);
                 let mut bone_cube =
                     SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
-                // Scale cube small and position it at the bone location (moved up 1 unit)
-                let cube_size = 0.02 / SCALE_FACTOR; // Small cube
+                // Scale cube small and position it at the bone location
+                let cube_size = 0.1; // Small cube
                 let bone_cube_transform = static_transform
-                    * Matrix4::from_translation(bone_position + vec3(0.0, 1.0 / SCALE_FACTOR, 0.0))
+                    * Matrix4::from_translation(bone_position * 10.0)
                     * Matrix4::from_scale(cube_size);
 
                 bone_cube.set_transform(bone_cube_transform);
