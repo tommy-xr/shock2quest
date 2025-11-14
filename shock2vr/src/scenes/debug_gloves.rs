@@ -6,7 +6,6 @@ use cgmath::{
 };
 use dark::{
     glb_model::GlbModel,
-    glb_skeleton::GlbSkeleton,
     importers::GLB_MODELS_IMPORTER,
     mission::{SongParams, room_database::RoomDatabase},
     ss2_entity_info::SystemShock2EntityInfo,
@@ -30,7 +29,6 @@ use crate::{
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
-    scenes::hand_pose::joint_indices,
     scenes::hand_pose::*,
     scripts::{Effect, GlobalEffect},
     time::Time,
@@ -41,7 +39,6 @@ const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 const GLOVE_POSITION: Point3<f32> = point3(0.0, 3.0, 1.0);
 const GLOVE_SCALE: f32 = 1.0;
 const SECOND_GLOVE_OFFSET_X: f32 = 0.5;
-const POSE_GLOVE_VERTICAL_OFFSET: f32 = -0.25;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -49,7 +46,6 @@ pub struct DebugGlovesScene {
     core: MissionCore,
     glove_template: Vec<SceneObject>,
     glove_model: Rc<GlbModel>,
-    glove_skeleton: GlbSkeleton,
 }
 
 impl DebugGlovesScene {
@@ -80,7 +76,6 @@ impl DebugGlovesScene {
         // Load the VR glove model once and instantiate it as needed.
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
         let glove_template = Self::load_glove_template(asset_cache);
-        let glove_skeleton = glove_model.skeleton().clone();
 
         info!(
             "Created debug gloves scene with {} glove nodes in template",
@@ -90,7 +85,6 @@ impl DebugGlovesScene {
         Self {
             core,
             glove_template,
-            glove_skeleton,
             glove_model,
         }
     }
@@ -99,28 +93,17 @@ impl DebugGlovesScene {
         use dark::importers::TEXTURE_IMPORTER;
         use engine::scene::SkinnedMaterial;
 
-        println!("Loading VR glove model for debug scene...");
-
         // Load the GLB model
         let model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
         let mut scene_objects = model.clone_scene_objects();
 
-        println!("Loaded VR glove model with {} objects", scene_objects.len());
-
         // Replace textures with external vr_glove_color.jpg
-        println!("Loading external texture: vr_glove_color.jpg");
 
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             asset_cache
                 .get::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, "vr_glove_color.jpg")
         })) {
             Ok(external_texture) => {
-                println!(
-                    "Successfully loaded external texture: {}x{}",
-                    external_texture.width(),
-                    external_texture.height()
-                );
-
                 let texture_rc = external_texture as Rc<dyn engine::texture::TextureTrait>;
 
                 // Replace materials in all scene objects
@@ -136,11 +119,9 @@ impl DebugGlovesScene {
                 for scene_object in scene_objects.iter_mut() {
                     scene_object.set_transform(Matrix4::identity());
                 }
-
-                println!("Successfully replaced textures on glove template");
             }
             Err(_) => {
-                println!("Failed to load external texture: vr_glove_color.jpg");
+                // Failed to load external texture - use default materials
             }
         }
 
@@ -154,47 +135,12 @@ impl DebugGlovesScene {
         // Apply the pointing pose to demonstrate the corrected joint indices
         let pointing_pose = point_right_hand();
 
-        println!(
-            "Applying pointing pose with {} rotations and {} positions",
-            pointing_pose.bone_rotations.len(),
-            pointing_pose.bone_positions.len()
-        );
-
-        // No need for pose_to_node_mapping anymore - we use joint indices directly
-
-        // Apply the pointing pose using proper joint indices
-        println!("Applying pointing pose using joint-based transforms");
-
         // Apply rotations to each joint using the corrected joint mapping
         for (pose_index, rotation) in pointing_pose.bone_rotations.iter().enumerate() {
             // Use pose_index as joint_index directly since the updated hand_pose.rs
             // should have the correct mapping
-            let joint_index = pose_index;
 
-            if joint_index >= 26 { // Skip if beyond valid joint range
-                continue;
-            }
-
-            // Get the original transform for this joint
-            if let Some(original_transform) = posed_model.get_joint_transform(joint_index) {
-                // Only apply non-identity rotations
-                if rotation.s != 1.0
-                    || rotation.v.x != 0.0
-                    || rotation.v.y != 0.0
-                    || rotation.v.z != 0.0
-                {
-                    let rotation_matrix = Matrix4::from(*rotation);
-
-                    // Compose the pose rotation with the original transform
-                    let composed_transform = original_transform * rotation_matrix;
-
-                    posed_model.set_joint_transform(joint_index, composed_transform);
-                    println!(
-                        "Applied pose rotation to joint {} (pose index {})",
-                        joint_index, pose_index
-                    );
-                }
-            }
+            // TODO: Set joint transform
         }
 
         posed_model
@@ -234,109 +180,6 @@ impl DebugGlovesScene {
         }
 
         debug_cubes
-    }
-
-    fn create_skeleton_connection_lines(
-        glb_model: &mut GlbModel,
-        transform: Matrix4<f32>,
-    ) -> Vec<SceneObject> {
-        let mut lines = Vec::new();
-
-        // Get skeleton data first
-        let node_count = glb_model.skeleton().nodes().len();
-        let mut parent_child_pairs = Vec::new();
-
-        println!("=== Skeleton Structure ===");
-        for node_index in 0..node_count {
-            let node = &glb_model.skeleton().nodes()[node_index];
-            println!(
-                "Node {}: name={:?}, parent={:?}",
-                node_index, node.name, node.parent_index
-            );
-
-            if let Some(parent_index) = node.parent_index {
-                parent_child_pairs.push((parent_index, node_index));
-            }
-        }
-        println!("=== End Skeleton Structure ===");
-
-        // Now get transforms for each parent-child pair
-        for (parent_index, child_index) in parent_child_pairs {
-            if let (Some(child_transform), Some(parent_transform)) = (
-                glb_model.get_global_transform(child_index),
-                glb_model.get_global_transform(parent_index),
-            ) {
-                let child_pos = child_transform.w.truncate();
-                let parent_pos = parent_transform.w.truncate();
-
-                // Debug: print the connection being drawn
-                // println!(
-                //     "Drawing line: parent {} -> child {} (positions: {:?} -> {:?})",
-                //     parent_index, child_index, parent_pos, child_pos
-                // );
-
-                // Apply the same coordinate scaling as the cubes
-                let scaled_parent_pos = parent_pos * 1.0; // Same as cube positioning
-                let scaled_child_pos = child_pos * 1.0;
-
-                // Create a line from parent to child
-                let line_object = Self::create_line_between_points(
-                    scaled_parent_pos,
-                    scaled_child_pos,
-                    transform,
-                    vec3(0.0, 1.0, 0.0), // Green lines for skeleton connections
-                );
-                lines.push(line_object);
-            }
-        }
-
-        lines
-    }
-
-    fn create_line_between_points(
-        start: Vector3<f32>,
-        end: Vector3<f32>,
-        transform: Matrix4<f32>,
-        color: Vector3<f32>,
-    ) -> SceneObject {
-        use cgmath::InnerSpace;
-
-        // Calculate line properties
-        let direction = end - start;
-        let length = direction.magnitude();
-        let center = start + direction * 0.5;
-
-        // Create a thin cylinder to represent the line
-        let line_material = color_material::create(color);
-        let mut line_object = SceneObject::new(
-            line_material,
-            Box::new(engine::scene::cube::create()), // Using cube as a thin line
-        );
-
-        // Calculate rotation to align with the direction vector
-        let up = vec3(0.0, 1.0, 0.0);
-        let rotation = if direction.magnitude() > 0.001 {
-            let normalized_dir = direction.normalize();
-            // Simple rotation - could be improved for arbitrary orientations
-            if (normalized_dir.cross(up)).magnitude() > 0.001 {
-                let axis = normalized_dir.cross(up).normalize();
-                let angle = normalized_dir.dot(up).acos();
-                Matrix4::from_axis_angle(axis, cgmath::Rad(angle))
-            } else {
-                Matrix4::identity()
-            }
-        } else {
-            Matrix4::identity()
-        };
-
-        // Transform: position at center, rotate to align with direction, scale to line dimensions
-        let line_transform = transform
-            * Matrix4::from_translation(center)
-            * rotation
-            * Matrix4::from_nonuniform_scale(0.005, length, 0.005); // Thin line
-
-        line_object.set_transform(line_transform);
-        line_object
     }
 
     fn clone_with_transform(template: &[SceneObject], transform: Matrix4<f32>) -> Vec<SceneObject> {
@@ -433,17 +276,13 @@ impl GameScene for DebugGlovesScene {
 
         let original_glove = Self::clone_with_transform(&self.glove_template, transform);
 
-        // let posed_glove = Self::create_posed_glove_objects(&self.glove_model);
-
-        // let static_glove_objects =
-        //     Self::create_static_glove_objects(&self.glove_template, &self.glove_skeleton);
-
         // Add the static and posed glove objects to the scene
         scene_objects.extend(original_glove);
 
         // Create posed model for debug visualization
-        let mut posed_model = Self::create_posed_glove(&self.glove_model);
-        scene_objects.extend(posed_model.to_scene_objects_with_skinning());
+        // TODO: Test this out
+        // let mut posed_model = Self::create_posed_glove(&self.glove_model);
+        // scene_objects.extend(posed_model.to_scene_objects_with_skinning());
 
         // Add debug cubes for original glove (using original model)
         let original_transform =
@@ -459,30 +298,18 @@ impl GameScene for DebugGlovesScene {
         scene_objects.extend(original_debug_cubes);
 
         // Add debug cubes for posed glove (using posed model with transforms applied)
-        let posed_transform = Matrix4::from_translation(vec3(
-            GLOVE_POSITION.x + SECOND_GLOVE_OFFSET_X,
-            GLOVE_POSITION.y,
-            GLOVE_POSITION.z,
-        ));
-        let posed_debug_cubes = Self::create_skeleton_debug_cubes(
-            &mut posed_model, // Now using mutable reference
-            posed_transform,
-            0.12, // Slightly larger
-            None,
-            // Some(test_node_index), // Highlight the test node
-        );
-        scene_objects.extend(posed_debug_cubes);
-
-        // Add skeleton connection lines for both skeletons
-        let original_skeleton_lines =
-            Self::create_skeleton_connection_lines(&mut original_model_clone, original_transform);
-        scene_objects.extend(original_skeleton_lines);
-
-        let posed_skeleton_lines =
-            Self::create_skeleton_connection_lines(&mut posed_model, posed_transform);
-        scene_objects.extend(posed_skeleton_lines);
-
-        // panic!("render single frame to limit output");
+        // let posed_transform = Matrix4::from_translation(vec3(
+        //     GLOVE_POSITION.x + SECOND_GLOVE_OFFSET_X,
+        //     GLOVE_POSITION.y,
+        //     GLOVE_POSITION.z,
+        // ));
+        // let posed_debug_cubes = Self::create_skeleton_debug_cubes(
+        //     &mut posed_model, // Now using mutable reference
+        //     posed_transform,
+        //     0.12, // Slightly larger
+        //     None,
+        // );
+        // scene_objects.extend(posed_debug_cubes);
         (scene_objects, camera_position, camera_rotation)
     }
 

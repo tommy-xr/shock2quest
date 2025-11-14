@@ -1,4 +1,4 @@
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3};
+use cgmath::{Matrix4, Quaternion, Vector3};
 use num::Zero;
 use std::collections::HashMap;
 

@@ -52,12 +52,8 @@ fn load_glb(
     for buffer_obj in document.buffers() {
         let data = match buffer_obj.source() {
             gltf::buffer::Source::Bin => blob.as_ref().expect("No binary blob in GLB file").clone(),
-            gltf::buffer::Source::Uri(uri) => {
-                eprintln!(
-                    "Warning: GLB file contains external buffer reference: {}",
-                    uri
-                );
-                eprintln!("Using empty buffer as fallback");
+            gltf::buffer::Source::Uri(_uri) => {
+                // GLB file contains external buffer reference, using empty buffer as fallback
                 vec![]
             }
         };
@@ -87,19 +83,13 @@ fn load_glb(
                         }
                     }
                     Err(_) => {
-                        eprintln!(
-                            "Warning: Could not decode embedded image, using checkerboard fallback"
-                        );
+                        // Could not decode embedded image, using checkerboard fallback
                         create_checkerboard_image_data()
                     }
                 }
             }
-            gltf::image::Source::Uri { uri, .. } => {
-                eprintln!(
-                    "Warning: GLB file contains external image reference: {}",
-                    uri
-                );
-                eprintln!("Using checkerboard pattern as fallback");
+            gltf::image::Source::Uri { uri: _uri, .. } => {
+                // GLB file contains external image reference, using checkerboard pattern as fallback
                 create_checkerboard_image_data()
             }
         };
@@ -154,12 +144,8 @@ fn extract_glb_skeleton(
     for scene in document.scenes() {
         for node in scene.nodes() {
             if let Some(skin) = find_skin_in_node(&node) {
-                println!("Found skin in GLB, extracting skeleton...");
-
                 let joint_nodes: Vec<gltf::Node> = skin.joints().collect();
                 let inverse_bind_matrices = extract_inverse_bind_matrices(&skin, buffers);
-
-                println!("GLB skeleton has {} joints", joint_nodes.len());
 
                 let skeleton = GlbSkeleton::new(joint_nodes, inverse_bind_matrices, all_nodes);
                 return Some(skeleton);
@@ -233,12 +219,6 @@ fn process_node(
     max_bounds: &mut Vector3<f32>,
 ) {
     let transform = Matrix4::from(node.transform().matrix());
-    println!(
-        "== Importing Node==\nindex: {}\nname: {}\ntransform: {:?}\n",
-        node.index(),
-        node.name().unwrap_or_default(),
-        transform
-    );
 
     if let Some(mesh) = node.mesh() {
         for primitive in mesh.primitives() {
@@ -363,7 +343,6 @@ fn process_primitive(
         let joints: Vec<[u16; 4]> = joints.unwrap();
         let weights: Vec<[f32; 4]> = weights.unwrap();
 
-        println!("Processing skinned mesh with {} vertices", positions.len());
 
         // Create skinned vertices
         let mut skinned_vertices = Vec::new();
@@ -517,10 +496,6 @@ fn create_texture_from_image(
     }
 
     let image_data = &images[texture_index];
-    println!(
-        "Loading texture {} ({}x{}, format: {:?})",
-        texture_index, image_data.width, image_data.height, image_data.format
-    );
 
     let raw_texture_data = RawTextureData {
         bytes: image_data.pixels.clone(),
@@ -571,12 +546,6 @@ fn create_static_material(
                 ));
             }
 
-            println!(
-                "Texture index {} out of range (only {} images available), using base color: {:?}",
-                texture_index,
-                images.len(),
-                base_color
-            );
 
             std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
                 base_color[0],
@@ -585,7 +554,6 @@ fn create_static_material(
             )))
         }
         None => {
-            println!("No texture specified, using base color: {:?}", base_color);
             std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
                 base_color[0],
                 base_color[1],
@@ -606,20 +574,10 @@ fn create_skinned_material(
         match create_texture_from_image(images, texture_index) {
             Some(tex) => tex,
             None => {
-                println!(
-                    "Texture index {} out of range (only {} images available) for skinned mesh, using base color: {:?}",
-                    texture_index,
-                    images.len(),
-                    base_color
-                );
                 create_solid_color_texture(base_color)
             }
         }
     } else {
-        println!(
-            "No texture specified for skinned mesh, using base color: {:?}",
-            base_color
-        );
         create_solid_color_texture(base_color)
     };
 

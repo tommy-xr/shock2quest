@@ -54,10 +54,6 @@ impl GlbSkeleton {
             joint_index_to_node.push(node_index);
         }
 
-        println!(
-            "=== GlbSkeleton == - joint index to node: {:?}",
-            joint_index_to_node
-        );
 
         // Build node hierarchy including all nodes (not just joints)
         let mut nodes = Vec::new();
