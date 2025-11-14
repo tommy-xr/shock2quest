@@ -182,7 +182,7 @@ impl DebugGlovesScene {
         // Example: Bend the first finger joint (if it exists)
         if let Some(_transform) = posed_model.get_node_transform(joint_indices::INDEX_METACARPAL) {
             // Apply a small rotation to demonstrate posing
-            println!("!! applying transform!");
+            println!("!! applying transform to INDEX_METACARPAL ({})", joint_indices::INDEX_METACARPAL);
             let bend_transform = Matrix4::from_angle_y(Deg(90.0));
             posed_model.set_node_transform(joint_indices::INDEX_METACARPAL, bend_transform);
         }
@@ -203,6 +203,46 @@ impl DebugGlovesScene {
         }
 
         scene_objects
+    }
+
+    fn create_skeleton_debug_cubes(
+        glb_model: &GlbModel,
+        transform: Matrix4<f32>,
+        cube_size: f32,
+        highlight_node: Option<usize>,
+    ) -> Vec<SceneObject> {
+        let skeleton = glb_model.skeleton().clone();
+        let mut animation_state = dark::glb_skeleton::GlbAnimationState::new(skeleton);
+        let mut debug_cubes = Vec::new();
+
+        // Create debug cubes for each node
+        for node_index in 0..glb_model.skeleton().nodes().len() {
+            if let Some(global_transform) = animation_state.get_global_transform(node_index) {
+                let bone_position = global_transform.w.truncate();
+
+                // Color scheme: highlight special node, otherwise use index-based colors
+                let cube_color = if Some(node_index) == highlight_node {
+                    vec3(1.0, 1.0, 0.0) // Bright yellow for highlighted bone
+                } else {
+                    Self::joint_debug_color(node_index)
+                };
+
+                let cube_material = color_material::create(cube_color);
+                let mut bone_cube = SceneObject::new(
+                    cube_material,
+                    Box::new(engine::scene::cube::create()),
+                );
+
+                let bone_cube_transform = transform
+                    * Matrix4::from_translation(bone_position)
+                    * Matrix4::from_scale(cube_size);
+
+                bone_cube.set_transform(bone_cube_transform);
+                debug_cubes.push(bone_cube);
+            }
+        }
+
+        debug_cubes
     }
 
     fn manual_skinning_data(skeleton: &GlbSkeleton) -> [Matrix4<f32>; 40] {
@@ -330,36 +370,37 @@ impl GameScene for DebugGlovesScene {
         scene_objects.extend(original_glove);
         scene_objects.extend(posed_glove);
 
-        // Add custom bone visualization for the static glove
-        let skeleton = self.glove_skeleton.clone();
-        let static_transform =
-            Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
-                * Matrix4::from_scale(GLOVE_SCALE);
-
-        // Create animation state to get bone positions
-        let mut animation_state = dark::glb_skeleton::GlbAnimationState::new(skeleton.clone());
-
-        // Create a cube for each node (not just joints)
-        for node_index in 0..skeleton.nodes().len() {
-            if let Some(global_transform) = animation_state.get_global_transform(node_index) {
-                let bone_position = global_transform.w.truncate();
-
-                // Create cube at bone position with joint-specific color
-                let cube_color = Self::joint_debug_color(node_index);
-                let cube_material = color_material::create(cube_color);
-                let mut bone_cube =
-                    SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
-
-                // Scale cube small and position it at the bone location
-                let cube_size = 0.1; // Small cube
-                let bone_cube_transform = static_transform
-                    * Matrix4::from_translation(bone_position * 10.0)
-                    * Matrix4::from_scale(cube_size);
-
-                bone_cube.set_transform(bone_cube_transform);
-                scene_objects.push(bone_cube);
-            }
+        // Create posed model for debug visualization
+        let mut posed_model = self.glove_model.as_ref().clone();
+        if let Some(_transform) = posed_model.get_node_transform(joint_indices::INDEX_METACARPAL) {
+            let bend_transform = Matrix4::from_angle_y(Deg(90.0));
+            posed_model.set_node_transform(joint_indices::INDEX_METACARPAL, bend_transform);
         }
+
+        // Add debug cubes for original glove
+        let original_transform = Matrix4::from_translation(vec3(GLOVE_POSITION.x, GLOVE_POSITION.y, GLOVE_POSITION.z))
+            * Matrix4::from_scale(GLOVE_SCALE);
+        let original_debug_cubes = Self::create_skeleton_debug_cubes(
+            &self.glove_model,
+            original_transform,
+            0.1,
+            None, // No highlighting
+        );
+        scene_objects.extend(original_debug_cubes);
+
+        // Add debug cubes for posed glove
+        let posed_transform = Matrix4::from_translation(vec3(
+            GLOVE_POSITION.x + SECOND_GLOVE_OFFSET_X,
+            GLOVE_POSITION.y,
+            GLOVE_POSITION.z,
+        ));
+        let posed_debug_cubes = Self::create_skeleton_debug_cubes(
+            &posed_model,
+            posed_transform,
+            0.12, // Slightly larger
+            Some(joint_indices::INDEX_METACARPAL), // Highlight the modified bone
+        );
+        scene_objects.extend(posed_debug_cubes);
 
         (scene_objects, camera_position, camera_rotation)
     }
