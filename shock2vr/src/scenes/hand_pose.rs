@@ -2,45 +2,52 @@ use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3};
 use num::Zero;
 use std::collections::HashMap;
 
-/// Joint indices for hand bones
+/// Joint indices for hand bones - mapped to actual GLB skeleton structure
 pub mod joint_indices {
-    // Root and wrist
-    pub const WRIST: usize = 0;
-    pub const FOREARM_STUB: usize = 1;
+    // GLB skeleton structure (based on debug output)
+    // Node 0: RootNode, Node 1: renderMesh0, Node 2: Root
+    pub const WRIST: usize = 3;  // wrist_r
 
-    // Thumb (2-5)
-    pub const THUMB_METACARPAL: usize = 2;
-    pub const THUMB_PROXIMAL: usize = 3;
-    pub const THUMB_INTERMEDIATE: usize = 4;
-    pub const THUMB_DISTAL: usize = 5;
+    // Thumb (4-7)
+    pub const THUMB_METACARPAL: usize = 4;    // finger_thumb_0_r
+    pub const THUMB_PROXIMAL: usize = 5;      // finger_thumb_1_r
+    pub const THUMB_INTERMEDIATE: usize = 6;  // finger_thumb_2_r
+    pub const THUMB_DISTAL: usize = 7;        // finger_thumb_r_end
 
-    // Index finger (6-10)
-    pub const INDEX_METACARPAL: usize = 6;
-    pub const INDEX_PROXIMAL: usize = 7;
-    pub const INDEX_INTERMEDIATE: usize = 8;
-    pub const INDEX_DISTAL: usize = 9;
-    pub const INDEX_TIP: usize = 10;
+    // Index finger (8-12)
+    pub const INDEX_METACARPAL: usize = 8;    // finger_index_meta_r
+    pub const INDEX_PROXIMAL: usize = 9;      // finger_index_0_r
+    pub const INDEX_INTERMEDIATE: usize = 10; // finger_index_1_r
+    pub const INDEX_DISTAL: usize = 11;       // finger_index_2_r
+    pub const INDEX_TIP: usize = 12;          // finger_index_r_end
 
-    // Middle finger (11-15)
-    pub const MIDDLE_METACARPAL: usize = 11;
-    pub const MIDDLE_PROXIMAL: usize = 12;
-    pub const MIDDLE_INTERMEDIATE: usize = 13;
-    pub const MIDDLE_DISTAL: usize = 14;
-    pub const MIDDLE_TIP: usize = 15;
+    // Middle finger (13-17)
+    pub const MIDDLE_METACARPAL: usize = 13;    // finger_middle_meta_r
+    pub const MIDDLE_PROXIMAL: usize = 14;      // finger_middle_0_r
+    pub const MIDDLE_INTERMEDIATE: usize = 15;  // finger_middle_1_r
+    pub const MIDDLE_DISTAL: usize = 16;        // finger_middle_2_r
+    pub const MIDDLE_TIP: usize = 17;           // finger_middle_r_end
 
-    // Ring finger (16-20)
-    pub const RING_METACARPAL: usize = 16;
-    pub const RING_PROXIMAL: usize = 17;
-    pub const RING_INTERMEDIATE: usize = 18;
-    pub const RING_DISTAL: usize = 19;
-    pub const RING_TIP: usize = 20;
+    // Ring finger (18-22)
+    pub const RING_METACARPAL: usize = 18;    // finger_ring_meta_r
+    pub const RING_PROXIMAL: usize = 19;      // finger_ring_0_r
+    pub const RING_INTERMEDIATE: usize = 20;  // finger_ring_1_r
+    pub const RING_DISTAL: usize = 21;        // finger_ring_2_r
+    pub const RING_TIP: usize = 22;           // finger_ring_r_end
 
-    // Pinky finger (21-25)
-    pub const PINKY_METACARPAL: usize = 21;
-    pub const PINKY_PROXIMAL: usize = 22;
-    pub const PINKY_INTERMEDIATE: usize = 23;
-    pub const PINKY_DISTAL: usize = 24;
-    pub const PINKY_TIP: usize = 25;
+    // Pinky finger (23-27)
+    pub const PINKY_METACARPAL: usize = 23;    // finger_pinky_meta_r
+    pub const PINKY_PROXIMAL: usize = 24;      // finger_pinky_0_r
+    pub const PINKY_INTERMEDIATE: usize = 25;  // finger_pinky_1_r
+    pub const PINKY_DISTAL: usize = 26;        // finger_pinky_2_r
+    pub const PINKY_TIP: usize = 27;           // finger_pinky_r_end
+
+    // Aux bones (28-32) - these may be helper bones, not main skeleton
+    // pub const THUMB_AUX: usize = 28;    // finger_thumb_r_aux
+    // pub const INDEX_AUX: usize = 29;    // finger_index_r_aux
+    // pub const MIDDLE_AUX: usize = 30;   // finger_middle_r_aux
+    // pub const RING_AUX: usize = 31;     // finger_ring_r_aux
+    // pub const PINKY_AUX: usize = 32;    // finger_pinky_r_aux
 }
 
 /// Creates a map of joint relationships where key is child joint index and value is parent joint index
@@ -133,7 +140,7 @@ impl Pose {
 // /// Returns the open hand pose for the right hand
 pub fn open_right_hand() -> Pose {
     let positions = vec![
-        Vector3::new(0.0, 0.0, 0.0),
+        Vector3::new(0.0, 0.0, 0.0), // Wrist
         Vector3::new(-0.034037687, 0.03650266, 0.16472164),
         Vector3::new(-0.012083233, 0.028070247, 0.025049694),
         Vector3::new(0.040405963, -0.000000051561553, 0.000000045447194),
@@ -209,7 +216,7 @@ pub fn open_right_hand() -> Pose {
 /// Returns the pointing pose for the right hand
 pub fn point_right_hand() -> Pose {
     let positions = vec![
-        Vector3::new(0.0, 0.0, 0.0),
+        Vector3::new(0.0, 0.0, 0.0), // Wrist
         Vector3::new(-0.034037687, 0.03650266, 0.16472164),
         Vector3::new(-0.016305087, 0.027528726, 0.017799662),
         Vector3::new(0.040405963, -0.000000051561553, 0.000000045447194),

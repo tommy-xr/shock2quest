@@ -197,7 +197,7 @@ impl DebugGlovesScene {
 
                 // Color scheme: highlight special node, otherwise use index-based colors
                 let cube_color = if Some(node_index) == highlight_node {
-                    vec3(1.0, 1.0, 0.0) // Bright yellow for highlighted bone
+                    vec3(1.0, 0.0, 0.0) // red for highlighted bone
                 } else {
                     vec3(1.0, 1.0, 1.0) // white for non highlight bones
                 };
@@ -207,7 +207,7 @@ impl DebugGlovesScene {
                     SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
                 let bone_cube_transform = transform
-                    * Matrix4::from_translation(bone_position * 5.0)
+                    * Matrix4::from_translation(bone_position * 1.0)
                     * Matrix4::from_scale(cube_size * 0.2);
 
                 bone_cube.set_transform(bone_cube_transform);
@@ -216,6 +216,109 @@ impl DebugGlovesScene {
         }
 
         debug_cubes
+    }
+
+    fn create_skeleton_connection_lines(
+        glb_model: &mut GlbModel,
+        transform: Matrix4<f32>,
+    ) -> Vec<SceneObject> {
+        let mut lines = Vec::new();
+
+        // Get skeleton data first
+        let node_count = glb_model.skeleton().nodes().len();
+        let mut parent_child_pairs = Vec::new();
+
+        println!("=== Skeleton Structure ===");
+        for node_index in 0..node_count {
+            let node = &glb_model.skeleton().nodes()[node_index];
+            println!(
+                "Node {}: name={:?}, parent={:?}",
+                node_index, node.name, node.parent_index
+            );
+
+            if let Some(parent_index) = node.parent_index {
+                parent_child_pairs.push((parent_index, node_index));
+            }
+        }
+        println!("=== End Skeleton Structure ===");
+
+        // Now get transforms for each parent-child pair
+        for (parent_index, child_index) in parent_child_pairs {
+            if let (Some(child_transform), Some(parent_transform)) = (
+                glb_model.get_global_transform(child_index),
+                glb_model.get_global_transform(parent_index),
+            ) {
+                let child_pos = child_transform.w.truncate();
+                let parent_pos = parent_transform.w.truncate();
+
+                // Debug: print the connection being drawn
+                println!(
+                    "Drawing line: parent {} -> child {} (positions: {:?} -> {:?})",
+                    parent_index, child_index, parent_pos, child_pos
+                );
+
+                // Apply the same coordinate scaling as the cubes
+                let scaled_parent_pos = parent_pos * 1.0; // Same as cube positioning
+                let scaled_child_pos = child_pos * 1.0;
+
+                // Create a line from parent to child
+                let line_object = Self::create_line_between_points(
+                    scaled_parent_pos,
+                    scaled_child_pos,
+                    transform,
+                    vec3(0.0, 1.0, 0.0), // Green lines for skeleton connections
+                );
+                lines.push(line_object);
+            }
+        }
+
+        lines
+    }
+
+    fn create_line_between_points(
+        start: Vector3<f32>,
+        end: Vector3<f32>,
+        transform: Matrix4<f32>,
+        color: Vector3<f32>,
+    ) -> SceneObject {
+        use cgmath::InnerSpace;
+
+        // Calculate line properties
+        let direction = end - start;
+        let length = direction.magnitude();
+        let center = start + direction * 0.5;
+
+        // Create a thin cylinder to represent the line
+        let line_material = color_material::create(color);
+        let mut line_object = SceneObject::new(
+            line_material,
+            Box::new(engine::scene::cube::create()), // Using cube as a thin line
+        );
+
+        // Calculate rotation to align with the direction vector
+        let up = vec3(0.0, 1.0, 0.0);
+        let rotation = if direction.magnitude() > 0.001 {
+            let normalized_dir = direction.normalize();
+            // Simple rotation - could be improved for arbitrary orientations
+            if (normalized_dir.cross(up)).magnitude() > 0.001 {
+                let axis = normalized_dir.cross(up).normalize();
+                let angle = normalized_dir.dot(up).acos();
+                Matrix4::from_axis_angle(axis, cgmath::Rad(angle))
+            } else {
+                Matrix4::identity()
+            }
+        } else {
+            Matrix4::identity()
+        };
+
+        // Transform: position at center, rotate to align with direction, scale to line dimensions
+        let line_transform = transform
+            * Matrix4::from_translation(center)
+            * rotation
+            * Matrix4::from_nonuniform_scale(0.005, length, 0.005); // Thin line
+
+        line_object.set_transform(line_transform);
+        line_object
     }
 
     fn clone_with_transform(template: &[SceneObject], transform: Matrix4<f32>) -> Vec<SceneObject> {
@@ -338,10 +441,9 @@ impl GameScene for DebugGlovesScene {
         // Create posed model for debug visualization
         let mut posed_model = self.glove_model.as_ref().clone();
 
-        // Debug: Test transforms on different nodes to map the skeleton
-        let test_node_index = 5; // Change this to test different nodes
+        // Debug: Test transforms using the corrected joint indices
+        let test_node_index = joint_indices::INDEX_METACARPAL; // Node 8: finger_index_meta_r
         if let Some(_transform) = posed_model.get_node_transform(test_node_index) {
-            println!("!! applying transform to node {}", test_node_index);
             let bend_transform = Matrix4::from_angle_y(Deg(90.0));
             posed_model.set_node_transform(test_node_index, bend_transform);
         }
@@ -373,6 +475,15 @@ impl GameScene for DebugGlovesScene {
             Some(test_node_index), // Highlight the test node
         );
         scene_objects.extend(posed_debug_cubes);
+
+        // Add skeleton connection lines for both skeletons
+        let original_skeleton_lines =
+            Self::create_skeleton_connection_lines(&mut original_model_clone, original_transform);
+        scene_objects.extend(original_skeleton_lines);
+
+        let posed_skeleton_lines =
+            Self::create_skeleton_connection_lines(&mut posed_model, posed_transform);
+        scene_objects.extend(posed_skeleton_lines);
 
         (scene_objects, camera_position, camera_rotation)
     }
