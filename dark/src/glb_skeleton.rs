@@ -1,8 +1,8 @@
 // glb_skeleton.rs
 // Standalone GLB skeleton system independent of SS2-specific abstractions
 
-use std::collections::HashMap;
 use cgmath::{Matrix4, SquareMatrix};
+use std::collections::HashMap;
 
 /// A single node in a GLB skeleton hierarchy
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ pub struct GlbAnimationState {
     current_node_transforms: Vec<Matrix4<f32>>, // Per-node local transforms (modified by animation/poses)
     global_transforms: Vec<Matrix4<f32>>,       // Computed world transforms for all nodes
     skinning_matrices: [Matrix4<f32>; 40],      // Final matrices for GPU (limited to 40 for now)
-    dirty: bool, // Whether transforms need recomputation
+    dirty: bool,                                // Whether transforms need recomputation
 }
 
 impl GlbSkeleton {
@@ -53,6 +53,11 @@ impl GlbSkeleton {
             node_to_joint_index.insert(node_index, joint_index);
             joint_index_to_node.push(node_index);
         }
+
+        println!(
+            "=== GlbSkeleton == - joint index to node: {:?}",
+            joint_index_to_node
+        );
 
         // Build node hierarchy including all nodes (not just joints)
         let mut nodes = Vec::new();
@@ -154,7 +159,12 @@ impl GlbAnimationState {
     /// Set a custom transform for a specific node (for manual posing)
     pub fn set_node_transform(&mut self, node_index: usize, transform: Matrix4<f32>) {
         // Find the position in our nodes array for this node index
-        if let Some(pos) = self.skeleton.nodes.iter().position(|n| n.index == node_index) {
+        if let Some(pos) = self
+            .skeleton
+            .nodes
+            .iter()
+            .position(|n| n.index == node_index)
+        {
             self.current_node_transforms[pos] = transform;
             self.dirty = true;
         }
@@ -162,7 +172,11 @@ impl GlbAnimationState {
 
     /// Get the current local transform for a node
     pub fn get_node_transform(&self, node_index: usize) -> Option<Matrix4<f32>> {
-        let pos = self.skeleton.nodes.iter().position(|n| n.index == node_index)?;
+        let pos = self
+            .skeleton
+            .nodes
+            .iter()
+            .position(|n| n.index == node_index)?;
         self.current_node_transforms.get(pos).copied()
     }
 
@@ -183,7 +197,12 @@ impl GlbAnimationState {
             changed = false;
             for (pos, node) in self.skeleton.nodes.iter().enumerate() {
                 let parent_global = if let Some(parent_index) = node.parent_index {
-                    if let Some(parent_pos) = self.skeleton.nodes.iter().position(|n| n.index == parent_index) {
+                    if let Some(parent_pos) = self
+                        .skeleton
+                        .nodes
+                        .iter()
+                        .position(|n| n.index == parent_index)
+                    {
                         self.global_transforms[parent_pos]
                     } else {
                         Matrix4::identity()
@@ -206,7 +225,12 @@ impl GlbAnimationState {
 
         for joint_index in 0..self.skeleton.joint_count.min(40) {
             if let Some(node_index) = self.skeleton.node_index_for_joint(joint_index) {
-                if let Some(node_pos) = self.skeleton.nodes.iter().position(|n| n.index == node_index) {
+                if let Some(node_pos) = self
+                    .skeleton
+                    .nodes
+                    .iter()
+                    .position(|n| n.index == node_index)
+                {
                     let global_transform = self.global_transforms[node_pos];
                     let inverse_bind = self.skeleton.inverse_bind_matrix(joint_index);
                     self.skinning_matrices[joint_index] = global_transform * inverse_bind;
@@ -231,7 +255,11 @@ impl GlbAnimationState {
     /// Get global transform for a specific node
     pub fn get_global_transform(&mut self, node_index: usize) -> Option<Matrix4<f32>> {
         self.update_transforms();
-        let pos = self.skeleton.nodes.iter().position(|n| n.index == node_index)?;
+        let pos = self
+            .skeleton
+            .nodes
+            .iter()
+            .position(|n| n.index == node_index)?;
         self.global_transforms.get(pos).copied()
     }
 }
@@ -244,9 +272,21 @@ trait Matrix4Ext {
 impl Matrix4Ext for Matrix4<f32> {
     fn magnitude2(&self) -> f32 {
         // Simple magnitude calculation for matrix difference detection
-        self.x.x * self.x.x + self.x.y * self.x.y + self.x.z * self.x.z + self.x.w * self.x.w +
-        self.y.x * self.y.x + self.y.y * self.y.y + self.y.z * self.y.z + self.y.w * self.y.w +
-        self.z.x * self.z.x + self.z.y * self.z.y + self.z.z * self.z.z + self.z.w * self.z.w +
-        self.w.x * self.w.x + self.w.y * self.w.y + self.w.z * self.w.z + self.w.w * self.w.w
+        self.x.x * self.x.x
+            + self.x.y * self.x.y
+            + self.x.z * self.x.z
+            + self.x.w * self.x.w
+            + self.y.x * self.y.x
+            + self.y.y * self.y.y
+            + self.y.z * self.y.z
+            + self.y.w * self.y.w
+            + self.z.x * self.z.x
+            + self.z.y * self.z.y
+            + self.z.z * self.z.z
+            + self.z.w * self.z.w
+            + self.w.x * self.w.x
+            + self.w.y * self.w.y
+            + self.w.z * self.w.z
+            + self.w.w * self.w.w
     }
 }

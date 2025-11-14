@@ -162,31 +162,32 @@ impl DebugGlovesScene {
 
         // Define mapping from pose array index to actual GLB node index
         let pose_to_node_mapping = [
-            joint_indices::WRIST,               // 0
-            joint_indices::THUMB_METACARPAL,    // 1
-            joint_indices::THUMB_PROXIMAL,      // 2
-            joint_indices::THUMB_INTERMEDIATE,  // 3
-            joint_indices::THUMB_DISTAL,        // 4
-            joint_indices::INDEX_METACARPAL,    // 6
-            joint_indices::INDEX_PROXIMAL,      // 7
-            joint_indices::INDEX_INTERMEDIATE,  // 8
-            joint_indices::INDEX_DISTAL,        // 9
-            joint_indices::INDEX_TIP,           // 10
-            joint_indices::MIDDLE_METACARPAL,   // 11
-            joint_indices::MIDDLE_PROXIMAL,     // 12
-            joint_indices::MIDDLE_INTERMEDIATE, // 13
-            joint_indices::MIDDLE_DISTAL,       // 14
-            joint_indices::MIDDLE_TIP,          // 15
-            joint_indices::RING_METACARPAL,     // 16
-            joint_indices::RING_PROXIMAL,       // 17
-            joint_indices::RING_INTERMEDIATE,   // 18
-            joint_indices::RING_DISTAL,         // 19
-            joint_indices::RING_TIP,            // 20
-            joint_indices::PINKY_METACARPAL,    // 21
-            joint_indices::PINKY_PROXIMAL,      // 22
-            joint_indices::PINKY_INTERMEDIATE,  // 23
-            joint_indices::PINKY_DISTAL,        // 24
-            joint_indices::PINKY_TIP,           // 25
+            joint_indices::ROOT,                // 0
+            joint_indices::WRIST,               // 1
+            joint_indices::THUMB_METACARPAL,    // 2
+            joint_indices::THUMB_PROXIMAL,      // 3
+            joint_indices::THUMB_INTERMEDIATE,  // 4
+            joint_indices::THUMB_DISTAL,        // 5
+            joint_indices::INDEX_METACARPAL,    // 7
+            joint_indices::INDEX_PROXIMAL,      // 8
+            joint_indices::INDEX_INTERMEDIATE,  // 9
+            joint_indices::INDEX_DISTAL,        // 10
+            joint_indices::INDEX_TIP,           // 11
+            joint_indices::MIDDLE_METACARPAL,   // 12
+            joint_indices::MIDDLE_PROXIMAL,     // 13
+            joint_indices::MIDDLE_INTERMEDIATE, // 14
+            joint_indices::MIDDLE_DISTAL,       // 15
+            joint_indices::MIDDLE_TIP,          // 16
+            joint_indices::RING_METACARPAL,     // 17
+            joint_indices::RING_PROXIMAL,       // 18
+            joint_indices::RING_INTERMEDIATE,   // 19
+            joint_indices::RING_DISTAL,         // 20
+            joint_indices::RING_TIP,            // 21
+            joint_indices::PINKY_METACARPAL,    // 22
+            joint_indices::PINKY_PROXIMAL,      // 23
+            joint_indices::PINKY_INTERMEDIATE,  // 24
+            joint_indices::PINKY_DISTAL,        // 25
+            joint_indices::PINKY_TIP,           // 26
         ];
 
         // Apply rotations to each joint
@@ -198,7 +199,7 @@ impl DebugGlovesScene {
                 let xform = translate_matrix * rotation_matrix;
                 posed_model.set_node_transform(node_index, xform);
                 println!(
-                    "Applied rotation to node {} (pose index {})",
+                    "Applied transform to node {} (pose index {})",
                     node_index, pose_index
                 );
             }
@@ -489,6 +490,7 @@ impl GameScene for DebugGlovesScene {
             Self::create_skeleton_connection_lines(&mut posed_model, posed_transform);
         scene_objects.extend(posed_skeleton_lines);
 
+        // panic!("render single frame to limit output");
         (scene_objects, camera_position, camera_rotation)
     }
 

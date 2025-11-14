@@ -3,10 +3,7 @@ use collision::Aabb3;
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
-use crate::{
-    glb_model::GlbModel,
-    glb_skeleton::GlbSkeleton,
-};
+use crate::{glb_model::GlbModel, glb_skeleton::GlbSkeleton};
 use engine::scene::{
     SceneObject, SkinnedMaterial, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal,
 };
@@ -56,7 +53,10 @@ fn load_glb(
         let data = match buffer_obj.source() {
             gltf::buffer::Source::Bin => blob.as_ref().expect("No binary blob in GLB file").clone(),
             gltf::buffer::Source::Uri(uri) => {
-                eprintln!("Warning: GLB file contains external buffer reference: {}", uri);
+                eprintln!(
+                    "Warning: GLB file contains external buffer reference: {}",
+                    uri
+                );
                 eprintln!("Using empty buffer as fallback");
                 vec![]
             }
@@ -87,13 +87,18 @@ fn load_glb(
                         }
                     }
                     Err(_) => {
-                        eprintln!("Warning: Could not decode embedded image, using checkerboard fallback");
+                        eprintln!(
+                            "Warning: Could not decode embedded image, using checkerboard fallback"
+                        );
                         create_checkerboard_image_data()
                     }
                 }
             }
             gltf::image::Source::Uri { uri, .. } => {
-                eprintln!("Warning: GLB file contains external image reference: {}", uri);
+                eprintln!(
+                    "Warning: GLB file contains external image reference: {}",
+                    uri
+                );
                 eprintln!("Using checkerboard pattern as fallback");
                 create_checkerboard_image_data()
             }
@@ -228,6 +233,12 @@ fn process_node(
     max_bounds: &mut Vector3<f32>,
 ) {
     let transform = Matrix4::from(node.transform().matrix());
+    println!(
+        "== Importing Node==\nindex: {}\nname: {}\ntransform: {:?}\n",
+        node.index(),
+        node.name().unwrap_or_default(),
+        transform
+    );
 
     if let Some(mesh) = node.mesh() {
         for primitive in mesh.primitives() {
@@ -449,7 +460,11 @@ fn process_primitive(
     })
 }
 
-fn process_glb_data(loaded_data: LoadedGlbData, _asset_cache: &mut AssetCache, _config: &()) -> GlbModel {
+fn process_glb_data(
+    loaded_data: LoadedGlbData,
+    _asset_cache: &mut AssetCache,
+    _config: &(),
+) -> GlbModel {
     let mut scene_objects = Vec::new();
 
     // Convert GLB meshes to SceneObjects
@@ -522,7 +537,9 @@ fn create_texture_from_image(
     Some(std::rc::Rc::new(texture) as std::rc::Rc<dyn engine::texture::TextureTrait>)
 }
 
-fn create_solid_color_texture(base_color: [f32; 4]) -> std::rc::Rc<dyn engine::texture::TextureTrait> {
+fn create_solid_color_texture(
+    base_color: [f32; 4],
+) -> std::rc::Rc<dyn engine::texture::TextureTrait> {
     let clamp = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
 
     let r = clamp(base_color[0]);
@@ -583,7 +600,9 @@ fn create_skinned_material(
     texture_index: Option<usize>,
     base_color: [f32; 4],
 ) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
-    let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = if let Some(texture_index) = texture_index {
+    let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = if let Some(texture_index) =
+        texture_index
+    {
         match create_texture_from_image(images, texture_index) {
             Some(tex) => tex,
             None => {
