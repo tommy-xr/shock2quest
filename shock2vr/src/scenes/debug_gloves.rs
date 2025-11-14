@@ -30,6 +30,7 @@ use crate::{
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
+    scenes::hand_pose::joint_indices,
     scripts::{Effect, GlobalEffect},
     time::Time,
 };
@@ -179,11 +180,12 @@ impl DebugGlovesScene {
         // TODO: Replace with actual hand pose transforms
 
         // Example: Bend the first finger joint (if it exists)
-        // if let Some(_transform) = posed_model.get_node_transform(7) {
-        //     // Apply a small rotation to demonstrate posing
-        //     let bend_transform = Matrix4::from_angle_y(Deg(90.0));
-        //     posed_model.set_node_transform(7, bend_transform);
-        // }
+        if let Some(_transform) = posed_model.get_node_transform(joint_indices::INDEX_METACARPAL) {
+            // Apply a small rotation to demonstrate posing
+            println!("!! applying transform!");
+            let bend_transform = Matrix4::from_angle_y(Deg(90.0));
+            posed_model.set_node_transform(joint_indices::INDEX_METACARPAL, bend_transform);
+        }
 
         // Get the properly skinned scene objects
         let mut scene_objects = posed_model.to_scene_objects_with_skinning();

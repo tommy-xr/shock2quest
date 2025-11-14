@@ -27,6 +27,7 @@ pub mod debug_joint_constraint;
 pub mod debug_map;
 pub mod debug_minimal;
 pub mod debug_ragdoll;
+pub mod hand_pose;
 
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
