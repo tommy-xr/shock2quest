@@ -31,6 +31,7 @@ use crate::{
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
     scenes::hand_pose::joint_indices,
+    scenes::hand_pose::*,
     scripts::{Effect, GlobalEffect},
     time::Time,
 };
@@ -146,40 +147,64 @@ impl DebugGlovesScene {
         scene_objects
     }
 
-    fn create_posed_glove_objects(glb_model: &Rc<GlbModel>) -> Vec<SceneObject> {
+    fn create_posed_glove(glb_model: &Rc<GlbModel>) -> GlbModel {
         // Clone the GLB model so we can modify it
         let mut posed_model = (**glb_model).clone();
 
-        // Apply some example hand poses to demonstrate the system
-        // TODO: Replace with actual hand pose transforms
+        // Apply the pointing pose to demonstrate the corrected joint indices
+        let pointing_pose = point_right_hand();
 
-        // Example: Bend the first finger joint (if it exists)
-        if let Some(_transform) = posed_model.get_node_transform(joint_indices::INDEX_METACARPAL) {
-            // Apply a small rotation to demonstrate posing
-            println!(
-                "!! applying transform to INDEX_METACARPAL ({})",
-                joint_indices::INDEX_METACARPAL
-            );
-            let bend_transform = Matrix4::from_angle_y(Deg(90.0));
-            posed_model.set_node_transform(joint_indices::INDEX_METACARPAL, bend_transform);
+        println!(
+            "Applying pointing pose with {} rotations and {} positions",
+            pointing_pose.bone_rotations.len(),
+            pointing_pose.bone_positions.len()
+        );
+
+        // Define mapping from pose array index to actual GLB node index
+        let pose_to_node_mapping = [
+            joint_indices::WRIST,               // 0
+            joint_indices::THUMB_METACARPAL,    // 1
+            joint_indices::THUMB_PROXIMAL,      // 2
+            joint_indices::THUMB_INTERMEDIATE,  // 3
+            joint_indices::THUMB_DISTAL,        // 4
+            joint_indices::INDEX_METACARPAL,    // 6
+            joint_indices::INDEX_PROXIMAL,      // 7
+            joint_indices::INDEX_INTERMEDIATE,  // 8
+            joint_indices::INDEX_DISTAL,        // 9
+            joint_indices::INDEX_TIP,           // 10
+            joint_indices::MIDDLE_METACARPAL,   // 11
+            joint_indices::MIDDLE_PROXIMAL,     // 12
+            joint_indices::MIDDLE_INTERMEDIATE, // 13
+            joint_indices::MIDDLE_DISTAL,       // 14
+            joint_indices::MIDDLE_TIP,          // 15
+            joint_indices::RING_METACARPAL,     // 16
+            joint_indices::RING_PROXIMAL,       // 17
+            joint_indices::RING_INTERMEDIATE,   // 18
+            joint_indices::RING_DISTAL,         // 19
+            joint_indices::RING_TIP,            // 20
+            joint_indices::PINKY_METACARPAL,    // 21
+            joint_indices::PINKY_PROXIMAL,      // 22
+            joint_indices::PINKY_INTERMEDIATE,  // 23
+            joint_indices::PINKY_DISTAL,        // 24
+            joint_indices::PINKY_TIP,           // 25
+        ];
+
+        // Apply rotations to each joint
+        for (pose_index, rotation) in pointing_pose.bone_rotations.iter().enumerate() {
+            if let Some(&node_index) = pose_to_node_mapping.get(pose_index) {
+                let rotation_matrix = Matrix4::from(*rotation);
+                let translate_matrix =
+                    Matrix4::from_translation(pointing_pose.bone_positions[pose_index]);
+                let xform = translate_matrix * rotation_matrix;
+                posed_model.set_node_transform(node_index, xform);
+                println!(
+                    "Applied rotation to node {} (pose index {})",
+                    node_index, pose_index
+                );
+            }
         }
 
-        // Get the properly skinned scene objects
-        let mut scene_objects = posed_model.to_scene_objects_with_skinning();
-
-        // Position the posed glove next to the original
-        let offset_transform = Matrix4::from_translation(vec3(
-            GLOVE_POSITION.x + SECOND_GLOVE_OFFSET_X,
-            GLOVE_POSITION.y,
-            GLOVE_POSITION.z,
-        ));
-
-        // Apply the positioning transform
-        for scene_object in &mut scene_objects {
-            scene_object.set_transform(offset_transform * scene_object.get_transform());
-        }
-
-        scene_objects
+        posed_model
     }
 
     fn create_skeleton_debug_cubes(
@@ -439,15 +464,8 @@ impl GameScene for DebugGlovesScene {
         // scene_objects.extend(posed_glove); + 2
 
         // Create posed model for debug visualization
-        let mut posed_model = self.glove_model.as_ref().clone();
-
-        // Debug: Test transforms using the corrected joint indices
-        let test_node_index = joint_indices::INDEX_METACARPAL; // Node 8: finger_index_meta_r
-        if let Some(_transform) = posed_model.get_node_transform(test_node_index) {
-            let bend_transform = Matrix4::from_angle_y(Deg(90.0));
-            posed_model.set_node_transform(test_node_index, bend_transform);
-        }
-        scene_objects.extend(posed_model.to_scene_objects_with_skinning());
+        let mut posed_model = Self::create_posed_glove(&self.glove_model);
+        // scene_objects.extend(posed_model.to_scene_objects_with_skinning());
 
         // Add debug cubes for original glove (using original model)
         let original_transform =
@@ -471,8 +489,9 @@ impl GameScene for DebugGlovesScene {
         let posed_debug_cubes = Self::create_skeleton_debug_cubes(
             &mut posed_model, // Now using mutable reference
             posed_transform,
-            0.12,                  // Slightly larger
-            Some(test_node_index), // Highlight the test node
+            0.12, // Slightly larger
+            None,
+            // Some(test_node_index), // Highlight the test node
         );
         scene_objects.extend(posed_debug_cubes);
 

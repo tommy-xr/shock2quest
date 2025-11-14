@@ -6,41 +6,41 @@ use std::collections::HashMap;
 pub mod joint_indices {
     // GLB skeleton structure (based on debug output)
     // Node 0: RootNode, Node 1: renderMesh0, Node 2: Root
-    pub const WRIST: usize = 3;  // wrist_r
+    pub const WRIST: usize = 3; // wrist_r
 
     // Thumb (4-7)
-    pub const THUMB_METACARPAL: usize = 4;    // finger_thumb_0_r
-    pub const THUMB_PROXIMAL: usize = 5;      // finger_thumb_1_r
-    pub const THUMB_INTERMEDIATE: usize = 6;  // finger_thumb_2_r
-    pub const THUMB_DISTAL: usize = 7;        // finger_thumb_r_end
+    pub const THUMB_METACARPAL: usize = 4; // finger_thumb_0_r
+    pub const THUMB_PROXIMAL: usize = 5; // finger_thumb_1_r
+    pub const THUMB_INTERMEDIATE: usize = 6; // finger_thumb_2_r
+    pub const THUMB_DISTAL: usize = 7; // finger_thumb_r_end
 
     // Index finger (8-12)
-    pub const INDEX_METACARPAL: usize = 8;    // finger_index_meta_r
-    pub const INDEX_PROXIMAL: usize = 9;      // finger_index_0_r
+    pub const INDEX_METACARPAL: usize = 8; // finger_index_meta_r
+    pub const INDEX_PROXIMAL: usize = 9; // finger_index_0_r
     pub const INDEX_INTERMEDIATE: usize = 10; // finger_index_1_r
-    pub const INDEX_DISTAL: usize = 11;       // finger_index_2_r
-    pub const INDEX_TIP: usize = 12;          // finger_index_r_end
+    pub const INDEX_DISTAL: usize = 11; // finger_index_2_r
+    pub const INDEX_TIP: usize = 12; // finger_index_r_end
 
     // Middle finger (13-17)
-    pub const MIDDLE_METACARPAL: usize = 13;    // finger_middle_meta_r
-    pub const MIDDLE_PROXIMAL: usize = 14;      // finger_middle_0_r
-    pub const MIDDLE_INTERMEDIATE: usize = 15;  // finger_middle_1_r
-    pub const MIDDLE_DISTAL: usize = 16;        // finger_middle_2_r
-    pub const MIDDLE_TIP: usize = 17;           // finger_middle_r_end
+    pub const MIDDLE_METACARPAL: usize = 13; // finger_middle_meta_r
+    pub const MIDDLE_PROXIMAL: usize = 14; // finger_middle_0_r
+    pub const MIDDLE_INTERMEDIATE: usize = 15; // finger_middle_1_r
+    pub const MIDDLE_DISTAL: usize = 16; // finger_middle_2_r
+    pub const MIDDLE_TIP: usize = 17; // finger_middle_r_end
 
     // Ring finger (18-22)
-    pub const RING_METACARPAL: usize = 18;    // finger_ring_meta_r
-    pub const RING_PROXIMAL: usize = 19;      // finger_ring_0_r
-    pub const RING_INTERMEDIATE: usize = 20;  // finger_ring_1_r
-    pub const RING_DISTAL: usize = 21;        // finger_ring_2_r
-    pub const RING_TIP: usize = 22;           // finger_ring_r_end
+    pub const RING_METACARPAL: usize = 18; // finger_ring_meta_r
+    pub const RING_PROXIMAL: usize = 19; // finger_ring_0_r
+    pub const RING_INTERMEDIATE: usize = 20; // finger_ring_1_r
+    pub const RING_DISTAL: usize = 21; // finger_ring_2_r
+    pub const RING_TIP: usize = 22; // finger_ring_r_end
 
     // Pinky finger (23-27)
-    pub const PINKY_METACARPAL: usize = 23;    // finger_pinky_meta_r
-    pub const PINKY_PROXIMAL: usize = 24;      // finger_pinky_0_r
-    pub const PINKY_INTERMEDIATE: usize = 25;  // finger_pinky_1_r
-    pub const PINKY_DISTAL: usize = 26;        // finger_pinky_2_r
-    pub const PINKY_TIP: usize = 27;           // finger_pinky_r_end
+    pub const PINKY_METACARPAL: usize = 23; // finger_pinky_meta_r
+    pub const PINKY_PROXIMAL: usize = 24; // finger_pinky_0_r
+    pub const PINKY_INTERMEDIATE: usize = 25; // finger_pinky_1_r
+    pub const PINKY_DISTAL: usize = 26; // finger_pinky_2_r
+    pub const PINKY_TIP: usize = 27; // finger_pinky_r_end
 
     // Aux bones (28-32) - these may be helper bones, not main skeleton
     // pub const THUMB_AUX: usize = 28;    // finger_thumb_r_aux
@@ -55,9 +55,6 @@ pub fn joint_relationships() -> HashMap<usize, usize> {
     use joint_indices::*;
 
     let mut relationships = HashMap::new();
-
-    // Forearm stub connects to wrist
-    relationships.insert(WRIST, FOREARM_STUB);
 
     // Thumb chain (starts from wrist)
     relationships.insert(THUMB_METACARPAL, WRIST);
