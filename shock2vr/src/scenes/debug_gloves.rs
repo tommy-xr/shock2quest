@@ -160,127 +160,42 @@ impl DebugGlovesScene {
             pointing_pose.bone_positions.len()
         );
 
-        // Define mapping from pose array index to actual GLB node index
-        // Based on skeleton structure, we need to map all 31 pose indices to nodes
-        let pose_to_node_mapping = [
-            joint_indices::ROOT,                // 0  -> Node 2
-            joint_indices::WRIST,               // 1  -> Node 3
-            joint_indices::THUMB_METACARPAL,    // 2  -> Node 4
-            joint_indices::THUMB_PROXIMAL,      // 3  -> Node 5
-            joint_indices::THUMB_INTERMEDIATE,  // 4  -> Node 6
-            joint_indices::THUMB_TIP,           // 5  -> Node 7 (finger_thumb_r_end)
-            joint_indices::INDEX_METACARPAL,    // 6  -> Node 8
-            joint_indices::INDEX_PROXIMAL,      // 7  -> Node 9
-            joint_indices::INDEX_INTERMEDIATE,  // 8  -> Node 10
-            joint_indices::INDEX_DISTAL,        // 9  -> Node 11
-            joint_indices::INDEX_TIP,           // 10 -> Node 12
-            joint_indices::MIDDLE_METACARPAL,   // 11 -> Node 13
-            joint_indices::MIDDLE_PROXIMAL,     // 12 -> Node 14
-            joint_indices::MIDDLE_INTERMEDIATE, // 13 -> Node 15
-            joint_indices::MIDDLE_DISTAL,       // 14 -> Node 16
-            joint_indices::MIDDLE_TIP,          // 15 -> Node 17
-            joint_indices::RING_METACARPAL,     // 16 -> Node 18
-            joint_indices::RING_PROXIMAL,       // 17 -> Node 19
-            joint_indices::RING_INTERMEDIATE,   // 18 -> Node 20
-            joint_indices::RING_DISTAL,         // 19 -> Node 21
-            joint_indices::RING_TIP,            // 20 -> Node 22
-            joint_indices::PINKY_METACARPAL,    // 21 -> Node 23
-            joint_indices::PINKY_PROXIMAL,      // 22 -> Node 24
-            joint_indices::PINKY_INTERMEDIATE,  // 23 -> Node 25
-            joint_indices::PINKY_DISTAL,        // 24 -> Node 26
-            joint_indices::PINKY_TIP,           // 25 -> Node 27
-            28,                                 // finger_thumb_r_aux          // 26 -> Node 28
-            29,                                 // finger_index_r_aux          // 27 -> Node 29
-            30,                                 // finger_middle_r_aux         // 28 -> Node 30
-            31,                                 // finger_ring_r_aux           // 29 -> Node 31
-            32,                                 // finger_pinky_r_aux          // 30 -> Node 32
-        ];
+        // No need for pose_to_node_mapping anymore - we use joint indices directly
 
-        // Apply minimal test rotations to just a few joints to debug the transform issue
-        println!("DEBUGGING: Applying minimal rotations to test joints");
+        // Apply the pointing pose using proper joint indices
+        println!("Applying pointing pose using joint-based transforms");
 
-        // Test: Apply small rotations to a few key joints to build up gradually
-
-        // 1. Index finger metacarpal - bend at base
-        // if let Some(original_transform) = posed_model.get_node_transform(joint_indices::INDEX_METACARPAL) {
-        //     let bend_rotation = Matrix4::from_angle_z(cgmath::Deg(20.0));
-        //     posed_model.set_node_transform(joint_indices::INDEX_METACARPAL, original_transform * bend_rotation);
-        //     println!("Applied 20-degree Z rotation to INDEX_METACARPAL");
-        // }
-
-        // 2. Index finger proximal - use joint index instead of node index
-        // Based on joint mapping: Joint 7 should be finger_index_0_r (INDEX_PROXIMAL)
-        let index_proximal_joint = 6; // Joint index, not node index
-
-        println!(
-            "Testing INDEX_PROXIMAL using joint index: {}",
-            index_proximal_joint
-        );
-
-        if let Some(original_transform) = posed_model.get_joint_transform(index_proximal_joint) {
-            // Try negative Z rotation (opposite direction)
-            let bend_rotation = Matrix4::from_angle_z(cgmath::Deg(-30.0));
-            posed_model
-                .set_joint_transform(index_proximal_joint, original_transform * bend_rotation);
-            println!(
-                "Applied -30-degree Z rotation to INDEX_PROXIMAL (joint {}) (opposite direction)",
-                index_proximal_joint
-            );
-        }
-
-        // 3. Middle finger metacarpal - use joint index
-        // Based on joint mapping: Joint 11 should be finger_middle_meta_r (MIDDLE_METACARPAL)
-        // let middle_metacarpal_joint = 11; // Joint index, not node index
-
-        // println!("Testing MIDDLE_METACARPAL using joint index: {}", middle_metacarpal_joint);
-
-        // if let Some(original_transform) = posed_model.get_joint_transform(middle_metacarpal_joint) {
-        //     let bend_rotation = Matrix4::from_angle_z(cgmath::Deg(15.0));
-        //     posed_model.set_joint_transform(middle_metacarpal_joint, original_transform * bend_rotation);
-        //     println!("Applied 15-degree Z rotation to MIDDLE_METACARPAL (joint {})", middle_metacarpal_joint);
-        // }
-
-        /*
-        // Apply rotations to each joint, composing with original transforms
+        // Apply rotations to each joint using the corrected joint mapping
         for (pose_index, rotation) in pointing_pose.bone_rotations.iter().enumerate() {
-            if let Some(&node_index) = pose_to_node_mapping.get(pose_index) {
-                // CRITICAL: Skip nodes 0, 1, 2 as they control mesh and coordinate system
-                if node_index <= 2 {
-                    println!("Skipping system node {} to preserve mesh coordinate space", node_index);
-                    continue;
-                }
+            // Use pose_index as joint_index directly since the updated hand_pose.rs
+            // should have the correct mapping
+            let joint_index = pose_index;
 
-                // Get the original transform for this node
-                if let Some(original_transform) = posed_model.get_node_transform(node_index) {
-                    // Only apply non-identity rotations
-                    if rotation.s != 1.0
-                        || rotation.v.x != 0.0
-                        || rotation.v.y != 0.0
-                        || rotation.v.z != 0.0
-                    {
-                        let rotation_matrix = Matrix4::from(*rotation);
+            if joint_index >= 26 { // Skip if beyond valid joint range
+                continue;
+            }
 
-                        println!(
-                            "Node {}: Original transform: {:?}",
-                            node_index, original_transform
-                        );
-                        println!("Node {}: Pose rotation: {:?}", node_index, rotation);
+            // Get the original transform for this joint
+            if let Some(original_transform) = posed_model.get_joint_transform(joint_index) {
+                // Only apply non-identity rotations
+                if rotation.s != 1.0
+                    || rotation.v.x != 0.0
+                    || rotation.v.y != 0.0
+                    || rotation.v.z != 0.0
+                {
+                    let rotation_matrix = Matrix4::from(*rotation);
 
-                        // Try a simpler approach: just apply a small test rotation to the original transform
-                        // to see if the issue is with the rotation composition or the pose data
-                        let test_rotation = Matrix4::from_angle_y(cgmath::Deg(15.0 * pose_index as f32));
-                        let composed_transform = original_transform * test_rotation;
+                    // Compose the pose rotation with the original transform
+                    let composed_transform = original_transform * rotation_matrix;
 
-                        posed_model.set_node_transform(node_index, composed_transform);
-                        println!(
-                            "Applied test rotation to node {} (pose index {})",
-                            node_index, pose_index
-                        );
-                    }
+                    posed_model.set_joint_transform(joint_index, composed_transform);
+                    println!(
+                        "Applied pose rotation to joint {} (pose index {})",
+                        joint_index, pose_index
+                    );
                 }
             }
         }
-        */
 
         posed_model
     }
