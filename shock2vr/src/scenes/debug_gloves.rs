@@ -38,7 +38,9 @@ const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 const GLOVE_POSITION: Point3<f32> = point3(0.0, 3.0, 1.0);
 const GLOVE_SCALE: f32 = 1.0;
-const SECOND_GLOVE_OFFSET_X: f32 = 0.5;
+
+// TODO: Bring back as we add more gloves tot he scene
+// const SECOND_GLOVE_OFFSET_X: f32 = 0.5;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -128,23 +130,24 @@ impl DebugGlovesScene {
         scene_objects
     }
 
-    fn create_posed_glove(glb_model: &Rc<GlbModel>) -> GlbModel {
-        // Clone the GLB model so we can modify it
-        let mut posed_model = (**glb_model).clone();
+    // TODO: Will bring back when we test posing again
+    // fn create_posed_glove(glb_model: &Rc<GlbModel>) -> GlbModel {
+    //     // Clone the GLB model so we can modify it
+    //     let mut posed_model = (**glb_model).clone();
 
-        // Apply the pointing pose to demonstrate the corrected joint indices
-        let pointing_pose = point_right_hand();
+    //     // Apply the pointing pose to demonstrate the corrected joint indices
+    //     let pointing_pose = point_right_hand();
 
-        // Apply rotations to each joint using the corrected joint mapping
-        for (pose_index, rotation) in pointing_pose.bone_rotations.iter().enumerate() {
-            // Use pose_index as joint_index directly since the updated hand_pose.rs
-            // should have the correct mapping
+    //     // Apply rotations to each joint using the corrected joint mapping
+    //     for (pose_index, rotation) in pointing_pose.bone_rotations.iter().enumerate() {
+    //         // Use pose_index as joint_index directly since the updated hand_pose.rs
+    //         // should have the correct mapping
 
-            // TODO: Set joint transform
-        }
+    //         // TODO: Set joint transform
+    //     }
 
-        posed_model
-    }
+    //     posed_model
+    // }
 
     fn create_skeleton_debug_cubes(
         glb_model: &mut GlbModel,
