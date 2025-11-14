@@ -29,7 +29,7 @@ use crate::{
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
-    scenes::hand_pose::*,
+    // scenes::hand_pose::*,
     scripts::{Effect, GlobalEffect},
     time::Time,
 };
