@@ -583,9 +583,9 @@ impl PhysicsWorld {
 
         let mut controller = KinematicCharacterController::default();
 
-        // controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
-        // controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
-        // controller.normal_nudge_factor = 0.1;
+        controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
+        controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
+        controller.normal_nudge_factor = 0.1;
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);
