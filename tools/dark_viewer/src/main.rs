@@ -9,8 +9,8 @@ use glfw::GlfwReceiver;
 
 mod scenes;
 use scenes::{
-    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene,
-    ToolScene, VideoPlayerScene,
+    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene,
+    VideoPlayerScene,
 };
 use shock2vr::zip_asset_path::ZipAssetPath;
 
@@ -254,12 +254,8 @@ fn create_scene(
         if animation_flag_provided {
             return Err("Animation support for GLB files has been removed. Use GLB files without --animation flag.".into());
         }
-        let scene = GlbViewerScene::from_model(
-            filename.to_string(),
-            scale,
-            asset_cache,
-            debug_skeletons,
-        )?;
+        let scene =
+            GlbViewerScene::from_model(filename.to_string(), scale, asset_cache, debug_skeletons)?;
         Ok(Box::new(scene))
     } else if !animations.is_empty() {
         Err("Animation preview is only supported for .bin AI meshes.".into())

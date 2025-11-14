@@ -32,10 +32,7 @@ impl GlbModel {
     }
 
     /// Create a static GLB model without skeleton
-    pub fn new_static(
-        scene_objects: Vec<SceneObject>,
-        bounding_box: Aabb3<f32>,
-    ) -> Self {
+    pub fn new_static(scene_objects: Vec<SceneObject>, bounding_box: Aabb3<f32>) -> Self {
         // Create empty skeleton for static model
         let empty_skeleton = GlbSkeleton::empty();
         let animation_state = GlbAnimationState::new(empty_skeleton);
@@ -49,7 +46,8 @@ impl GlbModel {
 
     /// Set a transform for a specific node (for manual posing)
     pub fn set_node_transform(&mut self, node_index: usize, transform: Matrix4<f32>) {
-        self.animation_state.set_node_transform(node_index, transform);
+        self.animation_state
+            .set_node_transform(node_index, transform);
     }
 
     /// Get the current transform for a node
@@ -102,7 +100,10 @@ impl GlbModel {
     }
 
     /// Apply hand pose transforms (convenience method for VR gloves)
-    pub fn apply_hand_pose(&mut self, joint_transforms: &std::collections::HashMap<u32, Matrix4<f32>>) {
+    pub fn apply_hand_pose(
+        &mut self,
+        joint_transforms: &std::collections::HashMap<u32, Matrix4<f32>>,
+    ) {
         for (joint_id, transform) in joint_transforms {
             // Convert joint ID to node index if needed
             let node_index = *joint_id as usize; // Assuming direct mapping for now
@@ -117,7 +118,8 @@ impl GlbModel {
 
     /// Set a transform for a specific joint (uses joint index, not node index)
     pub fn set_joint_transform(&mut self, joint_index: usize, transform: Matrix4<f32>) {
-        self.animation_state.set_joint_transform(joint_index, transform);
+        self.animation_state
+            .set_joint_transform(joint_index, transform);
     }
 
     /// Get the current local transform for a joint (uses joint index)

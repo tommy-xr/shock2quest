@@ -5,8 +5,8 @@ use std::collections::HashMap;
 /// Joint indices for hand bones - mapped to actual GLB skeleton structure
 pub mod joint_indices {
     // Root and wrist
-    pub const ROOT: usize = 0;  // Since joint 0 maps to Root node
-    pub const WRIST: usize = 0;  // Alias for ROOT
+    pub const ROOT: usize = 0; // Since joint 0 maps to Root node
+    pub const WRIST: usize = 0; // Alias for ROOT
     pub const FOREARM_STUB: usize = 1;
 
     // Thumb (2-5)

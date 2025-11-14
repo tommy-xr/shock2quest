@@ -343,7 +343,6 @@ fn process_primitive(
         let joints: Vec<[u16; 4]> = joints.unwrap();
         let weights: Vec<[f32; 4]> = weights.unwrap();
 
-
         // Create skinned vertices
         let mut skinned_vertices = Vec::new();
         for i in 0..positions.len() {
@@ -546,20 +545,17 @@ fn create_static_material(
                 ));
             }
 
-
             std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
                 base_color[0],
                 base_color[1],
                 base_color[2],
             )))
         }
-        None => {
-            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-                base_color[0],
-                base_color[1],
-                base_color[2],
-            )))
-        }
+        None => std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+            base_color[0],
+            base_color[1],
+            base_color[2],
+        ))),
     }
 }
 
@@ -568,18 +564,15 @@ fn create_skinned_material(
     texture_index: Option<usize>,
     base_color: [f32; 4],
 ) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
-    let texture: std::rc::Rc<dyn engine::texture::TextureTrait> = if let Some(texture_index) =
-        texture_index
-    {
-        match create_texture_from_image(images, texture_index) {
-            Some(tex) => tex,
-            None => {
-                create_solid_color_texture(base_color)
+    let texture: std::rc::Rc<dyn engine::texture::TextureTrait> =
+        if let Some(texture_index) = texture_index {
+            match create_texture_from_image(images, texture_index) {
+                Some(tex) => tex,
+                None => create_solid_color_texture(base_color),
             }
-        }
-    } else {
-        create_solid_color_texture(base_color)
-    };
+        } else {
+            create_solid_color_texture(base_color)
+        };
 
     std::cell::RefCell::new(SkinnedMaterial::create(texture, 1.0, 0.0))
 }

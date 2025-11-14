@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 
 use super::ToolScene;
-use cgmath::{Deg, Matrix4, Quaternion, Rad, vec3, SquareMatrix};
+use cgmath::{Deg, Matrix4, Quaternion, Rad, SquareMatrix, vec3};
 use dark::importers::GLB_MODELS_IMPORTER;
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::{Scene, SceneObject, color_material};
@@ -68,10 +68,8 @@ impl ToolScene for GlbViewerScene {
                         _ => vec3(0.7, 0.7, 0.7), // Gray for others
                     };
                     let cube_material = color_material::create(cube_color);
-                    let mut bone_cube = SceneObject::new(
-                        cube_material,
-                        Box::new(engine::scene::cube::create()),
-                    );
+                    let mut bone_cube =
+                        SceneObject::new(cube_material, Box::new(engine::scene::cube::create()));
 
                     // Scale cube small and position it at the bone location
                     let cube_size = 0.02; // Small cube
