@@ -5,7 +5,6 @@ use cgmath::{
     Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3, point3, vec3,
 };
 use dark::{
-    SCALE_FACTOR,
     glb_model::GlbModel,
     glb_skeleton::GlbSkeleton,
     importers::GLB_MODELS_IMPORTER,
@@ -37,11 +36,10 @@ use crate::{
 
 const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
-const GLOVE_POSITION: Point3<f32> =
-    point3(0.0 / SCALE_FACTOR, 6.0 / SCALE_FACTOR, 2.0 / SCALE_FACTOR);
-const GLOVE_SCALE: f32 = 2.0 / SCALE_FACTOR;
-const SECOND_GLOVE_OFFSET_X: f32 = 0.75 / SCALE_FACTOR;
-const POSE_GLOVE_VERTICAL_OFFSET: f32 = -0.5 / SCALE_FACTOR;
+const GLOVE_POSITION: Point3<f32> = point3(0.0, 3.0, 1.0);
+const GLOVE_SCALE: f32 = 1.0;
+const SECOND_GLOVE_OFFSET_X: f32 = 0.5;
+const POSE_GLOVE_VERTICAL_OFFSET: f32 = -0.25;
 
 /// Debug scene that displays the VR glove model with replaced textures
 /// in front of the player for testing texture loading.
@@ -68,7 +66,7 @@ impl DebugGlovesScene {
             audio_context,
             global_context,
             SpawnLocation::PositionRotation(
-                vec3(0.0, 5.0 / SCALE_FACTOR, 0.0 / SCALE_FACTOR),
+                vec3(0.0, 2.5, 0.0),
                 Quaternion::from_angle_y(Deg(90.0)),
             ),
             QuestInfo::new(),
@@ -173,29 +171,36 @@ impl DebugGlovesScene {
     //     // objects
     // }
 
-    fn create_manual_skinning_glove_objects(
-        template: &[SceneObject],
-        skeleton: &GlbSkeleton,
-    ) -> Vec<SceneObject> {
-        // Nudge the manual-skin glove next to the debug cubes for visual comparison.
-        let manual_transform = Matrix4::from_translation(vec3(
+    fn create_posed_glove_objects(glb_model: &Rc<GlbModel>) -> Vec<SceneObject> {
+        // Clone the GLB model so we can modify it
+        let mut posed_model = (**glb_model).clone();
+
+        // Apply some example hand poses to demonstrate the system
+        // TODO: Replace with actual hand pose transforms
+
+        // Example: Bend the first finger joint (if it exists)
+        // if let Some(_transform) = posed_model.get_node_transform(7) {
+        //     // Apply a small rotation to demonstrate posing
+        //     let bend_transform = Matrix4::from_angle_y(Deg(90.0));
+        //     posed_model.set_node_transform(7, bend_transform);
+        // }
+
+        // Get the properly skinned scene objects
+        let mut scene_objects = posed_model.to_scene_objects_with_skinning();
+
+        // Position the posed glove next to the original
+        let offset_transform = Matrix4::from_translation(vec3(
             GLOVE_POSITION.x + SECOND_GLOVE_OFFSET_X,
             GLOVE_POSITION.y,
             GLOVE_POSITION.z,
-        )) * Matrix4::from_angle_y(Deg(0.0))
-            * Matrix4::from_scale(1.01);
+        ));
 
-        let skinning_data = Self::manual_skinning_data(skeleton);
+        // Apply the positioning transform
+        for scene_object in &mut scene_objects {
+            scene_object.set_transform(offset_transform * scene_object.get_transform());
+        }
 
-        template
-            .iter()
-            .map(|object| {
-                let mut clone = object.clone();
-                clone.set_transform(manual_transform);
-                clone.set_skinning_data(skinning_data);
-                clone
-            })
-            .collect()
+        scene_objects
     }
 
     fn manual_skinning_data(skeleton: &GlbSkeleton) -> [Matrix4<f32>; 40] {
@@ -252,11 +257,7 @@ impl DebugGlovesScene {
     }
 
     fn create_floor_scene_objects() -> Vec<SceneObject> {
-        let floor_size_scaled = vec3(
-            FLOOR_SIZE.x / SCALE_FACTOR,
-            FLOOR_SIZE.y / SCALE_FACTOR,
-            FLOOR_SIZE.z / SCALE_FACTOR,
-        );
+        let floor_size_scaled = vec3(FLOOR_SIZE.x, FLOOR_SIZE.y, FLOOR_SIZE.z);
 
         let floor_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.0))
             * Matrix4::from_nonuniform_scale(
@@ -274,11 +275,7 @@ impl DebugGlovesScene {
     }
 
     fn create_floor_physics() -> Collider {
-        let floor_size_scaled = vec3(
-            FLOOR_SIZE.x / SCALE_FACTOR / 2.0,
-            FLOOR_SIZE.y / SCALE_FACTOR / 2.0,
-            FLOOR_SIZE.z / SCALE_FACTOR / 2.0,
-        );
+        let floor_size_scaled = vec3(FLOOR_SIZE.x / 2.0, FLOOR_SIZE.y / 2.0, FLOOR_SIZE.z / 2.0);
 
         ColliderBuilder::cuboid(
             floor_size_scaled.x,
@@ -322,15 +319,14 @@ impl GameScene for DebugGlovesScene {
 
         let original_glove = Self::clone_with_transform(&self.glove_template, transform);
 
-        let manually_skinned_glove =
-            Self::create_manual_skinning_glove_objects(&self.glove_template, &self.glove_skeleton);
+        let posed_glove = Self::create_posed_glove_objects(&self.glove_model);
 
         // let static_glove_objects =
         //     Self::create_static_glove_objects(&self.glove_template, &self.glove_skeleton);
 
-        // Add the static and per-hand glove objects to the scene
+        // Add the static and posed glove objects to the scene
         scene_objects.extend(original_glove);
-        scene_objects.extend(manually_skinned_glove);
+        scene_objects.extend(posed_glove);
 
         // Add custom bone visualization for the static glove
         let skeleton = self.glove_skeleton.clone();
