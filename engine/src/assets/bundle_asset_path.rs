@@ -13,7 +13,6 @@ pub struct BundleAssetPath {
 impl AbstractAssetPath for BundleAssetPath {
     fn exists(&self, _base_path: String, asset_name: String) -> bool {
         let path = self.build_relative_path(asset_name);
-        println!("Using path: {}", path);
         let bundle_fs = self.storage.bundle_filesystem();
         let exists = bundle_fs.file_exists(&path);
         trace!("Bundle asset checking exists [{}]: {}", path, exists);

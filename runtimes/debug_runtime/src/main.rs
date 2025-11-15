@@ -275,10 +275,6 @@ fn run_game_blocking(
     };
 
     info!("Step 6: Initializing game with mission: {}", mission);
-    info!(
-        "Asset path: {}",
-        shock2vr::paths::asset_root().to_string_lossy()
-    );
 
     let mut game = Game::init(options, bundle_storage);
 

@@ -23,13 +23,7 @@ pub fn search_roots() -> &'static [&'static str] {
 static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 #[cfg(not(target_os = "android"))]
-static ASSET_ROOT: OnceLock<PathBuf> = OnceLock::new();
-
-#[cfg(not(target_os = "android"))]
 const DESKTOP_CANDIDATES: &[&str] = &["./Data", "../Data", "../../Data", "."];
-
-#[cfg(not(target_os = "android"))]
-const ASSET_CANDIDATES: &[&str] = &["./assets", "../assets", "../../assets"];
 
 #[cfg(not(target_os = "android"))]
 const SENTINELS: &[&str] = &["shock2.gam", "res/obj.crf", "res/mesh.crf", "motiondb.bin"];
@@ -37,11 +31,6 @@ const SENTINELS: &[&str] = &["shock2.gam", "res/obj.crf", "res/mesh.crf", "motio
 #[cfg(not(target_os = "android"))]
 pub fn data_root() -> &'static Path {
     DATA_ROOT.get_or_init(resolve_desktop_data_root).as_path()
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn asset_root() -> &'static Path {
-    ASSET_ROOT.get_or_init(resolve_desktop_asset_root).as_path()
 }
 
 #[cfg(not(target_os = "android"))]
@@ -76,22 +65,6 @@ fn resolve_desktop_data_root() -> PathBuf {
         "Falling back to default Data path; no sentinel files were found"
     );
     PathBuf::from("../../Data")
-}
-
-#[cfg(not(target_os = "android"))]
-fn resolve_desktop_asset_root() -> PathBuf {
-    for candidate in ASSET_CANDIDATES {
-        let path = Path::new(candidate);
-        if path.exists() {
-            return path.to_path_buf();
-        }
-    }
-
-    warn!(
-        candidates = ?ASSET_CANDIDATES,
-        "Falling back to default assets path; no assets directory found"
-    );
-    PathBuf::from("../../assets")
 }
 
 #[cfg(not(target_os = "android"))]
