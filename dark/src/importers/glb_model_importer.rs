@@ -1,21 +1,16 @@
-use std::rc::Rc;
-
 use cgmath::{Matrix4, Vector3};
 use collision::Aabb3;
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
-use crate::{
-    importers::glb_animation_importer::extract_skeleton_from_document, model::Model,
-    ss2_skeleton::Skeleton,
-};
+use crate::{glb_model::GlbModel, glb_skeleton::GlbSkeleton};
 use engine::scene::{
     SceneObject, SkinnedMaterial, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal,
 };
 use engine::texture::{self, TextureOptions};
 use engine::texture_format::{PixelFormat, RawTextureData};
 
-// GLB data structures
+// GLB data structures (temporary for loading)
 #[derive(Debug)]
 pub enum GlbVertexData {
     Static(Vec<VertexPositionTextureNormal>),
@@ -29,51 +24,47 @@ pub struct GlbMesh {
     pub texture_index: Option<usize>, // Index into images array
 }
 
-pub struct GlbModel {
-    pub meshes: Vec<GlbMesh>,
-    pub bounding_box: Aabb3<f32>,
-    pub skeleton: Option<Skeleton>,
-    pub images: Vec<gltf::image::Data>,
+// Temporary structure for loading GLB data
+pub struct LoadedGlbData {
+    meshes: Vec<GlbMesh>,
+    bounding_box: Aabb3<f32>,
+    skeleton: Option<GlbSkeleton>,
+    images: Vec<gltf::image::Data>,
 }
 
 fn load_glb(
-    name: String,
+    _name: String,
     reader: &mut Box<dyn engine::assets::asset_paths::ReadableAndSeekable>,
     _assets: &mut AssetCache,
     _config: &(),
-) -> GlbModel {
+) -> LoadedGlbData {
     // Read the entire GLB file into memory
     let mut buffer = Vec::new();
     let _ = std::io::copy(reader, &mut buffer);
 
-    // Parse the GLTF document - use manual parsing to handle external references
+    // Parse the GLTF document
     let gltf = gltf::Gltf::from_slice(&buffer).expect("Failed to parse GLB file");
     let document = gltf.document;
     let blob = gltf.blob;
 
-    // Manually process buffers
+    // Process buffers
     let mut buffers = Vec::new();
     for buffer_obj in document.buffers() {
         let data = match buffer_obj.source() {
             gltf::buffer::Source::Bin => blob.as_ref().expect("No binary blob in GLB file").clone(),
-            gltf::buffer::Source::Uri(uri) => {
-                eprintln!(
-                    "Warning: GLB file '{}' contains external buffer reference: {}",
-                    name, uri
-                );
-                eprintln!("Using empty buffer as fallback");
+            gltf::buffer::Source::Uri(_uri) => {
+                // GLB file contains external buffer reference, using empty buffer as fallback
                 vec![]
             }
         };
         buffers.push(gltf::buffer::Data(data));
     }
 
-    // Manually process images with checkerboard fallback
+    // Process images
     let mut images = Vec::new();
     for image in document.images() {
         let image_data = match image.source() {
             gltf::image::Source::View { view, .. } => {
-                // Get data from buffer view
                 let buffer = &buffers[view.buffer().index()];
                 let start = view.offset();
                 let end = start + view.length();
@@ -81,7 +72,6 @@ fn load_glb(
 
                 match image::load_from_memory(&buf) {
                     Ok(loaded_image) => {
-                        // Convert to RGBA8 format
                         let rgba_image = loaded_image.to_rgba8();
                         let width = rgba_image.width();
                         let height = rgba_image.height();
@@ -93,32 +83,24 @@ fn load_glb(
                         }
                     }
                     Err(_) => {
-                        eprintln!(
-                            "Warning: Could not decode embedded image, using checkerboard fallback"
-                        );
+                        // Could not decode embedded image, using checkerboard fallback
                         create_checkerboard_image_data()
                     }
                 }
             }
-            gltf::image::Source::Uri { uri, .. } => {
-                eprintln!(
-                    "Warning: GLB file '{}' contains external image reference: {}",
-                    name, uri
-                );
-                eprintln!("Using checkerboard pattern as fallback");
+            gltf::image::Source::Uri { uri: _uri, .. } => {
+                // GLB file contains external image reference, using checkerboard pattern as fallback
                 create_checkerboard_image_data()
             }
         };
         images.push(image_data);
     }
 
+    // Process meshes
     let mut meshes = Vec::new();
     let mut min_bounds = Vector3::new(f32::MAX, f32::MAX, f32::MAX);
     let mut max_bounds = Vector3::new(f32::MIN, f32::MIN, f32::MIN);
 
-    // Materials will be processed directly from primitives
-
-    // Process each mesh in the GLTF scene
     for scene in document.scenes() {
         for node in scene.nodes() {
             process_node(
@@ -136,10 +118,10 @@ fn load_glb(
         cgmath::Point3::new(max_bounds.x, max_bounds.y, max_bounds.z),
     );
 
-    // Extract skeleton from GLB file (if present)
-    let skeleton = extract_skeleton_from_document(&document, &buffers);
+    // Extract skeleton if present
+    let skeleton = extract_glb_skeleton(&document, &buffers);
 
-    GlbModel {
+    LoadedGlbData {
         meshes,
         bounding_box,
         skeleton,
@@ -147,21 +129,76 @@ fn load_glb(
     }
 }
 
-/// Create a checkerboard pattern as fallback for missing textures
+/// Extract GLB skeleton from document
+fn extract_glb_skeleton(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Option<GlbSkeleton> {
+    // Collect all nodes first
+    let mut all_nodes = Vec::new();
+    for scene in document.scenes() {
+        collect_all_nodes(&scene.nodes().collect::<Vec<_>>(), &mut all_nodes);
+    }
+
+    // Find the first skin in any scene
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            if let Some(skin) = find_skin_in_node(&node) {
+                let joint_nodes: Vec<gltf::Node> = skin.joints().collect();
+                let inverse_bind_matrices = extract_inverse_bind_matrices(&skin, buffers);
+
+                let skeleton = GlbSkeleton::new(joint_nodes, inverse_bind_matrices, all_nodes);
+                return Some(skeleton);
+            }
+        }
+    }
+
+    None
+}
+
+fn collect_all_nodes<'a>(nodes: &[gltf::Node<'a>], all_nodes: &mut Vec<gltf::Node<'a>>) {
+    for node in nodes {
+        all_nodes.push(node.clone());
+        let children: Vec<gltf::Node> = node.children().collect();
+        collect_all_nodes(&children, all_nodes);
+    }
+}
+
+fn find_skin_in_node<'a>(node: &gltf::Node<'a>) -> Option<gltf::Skin<'a>> {
+    if let Some(skin) = node.skin() {
+        return Some(skin);
+    }
+
+    for child in node.children() {
+        if let Some(skin) = find_skin_in_node(&child) {
+            return Some(skin);
+        }
+    }
+
+    None
+}
+
+fn extract_inverse_bind_matrices(
+    skin: &gltf::Skin,
+    buffers: &[gltf::buffer::Data],
+) -> Vec<Matrix4<f32>> {
+    skin.reader(|buffer| Some(&buffers[buffer.index()]))
+        .read_inverse_bind_matrices()
+        .map(|iter| iter.map(Matrix4::from).collect::<Vec<_>>())
+        .unwrap_or_default()
+}
+
 fn create_checkerboard_image_data() -> gltf::image::Data {
-    // Create a 4x4 magenta/black checkerboard pattern
     let width = 4;
     let height = 4;
-    let mut pixels = Vec::with_capacity(width * height * 4); // RGBA
+    let mut pixels = Vec::with_capacity(width * height * 4);
 
     for y in 0..height {
         for x in 0..width {
             if (x + y) % 2 == 0 {
-                // Magenta
-                pixels.extend_from_slice(&[255, 0, 255, 255]);
+                pixels.extend_from_slice(&[255, 0, 255, 255]); // Magenta
             } else {
-                // Black
-                pixels.extend_from_slice(&[0, 0, 0, 255]);
+                pixels.extend_from_slice(&[0, 0, 0, 255]); // Black
             }
         }
     }
@@ -181,14 +218,12 @@ fn process_node(
     min_bounds: &mut Vector3<f32>,
     max_bounds: &mut Vector3<f32>,
 ) {
-    // Apply node transform
     let transform = Matrix4::from(node.transform().matrix());
 
-    // Process mesh if present
     if let Some(mesh) = node.mesh() {
         for primitive in mesh.primitives() {
             if let Some(glb_mesh) = process_primitive(&primitive, buffers, &transform) {
-                // Update bounding box based on vertex type
+                // Update bounding box
                 match &glb_mesh.vertex_data {
                     GlbVertexData::Static(vertices) => {
                         for vertex in vertices {
@@ -218,7 +253,7 @@ fn process_node(
         }
     }
 
-    // Process child nodes recursively
+    // Process child nodes
     for child in node.children() {
         process_node(&child, buffers, meshes, min_bounds, max_bounds);
     }
@@ -308,8 +343,6 @@ fn process_primitive(
         let joints: Vec<[u16; 4]> = joints.unwrap();
         let weights: Vec<[f32; 4]> = weights.unwrap();
 
-        println!("Processing skinned mesh with {} vertices", positions.len());
-
         // Create skinned vertices
         let mut skinned_vertices = Vec::new();
         for i in 0..positions.len() {
@@ -317,11 +350,10 @@ fn process_primitive(
             let norm = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
             let tex = texcoords.get(i).copied().unwrap_or([0.0, 0.0]);
 
-            // Get joint and weight data for this vertex
             let joint_indices = joints.get(i).copied().unwrap_or([0, 0, 0, 0]);
             let vertex_weights = weights.get(i).copied().unwrap_or([1.0, 0.0, 0.0, 0.0]);
 
-            // Convert joint indices to u32 and normalize weights
+            // Convert joint indices to u32
             let bone_indices = [
                 joint_indices[0] as u32,
                 joint_indices[1] as u32,
@@ -329,7 +361,7 @@ fn process_primitive(
                 joint_indices[3] as u32,
             ];
 
-            // Normalize weights to ensure they sum to 1.0
+            // Normalize weights
             let weight_sum =
                 vertex_weights[0] + vertex_weights[1] + vertex_weights[2] + vertex_weights[3];
             let normalized_weights = if weight_sum > 0.0 {
@@ -340,10 +372,10 @@ fn process_primitive(
                     vertex_weights[3] / weight_sum,
                 ]
             } else {
-                [1.0, 0.0, 0.0, 0.0] // Fallback to first bone if no weights
+                [1.0, 0.0, 0.0, 0.0]
             };
 
-            // Apply node transform to skinned meshes as well
+            // Apply transform
             let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
             let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
 
@@ -354,8 +386,8 @@ fn process_primitive(
                     transformed_pos.z,
                 ),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
-                bone_indices,                     // All 4 bone indices
-                bone_weights: normalized_weights, // Normalized multi-bone weights
+                bone_indices,
+                bone_weights: normalized_weights,
                 normal: cgmath::Vector3::new(
                     transformed_norm.x,
                     transformed_norm.y,
@@ -366,14 +398,13 @@ fn process_primitive(
 
         GlbVertexData::Skinned(skinned_vertices)
     } else {
-        // Create static vertices (original behavior)
+        // Create static vertices
         let mut static_vertices = Vec::new();
         for i in 0..positions.len() {
             let pos = positions[i];
             let norm = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
             let tex = texcoords.get(i).copied().unwrap_or([0.0, 0.0]);
 
-            // Apply transform to position and normal
             let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
             let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
 
@@ -407,11 +438,15 @@ fn process_primitive(
     })
 }
 
-fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config: &()) -> Model {
+fn process_glb_data(
+    loaded_data: LoadedGlbData,
+    _asset_cache: &mut AssetCache,
+    _config: &(),
+) -> GlbModel {
     let mut scene_objects = Vec::new();
 
     // Convert GLB meshes to SceneObjects
-    for glb_mesh in glb_model.meshes.into_iter() {
+    for glb_mesh in loaded_data.meshes.into_iter() {
         let GlbMesh {
             vertex_data,
             indices,
@@ -430,35 +465,36 @@ fn process_glb_model(glb_model: GlbModel, _asset_cache: &mut AssetCache, _config
         };
 
         let material = if is_skinned {
-            create_skinned_material(&glb_model.images, texture_index, base_color)
+            create_skinned_material(&loaded_data.images, texture_index, base_color)
         } else {
-            create_static_material(&glb_model.images, texture_index, base_color)
+            create_static_material(&loaded_data.images, texture_index, base_color)
         };
 
-        let scene_object = SceneObject::create(material, Rc::new(Box::new(geometry)));
+        let scene_object = SceneObject::create(material, std::rc::Rc::new(Box::new(geometry)));
         scene_objects.push(scene_object);
     }
 
-    // Create appropriate model type based on whether skeleton is present
-    Model::from_glb(scene_objects, glb_model.bounding_box, glb_model.skeleton)
+    // Create GlbModel
+    if let Some(skeleton) = loaded_data.skeleton {
+        GlbModel::new(scene_objects, loaded_data.bounding_box, skeleton)
+    } else {
+        GlbModel::new_static(scene_objects, loaded_data.bounding_box)
+    }
 }
 
-pub static GLB_MODELS_IMPORTER: Lazy<AssetImporter<GlbModel, Model, ()>> =
-    Lazy::new(|| AssetImporter::define(load_glb, process_glb_model));
+pub static GLB_MODELS_IMPORTER: Lazy<AssetImporter<LoadedGlbData, GlbModel, ()>> =
+    Lazy::new(|| AssetImporter::define(load_glb, process_glb_data));
 
+// Helper functions (same as before)
 fn create_texture_from_image(
     images: &[gltf::image::Data],
     texture_index: usize,
-) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+) -> Option<std::rc::Rc<dyn engine::texture::TextureTrait>> {
     if texture_index >= images.len() {
         return None;
     }
 
     let image_data = &images[texture_index];
-    println!(
-        "Loading texture {} ({}x{}, format: {:?})",
-        texture_index, image_data.width, image_data.height, image_data.format
-    );
 
     let raw_texture_data = RawTextureData {
         bytes: image_data.pixels.clone(),
@@ -472,11 +508,12 @@ fn create_texture_from_image(
     };
 
     let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
-
-    Some(Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>)
+    Some(std::rc::Rc::new(texture) as std::rc::Rc<dyn engine::texture::TextureTrait>)
 }
 
-fn create_solid_color_texture(base_color: [f32; 4]) -> Rc<dyn engine::texture::TextureTrait> {
+fn create_solid_color_texture(
+    base_color: [f32; 4],
+) -> std::rc::Rc<dyn engine::texture::TextureTrait> {
     let clamp = |value: f32| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
 
     let r = clamp(base_color[0]);
@@ -492,8 +529,7 @@ fn create_solid_color_texture(base_color: [f32; 4]) -> Rc<dyn engine::texture::T
     };
 
     let texture = texture::init_from_memory2(raw_texture_data, &TextureOptions::default());
-
-    Rc::new(texture) as Rc<dyn engine::texture::TextureTrait>
+    std::rc::Rc::new(texture) as std::rc::Rc<dyn engine::texture::TextureTrait>
 }
 
 fn create_static_material(
@@ -509,27 +545,17 @@ fn create_static_material(
                 ));
             }
 
-            println!(
-                "Texture index {} out of range (only {} images available), using base color: {:?}",
-                texture_index,
-                images.len(),
-                base_color
-            );
-
             std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
                 base_color[0],
                 base_color[1],
                 base_color[2],
             )))
         }
-        None => {
-            println!("No texture specified, using base color: {:?}", base_color);
-            std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
-                base_color[0],
-                base_color[1],
-                base_color[2],
-            )))
-        }
+        None => std::cell::RefCell::new(engine::scene::color_material::create(cgmath::vec3(
+            base_color[0],
+            base_color[1],
+            base_color[2],
+        ))),
     }
 }
 
@@ -538,27 +564,15 @@ fn create_skinned_material(
     texture_index: Option<usize>,
     base_color: [f32; 4],
 ) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
-    let texture: Rc<dyn engine::texture::TextureTrait> = if let Some(texture_index) = texture_index
-    {
-        match create_texture_from_image(images, texture_index) {
-            Some(tex) => tex,
-            None => {
-                println!(
-                    "Texture index {} out of range (only {} images available) for skinned mesh, using base color: {:?}",
-                    texture_index,
-                    images.len(),
-                    base_color
-                );
-                create_solid_color_texture(base_color)
+    let texture: std::rc::Rc<dyn engine::texture::TextureTrait> =
+        if let Some(texture_index) = texture_index {
+            match create_texture_from_image(images, texture_index) {
+                Some(tex) => tex,
+                None => create_solid_color_texture(base_color),
             }
-        }
-    } else {
-        println!(
-            "No texture specified for skinned mesh, using base color: {:?}",
-            base_color
-        );
-        create_solid_color_texture(base_color)
-    };
+        } else {
+            create_solid_color_texture(base_color)
+        };
 
     std::cell::RefCell::new(SkinnedMaterial::create(texture, 1.0, 0.0))
 }

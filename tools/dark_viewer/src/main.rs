@@ -9,8 +9,8 @@ use glfw::GlfwReceiver;
 
 mod scenes;
 use scenes::{
-    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbAnimatedViewerScene, GlbViewerScene,
-    ToolScene, VideoPlayerScene,
+    BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene,
+    VideoPlayerScene,
 };
 use shock2vr::zip_asset_path::ZipAssetPath;
 
@@ -67,7 +67,7 @@ struct Cli {
 
     /// One or more animation clips, comma separated.
     /// For .bin files: Paths can be provided with or without the trailing `_ .mc` suffix.
-    /// For .glb files: Animation names from within the GLB file. Use flag without value to show all.
+    /// Animation support for GLB files has been removed.
     #[arg(long, value_delimiter = ',', value_name = "CLIP", num_args = 0..)]
     animation: Option<Vec<String>>,
 
@@ -252,25 +252,13 @@ fn create_scene(
         Ok(Box::new(scene))
     } else if lower.ends_with(".glb") {
         if animation_flag_provided {
-            let scene = GlbAnimatedViewerScene::from_model_and_animations(
-                filename.to_string(),
-                animations.to_vec(),
-                scale,
-                asset_cache,
-                debug_skeletons,
-            )?;
-            Ok(Box::new(scene))
-        } else {
-            let scene = GlbViewerScene::from_model(
-                filename.to_string(),
-                scale,
-                asset_cache,
-                debug_skeletons,
-            )?;
-            Ok(Box::new(scene))
+            return Err("Animation support for GLB files has been removed. Use GLB files without --animation flag.".into());
         }
+        let scene =
+            GlbViewerScene::from_model(filename.to_string(), scale, asset_cache, debug_skeletons)?;
+        Ok(Box::new(scene))
     } else if !animations.is_empty() {
-        Err("Animation preview is only supported for .bin AI meshes and .glb models.".into())
+        Err("Animation preview is only supported for .bin AI meshes.".into())
     } else {
         Err(format!(
             "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font), .glb (GLB/GLTF 3D model)",

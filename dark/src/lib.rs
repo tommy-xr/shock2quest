@@ -2,6 +2,8 @@ pub mod audio;
 mod bitmap_animation;
 pub mod font;
 pub mod gamesys;
+pub mod glb_model;
+pub mod glb_skeleton;
 pub mod map;
 pub mod mission;
 pub mod model;
