@@ -93,12 +93,7 @@ pub fn create_initial_scene(
 
     if options.mission.eq_ignore_ascii_case("debug_gloves") {
         return SceneInitResult {
-            scene: Box::new(DebugGlovesScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
+            scene: DebugGlovesScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }

@@ -259,6 +259,17 @@ pub trait DebugSceneHooks {
         _audio_context: &mut AudioContext<EntityId, String>,
     ) {
     }
+
+    fn after_render(
+        &mut self,
+        _core: &mut MissionCore,
+        _scene_objects: &mut Vec<SceneObject>,
+        _camera_position: &mut Vector3<f32>,
+        _camera_rotation: &mut Quaternion<f32>,
+        _asset_cache: &mut AssetCache,
+        _options: &GameOptions,
+    ) {
+    }
 }
 
 pub struct HookedDebugScene<H> {
@@ -302,7 +313,17 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         asset_cache: &mut AssetCache,
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        self.core.render(asset_cache, options)
+        let (mut scene_objects, mut camera_position, mut camera_rotation) =
+            self.core.render(asset_cache, options);
+        self.hooks.after_render(
+            &mut self.core,
+            &mut scene_objects,
+            &mut camera_position,
+            &mut camera_rotation,
+            asset_cache,
+            options,
+        );
+        (scene_objects, camera_position, camera_rotation)
     }
 
     fn render_per_eye(
