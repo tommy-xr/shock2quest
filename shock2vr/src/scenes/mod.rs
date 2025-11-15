@@ -96,12 +96,7 @@ pub fn create_initial_scene(
 
     if options.mission.eq_ignore_ascii_case("debug_camera") {
         return SceneInitResult {
-            scene: Box::new(DebugCameraScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
+            scene: DebugCameraScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }
