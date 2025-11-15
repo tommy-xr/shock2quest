@@ -80,17 +80,16 @@ impl DebugSceneBuilder {
     pub fn build_with_hooks<H>(
         self,
         options: DebugSceneBuildOptions<'_>,
-        mut hooks: H,
+        hooks: H,
     ) -> Box<dyn GameScene>
     where
         H: DebugSceneHooks + 'static,
     {
-        let mut core = self.build_core(options);
-        hooks.after_load(&mut core);
-        Box::new(HookedDebugScene { core, hooks })
+        let core = self.build_core(options);
+        Box::new(HookedDebugScene::new(core, hooks))
     }
 
-    fn build_core(self, options: DebugSceneBuildOptions<'_>) -> MissionCore {
+    pub fn build_core(self, options: DebugSceneBuildOptions<'_>) -> MissionCore {
         let mut scene_objects = Vec::new();
         let mut physics_geometry = self.physics_geometry;
 
@@ -238,8 +237,6 @@ impl GameScene for DebugScene {
 }
 
 pub trait DebugSceneHooks {
-    fn after_load(&mut self, _core: &mut MissionCore) {}
-
     #[allow(clippy::too_many_arguments)]
     fn before_update(
         &mut self,
@@ -255,6 +252,12 @@ pub trait DebugSceneHooks {
 pub struct HookedDebugScene<H> {
     core: MissionCore,
     hooks: H,
+}
+
+impl<H> HookedDebugScene<H> {
+    pub fn new(core: MissionCore, hooks: H) -> Self {
+        Self { core, hooks }
+    }
 }
 
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {

@@ -18,6 +18,7 @@ use crate::{
     physics::CollisionGroup,
     scenes::debug_common::{
         DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneFloor, DebugSceneHooks,
+        HookedDebugScene,
     },
     time::Time,
 };
@@ -57,7 +58,10 @@ impl DebugJointConstraintScene {
             audio_context,
         };
 
-        builder.build_with_hooks(build_options, JointConstraintHooks::default())
+        let mut core = builder.build_core(build_options);
+        let mut hooks = JointConstraintHooks::default();
+        hooks.initialize(&mut core);
+        Box::new(HookedDebugScene::new(core, hooks))
     }
 }
 
@@ -70,8 +74,8 @@ struct JointConstraintHooks {
     last_left_impulse: bool,
 }
 
-impl DebugSceneHooks for JointConstraintHooks {
-    fn after_load(&mut self, core: &mut MissionCore) {
+impl JointConstraintHooks {
+    fn initialize(&mut self, core: &mut MissionCore) {
         let (body_handles, joint_handles) = Self::spawn_joint_chain(core);
         self.body_handles = body_handles;
         self.joint_handles = joint_handles;
@@ -84,7 +88,9 @@ impl DebugSceneHooks for JointConstraintHooks {
              - Tap the A button / mouse button 3 on either hand to fire an upward impulse on that side."
         );
     }
+}
 
+impl DebugSceneHooks for JointConstraintHooks {
     fn before_update(
         &mut self,
         core: &mut MissionCore,
