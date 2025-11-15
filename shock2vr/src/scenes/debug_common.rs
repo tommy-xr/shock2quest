@@ -72,6 +72,25 @@ impl DebugSceneBuilder {
     }
 
     pub fn build(self, options: DebugSceneBuildOptions<'_>) -> DebugScene {
+        DebugScene {
+            core: self.build_core(options),
+        }
+    }
+
+    pub fn build_with_hooks<H>(
+        self,
+        options: DebugSceneBuildOptions<'_>,
+        mut hooks: H,
+    ) -> Box<dyn GameScene>
+    where
+        H: DebugSceneHooks + 'static,
+    {
+        let mut core = self.build_core(options);
+        hooks.after_load(&mut core);
+        Box::new(HookedDebugScene { core, hooks })
+    }
+
+    fn build_core(self, options: DebugSceneBuildOptions<'_>) -> MissionCore {
         let mut scene_objects = Vec::new();
         let mut physics_geometry = self.physics_geometry;
 
@@ -98,7 +117,7 @@ impl DebugSceneBuilder {
             visibility_engine: Box::new(AlwaysVisible),
         };
 
-        let core = MissionCore::load(
+        MissionCore::load(
             self.scene_name,
             abstract_mission,
             options.asset_cache,
@@ -109,9 +128,7 @@ impl DebugSceneBuilder {
             Box::new(EmptyEntityPopulator {}),
             HeldItemSaveData::empty(),
             options.game_options,
-        );
-
-        DebugScene { core }
+        )
     }
 }
 
@@ -146,6 +163,116 @@ impl GameScene for DebugScene {
         game_options: &GameOptions,
         command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
+        self.core.update(
+            time,
+            asset_cache,
+            input_context,
+            game_options,
+            command_effects,
+        )
+    }
+
+    fn render(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        options: &GameOptions,
+    ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        self.core.render(asset_cache, options)
+    }
+
+    fn render_per_eye(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+        options: &GameOptions,
+    ) -> Vec<SceneObject> {
+        self.core
+            .render_per_eye(asset_cache, view, projection, screen_size, options)
+    }
+
+    fn finish_render(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) {
+        self.core
+            .finish_render(asset_cache, view, projection, screen_size)
+    }
+
+    fn handle_effects(
+        &mut self,
+        effects: Vec<Effect>,
+        global_context: &GlobalContext,
+        game_options: &GameOptions,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) -> Vec<GlobalEffect> {
+        self.core.handle_effects(
+            effects,
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        )
+    }
+
+    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
+        self.core.get_hand_spotlights(options)
+    }
+
+    fn world(&self) -> &shipyard::World {
+        self.core.world()
+    }
+
+    fn scene_name(&self) -> &str {
+        self.core.scene_name()
+    }
+
+    fn queue_entity_trigger(&mut self, entity_name: String) {
+        self.core.queue_entity_trigger(entity_name)
+    }
+}
+
+pub trait DebugSceneHooks {
+    fn after_load(&mut self, _core: &mut MissionCore) {}
+
+    #[allow(clippy::too_many_arguments)]
+    fn before_update(
+        &mut self,
+        _core: &mut MissionCore,
+        _time: &Time,
+        _input_context: &InputContext,
+        _asset_cache: &mut AssetCache,
+        _game_options: &GameOptions,
+    ) {
+    }
+}
+
+pub struct HookedDebugScene<H> {
+    core: MissionCore,
+    hooks: H,
+}
+
+impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
+    fn update(
+        &mut self,
+        time: &Time,
+        input_context: &InputContext,
+        asset_cache: &mut AssetCache,
+        game_options: &GameOptions,
+        command_effects: Vec<Effect>,
+    ) -> Vec<Effect> {
+        self.hooks.before_update(
+            &mut self.core,
+            time,
+            input_context,
+            asset_cache,
+            game_options,
+        );
         self.core.update(
             time,
             asset_cache,

@@ -108,12 +108,12 @@ pub fn create_initial_scene(
         .eq_ignore_ascii_case("debug_joint_constraint")
     {
         return SceneInitResult {
-            scene: Box::new(DebugJointConstraintScene::new(
+            scene: DebugJointConstraintScene::new(
                 global_context,
                 options,
                 asset_cache,
                 audio_context,
-            )),
+            ),
             mission_save_data: HashMap::new(),
         };
     }
