@@ -30,7 +30,7 @@ const CAMERA_TEMPLATE_ID: i32 = -367;
 pub struct DebugCameraScene {
     scene: DebugScene,
     #[allow(dead_code)]
-    camera_entity: Option<EntityId>,
+    camera_entity: EntityId,
 }
 
 impl DebugCameraScene {
@@ -56,27 +56,17 @@ impl DebugCameraScene {
 
         let mut scene = builder.build(build_options);
 
-        let camera_entity = Some(
-            scene
-                .core_mut()
-                .create_entity_with_position(
-                    asset_cache,
-                    CAMERA_TEMPLATE_ID,
-                    CAMERA_START_POS,
-                    Quaternion::from_angle_y(Deg(180.0)),
-                    Matrix4::from_translation(vec3(0.0, 1.0, 10.0)),
-                    CreateEntityOptions::default(),
-                )
-                .entity_id,
-        );
-
-        match camera_entity {
-            Some(id) => info!(
-                "Spawned debug camera entity {id:?} at ({:.2}, {:.2}, {:.2})",
-                CAMERA_START_POS.x, CAMERA_START_POS.y, CAMERA_START_POS.z
-            ),
-            None => info!("Failed to spawn debug camera entity from template 'vcamera'"),
-        }
+        let camera_entity = scene
+            .core_mut()
+            .create_entity_with_position(
+                asset_cache,
+                CAMERA_TEMPLATE_ID,
+                CAMERA_START_POS,
+                Quaternion::from_angle_y(Deg(180.0)),
+                Matrix4::from_translation(vec3(0.0, 1.0, 10.0)),
+                CreateEntityOptions::default(),
+            )
+            .entity_id;
 
         Self {
             scene,
