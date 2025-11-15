@@ -14,9 +14,10 @@ pub struct EngineRenderContext {
 
 use crate::file_system::Storage;
 use crate::scene::scene::Scene;
+use std::sync::Arc;
 
 pub trait Engine {
     fn render(&self, render_context: &EngineRenderContext, scene: &Scene);
 
-    fn get_storage(&self) -> &dyn Storage;
+    fn get_storage(&self) -> Arc<dyn Storage>;
 }

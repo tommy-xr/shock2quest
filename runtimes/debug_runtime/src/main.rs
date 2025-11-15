@@ -245,6 +245,7 @@ fn run_game_blocking(
     // Initialize the game engine
     info!("Step 4: Initializing engine...");
     let engine = engine::opengl();
+    let bundle_storage = engine.get_storage();
     info!("Engine initialized successfully");
 
     info!("Step 5: Setting up game options...");
@@ -274,10 +275,8 @@ fn run_game_blocking(
     };
 
     info!("Step 6: Initializing game with mission: {}", mission);
-    let asset_path = shock2vr::paths::asset_root().to_string_lossy().into_owned();
-    info!("Asset path: {}", asset_path);
 
-    let mut game = Game::init(options, asset_path);
+    let mut game = Game::init(options, bundle_storage);
 
     info!("Game initialized successfully with mission: {}", mission);
 

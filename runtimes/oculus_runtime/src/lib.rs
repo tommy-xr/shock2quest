@@ -426,16 +426,17 @@ fn main() {
     let mut frame = 0;
     let now = Instant::now();
     let engine = engine::android();
+    let bundle_storage = engine.get_storage();
     let mut experimental_features = HashSet::new();
-    experimental_features.insert("gui".to_owned());
+    // experimental_features.insert("gui".to_owned());
     let options: GameOptions = GameOptions {
         render_particles: false,
-        mission: "debug_joint_constraint".to_string(),
+        mission: "debug_gloves".to_string(),
         experimental_features,
         debug_skeletons: false,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(options, "".to_string()); // Android assets root
+    let mut game = shock2vr::Game::init(options, bundle_storage);
 
     let _camera_pos = vec3(0.0, 5.0, 10.0);
 
