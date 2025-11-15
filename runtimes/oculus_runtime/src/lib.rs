@@ -428,10 +428,10 @@ fn main() {
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
     let mut experimental_features = HashSet::new();
-    experimental_features.insert("gui".to_owned());
+    // experimental_features.insert("gui".to_owned());
     let options: GameOptions = GameOptions {
         render_particles: false,
-        mission: "debug_joint_constraint".to_string(),
+        mission: "debug_gloves".to_string(),
         experimental_features,
         debug_skeletons: false,
         ..GameOptions::default()
