@@ -1,6 +1,4 @@
-use cgmath::{
-    Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3, point3, vec3,
-};
+use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector2, Vector3, point3, vec3};
 use dark::SCALE_FACTOR;
 use engine::{
     assets::asset_cache::AssetCache,

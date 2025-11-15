@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector2, Vector3, vec3};
 use dark::{
     SCALE_FACTOR,
     mission::{SongParams, room_database::RoomDatabase},
@@ -41,7 +41,10 @@ impl DebugSceneBuilder {
     pub fn new(scene_name: impl Into<String>) -> Self {
         Self {
             scene_name: scene_name.into(),
-            spawn_location: SpawnLocation::MapDefault,
+            spawn_location: SpawnLocation::PositionRotation(
+                vec3(0.0, 5.0 / SCALE_FACTOR, 0.0 / SCALE_FACTOR),
+                Quaternion::from_angle_y(Deg(90.0)),
+            ),
             floor: None,
             extra_scene_objects: Vec::new(),
             physics_geometry: None,
