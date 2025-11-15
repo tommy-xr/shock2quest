@@ -247,6 +247,18 @@ pub trait DebugSceneHooks {
         _game_options: &GameOptions,
     ) {
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn before_handle_effects(
+        &mut self,
+        _core: &mut MissionCore,
+        _effects: &mut Vec<Effect>,
+        _global_context: &GlobalContext,
+        _game_options: &GameOptions,
+        _asset_cache: &mut AssetCache,
+        _audio_context: &mut AudioContext<EntityId, String>,
+    ) {
+    }
 }
 
 pub struct HookedDebugScene<H> {
@@ -324,6 +336,15 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
+        let mut effects = effects;
+        self.hooks.before_handle_effects(
+            &mut self.core,
+            &mut effects,
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        );
         self.core.handle_effects(
             effects,
             global_context,
