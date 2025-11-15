@@ -33,6 +33,7 @@ use std::{
     fs::{File, OpenOptions},
     io::BufReader,
     rc::Rc,
+    sync::Arc,
 };
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
@@ -45,6 +46,7 @@ use dark::{
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AssetPath, bundle_asset_path::BundleAssetPath},
     audio::{AudioClip, AudioContext},
+    file_system::Storage,
     game_log,
     scene::SceneObject,
 };
@@ -215,7 +217,7 @@ impl Game {
             .map(|mission| mission as &mut dyn game_scene::DebuggableScene)
     }
 
-    pub fn init(options: GameOptions, bundle_root_path: String) -> Game {
+    pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> Game {
         let asset_paths = AssetPath::combine(vec![
             AssetPath::folder(resource_path("res/mesh")),
             // AssetPath::folder(resource_path("res/mesh/txt16")),
@@ -234,7 +236,7 @@ impl Game {
             ZipAssetPath::new(resource_path("res/song.crf")),
             ZipAssetPath::new2(resource_path("res/strings.crf"), false),
             // Bundle assets
-            BundleAssetPath::new("".to_owned(), bundle_root_path.clone()),
+            BundleAssetPath::new("".to_owned(), bundle_storage),
             // Textures
             // AssetPath::folder("res/bitmap".to_owned()),
             // AssetPath::folder("res/bitmap/txt16".to_owned()),

@@ -226,6 +226,7 @@ pub fn main() {
     );
 
     let engine = engine::opengl();
+    let bundle_storage = engine.get_storage();
     let experimental_features: HashSet<String> =
         args.experimental.unwrap_or(vec![]).into_iter().collect();
 
@@ -244,8 +245,7 @@ pub fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let asset_path = shock2vr::paths::asset_root().to_string_lossy().into_owned();
-    let mut game = shock2vr::Game::init(options, asset_path);
+    let mut game = shock2vr::Game::init(options, bundle_storage);
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),

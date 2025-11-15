@@ -1,5 +1,6 @@
 pub use crate::file_system::FileSystem;
 use std::path::Path;
+use tracing::debug;
 
 pub struct DefaultFileSystem<'a> {
     pub root_path: Box<&'a Path>,
@@ -8,6 +9,7 @@ pub struct DefaultFileSystem<'a> {
 impl FileSystem for DefaultFileSystem<'_> {
     fn open_dir(&self, path: &str) -> Vec<String> {
         let full_path = self.root_path.join(path);
+        debug!("DefaultFileSystem::open_dir -> {:?}", full_path);
         let read_dir_result = std::fs::read_dir(full_path).unwrap();
 
         read_dir_result
@@ -24,13 +26,18 @@ impl FileSystem for DefaultFileSystem<'_> {
 
     fn open_file(&self, path: &str) -> Vec<u8> {
         let full_path = self.root_path.join(path);
-        println!("open_file: {full_path:?}");
+        debug!("DefaultFileSystem::open_file -> {:?}", full_path);
 
         std::fs::read(full_path).unwrap()
     }
 
     fn file_exists(&self, path: &str) -> bool {
         let full_path = self.root_path.join(path);
-        full_path.exists()
+        let exists = full_path.exists();
+        debug!(
+            "DefaultFileSystem::file_exists -> {:?} (exists={})",
+            full_path, exists
+        );
+        exists
     }
 }

@@ -1,15 +1,16 @@
 extern crate gl;
 
 use crate::util;
+use std::sync::Arc;
 
 pub struct OpenGLEngine {
     pub is_opengl_es: bool,
-    pub storage: Box<dyn crate::file_system::Storage>,
+    pub storage: Arc<dyn crate::file_system::Storage>,
 }
 
 impl OpenGLEngine {}
 
-fn init(is_opengl_es: bool, storage: Box<dyn crate::file_system::Storage>) -> OpenGLEngine {
+fn init(is_opengl_es: bool, storage: Arc<dyn crate::file_system::Storage>) -> OpenGLEngine {
     OpenGLEngine {
         is_opengl_es,
         storage,
@@ -21,8 +22,8 @@ use crate::engine::EngineRenderContext;
 use crate::scene::scene::Scene;
 
 impl Engine for OpenGLEngine {
-    fn get_storage(&self) -> &dyn crate::file_system::Storage {
-        &*self.storage
+    fn get_storage(&self) -> Arc<dyn crate::file_system::Storage> {
+        Arc::clone(&self.storage)
     }
 
     fn render(&self, render_context: &EngineRenderContext, scene: &Scene) {
@@ -133,17 +134,14 @@ pub fn init_gl() -> OpenGLEngine {
 }
 
 pub fn init_gles() -> OpenGLEngine {
-    let _file_system = Box::new(crate::file_system::DefaultFileSystem {
-        root_path: Box::new(std::path::Path::new("../assets")),
-    });
     let storage = create_desktop_storage();
 
     init(true, storage)
 }
 
-fn create_desktop_storage() -> Box<dyn crate::file_system::Storage> {
+fn create_desktop_storage() -> Arc<dyn crate::file_system::Storage> {
     let bundle_file_system = Box::new(crate::file_system::DefaultFileSystem {
-        root_path: Box::new(std::path::Path::new("../assets/")),
+        root_path: Box::new(std::path::Path::new("./assets/")),
     });
 
     crate::file_system::storage::init(bundle_file_system)
