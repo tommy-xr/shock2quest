@@ -45,8 +45,8 @@ impl DebugCameraScene {
         let builder = DebugSceneBuilder::new("debug_camera")
             .with_floor(DebugSceneFloor::ss2_units(FLOOR_SIZE, FLOOR_COLOR))
             .with_spawn_location(SpawnLocation::PositionRotation(
-                vec3(0.0, 5.0 / SCALE_FACTOR, -5.0 / SCALE_FACTOR),
-                Quaternion::from_angle_y(Deg(0.0)),
+                vec3(0.0, 5.0 / SCALE_FACTOR, 0.0 / SCALE_FACTOR),
+                Quaternion::from_angle_y(Deg(90.0)),
             ));
 
         let build_options = DebugSceneBuildOptions {
@@ -66,7 +66,7 @@ impl DebugCameraScene {
                     CAMERA_TEMPLATE_ID,
                     CAMERA_START_POS,
                     Quaternion::from_angle_y(Deg(180.0)),
-                    Matrix4::identity(),
+                    Matrix4::from_translation(vec3(0.0, 1.0, 10.0)),
                     CreateEntityOptions::default(),
                 )
                 .entity_id,
