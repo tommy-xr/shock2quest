@@ -1,21 +1,11 @@
-use std::collections::HashMap;
-
-use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
-use dark::{
-    SCALE_FACTOR,
-    mission::{SongParams, room_database::RoomDatabase},
-    ss2_entity_info::SystemShock2EntityInfo,
-};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, light::SpotLight},
-};
+use cgmath::{Quaternion, Vector3, vec3};
+use dark::SCALE_FACTOR;
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use rapier3d::{
     na::Point3 as RapierPoint,
     prelude::{
-        Collider, ColliderBuilder, GenericJointBuilder, ImpulseJointHandle, Isometry,
-        JointAxesMask, RigidBodyHandle, SharedShape,
+        GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, RigidBodyHandle,
+        SharedShape,
     },
 };
 use shipyard::EntityId;
@@ -24,14 +14,12 @@ use crate::{
     GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
-    mission::{
-        AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
-        entity_populator::empty_entity_populator::EmptyEntityPopulator, mission_core::MissionCore,
-    },
+    mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     physics::CollisionGroup,
-    quest_info::QuestInfo,
-    save_load::HeldItemSaveData,
-    scripts::{Effect, GlobalEffect},
+    scenes::debug_common::{
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneFloor, DebugSceneHooks,
+        HookedDebugScene,
+    },
     time::Time,
 };
 
@@ -47,14 +35,7 @@ const UPWARD_FORCE: f32 = 40.0;
 const LATERAL_FORCE: f32 = 25.0;
 const IMPULSE_STRENGTH: f32 = 15.0;
 
-pub struct DebugJointConstraintScene {
-    core: MissionCore,
-    body_handles: Vec<RigidBodyHandle>,
-    #[allow(dead_code)]
-    joint_handles: Vec<ImpulseJointHandle>,
-    last_right_impulse: bool,
-    last_left_impulse: bool,
-}
+pub struct DebugJointConstraintScene;
 
 impl DebugJointConstraintScene {
     pub fn new(
@@ -62,26 +43,42 @@ impl DebugJointConstraintScene {
         game_options: &GameOptions,
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
-    ) -> Self {
-        let abstract_mission = Self::create_debug_mission();
-
-        let mut core = MissionCore::load(
-            "debug_joint_constraint".to_string(),
-            abstract_mission,
-            asset_cache,
-            audio_context,
-            global_context,
-            SpawnLocation::PositionRotation(
+    ) -> Box<dyn GameScene> {
+        let builder = DebugSceneBuilder::new("debug_joint_constraint")
+            .with_floor(DebugSceneFloor::ss2_units(FLOOR_SIZE, FLOOR_COLOR))
+            .with_spawn_location(SpawnLocation::PositionRotation(
                 vec3(0.0, 5.0 / SCALE_FACTOR, -6.0 / SCALE_FACTOR),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            ),
-            QuestInfo::new(),
-            Box::new(EmptyEntityPopulator {}),
-            HeldItemSaveData::empty(),
-            game_options,
-        );
+            ));
 
-        let (body_handles, joint_handles) = Self::spawn_joint_chain(&mut core);
+        let build_options = DebugSceneBuildOptions {
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        };
+
+        let mut core = builder.build_core(build_options);
+        let mut hooks = JointConstraintHooks::default();
+        hooks.initialize(&mut core);
+        Box::new(HookedDebugScene::new(core, hooks))
+    }
+}
+
+#[derive(Default)]
+struct JointConstraintHooks {
+    body_handles: Vec<RigidBodyHandle>,
+    #[allow(dead_code)]
+    joint_handles: Vec<ImpulseJointHandle>,
+    last_right_impulse: bool,
+    last_left_impulse: bool,
+}
+
+impl JointConstraintHooks {
+    fn initialize(&mut self, core: &mut MissionCore) {
+        let (body_handles, joint_handles) = Self::spawn_joint_chain(core);
+        self.body_handles = body_handles;
+        self.joint_handles = joint_handles;
 
         println!(
             "[debug_joint_constraint] Controls:\n\
@@ -90,68 +87,23 @@ impl DebugJointConstraintScene {
              - Use controller grips / mouse button 2 to push the outer boxes sideways (left grip pulls left, right grip pushes right).\n\
              - Tap the A button / mouse button 3 on either hand to fire an upward impulse on that side."
         );
-
-        Self {
-            core,
-            body_handles,
-            joint_handles,
-            last_right_impulse: false,
-            last_left_impulse: false,
-        }
     }
+}
 
-    fn create_debug_mission() -> AbstractMission {
-        AbstractMission {
-            scene_objects: Self::create_floor_scene_objects(),
-            song_params: SongParams {
-                song: String::new(),
-            },
-            room_db: RoomDatabase { rooms: Vec::new() },
-            physics_geometry: Some(Self::create_floor_physics()),
-            spatial_data: None,
-            entity_info: SystemShock2EntityInfo::empty(),
-            obj_map: HashMap::new(),
-            visibility_engine: Box::new(AlwaysVisible),
-        }
+impl DebugSceneHooks for JointConstraintHooks {
+    fn before_update(
+        &mut self,
+        core: &mut MissionCore,
+        _time: &Time,
+        input_context: &InputContext,
+        _asset_cache: &mut AssetCache,
+        _game_options: &GameOptions,
+    ) {
+        self.handle_debug_input(core, input_context);
     }
+}
 
-    fn create_floor_scene_objects() -> Vec<SceneObject> {
-        let floor_size_scaled = vec3(
-            FLOOR_SIZE.x / SCALE_FACTOR,
-            FLOOR_SIZE.y / SCALE_FACTOR,
-            FLOOR_SIZE.z / SCALE_FACTOR,
-        );
-
-        let floor_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.0))
-            * Matrix4::from_nonuniform_scale(
-                floor_size_scaled.x,
-                floor_size_scaled.y,
-                floor_size_scaled.z,
-            );
-
-        let floor_material = color_material::create(FLOOR_COLOR);
-        let mut floor_object =
-            SceneObject::new(floor_material, Box::new(engine::scene::cube::create()));
-        floor_object.set_transform(floor_transform);
-
-        vec![floor_object]
-    }
-
-    fn create_floor_physics() -> Collider {
-        let floor_size_scaled = vec3(
-            FLOOR_SIZE.x / SCALE_FACTOR / 2.0,
-            FLOOR_SIZE.y / SCALE_FACTOR / 2.0,
-            FLOOR_SIZE.z / SCALE_FACTOR / 2.0,
-        );
-
-        ColliderBuilder::cuboid(
-            floor_size_scaled.x,
-            floor_size_scaled.y,
-            floor_size_scaled.z,
-        )
-        .build()
-    }
-
+impl JointConstraintHooks {
     fn spawn_joint_chain(
         core: &mut MissionCore,
     ) -> (Vec<RigidBodyHandle>, Vec<ImpulseJointHandle>) {
@@ -195,7 +147,7 @@ impl DebugJointConstraintScene {
         (body_handles, joint_handles)
     }
 
-    fn handle_debug_input(&mut self, input_context: &InputContext) {
+    fn handle_debug_input(&mut self, core: &mut MissionCore, input_context: &InputContext) {
         if self.body_handles.len() < 3 {
             return;
         }
@@ -208,33 +160,29 @@ impl DebugJointConstraintScene {
         let lateral_force = vec3(LATERAL_FORCE / SCALE_FACTOR, 0.0, 0.0);
 
         if input_context.left_hand.trigger_value > 0.05 {
-            self.core
-                .physics
+            core.physics
                 .apply_force(self.body_handles[left_idx], up_force);
         }
 
         if input_context.right_hand.trigger_value > 0.05 {
-            self.core
-                .physics
+            core.physics
                 .apply_force(self.body_handles[mid_idx], up_force);
         }
 
         if input_context.left_hand.squeeze_value > 0.05 {
-            self.core
-                .physics
+            core.physics
                 .apply_force(self.body_handles[left_idx], -lateral_force);
         }
 
         if input_context.right_hand.squeeze_value > 0.05 {
-            self.core
-                .physics
+            core.physics
                 .apply_force(self.body_handles[right_idx], lateral_force);
         }
 
         let right_impulse_pressed =
             input_context.right_hand.a_value > 0.5 && !self.last_right_impulse;
         if right_impulse_pressed {
-            self.core.physics.apply_impulse(
+            core.physics.apply_impulse(
                 self.body_handles[right_idx],
                 vec3(0.0, IMPULSE_STRENGTH / SCALE_FACTOR, 0.0),
             );
@@ -242,7 +190,7 @@ impl DebugJointConstraintScene {
 
         let left_impulse_pressed = input_context.left_hand.a_value > 0.5 && !self.last_left_impulse;
         if left_impulse_pressed {
-            self.core.physics.apply_impulse(
+            core.physics.apply_impulse(
                 self.body_handles[left_idx],
                 vec3(0.0, IMPULSE_STRENGTH / SCALE_FACTOR, 0.0),
             );
@@ -250,90 +198,5 @@ impl DebugJointConstraintScene {
 
         self.last_right_impulse = input_context.right_hand.a_value > 0.5;
         self.last_left_impulse = input_context.left_hand.a_value > 0.5;
-    }
-}
-
-impl GameScene for DebugJointConstraintScene {
-    fn update(
-        &mut self,
-        time: &Time,
-        input_context: &InputContext,
-        asset_cache: &mut AssetCache,
-        game_options: &GameOptions,
-        command_effects: Vec<Effect>,
-    ) -> Vec<Effect> {
-        self.handle_debug_input(input_context);
-
-        self.core.update(
-            time,
-            asset_cache,
-            input_context,
-            game_options,
-            command_effects,
-        )
-    }
-
-    fn render(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        options: &GameOptions,
-    ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        self.core.render(asset_cache, options)
-    }
-
-    fn render_per_eye(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        view: Matrix4<f32>,
-        projection: Matrix4<f32>,
-        screen_size: Vector2<f32>,
-        options: &GameOptions,
-    ) -> Vec<SceneObject> {
-        self.core
-            .render_per_eye(asset_cache, view, projection, screen_size, options)
-    }
-
-    fn finish_render(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        view: Matrix4<f32>,
-        projection: Matrix4<f32>,
-        screen_size: Vector2<f32>,
-    ) {
-        self.core
-            .finish_render(asset_cache, view, projection, screen_size)
-    }
-
-    fn handle_effects(
-        &mut self,
-        effects: Vec<Effect>,
-        global_context: &GlobalContext,
-        game_options: &GameOptions,
-        asset_cache: &mut AssetCache,
-        audio_context: &mut AudioContext<EntityId, String>,
-    ) -> Vec<GlobalEffect> {
-        self.core.handle_effects(
-            effects,
-            global_context,
-            game_options,
-            asset_cache,
-            audio_context,
-        )
-    }
-
-    fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        self.core.get_hand_spotlights(options)
-    }
-
-    fn world(&self) -> &shipyard::World {
-        self.core.world()
-    }
-
-    fn scene_name(&self) -> &str {
-        self.core.scene_name()
-    }
-
-    fn queue_entity_trigger(&mut self, entity_name: String) {
-        self.core.queue_entity_trigger(entity_name)
     }
 }

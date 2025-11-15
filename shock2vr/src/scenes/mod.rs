@@ -20,7 +20,7 @@ use crate::{
 
 pub mod cutscene_player;
 pub mod debug_camera;
-pub mod debug_entity_playground;
+pub mod debug_common;
 pub mod debug_gloves;
 pub mod debug_hud;
 pub mod debug_joint_constraint;
@@ -31,7 +31,6 @@ pub mod hand_pose;
 
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
-pub use debug_entity_playground::DebugEntityPlaygroundScene;
 pub use debug_gloves::DebugGlovesScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_joint_constraint::DebugJointConstraintScene;
@@ -78,29 +77,9 @@ pub fn create_initial_scene(
         };
     }
 
-    if options
-        .mission
-        .eq_ignore_ascii_case("debug_entity_playground")
-    {
-        return SceneInitResult {
-            scene: Box::new(DebugEntityPlaygroundScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
     if options.mission.eq_ignore_ascii_case("debug_camera") {
         return SceneInitResult {
-            scene: Box::new(DebugCameraScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
+            scene: DebugCameraScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }
@@ -114,12 +93,7 @@ pub fn create_initial_scene(
 
     if options.mission.eq_ignore_ascii_case("debug_gloves") {
         return SceneInitResult {
-            scene: Box::new(DebugGlovesScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
+            scene: DebugGlovesScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }
@@ -129,12 +103,12 @@ pub fn create_initial_scene(
         .eq_ignore_ascii_case("debug_joint_constraint")
     {
         return SceneInitResult {
-            scene: Box::new(DebugJointConstraintScene::new(
+            scene: DebugJointConstraintScene::new(
                 global_context,
                 options,
                 asset_cache,
                 audio_context,
-            )),
+            ),
             mission_save_data: HashMap::new(),
         };
     }
@@ -148,12 +122,7 @@ pub fn create_initial_scene(
 
     if options.mission.eq_ignore_ascii_case("debug_ragdoll") {
         return SceneInitResult {
-            scene: Box::new(DebugRagdollScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
+            scene: DebugRagdollScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }
