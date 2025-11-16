@@ -49,15 +49,29 @@ impl EnvSoundQuery {
         let mut tag_query_items = Vec::new();
         for item in &self.items {
             let maybe_tag_id = tag_map.get_index(&item.tag);
-            let maybe_value_id = value_map.get_index(&item.value).map(|x| x as u8);
 
-            if maybe_tag_id.is_none() || maybe_value_id.is_none() {
+            if maybe_tag_id.is_none() {
+                println!("Unable to resolve tag: {}", &item.tag);
                 continue;
             }
 
+            // First try to resolve the value as a string in the value map
+            let maybe_value_id = value_map.get_index(&item.value).map(|x| x as u8);
+
+            // If that fails, try to parse it as a direct numeric value
+            let final_value_id = if let Some(value_id) = maybe_value_id {
+                value_id
+            } else if let Ok(numeric_value) = item.value.parse::<u8>() {
+                println!("Using numeric value directly: {} -> {}", &item.value, numeric_value);
+                numeric_value
+            } else {
+                println!("Unable to resolve value: {}", &item.value);
+                continue;
+            };
+
             tag_query_items.push(TagQueryItem::KeyWithEnumValue(
                 maybe_tag_id.unwrap(),
-                maybe_value_id.unwrap(),
+                final_value_id,
                 false,
             ));
         }

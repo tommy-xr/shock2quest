@@ -64,8 +64,8 @@ impl Script for WeaponScript {
                         _ => None,
                     });
 
-                // Include projectile class tags (ie, ammotype) so environmental sound lookup can match.
-                let projectile_class_tags: Vec<(String, String)> =
+                // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
+                let mut projectile_class_tags: Vec<(String, String)> =
                     if let Some((projectile_template_id, _)) = &maybe_projectile {
                         get_ammotype_from_projectile_template(*projectile_template_id)
                             .map(|ammotype| vec![("ammotype".to_string(), ammotype.to_string())])
@@ -73,6 +73,9 @@ impl Script for WeaponScript {
                     } else {
                         Vec::new()
                     };
+
+                // Add weaponmode=0 for shoot mode
+                projectile_class_tags.push(("weaponmode".to_string(), "0".to_string()));
 
                 let additional_sound_tags = projectile_class_tags
                     .iter()
