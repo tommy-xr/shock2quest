@@ -2198,14 +2198,18 @@ fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, Entit
 }
 
 /// Create a map of template IDs to their class tag data for script access
-fn create_template_class_tag_map(entity_info: &Arc<SystemShock2EntityInfo>) -> HashMap<i32, HashMap<String, String>> {
+fn create_template_class_tag_map(
+    entity_info: &Arc<SystemShock2EntityInfo>,
+) -> HashMap<i32, HashMap<String, String>> {
     use crate::scripts::script_util::hydrate_template_component;
 
     let mut class_tag_map = HashMap::new();
 
     // Iterate through all template IDs to extract PropClassTag data
     for template_id in entity_info.entity_to_properties.keys() {
-        if let Some(class_tag) = hydrate_template_component::<PropClassTag>(*template_id, entity_info) {
+        if let Some(class_tag) =
+            hydrate_template_component::<PropClassTag>(*template_id, entity_info)
+        {
             let mut tag_map = HashMap::new();
             for (key, value) in class_tag.class_tags() {
                 tag_map.insert(key.to_string(), value.to_string());

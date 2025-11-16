@@ -19,7 +19,10 @@ use super::{
 };
 
 /// Get ammunition type from projectile template using pre-populated class tag map
-fn get_ammotype_from_projectile_template(template_id: i32, class_tag_map: &std::collections::HashMap<i32, std::collections::HashMap<String, String>>) -> Option<String> {
+fn get_ammotype_from_projectile_template(
+    template_id: i32,
+    class_tag_map: &std::collections::HashMap<i32, std::collections::HashMap<String, String>>,
+) -> Option<String> {
     let template_tags = class_tag_map.get(&template_id)?;
     template_tags.get("ammotype").cloned()
 }
@@ -58,10 +61,15 @@ impl Script for WeaponScript {
                 // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
                 let mut projectile_class_tags: Vec<(String, String)> =
                     if let Some((projectile_template_id, _)) = &maybe_projectile {
-                        let class_tags = world.borrow::<UniqueView<GlobalTemplateClassTags>>().unwrap();
-                        get_ammotype_from_projectile_template(*projectile_template_id, &class_tags.0)
-                            .map(|ammotype| vec![("ammotype".to_string(), ammotype)])
-                            .unwrap_or_default()
+                        let class_tags = world
+                            .borrow::<UniqueView<GlobalTemplateClassTags>>()
+                            .unwrap();
+                        get_ammotype_from_projectile_template(
+                            *projectile_template_id,
+                            &class_tags.0,
+                        )
+                        .map(|ammotype| vec![("ammotype".to_string(), ammotype)])
+                        .unwrap_or_default()
                     } else {
                         Vec::new()
                     };
