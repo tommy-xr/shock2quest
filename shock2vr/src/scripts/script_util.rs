@@ -9,7 +9,7 @@ use dark::{
     ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::audio::AudioHandle;
-use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, View, World};
+use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
 
 use crate::mission::entity_creator::initialize_entity_with_props;
 use crate::{runtime_props::RuntimePropTransform, util::point3_to_vec3};
@@ -118,37 +118,6 @@ pub fn get_entities_by_name(world: &World, name: &str) -> Vec<EntityId> {
 pub fn get_first_entity_by_name(world: &World, name: &str) -> Option<EntityId> {
     let entities = get_entities_by_name(world, name);
     entities.get(0).copied()
-}
-
-/// Hydrate a single template in a scratch world, grab a component, and drop it again.
-/// Useful for debugging/inspecting template properties without spawning into the main world.
-pub fn hydrate_template_component<T>(
-    template_id: i32,
-    entity_info: &SystemShock2EntityInfo,
-) -> Option<T>
-where
-    T: Component + Clone + Send + Sync,
-{
-    let mut temp_world = World::new();
-    let dummy_entity = temp_world.add_entity(());
-
-    initialize_entity_with_props(
-        template_id,
-        entity_info,
-        &mut temp_world,
-        dummy_entity,
-        &HashMap::new(),
-    );
-
-    let result = temp_world
-        .borrow::<View<T>>()
-        .ok()
-        .and_then(|view| view.get(dummy_entity).ok().cloned());
-
-    // Drop the temp world (and dummy entity) immediately
-    drop(temp_world);
-
-    result
 }
 
 pub fn template_id_string(world: &World, entity_id: &EntityId) -> String {
