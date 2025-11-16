@@ -242,6 +242,37 @@ pub fn send_to_all_switch_links(
 
     Effect::Combined { effects }
 }
+
+/// Hydrate a single template in a scratch world, grab a component, and drop it again.
+/// Useful for debugging/inspecting template properties without spawning into the main world.
+pub fn hydrate_template_component<T>(
+    template_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> Option<T>
+where
+    T: Component + Clone + Send + Sync,
+{
+    let mut temp_world = World::new();
+    let dummy_entity = temp_world.add_entity(());
+
+    initialize_entity_with_props(
+        template_id,
+        entity_info,
+        &mut temp_world,
+        dummy_entity,
+        &HashMap::new(), // empty obj_name_map for utility function
+    );
+
+    // Try to get the component from the hydrated entity
+    let v_component = temp_world.borrow::<View<T>>();
+    if let Ok(view) = v_component {
+        if let Ok(component) = view.get(dummy_entity) {
+            return Some(component.clone());
+        }
+    }
+
+    None
+}
 pub fn invert(msg: MessagePayload) -> MessagePayload {
     match msg {
         MessagePayload::TurnOff { from } => MessagePayload::TurnOn { from },

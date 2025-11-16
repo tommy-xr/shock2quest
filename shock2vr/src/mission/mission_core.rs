@@ -28,7 +28,7 @@ use dark::{
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropCreature, PropFrameAnimState,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature, PropFrameAnimState,
         PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
