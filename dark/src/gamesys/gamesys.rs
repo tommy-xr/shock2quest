@@ -18,9 +18,11 @@ pub struct Gamesys {
 
 impl Gamesys {
     pub fn get_random_environmental_sound(&self, query: &EnvSoundQuery) -> Option<String> {
+        println!("Querying: {:?}", query);
         let tag_query = query.to_tag_query(&self.speech_db.tag_map, &self.speech_db.value_map);
         let result = self.env_tag_map.query_match_all(&tag_query);
 
+        println!("Result: {:?}", result);
         if result.is_empty() {
             return None;
         }
