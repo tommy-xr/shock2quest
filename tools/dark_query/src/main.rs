@@ -685,7 +685,9 @@ fn handle_sound_command(tags: &[String]) -> Result<()> {
 
     if tags.is_empty() {
         println!("Usage: cargo dq sound +tag1:value1 +tag2:value2");
-        println!("Example: cargo dq sound +event:shoot +weapontype:pistol +ammotype:std +weaponmode:0");
+        println!(
+            "Example: cargo dq sound +event:shoot +weapontype:pistol +ammotype:std +weaponmode:0"
+        );
         return Ok(());
     }
 
