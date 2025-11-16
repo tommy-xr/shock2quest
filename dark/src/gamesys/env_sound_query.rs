@@ -51,7 +51,6 @@ impl EnvSoundQuery {
             let maybe_tag_id = tag_map.get_index(&item.tag);
 
             if maybe_tag_id.is_none() {
-                println!("Unable to resolve tag: {}", &item.tag);
                 continue;
             }
 
@@ -62,10 +61,8 @@ impl EnvSoundQuery {
             let final_value_id = if let Some(value_id) = maybe_value_id {
                 value_id
             } else if let Ok(numeric_value) = item.value.parse::<u8>() {
-                println!("Using numeric value directly: {} -> {}", &item.value, numeric_value);
                 numeric_value
             } else {
-                println!("Unable to resolve value: {}", &item.value);
                 continue;
             };
 
