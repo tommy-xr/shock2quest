@@ -1,6 +1,9 @@
 #![allow(unused_imports)]
 
-use super::{ToolScene, render_helpers::create_ground_plane};
+use super::{
+    ToolScene,
+    render_helpers::{create_axes_gizmo, create_ground_plane},
+};
 use cgmath::{Deg, Matrix4, Quaternion, Rad, SquareMatrix, vec3};
 use dark::importers::GLB_MODELS_IMPORTER;
 use engine::assets::asset_cache::AssetCache;
@@ -50,6 +53,9 @@ impl ToolScene for GlbViewerScene {
 
         // Add ground plane
         scene_objects.push(create_ground_plane(asset_cache));
+
+        // Add axes gizmo
+        scene_objects.extend(create_axes_gizmo(asset_cache));
 
         // Add debug skeleton visualization if requested
         if self.debug_skeletons && model.has_skeleton() {

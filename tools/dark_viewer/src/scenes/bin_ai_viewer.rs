@@ -1,6 +1,8 @@
 use super::{
     ToolScene,
-    render_helpers::{build_model_scene_with_debug_skeletons, create_ground_plane},
+    render_helpers::{
+        build_model_scene_with_debug_skeletons, create_axes_gizmo, create_ground_plane,
+    },
 };
 use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
@@ -99,6 +101,9 @@ impl ToolScene for BinAiViewerScene {
 
         // Add ground plane
         objects.push(create_ground_plane(asset_cache));
+
+        // Add axes gizmo
+        objects.extend(create_axes_gizmo(asset_cache));
 
         build_model_scene_with_debug_skeletons(
             self.model.as_ref(),
