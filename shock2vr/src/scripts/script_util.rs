@@ -1,3 +1,4 @@
+use crate::mission::entity_creator::initialize_entity_with_props;
 use crate::{runtime_props::RuntimePropTransform, util::point3_to_vec3};
 use cgmath::{Transform, point3};
 use dark::{
@@ -5,9 +6,11 @@ use dark::{
     properties::{
         Link, Links, PropClassTag, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
     },
+    ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
+use std::collections::HashMap;
 
 use super::{Effect, Message, MessagePayload};
 
