@@ -1,13 +1,14 @@
-use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
-use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER, TEXTURE_IMPORTER};
+use super::{
+    ToolScene,
+    render_helpers::{build_model_scene_with_debug_skeletons, create_ground_plane},
+};
+use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
-use engine::scene::{Scene, SceneObject, basic_material, create_plane_with_uv_scale};
-use engine::texture::TextureOptions;
+use engine::scene::Scene;
 use shock2vr::paths;
 use std::rc::Rc;
 use std::time::Duration;
-use cgmath::Matrix4;
 
 #[derive(Clone)]
 struct AnimationController {
@@ -97,16 +98,7 @@ impl ToolScene for BinAiViewerScene {
         let mut objects = self.model.to_animated_scene_objects(&self.animation_player);
 
         // Add ground plane
-        let grid_texture = asset_cache.get(&TEXTURE_IMPORTER, "grid.png");
-        let texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> = grid_texture;
-        let ground_material = basic_material::create(texture_trait, 1.0, 0.5); // 100% emissivity, 50% transparency
-        let ground_plane = SceneObject::new(ground_material, Box::new(create_plane_with_uv_scale(10.0)));
-
-        // Scale the ground plane to be larger (10x10 units)
-        let scale_transform = Matrix4::from_scale(10.0);
-        let mut ground_plane_scaled = ground_plane;
-        ground_plane_scaled.set_transform(scale_transform);
-        objects.push(ground_plane_scaled);
+        objects.push(create_ground_plane(asset_cache));
 
         build_model_scene_with_debug_skeletons(
             self.model.as_ref(),
