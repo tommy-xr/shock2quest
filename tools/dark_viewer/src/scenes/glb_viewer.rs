@@ -2,9 +2,9 @@
 
 use super::ToolScene;
 use cgmath::{Deg, Matrix4, Quaternion, Rad, SquareMatrix, vec3};
-use dark::importers::GLB_MODELS_IMPORTER;
+use dark::importers::{GLB_MODELS_IMPORTER, TEXTURE_IMPORTER};
 use engine::assets::asset_cache::AssetCache;
-use engine::scene::{Scene, SceneObject, color_material};
+use engine::scene::{Scene, SceneObject, color_material, basic_material, plane};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -47,6 +47,18 @@ impl ToolScene for GlbViewerScene {
         for scene_object in &mut scene_objects {
             scene_object.set_transform(scale_matrix * scene_object.get_transform());
         }
+
+        // Add ground plane
+        let grid_texture = asset_cache.get(&TEXTURE_IMPORTER, "grid.png");
+        let texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> = grid_texture;
+        let ground_material = basic_material::create(texture_trait, 1.0, 0.0); // 100% emissivity, 0% transparency
+        let ground_plane = SceneObject::new(ground_material, Box::new(plane::create()));
+
+        // Scale the ground plane to be larger (10x10 units)
+        let ground_scale_transform = Matrix4::from_scale(10.0);
+        let mut ground_plane_scaled = ground_plane;
+        ground_plane_scaled.set_transform(ground_scale_transform);
+        scene_objects.push(ground_plane_scaled);
 
         // Add debug skeleton visualization if requested
         if self.debug_skeletons && model.has_skeleton() {
