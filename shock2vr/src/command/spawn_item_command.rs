@@ -40,7 +40,7 @@ impl Command for SpawnItemCommand {
             // grunt og-shotgun: -175
             // grunt og-grenade: -176
             // monkey - red: -1432
-            template_id: -1432,
+            template_id: -17,
             position: pos + forward,
             orientation: rot,
             root_transform: Matrix4::identity(),

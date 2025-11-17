@@ -93,6 +93,11 @@ enum Commands {
         /// Tags to filter speech results (e.g., "+concept:spotplayer")
         tags: Vec<String>,
     },
+    /// Query environmental sound database by tags
+    Sound {
+        /// Tags to query environmental sounds (e.g., "+event:shoot", "+weapontype:pistol")
+        tags: Vec<String>,
+    },
 }
 
 fn init_logging(verbose: bool) -> Result<()> {
@@ -165,6 +170,9 @@ fn main() -> Result<()> {
         }
         Commands::Speech { voice, tags } => {
             handle_speech_command(voice.as_deref(), &tags)?;
+        }
+        Commands::Sound { tags } => {
+            handle_sound_command(&tags)?;
         }
     }
 
@@ -667,6 +675,52 @@ fn handle_speech_command(voice: Option<&str>, tags: &[String]) -> Result<()> {
         None => analyzer.list_voices(),
         Some(identifier) => analyzer.describe_voice(identifier, tags),
     }
+}
+
+fn handle_sound_command(tags: &[String]) -> Result<()> {
+    use dark::EnvSoundQuery;
+
+    // Load gamesys to access environmental sound database
+    let gamesys = data_loader::load_gamesys()?;
+
+    if tags.is_empty() {
+        println!("Usage: cargo dq sound +tag1:value1 +tag2:value2");
+        println!(
+            "Example: cargo dq sound +event:shoot +weapontype:pistol +ammotype:std +weaponmode:0"
+        );
+        return Ok(());
+    }
+
+    // Parse tags into key:value pairs
+    let mut tag_pairs = Vec::new();
+    for tag in tags {
+        if tag.starts_with('+') {
+            if let Some((key, value)) = tag[1..].split_once(':') {
+                tag_pairs.push((key, value));
+            } else {
+                println!("Warning: Tag '{}' doesn't have key:value format", tag);
+            }
+        } else {
+            println!("Warning: Tag '{}' should start with '+'", tag);
+        }
+    }
+
+    if tag_pairs.is_empty() {
+        println!("No valid tags found. Use format: +key:value");
+        return Ok(());
+    }
+
+    // Create and execute query
+    let query = EnvSoundQuery::from_tag_values(tag_pairs);
+    let result = gamesys.get_random_environmental_sound(&query);
+
+    println!("Query: {:?}", query);
+    match result {
+        Some(sound_file) => println!("Result: {}", sound_file),
+        None => println!("No matching sounds found"),
+    }
+
+    Ok(())
 }
 
 fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::SystemShock2EntityInfo) {

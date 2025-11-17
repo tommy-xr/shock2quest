@@ -20,7 +20,6 @@ impl Gamesys {
     pub fn get_random_environmental_sound(&self, query: &EnvSoundQuery) -> Option<String> {
         let tag_query = query.to_tag_query(&self.speech_db.tag_map, &self.speech_db.value_map);
         let result = self.env_tag_map.query_match_all(&tag_query);
-
         if result.is_empty() {
             return None;
         }

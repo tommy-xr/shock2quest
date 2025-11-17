@@ -18,6 +18,21 @@ use super::{
     },
 };
 
+/// Map projectile template IDs to their ammunition type tags for sound queries
+/// TODO: We need to remove hardcoded mapping!
+fn get_ammotype_from_projectile_template(template_id: i32) -> Option<&'static str> {
+    match template_id {
+        -362 => Some("std"),     // Standard Bullet
+        -33 => Some("he"),       // HE Bullet
+        -492 => Some("ap"),      // AP Bullet
+        -516 => Some("rslug"),   // Rifled Slug
+        -3422 => Some("rslug"),  // Double Slug (same ammo type)
+        -524 => Some("pellet"),  // Pellet Projectile
+        -3423 => Some("pellet"), // Double Pellet (same ammo type)
+        _ => None,
+    }
+}
+
 pub struct WeaponScript;
 impl WeaponScript {
     pub fn new() -> WeaponScript {
@@ -35,8 +50,6 @@ impl Script for WeaponScript {
     ) -> Effect {
         match msg {
             MessagePayload::TriggerPull => {
-                let sound_effect =
-                    play_environmental_sound(world, entity_id, "shoot", vec![], AudioHandle::new());
                 //Create muzzle flash
                 let muzzle_flashes =
                     get_all_links_with_template(world, entity_id, |link| match link {
@@ -50,6 +63,32 @@ impl Script for WeaponScript {
                         Link::Projectile(data) => Some(*data),
                         _ => None,
                     });
+
+                // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
+                let mut projectile_class_tags: Vec<(String, String)> =
+                    if let Some((projectile_template_id, _)) = &maybe_projectile {
+                        get_ammotype_from_projectile_template(*projectile_template_id)
+                            .map(|ammotype| vec![("ammotype".to_string(), ammotype.to_string())])
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+
+                // Add weaponmode=0 for shoot mode
+                projectile_class_tags.push(("weaponmode".to_string(), "0".to_string()));
+
+                let additional_sound_tags = projectile_class_tags
+                    .iter()
+                    .map(|(tag, value)| (tag.as_str(), value.as_str()))
+                    .collect::<Vec<_>>();
+
+                let sound_effect = play_environmental_sound(
+                    world,
+                    entity_id,
+                    "shoot",
+                    additional_sound_tags,
+                    AudioHandle::new(),
+                );
 
                 let projectile_effect = Effect::Multiple(
                     maybe_projectile
