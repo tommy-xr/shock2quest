@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::BufReader,
     rc::Rc,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -27,11 +28,11 @@ use dark::{
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropCreature, PropFrameAnimState,
-        PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags, PropParticleGroup,
-        PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
-        PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
-        PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
+        PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
+        PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
+        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
+        PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -127,6 +128,10 @@ pub struct GlobalEntityMetadata(pub HashMap<String, EntityMetadata>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateIdMap(pub HashMap<i32, WrappedEntityId>);
 
+/// Global template class tag mapping for script access
+#[derive(Unique, Clone)]
+pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
+
 impl EffectQueue {
     pub fn push(&mut self, effect: Effect) {
         self.effects.push(effect);
@@ -145,7 +150,7 @@ pub struct MissionCore {
     pub hit_boxes: HitBoxManager,
     pub rag_doll_manager: RagDollManager,
     pub debug_lines: Vec<DebugLine>,
-    pub entity_info: SystemShock2EntityInfo,
+    pub entity_info: Arc<SystemShock2EntityInfo>,
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
     pub scene_objects: Vec<SceneObject>,
@@ -212,8 +217,9 @@ impl MissionCore {
 
         let entity_info =
             ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
+        let entity_info_rc = Arc::new(entity_info);
 
-        let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info);
+        let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info_rc);
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -228,11 +234,13 @@ impl MissionCore {
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
         world.add_unique(speech_registry);
+        let template_class_tags = create_template_class_tag_map(&entity_info_rc);
+        world.add_unique(GlobalTemplateClassTags(template_class_tags));
 
         // ** Entity creation
 
         let template_to_entity_id = entity_populator.populate(
-            &entity_info,
+            &entity_info_rc,
             &abstract_mission.entity_info,
             &abstract_mission.obj_map,
             &mut world,
@@ -303,7 +311,7 @@ impl MissionCore {
                 &mut physics,
                 asset_cache,
                 &mut script_world,
-                &entity_info,
+                &entity_info_rc,
                 &abstract_mission.obj_map,
                 &template_to_entity_id,
                 CreateEntityOptions::default(),
@@ -381,7 +389,7 @@ impl MissionCore {
             left_hand,
             right_hand,
             level_name: mission,
-            entity_info,
+            entity_info: entity_info_rc.clone(),
             script_world,
             id_to_model,
             id_to_animation_player,
@@ -2187,6 +2195,30 @@ fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, Entit
     );
 
     name_to_template_id
+}
+
+/// Create a map of template IDs to their class tag data for script access
+fn create_template_class_tag_map(
+    entity_info: &Arc<SystemShock2EntityInfo>,
+) -> HashMap<i32, HashMap<String, String>> {
+    use crate::scripts::script_util::hydrate_template_component;
+
+    let mut class_tag_map = HashMap::new();
+
+    // Iterate through all template IDs to extract PropClassTag data
+    for template_id in entity_info.entity_to_properties.keys() {
+        if let Some(class_tag) =
+            hydrate_template_component::<PropClassTag>(*template_id, entity_info)
+        {
+            let mut tag_map = HashMap::new();
+            for (key, value) in class_tag.class_tags() {
+                tag_map.insert(key.to_string(), value.to_string());
+            }
+            class_tag_map.insert(*template_id, tag_map);
+        }
+    }
+
+    class_tag_map
 }
 
 ///

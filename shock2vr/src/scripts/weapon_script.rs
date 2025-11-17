@@ -1,10 +1,10 @@
 use cgmath::{Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform, point3};
 use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::entity_creator::CreateEntityOptions,
+    mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
     physics::PhysicsWorld,
     runtime_props::{RuntimePropTransform, RuntimePropVhots},
     vr_config,
@@ -18,19 +18,13 @@ use super::{
     },
 };
 
-/// Map projectile template IDs to their ammunition type tags for sound queries
-/// TODO: We need to remove hardcoded mapping!
-fn get_ammotype_from_projectile_template(template_id: i32) -> Option<&'static str> {
-    match template_id {
-        -362 => Some("std"),     // Standard Bullet
-        -33 => Some("he"),       // HE Bullet
-        -492 => Some("ap"),      // AP Bullet
-        -516 => Some("rslug"),   // Rifled Slug
-        -3422 => Some("rslug"),  // Double Slug (same ammo type)
-        -524 => Some("pellet"),  // Pellet Projectile
-        -3423 => Some("pellet"), // Double Pellet (same ammo type)
-        _ => None,
-    }
+/// Get ammunition type from projectile template using pre-populated class tag map
+fn get_ammotype_from_projectile_template(
+    template_id: i32,
+    class_tag_map: &std::collections::HashMap<i32, std::collections::HashMap<String, String>>,
+) -> Option<String> {
+    let template_tags = class_tag_map.get(&template_id)?;
+    template_tags.get("ammotype").cloned()
 }
 
 pub struct WeaponScript;
@@ -67,9 +61,15 @@ impl Script for WeaponScript {
                 // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
                 let mut projectile_class_tags: Vec<(String, String)> =
                     if let Some((projectile_template_id, _)) = &maybe_projectile {
-                        get_ammotype_from_projectile_template(*projectile_template_id)
-                            .map(|ammotype| vec![("ammotype".to_string(), ammotype.to_string())])
-                            .unwrap_or_default()
+                        let class_tags = world
+                            .borrow::<UniqueView<GlobalTemplateClassTags>>()
+                            .unwrap();
+                        get_ammotype_from_projectile_template(
+                            *projectile_template_id,
+                            &class_tags.0,
+                        )
+                        .map(|ammotype| vec![("ammotype".to_string(), ammotype)])
+                        .unwrap_or_default()
                     } else {
                         Vec::new()
                     };

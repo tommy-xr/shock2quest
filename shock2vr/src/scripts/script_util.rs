@@ -1,3 +1,4 @@
+use crate::mission::entity_creator::initialize_entity_with_props;
 use crate::{runtime_props::RuntimePropTransform, util::point3_to_vec3};
 use cgmath::{Transform, point3};
 use dark::{
@@ -5,9 +6,11 @@ use dark::{
     properties::{
         Link, Links, PropClassTag, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
     },
+    ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
+use std::collections::HashMap;
 
 use super::{Effect, Message, MessagePayload};
 
@@ -241,6 +244,37 @@ pub fn send_to_all_switch_links(
         .collect::<Vec<Effect>>();
 
     Effect::Combined { effects }
+}
+
+/// Hydrate a single template in a scratch world, grab a component, and drop it again.
+/// Useful for debugging/inspecting template properties without spawning into the main world.
+pub fn hydrate_template_component<T>(
+    template_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) -> Option<T>
+where
+    T: Component + Clone + Send + Sync,
+{
+    let mut temp_world = World::new();
+    let dummy_entity = temp_world.add_entity(());
+
+    initialize_entity_with_props(
+        template_id,
+        entity_info,
+        &mut temp_world,
+        dummy_entity,
+        &HashMap::new(), // empty obj_name_map for utility function
+    );
+
+    // Try to get the component from the hydrated entity
+    let v_component = temp_world.borrow::<View<T>>();
+    if let Ok(view) = v_component {
+        if let Ok(component) = view.get(dummy_entity) {
+            return Some(component.clone());
+        }
+    }
+
+    None
 }
 pub fn invert(msg: MessagePayload) -> MessagePayload {
     match msg {
