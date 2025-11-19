@@ -2,7 +2,9 @@
 
 use super::{
     ToolScene,
-    render_helpers::{build_model_scene_with_debug_skeletons, create_ground_plane},
+    render_helpers::{
+        build_model_scene_with_debug_skeletons, create_axes_gizmo, create_ground_plane,
+    },
 };
 use cgmath::{Deg, Matrix4, Quaternion, Rad, vec3};
 use dark::importers::MODELS_IMPORTER;
@@ -65,6 +67,9 @@ impl ToolScene for BinObjViewerScene {
 
         // Add ground plane
         turret_scene_objects.push(create_ground_plane(asset_cache));
+
+        // Add axes gizmo
+        turret_scene_objects.extend(create_axes_gizmo(asset_cache));
 
         build_model_scene_with_debug_skeletons(
             turret.as_ref(),
