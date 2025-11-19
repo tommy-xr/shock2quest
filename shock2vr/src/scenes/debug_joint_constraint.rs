@@ -17,8 +17,7 @@ use crate::{
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     physics::CollisionGroup,
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks,
-        HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
     time::Time,
 };

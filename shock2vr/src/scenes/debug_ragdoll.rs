@@ -12,8 +12,7 @@ use crate::{
         mission_core::MissionCore,
     },
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks,
-        HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
     scripts::Effect,
     time::Time,
