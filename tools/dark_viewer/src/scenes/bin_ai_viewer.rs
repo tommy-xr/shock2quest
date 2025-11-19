@@ -1,4 +1,7 @@
-use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
+use super::{
+    ToolScene,
+    render_helpers::{build_model_scene_with_debug_skeletons, create_ground_plane},
+};
 use dark::importers::{ANIMATION_CLIP_IMPORTER, MODELS_IMPORTER};
 use dark::motion::{AnimationClip, AnimationEvent, AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
@@ -91,8 +94,12 @@ impl ToolScene for BinAiViewerScene {
         }
     }
 
-    fn render(&self, _asset_cache: &mut AssetCache) -> Scene {
-        let objects = self.model.to_animated_scene_objects(&self.animation_player);
+    fn render(&self, asset_cache: &mut AssetCache) -> Scene {
+        let mut objects = self.model.to_animated_scene_objects(&self.animation_player);
+
+        // Add ground plane
+        objects.push(create_ground_plane(asset_cache));
+
         build_model_scene_with_debug_skeletons(
             self.model.as_ref(),
             Some(&self.animation_player),

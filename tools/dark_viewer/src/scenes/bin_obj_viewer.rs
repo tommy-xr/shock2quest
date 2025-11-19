@@ -1,6 +1,9 @@
 #![allow(unused_imports)]
 
-use super::{ToolScene, render_helpers::build_model_scene_with_debug_skeletons};
+use super::{
+    ToolScene,
+    render_helpers::{build_model_scene_with_debug_skeletons, create_ground_plane},
+};
 use cgmath::{Deg, Matrix4, Quaternion, Rad, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::motion::AnimationPlayer;
@@ -58,7 +61,10 @@ impl ToolScene for BinObjViewerScene {
 
     fn render(&self, asset_cache: &mut AssetCache) -> Scene {
         let turret = asset_cache.get(&MODELS_IMPORTER, &self.model_name);
-        let turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
+        let mut turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
+
+        // Add ground plane
+        turret_scene_objects.push(create_ground_plane(asset_cache));
 
         build_model_scene_with_debug_skeletons(
             turret.as_ref(),

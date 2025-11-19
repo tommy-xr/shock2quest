@@ -14,7 +14,10 @@ pub struct Plane {
 }
 
 pub fn create() -> Plane {
-    let uv_scale = 100.0;
+    create_with_uv_scale(100.0)
+}
+
+pub fn create_with_uv_scale(uv_scale: f32) -> Plane {
     let vertices: [f32; 30] = [
         -0.5, 0.0, -0.5, 0.0, 0.0, 0.5, 0.0, -0.5, uv_scale, 0.0, 0.5, 0.0, 0.5, uv_scale,
         uv_scale, -0.5, 0.0, -0.5, 0.0, 0.0, -0.5, 0.0, 0.5, 0.0, uv_scale, 0.5, 0.0, 0.5,
