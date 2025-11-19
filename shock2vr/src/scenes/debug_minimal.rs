@@ -15,8 +15,7 @@ impl DebugMinimalScene {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Self {
-        let builder = DebugSceneBuilder::new("debug_minimal")
-            .with_default_floor();
+        let builder = DebugSceneBuilder::new("debug_minimal").with_default_floor();
 
         let build_options = DebugSceneBuildOptions {
             global_context,

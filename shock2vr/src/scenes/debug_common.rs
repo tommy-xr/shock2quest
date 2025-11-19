@@ -76,7 +76,10 @@ impl DebugSceneBuilder {
         const DEFAULT_FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
         const DEFAULT_FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 
-        self.with_floor(DebugSceneFloor::ss2_units(DEFAULT_FLOOR_SIZE, DEFAULT_FLOOR_COLOR))
+        self.with_floor(DebugSceneFloor::ss2_units(
+            DEFAULT_FLOOR_SIZE,
+            DEFAULT_FLOOR_COLOR,
+        ))
     }
 
     /// Reset to the default spawn location (5 units above origin, facing east)
