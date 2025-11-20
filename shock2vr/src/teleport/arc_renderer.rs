@@ -1,8 +1,8 @@
-use cgmath::{Matrix4, Vector3, vec3, Quaternion, Rotation3, Deg};
-use engine::scene::{SceneObject, VertexPosition, BillboardMaterial, basic_material, quad};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3, vec3};
+use engine::scene::{BillboardMaterial, SceneObject, VertexPosition, basic_material, quad};
 use engine::texture_format::TextureFormat;
-use std::sync::Arc;
 use once_cell::sync::OnceCell;
+use std::sync::Arc;
 
 use super::ArcTrajectory;
 
@@ -66,7 +66,6 @@ impl ArcRenderer {
         let visual_arc = Self::generate_smooth_arc(trajectory);
         let mut particles = Vec::new();
 
-
         // Get or create a color-tinted particle texture
         let particle_texture_arc = Self::get_tinted_particle_texture(color);
 
@@ -79,13 +78,14 @@ impl ArcRenderer {
                 let alpha = 0.4 + alpha_ratio * 0.6; // Range from 0.4 to 1.0 for better visibility
 
                 // Create billboard material with enhanced emissivity for cyberpunk glow
-                let particle_texture: Arc<dyn engine::texture::TextureTrait> = particle_texture_arc.clone();
+                let particle_texture: Arc<dyn engine::texture::TextureTrait> =
+                    particle_texture_arc.clone();
                 let emissivity = (color.x.max(color.y).max(color.z) * 1.5).min(1.0); // Boost emissivity for glow effect
                 let material = BillboardMaterial::create(
                     particle_texture,
-                    emissivity,   // Enhanced glow
-                    1.0 - alpha,  // transparency (1.0 = fully transparent)
-                    0.06,         // Slightly larger particle size (6cm diameter)
+                    emissivity,  // Enhanced glow
+                    1.0 - alpha, // transparency (1.0 = fully transparent)
+                    0.06,        // Slightly larger particle size (6cm diameter)
                 );
 
                 // Create scene object for this particle
@@ -125,18 +125,14 @@ impl ArcRenderer {
         // Scale and position the ring with pulsing animation
         let base_ring_size = config.landing_scale.x.max(config.landing_scale.z); // Use larger of x or z
         let pulse_amplitude = 0.15; // 15% size variation
-        let pulse_frequency = 2.5;  // Pulses per second
+        let pulse_frequency = 2.5; // Pulses per second
         let pulse_factor = 1.0 + pulse_amplitude * (animation_time * pulse_frequency).sin();
         let animated_size = base_ring_size * pulse_factor;
 
         // Orient the quad to face upward (rotate 90 degrees around X-axis)
-        let rotation = Matrix4::from(Quaternion::from_axis_angle(
-            vec3(1.0, 0.0, 0.0),
-            Deg(-90.0)
-        ));
-        let translation = Matrix4::from_translation(
-            position + vec3(0.0, config.landing_height_offset, 0.0)
-        );
+        let rotation = Matrix4::from(Quaternion::from_axis_angle(vec3(1.0, 0.0, 0.0), Deg(-90.0)));
+        let translation =
+            Matrix4::from_translation(position + vec3(0.0, config.landing_height_offset, 0.0));
         let scale = Matrix4::from_scale(animated_size);
         target.set_transform(translation * rotation * scale);
         target.set_depth_write(false);
@@ -144,13 +140,14 @@ impl ArcRenderer {
         target
     }
 
-
     /// Get or create a color-tinted version of the ring texture
     fn get_tinted_ring_texture(color: Vector3<f32>) -> Arc<engine::texture::Texture> {
         use std::collections::HashMap;
 
         // Cache tinted textures by color (quantized to avoid infinite cache growth)
-        static TINTED_TEXTURES: OnceCell<std::sync::Mutex<HashMap<(u8, u8, u8), Arc<engine::texture::Texture>>>> = OnceCell::new();
+        static TINTED_TEXTURES: OnceCell<
+            std::sync::Mutex<HashMap<(u8, u8, u8), Arc<engine::texture::Texture>>>,
+        > = OnceCell::new();
         let cache = TINTED_TEXTURES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
 
         // Quantize color to reduce cache size
@@ -239,7 +236,8 @@ impl ArcRenderer {
 
                 let alpha = if distance <= outer_radius && distance >= inner_radius {
                     // Create a ring shape with soft edges
-                    let outer_fade = 1.0 - ((distance - outer_radius + 10.0) / 10.0).max(0.0).min(1.0);
+                    let outer_fade =
+                        1.0 - ((distance - outer_radius + 10.0) / 10.0).max(0.0).min(1.0);
                     let inner_fade = ((distance - inner_radius + 10.0) / 10.0).max(0.0).min(1.0);
                     (255.0 * outer_fade * inner_fade) as u8
                 } else {
@@ -247,7 +245,7 @@ impl ArcRenderer {
                 };
 
                 let index = ((y * size + x) * 4) as usize;
-                texture_data.bytes[index] = 255;     // Red
+                texture_data.bytes[index] = 255; // Red
                 texture_data.bytes[index + 1] = 255; // Green
                 texture_data.bytes[index + 2] = 255; // Blue
                 texture_data.bytes[index + 3] = alpha; // Alpha
@@ -277,8 +275,8 @@ impl ArcRenderer {
         let mut arc_points = Vec::with_capacity(num_points);
 
         // Calculate arc parameters
-        let horizontal_distance = ((end_point.x - start_point.x).powi(2) +
-                                 (end_point.z - start_point.z).powi(2)).sqrt();
+        let horizontal_distance =
+            ((end_point.x - start_point.x).powi(2) + (end_point.z - start_point.z).powi(2)).sqrt();
         let height_difference = end_point.y - start_point.y;
 
         // Create a parabolic arc that goes through start and end points
@@ -305,7 +303,9 @@ impl ArcRenderer {
         use std::collections::HashMap;
 
         // Cache tinted particle textures by color (quantized to avoid infinite cache growth)
-        static TINTED_PARTICLE_TEXTURES: OnceCell<std::sync::Mutex<HashMap<(u8, u8, u8), Arc<engine::texture::Texture>>>> = OnceCell::new();
+        static TINTED_PARTICLE_TEXTURES: OnceCell<
+            std::sync::Mutex<HashMap<(u8, u8, u8), Arc<engine::texture::Texture>>>,
+        > = OnceCell::new();
         let cache = TINTED_PARTICLE_TEXTURES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
 
         // Quantize color to reduce cache size
@@ -358,7 +358,7 @@ impl ArcRenderer {
 
                 let index = ((y * size + x) * 4) as usize;
                 // Apply color tinting to create colored particles
-                texture_data.bytes[index] = (255.0 * color.x) as u8;     // Red channel
+                texture_data.bytes[index] = (255.0 * color.x) as u8; // Red channel
                 texture_data.bytes[index + 1] = (255.0 * color.y) as u8; // Green channel
                 texture_data.bytes[index + 2] = (255.0 * color.z) as u8; // Blue channel
                 texture_data.bytes[index + 3] = alpha; // Alpha
