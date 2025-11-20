@@ -104,6 +104,7 @@ impl Skeleton {
                 &animation_transforms,
                 &mut global_transforms,
                 &bones,
+                Matrix4::identity(),
             );
         }
 
@@ -138,6 +139,7 @@ impl Skeleton {
                 &animation_transforms,
                 &mut global_transforms,
                 &bones,
+                Matrix4::identity(),
             );
         }
 
@@ -162,6 +164,7 @@ impl Skeleton {
                 &animation_transforms,
                 &mut global_transforms,
                 &bones,
+                Matrix4::identity(),
             );
         }
 
@@ -387,6 +390,7 @@ fn calc_and_cache_global_transform(
     animation_transforms: &HashMap<JointId, Matrix4<f32>>,
     global_transforms: &mut HashMap<JointId, Matrix4<f32>>,
     bones: &Vec<Bone>,
+    root_transform: Matrix4<f32>,
 ) -> Matrix4<f32> {
     match global_transforms.get(&bone) {
         Some(xform) => *xform,
@@ -400,12 +404,13 @@ fn calc_and_cache_global_transform(
             };
 
             let parent_transform = match local_bone.parent_id {
-                None => Matrix4::identity(),
+                None => root_transform,
                 Some(parent_id) => calc_and_cache_global_transform(
                     parent_id,
                     animation_transforms,
                     global_transforms,
                     bones,
+                    root_transform,
                 ),
             };
 
@@ -457,6 +462,7 @@ pub fn animate(
             &animation_transforms,
             &mut global_transforms,
             &bones,
+            Matrix4::identity(),
         );
     }
 
