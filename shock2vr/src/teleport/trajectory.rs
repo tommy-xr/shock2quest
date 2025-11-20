@@ -135,7 +135,6 @@ impl ArcTrajectory {
         // 1. Must be on same level or reasonable height difference
         let height_diff = (landing_pos.y - start_pos.y).abs();
         if height_diff > 2.0 {
-            println!("rejected landing position if too high");
             return false;
         }
 
