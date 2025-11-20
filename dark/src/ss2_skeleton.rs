@@ -115,52 +115,6 @@ impl Skeleton {
         }
     }
 
-    pub fn animate(
-        base_skeleton: &Skeleton,
-        animation_clip: &AnimationClip,
-        frame: u32,
-    ) -> Skeleton {
-        let bones = base_skeleton.bones.clone();
-
-        let normalized_frame = frame % animation_clip.num_frames;
-
-        let animations = &animation_clip.joint_to_frame;
-        let mut animation_transforms = HashMap::new();
-        for key in animations {
-            let (joint, frames) = key;
-            animation_transforms.insert(*joint, frames[normalized_frame as usize]);
-        }
-
-        // Get the root transform for this frame
-        let root_transform = if animation_clip.root_transforms.is_empty() {
-            Matrix4::identity()
-        } else {
-            animation_clip.root_transforms[normalized_frame as usize]
-        };
-
-        println!(
-            "Using root transform for frame: {} - {:?}",
-            normalized_frame, root_transform.w
-        );
-
-        let mut global_transforms = HashMap::new();
-
-        for bone in &bones {
-            let _ignored = calc_and_cache_global_transform(
-                bone.joint_id,
-                &animation_transforms,
-                &mut global_transforms,
-                &bones,
-                root_transform,
-            );
-        }
-
-        Skeleton {
-            bones,
-            animation_transforms,
-            global_transforms,
-        }
-    }
 
     pub fn set_joint_transforms(
         base_skeleton: &Skeleton,
