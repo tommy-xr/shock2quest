@@ -72,7 +72,12 @@ pub fn create_initial_scene(
 
     if options.mission.eq_ignore_ascii_case("debug_minimal") {
         return SceneInitResult {
-            scene: Box::new(DebugMinimalScene::new()),
+            scene: Box::new(DebugMinimalScene::create(
+                global_context,
+                options,
+                asset_cache,
+                audio_context,
+            )),
             mission_save_data: HashMap::new(),
         };
     }

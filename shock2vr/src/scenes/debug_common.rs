@@ -71,6 +71,25 @@ impl DebugSceneBuilder {
         self
     }
 
+    /// Add a standard floor suitable for most debug scenes (120x120 units, dark blue-gray)
+    pub fn with_default_floor(self) -> Self {
+        const DEFAULT_FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
+        const DEFAULT_FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
+
+        self.with_floor(DebugSceneFloor::ss2_units(
+            DEFAULT_FLOOR_SIZE,
+            DEFAULT_FLOOR_COLOR,
+        ))
+    }
+
+    /// Reset to the default spawn location (5 units above origin, facing east)
+    pub fn with_default_spawn_location(self) -> Self {
+        self.with_spawn_location(SpawnLocation::PositionRotation(
+            vec3(0.0, 5.0 / SCALE_FACTOR, 0.0 / SCALE_FACTOR),
+            Quaternion::from_angle_y(Deg(90.0)),
+        ))
+    }
+
     pub fn build(self, options: DebugSceneBuildOptions<'_>) -> DebugScene {
         DebugScene {
             core: self.build_core(options),
