@@ -1,4 +1,4 @@
-use cgmath::Vector3;
+use cgmath::{Quaternion, Rotation, Vector3};
 
 use crate::{
     input_context::{Hand, InputContext},
@@ -87,17 +87,27 @@ impl TeleportSystem {
     }
 
     /// Update teleport system based on input context
-    pub fn update(&mut self, input_context: &InputContext) -> Vec<Effect> {
+    pub fn update(
+        &mut self,
+        input_context: &InputContext,
+        player_position: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+    ) -> Vec<Effect> {
         if !self.config.enabled {
             return vec![Effect::NoEffect];
         }
 
         let mut effects = Vec::new();
 
+        let left_hand_world =
+            Self::to_world_hand(&input_context.left_hand, player_position, player_rotation);
+        let right_hand_world =
+            Self::to_world_hand(&input_context.right_hand, player_position, player_rotation);
+
         // Update left hand
         if let Some(effect) = Self::update_hand_static(
             &self.config,
-            &input_context.left_hand,
+            &left_hand_world,
             &mut self.left_hand_state,
             Handedness::Left,
         ) {
@@ -107,7 +117,7 @@ impl TeleportSystem {
         // Update right hand
         if let Some(effect) = Self::update_hand_static(
             &self.config,
-            &input_context.right_hand,
+            &right_hand_world,
             &mut self.right_hand_state,
             Handedness::Right,
         ) {
@@ -228,5 +238,20 @@ impl TeleportSystem {
     /// Update configuration
     pub fn set_config(&mut self, config: TeleportConfig) {
         self.config = config;
+    }
+
+    fn to_world_hand(
+        hand: &Hand,
+        player_position: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+    ) -> Hand {
+        Hand {
+            position: player_position + player_rotation.rotate_vector(hand.position),
+            rotation: player_rotation * hand.rotation,
+            thumbstick: hand.thumbstick,
+            trigger_value: hand.trigger_value,
+            squeeze_value: hand.squeeze_value,
+            a_value: hand.a_value,
+        }
     }
 }
