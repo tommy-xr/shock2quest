@@ -67,44 +67,8 @@ impl ArcRenderer {
         let mut particles = Vec::new();
 
 
-        // Get or create the particle texture
-        static PARTICLE_TEXTURE: OnceCell<Arc<engine::texture::Texture>> = OnceCell::new();
-        let particle_texture_arc = PARTICLE_TEXTURE.get_or_init(|| {
-            // Create a simple circular particle texture
-            let size = 64u32;
-            let center = size as f32 / 2.0;
-            let radius = center * 0.8;
-
-            let mut texture_data = engine::texture_format::RawTextureData {
-                bytes: vec![0; (size * size * 4) as usize],
-                width: size,
-                height: size,
-                format: engine::texture_format::PixelFormat::RGBA,
-            };
-
-            for x in 0..size {
-                for y in 0..size {
-                    let dx = x as f32 - center;
-                    let dy = y as f32 - center;
-                    let distance = (dx * dx + dy * dy).sqrt();
-
-                    let alpha = if distance <= radius {
-                        let ratio = 1.0 - (distance / radius);
-                        (255.0 * ratio * ratio) as u8
-                    } else {
-                        0
-                    };
-
-                    let index = ((y * size + x) * 4) as usize;
-                    texture_data.bytes[index] = 255;     // Red
-                    texture_data.bytes[index + 1] = 255; // Green
-                    texture_data.bytes[index + 2] = 255; // Blue
-                    texture_data.bytes[index + 3] = alpha; // Alpha
-                }
-            }
-
-            Arc::new(engine::texture::init_from_memory(texture_data))
-        });
+        // Get or create a color-tinted particle texture
+        let particle_texture_arc = Self::get_tinted_particle_texture(color);
 
         // Create particles at sampled positions along the visual arc
         let sample_interval = 2; // Take every 2nd point for good density
@@ -334,5 +298,73 @@ impl ArcRenderer {
         }
 
         arc_points
+    }
+
+    /// Get or create a color-tinted particle texture for arc visualization
+    fn get_tinted_particle_texture(color: Vector3<f32>) -> Arc<engine::texture::Texture> {
+        use std::collections::HashMap;
+
+        // Cache tinted particle textures by color (quantized to avoid infinite cache growth)
+        static TINTED_PARTICLE_TEXTURES: OnceCell<std::sync::Mutex<HashMap<(u8, u8, u8), Arc<engine::texture::Texture>>>> = OnceCell::new();
+        let cache = TINTED_PARTICLE_TEXTURES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+
+        // Quantize color to reduce cache size
+        let color_key = (
+            (color.x * 255.0) as u8,
+            (color.y * 255.0) as u8,
+            (color.z * 255.0) as u8,
+        );
+
+        if let Ok(mut cache_guard) = cache.lock() {
+            if let Some(texture) = cache_guard.get(&color_key) {
+                return texture.clone();
+            }
+
+            // Create new tinted particle texture
+            let tinted_texture = Self::create_tinted_particle_texture(color);
+            cache_guard.insert(color_key, tinted_texture.clone());
+            tinted_texture
+        } else {
+            // Fallback if mutex is poisoned
+            Self::create_tinted_particle_texture(color)
+        }
+    }
+
+    /// Create a color-tinted particle texture
+    fn create_tinted_particle_texture(color: Vector3<f32>) -> Arc<engine::texture::Texture> {
+        let size = 64u32;
+        let center = size as f32 / 2.0;
+        let radius = center * 0.8;
+
+        let mut texture_data = engine::texture_format::RawTextureData {
+            bytes: vec![0; (size * size * 4) as usize],
+            width: size,
+            height: size,
+            format: engine::texture_format::PixelFormat::RGBA,
+        };
+
+        for x in 0..size {
+            for y in 0..size {
+                let dx = x as f32 - center;
+                let dy = y as f32 - center;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                let alpha = if distance <= radius {
+                    let ratio = 1.0 - (distance / radius);
+                    (255.0 * ratio * ratio) as u8
+                } else {
+                    0
+                };
+
+                let index = ((y * size + x) * 4) as usize;
+                // Apply color tinting to create colored particles
+                texture_data.bytes[index] = (255.0 * color.x) as u8;     // Red channel
+                texture_data.bytes[index + 1] = (255.0 * color.y) as u8; // Green channel
+                texture_data.bytes[index + 2] = (255.0 * color.z) as u8; // Blue channel
+                texture_data.bytes[index + 3] = alpha; // Alpha
+            }
+        }
+
+        Arc::new(engine::texture::init_from_memory(texture_data))
     }
 }
