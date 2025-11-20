@@ -80,7 +80,7 @@ use crate::{
         speech_registry::SpeechVoiceRegistry,
     },
     systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
-    teleport::TeleportSystem,
+    teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::{VirtualHand, VirtualHandEffect},
@@ -426,19 +426,21 @@ impl MissionCore {
         self.world.add_unique(time.clone());
         let mut effects = command_effects;
 
-        // Update teleport system and add effects (only if experimental flag enabled)
-        if game_options.experimental_features.contains("teleport") {
-            let teleport_effects = self.teleport_system.update(input_context);
-            effects.extend(teleport_effects);
-        }
-
-        // Player movement logic
-        let delta_time = time.elapsed.as_secs_f32();
         let player = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             player_info.clone()
         };
 
+        // Update teleport system and add effects (only if experimental flag enabled)
+        if game_options.experimental_features.contains("teleport") {
+            let teleport_effects =
+                self.teleport_system
+                    .update(input_context, player.pos, player.rotation);
+            effects.extend(teleport_effects);
+        }
+
+        // Player movement logic
+        let delta_time = time.elapsed.as_secs_f32();
         let rot_speed = 2.0;
         let additional_rotation = cgmath::Quaternion::from_axis_angle(
             cgmath::vec3(0.0, 1.0, 0.0),
@@ -1906,6 +1908,19 @@ impl MissionCore {
         // Render inventory
         let inventory_objs = PlayerInventoryEntity::render(&self.world);
         scene.extend(inventory_objs);
+
+        // Render teleport arc + landing indicator
+        if options.experimental_features.contains("teleport")
+            && self.teleport_system.get_config().enabled
+        {
+            let style = TeleportVisualStyle::default();
+            let mut teleport_visuals = TeleportUI::build_visuals(
+                self.teleport_system.get_left_hand_state(),
+                self.teleport_system.get_right_hand_state(),
+                &style,
+            );
+            scene.append(&mut teleport_visuals);
+        }
 
         // Render debug physics
         if options.debug_physics {
