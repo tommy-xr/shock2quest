@@ -104,40 +104,7 @@ impl Skeleton {
                 &animation_transforms,
                 &mut global_transforms,
                 &bones,
-            );
-        }
-
-        Skeleton {
-            bones,
-            animation_transforms,
-            global_transforms,
-        }
-    }
-
-    pub fn animate(
-        base_skeleton: &Skeleton,
-        animation_clip: &AnimationClip,
-        frame: u32,
-    ) -> Skeleton {
-        let bones = base_skeleton.bones.clone();
-
-        let normalized_frame = frame % animation_clip.num_frames;
-
-        let animations = &animation_clip.joint_to_frame;
-        let mut animation_transforms = HashMap::new();
-        for key in animations {
-            let (joint, frames) = key;
-            animation_transforms.insert(*joint, frames[normalized_frame as usize]);
-        }
-
-        let mut global_transforms = HashMap::new();
-
-        for bone in &bones {
-            let _ignored = calc_and_cache_global_transform(
-                bone.joint_id,
-                &animation_transforms,
-                &mut global_transforms,
-                &bones,
+                Matrix4::identity(),
             );
         }
 
@@ -162,6 +129,7 @@ impl Skeleton {
                 &animation_transforms,
                 &mut global_transforms,
                 &bones,
+                Matrix4::identity(),
             );
         }
 
@@ -387,6 +355,7 @@ fn calc_and_cache_global_transform(
     animation_transforms: &HashMap<JointId, Matrix4<f32>>,
     global_transforms: &mut HashMap<JointId, Matrix4<f32>>,
     bones: &Vec<Bone>,
+    root_transform: Matrix4<f32>,
 ) -> Matrix4<f32> {
     match global_transforms.get(&bone) {
         Some(xform) => *xform,
@@ -400,12 +369,13 @@ fn calc_and_cache_global_transform(
             };
 
             let parent_transform = match local_bone.parent_id {
-                None => Matrix4::identity(),
+                None => root_transform,
                 Some(parent_id) => calc_and_cache_global_transform(
                     parent_id,
                     animation_transforms,
                     global_transforms,
                     bones,
+                    root_transform,
                 ),
             };
 
@@ -430,7 +400,7 @@ pub fn animate(
 
     let mut animation_transforms = HashMap::new();
 
-    if let Some(AnimationInfo {
+    let root_transform = if let Some(AnimationInfo {
         animation_clip,
         frame,
     }) = animation_info
@@ -441,7 +411,17 @@ pub fn animate(
             let (joint, frames) = key;
             animation_transforms.insert(*joint, frames[normalized_frame as usize]);
         }
-    }
+
+        // Get the root transform for this frame
+        if animation_clip.root_transforms.is_empty() {
+            Matrix4::identity()
+        } else {
+            let root_transform = animation_clip.root_transforms[normalized_frame as usize];
+            root_transform
+        }
+    } else {
+        Matrix4::identity()
+    };
 
     // Have joint transforms completely override animation transforms
     // TODO: Are there cases where joint transforms need to be used in the context of an animation transform? Maybe head rotation?
@@ -457,6 +437,7 @@ pub fn animate(
             &animation_transforms,
             &mut global_transforms,
             &bones,
+            root_transform,
         );
     }
 

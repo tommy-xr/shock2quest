@@ -16,6 +16,7 @@ pub struct AnimationClip {
     pub sliding_velocity: Vector3<f32>,
     pub translation: Vector3<f32>,
     pub joint_to_frame: HashMap<JointId, Vec<Matrix4<f32>>>,
+    pub root_transforms: Vec<Matrix4<f32>>, // root transforms per frame
     pub motion_flags: Vec<FrameFlags>,
     pub name: Option<String>, // Added for GLB animation support
 }
@@ -61,6 +62,7 @@ impl AnimationClip {
             duration,
             blend_length: Duration::from_millis(motion_stuff.blend_length as u64),
             joint_to_frame,
+            root_transforms: motion_clip.root_transforms.clone(),
             time_per_frame,
             motion_flags: mps_motion.motion_flags.clone(),
             sliding_velocity,
