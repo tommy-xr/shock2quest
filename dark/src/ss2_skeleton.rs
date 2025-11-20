@@ -131,6 +131,18 @@ impl Skeleton {
             animation_transforms.insert(*joint, frames[normalized_frame as usize]);
         }
 
+        // Get the root transform for this frame
+        let root_transform = if animation_clip.root_transforms.is_empty() {
+            Matrix4::identity()
+        } else {
+            animation_clip.root_transforms[normalized_frame as usize]
+        };
+
+        println!(
+            "Using root transform for frame: {} - {:?}",
+            normalized_frame, root_transform.w
+        );
+
         let mut global_transforms = HashMap::new();
 
         for bone in &bones {
@@ -139,7 +151,7 @@ impl Skeleton {
                 &animation_transforms,
                 &mut global_transforms,
                 &bones,
-                Matrix4::identity(),
+                root_transform,
             );
         }
 
@@ -435,7 +447,7 @@ pub fn animate(
 
     let mut animation_transforms = HashMap::new();
 
-    if let Some(AnimationInfo {
+    let root_transform = if let Some(AnimationInfo {
         animation_clip,
         frame,
     }) = animation_info
@@ -446,7 +458,21 @@ pub fn animate(
             let (joint, frames) = key;
             animation_transforms.insert(*joint, frames[normalized_frame as usize]);
         }
-    }
+
+        // Get the root transform for this frame
+        if animation_clip.root_transforms.is_empty() {
+            Matrix4::identity()
+        } else {
+            let root_transform = animation_clip.root_transforms[normalized_frame as usize];
+            println!(
+                "Using root transform for frame: {} - {:?}",
+                normalized_frame, root_transform.w
+            );
+            root_transform
+        }
+    } else {
+        Matrix4::identity()
+    };
 
     // Have joint transforms completely override animation transforms
     // TODO: Are there cases where joint transforms need to be used in the context of an animation transform? Maybe head rotation?
@@ -462,7 +488,7 @@ pub fn animate(
             &animation_transforms,
             &mut global_transforms,
             &bones,
-            Matrix4::identity(),
+            root_transform,
         );
     }
 

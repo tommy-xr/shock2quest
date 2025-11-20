@@ -1,8 +1,9 @@
 use std::io::{self, SeekFrom};
 
-use cgmath::Matrix4;
+use cgmath::{Matrix4, vec3};
 
 use crate::{
+    SCALE_FACTOR,
     motion::MpsMotion,
     ss2_common::{read_array_u32, read_quat, read_u32, read_vec3},
 };
@@ -10,7 +11,8 @@ use crate::{
 #[derive(Debug)]
 pub struct MotionClip {
     pub num_joints: u32,
-    pub animation: Vec<Vec<Matrix4<f32>>>, // joint -> animations across frames
+    pub root_transforms: Vec<Matrix4<f32>>, // root transforms across frames
+    pub animation: Vec<Vec<Matrix4<f32>>>,  // joint -> animations across frames
 }
 
 impl MotionClip {
@@ -24,11 +26,16 @@ impl MotionClip {
         // Read transforms for root joint
         let mut animation = Vec::new();
         let mut transforms = Vec::new();
-        for _ in 0..num_frames {
+        for frame in 0..num_frames {
             let xform = read_vec3(reader);
-            transforms.push(Matrix4::from_translation(xform));
+            println!("xform: {}:{:?}", frame, xform);
+            transforms.push(Matrix4::from_translation(vec3(
+                0.0,
+                xform.y / SCALE_FACTOR,
+                0.0,
+            )));
         }
-        animation.push(transforms);
+        animation.push(transforms.clone());
 
         // animation for each joint
         for joint in 1..num_joints {
@@ -43,6 +50,7 @@ impl MotionClip {
         }
 
         MotionClip {
+            root_transforms: transforms,
             num_joints,
             animation,
         }
