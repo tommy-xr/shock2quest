@@ -115,7 +115,6 @@ impl Skeleton {
         }
     }
 
-
     pub fn set_joint_transforms(
         base_skeleton: &Skeleton,
         joint_transforms: &HashMap<JointId, Matrix4<f32>>,
@@ -418,10 +417,6 @@ pub fn animate(
             Matrix4::identity()
         } else {
             let root_transform = animation_clip.root_transforms[normalized_frame as usize];
-            println!(
-                "Using root transform for frame: {} - {:?}",
-                normalized_frame, root_transform.w
-            );
             root_transform
         }
     } else {

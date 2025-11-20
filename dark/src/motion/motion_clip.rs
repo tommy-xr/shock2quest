@@ -1,6 +1,6 @@
 use std::io::{self, SeekFrom};
 
-use cgmath::{Matrix4, vec3};
+use cgmath::{Matrix4, SquareMatrix, vec3};
 
 use crate::{
     SCALE_FACTOR,
@@ -25,17 +25,24 @@ impl MotionClip {
         let _ = reader.seek(SeekFrom::Start(joint_offsets[0] as u64));
         // Read transforms for root joint
         let mut animation = Vec::new();
-        let mut transforms = Vec::new();
-        for frame in 0..num_frames {
+        let mut root_transforms = Vec::new();
+        let mut frame_transforms = Vec::new();
+        for _frame in 0..num_frames {
+            // We handle the root transforms in a special way,
+            // but we still need to populate Joint 0 for the other animations
+            // to work correctly
+            frame_transforms.push(Matrix4::identity());
+
+            // Record the root translation - we _only_ record the y, because
+            // the x/z transform is handled by our movement system.
             let xform = read_vec3(reader);
-            println!("xform: {}:{:?}", frame, xform);
-            transforms.push(Matrix4::from_translation(vec3(
+            root_transforms.push(Matrix4::from_translation(vec3(
                 0.0,
                 xform.y / SCALE_FACTOR,
                 0.0,
             )));
         }
-        animation.push(transforms.clone());
+        animation.push(frame_transforms);
 
         // animation for each joint
         for joint in 1..num_joints {
@@ -50,7 +57,7 @@ impl MotionClip {
         }
 
         MotionClip {
-            root_transforms: transforms,
+            root_transforms: root_transforms,
             num_joints,
             animation,
         }
