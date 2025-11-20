@@ -3,13 +3,16 @@ use std::collections::HashMap;
 use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector2, Vector3, vec3};
 use dark::{
     SCALE_FACTOR,
+    importers::TEXTURE_IMPORTER,
     mission::{SongParams, room_database::RoomDatabase},
     ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{SceneObject, color_material, light::SpotLight},
+    scene::{
+        SceneObject, basic_material, color_material, create_plane_with_uv_scale, light::SpotLight,
+    },
 };
 use rapier3d::prelude::{Collider, ColliderBuilder};
 use shipyard::EntityId;
@@ -71,14 +74,16 @@ impl DebugSceneBuilder {
         self
     }
 
-    /// Add a standard floor suitable for most debug scenes (120x120 units, dark blue-gray)
+    /// Add a standard floor suitable for most debug scenes (120x120 units, grid texture)
     pub fn with_default_floor(self) -> Self {
         const DEFAULT_FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
-        const DEFAULT_FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
 
-        self.with_floor(DebugSceneFloor::ss2_units(
+        self.with_floor(DebugSceneFloor::ss2_units_textured(
             DEFAULT_FLOOR_SIZE,
-            DEFAULT_FLOOR_COLOR,
+            "grid.png".to_string(),
+            1.0,  // emissivity
+            0.5,  // transparency
+            10.0, // uv_scale
         ))
     }
 
@@ -113,7 +118,7 @@ impl DebugSceneBuilder {
         let mut physics_geometry = self.physics_geometry;
 
         if let Some(floor) = self.floor {
-            let (mut floor_objects, floor_collider) = floor.build();
+            let (mut floor_objects, floor_collider) = floor.build(options.asset_cache);
             scene_objects.append(&mut floor_objects);
             if physics_geometry.is_none() {
                 physics_geometry = Some(floor_collider);
@@ -419,9 +424,19 @@ pub enum DebugSceneFloorUnits {
     World,
 }
 
+pub enum DebugSceneFloorMaterial {
+    Color(Vector3<f32>),
+    Texture {
+        texture_name: String,
+        emissivity: f32,
+        transparency: f32,
+        uv_scale: f32,
+    },
+}
+
 pub struct DebugSceneFloor {
     pub size: Vector3<f32>,
-    pub color: Vector3<f32>,
+    pub material: DebugSceneFloorMaterial,
     pub units: DebugSceneFloorUnits,
 }
 
@@ -429,7 +444,7 @@ impl DebugSceneFloor {
     pub fn ss2_units(size: Vector3<f32>, color: Vector3<f32>) -> Self {
         Self {
             size,
-            color,
+            material: DebugSceneFloorMaterial::Color(color),
             units: DebugSceneFloorUnits::SystemShock2,
         }
     }
@@ -437,12 +452,50 @@ impl DebugSceneFloor {
     pub fn world_units(size: Vector3<f32>, color: Vector3<f32>) -> Self {
         Self {
             size,
-            color,
+            material: DebugSceneFloorMaterial::Color(color),
             units: DebugSceneFloorUnits::World,
         }
     }
 
-    fn build(self) -> (Vec<SceneObject>, Collider) {
+    pub fn ss2_units_textured(
+        size: Vector3<f32>,
+        texture_name: String,
+        emissivity: f32,
+        transparency: f32,
+        uv_scale: f32,
+    ) -> Self {
+        Self {
+            size,
+            material: DebugSceneFloorMaterial::Texture {
+                texture_name,
+                emissivity,
+                transparency,
+                uv_scale,
+            },
+            units: DebugSceneFloorUnits::SystemShock2,
+        }
+    }
+
+    pub fn world_units_textured(
+        size: Vector3<f32>,
+        texture_name: String,
+        emissivity: f32,
+        transparency: f32,
+        uv_scale: f32,
+    ) -> Self {
+        Self {
+            size,
+            material: DebugSceneFloorMaterial::Texture {
+                texture_name,
+                emissivity,
+                transparency,
+                uv_scale,
+            },
+            units: DebugSceneFloorUnits::World,
+        }
+    }
+
+    fn build(self, asset_cache: &mut AssetCache) -> (Vec<SceneObject>, Collider) {
         let (visual_scale, collider_scale) = match self.units {
             DebugSceneFloorUnits::SystemShock2 => (1.0 / SCALE_FACTOR, 1.0 / SCALE_FACTOR),
             DebugSceneFloorUnits::World => (1.0, 1.0),
@@ -451,13 +504,43 @@ impl DebugSceneFloor {
         let visual_size = self.size * visual_scale;
         let collider_half_size = (self.size * collider_scale) * 0.5;
 
-        let floor_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.0))
-            * Matrix4::from_nonuniform_scale(visual_size.x, visual_size.y, visual_size.z);
+        let (floor_object, _floor_transform) = match self.material {
+            DebugSceneFloorMaterial::Color(color) => {
+                // Use cube geometry with color material for backward compatibility
+                let floor_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.0))
+                    * Matrix4::from_nonuniform_scale(visual_size.x, visual_size.y, visual_size.z);
 
-        let floor_material = color_material::create(self.color);
-        let mut floor_object =
-            SceneObject::new(floor_material, Box::new(engine::scene::cube::create()));
-        floor_object.set_transform(floor_transform);
+                let floor_material = color_material::create(color);
+                let mut floor_object =
+                    SceneObject::new(floor_material, Box::new(engine::scene::cube::create()));
+                floor_object.set_transform(floor_transform);
+
+                (floor_object, floor_transform)
+            }
+            DebugSceneFloorMaterial::Texture {
+                texture_name,
+                emissivity,
+                transparency,
+                uv_scale,
+            } => {
+                // Use plane geometry with textured material
+                let grid_texture = asset_cache.get(&TEXTURE_IMPORTER, &texture_name);
+                let texture_trait: std::rc::Rc<dyn engine::texture::TextureTrait> = grid_texture;
+                let floor_material =
+                    basic_material::create(texture_trait, emissivity, transparency);
+
+                // Create plane with UV scaling
+                let floor_geometry = create_plane_with_uv_scale(uv_scale);
+                let mut floor_object = SceneObject::new(floor_material, Box::new(floor_geometry));
+
+                // Scale the plane to match the desired size
+                let floor_transform = Matrix4::from_translation(vec3(0.0, 0.0, 0.0))
+                    * Matrix4::from_nonuniform_scale(visual_size.x, visual_size.y, visual_size.z);
+                floor_object.set_transform(floor_transform);
+
+                (floor_object, floor_transform)
+            }
+        };
 
         let collider = ColliderBuilder::cuboid(
             collider_half_size.x,

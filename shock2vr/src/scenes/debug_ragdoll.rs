@@ -1,4 +1,4 @@
-use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, vec3};
 use dark::{SCALE_FACTOR, properties::PropTemplateId};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::{EntityId, IntoIter, IntoWithId};
@@ -12,15 +12,11 @@ use crate::{
         mission_core::MissionCore,
     },
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneFloor, DebugSceneHooks,
-        HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
     scripts::Effect,
     time::Time,
 };
-
-const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
-const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 
 const IMPULSE_STRENGTH: f32 = 1.0;
 const PULL_FORCE: f32 = 1.0;
@@ -35,7 +31,7 @@ impl DebugRagdollScene {
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Box<dyn GameScene> {
         let builder = DebugSceneBuilder::new("debug_ragdoll")
-            .with_floor(DebugSceneFloor::ss2_units(FLOOR_SIZE, FLOOR_COLOR))
+            .with_default_floor()
             .with_spawn_location(SpawnLocation::PositionRotation(
                 vec3(0.0, 5.0 / SCALE_FACTOR, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),

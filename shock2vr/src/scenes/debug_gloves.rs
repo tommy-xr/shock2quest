@@ -18,13 +18,10 @@ use crate::{
     game_scene::GameScene,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneFloor, DebugSceneHooks,
-        HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
 };
 
-const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.15, 0.15, 0.20);
-const FLOOR_SIZE: Vector3<f32> = Vector3::new(120.0, 0.5, 120.0);
 const GLOVE_POSITION: Point3<f32> = point3(0.0, 3.0, 1.0);
 const GLOVE_SCALE: f32 = 1.0;
 
@@ -140,7 +137,7 @@ impl DebugGlovesScene {
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Box<dyn GameScene> {
         let builder = DebugSceneBuilder::new("debug_gloves")
-            .with_floor(DebugSceneFloor::world_units(FLOOR_SIZE, FLOOR_COLOR))
+            .with_default_floor()
             .with_spawn_location(SpawnLocation::PositionRotation(
                 vec3(0.0, 2.5, 0.0),
                 Quaternion::from_angle_y(Deg(90.0)),

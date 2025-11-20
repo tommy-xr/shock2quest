@@ -17,14 +17,10 @@ use crate::{
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     physics::CollisionGroup,
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneFloor, DebugSceneHooks,
-        HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
     time::Time,
 };
-
-const FLOOR_COLOR: Vector3<f32> = Vector3::new(0.12, 0.12, 0.18);
-const FLOOR_SIZE: Vector3<f32> = Vector3::new(60.0, 0.5, 60.0);
 
 const BOX_COUNT: usize = 5;
 const BOX_SIZE: Vector3<f32> = Vector3::new(1.5, 0.7, 0.7);
@@ -45,7 +41,7 @@ impl DebugJointConstraintScene {
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Box<dyn GameScene> {
         let builder = DebugSceneBuilder::new("debug_joint_constraint")
-            .with_floor(DebugSceneFloor::ss2_units(FLOOR_SIZE, FLOOR_COLOR))
+            .with_default_floor()
             .with_spawn_location(SpawnLocation::PositionRotation(
                 vec3(0.0, 5.0 / SCALE_FACTOR, -6.0 / SCALE_FACTOR),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
