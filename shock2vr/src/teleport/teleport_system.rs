@@ -30,7 +30,7 @@ impl Default for TeleportConfig {
             button_mapping: TeleportButton::Trigger,
             trigger_threshold: 0.5,
             initial_velocity: 12.0,
-            arc_segments: 30,
+            arc_segments: 100,
             ground_height: 0.0,
         }
     }
