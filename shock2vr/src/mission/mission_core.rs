@@ -431,16 +431,16 @@ impl MissionCore {
             player_info.clone()
         };
 
+        // Player movement logic
+        let delta_time = time.elapsed.as_secs_f32();
+
         // Update teleport system and add effects (only if experimental flag enabled)
         if game_options.experimental_features.contains("teleport") {
             let teleport_effects =
                 self.teleport_system
-                    .update(input_context, player.pos, player.rotation);
+                    .update(input_context, player.pos, player.rotation, delta_time);
             effects.extend(teleport_effects);
         }
-
-        // Player movement logic
-        let delta_time = time.elapsed.as_secs_f32();
         let rot_speed = 2.0;
         let additional_rotation = cgmath::Quaternion::from_axis_angle(
             cgmath::vec3(0.0, 1.0, 0.0),

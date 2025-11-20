@@ -15,12 +15,14 @@ pub struct TeleportVisualStyle {
 
 impl Default for TeleportVisualStyle {
     fn default() -> Self {
+        // System Shock 2 cyberpunk color scheme
+        // Cyan/blue for valid states, orange/red for invalid states
         Self {
-            valid_arc_color: vec3(0.0, 0.85, 0.35),
-            invalid_arc_color: vec3(0.9, 0.2, 0.2),
-            valid_target_color: vec3(0.1, 1.0, 0.45),
-            invalid_target_color: vec3(1.0, 0.35, 0.2),
-            landing_scale: vec3(0.35, 0.02, 0.35),
+            valid_arc_color: vec3(0.0, 0.8, 1.0),       // Bright cyan
+            invalid_arc_color: vec3(1.0, 0.35, 0.1),    // Orange-red
+            valid_target_color: vec3(0.1, 0.9, 1.0),    // Slightly brighter cyan
+            invalid_target_color: vec3(1.0, 0.4, 0.15), // Slightly brighter orange
+            landing_scale: vec3(1.2, 0.02, 1.2),        // Much larger for better visibility (~3x)
             landing_height_offset: 0.02,
         }
     }
@@ -62,9 +64,8 @@ impl TeleportUI {
         };
 
         if let Some(trajectory) = hand_state.current_trajectory.as_ref() {
-            if let Some(arc_scene) = ArcRenderer::create_arc_lines(trajectory, arc_color) {
-                visuals.push(arc_scene);
-            }
+            let mut arc_particles = ArcRenderer::create_particle_arc(trajectory, arc_color);
+            visuals.append(&mut arc_particles);
         }
 
         if let Some(target_position) = hand_state.target_position {
@@ -78,6 +79,7 @@ impl TeleportUI {
                 target_position,
                 target_color,
                 render_config,
+                hand_state.animation_time,
             ));
         }
 

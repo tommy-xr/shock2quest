@@ -39,33 +39,42 @@ impl ArcTrajectory {
             Self::calculate_max_flight_time(velocity, gravity, start_position.y, ground_height);
         let time_step = max_time / num_segments as f32;
 
-        // Calculate arc points
+        // Calculate arc points - always generate full arc for visual feedback
         for i in 0..=num_segments {
             let t = i as f32 * time_step;
             let position = Self::calculate_position_at_time(start_position, velocity, gravity, t);
 
-            // Check if we've hit the ground or gone too far
-            if position.y <= ground_height {
-                // Found ground intersection
+            // Check if we've hit the ground for the first time
+            if position.y <= ground_height && landing_position.is_none() {
+                // Found ground intersection - save it but continue arc for visuals
                 let corrected_position = Vector3::new(position.x, ground_height, position.z);
-
-                // Check if within max distance
                 let distance = (corrected_position - start_position).magnitude();
                 if distance <= max_distance {
-                    points.push(corrected_position);
                     landing_position = Some(corrected_position);
                     is_valid = Self::is_valid_landing_position(corrected_position, start_position);
                 }
-                break;
             }
 
-            // Check max distance
-            let distance = (position - start_position).magnitude();
-            if distance > max_distance {
-                break;
+            // Always add points above ground for the visual arc
+            if position.y > ground_height {
+                // Check max distance
+                let distance = (position - start_position).magnitude();
+                if distance > max_distance {
+                    break;
+                }
+                points.push(position);
+            } else if landing_position.is_none() {
+                // Add points even below ground if we haven't found a landing yet (for visual continuity)
+                let distance = (position - start_position).magnitude();
+                if distance <= max_distance {
+                    points.push(position);
+                }
             }
+        }
 
-            points.push(position);
+        // If we found a landing position, add it as the final point for visual continuity
+        if let Some(landing_pos) = landing_position {
+            points.push(landing_pos);
         }
 
         ArcTrajectory {

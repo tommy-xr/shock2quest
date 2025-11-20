@@ -30,7 +30,7 @@ impl Default for TeleportConfig {
             button_mapping: TeleportButton::Trigger,
             trigger_threshold: 0.5,
             initial_velocity: 12.0,
-            arc_segments: 30,
+            arc_segments: 100,
             ground_height: 0.0,
         }
     }
@@ -52,6 +52,7 @@ pub struct TeleportHandState {
     pub target_position: Option<Vector3<f32>>,
     pub is_valid_target: bool,
     pub current_trajectory: Option<ArcTrajectory>,
+    pub animation_time: f32, // Time for animation effects (pulsing, etc.)
 }
 
 impl Default for TeleportHandState {
@@ -62,6 +63,7 @@ impl Default for TeleportHandState {
             target_position: None,
             is_valid_target: false,
             current_trajectory: None,
+            animation_time: 0.0,
         }
     }
 }
@@ -92,6 +94,7 @@ impl TeleportSystem {
         input_context: &InputContext,
         player_position: Vector3<f32>,
         player_rotation: Quaternion<f32>,
+        delta_time: f32,
     ) -> Vec<Effect> {
         if !self.config.enabled {
             return vec![Effect::NoEffect];
@@ -103,6 +106,10 @@ impl TeleportSystem {
             Self::to_world_hand(&input_context.left_hand, player_position, player_rotation);
         let right_hand_world =
             Self::to_world_hand(&input_context.right_hand, player_position, player_rotation);
+
+        // Update animation time for both hands
+        self.left_hand_state.animation_time += delta_time;
+        self.right_hand_state.animation_time += delta_time;
 
         // Update left hand
         if let Some(effect) = Self::update_hand_static(
