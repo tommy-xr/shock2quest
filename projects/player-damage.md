@@ -15,7 +15,18 @@ This document describes the implementation plan for player damage system - curre
 
 ### Phase 1: Player Health Infrastructure & Testing
 
-#### 1.1 Add Player Health Property
+#### 1.1 Create Debug Damage Scene
+```rust
+// New file: shock2vr/src/scenes/debug_damage.rs
+pub struct DebugDamageScene {
+    // Spawn: Pipe Hybrid, Shotgun Hybrid, Midwife, Explosive Barrel
+    // Player positioned optimally for testing all damage types
+    // UI showing current health, last damage taken
+    // Keyboard shortcuts to reset health, trigger specific attacks
+}
+```
+
+#### 1.2 Add Player Health Property
 ```rust
 // Location: shock2vr/src/mission/entity_creator.rs
 // When creating player entity, add PropHitPoints + PropMaxHitPoints
@@ -27,7 +38,7 @@ if template_id == PLAYER_TEMPLATE_ID {
 
 **Decision**: Use `PropHitPoints` on player entity (not PlayerInfo) for consistency with existing damage infrastructure and save/load system.
 
-#### 1.2 Create Player Script
+#### 1.3 Create Player Script
 ```rust
 // New file: shock2vr/src/scripts/player_script.rs
 pub struct PlayerScript {
@@ -58,17 +69,6 @@ impl Script for PlayerScript {
         }
         Effect::NoEffect
     }
-}
-```
-
-#### 1.3 Create Debug Damage Scene
-```rust
-// New file: shock2vr/src/scenes/debug_damage.rs
-pub struct DebugDamageScene {
-    // Spawn: Pipe Hybrid, Shotgun Hybrid, Midwife, Explosive Barrel
-    // Player positioned optimally for testing all damage types
-    // UI showing current health, last damage taken
-    // Keyboard shortcuts to reset health, trigger specific attacks
 }
 ```
 
