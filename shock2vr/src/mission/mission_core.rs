@@ -1241,7 +1241,7 @@ impl MissionCore {
 
                             let query = MotionQuery::new(actor_type, query_items)
                                 .with_selection_strategy(selection_strategy);
-                            // let query_with_actor =
+
                             let maybe_next_animation = global_context.motiondb.query(query.clone());
                             if let Some(next_animation) = maybe_next_animation {
                                 let maybe_clip = asset_cache.get_opt(
