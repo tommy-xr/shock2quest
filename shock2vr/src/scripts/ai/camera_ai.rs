@@ -314,7 +314,10 @@ impl CameraAI {
         // Use helper to resolve voice index
         let voice_index = speech_util::resolve_entity_voice_index(world, entity_id);
         if voice_index.is_none() {
-            tracing::warn!("camera entity {:?} has no resolvable voice index", entity_id);
+            tracing::warn!(
+                "camera entity {:?} has no resolvable voice index",
+                entity_id
+            );
         }
 
         let timings = CameraTimings {
@@ -746,7 +749,6 @@ impl CameraModels {
         }
     }
 }
-
 
 fn draw_debug_camera_fov(
     world: &World,

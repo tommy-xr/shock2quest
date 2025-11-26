@@ -12,10 +12,13 @@ pub fn resolve_entity_voice_index(world: &World, entity_id: EntityId) -> Option<
     // First check for direct voice index
     if let Ok(v_voice_index) = world.borrow::<View<PropVoiceIndex>>() {
         if let Ok(voice_prop) = v_voice_index.get(entity_id) {
-            let index = voice_prop.0 as usize;
-            drop(v_voice_index);
-            trace!("Entity {:?} has direct voice index: {}", entity_id, index);
-            return Some(index);
+            // Only use the index if it's non-negative (-1 is a sentinel for "unset")
+            if voice_prop.0 >= 0 {
+                let index = voice_prop.0 as usize;
+                drop(v_voice_index);
+                trace!("Entity {:?} has direct voice index: {}", entity_id, index);
+                return Some(index);
+            }
         }
         drop(v_voice_index);
     }
@@ -27,10 +30,16 @@ pub fn resolve_entity_voice_index(world: &World, entity_id: EntityId) -> Option<
             drop(v_speech_voice);
 
             if let Some(index) = lookup_voice_index_by_label(world, &label) {
-                trace!("Entity {:?} resolved voice '{}' to index {}", entity_id, label, index);
+                trace!(
+                    "Entity {:?} resolved voice '{}' to index {}",
+                    entity_id, label, index
+                );
                 return Some(index);
             } else {
-                trace!("Entity {:?} has voice label '{}' but couldn't resolve it", entity_id, label);
+                trace!(
+                    "Entity {:?} has voice label '{}' but couldn't resolve it",
+                    entity_id, label
+                );
             }
         } else {
             drop(v_speech_voice);
@@ -39,7 +48,10 @@ pub fn resolve_entity_voice_index(world: &World, entity_id: EntityId) -> Option<
 
     // Finally try to infer from creature type
     if let Some(index) = infer_voice_index_from_creature_type(world, entity_id) {
-        trace!("Entity {:?} inferred voice index {} from creature type", entity_id, index);
+        trace!(
+            "Entity {:?} inferred voice index {} from creature type",
+            entity_id, index
+        );
         return Some(index);
     }
 

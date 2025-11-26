@@ -1,12 +1,12 @@
 use std::{cell::RefCell, collections::HashSet};
 
 use cgmath::{Deg, MetricSpace, Quaternion, Rotation3, vec3, vec4};
-use rand;
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
     properties::{Link, PropAISignalResponse, PropPosition},
 };
+use rand;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
@@ -335,7 +335,9 @@ impl Script for AnimatedMonsterAI {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
 
                     // Play death sound effect immediately
-                    let death_sound_effect = if let Some(voice_index) = crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id) {
+                    let death_sound_effect = if let Some(voice_index) =
+                        crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id)
+                    {
                         // Randomly choose between loud and soft death sound
                         let concept = if rand::random::<bool>() {
                             "comdieloud".to_string()
