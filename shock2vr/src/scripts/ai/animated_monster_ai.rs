@@ -5,7 +5,7 @@ use rand;
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
-    properties::{Link, PropAISignalResponse, PropPosition, PropVoiceIndex},
+    properties::{Link, PropAISignalResponse, PropPosition},
 };
 use shipyard::{EntityId, Get, View, World};
 
@@ -335,45 +335,23 @@ impl Script for AnimatedMonsterAI {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
 
                     // Play death sound effect immediately
-                    let death_sound_effect = world.run(|v_voice: View<PropVoiceIndex>| {
-                        if let Ok(voice_prop) = v_voice.get(entity_id) {
-                            // Use the entity's voice index if available
-                            let voice_index = voice_prop.0 as usize;
-
-                            // Randomly choose between loud and soft death sound
-                            let concept = if rand::random::<bool>() {
-                                "comdieloud".to_string()
-                            } else {
-                                "comdiesoft".to_string()
-                            };
-
-                            println!("DEBUG: Monster death - using entity voice index: {}", voice_index);
-
-                            Effect::PlaySpeech {
-                                entity_id,
-                                voice_index,
-                                concept,
-                                tags: vec![],
-                            }
+                    let death_sound_effect = if let Some(voice_index) = crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id) {
+                        // Randomly choose between loud and soft death sound
+                        let concept = if rand::random::<bool>() {
+                            "comdieloud".to_string()
                         } else {
-                            // Default to voice 2 (pipe hybrid) which has working death sounds
-                            // Voice 6 (midwife) death sounds aren't resolving properly yet
-                            let concept = if rand::random::<bool>() {
-                                "comdieloud".to_string()
-                            } else {
-                                "comdiesoft".to_string()
-                            };
+                            "comdiesoft".to_string()
+                        };
 
-                            println!("DEBUG: Monster death - no voice index found, using default voice 2");
-
-                            Effect::PlaySpeech {
-                                entity_id,
-                                voice_index: 2, // Pipe hybrid - has og1die_1, og1die_2, og1die_3
-                                concept,
-                                tags: vec![],
-                            }
+                        Effect::PlaySpeech {
+                            entity_id,
+                            voice_index,
+                            concept,
+                            tags: vec![],
                         }
-                    });
+                    } else {
+                        Effect::NoEffect
+                    };
 
                     let death_animation = Effect::QueueAnimationBySchema {
                         entity_id,
