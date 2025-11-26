@@ -1,10 +1,11 @@
 use std::{cell::RefCell, collections::HashSet};
 
 use cgmath::{Deg, MetricSpace, Quaternion, Rotation3, vec3, vec4};
+use rand;
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
-    properties::{Link, PropAISignalResponse, PropPosition},
+    properties::{Link, PropAISignalResponse, PropPosition, PropVoiceIndex},
 };
 use shipyard::{EntityId, Get, View, World};
 
@@ -332,11 +333,55 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
-                    Effect::QueueAnimationBySchema {
+
+                    // Play death sound effect immediately
+                    let death_sound_effect = world.run(|v_voice: View<PropVoiceIndex>| {
+                        if let Ok(voice_prop) = v_voice.get(entity_id) {
+                            // Use the entity's voice index if available
+                            let voice_index = voice_prop.0 as usize;
+
+                            // Randomly choose between loud and soft death sound
+                            let concept = if rand::random::<bool>() {
+                                "comdieloud".to_string()
+                            } else {
+                                "comdiesoft".to_string()
+                            };
+
+                            println!("DEBUG: Monster death - using entity voice index: {}", voice_index);
+
+                            Effect::PlaySpeech {
+                                entity_id,
+                                voice_index,
+                                concept,
+                                tags: vec![],
+                            }
+                        } else {
+                            // Default to voice 2 (pipe hybrid) which has working death sounds
+                            // Voice 6 (midwife) death sounds aren't resolving properly yet
+                            let concept = if rand::random::<bool>() {
+                                "comdieloud".to_string()
+                            } else {
+                                "comdiesoft".to_string()
+                            };
+
+                            println!("DEBUG: Monster death - no voice index found, using default voice 2");
+
+                            Effect::PlaySpeech {
+                                entity_id,
+                                voice_index: 2, // Pipe hybrid - has og1die_1, og1die_2, og1die_3
+                                concept,
+                                tags: vec![],
+                            }
+                        }
+                    });
+
+                    let death_animation = Effect::QueueAnimationBySchema {
                         entity_id,
                         motion_query_items: vec![MotionQueryItem::new("crumple")],
                         selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
-                    }
+                    };
+
+                    Effect::combine(vec![death_sound_effect, death_animation])
                 } else if self.took_damage {
                     self.took_damage = false;
                     Effect::QueueAnimationBySchema {

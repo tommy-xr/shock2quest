@@ -1407,17 +1407,23 @@ impl MissionCore {
                     concept,
                     tags,
                 } => {
+                    println!("DEBUG: PlaySpeech - entity_id: {:?}, voice_index: {}, concept: '{}', tags: {:?}",
+                        entity_id, voice_index, concept, tags);
+
                     if let Some(sample_name) = resolve_speech_sample(
                         &global_context.gamesys,
                         voice_index,
                         concept.as_str(),
                         &tags,
                     ) {
+                        println!("DEBUG: Resolved sample name: '{}'", sample_name);
                         let audio_path = format!("{sample_name}.wav");
                         if let Some(audio_clip) = asset_cache.get_opt(&AUDIO_IMPORTER, &audio_path)
                         {
+                            println!("DEBUG: Successfully loaded audio clip: '{}'", audio_path);
                             let handle = AudioHandle::new();
                             if let Some(position) = get_entity_position(&self.world, entity_id) {
+                                println!("DEBUG: Playing spatial audio at position: {:?}", position);
                                 engine::audio::play_spatial_audio(
                                     audio_context,
                                     position,
@@ -1426,15 +1432,18 @@ impl MissionCore {
                                     audio_clip,
                                 );
                             } else {
+                                println!("DEBUG: Playing non-spatial audio (no position found)");
                                 engine::audio::play_audio(audio_context, handle, None, audio_clip);
                             }
                         } else {
+                            println!("DEBUG: Failed to load audio clip: '{}'", audio_path);
                             warn!(
                                 "Unable to load speech clip '{}' for concept '{}'",
                                 audio_path, concept
                             );
                         }
                     } else {
+                        println!("DEBUG: Failed to resolve speech sample - no match found");
                         warn!(
                             "Failed to resolve speech for voice {} concept '{}'",
                             voice_index, concept
