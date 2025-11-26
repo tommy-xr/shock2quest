@@ -6,6 +6,7 @@ use dark::{
     motion::{MotionFlags, MotionQueryItem},
     properties::{Link, PropAISignalResponse, PropPosition},
 };
+use rand;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::{
@@ -332,11 +333,35 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
-                    Effect::QueueAnimationBySchema {
+
+                    // Play death sound effect immediately
+                    let death_sound_effect = if let Some(voice_index) =
+                        crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id)
+                    {
+                        // Randomly choose between loud and soft death sound
+                        let concept = if rand::random::<bool>() {
+                            "comdieloud".to_string()
+                        } else {
+                            "comdiesoft".to_string()
+                        };
+
+                        Effect::PlaySpeech {
+                            entity_id,
+                            voice_index,
+                            concept,
+                            tags: vec![],
+                        }
+                    } else {
+                        Effect::NoEffect
+                    };
+
+                    let death_animation = Effect::QueueAnimationBySchema {
                         entity_id,
                         motion_query_items: vec![MotionQueryItem::new("crumple")],
                         selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
-                    }
+                    };
+
+                    Effect::combine(vec![death_sound_effect, death_animation])
                 } else if self.took_damage {
                     self.took_damage = false;
                     Effect::QueueAnimationBySchema {

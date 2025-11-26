@@ -1,7 +1,7 @@
 use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3, point3, vec3, vec4};
 use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
-    PropClassTag, PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
+    PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
 };
 use num_traits::{FromPrimitive, ToPrimitive};
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -9,7 +9,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
-    scripts::{AIPropertyUpdate, Effect, ai::ai_util, speech_registry::SpeechVoiceRegistry},
+    scripts::{AIPropertyUpdate, Effect, ai::ai_util, speech_util},
     time::Time,
 };
 
@@ -300,17 +300,6 @@ impl CameraAI {
             .map(|v| (v.level, v.peak))
             .unwrap_or((AIAlertLevel::Lowest, AIAlertLevel::Lowest));
 
-        let voice_index_direct = v_voice_index
-            .get(entity_id)
-            .ok()
-            .map(|v| v.0)
-            .and_then(|idx| if idx >= 0 { Some(idx as usize) } else { None });
-
-        let voice_label = v_voice_label
-            .get(entity_id)
-            .ok()
-            .map(|label| label.0.clone());
-
         drop((
             v_device,
             v_camera,
@@ -322,26 +311,13 @@ impl CameraAI {
             v_voice_label,
         ));
 
-        let mut voice_index = voice_index_direct;
-
+        // Use helper to resolve voice index
+        let voice_index = speech_util::resolve_entity_voice_index(world, entity_id);
         if voice_index.is_none() {
-            if let Some(label) = voice_label.as_deref() {
-                voice_index = lookup_voice_index_by_label(world, label);
-            }
-        }
-
-        if let Some(idx) = voice_index {
-            tracing::debug!("camera entity {:?} resolved voice index {}", entity_id, idx);
-        } else {
             tracing::warn!(
-                "camera entity {:?} missing voice index despite labels {:?}",
-                entity_id,
-                voice_label
+                "camera entity {:?} has no resolvable voice index",
+                entity_id
             );
-        }
-
-        if voice_index.is_none() {
-            voice_index = infer_voice_index_from_creature_type(world, entity_id);
         }
 
         let timings = CameraTimings {
@@ -772,29 +748,6 @@ impl CameraModels {
             AIAlertLevel::Lowest => &self.green,
         }
     }
-}
-
-fn lookup_voice_index_by_label(world: &World, label: &str) -> Option<usize> {
-    world
-        .borrow::<UniqueView<SpeechVoiceRegistry>>()
-        .ok()
-        .and_then(|registry| registry.lookup(label))
-}
-
-fn infer_voice_index_from_creature_type(world: &World, entity_id: EntityId) -> Option<usize> {
-    if let Ok(class_tags) = world.borrow::<View<PropClassTag>>() {
-        if let Ok(tags) = class_tags.get(entity_id) {
-            for (tag, value) in tags.class_tags() {
-                if tag.eq_ignore_ascii_case("creaturetype") {
-                    let label = format!("v{}", value);
-                    drop(class_tags);
-                    return lookup_voice_index_by_label(world, &label);
-                }
-            }
-        }
-        drop(class_tags);
-    }
-    None
 }
 
 fn draw_debug_camera_fov(
