@@ -39,4 +39,9 @@ For mantling
 
 - Upgrade to latest rapier ahead of time to make sure we have the latest code
 - Factor out different 'movement modes' for player movement in physics_world
+  - Create common movement mode trait
+  - WalkMode
+  - DesktopLadderMovementMode
+  - DesktopMantleMovementMode
+  - VRClimbMovementMode
 - Add helper for is_touching_ground, is_touching_climbable
