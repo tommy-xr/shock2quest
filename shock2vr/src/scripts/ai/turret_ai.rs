@@ -1,11 +1,13 @@
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3, vec4};
-use dark::properties::{AIAlertLevel, PropAIAlertCap, PropAIAwareDelay, PropPosition};
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3};
+use dark::properties::{AIAlertLevel, PropAIAlertCap, PropAIAwareDelay};
+use shipyard::{EntityId, Get, View, World};
 
-use crate::{mission::DebugOptions, physics::PhysicsWorld, time::Time};
+use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    Effect, MessagePayload, Script, ai_util,
+    Effect, MessagePayload, Script,
+    ai_debug_util::{self, AlertnessDebugConfig, FovDebugConfig},
+    ai_util,
     alertness::{self, AlertnessState, AlertnessTimings},
     steering::{ChasePlayerSteeringStrategy, SteeringStrategy},
 };
@@ -271,15 +273,31 @@ impl Script for TurretAI {
             Effect::NoEffect
         };
 
-        // Debug visualization
-        let debug_eff = draw_debug_turret_alertness(world, entity_id, &self.alertness, is_visible);
+        // Debug visualization - alertness bar
+        let alertness_debug_eff = ai_debug_util::draw_debug_alertness(
+            world,
+            entity_id,
+            &self.alertness,
+            is_visible,
+            &AlertnessDebugConfig::turret(),
+        );
+
+        // Debug visualization - FOV cone
+        let fov_debug_eff = ai_debug_util::draw_debug_fov(
+            world,
+            entity_id,
+            self.current_heading,
+            is_visible,
+            &FovDebugConfig::turret(),
+        );
 
         Effect::combine(vec![
             alertness_effect,
             cap_animation,
             state_eff,
             attack_eff,
-            debug_eff,
+            alertness_debug_eff,
+            fov_debug_eff,
         ])
     }
 
@@ -292,77 +310,4 @@ impl Script for TurretAI {
     ) -> Effect {
         Effect::NoEffect
     }
-}
-
-/// Draw debug visualization showing turret alertness state
-fn draw_debug_turret_alertness(
-    world: &World,
-    entity_id: EntityId,
-    alertness: &AlertnessState,
-    is_visible: bool,
-) -> Effect {
-    // Check if debug_ai is enabled
-    let debug_options = world.borrow::<UniqueView<DebugOptions>>().ok();
-    if !debug_options.map(|d| d.debug_ai).unwrap_or(false) {
-        return Effect::NoEffect;
-    }
-
-    let v_pos = world.borrow::<View<PropPosition>>().ok();
-    if v_pos.is_none() {
-        return Effect::NoEffect;
-    }
-
-    let v_pos = v_pos.unwrap();
-    if let Ok(pose) = v_pos.get(entity_id) {
-        let base_pos = pose.position;
-
-        // Color based on alertness level
-        let level_color = match alertness.current_level {
-            AIAlertLevel::Lowest => vec4(0.0, 0.5, 0.0, 1.0), // Dark green
-            AIAlertLevel::Low => vec4(0.5, 0.5, 0.0, 1.0),    // Yellow-green
-            AIAlertLevel::Moderate => vec4(1.0, 0.5, 0.0, 1.0), // Orange
-            AIAlertLevel::High => vec4(1.0, 0.0, 0.0, 1.0),   // Red
-        };
-
-        // Visibility indicator color
-        let vis_color = if is_visible {
-            vec4(0.0, 1.0, 0.0, 1.0) // Green = visible
-        } else {
-            vec4(0.5, 0.5, 0.5, 1.0) // Gray = not visible
-        };
-
-        // Draw alertness level indicator (vertical bar)
-        let level_height = match alertness.current_level {
-            AIAlertLevel::Lowest => 0.25,
-            AIAlertLevel::Low => 0.5,
-            AIAlertLevel::Moderate => 0.75,
-            AIAlertLevel::High => 1.0,
-        };
-
-        let bar_base = base_pos + vec3(0.5, 0.0, 0.0);
-        let bar_top = bar_base + vec3(0.0, level_height, 0.0);
-
-        // Draw visibility indicator (horizontal line)
-        let vis_base = base_pos + vec3(-0.5, 0.5, 0.0);
-        let vis_end = vis_base + vec3(0.0, 0.0, 0.5);
-
-        return Effect::DrawDebugLines {
-            lines: vec![
-                // Alertness level bar
-                (
-                    cgmath::point3(bar_base.x, bar_base.y, bar_base.z),
-                    cgmath::point3(bar_top.x, bar_top.y, bar_top.z),
-                    level_color,
-                ),
-                // Visibility indicator
-                (
-                    cgmath::point3(vis_base.x, vis_base.y, vis_base.z),
-                    cgmath::point3(vis_end.x, vis_end.y, vis_end.z),
-                    vis_color,
-                ),
-            ],
-        };
-    }
-
-    Effect::NoEffect
 }

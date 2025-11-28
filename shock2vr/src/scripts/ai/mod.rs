@@ -1,3 +1,4 @@
+pub mod ai_debug_util;
 pub mod ai_util;
 pub mod alertness;
 pub mod steering;

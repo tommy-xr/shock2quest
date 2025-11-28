@@ -15,7 +15,6 @@ use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
     scripts::{Effect, script_util::get_first_link_with_template_and_data},
-    util,
 };
 
 ///
@@ -79,26 +78,6 @@ pub(crate) fn does_entity_have_hitboxes(world: &World, entity_id: EntityId) -> b
 
     // If the entity has a creature prop, we use hitboxes for damage
     v_creature_prop.contains(entity_id)
-}
-
-pub fn draw_debug_facing_line(world: &World, entity_id: EntityId) -> Effect {
-    let xform = world
-        .borrow::<View<RuntimePropTransform>>()
-        .unwrap()
-        .get(entity_id)
-        .unwrap()
-        .0;
-
-    let position = util::get_position_from_matrix(&xform);
-    let forward = xform.transform_vector(vec3(0.0, 0.0, 1.0)).normalize();
-
-    Effect::DrawDebugLines {
-        lines: vec![(
-            position + vec3(0.0, 0.5, 0.0),
-            position + forward + vec3(0.0, 0.5, 0.0),
-            vec4(1.0, 0.0, 0.0, 1.0),
-        )],
-    }
 }
 
 /// Fire Ranged Weapon
@@ -303,6 +282,38 @@ pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     }
 
     maybe_prop_hit_points.unwrap().hit_points <= 0
+}
+
+/// Check if an entity has a ranged weapon capability
+///
+/// Returns true if the entity has either an AIRangedWeapon link (used by turrets)
+/// or an AIProjectile link (used by most creatures like robots, hybrids, midwives).
+pub fn has_ranged_weapon(world: &World, entity_id: EntityId) -> bool {
+    // Check for AIRangedWeapon (turret-style)
+    let has_ai_ranged = get_first_link_with_template_and_data(world, entity_id, |link| {
+        if matches!(link, Link::AIRangedWeapon) {
+            Some(())
+        } else {
+            None
+        }
+    })
+    .is_some();
+
+    if has_ai_ranged {
+        return true;
+    }
+
+    // Check for AIProjectile (creature-style)
+    let has_ai_projectile = get_first_link_with_template_and_data(world, entity_id, |link| {
+        if matches!(link, Link::AIProjectile(_)) {
+            Some(())
+        } else {
+            None
+        }
+    })
+    .is_some();
+
+    has_ai_projectile
 }
 
 pub fn play_positional_sound(
