@@ -45,6 +45,9 @@ impl Script for BaseMonster {
             if v_prop_sig_resp.get(entity_id).is_ok() || maybe_ai_signal_resp.is_some() {
                 Box::new(AnimatedMonsterAI::idle())
             } else {
+                // AI scripts are created here based on PropAI value, not in the main
+                // script factory in mod.rs. This is because AI entities use BaseMonster
+                // as their script, which then delegates to the appropriate AI implementation.
                 match prop_ai.0.to_ascii_lowercase().as_str() {
                     "camera" => Box::new(CameraAI::new()),
                     "melee" => Box::new(AnimatedMonsterAI::new()),

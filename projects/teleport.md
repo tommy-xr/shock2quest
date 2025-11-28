@@ -1,155 +1,97 @@
 # VR Teleport Movement System
 
-## Overview
-A standard VR teleport system that eliminates motion sickness by allowing players to point to a location and instantly teleport there, rather than smooth locomotion. This system will integrate with the existing shock2quest VR framework.
+## Project Status: ✅ CORE IMPLEMENTATION COMPLETE
 
-## Architecture Analysis
+A standard VR teleport system that eliminates motion sickness by allowing players to point to a location and instantly teleport there, rather than smooth locomotion.
 
-### Existing Systems
-- **Input System**: `shock2vr/src/input_context.rs` - Handles VR controller input with `Hand` struct containing position, rotation, thumbstick, trigger, squeeze, and A button values
-- **Effect System**: `shock2vr/src/scripts/effect.rs` - Provides `SetPlayerPosition` effect with teleport support
-- **GUI System**: `shock2vr/src/gui/` - World-space UI rendering with `SetUI` effect for displaying components
-- **Existing Teleport**: Basic teleport already exists via `trap_teleport_player.rs` script
+## Completed Phases
 
-## Implementation Plan
+### Phase 1: Core Teleport Input Detection ✅
 
-### Phase 1: Core Teleport Input Detection ✅ COMPLETED
+**Files:**
+- `shock2vr/src/teleport/mod.rs` - Main teleport module
+- `shock2vr/src/teleport/teleport_system.rs` - Core teleport logic
 
-**Files Created/Modified:**
-- ✅ `shock2vr/src/teleport/mod.rs` - Main teleport module
-- ✅ `shock2vr/src/teleport/teleport_system.rs` - Core teleport logic
-- ✅ `shock2vr/src/lib.rs` - Exported teleport module publicly
+**Features:**
+- TeleportSystem struct with configurable input detection
+- Support for trigger, A button, or squeeze button activation
+- Per-hand state tracking with button press/release detection
+- Integration with `SetPlayerPosition` effect system
 
-**Implementation Completed:**
-1. ✅ TeleportSystem struct with configurable input detection
-2. ✅ Support for trigger, A button, or squeeze button activation
-3. ✅ Per-hand state tracking with button press/release detection
-4. ✅ Basic forward ray casting for teleport target (placeholder for Phase 2)
-5. ✅ Integration with existing `SetPlayerPosition` effect system
-6. ✅ Compiles successfully with desktop runtime
+### Phase 2: Arc Trajectory Calculation ✅
 
-### Phase 2: Arc Trajectory Calculation ✅ COMPLETED
+**Files:**
+- `shock2vr/src/teleport/trajectory.rs` - Arc calculation and physics
 
-**Files Created/Modified:**
-- ✅ `shock2vr/src/teleport/trajectory.rs` - Arc calculation and physics engine
-- ✅ `shock2vr/src/teleport/teleport_system.rs` - Enhanced with arc trajectory integration
-- ✅ `shock2vr/src/teleport/mod.rs` - Module exports for trajectory system
+**Features:**
+- Parabolic arc from controller position/rotation using realistic physics
+- Valid landing position determination with kinematic equations
+- Invalid location handling (too close, height differences)
+- Configurable velocity, gravity, and arc segments
+- Comprehensive test coverage (6 passing tests)
 
-**Implementation Completed:**
-1. ✅ Calculate parabolic arc from controller position/rotation using realistic physics
-2. ✅ Determine valid landing position with kinematic equations
-3. ✅ Handle invalid locations (too close, height differences, invalid coordinates)
-4. ✅ Arc length calculation and normalized position interpolation for visual feedback
-5. ✅ Enhanced teleport configuration with velocity, gravity, and arc segments
-6. ✅ Comprehensive test coverage (6 passing tests)
+### Phase 3: Visual Feedback System ✅
 
-**Key Features Delivered:**
-- **Realistic Physics**: Proper parabolic trajectory using kinematic equations
-- **Configurable Arc**: Adjustable initial velocity, gravity, and arc segments
-- **Validation Logic**: Distance checking, height differences, and coordinate validation
-- **Visual Support**: Arc points, length calculation, and position interpolation ready for Phase 3
-- **Backwards Compatibility**: Existing teleport input detection maintained
+Completed in PR #236 (commit `5ba5184`).
 
-### Phase 3: Visual Feedback System
-**Files to Create/Modify:**
-- `shock2vr/src/teleport/teleport_ui.rs` - Teleport visual components
-- `shock2vr/src/teleport/arc_renderer.rs` - Arc line rendering
+**Files:**
+- `shock2vr/src/teleport/arc_renderer.rs` - Arc and target rendering
+- `shock2vr/src/teleport/teleport_ui.rs` - Visual components
 
-**Implementation:**
-1. Create arc line mesh using existing `lines_mesh.rs` system
-2. Landing target indicator (circle/pad at destination)
-3. Color coding (green=valid, red=invalid)
-4. Integration with existing GUI system via `SetUI` effect
+**Features:**
+- **Particle-Based Arc**: 25-point interpolated arc with billboard particles
+  - Alpha gradient (0.4-1.0), 6cm particle size
+  - Color-tinted with cyberpunk glow (1.5x emissivity)
+  - Texture caching to avoid memory bloat
+- **Ring Target Indicator**: `assets/teleport-landing.png` (128x128 PNG)
+  - Pulsing animation: `scale * (1.0 + 0.15 * sin(time * 2.5))`
+  - Ground-level positioning with 0.02m Y-offset
+  - Fallback procedural ring if asset not found
+- **System Shock 2 Aesthetic**:
+  - Valid: Cyan/blue `vec3(0.0, 0.8, 1.0)`
+  - Invalid: Orange-red `vec3(1.0, 0.35, 0.1)`
 
-### Phase 4: Teleport Execution
-**Files to Create/Modify:**
-- `shock2vr/src/teleport/teleport_executor.rs` - Handle actual teleportation
+### Phase 4: Teleport Execution ✅
 
-**Implementation:**
-1. Trigger on button release
-2. Validate final position
-3. Use existing `SetPlayerPosition` effect with `is_teleport: true`
-4. Clear visual feedback
-5. Optional fade transition
+Integrated into `teleport_system.rs`.
 
-### Phase 5: Integration & Configuration
-**Files to Create/Modify:**
-- `shock2vr/src/teleport/config.rs` - Teleport settings
-- Modify `shock2vr/src/lib.rs` to include teleport module
+**Features:**
+- Trigger on button release
+- Final position validation
+- Uses `SetPlayerPosition` effect with `is_teleport: true`
+- Visual feedback cleared on teleport
 
-**Implementation:**
-1. Configurable arc physics (gravity, max distance)
-2. Button mapping options
-3. Visual style configuration
-4. Performance optimization
+## Future Enhancements (Not Yet Implemented)
 
-## Technical Details
+### Visual Polish
+- **Animated Flow Particles**: Moving particles along trajectory
+- **Advanced Ring Effects**: Rotating elements, scan lines, holographic appearance
+- **Environmental Integration**: Adapt visuals to mission lighting/atmosphere
+
+### Accessibility & Configuration
+- **Accessibility Options**: High contrast mode, size adjustments, color blind support
+- **Audio Feedback**: Sound effects to complement visuals
+- **Fade Transition**: Optional screen fade during teleport
+
+## Technical Reference
 
 ### Input Mapping
 - **Primary**: Trigger hold to activate, release to teleport
 - **Alternative**: A button hold (configurable)
-- **Hand Selection**: Both hands supported, dominant hand priority
+- **Hand Selection**: Both hands supported
 
-### Arc Physics
-- **Gravity**: Realistic arc trajectory simulation
-- **Max Distance**: Configurable maximum teleport range
-- **Collision**: Use existing physics world for ground detection
-- **Validation**: Ensure landing spot has adequate clearance
+### Key Files
+| File | Purpose |
+|------|---------|
+| `shock2vr/src/teleport/mod.rs` | Module exports |
+| `shock2vr/src/teleport/teleport_system.rs` | Core logic, state tracking |
+| `shock2vr/src/teleport/trajectory.rs` | Arc physics calculations |
+| `shock2vr/src/teleport/arc_renderer.rs` | Visual rendering |
+| `shock2vr/src/teleport/teleport_ui.rs` | UI integration |
+| `assets/teleport-landing.png` | Ring texture (128x128) |
 
-### Visual Components
-- **Arc Line**: Segmented line following trajectory path
-- **Landing Pad**: Circular indicator at destination
-- **Invalid Feedback**: Red coloring when location unsuitable
-- **Fade Effect**: Optional screen fade during teleport
-
-### Performance Considerations
-- **Update Frequency**: Only calculate when teleport active
-- **LOD**: Reduce arc segments at distance
-- **Pooling**: Reuse visual meshes to avoid allocation
-
-## Integration Points
-
-### Existing Systems Used
-1. **InputContext** - Controller input detection
-2. **Effect System** - `SetPlayerPosition` for actual teleportation
-3. **GUI System** - World-space UI for visual feedback
-4. **Physics** - Collision detection for valid surfaces
-5. **Render System** - Line and mesh rendering
-
-### New Components Required
-- `TeleportState` - Track active teleport per hand
-- `TeleportConfig` - System configuration
-- `ArcTrajectory` - Physics calculation
-- `TeleportVisuals` - UI components and rendering
-
-## Testing Strategy
-1. **Unit Tests**: Arc calculation accuracy
-2. **Integration Tests**: Input -> visual -> teleport flow
-3. **VR Testing**: Motion sickness validation
-4. **Performance Tests**: Frame rate impact measurement
-
-## Configuration Options
-```rust
-pub struct TeleportConfig {
-    pub enabled: bool,
-    pub max_distance: f32,
-    pub arc_gravity: f32,
-    pub button_mapping: TeleportButton,
-    pub visual_style: TeleportVisualStyle,
-    pub fade_duration: f32,
-}
-
-pub enum TeleportButton {
-    Trigger,
-    AButton,
-    Squeeze,
-}
+### Enabling Teleport
+Teleport is an experimental feature. Enable with:
+```bash
+cargo run -- --experimental teleport
 ```
-
-## Success Criteria
-- [ ] Smooth button hold detection without false triggers
-- [ ] Accurate arc trajectory that feels natural
-- [ ] Clear visual feedback for valid/invalid destinations
-- [ ] Instant teleportation with no motion sickness
-- [ ] Stable performance with no frame drops
-- [ ] Configurable settings for user preference
