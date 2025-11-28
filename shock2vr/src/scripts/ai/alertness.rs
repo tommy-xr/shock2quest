@@ -511,6 +511,9 @@ mod tests {
             clamp_level(AIAlertLevel::Moderate, &cap),
             AIAlertLevel::Moderate
         );
-        assert_eq!(clamp_level(AIAlertLevel::High, &cap), AIAlertLevel::Moderate);
+        assert_eq!(
+            clamp_level(AIAlertLevel::High, &cap),
+            AIAlertLevel::Moderate
+        );
     }
 }
