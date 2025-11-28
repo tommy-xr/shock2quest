@@ -81,6 +81,7 @@ pub struct GameOptions {
     pub debug_portals: bool,
     pub debug_show_ids: bool,
     pub debug_skeletons: bool,
+    pub debug_ai: bool,
     pub experimental_features: HashSet<String>,
 }
 
@@ -95,6 +96,7 @@ impl Default for GameOptions {
             debug_physics: false,
             debug_show_ids: false,
             debug_skeletons: false,
+            debug_ai: false,
             render_particles: true,
             experimental_features: HashSet::new(),
         }

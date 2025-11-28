@@ -28,6 +28,7 @@ pub mod debug_map;
 pub mod debug_minimal;
 pub mod debug_ragdoll;
 pub mod debug_teleport;
+pub mod debug_turret;
 pub mod hand_pose;
 
 pub use cutscene_player::CutscenePlayerScene;
@@ -39,6 +40,7 @@ pub use debug_map::DebugMapScene;
 pub use debug_minimal::DebugMinimalScene;
 pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_teleport::DebugTeleportScene;
+pub use debug_turret::DebugTurretScene;
 
 pub struct SceneInitResult {
     pub scene: Box<dyn GameScene>,
@@ -99,6 +101,13 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("debug_camera") {
         return SceneInitResult {
             scene: DebugCameraScene::new(global_context, options, asset_cache, audio_context),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_turret") {
+        return SceneInitResult {
+            scene: DebugTurretScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }
