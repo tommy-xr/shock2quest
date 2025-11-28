@@ -3,17 +3,20 @@ use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
     PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
 };
-use num_traits::{FromPrimitive, ToPrimitive};
+use num_traits::ToPrimitive;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
-    scripts::{AIPropertyUpdate, Effect, ai::ai_util, speech_util},
+    scripts::{Effect, ai::ai_util, speech_util},
     time::Time,
 };
 
-use super::{MessagePayload, Script};
+use super::{
+    MessagePayload, Script,
+    alertness::{self, AlertnessState, AlertnessTimings},
+};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -21,26 +24,13 @@ struct CameraConfig {
     device: PropAIDevice,
     camera: PropAICamera,
     alert_cap: PropAIAlertCap,
-    timings: CameraTimings,
+    timings: AlertnessTimings,
     models: CameraModels,
     voice_index: Option<usize>,
 }
 
-#[derive(Clone)]
-struct CameraTimings {
-    to_two: f32,
-    to_three: f32,
-    two_reuse: f32,
-    three_reuse: f32,
-    ignore_range: f32,
-}
-
 const ALERT_ESCALATE_SECONDS: f32 = 3.0;
 const ALERT_DECAY_SECONDS: f32 = 5.0;
-const DEFAULT_TO_TWO_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
-const DEFAULT_TO_THREE_SECONDS: f32 = ALERT_ESCALATE_SECONDS;
-const DEFAULT_DECAY_SECONDS: f32 = ALERT_DECAY_SECONDS;
-const DEFAULT_IGNORE_SECONDS: f32 = ALERT_DECAY_SECONDS;
 
 const CAMERA_SPEECH_LOOP_DELAY: f32 = 1.5;
 const CAMERA_SPEECH_MIN_INTERVAL: f32 = 1.0;
@@ -52,28 +42,26 @@ struct CameraModels {
     red: String,
 }
 
+/// Camera-specific state that wraps the shared AlertnessState
 struct CameraState {
-    current_level: AIAlertLevel,
-    peak_level: AIAlertLevel,
+    /// Shared alertness state (current/peak levels, visibility timers)
+    alertness: AlertnessState,
+    /// Current model being displayed
     current_model: Option<String>,
-    visible_time: f32,
-    hidden_time: f32,
+    /// Current view angle for joint animation
     view_angle: f32,
-    time_since_level_change: f32,
+    /// Time since last speech was played
     time_since_last_speech: f32,
+    /// Whether we've played the "at level" sustain line
     played_at_level_line: bool,
 }
 
 impl Default for CameraState {
     fn default() -> Self {
         Self {
-            current_level: AIAlertLevel::Lowest,
-            peak_level: AIAlertLevel::Lowest,
+            alertness: AlertnessState::default(),
             current_model: None,
-            visible_time: 0.0,
-            hidden_time: 0.0,
             view_angle: 0.0,
-            time_since_level_change: 0.0,
             time_since_last_speech: CAMERA_SPEECH_MIN_INTERVAL,
             played_at_level_line: true,
         }
@@ -82,7 +70,6 @@ impl Default for CameraState {
 
 impl CameraState {
     fn reset_for_level(&mut self, level: AIAlertLevel) {
-        self.time_since_level_change = 0.0;
         self.played_at_level_line = !matches!(level, AIAlertLevel::Moderate | AIAlertLevel::High);
     }
 
@@ -146,21 +133,23 @@ impl CameraAI {
         entity_id: EntityId,
         config: &CameraConfig,
         previous_level: AIAlertLevel,
+        new_level: AIAlertLevel,
         was_visible: bool,
         effects: &mut Vec<Effect>,
     ) {
-        self.state.reset_for_level(self.state.current_level);
+        self.state.reset_for_level(new_level);
 
         if config.voice_index.is_none() {
-            println!("voice index is none");
+            tracing::debug!("camera {:?}: voice index is none", entity_id);
             return;
         }
 
         let previous_rank = level_to_u32(previous_level);
-        let new_rank = level_to_u32(self.state.current_level);
+        let new_rank = level_to_u32(new_level);
 
         if new_rank > previous_rank {
-            let concept = match self.state.current_level {
+            // Escalating
+            let concept = match new_level {
                 AIAlertLevel::Low => Some("tolevelone"),
                 AIAlertLevel::Moderate => Some("toleveltwo"),
                 AIAlertLevel::High => Some("tolevelthree"),
@@ -171,14 +160,15 @@ impl CameraAI {
                 self.enqueue_speech(entity_id, config, concept, &[], effects);
             }
         } else {
+            // Decaying
             if previous_level == AIAlertLevel::High
-                && self.state.current_level == AIAlertLevel::Moderate
+                && new_level == AIAlertLevel::Moderate
                 && !was_visible
             {
                 self.enqueue_speech(entity_id, config, "lostcontact", &[], effects);
             }
 
-            if self.state.current_level == AIAlertLevel::Lowest {
+            if new_level == AIAlertLevel::Lowest {
                 self.enqueue_speech(entity_id, config, "backtozero", &[], effects);
             }
         }
@@ -194,7 +184,7 @@ impl CameraAI {
             return;
         }
 
-        let concept = match self.state.current_level {
+        let concept = match self.state.alertness.current_level {
             AIAlertLevel::Moderate => Some("atleveltwo"),
             AIAlertLevel::High => Some("atlevelthree"),
             _ => None,
@@ -202,7 +192,7 @@ impl CameraAI {
 
         if let Some(concept) = concept {
             if !self.state.played_at_level_line
-                && self.state.time_since_level_change >= CAMERA_SPEECH_LOOP_DELAY
+                && self.state.alertness.time_since_level_change >= CAMERA_SPEECH_LOOP_DELAY
                 && self.state.time_since_last_speech >= CAMERA_SPEECH_MIN_INTERVAL
             {
                 if self.enqueue_speech(entity_id, config, concept, &[], effects) {
@@ -276,17 +266,20 @@ impl CameraAI {
                 min_relax: AIAlertLevel::Low,
             });
 
+        // Build default aware delay using the same constants as before
+        let default_aware_delay = PropAIAwareDelay {
+            to_two: (ALERT_ESCALATE_SECONDS * 1000.0) as u32,
+            to_three: (ALERT_ESCALATE_SECONDS * 1000.0) as u32,
+            two_reuse: (ALERT_DECAY_SECONDS * 1000.0) as u32,
+            three_reuse: (ALERT_DECAY_SECONDS * 1000.0) as u32,
+            ignore_range: (ALERT_DECAY_SECONDS * 1000.0) as u32,
+        };
+
         let aware_delay = v_aware_delay
             .get(entity_id)
             .ok()
             .cloned()
-            .unwrap_or(PropAIAwareDelay {
-                to_two: (DEFAULT_TO_TWO_SECONDS * 1000.0) as u32,
-                to_three: (DEFAULT_TO_THREE_SECONDS * 1000.0) as u32,
-                two_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
-                three_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
-                ignore_range: (DEFAULT_IGNORE_SECONDS * 1000.0) as u32,
-            });
+            .unwrap_or(default_aware_delay);
 
         let base_model = v_model_name
             .get(entity_id)
@@ -320,209 +313,42 @@ impl CameraAI {
             );
         }
 
-        let timings = CameraTimings {
-            to_two: ms_to_seconds(aware_delay.to_two),
-            to_three: ms_to_seconds(aware_delay.to_three),
-            two_reuse: ms_to_seconds(aware_delay.two_reuse),
-            three_reuse: ms_to_seconds(aware_delay.three_reuse),
-            ignore_range: ms_to_seconds(aware_delay.ignore_range),
-        };
-
+        // Use the shared AlertnessTimings
+        let timings = AlertnessTimings::from_aware_delay(&aware_delay);
         let models = derive_models(&base_model);
 
         let config = CameraConfig {
             device,
             camera,
-            alert_cap,
+            alert_cap: alert_cap.clone(),
             timings,
             models,
             voice_index,
         };
 
+        // Initialize alertness state with clamped levels
+        let initial_level = alertness::clamp_level(initial_alertness.0, &alert_cap);
+        let mut initial_peak = alertness::clamp_level(initial_alertness.1, &alert_cap);
+
+        // Ensure peak never falls below the relax floor
+        if level_to_u32(initial_peak) < level_to_u32(alert_cap.min_relax) {
+            initial_peak = alert_cap.min_relax;
+        }
+
+        let mut alertness_state = AlertnessState::new(initial_level);
+        alertness_state.peak_level = initial_peak;
+
         let mut state = CameraState {
-            current_level: clamp_level(initial_alertness.0, &config.alert_cap),
-            peak_level: clamp_level(initial_alertness.1, &config.alert_cap),
+            alertness: alertness_state,
             current_model: None,
-            visible_time: 0.0,
-            hidden_time: 0.0,
             view_angle: 0.0,
-            time_since_level_change: 0.0,
             time_since_last_speech: CAMERA_SPEECH_MIN_INTERVAL,
             played_at_level_line: true,
         };
 
-        // Ensure peak never falls below the relax floor
-        if level_to_u32(state.peak_level) < level_to_u32(config.alert_cap.min_relax) {
-            state.peak_level = config.alert_cap.min_relax;
-        }
-
-        state.reset_for_level(state.current_level);
+        state.reset_for_level(state.alertness.current_level);
 
         Some((config, state))
-    }
-
-    fn process_alertness(
-        &mut self,
-        entity_id: EntityId,
-        visible: bool,
-        delta: f32,
-        config: &CameraConfig,
-        effects: &mut Vec<Effect>,
-    ) {
-        if visible {
-            self.state.visible_time += delta;
-            self.state.hidden_time = 0.0;
-
-            match self.state.current_level {
-                AIAlertLevel::Lowest => {
-                    if self.state.visible_time >= config.timings.to_two {
-                        let previous_level = self.state.current_level;
-                        if self.set_alert_level(
-                            entity_id,
-                            AIAlertLevel::Moderate,
-                            &config.alert_cap,
-                            effects,
-                        ) {
-                            self.sync_model(entity_id, &config.models, effects, false);
-                            self.on_alert_level_changed(
-                                entity_id,
-                                config,
-                                previous_level,
-                                true,
-                                effects,
-                            );
-                            self.state.visible_time = 0.0;
-                        }
-                    }
-                }
-                AIAlertLevel::Low | AIAlertLevel::Moderate => {
-                    if self.state.visible_time >= config.timings.to_three {
-                        let previous_level = self.state.current_level;
-                        if self.set_alert_level(
-                            entity_id,
-                            AIAlertLevel::High,
-                            &config.alert_cap,
-                            effects,
-                        ) {
-                            self.sync_model(entity_id, &config.models, effects, false);
-                            self.on_alert_level_changed(
-                                entity_id,
-                                config,
-                                previous_level,
-                                true,
-                                effects,
-                            );
-                            self.state.visible_time = 0.0;
-                        }
-                    }
-                }
-                AIAlertLevel::High => {}
-            }
-        } else {
-            self.state.hidden_time += delta;
-            self.state.visible_time = 0.0;
-
-            match self.state.current_level {
-                AIAlertLevel::High => {
-                    if self.state.hidden_time >= config.timings.three_reuse {
-                        let previous_level = self.state.current_level;
-                        if self.set_alert_level(
-                            entity_id,
-                            AIAlertLevel::Moderate,
-                            &config.alert_cap,
-                            effects,
-                        ) {
-                            self.sync_model(entity_id, &config.models, effects, false);
-                            self.on_alert_level_changed(
-                                entity_id,
-                                config,
-                                previous_level,
-                                false,
-                                effects,
-                            );
-                            self.state.hidden_time = 0.0;
-                        }
-                    }
-                }
-                AIAlertLevel::Moderate => {
-                    if self.state.hidden_time >= config.timings.two_reuse {
-                        let previous_level = self.state.current_level;
-                        if self.set_alert_level(
-                            entity_id,
-                            AIAlertLevel::Low,
-                            &config.alert_cap,
-                            effects,
-                        ) {
-                            self.sync_model(entity_id, &config.models, effects, false);
-                            self.on_alert_level_changed(
-                                entity_id,
-                                config,
-                                previous_level,
-                                false,
-                                effects,
-                            );
-                            self.state.hidden_time = 0.0;
-                        }
-                    }
-                }
-                AIAlertLevel::Low => {
-                    if self.state.hidden_time >= config.timings.ignore_range {
-                        let previous_level = self.state.current_level;
-                        if self.set_alert_level(
-                            entity_id,
-                            AIAlertLevel::Lowest,
-                            &config.alert_cap,
-                            effects,
-                        ) {
-                            self.sync_model(entity_id, &config.models, effects, false);
-                            self.on_alert_level_changed(
-                                entity_id,
-                                config,
-                                previous_level,
-                                false,
-                                effects,
-                            );
-                            self.state.hidden_time = 0.0;
-                        }
-                    }
-                }
-                AIAlertLevel::Lowest => {
-                    self.state.hidden_time = 0.0;
-                }
-            }
-        }
-    }
-
-    fn set_alert_level(
-        &mut self,
-        entity_id: EntityId,
-        new_level: AIAlertLevel,
-        alert_cap: &PropAIAlertCap,
-        effects: &mut Vec<Effect>,
-    ) -> bool {
-        let clamped_level = clamp_level(new_level, alert_cap);
-        if clamped_level == self.state.current_level {
-            return false;
-        }
-
-        self.state.current_level = clamped_level;
-
-        if level_to_u32(clamped_level) > level_to_u32(self.state.peak_level) {
-            self.state.peak_level = clamped_level;
-        } else if level_to_u32(clamped_level) < level_to_u32(self.state.peak_level) {
-            let relax_floor = alert_cap.min_relax;
-            self.state.peak_level = max_level(clamped_level, relax_floor);
-        }
-
-        effects.push(Effect::SetAIProperty {
-            entity_id,
-            update: AIPropertyUpdate::Alertness {
-                level: self.state.current_level,
-                peak: self.state.peak_level,
-            },
-        });
-
-        true
     }
 
     fn sync_model(
@@ -532,7 +358,7 @@ impl CameraAI {
         effects: &mut Vec<Effect>,
         force: bool,
     ) {
-        let target = models.model_for_level(self.state.current_level);
+        let target = models.model_for_level(self.state.alertness.current_level);
         if force
             || self
                 .state
@@ -559,13 +385,10 @@ impl Script for CameraAI {
             self.state = state;
 
             // Force an initial sync so the renderer and mission data match the runtime state.
-            effects.push(Effect::SetAIProperty {
+            effects.push(alertness::sync_alertness_effect(
                 entity_id,
-                update: AIPropertyUpdate::Alertness {
-                    level: self.state.current_level,
-                    peak: self.state.peak_level,
-                },
-            });
+                &self.state.alertness,
+            ));
 
             if let Some(models) = self.config.as_ref().map(|cfg| cfg.models.clone()) {
                 self.sync_model(entity_id, &models, &mut effects, true);
@@ -610,10 +433,32 @@ impl Script for CameraAI {
             let speed_deg_per_sec = (config.camera.scan_speed * 1000.0).max(1.0);
             max_delta = Some(speed_deg_per_sec * delta);
 
-            self.process_alertness(entity_id, is_visible, delta, config, &mut effects);
+            // Use the shared alertness update logic
+            if let Some((old_level, new_level)) = alertness::process_alertness_update(
+                &mut self.state.alertness,
+                is_visible,
+                delta,
+                &config.timings,
+                &config.alert_cap,
+            ) {
+                // Level changed - sync model and play speech
+                self.sync_model(entity_id, &config.models, &mut effects, false);
+                self.on_alert_level_changed(
+                    entity_id,
+                    config,
+                    old_level,
+                    new_level,
+                    is_visible,
+                    &mut effects,
+                );
+                // Sync alertness to ECS
+                effects.push(alertness::sync_alertness_effect(
+                    entity_id,
+                    &self.state.alertness,
+                ));
+            }
         }
 
-        self.state.time_since_level_change += delta;
         self.state.time_since_last_speech += delta;
 
         let aim_angle = if let Some(delta_limit) = max_delta {
@@ -653,10 +498,6 @@ impl Script for CameraAI {
     ) -> Effect {
         Effect::NoEffect
     }
-}
-
-fn ms_to_seconds(value: u32) -> f32 {
-    value as f32 / 1000.0
 }
 
 fn normalize_deg(mut angle: f32) -> f32 {
@@ -710,29 +551,6 @@ fn derive_models(base_model: &str) -> CameraModels {
         green: base_model.to_string(),
         yellow: rebuild(yellow_stem),
         red: rebuild(red_stem),
-    }
-}
-
-fn clamp_level(level: AIAlertLevel, cap: &PropAIAlertCap) -> AIAlertLevel {
-    let mut raw = level_to_u32(level);
-    let min = level_to_u32(cap.min_level);
-    let max = level_to_u32(cap.max_level);
-
-    if raw < min {
-        raw = min;
-    }
-    if raw > max {
-        raw = max;
-    }
-
-    AIAlertLevel::from_u32(raw).unwrap_or(cap.max_level)
-}
-
-fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
-    if level_to_u32(a) >= level_to_u32(b) {
-        a
-    } else {
-        b
     }
 }
 
