@@ -386,9 +386,31 @@ impl Script for AnimatedMonsterAI {
                     //self.current_behavior = Rc::new(IdleBehavior);
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
-                    Effect::QueueAnimationBySchema {
+                    let motion_query_items = self.current_behavior.borrow().animation();
+
+                    // Check if this is an attack animation and play attack sound
+                    let attack_sound_effect = if is_attack_animation(&motion_query_items) {
+                        if let Some(voice_index) =
+                            crate::scripts::speech_util::resolve_entity_voice_index(
+                                world, entity_id,
+                            )
+                        {
+                            Effect::PlaySpeech {
+                                entity_id,
+                                voice_index,
+                                concept: "comattack".to_string(),
+                                tags: vec![],
+                            }
+                        } else {
+                            Effect::NoEffect
+                        }
+                    } else {
+                        Effect::NoEffect
+                    };
+
+                    let queue_animation_effect = Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_query_items: self.current_behavior.borrow().animation(),
+                        motion_query_items,
                         selection_strategy,
                         //tag: "idlegesture".to_owned(),
                         // motion_query_items: vec![
@@ -423,7 +445,9 @@ impl Script for AnimatedMonsterAI {
                         // MotionQueryItem::new("stand"),
                         //MotionQueryItem::new("direction").optional(),
                         //],
-                    }
+                    };
+
+                    Effect::combine(vec![attack_sound_effect, queue_animation_effect])
                 }
             }
             MessagePayload::AnimationFlagTriggered { motion_flags } => {
@@ -459,5 +483,16 @@ fn player_is_within_watch_obj(world: &World, entity_id: EntityId, radius: f32) -
         return ent_pos.position.distance(u_player.pos) <= radius;
     }
 
+    false
+}
+
+/// Checks if the motion query items represent an attack animation
+fn is_attack_animation(motion_query_items: &[MotionQueryItem]) -> bool {
+    for item in motion_query_items {
+        let tag = item.tag_name();
+        if tag == "attack" || tag == "meleecombat" || tag == "rangedcombat" {
+            return true;
+        }
+    }
     false
 }
