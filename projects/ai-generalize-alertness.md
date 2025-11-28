@@ -7,20 +7,49 @@ This project aims to extract and generalize the alertness system currently imple
 ## Current State Analysis
 
 ### Camera AI (Fully Implemented)
-- **Alertness Levels**: 4 levels (Lowest, Low, Moderate, High)
+- **Location**: `shock2vr/src/scripts/ai/camera_ai.rs`
+- **Alertness Levels**: 4 levels defined in `dark/src/properties/prop_ai_alert_cap.rs:12-17`
+  - `Lowest` (0), `Low` (1), `Moderate` (2), `High` (3)
 - **State Transitions**: Based on visibility timers with configurable delays
-- **Responses**: Model changes (green/yellow/red), speech lines, animation adjustments
-- **Properties Used**: PropAIAlertness, PropAIAlertCap, PropAIAwareDelay
+- **Responses**: Model changes (green/yellow/red), speech lines, joint animation
+- **Properties Used**:
+  - `PropAIAlertness` - current and peak alertness levels
+  - `PropAIAlertCap` - min/max level constraints and relax floor
+  - `PropAIAwareDelay` - timing for escalation and decay
+- **Known Bug**: Camera skips `Low` level during escalation (`Lowest → Moderate` instead of `Lowest → Low → Moderate`). Speech concepts exist for all levels (`tolevelone`, `toleveltwo`, `tolevelthree`), suggesting this was unintentional.
 
 ### Turret AI (Simple Binary)
-- **Current Implementation**: Binary states (Closed/Opening/Closing/Open)
-- **Visibility Detection**: Simple is_player_visible check
-- **No Alertness Integration**: Could benefit from gradual awareness
+- **Location**: `shock2vr/src/scripts/ai/turret_ai.rs`
+- **Current Implementation**: Binary states (`Closed`, `Opening`, `Closing`, `Open`)
+- **Visibility Detection**: Simple `is_player_visible` check with instant response
+- **No Alertness Integration**: Opens immediately when player visible
 
 ### Animated Monster AI (Behavior-Based)
-- **Current Implementation**: Behavior selection (Idle, Chase, RangedAttack)
+- **Location**: `shock2vr/src/scripts/ai/animated_monster_ai.rs`
+- **Behavior Trait**: `shock2vr/src/scripts/ai/behavior/behavior.rs`
+- **Current Behaviors**: `IdleBehavior`, `ChaseBehavior`, `MeleeAttackBehavior`, `RangedAttackBehavior`, `WanderBehavior`, `ScriptedSequenceBehavior`, `DeadBehavior`
 - **No Alertness Levels**: Behaviors switch without gradual awareness
 - **Could Benefit From**: Alertness-driven behavior transitions
+
+## Design Decisions
+
+### Naming Convention
+**Decision**: Keep original Dark Engine property field names for compatibility with game data.
+- `to_two` (not `to_moderate`) - time to reach level 2
+- `to_three` (not `to_high`) - time to reach level 3
+- `two_reuse` (not `from_moderate`) - decay time from level 2
+- `three_reuse` (not `from_high`) - decay time from level 3
+- `ignore_range` - time to return to Lowest
+
+### Escalation Path
+**Decision**: Support full 4-level escalation: `Lowest → Low → Moderate → High`
+- Fix the camera bug that skips `Low` level
+- Use `to_two` for `Lowest → Low` (half the original time)
+- Use `to_two` for `Low → Moderate` (half the original time)
+- Use `to_three` for `Moderate → High`
+
+### Alert Propagation
+**Decision**: Defer to Phase 5 (final phase).
 
 ## Proposed Architecture
 
@@ -39,9 +68,6 @@ pub struct AlertnessState {
     pub visible_time: f32,
     pub hidden_time: f32,
     pub time_since_level_change: f32,
-
-    // Optional: AI-specific state
-    pub custom_data: Option<Box<dyn Any>>,
 }
 
 impl AlertnessState {
@@ -52,228 +78,262 @@ impl AlertnessState {
             visible_time: 0.0,
             hidden_time: 0.0,
             time_since_level_change: 0.0,
-            custom_data: None,
         }
     }
 
-    pub fn reset_for_level(&mut self, level: AIAlertLevel) {
+    pub fn reset_timers_for_level_change(&mut self) {
         self.time_since_level_change = 0.0;
-        // AI-specific reset logic can be added via custom_data
     }
 }
 ```
 
-### 2. AlertnessConfig Struct
+### 2. AlertnessTimings Struct
 ```rust
+/// Timing configuration derived from PropAIAwareDelay
+/// All times are in seconds (converted from milliseconds in the property)
 #[derive(Clone, Debug)]
-pub struct AlertnessConfig {
-    // Timing parameters (from PropAIAwareDelay)
-    pub escalation_times: EscalationTimes,
-    pub decay_times: DecayTimes,
-
-    // Level constraints (from PropAIAlertCap)
-    pub alert_cap: PropAIAlertCap,
-
-    // AI-specific configuration
-    pub response_config: AlertnessResponseConfig,
+pub struct AlertnessTimings {
+    /// Time to escalate from Lowest -> Low (derived: to_two / 2)
+    pub to_low: f32,
+    /// Time to escalate from Low -> Moderate (derived: to_two / 2)
+    pub to_moderate: f32,
+    /// Time to escalate from Moderate -> High (from to_three)
+    pub to_high: f32,
+    /// Time to decay from High -> Moderate (from three_reuse)
+    pub from_high: f32,
+    /// Time to decay from Moderate -> Low (from two_reuse)
+    pub from_moderate: f32,
+    /// Time to decay from Low -> Lowest (from ignore_range)
+    pub from_low: f32,
 }
 
-#[derive(Clone, Debug)]
-pub struct EscalationTimes {
-    pub to_low: f32,      // Time to go from Lowest -> Low (if applicable)
-    pub to_moderate: f32, // Time to go from Low -> Moderate (was to_two)
-    pub to_high: f32,     // Time to go from Moderate -> High (was to_three)
-}
-
-#[derive(Clone, Debug)]
-pub struct DecayTimes {
-    pub from_high: f32,     // Time to decay from High -> Moderate (was three_reuse)
-    pub from_moderate: f32, // Time to decay from Moderate -> Low (was two_reuse)
-    pub from_low: f32,      // Time to decay from Low -> Lowest (was ignore_range)
-}
-
-#[derive(Clone, Debug)]
-pub enum AlertnessResponseConfig {
-    Camera {
-        models: CameraModels,
-        speech_enabled: bool,
-    },
-    Turret {
-        activation_delay: f32,
-        targeting_accuracy_by_level: [f32; 4],
-    },
-    Monster {
-        behavior_thresholds: BehaviorThresholds,
-    },
+impl AlertnessTimings {
+    pub fn from_aware_delay(delay: &PropAIAwareDelay) -> Self {
+        let to_two_secs = delay.to_two as f32 / 1000.0;
+        Self {
+            to_low: to_two_secs / 2.0,
+            to_moderate: to_two_secs / 2.0,
+            to_high: delay.to_three as f32 / 1000.0,
+            from_high: delay.three_reuse as f32 / 1000.0,
+            from_moderate: delay.two_reuse as f32 / 1000.0,
+            from_low: delay.ignore_range as f32 / 1000.0,
+        }
+    }
 }
 ```
 
-### 3. AlertnessManager Trait
+### 3. Core Helper Functions
 ```rust
-pub trait AlertnessManager {
-    /// Update alertness based on visibility and elapsed time
-    fn update_alertness(
-        &mut self,
-        entity_id: EntityId,
-        is_visible: bool,
-        delta: f32,
-        config: &AlertnessConfig,
-        effects: &mut Vec<Effect>,
-    );
-
-    /// Handle alertness level changes
-    fn on_alertness_changed(
-        &mut self,
-        entity_id: EntityId,
-        old_level: AIAlertLevel,
-        new_level: AIAlertLevel,
-        was_visible: bool,
-        effects: &mut Vec<Effect>,
-    );
-
-    /// Get current alertness state
-    fn get_alertness_state(&self) -> &AlertnessState;
-
-    /// Set alertness level with proper clamping and effects
-    fn set_alertness_level(
-        &mut self,
-        entity_id: EntityId,
-        new_level: AIAlertLevel,
-        config: &AlertnessConfig,
-        effects: &mut Vec<Effect>,
-    ) -> bool;
-}
-```
-
-### 4. Common Alertness Logic
-```rust
-/// Standard implementation of alertness updates that can be reused
-pub fn process_standard_alertness(
+/// Process visibility and update alertness state
+/// Returns Some(new_level) if a level change occurred, None otherwise
+pub fn process_alertness_update(
     state: &mut AlertnessState,
-    entity_id: EntityId,
     is_visible: bool,
     delta: f32,
-    config: &AlertnessConfig,
-    effects: &mut Vec<Effect>,
-    on_change: impl Fn(AIAlertLevel, AIAlertLevel, bool),
-) {
+    timings: &AlertnessTimings,
+    alert_cap: &PropAIAlertCap,
+) -> Option<(AIAlertLevel, AIAlertLevel)> {
+    state.time_since_level_change += delta;
+
     if is_visible {
         state.visible_time += delta;
         state.hidden_time = 0.0;
-
-        // Handle escalation logic
-        match state.current_level {
-            AIAlertLevel::Lowest => {
-                if state.visible_time >= config.escalation_times.to_moderate {
-                    // Escalate to Moderate
-                }
-            }
-            // ... other escalation cases
-        }
+        try_escalate(state, timings, alert_cap)
     } else {
         state.hidden_time += delta;
         state.visible_time = 0.0;
-
-        // Handle decay logic
-        // ... decay cases
+        try_decay(state, timings, alert_cap)
     }
 }
 
-/// Helper to clamp alertness levels based on caps
-pub fn clamp_alertness_level(
-    level: AIAlertLevel,
-    cap: &PropAIAlertCap,
-) -> AIAlertLevel {
-    // Implementation from camera_ai
+fn try_escalate(
+    state: &mut AlertnessState,
+    timings: &AlertnessTimings,
+    alert_cap: &PropAIAlertCap,
+) -> Option<(AIAlertLevel, AIAlertLevel)> {
+    let (threshold, next_level) = match state.current_level {
+        AIAlertLevel::Lowest => (timings.to_low, AIAlertLevel::Low),
+        AIAlertLevel::Low => (timings.to_moderate, AIAlertLevel::Moderate),
+        AIAlertLevel::Moderate => (timings.to_high, AIAlertLevel::High),
+        AIAlertLevel::High => return None,
+    };
+
+    if state.visible_time >= threshold {
+        let old_level = state.current_level;
+        if set_level(state, next_level, alert_cap) {
+            state.visible_time = 0.0;
+            return Some((old_level, state.current_level));
+        }
+    }
+    None
 }
 
-/// Helper to sync alertness with ECS
-pub fn sync_alertness_property(
-    entity_id: EntityId,
-    state: &AlertnessState,
-    effects: &mut Vec<Effect>,
-) {
-    effects.push(Effect::SetAIProperty {
+fn try_decay(
+    state: &mut AlertnessState,
+    timings: &AlertnessTimings,
+    alert_cap: &PropAIAlertCap,
+) -> Option<(AIAlertLevel, AIAlertLevel)> {
+    let (threshold, next_level) = match state.current_level {
+        AIAlertLevel::High => (timings.from_high, AIAlertLevel::Moderate),
+        AIAlertLevel::Moderate => (timings.from_moderate, AIAlertLevel::Low),
+        AIAlertLevel::Low => (timings.from_low, AIAlertLevel::Lowest),
+        AIAlertLevel::Lowest => return None,
+    };
+
+    if state.hidden_time >= threshold {
+        let old_level = state.current_level;
+        if set_level(state, next_level, alert_cap) {
+            state.hidden_time = 0.0;
+            return Some((old_level, state.current_level));
+        }
+    }
+    None
+}
+
+/// Set alertness level with clamping. Returns true if level changed.
+pub fn set_level(
+    state: &mut AlertnessState,
+    new_level: AIAlertLevel,
+    alert_cap: &PropAIAlertCap,
+) -> bool {
+    let clamped = clamp_level(new_level, alert_cap);
+    if clamped == state.current_level {
+        return false;
+    }
+
+    state.current_level = clamped;
+    state.reset_timers_for_level_change();
+
+    // Update peak level
+    if level_to_u32(clamped) > level_to_u32(state.peak_level) {
+        state.peak_level = clamped;
+    } else if level_to_u32(clamped) < level_to_u32(state.peak_level) {
+        state.peak_level = max_level(clamped, alert_cap.min_relax);
+    }
+
+    true
+}
+
+/// Clamp level to alert cap constraints
+pub fn clamp_level(level: AIAlertLevel, cap: &PropAIAlertCap) -> AIAlertLevel {
+    let raw = level_to_u32(level);
+    let min = level_to_u32(cap.min_level);
+    let max = level_to_u32(cap.max_level);
+    let clamped = raw.clamp(min, max);
+    AIAlertLevel::from_u32(clamped).unwrap_or(cap.max_level)
+}
+
+/// Create Effect to sync alertness state to ECS
+pub fn sync_alertness_effect(entity_id: EntityId, state: &AlertnessState) -> Effect {
+    Effect::SetAIProperty {
         entity_id,
         update: AIPropertyUpdate::Alertness {
             level: state.current_level,
             peak: state.peak_level,
         },
-    });
+    }
+}
+
+fn level_to_u32(level: AIAlertLevel) -> u32 {
+    level.to_u32().unwrap_or(0)
+}
+
+fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
+    if level_to_u32(a) >= level_to_u32(b) { a } else { b }
 }
 ```
 
 ## Implementation Phases
 
-### Phase 1: Core Alertness Module (Day 1)
-1. Create `alertness.rs` with core structs and traits
-2. Implement common helper functions
-3. Add unit tests for alertness state transitions
+### Phase 1: Core Alertness Module
+**Goal**: Create shared alertness infrastructure
 
-### Phase 2: Camera AI Migration (Day 2)
-1. Refactor `camera_ai.rs` to use AlertnessManager
-2. Create CameraAlertnessManager implementing the trait
-3. Ensure existing functionality is preserved
-4. Test camera behavior remains unchanged
+1. Create `shock2vr/src/scripts/ai/alertness.rs` with:
+   - `AlertnessState` struct
+   - `AlertnessTimings` struct
+   - `process_alertness_update()` function
+   - `clamp_level()`, `set_level()` helper functions
+   - `sync_alertness_effect()` for ECS updates
+2. Add module to `shock2vr/src/scripts/ai/mod.rs`
+3. Add unit tests for state transitions:
+   - Test escalation through all 4 levels
+   - Test decay through all 4 levels
+   - Test alert cap clamping (min/max/relax)
+   - Test peak level tracking
 
-### Phase 3: Turret AI Integration (Day 3)
-1. Create TurretAlertnessManager
-2. Map turret states to alertness levels:
-   - Closed → Lowest
-   - Opening → Low/Moderate (based on timing)
-   - Open → High
-   - Closing → Moderate/Low (based on timing)
-3. Add gradual awareness before opening
-4. Improve targeting based on alertness level
+### Phase 2: Camera AI Migration
+**Goal**: Refactor camera to use shared alertness module
 
-### Phase 4: Monster AI Integration (Day 4-5)
-1. Create MonsterAlertnessManager
-2. Map behaviors to alertness levels:
-   - Lowest → IdleBehavior or WanderBehavior
-   - Low → SearchBehavior (new, looking for player)
-   - Moderate → ChaseBehavior
-   - High → RangedAttackBehavior/MeleeAttackBehavior
-3. Add smooth behavior transitions
-4. Consider alertness in animation selection
+1. Replace `CameraState` alertness fields with embedded `AlertnessState`
+2. Replace `CameraTimings` with `AlertnessTimings::from_aware_delay()`
+3. Replace `process_alertness()` with calls to `alertness::process_alertness_update()`
+4. Keep camera-specific logic:
+   - Model switching (`sync_model`)
+   - Speech (`on_alert_level_changed`, `maybe_play_level_sustain`)
+   - Joint animation
+5. **Bug fix**: Camera now escalates through `Low` level
+6. Test: Verify camera behavior with existing speech/model changes
 
-### Phase 5: Polish and Extensions (Day 6)
-1. Add debug visualization for all AI alertness
-2. Create shared alertness HUD indicators
-3. Add configuration for alertness spread (one AI alerting others)
-4. Performance optimization
+### Phase 3: Turret AI Integration
+**Goal**: Add alertness tracking to turrets (optional behavioral changes)
 
-## Benefits
+1. Add `AlertnessState` to `TurretAI` struct
+2. Load `PropAIAwareDelay` and `PropAIAlertCap` in initialize
+3. Update alertness each frame via `process_alertness_update()`
+4. **Preserve existing behavior**: Turret still opens immediately on visibility
+5. Optional enhancements (can defer):
+   - Targeting accuracy varies by alertness level
+   - Play alert sounds on level changes
+6. Test: Verify turret still functions, alertness tracked correctly
 
-1. **Consistency**: All AI types follow similar alertness patterns
-2. **Reusability**: Core logic shared, reducing duplication
-3. **Extensibility**: Easy to add alertness to new AI types
-4. **Configurability**: Each AI type can customize responses
-5. **Debugging**: Unified alertness visualization and logging
-6. **Gameplay**: More predictable and fair AI awareness system
+### Phase 4: Monster AI Integration
+**Goal**: Drive behavior selection from alertness
 
-## Testing Strategy
+1. Add `AlertnessState` to `AnimatedMonsterAI` struct
+2. Load `PropAIAwareDelay` and `PropAIAlertCap` in initialize
+3. Update alertness each frame
+4. Modify `next_behavior()` logic to consider alertness:
+   - `Lowest` → `IdleBehavior` or `WanderBehavior`
+   - `Low` → `WanderBehavior` (searching)
+   - `Moderate` → `ChaseBehavior`
+   - `High` → `RangedAttackBehavior` or `MeleeAttackBehavior`
+5. Handle behavior transitions when alertness changes
+6. Test: Verify monsters react more gradually to player visibility
 
-1. **Unit Tests**: Test state transitions and timing logic
-2. **Integration Tests**: Verify each AI type responds correctly
-3. **Regression Tests**: Ensure camera AI behavior unchanged
-4. **Performance Tests**: Verify no performance degradation
-5. **Gameplay Tests**: Manual testing of AI reactions
+### Phase 5: Polish and Alert Propagation
+**Goal**: Add propagation and debugging tools
 
-## Future Enhancements
+1. Add debug visualization for alertness (similar to camera FOV debug)
+2. Implement alert propagation via `AIAlertLink` or similar:
+   - When AI reaches High alertness, notify linked AIs
+   - Linked AIs escalate their alertness
+3. Add shared alertness indicator UI (optional)
+4. Performance review
 
-1. **Alert Propagation**: AIs can alert nearby allies
-2. **Environmental Factors**: Darkness/noise affect alertness
-3. **Player Actions**: Stealth mechanics to reduce alertness
-4. **Persistent Alertness**: Remember player across map transitions
-5. **Difficulty Scaling**: Adjust timing based on difficulty
-6. **Audio Cues**: Consistent audio feedback for alertness changes
+## File Summary
+
+| File | Changes |
+|------|---------|
+| `shock2vr/src/scripts/ai/alertness.rs` | **New** - Core alertness module |
+| `shock2vr/src/scripts/ai/mod.rs` | Add `mod alertness` |
+| `shock2vr/src/scripts/ai/camera_ai.rs` | Refactor to use alertness module, fix Low level bug |
+| `shock2vr/src/scripts/ai/turret_ai.rs` | Add alertness tracking |
+| `shock2vr/src/scripts/ai/animated_monster_ai.rs` | Add alertness-driven behavior selection |
 
 ## Success Criteria
 
-- [ ] Camera AI retains all existing functionality
-- [ ] Turret AI gains gradual awareness
-- [ ] Monster AI behaviors driven by alertness
-- [ ] Code duplication reduced by >50%
-- [ ] All AI types use consistent alertness visualization
+- [ ] Camera AI retains all existing functionality (speech, models, animation)
+- [ ] Camera AI now uses `Low` level correctly
+- [ ] Turret AI tracks alertness (even if behavior unchanged initially)
+- [ ] Monster AI behaviors driven by alertness levels
+- [ ] Shared alertness code in `alertness.rs` used by all AI types
+- [ ] Unit tests for alertness state machine
 - [ ] No performance regression
-- [ ] Easy to add alertness to new AI scripts
+
+## Future Enhancements (Out of Scope)
+
+1. **Environmental Factors**: Darkness/noise affect alertness detection
+2. **Player Actions**: Stealth mechanics to reduce alertness
+3. **Persistent Alertness**: Remember player across map transitions
+4. **Difficulty Scaling**: Adjust timing based on difficulty setting
+5. **Audio Cues**: Consistent audio feedback for alertness changes
