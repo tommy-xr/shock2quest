@@ -1,8 +1,8 @@
 use std::f32::consts::PI;
 
 use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation3, SquareMatrix,
-    Transform, Vector3, point3, vec3, vec4,
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3,
+    SquareMatrix, Transform, Vector3, point3, vec3, vec4,
 };
 use dark::{EnvSoundQuery, SCALE_FACTOR, properties::*};
 use engine::audio::AudioHandle;
@@ -385,7 +385,7 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
 /// * `from_entity` - The entity doing the looking
 /// * `world` - The ECS world
 /// * `physics` - Physics world for raycasting
-/// * `heading` - The entity's current facing direction (yaw in degrees)
+/// * `heading` - The entity's current facing direction offset (yaw in degrees)
 /// * `fov_half_angle` - Half of the field of view angle in degrees
 ///
 /// # Returns
@@ -415,14 +415,17 @@ pub fn is_player_visible_in_fov(
 
         let to_player_2d = to_player_2d.normalize();
 
-        // Calculate entity's forward direction from heading
-        // Heading is yaw angle, where 0 = +Z, 90 = +X
-        let heading_rad = heading.0.to_radians();
-        let forward = Vector3::new(heading_rad.sin(), 0.0, heading_rad.cos());
+        // Calculate entity's forward direction combining base rotation and heading offset
+        // This matches the debug visualization in ai_debug_util::draw_debug_fov
+        let orientation = ent_pos.rotation * Quaternion::from_angle_y(-heading);
+        let forward_3d = orientation.rotate_vector(vec3(0.0, 0.0, 1.0));
+        let forward = Vector3::new(forward_3d.x, 0.0, forward_3d.z).normalize();
 
         // Calculate angle between forward and direction to player
         let dot = forward.dot(to_player_2d);
-        let angle_to_player = dot.acos().to_degrees();
+        // Clamp dot product to valid range for acos
+        let dot_clamped = dot.clamp(-1.0, 1.0);
+        let angle_to_player = dot_clamped.acos().to_degrees();
 
         // Check if player is within FOV
         if angle_to_player > fov_half_angle {

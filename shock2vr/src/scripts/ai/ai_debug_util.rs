@@ -171,16 +171,6 @@ impl Default for FovDebugConfig {
 }
 
 impl FovDebugConfig {
-    /// Configuration for cameras (uses scan angles from camera config)
-    pub fn camera(scan_angle_1: f32, scan_angle_2: f32) -> Self {
-        let fov_total = scan_angle_2 - scan_angle_1;
-        Self {
-            height_offset: 0.5,
-            line_length: 5.0,
-            fov_half_angle: fov_total * 0.5,
-        }
-    }
-
     /// Configuration for turrets (narrower FOV)
     pub fn turret() -> Self {
         Self {
