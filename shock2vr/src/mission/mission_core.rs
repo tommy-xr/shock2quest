@@ -101,6 +101,12 @@ pub struct PlayerInfo {
     pub inventory_entity_id: EntityId,
 }
 
+/// Debug options accessible from scripts via UniqueView
+#[derive(Unique, Clone, Default)]
+pub struct DebugOptions {
+    pub debug_ai: bool,
+}
+
 #[derive(Unique, Clone)]
 pub struct EffectQueue {
     effects: Vec<Effect>,
@@ -234,6 +240,9 @@ impl MissionCore {
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
         world.add_unique(speech_registry);
+        world.add_unique(DebugOptions {
+            debug_ai: game_options.debug_ai,
+        });
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
 

@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::PlayerInfo,
+    mission::{DebugOptions, PlayerInfo},
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util, speech_util},
     time::Time,
@@ -575,7 +575,9 @@ fn draw_debug_camera_fov(
     config: &CameraConfig,
     is_visible: bool,
 ) -> Effect {
-    if !cfg!(debug_assertions) {
+    // Check if debug_ai is enabled
+    let debug_options = world.borrow::<UniqueView<DebugOptions>>().ok();
+    if !debug_options.map(|d| d.debug_ai).unwrap_or(false) {
         return Effect::NoEffect;
     }
 

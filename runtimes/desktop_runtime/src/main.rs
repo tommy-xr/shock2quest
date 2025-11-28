@@ -111,6 +111,9 @@ struct Args {
     #[arg(long = "debug-skeletons")]
     debug_skeletons: bool,
 
+    #[arg(long = "debug-ai")]
+    debug_ai: bool,
+
     #[arg(short, long, default_value = None)]
     save_file: Option<String>,
     // Number of times to greet
@@ -241,6 +244,7 @@ pub fn main() {
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,
+        debug_ai: args.debug_ai,
         render_particles: true,
         experimental_features,
         ..GameOptions::default()

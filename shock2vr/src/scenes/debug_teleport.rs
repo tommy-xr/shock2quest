@@ -29,6 +29,7 @@ impl DebugTeleportScene {
             debug_portals: game_options.debug_portals,
             debug_show_ids: game_options.debug_show_ids,
             debug_skeletons: game_options.debug_skeletons,
+            debug_ai: game_options.debug_ai,
             experimental_features,
         };
 
