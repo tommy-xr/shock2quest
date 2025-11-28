@@ -296,7 +296,16 @@ impl Script for AnimatedMonsterAI {
         time: &Time,
     ) -> Effect {
         let delta = time.elapsed.as_secs_f32();
-        let is_visible = is_player_visible(entity_id, world, physics);
+
+        // Monster FOV is 60 degrees half-angle (matches FovDebugConfig::monster())
+        const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
+        let is_visible = is_player_visible_in_fov(
+            entity_id,
+            world,
+            physics,
+            self.current_heading,
+            MONSTER_FOV_HALF_ANGLE,
+        );
 
         // Update alertness state
         let (alertness_effect, behavior_change_effect) = if let Some(config) = &self.config {

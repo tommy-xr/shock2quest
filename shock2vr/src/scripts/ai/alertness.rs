@@ -185,6 +185,19 @@ fn try_decay(
     timings: &AlertnessTimings,
     alert_cap: &PropAIAlertCap,
 ) -> Option<(AIAlertLevel, AIAlertLevel)> {
+    // Check if we're already at the minimum relaxation floor
+    // Once the entity has reached a certain peak, it won't fully relax below min_relax
+    let relax_floor = if level_to_u32(state.peak_level) >= level_to_u32(alert_cap.min_relax) {
+        alert_cap.min_relax
+    } else {
+        alert_cap.min_level
+    };
+
+    // Can't decay below the relax floor
+    if level_to_u32(state.current_level) <= level_to_u32(relax_floor) {
+        return None;
+    }
+
     let (threshold, next_level) = match state.current_level {
         AIAlertLevel::High => (timings.from_high, AIAlertLevel::Moderate),
         AIAlertLevel::Moderate => (timings.from_moderate, AIAlertLevel::Low),
@@ -194,7 +207,9 @@ fn try_decay(
 
     if state.hidden_time >= threshold {
         let old_level = state.current_level;
-        if set_level(state, next_level, alert_cap) {
+        // Ensure we don't decay below the relax floor
+        let clamped_next = max_level(next_level, relax_floor);
+        if set_level(state, clamped_next, alert_cap) {
             state.hidden_time = 0.0;
             return Some((old_level, state.current_level));
         }

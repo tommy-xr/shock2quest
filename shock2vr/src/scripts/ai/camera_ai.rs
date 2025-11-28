@@ -418,7 +418,23 @@ impl Script for CameraAI {
         let config_clone = self.config.clone();
 
         if let Some(config) = config_clone.as_ref() {
-            is_visible = ai_util::is_player_visible(entity_id, world, physics);
+            // Calculate camera's effective heading from base yaw + view angle
+            let base_yaw = ai_util::current_yaw(entity_id, world);
+            let effective_heading = Deg(base_yaw.0 + self.state.view_angle + 90.0);
+
+            // Calculate FOV half-angle from camera scan angles
+            let fov_total = config.camera.scan_angle_2 - config.camera.scan_angle_1;
+            let fov_half_angle = fov_total * 0.5;
+
+            // Check visibility with FOV constraint
+            is_visible = ai_util::is_player_visible_in_fov(
+                entity_id,
+                world,
+                physics,
+                effective_heading,
+                fov_half_angle,
+            );
+
             if is_visible {
                 let v_pos = world.borrow::<View<PropPosition>>().unwrap();
                 if let Ok(pose) = v_pos.get(entity_id) {
@@ -426,8 +442,7 @@ impl Script for CameraAI {
                     let target_yaw = ai_util::yaw_between_vectors(pose.position, u_player.pos);
                     drop(u_player);
 
-                    let current_yaw = ai_util::current_yaw(entity_id, world);
-                    target_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
+                    target_angle = normalize_deg(base_yaw.0 - target_yaw.0 - 90.0);
                 }
             }
 

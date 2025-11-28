@@ -345,6 +345,10 @@ pub fn play_positional_sound(
     }
 }
 
+/// Check if the player is visible from an entity (raycast only, no FOV check)
+///
+/// This is a basic visibility check that only verifies line-of-sight.
+/// For FOV-aware visibility, use `is_player_visible_in_fov`.
 pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
     let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
@@ -366,6 +370,79 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
         // If we didn't hit anything - player visible!
         // Currently, the ray cast doesn't intersect player...
         // TODO: Check for entities, but pass-through transparent ones (ie, glass/windows)
+        return result.is_none();
+    };
+
+    false
+}
+
+/// Check if the player is visible from an entity within a field of view
+///
+/// This combines a raycast check with an FOV cone check based on the entity's
+/// current heading and FOV half-angle.
+///
+/// # Arguments
+/// * `from_entity` - The entity doing the looking
+/// * `world` - The ECS world
+/// * `physics` - Physics world for raycasting
+/// * `heading` - The entity's current facing direction (yaw in degrees)
+/// * `fov_half_angle` - Half of the field of view angle in degrees
+///
+/// # Returns
+/// `true` if the player is within the FOV cone AND there's line-of-sight
+pub fn is_player_visible_in_fov(
+    from_entity: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    heading: Deg<f32>,
+    fov_half_angle: f32,
+) -> bool {
+    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+
+    if let Ok(ent_pos) = v_current_pos.get(from_entity) {
+        let entity_pos = ent_pos.position;
+        let player_pos = u_player.pos;
+
+        // Calculate direction to player
+        let to_player = player_pos - entity_pos;
+        let to_player_2d = Vector3::new(to_player.x, 0.0, to_player.z);
+
+        if to_player_2d.magnitude2() < 1e-6 {
+            // Player is directly above/below - consider visible
+            return is_player_visible(from_entity, world, physics);
+        }
+
+        let to_player_2d = to_player_2d.normalize();
+
+        // Calculate entity's forward direction from heading
+        // Heading is yaw angle, where 0 = +Z, 90 = +X
+        let heading_rad = heading.0.to_radians();
+        let forward = Vector3::new(heading_rad.sin(), 0.0, heading_rad.cos());
+
+        // Calculate angle between forward and direction to player
+        let dot = forward.dot(to_player_2d);
+        let angle_to_player = dot.acos().to_degrees();
+
+        // Check if player is within FOV
+        if angle_to_player > fov_half_angle {
+            return false;
+        }
+
+        // Player is in FOV, now check line-of-sight
+        let start_point = point3(0.0, 0.0, 0.0) + entity_pos;
+        let end_point = point3(0.0, 0.0, 0.0) + player_pos;
+        let direction = (end_point - start_point).normalize();
+        let distance = (end_point - start_point).magnitude();
+        let result = physics.ray_cast2(
+            start_point,
+            direction,
+            distance,
+            InternalCollisionGroups::WORLD,
+            Some(from_entity),
+            true,
+        );
+
         return result.is_none();
     };
 

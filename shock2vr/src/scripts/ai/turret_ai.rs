@@ -25,10 +25,8 @@ impl TurretState {
         entity_id: EntityId,
         time: &Time,
         world: &World,
-        physics: &PhysicsWorld,
+        is_player_visible: bool,
     ) -> (TurretState, Effect) {
-        let is_player_visible = ai_util::is_player_visible(entity_id, world, physics);
-
         match current_state {
             TurretState::Closed => {
                 if is_player_visible {
@@ -229,7 +227,16 @@ impl Script for TurretAI {
         time: &Time,
     ) -> Effect {
         let delta = time.elapsed.as_secs_f32();
-        let is_visible = ai_util::is_player_visible(entity_id, world, physics);
+
+        // Turret FOV is 30 degrees half-angle (matches FovDebugConfig::turret())
+        const TURRET_FOV_HALF_ANGLE: f32 = 30.0;
+        let is_visible = ai_util::is_player_visible_in_fov(
+            entity_id,
+            world,
+            physics,
+            self.current_heading,
+            TURRET_FOV_HALF_ANGLE,
+        );
 
         // Update alertness state
         let alertness_effect = if let Some(config) = &self.config {
@@ -249,9 +256,9 @@ impl Script for TurretAI {
             Effect::NoEffect
         };
 
-        // Existing turret state machine (unchanged behavior)
+        // Existing turret state machine (now uses FOV-aware visibility)
         let (new_state, state_eff) =
-            TurretState::update(&self.current_state, entity_id, time, world, physics);
+            TurretState::update(&self.current_state, entity_id, time, world, is_visible);
         self.current_state = new_state;
 
         let open_amount = match self.current_state {
