@@ -4,7 +4,9 @@ use cgmath::{Deg, MetricSpace, Quaternion, Rotation3, vec3, vec4};
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
-    properties::{Link, PropAISignalResponse, PropPosition},
+    properties::{
+        AIAlertLevel, Link, PropAIAlertCap, PropAIAwareDelay, PropAISignalResponse, PropPosition,
+    },
 };
 use rand;
 use shipyard::{EntityId, Get, View, World};
@@ -18,10 +20,23 @@ use crate::{
 
 use super::{
     Effect, Message, MessagePayload, Script,
+    ai_debug_util::{self, AlertnessDebugConfig, FovDebugConfig},
     ai_util::*,
+    alertness::{self, AlertnessState, AlertnessTimings},
     behavior::*,
     steering::{Steering, SteeringOutput},
 };
+// Default timing constants for monsters (in seconds)
+const DEFAULT_ESCALATE_SECONDS: f32 = 1.5;
+const DEFAULT_DECAY_SECONDS: f32 = 3.0;
+
+/// Configuration for monster alertness behavior
+#[derive(Clone)]
+struct MonsterConfig {
+    alert_cap: PropAIAlertCap,
+    timings: AlertnessTimings,
+}
+
 pub struct AnimatedMonsterAI {
     last_hit_sensor: Option<EntityId>,
     current_behavior: Box<RefCell<dyn Behavior>>,
@@ -32,6 +47,11 @@ pub struct AnimatedMonsterAI {
     locomotion_seq: u32,
 
     played_ai_watch_obj: HashSet<EntityId>,
+
+    /// Alertness state tracking
+    alertness: AlertnessState,
+    /// Alertness configuration (loaded from entity properties)
+    config: Option<MonsterConfig>,
 }
 
 impl AnimatedMonsterAI {
@@ -39,29 +59,86 @@ impl AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
             took_damage: false,
-            //current_behavior: Box::new(RefCell::new(MeleeAttackBehavior)),
-            //current_behavior: Box::new(RefCell::new(ChaseBehavior::new())),
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
             last_hit_sensor: None,
-
             played_ai_watch_obj: HashSet::new(),
+            alertness: AlertnessState::default(),
+            config: None,
         }
     }
+
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
             took_damage: false,
-            //current_behavior: Box::new(RefCell::new(MeleeAttackBehavior)),
-            //current_behavior: Box::new(RefCell::new(ChaseBehavior::new())),
-            current_behavior: Box::new(RefCell::new(RangedAttackBehavior)),
+            // Start with IdleBehavior - alertness will drive behavior changes
+            current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
             last_hit_sensor: None,
             played_ai_watch_obj: HashSet::new(),
+            alertness: AlertnessState::default(),
+            config: None,
+        }
+    }
+
+    fn build_config(world: &World, entity_id: EntityId) -> Option<MonsterConfig> {
+        let (v_alert_cap, v_aware_delay): (View<PropAIAlertCap>, View<PropAIAwareDelay>) =
+            world.borrow().ok()?;
+
+        let alert_cap = v_alert_cap
+            .get(entity_id)
+            .ok()
+            .cloned()
+            .unwrap_or(PropAIAlertCap {
+                max_level: AIAlertLevel::High,
+                min_level: AIAlertLevel::Lowest,
+                min_relax: AIAlertLevel::Low,
+            });
+
+        // Build default aware delay for monsters (faster than cameras/turrets)
+        let default_aware_delay = PropAIAwareDelay {
+            to_two: (DEFAULT_ESCALATE_SECONDS * 1000.0) as u32,
+            to_three: (DEFAULT_ESCALATE_SECONDS * 1000.0) as u32,
+            two_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+            three_reuse: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+            ignore_range: (DEFAULT_DECAY_SECONDS * 1000.0) as u32,
+        };
+
+        let aware_delay = v_aware_delay
+            .get(entity_id)
+            .ok()
+            .cloned()
+            .unwrap_or(default_aware_delay);
+
+        let timings = AlertnessTimings::from_aware_delay(&aware_delay);
+
+        Some(MonsterConfig { alert_cap, timings })
+    }
+
+    /// Get the appropriate behavior for the current alertness level
+    fn behavior_for_alertness(
+        &self,
+        world: &World,
+        _physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Box<RefCell<dyn Behavior>> {
+        match self.alertness.current_level {
+            AIAlertLevel::Lowest => Box::new(RefCell::new(IdleBehavior)),
+            AIAlertLevel::Low => Box::new(RefCell::new(WanderBehavior::new())),
+            AIAlertLevel::Moderate => Box::new(RefCell::new(ChaseBehavior::new())),
+            AIAlertLevel::High => {
+                // Choose attack type based on whether monster has ranged weapon
+                if has_ranged_weapon(world, entity_id) {
+                    Box::new(RefCell::new(RangedAttackBehavior))
+                } else {
+                    Box::new(RefCell::new(MeleeAttackBehavior))
+                }
+            }
         }
     }
 
@@ -188,22 +265,28 @@ impl AnimatedMonsterAI {
 impl Script for AnimatedMonsterAI {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.current_heading = current_yaw(entity_id, world);
+
+        // Load alertness configuration from entity properties
+        self.config = Self::build_config(world, entity_id);
+
+        // Initialize alertness state
+        let alertness_effect = if let Some(config) = &self.config {
+            let initial_level = alertness::clamp_level(AIAlertLevel::Lowest, &config.alert_cap);
+            self.alertness = AlertnessState::new(initial_level);
+            alertness::sync_alertness_effect(entity_id, &self.alertness)
+        } else {
+            Effect::NoEffect
+        };
+
         let is_locomotion = self.current_behavior.borrow().is_locomotion();
         let selection_strategy = self.next_selection(is_locomotion);
-        Effect::QueueAnimationBySchema {
+        let animation_effect = Effect::QueueAnimationBySchema {
             entity_id,
             motion_query_items: self.current_behavior.borrow().animation(),
-            selection_strategy, //     MotionQueryItem::new("rangedcombat".to_owned())),
-                                //     // "rangedcombat".to_owned(),
-                                //     // "attack".to_owned(),
-                                //     //"direction".to_owned(),
-                                // ],
-        }
+            selection_strategy,
+        };
 
-        // Effect::QueueAnimationBySchema {
-        //     entity_id,
-        //     motion_query_items: self.current_behavior.animation(),
-        // }
+        Effect::combine(vec![alertness_effect, animation_effect])
     }
     fn update(
         &mut self,
@@ -212,6 +295,41 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        let delta = time.elapsed.as_secs_f32();
+        let is_visible = is_player_visible(entity_id, world, physics);
+
+        // Update alertness state
+        let (alertness_effect, behavior_change_effect) = if let Some(config) = &self.config {
+            if let Some((_old_level, _new_level)) = alertness::process_alertness_update(
+                &mut self.alertness,
+                is_visible,
+                delta,
+                &config.timings,
+                &config.alert_cap,
+            ) {
+                // Level changed - sync to ECS and potentially change behavior
+                let sync_effect = alertness::sync_alertness_effect(entity_id, &self.alertness);
+
+                // When alertness changes, update behavior to match new level
+                let new_behavior = self.behavior_for_alertness(world, physics, entity_id);
+                self.current_behavior = new_behavior;
+
+                let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                let selection_strategy = self.next_selection(is_locomotion);
+                let animation_effect = Effect::QueueAnimationBySchema {
+                    entity_id,
+                    motion_query_items: self.current_behavior.borrow().animation(),
+                    selection_strategy,
+                };
+
+                (sync_effect, animation_effect)
+            } else {
+                (Effect::NoEffect, Effect::NoEffect)
+            }
+        } else {
+            (Effect::NoEffect, Effect::NoEffect)
+        };
+
         // Check our AIWatchObj status
         let ai_signal_resp =
             script_util::get_all_links_with_data(world, entity_id, |link| match link {
@@ -219,14 +337,14 @@ impl Script for AnimatedMonsterAI {
                 _ => None,
             });
 
-        for (entity_id, watch_options) in ai_signal_resp {
-            if self.played_ai_watch_obj.contains(&entity_id) {
+        for (ent_id, watch_options) in ai_signal_resp {
+            if self.played_ai_watch_obj.contains(&ent_id) {
                 continue;
             }
 
-            if player_is_within_watch_obj(world, entity_id, watch_options.radius) {
+            if player_is_within_watch_obj(world, ent_id, watch_options.radius) {
                 // Immediately switch to Scripted sequence Behavior
-                self.played_ai_watch_obj.insert(entity_id);
+                self.played_ai_watch_obj.insert(ent_id);
                 self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
                     world,
                     watch_options.scripted_actions.clone(),
@@ -253,15 +371,34 @@ impl Script for AnimatedMonsterAI {
 
         let rotation_effect = self.apply_steering_output(steering_output, time, entity_id);
 
-        let debug_effect = draw_debug_facing_line(world, entity_id);
-
         let sensor_effect = self.try_tickle_sensor(world, physics, entity_id);
 
+        // Debug visualization - alertness bar
+        let alertness_debug_effect = ai_debug_util::draw_debug_alertness(
+            world,
+            entity_id,
+            &self.alertness,
+            is_visible,
+            &AlertnessDebugConfig::monster(),
+        );
+
+        // Debug visualization - FOV cone
+        let fov_debug_effect = ai_debug_util::draw_debug_fov(
+            world,
+            entity_id,
+            self.current_heading,
+            is_visible,
+            &FovDebugConfig::monster(),
+        );
+
         Effect::combine(vec![
+            alertness_effect,
+            behavior_change_effect,
             steering_effects,
             rotation_effect,
-            debug_effect,
             sensor_effect,
+            alertness_debug_effect,
+            fov_debug_effect,
         ])
     }
 

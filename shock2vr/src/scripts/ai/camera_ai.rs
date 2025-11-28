@@ -1,4 +1,4 @@
-use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3, point3, vec3, vec4};
+use cgmath::{Deg, Quaternion, Rotation3};
 use dark::properties::{
     AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
     PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::{DebugOptions, PlayerInfo},
+    mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util, speech_util},
     time::Time,
@@ -15,6 +15,7 @@ use crate::{
 
 use super::{
     MessagePayload, Script,
+    ai_debug_util::{self, AlertnessDebugConfig, FovDebugConfig},
     alertness::{self, AlertnessState, AlertnessTimings},
 };
 
@@ -479,10 +480,30 @@ impl Script for CameraAI {
         if let Some(config) = config_clone.as_ref() {
             self.maybe_play_level_sustain(entity_id, config, &mut effects);
 
-            let debug_effect =
-                draw_debug_camera_fov(world, entity_id, aim_angle, config, is_visible);
-            if !matches!(debug_effect, Effect::NoEffect) {
-                effects.push(debug_effect);
+            // FOV debug visualization (camera uses aim_angle for custom orientation)
+            let fov_config =
+                FovDebugConfig::camera(config.camera.scan_angle_1, config.camera.scan_angle_2);
+            let fov_debug_effect = ai_debug_util::draw_debug_fov(
+                world,
+                entity_id,
+                Deg(aim_angle + 90.0), // Camera-specific offset
+                is_visible,
+                &fov_config,
+            );
+            if !matches!(fov_debug_effect, Effect::NoEffect) {
+                effects.push(fov_debug_effect);
+            }
+
+            // Alertness bar debug visualization (shared with turrets/monsters)
+            let alertness_debug_effect = ai_debug_util::draw_debug_alertness(
+                world,
+                entity_id,
+                &self.state.alertness,
+                is_visible,
+                &AlertnessDebugConfig::camera(),
+            );
+            if !matches!(alertness_debug_effect, Effect::NoEffect) {
+                effects.push(alertness_debug_effect);
             }
         }
 
@@ -566,67 +587,4 @@ impl CameraModels {
             AIAlertLevel::Lowest => &self.green,
         }
     }
-}
-
-fn draw_debug_camera_fov(
-    world: &World,
-    entity_id: EntityId,
-    aim_angle: f32,
-    config: &CameraConfig,
-    is_visible: bool,
-) -> Effect {
-    // Check if debug_ai is enabled
-    let debug_options = world.borrow::<UniqueView<DebugOptions>>().ok();
-    if !debug_options.map(|d| d.debug_ai).unwrap_or(false) {
-        return Effect::NoEffect;
-    }
-
-    let v_pos = world.borrow::<View<PropPosition>>().unwrap();
-    if let Ok(pose) = v_pos.get(entity_id) {
-        let origin = point3(pose.position.x, pose.position.y, pose.position.z);
-        let orientation = pose.rotation * Quaternion::from_angle_y(Deg(-aim_angle - 90.0));
-        let forward = orientation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize();
-
-        let up = Vector3::new(0.0, 1.0, 0.0);
-        let mut right = forward.cross(up);
-        if right.magnitude2() < 1e-4 {
-            right = Vector3::new(1.0, 0.0, 0.0);
-        } else {
-            right = right.normalize();
-        }
-
-        let fov_total = config.camera.scan_angle_2 - config.camera.scan_angle_1;
-        let fov_half_rad = (fov_total * 0.5).to_radians();
-        let cos_half = fov_half_rad.cos();
-        let sin_half = fov_half_rad.sin();
-        let rotated_left = (forward * cos_half) - (right * sin_half);
-        let rotated_right = (forward * cos_half) + (right * sin_half);
-
-        let length = 5.0;
-        let origin_point = origin + vec3(0.0, 0.5, 0.0);
-
-        let main_color = if is_visible {
-            vec4(0.0, 1.0, 0.0, 1.0)
-        } else {
-            vec4(1.0, 0.0, 0.0, 1.0)
-        };
-
-        return Effect::DrawDebugLines {
-            lines: vec![
-                (origin_point, origin_point + forward * length, main_color),
-                (
-                    origin_point,
-                    origin_point + rotated_left.normalize() * length,
-                    vec4(0.0, 0.5, 1.0, 1.0),
-                ),
-                (
-                    origin_point,
-                    origin_point + rotated_right.normalize() * length,
-                    vec4(0.0, 0.5, 1.0, 1.0),
-                ),
-            ],
-        };
-    }
-
-    Effect::NoEffect
 }
