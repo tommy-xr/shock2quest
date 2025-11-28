@@ -1,4 +1,5 @@
 pub mod ai_util;
+pub mod alertness;
 pub mod steering;
 
 mod animated_monster_ai;
