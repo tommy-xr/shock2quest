@@ -180,6 +180,9 @@ fn try_escalate(
 }
 
 /// Attempt to decay alertness level based on hidden time.
+///
+/// Note: `min_relax` in `PropAIAlertCap` only affects peak_level tracking (in `set_level`),
+/// not the current level decay floor. The current level can decay all the way to `min_level`.
 fn try_decay(
     state: &mut AlertnessState,
     timings: &AlertnessTimings,

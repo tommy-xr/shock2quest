@@ -264,7 +264,8 @@ impl CameraAI {
             .unwrap_or(PropAIAlertCap {
                 max_level: AIAlertLevel::High,
                 min_level: AIAlertLevel::Lowest,
-                min_relax: AIAlertLevel::Low,
+                // Allow camera to fully decay to Lowest (green) when player is out of sight
+                min_relax: AIAlertLevel::Lowest,
             });
 
         // Build default aware delay using the same constants as before
@@ -418,7 +419,24 @@ impl Script for CameraAI {
         let config_clone = self.config.clone();
 
         if let Some(config) = config_clone.as_ref() {
-            is_visible = ai_util::is_player_visible(entity_id, world, physics);
+            // Camera's effective heading matches the joint rotation (view_angle)
+            // The +90 offset aligns with how the debug visualization works
+            let effective_heading = Deg(self.state.view_angle + 90.0);
+
+            // Camera has a fixed instantaneous FOV (the cone it can see at any moment)
+            // This is separate from the scan range (how far it sweeps back and forth)
+            // Using 30 degrees half-angle = 60 degree total cone
+            const CAMERA_INSTANTANEOUS_FOV_HALF: f32 = 30.0;
+
+            // Check visibility with FOV constraint
+            is_visible = ai_util::is_player_visible_in_fov(
+                entity_id,
+                world,
+                physics,
+                effective_heading,
+                CAMERA_INSTANTANEOUS_FOV_HALF,
+            );
+
             if is_visible {
                 let v_pos = world.borrow::<View<PropPosition>>().unwrap();
                 if let Ok(pose) = v_pos.get(entity_id) {
@@ -426,8 +444,8 @@ impl Script for CameraAI {
                     let target_yaw = ai_util::yaw_between_vectors(pose.position, u_player.pos);
                     drop(u_player);
 
-                    let current_yaw = ai_util::current_yaw(entity_id, world);
-                    target_angle = normalize_deg(current_yaw.0 - target_yaw.0 - 90.0);
+                    let base_yaw = ai_util::current_yaw(entity_id, world);
+                    target_angle = normalize_deg(base_yaw.0 - target_yaw.0 - 90.0);
                 }
             }
 
@@ -480,13 +498,17 @@ impl Script for CameraAI {
         if let Some(config) = config_clone.as_ref() {
             self.maybe_play_level_sustain(entity_id, config, &mut effects);
 
-            // FOV debug visualization (camera uses aim_angle for custom orientation)
-            let fov_config =
-                FovDebugConfig::camera(config.camera.scan_angle_1, config.camera.scan_angle_2);
+            // FOV debug visualization - use aim_angle which matches the joint transform
+            const CAMERA_INSTANTANEOUS_FOV_HALF: f32 = 30.0;
+            let fov_config = FovDebugConfig {
+                height_offset: 0.5,
+                line_length: 5.0,
+                fov_half_angle: CAMERA_INSTANTANEOUS_FOV_HALF,
+            };
             let fov_debug_effect = ai_debug_util::draw_debug_fov(
                 world,
                 entity_id,
-                Deg(aim_angle + 90.0), // Camera-specific offset
+                Deg(aim_angle + 90.0),
                 is_visible,
                 &fov_config,
             );
@@ -583,8 +605,9 @@ impl CameraModels {
     fn model_for_level(&self, level: AIAlertLevel) -> &str {
         match level {
             AIAlertLevel::High => &self.red,
-            AIAlertLevel::Moderate | AIAlertLevel::Low => &self.yellow,
-            AIAlertLevel::Lowest => &self.green,
+            AIAlertLevel::Moderate => &self.yellow,
+            // Low and Lowest both show green - camera is in "safe" state
+            AIAlertLevel::Low | AIAlertLevel::Lowest => &self.green,
         }
     }
 }
