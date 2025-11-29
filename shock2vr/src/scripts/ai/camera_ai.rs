@@ -36,6 +36,11 @@ const ALERT_DECAY_SECONDS: f32 = 5.0;
 const CAMERA_SPEECH_LOOP_DELAY: f32 = 1.5;
 const CAMERA_SPEECH_MIN_INTERVAL: f32 = 1.0;
 
+/// Camera's instantaneous field of view (half-angle in degrees).
+/// This is the cone the camera can see at any moment, separate from its scan sweep range.
+/// 30 degrees half-angle = 60 degree total viewing cone.
+const CAMERA_FOV_HALF_ANGLE: f32 = 30.0;
+
 #[derive(Clone)]
 struct CameraModels {
     green: String,
@@ -423,18 +428,13 @@ impl Script for CameraAI {
             // The +90 offset aligns with how the debug visualization works
             let effective_heading = Deg(self.state.view_angle + 90.0);
 
-            // Camera has a fixed instantaneous FOV (the cone it can see at any moment)
-            // This is separate from the scan range (how far it sweeps back and forth)
-            // Using 30 degrees half-angle = 60 degree total cone
-            const CAMERA_INSTANTANEOUS_FOV_HALF: f32 = 30.0;
-
             // Check visibility with FOV constraint
             is_visible = ai_util::is_player_visible_in_fov(
                 entity_id,
                 world,
                 physics,
                 effective_heading,
-                CAMERA_INSTANTANEOUS_FOV_HALF,
+                CAMERA_FOV_HALF_ANGLE,
             );
 
             if is_visible {
@@ -499,11 +499,10 @@ impl Script for CameraAI {
             self.maybe_play_level_sustain(entity_id, config, &mut effects);
 
             // FOV debug visualization - use aim_angle which matches the joint transform
-            const CAMERA_INSTANTANEOUS_FOV_HALF: f32 = 30.0;
             let fov_config = FovDebugConfig {
                 height_offset: 0.5,
                 line_length: 5.0,
-                fov_half_angle: CAMERA_INSTANTANEOUS_FOV_HALF,
+                fov_half_angle: CAMERA_FOV_HALF_ANGLE,
             };
             let fov_debug_effect = ai_debug_util::draw_debug_fov(
                 world,
