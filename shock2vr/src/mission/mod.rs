@@ -86,6 +86,7 @@ impl Mission {
             entity_info: level.entity_info,
             obj_map,
             visibility_engine: Box::new(PortalVisibilityEngine::new()),
+            path_database: level.path_database,
         };
 
         let mission_core = MissionCore::load(
