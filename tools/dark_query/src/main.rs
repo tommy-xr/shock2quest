@@ -98,6 +98,15 @@ enum Commands {
         /// Tags to query environmental sounds (e.g., "+event:shoot", "+weapontype:pistol")
         tags: Vec<String>,
     },
+    /// Query AI pathfinding database from mission files
+    Aipath {
+        /// Mission file to load pathfinding data from (e.g., "medsci1.mis")
+        mission: String,
+
+        /// Limit the number of cells/links to display
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 fn init_logging(verbose: bool) -> Result<()> {
@@ -173,6 +182,9 @@ fn main() -> Result<()> {
         }
         Commands::Sound { tags } => {
             handle_sound_command(&tags)?;
+        }
+        Commands::Aipath { mission, limit } => {
+            handle_aipath_command(&mission, limit)?;
         }
     }
 
@@ -770,4 +782,321 @@ fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::Syste
             println!("    {}. {}", i + 1, link_name);
         }
     }
+}
+
+fn handle_aipath_command(mission: &str, limit: Option<usize>) -> Result<()> {
+    use std::fs::File;
+
+    info!("Loading AIPATH data from {}...", mission);
+
+    // Load the mission file
+    let data_root = shock2vr::paths::data_root();
+    let mission_path = data_root.join(mission);
+
+    if !mission_path.exists() {
+        anyhow::bail!("Mission file not found: {}", mission_path.display());
+    }
+
+    let mut file = File::open(&mission_path)?;
+
+    // Parse AIPATH chunk directly
+    let table_of_contents = dark::ss2_chunk_file_reader::read_table_of_contents(&mut file);
+
+    // First, let's examine the raw AIPATH chunk
+    if let Some(aipath_chunk) = table_of_contents.get_chunk("AIPATH".to_string()) {
+        use std::io::{Read, Seek};
+
+        println!("=== AIPATH Chunk Analysis from {} ===", mission);
+        println!(
+            "Chunk offset: {}, length: {}",
+            aipath_chunk.offset, aipath_chunk.length
+        );
+
+        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
+            .unwrap();
+
+        // Read first 64 bytes for analysis
+        let mut buffer = [0u8; 64];
+        let bytes_read = file.read(&mut buffer).unwrap_or(0);
+
+        println!("First {} bytes (hex):", bytes_read.min(64));
+        for (i, chunk) in buffer[..bytes_read].chunks(16).enumerate() {
+            print!("{:04x}: ", i * 16);
+            for byte in chunk {
+                print!("{:02x} ", byte);
+            }
+            print!("  ");
+            for byte in chunk {
+                let c = if byte.is_ascii_graphic() || *byte == b' ' {
+                    *byte as char
+                } else {
+                    '.'
+                };
+                print!("{}", c);
+            }
+            println!();
+        }
+        println!();
+
+        // Reset and try to parse as u32s
+        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
+            .unwrap();
+        println!("First 32 u32 values:");
+        for i in 0..32 {
+            match dark::ss2_common::read_u32(&mut file) {
+                value => println!("  [{}]: {} (0x{:08x})", i, value, value),
+            }
+        }
+        println!();
+
+        // Also try reading as floats to see if any make sense as coordinates
+        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
+            .unwrap();
+        println!("First 32 values as floats:");
+        for i in 0..32 {
+            match dark::ss2_common::read_single(&mut file) {
+                value => println!("  [{}]: {:.6}", i, value),
+            }
+        }
+        println!();
+
+        // Search for reasonable coordinate patterns in the chunk
+        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
+            .unwrap();
+        println!("Searching for coordinate patterns in chunk...");
+
+        let mut offset = 0;
+        let search_limit = 1000; // Search first 1000 floats
+        for i in 0..search_limit {
+            let val = dark::ss2_common::read_single(&mut file);
+            offset += 4;
+
+            // Look for reasonable coordinate values (typical game world scale)
+            if val > 50.0 && val < 200.0 && val.fract() > 0.1 {
+                println!(
+                    "Found coordinate candidate at offset {}: {:.6}",
+                    offset - 4,
+                    val
+                );
+
+                // Check if next two values could be a vertex
+                let y = dark::ss2_common::read_single(&mut file);
+                let z = dark::ss2_common::read_single(&mut file);
+
+                if y > -50.0 && y < 200.0 && z > -50.0 && z < 50.0 {
+                    println!(
+                        "  Potential vertex: ({:.2}, {:.2}, {:.2}) at offset {}",
+                        val,
+                        y,
+                        z,
+                        offset - 4
+                    );
+                } else {
+                    // Seek back since this wasn't a vertex
+                    file.seek(std::io::SeekFrom::Current(-8)).unwrap();
+                }
+                offset += 8;
+            }
+        }
+        println!();
+    }
+
+    // Reset file position for actual parsing attempt
+    if let Some(path_database) = dark::mission::PathDatabase::read(&table_of_contents, &mut file) {
+        println!("=== AIPATH Database from {} ===", mission);
+        println!(
+            "Cells: {}, Vertices: {}, Links: {}",
+            path_database.cells.len(),
+            path_database.vertices.len(),
+            path_database.links.len()
+        );
+        println!();
+
+        // Display sample cells
+        let cell_limit = limit.unwrap_or(10);
+        println!("Sample Cells (showing up to {}):", cell_limit);
+        for (i, cell) in path_database.cells.iter().take(cell_limit).enumerate() {
+            println!(
+                "  Cell {}: center=({:.1}, {:.1}, {:.1}), {} vertices, flags={:?}",
+                i,
+                cell.center.x,
+                cell.center.y,
+                cell.center.z,
+                cell.vertex_indices.len(),
+                cell.flags
+            );
+        }
+
+        println!();
+
+        // Display sample vertices
+        let vertex_limit = limit.unwrap_or(10);
+        println!("Sample Vertices (showing up to {}):", vertex_limit);
+        for (i, vertex) in path_database.vertices.iter().take(vertex_limit).enumerate() {
+            println!(
+                "  Vertex {}: ({:.2}, {:.2}, {:.2})",
+                i, vertex.x, vertex.y, vertex.z
+            );
+        }
+
+        println!();
+
+        // Display sample links
+        let link_limit = limit.unwrap_or(20);
+        println!("Sample Links (showing up to {}):", link_limit);
+        for (i, link) in path_database.links.iter().take(link_limit).enumerate() {
+            println!(
+                "  Link {}: cell {} -> cell {}, vertices {}:{}, cost={}, movement={:?}",
+                i,
+                link.from_cell,
+                link.to_cell,
+                link.edge_vertex_a,
+                link.edge_vertex_b,
+                link.cost,
+                link.ok_bits
+            );
+        }
+
+        if path_database.cells.len() > cell_limit || path_database.links.len() > link_limit {
+            println!();
+            println!("(Use --limit N to show more entries)");
+        }
+
+        println!();
+        println!("=== AIPATH Data Sanity Checks ===");
+
+        // Check 1: Verify vertex count consistency
+        let mut total_vertex_refs = 0u32;
+        let mut cells_with_vertices = 0;
+        for cell in &path_database.cells {
+            total_vertex_refs += cell.vertex_indices.len() as u32;
+            if !cell.vertex_indices.is_empty() {
+                cells_with_vertices += 1;
+            }
+        }
+
+        println!(
+            "Vertex references: {} total vertex indices across {} cells",
+            total_vertex_refs, cells_with_vertices
+        );
+        println!("Available vertices: {}", path_database.vertices.len());
+
+        // Check 2: Verify link source/destination cell IDs are valid
+        let mut valid_links = 0;
+        let mut invalid_source_cells = 0;
+        let mut invalid_dest_cells = 0;
+        let mut links_per_cell = vec![0u32; path_database.cells.len()];
+
+        for link in &path_database.links {
+            let mut link_valid = true;
+
+            // Check source cell
+            if link.from_cell >= path_database.cells.len() as u32 {
+                invalid_source_cells += 1;
+                link_valid = false;
+            } else {
+                links_per_cell[link.from_cell as usize] += 1;
+            }
+
+            // Check destination cell
+            if link.to_cell >= path_database.cells.len() as u32 {
+                invalid_dest_cells += 1;
+                link_valid = false;
+            }
+
+            if link_valid {
+                valid_links += 1;
+            }
+        }
+
+        println!(
+            "Links: {}/{} valid (invalid source: {}, invalid dest: {})",
+            valid_links,
+            path_database.links.len(),
+            invalid_source_cells,
+            invalid_dest_cells
+        );
+
+        // Check 3: Verify vertex IDs in links are valid
+        let mut invalid_vertex_refs = 0;
+        for link in &path_database.links {
+            if link.edge_vertex_a >= path_database.vertices.len() as u32 {
+                invalid_vertex_refs += 1;
+            }
+            if link.edge_vertex_b >= path_database.vertices.len() as u32 {
+                invalid_vertex_refs += 1;
+            }
+        }
+
+        if invalid_vertex_refs > 0 {
+            println!(
+                "Warning: {} invalid vertex references in links",
+                invalid_vertex_refs
+            );
+        } else {
+            println!("All vertex references in links are valid");
+        }
+
+        // Check 4: Show distribution of outgoing links per cell
+        let mut link_distribution = std::collections::HashMap::new();
+        for &count in &links_per_cell {
+            *link_distribution.entry(count).or_insert(0) += 1;
+        }
+
+        println!("Link distribution:");
+        let mut sorted_dist: Vec<_> = link_distribution.iter().collect();
+        sorted_dist.sort_by_key(|&(count, _)| count);
+        for (link_count, cell_count) in sorted_dist {
+            println!("  {} cells have {} outgoing links", cell_count, link_count);
+        }
+
+        // Check 5: Look for cells with no connections (potential islands)
+        let isolated_cells = links_per_cell.iter().filter(|&&count| count == 0).count();
+        if isolated_cells > 0 {
+            println!(
+                "Warning: {} cells have no outgoing links (potential navigation islands)",
+                isolated_cells
+            );
+        } else {
+            println!("All cells have at least one outgoing link");
+        }
+
+        // Check 6: Verify total link count matches sum of individual cell link counts
+        let total_links_from_cells: u32 = links_per_cell.iter().sum();
+        println!(
+            "Link count verification: {} links total, {} from cell counts ({})",
+            path_database.links.len(),
+            total_links_from_cells,
+            if total_links_from_cells == path_database.links.len() as u32 {
+                "MATCH"
+            } else {
+                "MISMATCH"
+            }
+        );
+
+        // Check 7: Show some statistics
+        println!("Statistics:");
+        println!(
+            "  Average links per cell: {:.1}",
+            total_links_from_cells as f64 / path_database.cells.len() as f64
+        );
+        let max_links = links_per_cell.iter().max().unwrap_or(&0);
+        println!("  Maximum links from one cell: {}", max_links);
+
+        // Check connectivity health
+        let well_connected_cells = links_per_cell.iter().filter(|&&count| count >= 3).count();
+        println!(
+            "  Well-connected cells (3+ links): {}/{} ({:.1}%)",
+            well_connected_cells,
+            path_database.cells.len(),
+            100.0 * well_connected_cells as f64 / path_database.cells.len() as f64
+        );
+    } else {
+        println!("No AIPATH chunk found in mission file: {}", mission);
+        println!(
+            "This mission may not have pathfinding data, or the file format may not be supported."
+        );
+    }
+
+    Ok(())
 }
