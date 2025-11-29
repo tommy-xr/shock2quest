@@ -385,8 +385,23 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
 /// * `from_entity` - The entity doing the looking
 /// * `world` - The ECS world
 /// * `physics` - Physics world for raycasting
-/// * `heading` - The entity's current facing direction offset (yaw in degrees)
+/// * `heading` - Additional rotation offset applied on top of `pose.rotation` (see below)
 /// * `fov_half_angle` - Half of the field of view angle in degrees
+///
+/// # Heading Convention
+/// The forward direction is calculated as:
+/// ```ignore
+/// orientation = pose.rotation * Quaternion::from_angle_y(-heading)
+/// forward = orientation.rotate_vector(vec3(0.0, 0.0, 1.0))
+/// ```
+///
+/// Different entity types require different heading values:
+/// - **Monsters**: Pass `Deg(0.0)` - rotation is set via `Effect::SetRotation`, so
+///   `pose.rotation` already contains the full orientation.
+/// - **Cameras**: Pass `Deg(view_angle + 90.0)` - rotation is via joint transforms,
+///   not entity rotation. The +90 offset aligns with the joint coordinate system.
+/// - **Turrets**: Pass `-current_heading` - similar to cameras but with negated heading
+///   due to how the turret joint rotation is calculated.
 ///
 /// # Returns
 /// `true` if the player is within the FOV cone AND there's line-of-sight

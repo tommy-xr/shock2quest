@@ -245,7 +245,7 @@ fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
 
 ## Implementation Phases
 
-### Phase 1: Core Alertness Module
+### Phase 1: Core Alertness Module ✅
 **Goal**: Create shared alertness infrastructure
 
 1. Create `shock2vr/src/scripts/ai/alertness.rs` with:
@@ -261,7 +261,7 @@ fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
    - Test alert cap clamping (min/max/relax)
    - Test peak level tracking
 
-### Phase 2: Camera AI Migration
+### Phase 2: Camera AI Migration ✅
 **Goal**: Refactor camera to use shared alertness module
 
 1. Replace `CameraState` alertness fields with embedded `AlertnessState`
@@ -274,7 +274,7 @@ fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
 5. **Bug fix**: Camera now escalates through `Low` level
 6. Test: Verify camera behavior with existing speech/model changes
 
-### Phase 3: Turret AI Integration
+### Phase 3: Turret AI Integration ✅
 **Goal**: Add alertness tracking to turrets (optional behavioral changes)
 
 1. Add `AlertnessState` to `TurretAI` struct
@@ -286,7 +286,7 @@ fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
    - Play alert sounds on level changes
 6. Test: Verify turret still functions, alertness tracked correctly
 
-### Phase 4: Monster AI Integration
+### Phase 4: Monster AI Integration ✅
 **Goal**: Drive behavior selection from alertness
 
 1. Add `AlertnessState` to `AnimatedMonsterAI` struct
@@ -300,7 +300,7 @@ fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
 5. Handle behavior transitions when alertness changes
 6. Test: Verify monsters react more gradually to player visibility
 
-### Phase 5: Polish and Alert Propagation
+### Phase 5: Polish and Alert Propagation ✅
 **Goal**: Add propagation and debugging tools
 
 1. Add debug visualization for alertness (similar to camera FOV debug)
@@ -314,21 +314,54 @@ fn max_level(a: AIAlertLevel, b: AIAlertLevel) -> AIAlertLevel {
 
 | File | Changes |
 |------|---------|
-| `shock2vr/src/scripts/ai/alertness.rs` | **New** - Core alertness module |
-| `shock2vr/src/scripts/ai/mod.rs` | Add `mod alertness` |
-| `shock2vr/src/scripts/ai/camera_ai.rs` | Refactor to use alertness module, fix Low level bug |
-| `shock2vr/src/scripts/ai/turret_ai.rs` | Add alertness tracking |
-| `shock2vr/src/scripts/ai/animated_monster_ai.rs` | Add alertness-driven behavior selection |
+| `shock2vr/src/scripts/ai/alertness.rs` | **New** - Core alertness module with state machine and unit tests |
+| `shock2vr/src/scripts/ai/ai_debug_util.rs` | **New** - Shared debug visualization for alertness bars and FOV cones |
+| `shock2vr/src/scripts/ai/ai_util.rs` | Added `is_player_visible_in_fov()` with documented heading conventions |
+| `shock2vr/src/scripts/ai/mod.rs` | Add `mod alertness`, `mod ai_debug_util` |
+| `shock2vr/src/scripts/ai/camera_ai.rs` | Refactor to use alertness module, fix Low level bug, FOV-aware visibility |
+| `shock2vr/src/scripts/ai/turret_ai.rs` | Add alertness tracking, FOV-aware visibility |
+| `shock2vr/src/scripts/ai/animated_monster_ai.rs` | Add alertness-driven behavior selection, FOV-aware visibility |
 
 ## Success Criteria
 
-- [ ] Camera AI retains all existing functionality (speech, models, animation)
-- [ ] Camera AI now uses `Low` level correctly
-- [ ] Turret AI tracks alertness (even if behavior unchanged initially)
-- [ ] Monster AI behaviors driven by alertness levels
-- [ ] Shared alertness code in `alertness.rs` used by all AI types
-- [ ] Unit tests for alertness state machine
-- [ ] No performance regression
+- [x] Camera AI retains all existing functionality (speech, models, animation)
+- [x] Camera AI now uses `Low` level correctly
+- [x] Turret AI tracks alertness (even if behavior unchanged initially)
+- [x] Monster AI behaviors driven by alertness levels
+- [x] Shared alertness code in `alertness.rs` used by all AI types
+- [x] Unit tests for alertness state machine
+- [x] No performance regression
+
+## Implementation Notes
+
+### FOV-Aware Visibility Check
+The `is_player_visible_in_fov()` function in `ai_util.rs` combines line-of-sight raycast with a field-of-view cone check. Each AI type has a fixed instantaneous FOV:
+- **Camera**: 30° half-angle (60° total cone) - defined as `CAMERA_FOV_HALF_ANGLE`
+- **Turret**: 30° half-angle (60° total cone) - defined as `TURRET_FOV_HALF_ANGLE`
+- **Monster**: 60° half-angle (120° total cone) - defined as `MONSTER_FOV_HALF_ANGLE`
+
+### Heading Convention for FOV Checks
+The `is_player_visible_in_fov()` and `draw_debug_fov()` functions take a `heading` parameter that is applied on top of `pose.rotation`. Different entity types require different heading values due to how they manage rotation:
+
+| Entity Type | Heading Parameter | Reason |
+|-------------|-------------------|--------|
+| **Monster** | `Deg(0.0)` | Rotation set via `Effect::SetRotation`, so `pose.rotation` already contains full orientation |
+| **Camera** | `Deg(view_angle + 90.0)` | Rotation via joint transforms; +90 offset aligns with joint coordinate system |
+| **Turret** | `-current_heading` | Similar to camera but negated due to turret joint rotation calculation |
+
+### Camera Alertness Levels to Model Colors
+- `Lowest` / `Low` → Green (camera in safe state)
+- `Moderate` → Yellow (camera alerted)
+- `High` → Red (camera fully alarmed)
+
+The camera's default `min_relax` is set to `Lowest` to allow full decay back to green.
+
+### Debug Visualization
+Created `ai_debug_util.rs` with shared debug visualization utilities:
+- `AlertnessDebugConfig` - configures alertness bar position/size per entity type
+- `FovDebugConfig` - configures FOV cone visualization per entity type
+- `draw_debug_alertness()` - draws alertness level bar and visibility indicator
+- `draw_debug_fov()` - draws FOV cone with heading-based orientation
 
 ## Future Enhancements (Out of Scope)
 
