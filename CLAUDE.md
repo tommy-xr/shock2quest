@@ -27,7 +27,6 @@ Before making any changes, review these documents:
 
 - **`DEVELOPMENT.md`** - Setup and build instructions
 - **`README.md`** - Project overview and goals
-- All documents in `.notes`
 
 ### Reference Materials
 
@@ -49,7 +48,7 @@ This is a Rust-based VR port of System Shock 2. Key components:
 - `runtimes/` - Platform-specific runtime implementations
   - `desktop_runtime/` - Desktop version
   - `oculus_runtime/` - Oculus Quest VR version
-  - `tool/` - Development tools for viewing models
+- `tools/` - Development CLI tools (dark_query, dark_viewer)
 
 ## Entity System Workflow
 
@@ -82,83 +81,6 @@ Runtime:
 └── shock2vr/src/scripts/    - Entity behavior implementations
 ```
 
-### Common Entity Tasks
-
-#### Debugging Entity Issues
-
-1. **Find entity by name**:
-
-```bash
-# Use grep to find entities with specific names in .gam/.mis files
-rg "EntityName" Data/
-```
-
-2. **Trace entity inheritance**:
-
-```rust
-// In your debugging code
-let ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
-println!("Template {} inherits from: {:?}", template_id, ancestors);
-```
-
-3. **List entity properties**:
-
-```rust
-// Check what properties an entity has
-for (template_id, props) in &entity_info.entity_to_properties {
-    println!("Template {}: {} properties", template_id, props.len());
-}
-```
-
-#### Working with Properties
-
-1. **Add new property type**:
-
-   - Define in `dark/src/properties/mod.rs`
-   - Add parsing logic following existing patterns
-   - Update property registration in `get()` function
-
-2. **Debug property inheritance**:
-
-   - Properties are resolved during entity creation
-   - Child properties override parent properties
-   - Some properties (Scripts) use merge logic instead
-
-3. **Runtime property access**:
-
-```rust
-// Query entities by property
-world.run(|v_model: View<PropModelName>| {
-    for (entity_id, model) in v_model.iter().with_id() {
-        println!("Entity {} uses model: {}", entity_id, model.0);
-    }
-});
-```
-
-#### Analyzing Links
-
-1. **MetaProp links** (inheritance):
-
-```rust
-// These define template inheritance: child -> parent
-Link { src: child_template, dest: parent_template, ... }
-```
-
-2. **Behavioral links** (Contains, Flinderize, etc.):
-
-```rust
-// Find what an entity contains
-if let Ok(links) = v_links.get(entity_id) {
-    for link in &links.to_links {
-        match &link.link {
-            Link::Contains(_) => println!("Contains entity {:?}", link.to_entity_id),
-            Link::Flinderize(_) => println!("Will flinderize when destroyed"),
-            _ => {}
-        }
-    }
-}
-```
-
 ## Tooling Notes
 
 ### dark_query Speech Explorer
@@ -185,47 +107,18 @@ Use the `dark_query` CLI to inspect speech metadata without launching the game:
 
 If no tags are supplied for a voice, the tool prints the concept list and per-tag metadata. When tags are provided, every matching schema and its samples (with frequency weights) are shown.
 
-### Entity System Debugging
-
-#### Common Problems
-
-1. **Missing entities**: Check gamesys merging and template ID resolution
-2. **Wrong properties**: Verify inheritance chain and property override logic
-3. **Broken scripts**: Ensure script files exist and are registered
-4. **Physics issues**: Check PropPhysType, PropPhysDimensions, and collision setup
-
-#### Debugging Commands
-
-```rust
-// Print all MetaProp links (inheritance relationships)
-for link in &entity_info.link_metaprops {
-    println!("MetaProp: {} inherits from {}", link.src, link.dest);
-}
-
-// Show entity creation process
-let template_to_entity_id = entity_populator.populate(&entity_info, &level, &mut world);
-for (template_id, entity_id) in &template_to_entity_id {
-    println!("Created entity {} from template {}", entity_id.0, template_id);
-}
-```
-
-#### Performance Considerations
-
-- Entity inheritance is resolved at creation time, not runtime
-- Properties are shared via `Rc<Box<dyn Property>>` for memory efficiency
-- Typical missions have 1000-5000 entities
-- MetaProp link traversal can be expensive for deep hierarchies
-
 ### File Format Investigation
 
 When working with entity data, you may need to examine raw game files:
 
-1. **Parse specific chunks**:
+1. **Inspect model files**:
 
 ```bash
-# Create small CLI tools to examine file structure
-cargo dv inspect-gamesys shock2.gam
-cargo dv list-entities medsci1.mis
+# Use dark_viewer to examine model structure
+cargo dv grunt_p.bin
+
+# Use dark_query to list entities
+cargo dq entities medsci1.mis
 ```
 
 2. **Compare gamesys vs mission data**:
@@ -268,7 +161,7 @@ Example usage:
 ```bash
 cargo dr --release --experimental teleport
 cargo dq entities earth.mis --filter "*Door*" --limit 10
-cargo dv inspect-gamesys shock2.gam
+cargo dv grunt_p.bin
 ```
 
 **Note**: These aliases only work for desktop development. Android builds still require the full `cargo apk` commands.
@@ -328,49 +221,40 @@ This approach allows:
 
 ### Build Validation
 
-**MANDATORY: Both runtimes must compile before committing any changes.**
+**MANDATORY: Core crates must compile before committing any changes.**
 
-#### Desktop Runtime Validation
+#### Standard Validation
+
+For most changes to core crates (`shock2vr`, `dark`, `engine`):
 
 ```bash
-cd runtimes/desktop_runtime
-cargo build
+cargo check -p shock2vr
 ```
 
-#### Oculus Runtime Validation
+This validates the main game logic without requiring platform-specific setup.
+
+#### Runtime-Specific Validation
+
+Only validate specific runtimes when you've made changes to them:
 
 ```bash
+# Desktop runtime (if changes made to runtimes/desktop_runtime)
+cargo check -p desktop_runtime
+
+# Oculus runtime (if changes made to runtimes/oculus_runtime)
 cd runtimes/oculus_runtime
-# REQUIRED: Set up Android SDK environment
 source ./set_up_android_sdk.sh
 cargo apk check
 ```
 
-**Note**: The oculus runtime requires Android SDK setup and will fail to compile on macOS/Linux without proper Android cross-compilation environment. Always run `source ./set_up_android_sdk.sh` first.
-
-#### Build Validation Workflow
-
-1. Make changes to core crates (`shock2vr`, `dark`, `engine`)
-2. **Immediately** validate both runtimes compile:
-
-   ```bash
-   # Test desktop runtime
-   cd runtimes/desktop_runtime && cargo build
-
-   # Test oculus runtime
-   cd ../oculus_runtime && source ./set_up_android_sdk.sh && cargo apk check
-   ```
-
-3. Fix any compilation errors before proceeding
-4. Only commit when both runtimes compile successfully
+**Note**: The oculus runtime requires Android SDK setup. Only validate it when making oculus-specific changes.
 
 ## Incremental Change Process
 
 ### 1. Research Phase
 
 - Read relevant source files and understand data flow
-- Check `docs/` folder for architectural context
-- Review `references/` for technical specifications
+- Check `references/` folder for technical specifications
 - Understand existing patterns and conventions
 
 ### 2. Planning Phase
@@ -388,10 +272,9 @@ cargo apk check
 - Make minimal changes to achieve one specific goal
 - If there are issues found, like a bug or potential refactoring, that are outside of the scope of the current goal, you _MAY_ open an issue with enough details to make it actionable in a separate pass.
 - Follow existing code patterns and naming conventions
-- **CRITICAL: Run `cargo check` after each logical group of changes**
+- **CRITICAL: Run `cargo check -p shock2vr` after each logical group of changes**
   - Especially important for trait/interface changes that affect multiple files
   - Validate compilation before moving to next step
-  - See "Build Validation" section for mandatory runtime checks
 - Test on desktop runtime first
 - Validate each step before proceeding
 
@@ -401,44 +284,9 @@ cargo apk check
   - Run `cargo check` and `cargo clippy`
   - Fix all compilation errors - never commit broken code
   - For trait changes: verify ALL implementations are updated
-- **CRITICAL: Run `cargo check` after each logical group of changes**
-  - Especially important for trait/interface changes that affect multiple files
-  - Validate compilation before moving to next step
 - Test core functionality on desktop
 - Verify VR compatibility if changes affect rendering
-- Update documentation in `docs/` if architectural changes were made
-
-## Common Change Categories
-
-### Small Changes (Single commit)
-
-- Bug fixes in specific functions
-- Adding new configuration options
-- Updating existing UI elements
-- Performance optimizations in isolated code
-
-### Medium Changes (2-3 commits)
-
-- New gameplay features
-- Refactoring a single module
-- Adding new file format support
-- UI/UX improvements
-
-### Large Changes (Multiple small PRs)
-
-- New major systems (break into multiple features)
-- Architectural refactoring (one module at a time)
-- Cross-platform compatibility changes
-- Major performance overhauls
-
-## Notes and Documentation
-
-- Update `docs/` folder when making architectural decisions
-- Document complex VR interactions and performance considerations
-- Keep `CLAUDE.md` updated with new workflow discoveries
-- Add new reference materials to appropriate folders
-
-**Remember: Small, frequent, well-tested changes are always preferred over large, complex modifications.**
+- Update documentation if architectural changes were made
 
 ## Special Considerations for Trait/Interface Changes
 
@@ -648,43 +496,6 @@ The motion database organizes animations hierarchically using tags:
 - **Creature-specific tags**: `+midwife`, `+droid`, etc.
 
 This system matches the tag database structure found in the original spew files and allows precise animation queries for debugging AI behavior and animation systems.
-
-### Key Use Cases
-
-1. **Debug Entity Issues**:
-   - Find why an entity has unexpected behavior
-   - Trace inheritance chains to understand property sources
-   - Identify missing or incorrect links
-
-2. **Understand Game Logic**:
-   - Follow trigger chains (tripwire → sound trap → other effects)
-   - Analyze complex multi-entity interactions
-   - Map out level design patterns
-
-3. **Development Support**:
-   - Identify unparsed properties/links that need implementation
-   - Validate entity merging between gamesys and missions
-   - Test inheritance-aware property resolution
-
-4. **LLM Integration**:
-   - Provide detailed entity context for AI debugging
-   - Generate comprehensive entity relationship reports
-   - Support complex entity system analysis
-
-### Implementation Notes
-
-- **Inheritance Resolution**: Uses `ss2_entity_info::get_hierarchy()` and `get_ancestors()` for proper inheritance traversal
-- **Bidirectional Links**: Scans all entities to build complete relationship graphs
-- **Performance**: Efficient for typical missions (1000-5000 entities)
-- **Path Detection**: Automatically works from Data directory or tools/dark_query
-- **Mission Parsing**: Uses entity-only parsing (no asset loading) for CLI efficiency
-
-### File Locations
-
-- **Main CLI**: `tools/dark_query/src/main.rs`
-- **Entity Analysis**: `tools/dark_query/src/entity_analyzer.rs`
-- **Data Loading**: `tools/dark_query/src/data_loader.rs`
-- **Project Plan**: `projects/entity-query-cli-tool.md`
 
 ## Data Path Management
 
