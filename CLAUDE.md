@@ -107,6 +107,70 @@ Use the `dark_query` CLI to inspect speech metadata without launching the game:
 
 If no tags are supplied for a voice, the tool prints the concept list and per-tag metadata. When tags are provided, every matching schema and its samples (with frequency weights) are shown.
 
+### Iterating on Visual Features
+
+For debugging visual/rendering changes without a full interactive session:
+
+1. **dark_viewer with `--debug-no-render`**: Loads assets and exits after the first frame, useful for adding logging to inspect model/asset data:
+
+   ```bash
+   cargo dv grunt_p.bin --debug-no-render
+   ```
+
+2. **Debug Runtime** (in progress, see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
+
+   ```bash
+   # Start debug runtime
+   cargo dbgr -- --mission medsci1.mis --port 8080
+
+   # Control via HTTP
+   curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
+   curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
+
+   # IMPORTANT: Always shut down when done to avoid interfering with user's session
+   curl -X POST http://127.0.0.1:8080/v1/shutdown
+   ```
+
+3. **Debug Scenes**: Minimal test scenes for isolating specific features. Pass as the `--mission` argument:
+
+   | Scene                    | Purpose                                      |
+   | ------------------------ | -------------------------------------------- |
+   | `debug_camera`           | Test security camera AI behavior             |
+   | `debug_turret`           | Test turret AI and targeting                 |
+   | `debug_ragdoll`          | Test ragdoll physics                         |
+   | `debug_gloves`           | Test VR hand/glove rendering                 |
+   | `debug_teleport`         | Test VR teleport locomotion                  |
+   | `debug_joint_constraint` | Test physics joint constraints               |
+   | `debug_hud`              | Test HUD rendering                           |
+   | `debug_map`              | Test map/automap rendering                   |
+   | `debug_minimal`          | Bare minimum scene for basic testing         |
+
+   ```bash
+   # Use with debug runtime for programmatic control
+   cargo dbgr -- --mission debug_camera --port 8080
+   ```
+
+   Debug scenes are defined in `shock2vr/src/scenes/` and provide isolated environments for testing specific game systems without loading full missions.
+
+### Available Mission Files
+
+For testing entity queries and game features, these mission files are available in `Data/`:
+
+| Mission       | Description                    |
+| ------------- | ------------------------------ |
+| `earth.mis`   | Earth - tutorial/intro level   |
+| `station.mis` | Station - hub area             |
+| `medsci1.mis` | MedSci deck 1                  |
+| `medsci2.mis` | MedSci deck 2                  |
+| `eng1.mis`    | Engineering deck 1             |
+| `eng2.mis`    | Engineering deck 2             |
+| `hydro1.mis`  | Hydroponics deck 1             |
+| `ops1.mis`    | Operations deck 1              |
+| `rec1.mis`    | Recreation deck 1              |
+| `command1.mis`| Command deck 1                 |
+
+Use with `dark_query`: `cargo dq entities earth.mis --limit 10`
+
 ### File Format Investigation
 
 When working with entity data, you may need to examine raw game files:
@@ -165,6 +229,8 @@ cargo dv grunt_p.bin
 ```
 
 **Note**: These aliases only work for desktop development. Android builds still require the full `cargo apk` commands.
+
+**For agents**: Do not use `cargo dr` - it opens an interactive window that requires user intervention to close. Use the debug runtime (`cargo dbgr`) instead, which can be programmatically controlled and shut down via HTTP.
 
 ### Experimental Features
 
