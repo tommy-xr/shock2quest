@@ -131,6 +131,27 @@ For debugging visual/rendering changes without a full interactive session:
    curl -X POST http://127.0.0.1:8080/v1/shutdown
    ```
 
+3. **Debug Scenes**: Minimal test scenes for isolating specific features. Pass as the `--mission` argument:
+
+   | Scene                    | Purpose                                      |
+   | ------------------------ | -------------------------------------------- |
+   | `debug_camera`           | Test security camera AI behavior             |
+   | `debug_turret`           | Test turret AI and targeting                 |
+   | `debug_ragdoll`          | Test ragdoll physics                         |
+   | `debug_gloves`           | Test VR hand/glove rendering                 |
+   | `debug_teleport`         | Test VR teleport locomotion                  |
+   | `debug_joint_constraint` | Test physics joint constraints               |
+   | `debug_hud`              | Test HUD rendering                           |
+   | `debug_map`              | Test map/automap rendering                   |
+   | `debug_minimal`          | Bare minimum scene for basic testing         |
+
+   ```bash
+   # Use with debug runtime for programmatic control
+   cargo dbgr -- --mission debug_camera --port 8080
+   ```
+
+   Debug scenes are defined in `shock2vr/src/scenes/` and provide isolated environments for testing specific game systems without loading full missions.
+
 ### Available Mission Files
 
 For testing entity queries and game features, these mission files are available in `Data/`:
@@ -208,6 +229,8 @@ cargo dv grunt_p.bin
 ```
 
 **Note**: These aliases only work for desktop development. Android builds still require the full `cargo apk` commands.
+
+**For agents**: Do not use `cargo dr` - it opens an interactive window that requires user intervention to close. Use the debug runtime (`cargo dbgr`) instead, which can be programmatically controlled and shut down via HTTP.
 
 ### Experimental Features
 
