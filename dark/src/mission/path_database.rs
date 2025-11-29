@@ -106,15 +106,15 @@ impl PathDatabase {
             // Parse sAIPathCell structure (32 bytes total)
             let first_vertex = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 0
             let first_cell = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 2
-            let plane = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 4
-            let next = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 6
-            let best_neighbor = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 8
-            let link_from_neighbor = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 10
+            let _plane = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 4
+            let _next = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 6
+            let _best_neighbor = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 8
+            let _link_from_neighbor = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 10
 
             let vertex_count = read_u8(reader); // offset 12
             let path_flags = read_u8(reader); // offset 13
             let cell_count = read_u8(reader); // offset 14
-            let wrap_flags = read_u8(reader); // offset 15
+            let _wrap_flags = read_u8(reader); // offset 15
 
             // Read center point (cMxsVector - 12 bytes: 3 floats)
             let center_x = read_single(reader); // offset 16
@@ -122,7 +122,7 @@ impl PathDatabase {
             let center_z = read_single(reader); // offset 24
 
             // Read bitfields (4 bytes total, offsets 28-31)
-            let bitfield_data = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+            let _bitfield_data = reader.read_u32::<byteorder::LittleEndian>().unwrap();
 
             let center = Vector3::new(center_x, center_y, center_z);
             let flags = PathCellFlags::from_bits_truncate(path_flags as u32);
@@ -343,6 +343,7 @@ impl PathDatabase {
     }
 
     /// Calculate the center point of a cell from its vertices
+    #[allow(dead_code)] // Will be used in future phases
     fn calculate_center(vertex_indices: &[u32], vertices: &[Vector3<f32>]) -> Vector3<f32> {
         if vertex_indices.is_empty() {
             return Vector3::new(0.0, 0.0, 0.0);

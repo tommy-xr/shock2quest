@@ -22,7 +22,6 @@ use crate::Gamesys;
 use crate::SCALE_FACTOR;
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
 use crate::ss2_common::read_bytes;
-use path_database::*;
 use render_params::*;
 use room_database::*;
 
