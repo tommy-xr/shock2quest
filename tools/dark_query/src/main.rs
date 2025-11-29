@@ -802,106 +802,7 @@ fn handle_aipath_command(mission: &str, limit: Option<usize>) -> Result<()> {
     // Parse AIPATH chunk directly
     let table_of_contents = dark::ss2_chunk_file_reader::read_table_of_contents(&mut file);
 
-    // First, let's examine the raw AIPATH chunk
-    if let Some(aipath_chunk) = table_of_contents.get_chunk("AIPATH".to_string()) {
-        use std::io::{Read, Seek};
-
-        println!("=== AIPATH Chunk Analysis from {} ===", mission);
-        println!(
-            "Chunk offset: {}, length: {}",
-            aipath_chunk.offset, aipath_chunk.length
-        );
-
-        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
-            .unwrap();
-
-        // Read first 64 bytes for analysis
-        let mut buffer = [0u8; 64];
-        let bytes_read = file.read(&mut buffer).unwrap_or(0);
-
-        println!("First {} bytes (hex):", bytes_read.min(64));
-        for (i, chunk) in buffer[..bytes_read].chunks(16).enumerate() {
-            print!("{:04x}: ", i * 16);
-            for byte in chunk {
-                print!("{:02x} ", byte);
-            }
-            print!("  ");
-            for byte in chunk {
-                let c = if byte.is_ascii_graphic() || *byte == b' ' {
-                    *byte as char
-                } else {
-                    '.'
-                };
-                print!("{}", c);
-            }
-            println!();
-        }
-        println!();
-
-        // Reset and try to parse as u32s
-        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
-            .unwrap();
-        println!("First 32 u32 values:");
-        for i in 0..32 {
-            match dark::ss2_common::read_u32(&mut file) {
-                value => println!("  [{}]: {} (0x{:08x})", i, value, value),
-            }
-        }
-        println!();
-
-        // Also try reading as floats to see if any make sense as coordinates
-        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
-            .unwrap();
-        println!("First 32 values as floats:");
-        for i in 0..32 {
-            match dark::ss2_common::read_single(&mut file) {
-                value => println!("  [{}]: {:.6}", i, value),
-            }
-        }
-        println!();
-
-        // Search for reasonable coordinate patterns in the chunk
-        file.seek(std::io::SeekFrom::Start(aipath_chunk.offset))
-            .unwrap();
-        println!("Searching for coordinate patterns in chunk...");
-
-        let mut offset = 0;
-        let search_limit = 1000; // Search first 1000 floats
-        for i in 0..search_limit {
-            let val = dark::ss2_common::read_single(&mut file);
-            offset += 4;
-
-            // Look for reasonable coordinate values (typical game world scale)
-            if val > 50.0 && val < 200.0 && val.fract() > 0.1 {
-                println!(
-                    "Found coordinate candidate at offset {}: {:.6}",
-                    offset - 4,
-                    val
-                );
-
-                // Check if next two values could be a vertex
-                let y = dark::ss2_common::read_single(&mut file);
-                let z = dark::ss2_common::read_single(&mut file);
-
-                if y > -50.0 && y < 200.0 && z > -50.0 && z < 50.0 {
-                    println!(
-                        "  Potential vertex: ({:.2}, {:.2}, {:.2}) at offset {}",
-                        val,
-                        y,
-                        z,
-                        offset - 4
-                    );
-                } else {
-                    // Seek back since this wasn't a vertex
-                    file.seek(std::io::SeekFrom::Current(-8)).unwrap();
-                }
-                offset += 8;
-            }
-        }
-        println!();
-    }
-
-    // Reset file position for actual parsing attempt
+    // Parse AIPATH chunk
     if let Some(path_database) = dark::mission::PathDatabase::read(&table_of_contents, &mut file) {
         println!("=== AIPATH Database from {} ===", mission);
         println!(
@@ -980,6 +881,20 @@ fn handle_aipath_command(mission: &str, limit: Option<usize>) -> Result<()> {
             total_vertex_refs, cells_with_vertices
         );
         println!("Available vertices: {}", path_database.vertices.len());
+
+        // Show vertex count distribution
+        let mut vertex_distribution = std::collections::HashMap::new();
+        for cell in &path_database.cells {
+            let count = cell.vertex_indices.len();
+            *vertex_distribution.entry(count).or_insert(0) += 1;
+        }
+
+        println!("Vertex count distribution:");
+        let mut sorted_vertex_dist: Vec<_> = vertex_distribution.iter().collect();
+        sorted_vertex_dist.sort_by_key(|&(count, _)| count);
+        for (vertex_count, cell_count) in sorted_vertex_dist.iter().take(8) {
+            println!("  {} cells have {} vertices", cell_count, vertex_count);
+        }
 
         // Check 2: Verify link source/destination cell IDs are valid
         let mut valid_links = 0;

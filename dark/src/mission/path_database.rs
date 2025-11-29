@@ -100,6 +100,7 @@ impl PathDatabase {
         // Read cell data (32 bytes per cell according to sAIPathCell structure)
         let mut cells = Vec::new();
         let mut cell_link_info = Vec::new(); // Store (first_cell, cell_count) for each cell
+        let mut cell_vertex_info = Vec::new(); // Store (first_vertex, vertex_count) for each cell
 
         for i in 0..num_cells {
             // Parse sAIPathCell structure (32 bytes total)
@@ -126,20 +127,28 @@ impl PathDatabase {
             let center = Vector3::new(center_x, center_y, center_z);
             let flags = PathCellFlags::from_bits_truncate(path_flags as u32);
 
-            // Store the link range information for this cell
+            // Store the link and vertex range information for this cell
             cell_link_info.push((first_cell as u32, cell_count as u32));
+            cell_vertex_info.push((first_vertex as u32, vertex_count as u32));
 
             cells.push(PathCell {
                 id: i,
                 center,
-                vertex_indices: Vec::new(), // Will populate based on vertex links later
+                vertex_indices: Vec::new(), // Will populate using first_vertex and vertex_count
                 flags,
             });
 
             if i < 5 {
                 debug!(
-                    "Cell {}: center=({:.2}, {:.2}, {:.2}) firstCell={} cellCount={} flags=0x{:02x}",
-                    i, center_x, center_y, center_z, first_cell, cell_count, path_flags
+                    "Cell {}: center=({:.2}, {:.2}, {:.2}) firstVertex={} vertexCount={} firstCell={} cellCount={}",
+                    i,
+                    center_x,
+                    center_y,
+                    center_z,
+                    first_vertex,
+                    vertex_count,
+                    first_cell,
+                    cell_count
                 );
             }
         }
@@ -249,6 +258,7 @@ impl PathDatabase {
             remaining_bytes, num_cell_vertices
         );
 
+        let mut cell_vertex_links = Vec::new();
         if remaining_bytes < (num_cell_vertices * 4) as u64 {
             warn!(
                 "Not enough bytes remaining for cell-vertex links: need {} but only have {}",
@@ -258,6 +268,7 @@ impl PathDatabase {
         } else {
             for i in 0..num_cell_vertices {
                 let vertex_id = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+                cell_vertex_links.push(vertex_id);
                 if i < 5 {
                     debug!("Cell-vertex link {}: vertex_id={}", i, vertex_id);
                 }
@@ -288,6 +299,34 @@ impl PathDatabase {
             }
         }
 
+        // Populate vertex_indices for each cell using first_vertex and vertex_count
+        for (cell_index, (first_vertex, vertex_count)) in cell_vertex_info.iter().enumerate() {
+            let start_vertex = *first_vertex as usize;
+            let end_vertex = start_vertex + (*vertex_count as usize);
+
+            // Populate vertex_indices for this cell
+            for vertex_index in start_vertex..end_vertex.min(cell_vertex_links.len()) {
+                if vertex_index < cell_vertex_links.len() {
+                    let vertex_id = cell_vertex_links[vertex_index];
+                    // Validate vertex ID is within bounds
+                    if vertex_id < vertices.len() as u32 {
+                        cells[cell_index].vertex_indices.push(vertex_id);
+                    }
+                }
+            }
+
+            if cell_index < 5 && *vertex_count > 0 {
+                debug!(
+                    "Cell {} has {} vertices (indices {}-{}): {:?}",
+                    cell_index,
+                    vertex_count,
+                    start_vertex,
+                    end_vertex.saturating_sub(1),
+                    &cells[cell_index].vertex_indices
+                );
+            }
+        }
+
         debug!(
             "AIPATH loaded: {} cells, {} vertices, {} links, {} cell-vertex links",
             cells.len(),
@@ -295,9 +334,6 @@ impl PathDatabase {
             links.len(),
             num_cell_vertices
         );
-
-        // TODO: Populate vertex_indices for each cell using cell-vertex links
-        // TODO: Populate from_cell for each link using cell link ranges
 
         Some(PathDatabase {
             cells,
