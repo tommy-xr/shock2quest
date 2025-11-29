@@ -4,6 +4,7 @@ use std::{fs::File, io::BufReader};
 use tracing::info;
 pub mod entity_populator;
 pub mod mission_core;
+pub mod pathfinding_debug;
 pub mod spatial_query;
 mod spawn_location;
 pub mod visibility_engine;

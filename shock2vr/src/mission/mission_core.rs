@@ -16,6 +16,7 @@ use cgmath::{
 use crate::SpawnLocation;
 use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
+use crate::mission::pathfinding_debug;
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
@@ -1944,8 +1945,11 @@ impl MissionCore {
 
         // Render debug pathfinding
         if options.debug_pathfinding {
-            let mut pathfinding_visuals = self.render_pathfinding_debug();
-            scene.append(&mut pathfinding_visuals);
+            if let Some(ref path_database) = self.path_database {
+                let mut pathfinding_visuals =
+                    pathfinding_debug::render_pathfinding_debug(path_database);
+                scene.append(&mut pathfinding_visuals);
+            }
         }
 
         // self.world.run(
@@ -2024,109 +2028,6 @@ impl MissionCore {
         }
 
         (scene, player.pos, player.rotation)
-    }
-
-    /// Render pathfinding visualization for debugging
-    fn render_pathfinding_debug(&self) -> Vec<SceneObject> {
-        let mut visuals = Vec::new();
-
-        if let Some(ref path_database) = self.path_database {
-            let mut cyan_lines = Vec::new();
-            let mut yellow_lines = Vec::new();
-
-            // Render path cells as cyan polygons and center crosses
-            for cell in &path_database.cells {
-                let center = cell.center;
-
-                // Create a small cross at the center
-                let size = 0.1;
-                cyan_lines.push(VertexPosition {
-                    position: Vector3::new(center.x - size, center.y, center.z),
-                });
-                cyan_lines.push(VertexPosition {
-                    position: Vector3::new(center.x + size, center.y, center.z),
-                });
-                cyan_lines.push(VertexPosition {
-                    position: Vector3::new(center.x, center.y - size, center.z),
-                });
-                cyan_lines.push(VertexPosition {
-                    position: Vector3::new(center.x, center.y + size, center.z),
-                });
-                cyan_lines.push(VertexPosition {
-                    position: Vector3::new(center.x, center.y, center.z - size),
-                });
-                cyan_lines.push(VertexPosition {
-                    position: Vector3::new(center.x, center.y, center.z + size),
-                });
-
-                // Draw polygon outline by connecting vertices
-                if cell.vertex_indices.len() >= 3 {
-                    for i in 0..cell.vertex_indices.len() {
-                        let current_idx = cell.vertex_indices[i] as usize;
-                        let next_idx =
-                            cell.vertex_indices[(i + 1) % cell.vertex_indices.len()] as usize;
-
-                        if current_idx < path_database.vertices.len()
-                            && next_idx < path_database.vertices.len()
-                        {
-                            let current = &path_database.vertices[current_idx];
-                            let next = &path_database.vertices[next_idx];
-
-                            cyan_lines.push(VertexPosition {
-                                position: Vector3::new(current.x, current.y, current.z),
-                            });
-                            cyan_lines.push(VertexPosition {
-                                position: Vector3::new(next.x, next.y, next.z),
-                            });
-                        }
-                    }
-                }
-            }
-
-            // Render path links as yellow lines connecting cell centers
-            for link in &path_database.links {
-                let from_cell_idx = link.from_cell as usize;
-                let to_cell_idx = link.to_cell as usize;
-
-                if from_cell_idx < path_database.cells.len()
-                    && to_cell_idx < path_database.cells.len()
-                {
-                    let from_center = &path_database.cells[from_cell_idx].center;
-                    let to_center = &path_database.cells[to_cell_idx].center;
-
-                    yellow_lines.push(VertexPosition {
-                        position: Vector3::new(from_center.x, from_center.y, from_center.z),
-                    });
-                    yellow_lines.push(VertexPosition {
-                        position: Vector3::new(to_center.x, to_center.y, to_center.z),
-                    });
-                }
-            }
-
-            // Create cyan lines for cells
-            if !cyan_lines.is_empty() {
-                let cyan_material =
-                    engine::scene::color_material::create(Vector3::new(0.0, 1.0, 1.0));
-                let cyan_mesh = SceneObject::new(
-                    cyan_material,
-                    Box::new(engine::scene::lines_mesh::create(cyan_lines)),
-                );
-                visuals.push(cyan_mesh);
-            }
-
-            // Create yellow lines for links
-            if !yellow_lines.is_empty() {
-                let yellow_material =
-                    engine::scene::color_material::create(Vector3::new(1.0, 1.0, 0.0));
-                let yellow_mesh = SceneObject::new(
-                    yellow_material,
-                    Box::new(engine::scene::lines_mesh::create(yellow_lines)),
-                );
-                visuals.push(yellow_mesh);
-            }
-        }
-
-        visuals
     }
 
     /// Get hand spotlights for testing enhanced lighting system
