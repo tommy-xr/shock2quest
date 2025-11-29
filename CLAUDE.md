@@ -107,37 +107,6 @@ Use the `dark_query` CLI to inspect speech metadata without launching the game:
 
 If no tags are supplied for a voice, the tool prints the concept list and per-tag metadata. When tags are provided, every matching schema and its samples (with frequency weights) are shown.
 
-### Entity System Debugging
-
-#### Common Problems
-
-1. **Missing entities**: Check gamesys merging and template ID resolution
-2. **Wrong properties**: Verify inheritance chain and property override logic
-3. **Broken scripts**: Ensure script files exist and are registered
-4. **Physics issues**: Check PropPhysType, PropPhysDimensions, and collision setup
-
-#### Debugging Commands
-
-```rust
-// Print all MetaProp links (inheritance relationships)
-for link in &entity_info.link_metaprops {
-    println!("MetaProp: {} inherits from {}", link.src, link.dest);
-}
-
-// Show entity creation process
-let template_to_entity_id = entity_populator.populate(&entity_info, &level, &mut world);
-for (template_id, entity_id) in &template_to_entity_id {
-    println!("Created entity {} from template {}", entity_id.0, template_id);
-}
-```
-
-#### Performance Considerations
-
-- Entity inheritance is resolved at creation time, not runtime
-- Properties are shared via `Rc<Box<dyn Property>>` for memory efficiency
-- Typical missions have 1000-5000 entities
-- MetaProp link traversal can be expensive for deep hierarchies
-
 ### File Format Investigation
 
 When working with entity data, you may need to examine raw game files:
@@ -318,37 +287,6 @@ cargo apk check
 - Test core functionality on desktop
 - Verify VR compatibility if changes affect rendering
 - Update documentation if architectural changes were made
-
-## Common Change Categories
-
-### Small Changes (Single commit)
-
-- Bug fixes in specific functions
-- Adding new configuration options
-- Updating existing UI elements
-- Performance optimizations in isolated code
-
-### Medium Changes (2-3 commits)
-
-- New gameplay features
-- Refactoring a single module
-- Adding new file format support
-- UI/UX improvements
-
-### Large Changes (Multiple small PRs)
-
-- New major systems (break into multiple features)
-- Architectural refactoring (one module at a time)
-- Cross-platform compatibility changes
-- Major performance overhauls
-
-## Notes and Documentation
-
-- Document complex VR interactions and performance considerations
-- Keep `CLAUDE.md` updated with new workflow discoveries
-- Add new reference materials to `references/` folder
-
-**Remember: Small, frequent, well-tested changes are always preferred over large, complex modifications.**
 
 ## Special Considerations for Trait/Interface Changes
 
@@ -558,42 +496,6 @@ The motion database organizes animations hierarchically using tags:
 - **Creature-specific tags**: `+midwife`, `+droid`, etc.
 
 This system matches the tag database structure found in the original spew files and allows precise animation queries for debugging AI behavior and animation systems.
-
-### Key Use Cases
-
-1. **Debug Entity Issues**:
-   - Find why an entity has unexpected behavior
-   - Trace inheritance chains to understand property sources
-   - Identify missing or incorrect links
-
-2. **Understand Game Logic**:
-   - Follow trigger chains (tripwire → sound trap → other effects)
-   - Analyze complex multi-entity interactions
-   - Map out level design patterns
-
-3. **Development Support**:
-   - Identify unparsed properties/links that need implementation
-   - Validate entity merging between gamesys and missions
-   - Test inheritance-aware property resolution
-
-4. **LLM Integration**:
-   - Provide detailed entity context for AI debugging
-   - Generate comprehensive entity relationship reports
-   - Support complex entity system analysis
-
-### Implementation Notes
-
-- **Inheritance Resolution**: Uses `ss2_entity_info::get_hierarchy()` and `get_ancestors()` for proper inheritance traversal
-- **Bidirectional Links**: Scans all entities to build complete relationship graphs
-- **Performance**: Efficient for typical missions (1000-5000 entities)
-- **Path Detection**: Automatically works from Data directory or tools/dark_query
-- **Mission Parsing**: Uses entity-only parsing (no asset loading) for CLI efficiency
-
-### File Locations
-
-- **Main CLI**: `tools/dark_query/src/main.rs`
-- **Entity Analysis**: `tools/dark_query/src/entity_analyzer.rs`
-- **Data Loading**: `tools/dark_query/src/data_loader.rs`
 
 ## Data Path Management
 
