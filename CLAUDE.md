@@ -107,6 +107,49 @@ Use the `dark_query` CLI to inspect speech metadata without launching the game:
 
 If no tags are supplied for a voice, the tool prints the concept list and per-tag metadata. When tags are provided, every matching schema and its samples (with frequency weights) are shown.
 
+### Iterating on Visual Features
+
+For debugging visual/rendering changes without a full interactive session:
+
+1. **dark_viewer with `--debug-no-render`**: Loads assets and exits after the first frame, useful for adding logging to inspect model/asset data:
+
+   ```bash
+   cargo dv grunt_p.bin --debug-no-render
+   ```
+
+2. **Debug Runtime** (in progress, see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
+
+   ```bash
+   # Start debug runtime
+   cargo dbgr -- --mission medsci1.mis --port 8080
+
+   # Control via HTTP
+   curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
+   curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
+
+   # IMPORTANT: Always shut down when done to avoid interfering with user's session
+   curl -X POST http://127.0.0.1:8080/v1/shutdown
+   ```
+
+### Available Mission Files
+
+For testing entity queries and game features, these mission files are available in `Data/`:
+
+| Mission       | Description                    |
+| ------------- | ------------------------------ |
+| `earth.mis`   | Earth - tutorial/intro level   |
+| `station.mis` | Station - hub area             |
+| `medsci1.mis` | MedSci deck 1                  |
+| `medsci2.mis` | MedSci deck 2                  |
+| `eng1.mis`    | Engineering deck 1             |
+| `eng2.mis`    | Engineering deck 2             |
+| `hydro1.mis`  | Hydroponics deck 1             |
+| `ops1.mis`    | Operations deck 1              |
+| `rec1.mis`    | Recreation deck 1              |
+| `command1.mis`| Command deck 1                 |
+
+Use with `dark_query`: `cargo dq entities earth.mis --limit 10`
+
 ### File Format Investigation
 
 When working with entity data, you may need to examine raw game files:
