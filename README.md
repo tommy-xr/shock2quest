@@ -53,7 +53,7 @@ Example usage:
 ```bash
 cargo dr --experimental teleport  # Run desktop with teleport feature
 cargo dq entities earth.mis --limit 5  # Query entities in mission
-cargo dv inspect-gamesys shock2.gam  # Inspect gamesys file
+cargo dv grunt_p.bin  # View model file
 ```
 
 ## Roadmap
