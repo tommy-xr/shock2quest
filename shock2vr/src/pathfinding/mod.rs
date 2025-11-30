@@ -3,12 +3,14 @@
 /// This module provides A* pathfinding capabilities using the navigation mesh
 /// stored in AIPATH chunks. It maintains separation from the BSP tree system
 /// used for rendering/visibility queries.
-
 pub mod path_visualization;
 
+use cgmath::{InnerSpace, Vector3};
+use dark::mission::{
+    PathDatabase,
+    path_database::{MovementBits, PathCell},
+};
 use std::sync::Arc;
-use cgmath::{Vector3, InnerSpace};
-use dark::mission::{PathDatabase, path_database::{PathCell, MovementBits}};
 
 /// Pathfinding service for AI navigation
 ///
@@ -62,7 +64,8 @@ impl PathfindingService {
         )?;
 
         // Convert cell path to world positions (cell centers)
-        let waypoints = result.0
+        let waypoints = result
+            .0
             .iter()
             .map(|&cell_id| self.path_database.cells[cell_id as usize].center)
             .collect();
@@ -108,7 +111,8 @@ impl PathfindingService {
     ///
     /// Returns a list of (target_cell_id, cost) pairs for cells reachable from the given cell.
     fn get_successors(&self, cell_id: u32, movement_bits: MovementBits) -> Vec<(u32, u32)> {
-        self.path_database.links
+        self.path_database
+            .links
             .iter()
             .filter(|link| link.from_cell == cell_id)
             .filter(|link| link.ok_bits.intersects(movement_bits))
@@ -141,7 +145,8 @@ impl PathfindingService {
         }
 
         // Get the vertices of this cell
-        let vertices: Vec<Vector3<f32>> = cell.vertex_indices
+        let vertices: Vec<Vector3<f32>> = cell
+            .vertex_indices
             .iter()
             .filter_map(|&idx| self.path_database.vertices.get(idx as usize))
             .copied()

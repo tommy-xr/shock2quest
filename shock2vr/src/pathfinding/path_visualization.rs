@@ -1,12 +1,11 @@
+use crate::creature::HUMAN_HEIGHT;
+use cgmath::Vector3;
+use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
 /// Path visualization system for debugging and AI path display
 ///
 /// Supports multiple simultaneous paths with different colors and markers.
 /// Designed to work with the interactive pathfinding test system.
-
 use std::collections::HashMap;
-use cgmath::Vector3;
-use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
-use crate::creature::HUMAN_HEIGHT;
 
 /// Height offset for path visualization - center of human height
 const PATH_NODE_HEIGHT: f32 = HUMAN_HEIGHT / 2.0;
@@ -127,8 +126,12 @@ impl PathVisualizationSystem {
             MarkerType::Waypoint => {
                 // Render as a small dot (single point)
                 let marker_lines = vec![
-                    VertexPosition { position: marker_pos },
-                    VertexPosition { position: marker_pos },
+                    VertexPosition {
+                        position: marker_pos,
+                    },
+                    VertexPosition {
+                        position: marker_pos,
+                    },
                 ];
 
                 let material = color_material::create(marker.color);
@@ -154,11 +157,7 @@ pub struct ComputedPath {
 
 impl ComputedPath {
     /// Create a new computed path
-    pub fn new(
-        name: String,
-        waypoints: Vec<Vector3<f32>>,
-        color: Vector3<f32>,
-    ) -> Self {
+    pub fn new(name: String, waypoints: Vec<Vector3<f32>>, color: Vector3<f32>) -> Self {
         Self {
             waypoints,
             color,
