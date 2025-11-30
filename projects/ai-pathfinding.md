@@ -166,7 +166,7 @@ The visualization successfully displays:
 
 ## Phase 3: A* Pathfinding Integration
 
-**Goal**: Implement pathfinding using the `pathfinding` crate to find routes through the cell graph.
+**Goal**: Implement pathfinding using the `pathfinding` crate to find routes through the cell graph with interactive testing.
 
 ### Dependencies
 
@@ -179,9 +179,12 @@ pathfinding = "4"
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `shock2vr/src/pathfinding/mod.rs` | Create | Pathfinding service and queries |
+| `shock2vr/src/pathfinding/mod.rs` | Create | PathfindingService and AIPATH cell queries |
 | `shock2vr/src/pathfinding/cell_graph.rs` | Create | Graph adapter for pathfinding crate |
+| `shock2vr/src/pathfinding/path_visualization.rs` | Create | Multi-path visualization system |
 | `shock2vr/src/lib.rs` | Modify | Add pathfinding module |
+| `runtimes/desktop_runtime/src/main.rs` | Modify | Add P key for interactive pathfinding test |
+| `runtimes/debug_runtime/src/main.rs` | Modify | Add HTTP pathfinding-test commands |
 
 ### Core API Design
 
@@ -193,7 +196,8 @@ pub struct PathfindingService {
 }
 
 impl PathfindingService {
-    /// Find the cell containing a world position
+    /// Find the AIPATH cell containing a world position
+    /// Uses simple point-in-polygon tests (can be optimized later)
     pub fn cell_from_position(&self, pos: Vector3<f32>) -> Option<u32>;
 
     /// Find path from start position to goal position
@@ -215,6 +219,54 @@ impl PathfindingService {
     ) -> Option<u32>;
 }
 ```
+
+### Interactive Pathfinding Test System
+
+**Desktop Runtime (P Key):**
+- **Press 1**: Set start position (player location), show green marker
+- **Press 2**: Set goal position (player location), compute A* path, show green path
+- **Press 3**: Reset/clear all markers and test paths
+
+**Debug Runtime (HTTP Commands):**
+```bash
+# Set start position to player's current location
+curl -X POST http://127.0.0.1:8080/v1/pathfinding-test -d '{"action": "set_start"}'
+
+# Set goal position and compute path
+curl -X POST http://127.0.0.1:8080/v1/pathfinding-test -d '{"action": "set_goal"}'
+
+# Clear test data
+curl -X POST http://127.0.0.1:8080/v1/pathfinding-test -d '{"action": "reset"}'
+```
+
+### Multi-Path Visualization System
+
+```rust
+// shock2vr/src/pathfinding/path_visualization.rs
+
+pub struct PathVisualizationSystem {
+    pub paths: HashMap<String, ComputedPath>,
+}
+
+pub struct ComputedPath {
+    pub waypoints: Vec<Vector3<f32>>,
+    pub color: Vector3<f32>,      // Green for test, different colors for AI
+    pub name: String,             // "test_path", "grunt_1_path", etc.
+    pub markers: Vec<PathMarker>, // Start/goal markers
+}
+
+pub struct PathMarker {
+    pub position: Vector3<f32>,
+    pub marker_type: MarkerType,  // Start, Goal, Waypoint
+    pub color: Vector3<f32>,
+}
+```
+
+This design supports:
+- **Interactive testing** before AI integration
+- **Multiple simultaneous paths** for different AI entities
+- **Easy switching** between spatial query strategies
+- **Flexible visualization** with named paths and custom colors
 
 ### Implementation Steps
 
