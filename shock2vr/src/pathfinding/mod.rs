@@ -91,9 +91,11 @@ impl PathfindingService {
         });
 
         // Find the reachable cell closest to the goal
-        let mut closest_cell = None;
-        let mut closest_distance = f32::INFINITY;
+        let mut closest_cell = Some(start_cell_id); // Start with start cell as fallback
+        let start_center = self.path_database.cells[start_cell_id as usize].center;
+        let mut closest_distance = (goal - start_center).magnitude();
 
+        // Check all other reachable cells
         for (cell_id, _) in reachable {
             let cell_center = self.path_database.cells[cell_id as usize].center;
             let distance = (goal - cell_center).magnitude();
