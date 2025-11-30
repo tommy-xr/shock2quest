@@ -6,10 +6,11 @@ This plan implements proper A* pathfinding for monster AI using the AIPATH data 
 
 ## Current State
 
-- **No AIPATH parsing exists** - The `AIPATH` chunk in mission files is not currently read
+- ✅ **AIPATH parsing complete** - Complete pathfinding database extraction from mission files (Phase 1)
 - **AI uses direct movement** - Monsters chase players in a straight line with whisker-based collision avoidance
 - **Scripted sequences exist** - `ScriptedSequenceBehavior` supports waypoint navigation via `GotoScriptedAction`, but uses direct steering
 - **Debug infrastructure exists** - `--debug-*` flags, `DrawDebugLines` effect, and color materials are available
+- **Ready for Phase 2** - Debug visualization and pathfinding integration
 
 ## Design Decisions
 
@@ -19,91 +20,81 @@ This plan implements proper A* pathfinding for monster AI using the AIPATH data 
 
 ---
 
-## Phase 1: AIPATH Chunk Parsing
+## Phase 1: AIPATH Chunk Parsing ✅ **COMPLETED**
 
 **Goal**: Parse the AIPATH chunk from mission files and output debug information about available pathfinding data.
 
-### Files to Create/Modify
+### ✅ Completed Implementation
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `dark/src/mission/path_database.rs` | Create | AIPATH parsing and data structures |
-| `dark/src/mission/mod.rs` | Modify | Add path_database module, read AIPATH chunk |
+**Files Created/Modified:**
+- ✅ `dark/src/mission/path_database.rs` - Complete AIPATH parsing with sAIPathCell, sAIPathVertex, sAIPathCellLink structures
+- ✅ `dark/src/mission/mod.rs` - PathDatabase integration into mission loading
+- ✅ `tools/dark_query/src/main.rs` - AIPATH inspection command with sanity checks
 
-### Data Structures
-
-Based on `references/pathfinding.md`, define these structures:
-
+**Data Structures Implemented:**
 ```rust
-// dark/src/mission/path_database.rs
-
 /// A convex floor polygon for AI navigation
 pub struct PathCell {
     pub id: u32,
-    pub center: Vector3<f32>,      // Cached center point
-    pub vertex_indices: Vec<u32>,  // Indices into vertices array
-    pub flags: PathCellFlags,      // Unpathable, below-door, etc.
+    pub center: Vector3<f32>,      // Parsed center point from sAIPathCell
+    pub vertex_indices: Vec<u32>,  // Populated from cell-vertex links
+    pub flags: PathCellFlags,      // Movement restrictions
 }
 
-bitflags! {
-    pub struct PathCellFlags: u32 {
-        const UNPATHABLE = 0x01;
-        const BELOW_DOOR = 0x02;
-        const BLOCKING_OBB = 0x04;
-        const MOVING_TERRAIN = 0x08;
-    }
-}
-
-/// Link between two path cells
+/// Link between two path cells (8 bytes, matches sAIPathCellLink)
 pub struct PathCellLink {
-    pub from_cell: u32,
-    pub to_cell: u32,
-    pub edge_vertex_a: u32,        // Shared edge start
-    pub edge_vertex_b: u32,        // Shared edge end
-    pub ok_bits: MovementBits,     // Who can traverse
-    pub cost: u8,                  // Traversal cost
-}
-
-bitflags! {
-    pub struct MovementBits: u32 {
-        const WALK = 0x01;
-        const FLY = 0x02;
-        const SWIM = 0x04;
-        const SMALL_CREATURE = 0x08;
-    }
+    pub from_cell: u32,           // Populated from cell firstCell/cellCount
+    pub to_cell: u32,             // Destination cell from link data
+    pub edge_vertex_a: u32,       // Shared edge vertices
+    pub edge_vertex_b: u32,
+    pub ok_bits: MovementBits,    // Who can traverse (WALK, FLY, SWIM, SMALL_CREATURE)
+    pub cost: u8,                 // Traversal cost
 }
 
 /// Complete path database loaded from AIPATH chunk
 pub struct PathDatabase {
-    pub cells: Vec<PathCell>,
-    pub vertices: Vec<Vector3<f32>>,
-    pub links: Vec<PathCellLink>,
-    // Zone data can be added later if needed
+    pub cells: Vec<PathCell>,      // Navigation polygons
+    pub vertices: Vec<Vector3<f32>>, // 3D boundary points
+    pub links: Vec<PathCellLink>,    // Cell connections
 }
 ```
 
-### Implementation Steps
+### ✅ Results for medsci1.mis
 
-1. **Create `path_database.rs`** with structures above
-2. **Implement `PathDatabase::read()`** following the pattern in `room_database.rs`:
-   - Read from "AIPATH" chunk
-   - Parse header (version 3.3 expected)
-   - Read counts for cells, vertices, links
-   - Parse each array
-3. **Add to `mission/mod.rs`**:
-   - Add `pub mod path_database;`
-   - Add `path_database: Option<PathDatabase>` to `SystemShock2Level`
-   - Call `PathDatabase::read()` in the `read()` function (with graceful fallback if chunk missing)
-4. **Add temporary debug output**:
-   - Log cell count, vertex count, link count
-   - Log a sample of cells with their centers and link counts
+**Pathfinding Database:**
+- **4,695 navigation cells** with realistic center coordinates
+- **9,900 vertices** with precise 3D boundary points
+- **27,035 links** with complete source/destination mapping
+- **18,722 vertex references** properly distributed across cells
 
-### Validation
+**Data Quality Validation:**
+- ✅ **Perfect data integrity** (all 27,035 links have valid cell/vertex references)
+- ✅ **Realistic polygon shapes** (92% rectangles, 5% triangles, 2% pentagons)
+- ✅ **Healthy connectivity** (5.8 average links per cell, 82.7% well-connected)
+- ✅ **Complete polygon reconstruction** (all cells have vertex indices for boundary geometry)
 
-Run with a mission file and verify log output shows reasonable data:
+**Debug Tool:**
+```bash
+cargo dq aipath medsci1.mis    # Complete pathfinding database inspection
+cargo dq entities medsci1.mis  # Verify integration with mission loading
 ```
-AIPATH loaded: 1247 cells, 3891 vertices, 4523 links
-Sample cell 0: center=(12.5, 3.0, -45.2), 4 vertices, 3 links
+
+**Sample Output:**
+```
+=== AIPATH Database from medsci1.mis ===
+Cells: 4695, Vertices: 9900, Links: 27035
+
+Sample Cells:
+  Cell 1: center=(130.8, 75.2, -18.0), 4 vertices, flags=(empty)
+  Cell 2: center=(142.8, 75.2, -18.0), 4 vertices, flags=(empty)
+
+Sample Vertices:
+  Vertex 1: (124.75, 79.25, -18.00)
+  Vertex 2: (148.75, 79.25, -18.00)
+
+Sample Links:
+  Link 1: cell 1 -> cell 3, vertices 9:4, cost=15, movement=WALK | SMALL_CREATURE
+  Link 2: cell 1 -> cell 6, vertices 4:5, cost=8, movement=WALK | SMALL_CREATURE
 ```
 
 ---

@@ -98,6 +98,15 @@ enum Commands {
         /// Tags to query environmental sounds (e.g., "+event:shoot", "+weapontype:pistol")
         tags: Vec<String>,
     },
+    /// Query AI pathfinding database from mission files
+    Aipath {
+        /// Mission file to load pathfinding data from (e.g., "medsci1.mis")
+        mission: String,
+
+        /// Limit the number of cells/links to display
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 fn init_logging(verbose: bool) -> Result<()> {
@@ -173,6 +182,9 @@ fn main() -> Result<()> {
         }
         Commands::Sound { tags } => {
             handle_sound_command(&tags)?;
+        }
+        Commands::Aipath { mission, limit } => {
+            handle_aipath_command(&mission, limit)?;
         }
     }
 
@@ -770,4 +782,236 @@ fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::Syste
             println!("    {}. {}", i + 1, link_name);
         }
     }
+}
+
+fn handle_aipath_command(mission: &str, limit: Option<usize>) -> Result<()> {
+    use std::fs::File;
+
+    info!("Loading AIPATH data from {}...", mission);
+
+    // Load the mission file
+    let data_root = shock2vr::paths::data_root();
+    let mission_path = data_root.join(mission);
+
+    if !mission_path.exists() {
+        anyhow::bail!("Mission file not found: {}", mission_path.display());
+    }
+
+    let mut file = File::open(&mission_path)?;
+
+    // Parse AIPATH chunk directly
+    let table_of_contents = dark::ss2_chunk_file_reader::read_table_of_contents(&mut file);
+
+    // Parse AIPATH chunk
+    if let Some(path_database) = dark::mission::PathDatabase::read(&table_of_contents, &mut file) {
+        println!("=== AIPATH Database from {} ===", mission);
+        println!(
+            "Cells: {}, Vertices: {}, Links: {}",
+            path_database.cells.len(),
+            path_database.vertices.len(),
+            path_database.links.len()
+        );
+        println!();
+
+        // Display sample cells
+        let cell_limit = limit.unwrap_or(10);
+        println!("Sample Cells (showing up to {}):", cell_limit);
+        for (i, cell) in path_database.cells.iter().take(cell_limit).enumerate() {
+            println!(
+                "  Cell {}: center=({:.1}, {:.1}, {:.1}), {} vertices, flags={:?}",
+                i,
+                cell.center.x,
+                cell.center.y,
+                cell.center.z,
+                cell.vertex_indices.len(),
+                cell.flags
+            );
+        }
+
+        println!();
+
+        // Display sample vertices
+        let vertex_limit = limit.unwrap_or(10);
+        println!("Sample Vertices (showing up to {}):", vertex_limit);
+        for (i, vertex) in path_database.vertices.iter().take(vertex_limit).enumerate() {
+            println!(
+                "  Vertex {}: ({:.2}, {:.2}, {:.2})",
+                i, vertex.x, vertex.y, vertex.z
+            );
+        }
+
+        println!();
+
+        // Display sample links
+        let link_limit = limit.unwrap_or(20);
+        println!("Sample Links (showing up to {}):", link_limit);
+        for (i, link) in path_database.links.iter().take(link_limit).enumerate() {
+            println!(
+                "  Link {}: cell {} -> cell {}, vertices {}:{}, cost={}, movement={:?}",
+                i,
+                link.from_cell,
+                link.to_cell,
+                link.edge_vertex_a,
+                link.edge_vertex_b,
+                link.cost,
+                link.ok_bits
+            );
+        }
+
+        if path_database.cells.len() > cell_limit || path_database.links.len() > link_limit {
+            println!();
+            println!("(Use --limit N to show more entries)");
+        }
+
+        println!();
+        println!("=== AIPATH Data Sanity Checks ===");
+
+        // Check 1: Verify vertex count consistency
+        let mut total_vertex_refs = 0u32;
+        let mut cells_with_vertices = 0;
+        for cell in &path_database.cells {
+            total_vertex_refs += cell.vertex_indices.len() as u32;
+            if !cell.vertex_indices.is_empty() {
+                cells_with_vertices += 1;
+            }
+        }
+
+        println!(
+            "Vertex references: {} total vertex indices across {} cells",
+            total_vertex_refs, cells_with_vertices
+        );
+        println!("Available vertices: {}", path_database.vertices.len());
+
+        // Show vertex count distribution
+        let mut vertex_distribution = std::collections::HashMap::new();
+        for cell in &path_database.cells {
+            let count = cell.vertex_indices.len();
+            *vertex_distribution.entry(count).or_insert(0) += 1;
+        }
+
+        println!("Vertex count distribution:");
+        let mut sorted_vertex_dist: Vec<_> = vertex_distribution.iter().collect();
+        sorted_vertex_dist.sort_by_key(|&(count, _)| count);
+        for (vertex_count, cell_count) in sorted_vertex_dist.iter().take(8) {
+            println!("  {} cells have {} vertices", cell_count, vertex_count);
+        }
+
+        // Check 2: Verify link source/destination cell IDs are valid
+        let mut valid_links = 0;
+        let mut invalid_source_cells = 0;
+        let mut invalid_dest_cells = 0;
+        let mut links_per_cell = vec![0u32; path_database.cells.len()];
+
+        for link in &path_database.links {
+            let mut link_valid = true;
+
+            // Check source cell
+            if link.from_cell >= path_database.cells.len() as u32 {
+                invalid_source_cells += 1;
+                link_valid = false;
+            } else {
+                links_per_cell[link.from_cell as usize] += 1;
+            }
+
+            // Check destination cell
+            if link.to_cell >= path_database.cells.len() as u32 {
+                invalid_dest_cells += 1;
+                link_valid = false;
+            }
+
+            if link_valid {
+                valid_links += 1;
+            }
+        }
+
+        println!(
+            "Links: {}/{} valid (invalid source: {}, invalid dest: {})",
+            valid_links,
+            path_database.links.len(),
+            invalid_source_cells,
+            invalid_dest_cells
+        );
+
+        // Check 3: Verify vertex IDs in links are valid
+        let mut invalid_vertex_refs = 0;
+        for link in &path_database.links {
+            if link.edge_vertex_a >= path_database.vertices.len() as u32 {
+                invalid_vertex_refs += 1;
+            }
+            if link.edge_vertex_b >= path_database.vertices.len() as u32 {
+                invalid_vertex_refs += 1;
+            }
+        }
+
+        if invalid_vertex_refs > 0 {
+            println!(
+                "Warning: {} invalid vertex references in links",
+                invalid_vertex_refs
+            );
+        } else {
+            println!("All vertex references in links are valid");
+        }
+
+        // Check 4: Show distribution of outgoing links per cell
+        let mut link_distribution = std::collections::HashMap::new();
+        for &count in &links_per_cell {
+            *link_distribution.entry(count).or_insert(0) += 1;
+        }
+
+        println!("Link distribution:");
+        let mut sorted_dist: Vec<_> = link_distribution.iter().collect();
+        sorted_dist.sort_by_key(|&(count, _)| count);
+        for (link_count, cell_count) in sorted_dist {
+            println!("  {} cells have {} outgoing links", cell_count, link_count);
+        }
+
+        // Check 5: Look for cells with no connections (potential islands)
+        let isolated_cells = links_per_cell.iter().filter(|&&count| count == 0).count();
+        if isolated_cells > 0 {
+            println!(
+                "Warning: {} cells have no outgoing links (potential navigation islands)",
+                isolated_cells
+            );
+        } else {
+            println!("All cells have at least one outgoing link");
+        }
+
+        // Check 6: Verify total link count matches sum of individual cell link counts
+        let total_links_from_cells: u32 = links_per_cell.iter().sum();
+        println!(
+            "Link count verification: {} links total, {} from cell counts ({})",
+            path_database.links.len(),
+            total_links_from_cells,
+            if total_links_from_cells == path_database.links.len() as u32 {
+                "MATCH"
+            } else {
+                "MISMATCH"
+            }
+        );
+
+        // Check 7: Show some statistics
+        println!("Statistics:");
+        println!(
+            "  Average links per cell: {:.1}",
+            total_links_from_cells as f64 / path_database.cells.len() as f64
+        );
+        let max_links = links_per_cell.iter().max().unwrap_or(&0);
+        println!("  Maximum links from one cell: {}", max_links);
+
+        // Check connectivity health
+        let well_connected_cells = links_per_cell.iter().filter(|&&count| count >= 3).count();
+        println!(
+            "  Well-connected cells (3+ links): {}/{} ({:.1}%)",
+            well_connected_cells,
+            path_database.cells.len(),
+            100.0 * well_connected_cells as f64 / path_database.cells.len() as f64
+        );
+    } else {
+        println!("No AIPATH chunk found in mission file: {}", mission);
+        println!(
+            "This mission may not have pathfinding data, or the file format may not be supported."
+        );
+    }
+
+    Ok(())
 }

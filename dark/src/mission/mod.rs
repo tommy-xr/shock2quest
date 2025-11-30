@@ -1,6 +1,7 @@
 mod bsp_tree;
 mod cell;
 mod cell_portal;
+pub mod path_database;
 mod plane;
 pub mod render_params;
 pub mod room;
@@ -12,6 +13,7 @@ pub mod texture_list;
 pub use bsp_tree::*;
 pub use cell::*;
 pub use cell_portal::*;
+pub use path_database::PathDatabase;
 pub use plane::*;
 
 use crate::properties::LinkDefinitionWithData;
@@ -81,6 +83,7 @@ pub struct SystemShock2Level {
     pub room_database: RoomDatabase,
     pub song_params: SongParams,
     pub bsp_tree: BspTree,
+    pub path_database: Option<PathDatabase>,
 }
 
 impl SystemShock2Level {
@@ -210,6 +213,30 @@ pub fn read<T: io::Read + io::Seek>(
     let _render_params = RenderParams::read(&table_of_contents, reader);
     let room_database = RoomDatabase::read(&table_of_contents, reader);
     let song_params = SongParams::read(&table_of_contents, reader);
+    let path_database = PathDatabase::read(&table_of_contents, reader);
+
+    // Log AIPATH data if loaded
+    if let Some(ref pathdb) = path_database {
+        tracing::debug!(
+            "AIPATH loaded: {} cells, {} vertices, {} links",
+            pathdb.cells.len(),
+            pathdb.vertices.len(),
+            pathdb.links.len()
+        );
+
+        // Log a sample of cells for verification
+        for (i, cell) in pathdb.cells.iter().take(3).enumerate() {
+            tracing::debug!(
+                "Sample cell {}: center=({:.1}, {:.1}, {:.1}), {} vertices, flags={:?}",
+                i,
+                cell.center.x,
+                cell.center.y,
+                cell.center.z,
+                cell.vertex_indices.len(),
+                cell.flags
+            );
+        }
+    }
 
     SystemShock2Level {
         bsp_tree,
@@ -221,6 +248,7 @@ pub fn read<T: io::Read + io::Seek>(
         entity_info,
         room_database,
         song_params,
+        path_database,
     }
 }
 
