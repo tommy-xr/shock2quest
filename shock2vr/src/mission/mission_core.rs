@@ -16,6 +16,7 @@ use cgmath::{
 use crate::SpawnLocation;
 use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
+use crate::mission::pathfinding_debug;
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
@@ -105,6 +106,7 @@ pub struct PlayerInfo {
 #[derive(Unique, Clone, Default)]
 pub struct DebugOptions {
     pub debug_ai: bool,
+    pub debug_pathfinding: bool,
 }
 
 #[derive(Unique, Clone)]
@@ -177,6 +179,7 @@ pub struct MissionCore {
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
+    pub path_database: Option<dark::mission::PathDatabase>,
 }
 
 pub struct GlobalContext {
@@ -196,6 +199,7 @@ pub struct AbstractMission {
     pub entity_info: SystemShock2EntityInfo,
     pub obj_map: HashMap<i32, String>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
+    pub path_database: Option<dark::mission::PathDatabase>,
 }
 
 impl MissionCore {
@@ -242,6 +246,7 @@ impl MissionCore {
         world.add_unique(speech_registry);
         world.add_unique(DebugOptions {
             debug_ai: game_options.debug_ai,
+            debug_pathfinding: game_options.debug_pathfinding,
         });
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
@@ -420,6 +425,7 @@ impl MissionCore {
             teleport_system,
             pending_entity_triggers: Vec::new(),
             obj_map: abstract_mission.obj_map,
+            path_database: abstract_mission.path_database,
         }
     }
 
@@ -1935,6 +1941,15 @@ impl MissionCore {
         if options.debug_physics {
             let debug_render = &self.physics.debug_render();
             scene.append(&mut debug_render.clone());
+        }
+
+        // Render debug pathfinding
+        if options.debug_pathfinding {
+            if let Some(ref path_database) = self.path_database {
+                let mut pathfinding_visuals =
+                    pathfinding_debug::render_pathfinding_debug(path_database);
+                scene.append(&mut pathfinding_visuals);
+            }
         }
 
         // self.world.run(

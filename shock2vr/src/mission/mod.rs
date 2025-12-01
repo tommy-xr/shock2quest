@@ -4,6 +4,7 @@ use std::{fs::File, io::BufReader};
 use tracing::info;
 pub mod entity_populator;
 pub mod mission_core;
+pub mod pathfinding_debug;
 pub mod spatial_query;
 mod spawn_location;
 pub mod visibility_engine;
@@ -86,6 +87,7 @@ impl Mission {
             entity_info: level.entity_info,
             obj_map,
             visibility_engine: Box::new(PortalVisibilityEngine::new()),
+            path_database: level.path_database,
         };
 
         let mission_core = MissionCore::load(

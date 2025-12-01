@@ -1,5 +1,6 @@
+use crate::SCALE_FACTOR;
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
-use crate::ss2_common::{read_single, read_u8};
+use crate::ss2_common::{read_point3, read_u8, read_vec3};
 use byteorder::ReadBytesExt;
 use cgmath::Vector3;
 use std::io;
@@ -116,15 +117,11 @@ impl PathDatabase {
             let cell_count = read_u8(reader); // offset 14
             let _wrap_flags = read_u8(reader); // offset 15
 
-            // Read center point (cMxsVector - 12 bytes: 3 floats)
-            let center_x = read_single(reader); // offset 16
-            let center_y = read_single(reader); // offset 20
-            let center_z = read_single(reader); // offset 24
+            // Read center point (cMxsVector - 12 bytes: 3 floats) using standard reader
+            let center = read_vec3(reader) / SCALE_FACTOR;
 
             // Read bitfields (4 bytes total, offsets 28-31)
             let _bitfield_data = reader.read_u32::<byteorder::LittleEndian>().unwrap();
-
-            let center = Vector3::new(center_x, center_y, center_z);
             let flags = PathCellFlags::from_bits_truncate(path_flags as u32);
 
             // Store the link and vertex range information for this cell
@@ -142,9 +139,9 @@ impl PathDatabase {
                 debug!(
                     "Cell {}: center=({:.2}, {:.2}, {:.2}) firstVertex={} vertexCount={} firstCell={} cellCount={}",
                     i,
-                    center_x,
-                    center_y,
-                    center_z,
+                    center.x,
+                    center.y,
+                    center.z,
                     first_vertex,
                     vertex_count,
                     first_cell,
@@ -195,15 +192,17 @@ impl PathDatabase {
         // Read vertex data (16 bytes per vertex: 3 floats + 1 u32)
         let mut vertices = Vec::new();
         for i in 0..num_vertices {
-            let x = read_single(reader);
-            let y = read_single(reader);
-            let z = read_single(reader);
+            // Read vertex coordinates using standard reader, then convert to Vector3
+            let vertex_point = read_point3(reader) / SCALE_FACTOR;
             let _pt_info = reader.read_u32::<byteorder::LittleEndian>().unwrap();
 
-            vertices.push(Vector3::new(x, y, z));
+            vertices.push(Vector3::new(vertex_point.x, vertex_point.y, vertex_point.z));
 
             if i < 10 {
-                debug!("Vertex {}: ({:.2}, {:.2}, {:.2})", i, x, y, z);
+                debug!(
+                    "Vertex {}: ({:.2}, {:.2}, {:.2})",
+                    i, vertex_point.x, vertex_point.y, vertex_point.z
+                );
             }
         }
 

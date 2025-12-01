@@ -138,6 +138,7 @@ impl DebugSceneBuilder {
             entity_info: SystemShock2EntityInfo::empty(),
             obj_map: HashMap::new(),
             visibility_engine: Box::new(AlwaysVisible),
+            path_database: None,
         };
 
         MissionCore::load(

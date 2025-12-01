@@ -74,6 +74,10 @@ struct Args {
     #[arg(long)]
     debug_skeletons: bool,
 
+    /// Enable pathfinding visualization
+    #[arg(long)]
+    debug_pathfinding: bool,
+
     /// Save file to load
     #[arg(short, long)]
     save_file: Option<String>,
@@ -269,6 +273,8 @@ fn run_game_blocking(
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,
+        debug_pathfinding: args.debug_pathfinding,
+        debug_ai: false,
         render_particles: true,
         experimental_features,
         ..GameOptions::default()

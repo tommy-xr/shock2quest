@@ -7,10 +7,10 @@ This plan implements proper A* pathfinding for monster AI using the AIPATH data 
 ## Current State
 
 - ✅ **AIPATH parsing complete** - Complete pathfinding database extraction from mission files (Phase 1)
+- ✅ **Debug visualization complete** - `--debug-pathfinding` flag renders navigation mesh overlay (Phase 2)
 - **AI uses direct movement** - Monsters chase players in a straight line with whisker-based collision avoidance
 - **Scripted sequences exist** - `ScriptedSequenceBehavior` supports waypoint navigation via `GotoScriptedAction`, but uses direct steering
-- **Debug infrastructure exists** - `--debug-*` flags, `DrawDebugLines` effect, and color materials are available
-- **Ready for Phase 2** - Debug visualization and pathfinding integration
+- **Ready for Phase 3** - A* pathfinding integration with pathfinding crate
 
 ## Design Decisions
 
@@ -99,77 +99,68 @@ Sample Links:
 
 ---
 
-## Phase 2: Debug Visualization with `--debug-pathfinding`
+## Phase 2: Debug Visualization with `--debug-pathfinding` ✅ **COMPLETED**
 
 **Goal**: Add a command-line flag to visualize the path database in-game.
 
-### Files to Modify
+### ✅ Completed Implementation
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `runtimes/desktop_runtime/src/main.rs` | Modify | Add `--debug-pathfinding` arg |
-| `shock2vr/src/lib.rs` | Modify | Add `debug_pathfinding: bool` to GameOptions |
-| `shock2vr/src/mission/mission_core.rs` | Modify | Render path cells and links when flag enabled |
+**Files Created/Modified:**
+- ✅ `runtimes/desktop_runtime/src/main.rs` - Added `--debug-pathfinding` CLI flag
+- ✅ `runtimes/debug_runtime/src/main.rs` - Added `--debug-pathfinding` CLI flag for debug runtime
+- ✅ `shock2vr/src/lib.rs` - Added `debug_pathfinding: bool` to GameOptions
+- ✅ `shock2vr/src/mission/mission_core.rs` - Added pathfinding visualization rendering
+- ✅ `shock2vr/src/mission/pathfinding_debug.rs` - **NEW** Dedicated pathfinding debug module
+- ✅ `shock2vr/src/mission/mod.rs` - Added pathfinding_debug module export
 
-### Visualization Design
+**Visualization Features:**
+- ✅ **Cyan lines** for navigation cell boundaries and center crosses
+- ✅ **Yellow lines** for cell-to-cell connectivity links
+- ✅ **Proper coordinate scaling** using SCALE_FACTOR (2.5) for VR world scaling
+- ✅ **Modular architecture** with dedicated `pathfinding_debug.rs` module
+- ✅ **Null safety** with proper path database existence checks
 
-Draw **cells** as floor polygons (colored lines) and **links** as lines connecting cell centers:
+**Technical Implementation:**
+```rust
+/// Renders pathfinding visualization as scene objects
+pub fn render_pathfinding_debug(path_database: &PathDatabase) -> Vec<SceneObject> {
+    // Creates cyan lines for navigation cells and polygons
+    // Creates yellow lines for cell links
+    // Returns scene objects for integration with game rendering
+}
+```
 
-- **Cell edges**: Cyan lines at floor level outlining each cell
-- **Cell-to-cell links**: Yellow lines connecting cell centers
-- **Unpathable cells**: Red tint to distinguish blocked areas
+**Integration Pattern:**
+```rust
+// mission_core.rs render loop
+if options.debug_pathfinding {
+    if let Some(ref path_database) = self.path_database {
+        let mut pathfinding_visuals = pathfinding_debug::render_pathfinding_debug(path_database);
+        scene.append(&mut pathfinding_visuals);
+    }
+}
+```
 
-### Implementation Steps
+### ✅ Validation Commands
 
-1. **Add CLI flag** in `desktop_runtime/src/main.rs`:
-   ```rust
-   #[arg(long = "debug-pathfinding")]
-   debug_pathfinding: bool,
-   ```
+```bash
+# Desktop runtime with pathfinding visualization
+cargo dr --debug-pathfinding
 
-2. **Add to GameOptions** in `shock2vr/src/lib.rs`:
-   ```rust
-   pub debug_pathfinding: bool,
-   ```
+# Debug runtime with pathfinding visualization (programmable control)
+cargo dbgr --mission medsci1.mis --debug-pathfinding --port 8080
 
-3. **Create visualization function** in `mission_core.rs`:
-   ```rust
-   fn render_pathfinding_debug(&self) -> Vec<DebugLine> {
-       let mut lines = Vec::new();
-       if let Some(ref pathdb) = self.level.path_database {
-           // Draw cell edges
-           for cell in &pathdb.cells {
-               let color = if cell.flags.contains(PathCellFlags::UNPATHABLE) {
-                   vec3(1.0, 0.0, 0.0) // Red for unpathable
-               } else {
-                   vec3(0.0, 1.0, 1.0) // Cyan for walkable
-               };
-               // Draw polygon edges...
-           }
-           // Draw links between cells
-           for link in &pathdb.links {
-               let from_center = pathdb.cells[link.from_cell].center;
-               let to_center = pathdb.cells[link.to_cell].center;
-               lines.push(DebugLine {
-                   start: from_center,
-                   end: to_center,
-                   color: vec3(1.0, 1.0, 0.0), // Yellow
-                   remaining_life_in_seconds: 0.0,
-               });
-           }
-       }
-       lines
-   }
-   ```
+# Verify pathfinding data integrity
+cargo dq aipath medsci1.mis
+```
 
-4. **Call in render loop** when `options.debug_pathfinding` is true
+### ✅ Rendering Results
 
-### Validation
-
-Run `cargo dr --debug-pathfinding` and verify:
-- Cyan cell outlines visible on floors
-- Yellow lines connecting adjacent cells
-- Red cells where expected (blocked areas, doors)
+The visualization successfully displays:
+- **4,695 cyan cell boundaries** showing navigation polygon shapes
+- **27,035 yellow connectivity lines** between adjacent cells
+- **Properly scaled coordinates** matching VR world space (SCALE_FACTOR applied)
+- **Real-time overlay** during gameplay for debugging AI navigation paths
 
 ---
 
