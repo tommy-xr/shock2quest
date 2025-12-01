@@ -67,3 +67,19 @@ impl Command for TransitionLevelCommand {
         })
     }
 }
+
+// PathfindingTestCommand
+#[derive(Debug)]
+pub struct PathfindingTestCommand {}
+
+impl PathfindingTestCommand {
+    pub fn new() -> PathfindingTestCommand {
+        PathfindingTestCommand {}
+    }
+}
+
+impl Command for PathfindingTestCommand {
+    fn execute(&self, _world: &World) -> Effect {
+        Effect::PathfindingTest
+    }
+}

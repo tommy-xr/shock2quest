@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
 /// Keeps the spatial query implementation simple and swappable.
 pub struct PathfindingService {
-    path_database: Arc<PathDatabase>,
+    pub path_database: Arc<PathDatabase>,
 }
 
 impl PathfindingService {

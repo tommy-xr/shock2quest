@@ -37,6 +37,9 @@ pub enum RuntimeCommand {
     /// Execute a game command (spawn, save, etc.)
     RunGameCommand(String, Vec<String>, oneshot::Sender<CommandResult>),
 
+    /// Pathfinding test command (set_start, set_goal, reset)
+    PathfindingTest(String, oneshot::Sender<CommandResult>),
+
     /// List entities near the player
     ListEntities {
         limit: Option<usize>,

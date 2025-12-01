@@ -14,6 +14,7 @@ use glfw::GlfwReceiver;
 use glfw::Modifiers;
 use shock2vr::command::LoadCommand;
 use shock2vr::command::MoveInventoryCommand;
+use shock2vr::command::PathfindingTestCommand;
 
 use shock2vr::command::SaveCommand;
 use shock2vr::command::SpawnItemCommand;
@@ -393,6 +394,7 @@ struct InputState {
     quick_save_pressed: bool,
     space_pressed: bool,
     is_crouching: bool,
+    pathfinding_test_pressed: bool,
 }
 impl InputState {
     pub fn new() -> Self {
@@ -401,6 +403,7 @@ impl InputState {
             quick_save_pressed: false,
             space_pressed: false,
             is_crouching: false,
+            pathfinding_test_pressed: false,
         }
     }
 }
@@ -609,6 +612,14 @@ fn process_events(
     if window.get_key(Key::I) == Action::Press {
         //commands.push(Box::new(SavePositionCommand::new()));
         commands.push(Box::new(MoveInventoryCommand::new(head_rotation)))
+    }
+
+    // Pathfinding test system - P key cycles through test states
+    if window.get_key(Key::P) == Action::Press {
+        input_state.pathfinding_test_pressed = true;
+        if !last_input_state.pathfinding_test_pressed {
+            commands.push(Box::new(PathfindingTestCommand::new()));
+        }
     }
     (input_context, input_state, commands, effects)
 }

@@ -7,8 +7,8 @@ use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
 /// Designed to work with the interactive pathfinding test system.
 use std::collections::HashMap;
 
-/// Height offset for path visualization - center of human height
-const PATH_NODE_HEIGHT: f32 = HUMAN_HEIGHT / 2.0;
+/// Height offset for path visualization - raised above debug mesh for visibility
+const PATH_NODE_HEIGHT: f32 = HUMAN_HEIGHT * 0.75;
 
 /// System for managing and rendering multiple pathfinding visualizations
 pub struct PathVisualizationSystem {
