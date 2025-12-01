@@ -1,7 +1,11 @@
+use crate::creature::HUMAN_HEIGHT;
 /// Pathfinding debug visualization for AI navigation mesh
 use cgmath::Vector3;
 use dark::mission::PathDatabase;
 use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
+
+/// Height offset for pathfinding visualization - center of human height
+const PATH_NODE_HEIGHT: f32 = HUMAN_HEIGHT / 2.0;
 
 /// Renders pathfinding visualization as scene objects
 ///
@@ -14,9 +18,9 @@ pub fn render_pathfinding_debug(path_database: &PathDatabase) -> Vec<SceneObject
 
     // Render path cells as cyan polygons and center crosses
     for cell in &path_database.cells {
-        let center = cell.center;
+        let center = cell.center + Vector3::new(0.0, PATH_NODE_HEIGHT, 0.0);
 
-        // Create a small cross at the center
+        // Create a small cross at the center (raised to human eye level)
         let size = 0.1;
         cyan_lines.push(VertexPosition {
             position: Vector3::new(center.x - size, center.y, center.z),
@@ -66,14 +70,16 @@ pub fn render_pathfinding_debug(path_database: &PathDatabase) -> Vec<SceneObject
         let to_cell_idx = link.to_cell as usize;
 
         if from_cell_idx < path_database.cells.len() && to_cell_idx < path_database.cells.len() {
-            let from_center = &path_database.cells[from_cell_idx].center;
-            let to_center = &path_database.cells[to_cell_idx].center;
+            let from_center = path_database.cells[from_cell_idx].center
+                + Vector3::new(0.0, PATH_NODE_HEIGHT, 0.0);
+            let to_center =
+                path_database.cells[to_cell_idx].center + Vector3::new(0.0, PATH_NODE_HEIGHT, 0.0);
 
             yellow_lines.push(VertexPosition {
-                position: Vector3::new(from_center.x, from_center.y, from_center.z),
+                position: from_center,
             });
             yellow_lines.push(VertexPosition {
-                position: Vector3::new(to_center.x, to_center.y, to_center.z),
+                position: to_center,
             });
         }
     }

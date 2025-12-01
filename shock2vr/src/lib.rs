@@ -12,6 +12,7 @@ mod creature;
 mod gui;
 mod hud;
 mod mission;
+pub mod pathfinding;
 pub mod paths;
 mod physics;
 mod quest_info;
