@@ -2316,11 +2316,8 @@ impl MissionCore {
                                             waypoints.clone(),
                                         );
 
-                                        // TEMP DEBUG: Add fallback waypoints if empty
+                                        // Add fallback waypoints if pathfinding returns empty result
                                         if waypoints.is_empty() {
-                                            println!(
-                                                "⚠️  NO FALLBACK WAYPOINTS: Adding test waypoints"
-                                            );
                                             let mid_point =
                                                 start_pos + (closest_center - start_pos) * 0.5;
                                             test_path.waypoints =
