@@ -187,7 +187,6 @@ pub struct MissionCore {
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
 }
 
-
 pub struct GlobalContext {
     pub properties: Vec<Box<dyn PropertyDefinition<BufReader<File>>>>,
     pub links: Vec<Box<dyn LinkDefinition>>,
@@ -2193,7 +2192,6 @@ impl MissionCore {
             &mut self.path_visualization,
         )
     }
-
 
     /// Internal method to trigger an entity and return messages to dispatch
     fn trigger_entity_by_name_internal(&mut self, entity_name: String) -> Vec<Message> {

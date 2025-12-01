@@ -718,11 +718,12 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
         }
         RuntimeCommand::PathfindingTest(action, reply) => {
             // TODO: Implement pathfinding test command execution
-            // This would need to be integrated into the game loop's command processing
+            // This requires broader architectural changes to input/command handling.
+            // See "Known Architectural Issues" section in projects/debug-runtime.md
             let result = CommandResult {
                 success: false,
                 message: format!(
-                    "Pathfinding test action '{}' not yet implemented in debug runtime",
+                    "Pathfinding test action '{}' not yet implemented - requires keybinding system refactor",
                     action
                 ),
                 data: None,

@@ -1,9 +1,9 @@
+use crate::pathfinding::{PathfindingService, path_visualization::PathVisualizationSystem};
 /// Interactive pathfinding test system for debugging AI navigation
 ///
 /// Provides P-key cycling through pathfinding test states and HTTP commands
 /// for the debug runtime to test A* pathfinding with visual feedback.
 use cgmath::Vector3;
-use crate::pathfinding::{PathfindingService, path_visualization::PathVisualizationSystem};
 
 /// State machine for interactive pathfinding testing
 #[derive(Debug, Clone, PartialEq)]
@@ -47,11 +47,9 @@ impl PathfindingTest {
         if action != "cycle" {
             match action {
                 "set_start" => self.set_start(player_position, path_visualization),
-                "set_goal" => self.set_goal(
-                    player_position,
-                    pathfinding_service,
-                    path_visualization,
-                ),
+                "set_goal" => {
+                    self.set_goal(player_position, pathfinding_service, path_visualization)
+                }
                 "reset" => self.reset(path_visualization),
                 _ => format!("Unknown pathfinding test action: {}", action),
             }
@@ -61,11 +59,9 @@ impl PathfindingTest {
                 PathfindingTestState::WaitingForStart => {
                     self.set_start(player_position, path_visualization)
                 }
-                PathfindingTestState::WaitingForGoal => self.set_goal(
-                    player_position,
-                    pathfinding_service,
-                    path_visualization,
-                ),
+                PathfindingTestState::WaitingForGoal => {
+                    self.set_goal(player_position, pathfinding_service, path_visualization)
+                }
                 PathfindingTestState::ShowingPath => self.reset(path_visualization),
             }
         }
@@ -81,7 +77,9 @@ impl PathfindingTest {
         path_visualization.remove_path("test_path");
 
         // Store start position for future path computation
-        use crate::pathfinding::path_visualization::{ComputedPath, MarkerType, PathMarker, colors};
+        use crate::pathfinding::path_visualization::{
+            ComputedPath, MarkerType, PathMarker, colors,
+        };
 
         let mut path = ComputedPath::new("test_start".to_string(), vec![], colors::TEST_PATH);
 
@@ -184,11 +182,8 @@ impl PathfindingTest {
                     Some(waypoints) => {
                         use crate::pathfinding::path_visualization::ComputedPath;
 
-                        let mut test_path = ComputedPath::test_path(
-                            start_pos,
-                            closest_center,
-                            waypoints.clone(),
-                        );
+                        let mut test_path =
+                            ComputedPath::test_path(start_pos, closest_center, waypoints.clone());
 
                         // Add fallback waypoints if pathfinding returns empty result
                         if waypoints.is_empty() {
