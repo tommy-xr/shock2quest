@@ -386,6 +386,15 @@ impl MissionCore {
             effects: Vec::new(),
         });
 
+        // Add pathfinding service to world for AI access
+        let pathfinding_service_for_world = abstract_mission
+            .path_database
+            .as_ref()
+            .map(|db| PathfindingService::new(Arc::new(db.clone())));
+        if let Some(pathfinding_service) = pathfinding_service_for_world {
+            world.add_unique(pathfinding_service);
+        }
+
         // Initialize teleport system based on game options
         let teleport_system = if game_options.experimental_features.contains("teleport") {
             let teleport_config = crate::teleport::TeleportConfig {

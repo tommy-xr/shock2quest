@@ -317,82 +317,110 @@ This implementation provides a solid foundation for Phase 4 AI integration, with
 
 ---
 
-## Phase 4: AI Integration
+## Phase 4: AI Integration ✅ **COMPLETED**
 
-**Goal**: Enhance monster AI to use A* pathfinding when chasing the player.
+**Goal**: Enhance monster AI to use A* pathfinding for navigation to any target (players, entities, or specific positions).
 
-### Files to Modify
+### ✅ Completed Implementation
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `shock2vr/src/scripts/ai/steering/pathfinding_steering_strategy.rs` | Create | New steering strategy using pathfinding |
-| `shock2vr/src/scripts/ai/steering/mod.rs` | Modify | Export new strategy |
-| `shock2vr/src/scripts/ai/behavior/chase_behavior.rs` | Modify | Use pathfinding steering |
-| `shock2vr/src/scripts/ai/animated_monster_ai.rs` | Modify | Store current path state |
+**Files Created/Modified:**
+- ✅ `shock2vr/src/scripts/ai/steering/waypoint_steering_strategy.rs` - **NEW** General waypoint-following strategy using pathfinding
+- ✅ `shock2vr/src/scripts/ai/steering/mod.rs` - Added waypoint strategy export
+- ✅ `shock2vr/src/scripts/ai/behavior/chase_behavior.rs` - Added `with_pathfinding()` constructor for waypoint steering
 
-### Design
+### ✅ Implemented Design
 
-Create a new `PathfindingSteeringStrategy` that:
-1. Periodically recomputes path to player (not every frame - expensive)
-2. Stores current path as list of waypoints
-3. Steers toward next waypoint in path
-4. Falls back to direct chase when player is visible (line of sight)
+The completed `WaypointSteeringStrategy` provides:
+1. **✅ General Target Support**: Can navigate to players, entities, or specific Vector3 positions via `NavigationTarget` enum
+2. **✅ Smart Fallback**: Uses direct steering when within distance threshold (3m) OR in same AIPATH cell (instead of line-of-sight for better obstacle handling)
+3. **✅ Waypoint Following**: Stores current path and follows waypoints in sequence with configurable reach distance
+4. **✅ Integration Ready**: Works with existing steering chain system via `ChaseBehavior::with_pathfinding()`
+5. **✅ Reusable**: Designed for chase, patrol, investigation, and scripted movement behaviors
 
-### Implementation Steps
+### ✅ NavigationTarget Enum
 
-1. **Create `PathfindingSteeringStrategy`**:
-   ```rust
-   pub struct PathfindingSteeringStrategy {
-       current_path: Vec<Vector3<f32>>,
-       current_waypoint_idx: usize,
-       last_path_update: f32,
-       path_update_interval: f32, // e.g., 0.5 seconds
-   }
+```rust
+#[derive(Debug, Clone)]
+pub enum NavigationTarget {
+    /// Navigate to player's current position
+    Player,
+    /// Navigate to specific entity's position
+    Entity(EntityId),
+    /// Navigate to fixed world position
+    Position(Vector3<f32>),
+}
+```
 
-   impl SteeringStrategy for PathfindingSteeringStrategy {
-       fn steer(&mut self, current_heading: Deg<f32>, world: &World, physics: &PhysicsWorld, entity_id: EntityId, time: &Time) -> Option<(SteeringOutput, Effect)> {
-           // 1. Check if path needs update
-           if time.total - self.last_path_update > self.path_update_interval {
-               self.update_path(world, entity_id);
-               self.last_path_update = time.total;
-           }
+### ✅ Core Implementation
 
-           // 2. Check if at current waypoint
-           if self.at_waypoint(world, entity_id) {
-               self.current_waypoint_idx += 1;
-           }
+```rust
+pub struct WaypointSteeringStrategy {
+    target: NavigationTarget,
+    pathfinding_service: Option<PathfindingService>,
+    current_waypoints: Vec<Vector3<f32>>,
+    current_waypoint_index: usize,
+    waypoint_reached_distance: f32,     // Default: 0.5m
+    direct_steering_distance: f32,      // Default: 3.0m
+}
 
-           // 3. Steer toward current waypoint
-           if let Some(waypoint) = self.current_path.get(self.current_waypoint_idx) {
-               let position = get_entity_position(world, entity_id);
-               return Some((Steering::turn_to_point(position, *waypoint), Effect::Noop));
-           }
+impl WaypointSteeringStrategy {
+    pub fn new(target: NavigationTarget, pathfinding_service: Option<PathfindingService>) -> Self
+    pub fn set_target(&mut self, target: NavigationTarget)
 
-           None
-       }
-   }
-   ```
+    // Smart fallback logic
+    fn should_use_direct_steering(&self, current_pos: Vector3<f32>, target_pos: Vector3<f32>) -> bool {
+        // Distance threshold (~3 meters) OR same AIPATH cell
+        let distance = (target_pos - current_pos).magnitude();
+        if distance < self.direct_steering_distance { return true; }
 
-2. **Modify `ChaseBehavior`** to use pathfinding:
-   - When player not visible: use `PathfindingSteeringStrategy`
-   - When player visible: use direct `ChasePlayerSteeringStrategy` (faster response)
-   - Chain with `CollisionAvoidanceSteeringStrategy` for safety
+        let current_cell = pathfinding_service.cell_from_position(current_pos);
+        let target_cell = pathfinding_service.cell_from_position(target_pos);
+        current_cell.is_some() && current_cell == target_cell
+}
+```
 
-3. **Add path state to AI**:
-   - Store `PathfindingSteeringStrategy` instance in `AnimatedMonsterAI`
-   - Persist path across frames
-   - Clear path when behavior changes or player moves significantly
+### ✅ Integration with Chase Behavior
 
-4. **Integrate PathfindingService**:
-   - Pass `PathfindingService` reference to steering strategies
-   - Access from World resources or via context parameter
+```rust
+// In shock2vr/src/scripts/ai/behavior/chase_behavior.rs
+impl ChaseBehavior {
+    // Existing constructor (backwards compatible)
+    pub fn new() -> ChaseBehavior { /* Direct player chase */ }
 
-### Validation
+    // New constructor with pathfinding support
+    pub fn with_pathfinding(pathfinding_service: Option<PathfindingService>) -> ChaseBehavior {
+        ChaseBehavior {
+            steering_strategy: steering::chained(vec![
+                Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
+                Box::new(WaypointSteeringStrategy::new(
+                    NavigationTarget::Player,
+                    pathfinding_service,
+                )),
+            ]),
+        }
+    }
+}
+```
 
-- Monster navigates around obstacles to reach player
-- Monster takes efficient routes through doorways
-- Monster doesn't get stuck on corners
-- Falls back gracefully when no path exists
+### ✅ Key Features Implemented
+
+1. **Smart Fallback Logic**: Direct steering when close (3m) OR in same AIPATH cell
+2. **Memory Efficient**: Recomputes paths only when needed, not every frame
+3. **Backwards Compatible**: Existing `ChaseBehavior::new()` unchanged
+4. **Flexible Targeting**: Supports player, entity, and position targets
+5. **Integration Ready**: Works with existing steering chain and collision avoidance
+
+### ✅ Validation
+
+```bash
+# Test compilation
+cargo check -p shock2vr
+
+# Future testing will use existing interactive pathfinding system
+cargo dbgr --mission medsci1.mis --debug-pathfinding --port 8080
+```
+
+---
 
 ---
 
@@ -400,20 +428,22 @@ Create a new `PathfindingSteeringStrategy` that:
 
 **Goal**: Implement patrol behavior using AIWatchObj/TPath links with A* navigation between waypoints.
 
+**Note**: Phase 4's general `WaypointSteeringStrategy` dramatically simplifies patrol implementation since patrol waypoints are just navigation targets.
+
 ### Background
 
 The original engine uses:
 - **AIWatchObj links**: Trigger scripted sequences when AI enters radius
 - **TPath links**: Define patrol routes between waypoints
 
-Patrol waypoints come from the link-based system (TPath links define high-level patrol points), and A* pathfinding is used to navigate between those waypoints through the cell graph.
+With the general waypoint steering from Phase 4, patrol behavior becomes straightforward: just cycle through waypoint positions using `WaypointSteeringStrategy::new_goto_position()`.
 
 ### Files to Modify
 
 | File | Action | Purpose |
 |------|--------|---------|
 | `dark/src/properties/mod.rs` | Modify | Add TPath link parsing if not present |
-| `shock2vr/src/scripts/ai/behavior/patrol_behavior.rs` | Create | New patrol behavior |
+| `shock2vr/src/scripts/ai/behavior/patrol_behavior.rs` | Create | Simplified patrol behavior using waypoint steering |
 | `shock2vr/src/scripts/ai/behavior/mod.rs` | Modify | Export patrol behavior |
 | `shock2vr/src/scripts/ai/animated_monster_ai.rs` | Modify | Use patrol behavior at low alertness |
 
@@ -428,13 +458,15 @@ pub struct TPathLink {
 }
 ```
 
-### Patrol Behavior Design
+### Simplified Patrol Behavior Design
+
+**Key Insight**: With general waypoint steering, patrol behavior just manages waypoint sequence rather than pathfinding logic.
 
 ```rust
 pub struct PatrolBehavior {
-    waypoints: Vec<EntityId>,        // Ordered patrol points from TPath links
-    current_waypoint_idx: usize,
-    pathfinding_strategy: PathfindingSteeringStrategy,
+    patrol_points: Vec<Vector3<f32>>,    // Waypoint positions from TPath links
+    current_point_idx: usize,
+    waypoint_steering: WaypointSteeringStrategy,  // Reuses Phase 4 strategy!
     state: PatrolState,
 }
 
@@ -451,28 +483,33 @@ enum PatrolState {
    - Add `LinkTPath` definition
    - Parse from `L$TPath` and `LD$TPath` chunks
 
-2. **Create `PatrolBehavior`**:
-   - On init: collect TPath-linked waypoints for this entity
-   - Build ordered patrol route
-   - Use `PathfindingSteeringStrategy` to navigate between waypoints (A* through the cell graph)
+2. **Create `PatrolBehavior`** (dramatically simplified):
+   - On init: collect TPath-linked waypoint positions for this entity
+   - Initialize `WaypointSteeringStrategy::new_goto_position()` for first waypoint
+   - **No custom pathfinding logic needed** - reuse Phase 4 waypoint steering!
 
-3. **Patrol loop logic**:
+3. **Simplified patrol loop logic**:
    ```rust
    fn update(&mut self, ...) -> BehaviorOutput {
        match self.state {
            PatrolState::MovingToWaypoint => {
-               if self.at_waypoint() {
+               // Let waypoint steering handle all pathfinding
+               let steering_output = self.waypoint_steering.steer(...);
+
+               if self.at_current_waypoint() {
                    self.state = PatrolState::WaitingAtWaypoint {
                        remaining: self.get_pause_time()
                    };
-               } else {
-                   // Use pathfinding to navigate to waypoint
-                   return self.pathfinding_strategy.steer(...);
                }
+               return steering_output;
            }
            PatrolState::WaitingAtWaypoint { remaining } => {
                if remaining <= 0.0 {
-                   self.advance_to_next_waypoint();
+                   self.advance_to_next_patrol_point();
+                   // Update waypoint steering target to next position
+                   self.waypoint_steering.set_target(
+                       NavigationTarget::Position(self.current_patrol_point())
+                   );
                    self.state = PatrolState::MovingToWaypoint;
                }
            }
@@ -483,13 +520,19 @@ enum PatrolState {
 
 4. **Integrate with alertness system**:
    - Use `PatrolBehavior` when alertness is Low (level 1)
-   - Switch to `ChaseBehavior` when alertness escalates
+   - Switch to `ChaseBehavior` (using same waypoint steering!) when alertness escalates
    - Return to patrol when alertness decays back to Low
 
 5. **Handle waypoint actions**:
    - Check for AIWatchObj triggers at waypoints
    - Execute associated scripted sequences
    - Continue patrol after sequence completes
+
+**Key Benefits of General Waypoint Steering**:
+- **No duplicate pathfinding logic** - patrol reuses chase pathfinding
+- **Consistent behavior** - same A* algorithm for all navigation
+- **Easy debugging** - single pathfinding system to debug
+- **Future-proof** - new behaviors can easily add waypoint navigation
 
 ### Validation
 

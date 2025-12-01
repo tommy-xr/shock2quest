@@ -7,12 +7,13 @@ use shipyard::*;
 
 use crate::{
     mission::PlayerInfo,
+    pathfinding::PathfindingService,
     physics::PhysicsWorld,
     scripts::{
         Effect,
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, SteeringOutput,
-            SteeringStrategy,
+            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, NavigationTarget,
+            SteeringOutput, SteeringStrategy, WaypointSteeringStrategy,
         },
     },
     time::Time,
@@ -32,6 +33,20 @@ impl ChaseBehavior {
                     CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
                 ),
                 Box::new(ChasePlayerSteeringStrategy),
+            ]),
+        }
+    }
+
+    pub fn with_pathfinding(pathfinding_service: Option<PathfindingService>) -> ChaseBehavior {
+        ChaseBehavior {
+            steering_strategy: steering::chained(vec![
+                Box::new(
+                    CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
+                ),
+                Box::new(WaypointSteeringStrategy::new(
+                    NavigationTarget::Player,
+                    pathfinding_service,
+                )),
             ]),
         }
     }

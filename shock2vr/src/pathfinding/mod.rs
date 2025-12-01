@@ -10,12 +10,14 @@ use dark::mission::{
     PathDatabase,
     path_database::{MovementBits, PathCell},
 };
+use shipyard::{Unique, track::Untracked};
 use std::sync::Arc;
 
 /// Pathfinding service for AI navigation
 ///
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
 /// Keeps the spatial query implementation simple and swappable.
+#[derive(Clone)]
 pub struct PathfindingService {
     pub path_database: Arc<PathDatabase>,
 }
@@ -186,4 +188,8 @@ impl PathfindingService {
 
         true
     }
+}
+
+impl Unique for PathfindingService {
+    type Tracking = Untracked;
 }

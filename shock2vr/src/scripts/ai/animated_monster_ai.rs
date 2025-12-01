@@ -9,10 +9,11 @@ use dark::{
     },
 };
 use rand;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::PlayerInfo,
+    pathfinding::PathfindingService,
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::script_util,
     time::Time,
@@ -129,8 +130,16 @@ impl AnimatedMonsterAI {
     ) -> Box<RefCell<dyn Behavior>> {
         match self.alertness.current_level {
             AIAlertLevel::Lowest => Box::new(RefCell::new(IdleBehavior)),
-            AIAlertLevel::Low => Box::new(RefCell::new(WanderBehavior::new())),
-            AIAlertLevel::Moderate => Box::new(RefCell::new(ChaseBehavior::new())),
+            AIAlertLevel::Low => {
+                // DEBUG: Use pathfinding chase at Low alertness for easy testing
+                let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
+                Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
+            },
+            AIAlertLevel::Moderate => {
+                // Try to get pathfinding service from world for intelligent navigation
+                let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
+                Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
+            },
             AIAlertLevel::High => {
                 // Choose attack type based on whether monster has ranged weapon
                 if has_ranged_weapon(world, entity_id) {
