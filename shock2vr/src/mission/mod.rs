@@ -5,6 +5,7 @@ use tracing::info;
 pub mod entity_populator;
 pub mod mission_core;
 pub mod pathfinding_debug;
+pub mod pathfinding_test;
 pub mod spatial_query;
 mod spawn_location;
 pub mod visibility_engine;

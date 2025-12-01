@@ -184,15 +184,9 @@ pub struct MissionCore {
     pub path_database: Option<dark::mission::PathDatabase>,
     pub pathfinding_service: Option<PathfindingService>,
     pub path_visualization: PathVisualizationSystem,
-    pub pathfinding_test_state: PathfindingTestState,
+    pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum PathfindingTestState {
-    WaitingForStart,
-    WaitingForGoal,
-    ShowingPath,
-}
 
 pub struct GlobalContext {
     pub properties: Vec<Box<dyn PropertyDefinition<BufReader<File>>>>,
@@ -443,7 +437,7 @@ impl MissionCore {
                 .as_ref()
                 .map(|db| PathfindingService::new(Arc::new(db.clone()))),
             path_visualization: PathVisualizationSystem::new(),
-            pathfinding_test_state: PathfindingTestState::WaitingForStart,
+            pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
         }
     }
 
@@ -2191,181 +2185,15 @@ impl MissionCore {
 
     /// Interactive pathfinding test system
     pub fn pathfinding_test_action(&mut self, action: &str) -> String {
-        // If a specific action is requested, use it
-        if action != "cycle" {
-            match action {
-                "set_start" => {
-                    let player_pos = self.player_position();
-                    self.pathfinding_test_set_start(player_pos)
-                }
-                "set_goal" => {
-                    let player_pos = self.player_position();
-                    self.pathfinding_test_set_goal(player_pos)
-                }
-                "reset" => self.pathfinding_test_reset(),
-                _ => format!("Unknown pathfinding test action: {}", action),
-            }
-        } else {
-            // Cycle through states based on current state
-            let player_pos = self.player_position();
-            match self.pathfinding_test_state {
-                PathfindingTestState::WaitingForStart => {
-                    self.pathfinding_test_set_start(player_pos)
-                }
-                PathfindingTestState::WaitingForGoal => self.pathfinding_test_set_goal(player_pos),
-                PathfindingTestState::ShowingPath => self.pathfinding_test_reset(),
-            }
-        }
-    }
-
-    fn pathfinding_test_set_start(&mut self, position: Vector3<f32>) -> String {
-        // Clear any existing test path
-        self.path_visualization.remove_path("test_path");
-
-        // Store start position for future path computation
-        use crate::pathfinding::path_visualization::{
-            ComputedPath, MarkerType, PathMarker, colors,
-        };
-
-        let mut path = ComputedPath::new("test_start".to_string(), vec![], colors::TEST_PATH);
-
-        path.add_marker(PathMarker {
-            position,
-            marker_type: MarkerType::Start,
-            color: colors::START_MARKER,
-        });
-
-        self.path_visualization
-            .set_path("test_start".to_string(), path);
-
-        // Update state to wait for goal
-        self.pathfinding_test_state = PathfindingTestState::WaitingForGoal;
-
-        format!(
-            "Set pathfinding test start at ({:.2}, {:.2}, {:.2}). Press P again to set goal.",
-            position.x, position.y, position.z
+        let player_pos = self.player_position();
+        self.pathfinding_test.handle_action(
+            action,
+            player_pos,
+            &self.pathfinding_service,
+            &mut self.path_visualization,
         )
     }
 
-    fn pathfinding_test_set_goal(&mut self, position: Vector3<f32>) -> String {
-        if !self.path_visualization.has_path("test_start") {
-            return "No start position set. Press P once to set start first.".to_string();
-        }
-
-        // Get start position from existing marker
-        let start_pos = if let Some(start_path) = self.path_visualization.paths.get("test_start") {
-            if let Some(marker) = start_path.markers.first() {
-                marker.position
-            } else {
-                return "Error: Could not find start position".to_string();
-            }
-        } else {
-            return "Error: Could not find start position".to_string();
-        };
-
-        // Compute pathfinding route
-        match &self.pathfinding_service {
-            Some(service) => {
-                use dark::mission::path_database::MovementBits;
-                let movement_bits = MovementBits::WALK; // Human movement
-
-                match service.find_path(start_pos, position, movement_bits) {
-                    Some(waypoints) => {
-                        use crate::pathfinding::path_visualization::ComputedPath;
-
-                        // Create complete test path with start/goal markers
-                        let test_path =
-                            ComputedPath::test_path(start_pos, position, waypoints.clone());
-
-                        // Remove old markers and set complete path
-                        self.path_visualization.remove_path("test_start");
-                        self.path_visualization
-                            .set_path("test_path".to_string(), test_path);
-
-                        // Update state to show path
-                        self.pathfinding_test_state = PathfindingTestState::ShowingPath;
-
-                        format!(
-                            "Computed path with {} waypoints from ({:.2}, {:.2}, {:.2}) to ({:.2}, {:.2}, {:.2}). Press P again to reset.",
-                            waypoints.len(),
-                            start_pos.x,
-                            start_pos.y,
-                            start_pos.z,
-                            position.x,
-                            position.y,
-                            position.z
-                        )
-                    }
-                    None => {
-                        // No path found - try closest reachable cell
-                        match service.find_closest_reachable_cell(
-                            start_pos,
-                            position,
-                            movement_bits,
-                        ) {
-                            Some(closest_cell_id) => {
-                                let closest_center =
-                                    service.path_database.cells[closest_cell_id as usize].center;
-                                match service.find_path(start_pos, closest_center, movement_bits) {
-                                    Some(waypoints) => {
-                                        use crate::pathfinding::path_visualization::ComputedPath;
-
-                                        let mut test_path = ComputedPath::test_path(
-                                            start_pos,
-                                            closest_center,
-                                            waypoints.clone(),
-                                        );
-
-                                        // Add fallback waypoints if pathfinding returns empty result
-                                        if waypoints.is_empty() {
-                                            let mid_point =
-                                                start_pos + (closest_center - start_pos) * 0.5;
-                                            test_path.waypoints =
-                                                vec![start_pos, mid_point, closest_center];
-                                        }
-
-                                        self.path_visualization.remove_path("test_start");
-                                        self.path_visualization
-                                            .set_path("test_path".to_string(), test_path);
-
-                                        // Update state to show path
-                                        self.pathfinding_test_state =
-                                            PathfindingTestState::ShowingPath;
-
-                                        format!(
-                                            "No direct path found. Computed fallback path with {} waypoints to closest reachable position ({:.2}, {:.2}, {:.2}). Press P again to reset.",
-                                            waypoints.len(),
-                                            closest_center.x,
-                                            closest_center.y,
-                                            closest_center.z
-                                        )
-                                    }
-                                    None => {
-                                        "Error: Could not compute path to closest reachable cell"
-                                            .to_string()
-                                    }
-                                }
-                            }
-                            None => {
-                                "No path possible - start position may be unreachable".to_string()
-                            }
-                        }
-                    }
-                }
-            }
-            None => "Pathfinding service not available (no AIPATH data)".to_string(),
-        }
-    }
-
-    fn pathfinding_test_reset(&mut self) -> String {
-        self.path_visualization.remove_path("test_start");
-        self.path_visualization.remove_path("test_path");
-
-        // Reset state to waiting for start
-        self.pathfinding_test_state = PathfindingTestState::WaitingForStart;
-
-        "Cleared pathfinding test data. Press P to set start position.".to_string()
-    }
 
     /// Internal method to trigger an entity and return messages to dispatch
     fn trigger_entity_by_name_internal(&mut self, entity_name: String) -> Vec<Message> {
