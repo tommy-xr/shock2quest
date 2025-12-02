@@ -14,9 +14,11 @@ use cgmath::{
 };
 
 use crate::SpawnLocation;
+use crate::game_scene::DebuggableScene;
 use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
 use crate::mission::pathfinding_debug;
+use crate::pathfinding::{PathfindingService, path_visualization::PathVisualizationSystem};
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
@@ -180,6 +182,9 @@ pub struct MissionCore {
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
     pub path_database: Option<dark::mission::PathDatabase>,
+    pub pathfinding_service: Option<PathfindingService>,
+    pub path_visualization: PathVisualizationSystem,
+    pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
 }
 
 pub struct GlobalContext {
@@ -425,7 +430,13 @@ impl MissionCore {
             teleport_system,
             pending_entity_triggers: Vec::new(),
             obj_map: abstract_mission.obj_map,
-            path_database: abstract_mission.path_database,
+            path_database: abstract_mission.path_database.clone(),
+            pathfinding_service: abstract_mission
+                .path_database
+                .as_ref()
+                .map(|db| PathfindingService::new(Arc::new(db.clone()))),
+            path_visualization: PathVisualizationSystem::new(),
+            pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
         }
     }
 
@@ -1598,6 +1609,10 @@ impl MissionCore {
                 Effect::TurnOnTweqs { entity_id } => {
                     self.world.run_with_data(turn_on_tweqs, entity_id);
                 }
+                Effect::PathfindingTest => {
+                    let result = self.pathfinding_test_action("cycle");
+                    info!("Pathfinding test: {}", result);
+                }
                 Effect::GlobalEffect(global_effect) => global_effects.push(global_effect),
                 _ => {
                     game_log!(WARN, "Unhandled effect: {effect:?}");
@@ -1952,6 +1967,10 @@ impl MissionCore {
             }
         }
 
+        // Render computed paths (test paths and AI paths)
+        let mut path_visuals = self.path_visualization.render();
+        scene.append(&mut path_visuals);
+
         // self.world.run(
         //     |v_position: View<PropPosition>,
         //      v_sym_name: View<PropSymName>,
@@ -2161,6 +2180,17 @@ impl MissionCore {
     pub fn queue_entity_trigger(&mut self, entity_name: String) {
         println!("Queueing entity trigger for: {}", entity_name);
         self.pending_entity_triggers.push(entity_name);
+    }
+
+    /// Interactive pathfinding test system
+    pub fn pathfinding_test_action(&mut self, action: &str) -> String {
+        let player_pos = self.player_position();
+        self.pathfinding_test.handle_action(
+            action,
+            player_pos,
+            &self.pathfinding_service,
+            &mut self.path_visualization,
+        )
     }
 
     /// Internal method to trigger an entity and return messages to dispatch

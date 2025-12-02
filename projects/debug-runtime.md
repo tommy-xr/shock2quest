@@ -291,3 +291,31 @@ curl -X POST http://127.0.0.1:8080/v1/screenshot \
 - Input overrides persist until reset
 - Frame counter tracks actual game frames (not wall time)
 - macOS Retina displays: viewport size auto-detected for correct screenshots
+
+## Known Architectural Issues
+
+### Command Integration Complexity
+
+Currently, adding new debug commands (like pathfinding test) requires deep knowledge of the codebase internals and manual integration at multiple layers. This is exemplified by the `/v1/pathfinding-test` HTTP endpoint which cannot easily call the mission's pathfinding test functionality.
+
+**Root Cause**: Input handling is scattered across runtime-specific implementations (desktop P key, VR controller buttons) rather than centralized in the core game logic.
+
+**What Makes This So Challenging**:
+1. **Module Privacy**: The `Mission` struct is in a private module, making downcast access complex
+2. **Trait Boundaries**: Debug runtime uses `debug_scene()` trait which doesn't expose mission-specific methods
+3. **Multiple Abstraction Layers**: Commands flow through Game → Scene → Mission → MissionCore requiring knowledge of each layer
+4. **Runtime-Specific Logic**: Desktop runtime handles P key directly in GLFW event loop, bypassing the command system
+5. **Effect System Mismatch**: The command/effect system isn't designed for external (HTTP) command injection
+
+**Current Workaround Attempts Failed Because**:
+- Direct mission access requires unsafe downcasting through trait objects
+- The effect system expects commands to originate from within the game loop
+- No clean API exists for external systems to trigger gameplay commands
+
+**Proposed Solution**:
+- **Keybinding System**: Move input handling from runtimes → core with a configurable keybinding system
+- **Unified Commands**: Desktop P key and HTTP `/v1/pathfinding-test` would both trigger the same core command
+- **Runtime Agnostic**: VR runtime could optionally bind pathfinding test to controller buttons
+- **Clean Debug API**: Expose mission commands through a well-defined interface
+
+This would make adding debug features trivial: define the command once in core, then optionally bind it to keys/HTTP endpoints as needed.

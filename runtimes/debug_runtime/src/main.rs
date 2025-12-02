@@ -169,6 +169,10 @@ async fn start_http_server(
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
         .route("/v1/control/command", axum::routing::post(run_game_command))
+        .route(
+            "/v1/pathfinding-test",
+            axum::routing::post(pathfinding_test),
+        )
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
@@ -712,6 +716,22 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
                 tracing::warn!("Failed to send command result - receiver dropped");
             }
         }
+        RuntimeCommand::PathfindingTest(action, reply) => {
+            // TODO: Implement pathfinding test command execution
+            // This requires broader architectural changes to input/command handling.
+            // See "Known Architectural Issues" section in projects/debug-runtime.md
+            let result = CommandResult {
+                success: false,
+                message: format!(
+                    "Pathfinding test action '{}' not yet implemented - requires keybinding system refactor",
+                    action
+                ),
+                data: None,
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send pathfinding test result - receiver dropped");
+            }
+        }
         RuntimeCommand::ListEntities {
             limit,
             filter,
@@ -1245,6 +1265,12 @@ struct GameCommandRequest {
     args: Vec<String>,
 }
 
+/// Request payload for pathfinding test command
+#[derive(serde::Deserialize)]
+struct PathfindingTestRequest {
+    action: String, // "set_start", "set_goal", or "reset"
+}
+
 /// HTTP handler for getting player position
 async fn get_player_position(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
@@ -1604,6 +1630,30 @@ async fn run_game_command(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive RunGameCommand result - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// HTTP endpoint handler: Execute a pathfinding test command
+async fn pathfinding_test(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<PathfindingTestRequest>,
+) -> Result<Json<CommandResult>, StatusCode> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::PathfindingTest(request.action, reply_tx))
+        .is_err()
+    {
+        tracing::error!("Failed to send PathfindingTest command - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive PathfindingTest result - sender dropped");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

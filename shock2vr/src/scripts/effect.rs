@@ -215,6 +215,9 @@ pub enum Effect {
     },
 
     GlobalEffect(GlobalEffect),
+
+    /// Interactive pathfinding test system
+    PathfindingTest,
 }
 
 impl Effect {
