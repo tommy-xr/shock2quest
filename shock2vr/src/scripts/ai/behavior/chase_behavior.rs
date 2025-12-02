@@ -12,8 +12,8 @@ use crate::{
     scripts::{
         Effect,
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, NavigationTarget,
-            SteeringOutput, SteeringStrategy, WaypointSteeringStrategy,
+            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy,
+            NavigationTarget, SteeringOutput, SteeringStrategy, WaypointSteeringStrategy,
         },
     },
     time::Time,
@@ -40,9 +40,9 @@ impl ChaseBehavior {
     pub fn with_pathfinding(pathfinding_service: Option<PathfindingService>) -> ChaseBehavior {
         ChaseBehavior {
             steering_strategy: steering::chained(vec![
-                Box::new(
-                    CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
-                ),
+                // Box::new(
+                //     CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
+                // ),
                 Box::new(WaypointSteeringStrategy::new(
                     NavigationTarget::Player,
                     pathfinding_service,
@@ -87,26 +87,31 @@ impl Behavior for ChaseBehavior {
         _physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
-        let _rand = rand::thread_rng().gen_range(0..100);
-        let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-        let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-        //let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+        // DEBUG: Disable attack transitions for pure pathfinding testing
+        println!("[CHASE] Entity {} staying in chase behavior (attack transitions disabled for testing)", entity_id.inner());
+        return NextBehavior::Stay;
 
-        let melee_attack_distance = 8.0 / SCALE_FACTOR;
-        let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
-        let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
+        // Original attack transition logic (commented for testing):
+        // let _rand = rand::thread_rng().gen_range(0..100);
+        // let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+        // let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+        // //let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
 
-        if let Ok(prop_pos) = v_current_pos.get(entity_id) {
-            let distance = (prop_pos.position - u_player.pos).magnitude();
+        // let melee_attack_distance = 8.0 / SCALE_FACTOR;
+        // let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
+        // let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
 
-            if distance > ranged_min_attack_distance && distance < ranged_max_attack_distance {
-                return NextBehavior::Next(Box::new(RefCell::new(RangedAttackBehavior)));
-            }
-            if distance < melee_attack_distance {
-                return NextBehavior::Next(Box::new(RefCell::new(MeleeAttackBehavior)));
-            }
-        }
+        // if let Ok(prop_pos) = v_current_pos.get(entity_id) {
+        //     let distance = (prop_pos.position - u_player.pos).magnitude();
 
-        NextBehavior::Stay
+        //     if distance > ranged_min_attack_distance && distance < ranged_max_attack_distance {
+        //         return NextBehavior::Next(Box::new(RefCell::new(RangedAttackBehavior)));
+        //     }
+        //     if distance < melee_attack_distance {
+        //         return NextBehavior::Next(Box::new(RefCell::new(MeleeAttackBehavior)));
+        //     }
+        // }
+
+        // NextBehavior::Stay
     }
 }

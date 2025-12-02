@@ -57,6 +57,7 @@ pub struct AnimatedMonsterAI {
 
 impl AnimatedMonsterAI {
     pub fn idle() -> AnimatedMonsterAI {
+        println!("[MONSTER] Creating new AnimatedMonsterAI with IDLE behavior");
         AnimatedMonsterAI {
             is_dead: false,
             took_damage: false,
@@ -72,6 +73,7 @@ impl AnimatedMonsterAI {
     }
 
     pub fn new() -> AnimatedMonsterAI {
+        println!("[MONSTER] Creating new AnimatedMonsterAI with DEFAULT behavior");
         AnimatedMonsterAI {
             is_dead: false,
             took_damage: false,
@@ -128,27 +130,42 @@ impl AnimatedMonsterAI {
         _physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> Box<RefCell<dyn Behavior>> {
-        match self.alertness.current_level {
-            AIAlertLevel::Lowest => Box::new(RefCell::new(IdleBehavior)),
-            AIAlertLevel::Low => {
-                // DEBUG: Use pathfinding chase at Low alertness for easy testing
-                let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
-                Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
-            },
-            AIAlertLevel::Moderate => {
-                // Try to get pathfinding service from world for intelligent navigation
-                let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
-                Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
-            },
-            AIAlertLevel::High => {
-                // Choose attack type based on whether monster has ranged weapon
-                if has_ranged_weapon(world, entity_id) {
-                    Box::new(RefCell::new(RangedAttackBehavior))
-                } else {
-                    Box::new(RefCell::new(MeleeAttackBehavior))
-                }
-            }
-        }
+        // DEBUG: Force ALL monsters to use pathfinding chase behavior for pure pathfinding testing
+        let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
+        println!("[AI] Entity {} DEBUG: FORCING pathfinding chase behavior for testing (alertness: {:?}, pathfinding service: {})",
+                entity_id.inner(), self.alertness.current_level, pathfinding_service.is_some());
+        Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
+
+        // Original behavior selection (commented for testing):
+        // println!("[AI] Entity {} selecting behavior for alertness level {:?}", entity_id.inner(), self.alertness.current_level);
+        // match self.alertness.current_level {
+        //     AIAlertLevel::Lowest => {
+        //         println!("[AI] Entity {} using IDLE behavior", entity_id.inner());
+        //         Box::new(RefCell::new(IdleBehavior))
+        //     },
+        //     AIAlertLevel::Low => {
+        //         // DEBUG: Use pathfinding chase at Low alertness for easy testing
+        //         let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
+        //         println!("[AI] Entity {} at LOW alertness - using pathfinding chase behavior (pathfinding service: {})",
+        //                 entity_id.inner(), pathfinding_service.is_some());
+        //         Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
+        //     },
+        //     AIAlertLevel::Moderate => {
+        //         // Try to get pathfinding service from world for intelligent navigation
+        //         let pathfinding_service = world.borrow::<UniqueView<PathfindingService>>().ok().map(|s| (*s).clone());
+        //         println!("[AI] Entity {} at MODERATE alertness - using pathfinding chase behavior (pathfinding service: {})",
+        //                 entity_id.inner(), pathfinding_service.is_some());
+        //         Box::new(RefCell::new(ChaseBehavior::with_pathfinding(pathfinding_service)))
+        //     },
+        //     AIAlertLevel::High => {
+        //         // Choose attack type based on whether monster has ranged weapon
+        //         if has_ranged_weapon(world, entity_id) {
+        //             Box::new(RefCell::new(RangedAttackBehavior))
+        //         } else {
+        //             Box::new(RefCell::new(MeleeAttackBehavior))
+        //         }
+        //     }
+        // }
     }
 
     fn apply_steering_output(
@@ -304,6 +321,8 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        println!("[AI] Entity {} update called (delta: {:.3}s, alertness: {:?})",
+                entity_id.inner(), time.elapsed.as_secs_f32(), self.alertness.current_level);
         let delta = time.elapsed.as_secs_f32();
 
         // Monster FOV is 60 degrees half-angle (matches FovDebugConfig::monster())
@@ -312,6 +331,19 @@ impl Script for AnimatedMonsterAI {
         const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
         let is_visible =
             is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE);
+
+        println!("[AI] Entity {} visibility check: visible={}, visible_time={:.2}s, hidden_time={:.2}s",
+                entity_id.inner(), is_visible, self.alertness.visible_time, self.alertness.hidden_time);
+
+        // DEBUG: Force behavior update only once when alertness changes
+        let old_alertness = self.alertness.current_level;
+        let mut force_behavior_update = false;
+        if self.alertness.current_level == AIAlertLevel::Lowest {
+            self.alertness.current_level = AIAlertLevel::Moderate;
+            force_behavior_update = true;
+            println!("[AI] Entity {} DEBUG: Forcing alertness from {:?} to {:?} for pathfinding testing",
+                    entity_id.inner(), old_alertness, self.alertness.current_level);
+        }
 
         // Update alertness state
         let (alertness_effect, behavior_change_effect) = if let Some(config) = &self.config {
@@ -338,9 +370,51 @@ impl Script for AnimatedMonsterAI {
                 };
 
                 (sync_effect, animation_effect)
+            } else if force_behavior_update {
+                // DEBUG: Forced alertness change - update behavior
+                println!("[AI] Entity {} DEBUG: Force updating behavior for new alertness level - current behavior type: {}",
+                        entity_id.inner(), std::any::type_name_of_val(&*self.current_behavior.borrow()));
+                let sync_effect = alertness::sync_alertness_effect(entity_id, &self.alertness);
+
+                let new_behavior = self.behavior_for_alertness(world, physics, entity_id);
+                self.current_behavior = new_behavior;
+
+                println!("[AI] Entity {} DEBUG: Behavior updated to type: {}",
+                        entity_id.inner(), std::any::type_name_of_val(&*self.current_behavior.borrow()));
+
+                let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                let selection_strategy = self.next_selection(is_locomotion);
+                let animation_effect = Effect::QueueAnimationBySchema {
+                    entity_id,
+                    motion_query_items: self.current_behavior.borrow().animation(),
+                    selection_strategy,
+                };
+
+                (sync_effect, animation_effect)
             } else {
                 (Effect::NoEffect, Effect::NoEffect)
             }
+        } else if force_behavior_update {
+            // DEBUG: Forced alertness change without config - still update behavior
+            println!("[AI] Entity {} DEBUG: Force updating behavior for new alertness level (no config) - current behavior type: {}",
+                    entity_id.inner(), std::any::type_name_of_val(&*self.current_behavior.borrow()));
+            let sync_effect = alertness::sync_alertness_effect(entity_id, &self.alertness);
+
+            let new_behavior = self.behavior_for_alertness(world, physics, entity_id);
+            self.current_behavior = new_behavior;
+
+            println!("[AI] Entity {} DEBUG: Behavior updated to type: {}",
+                    entity_id.inner(), std::any::type_name_of_val(&*self.current_behavior.borrow()));
+
+            let is_locomotion = self.current_behavior.borrow().is_locomotion();
+            let selection_strategy = self.next_selection(is_locomotion);
+            let animation_effect = Effect::QueueAnimationBySchema {
+                entity_id,
+                motion_query_items: self.current_behavior.borrow().animation(),
+                selection_strategy,
+            };
+
+            (sync_effect, animation_effect)
         } else {
             (Effect::NoEffect, Effect::NoEffect)
         };

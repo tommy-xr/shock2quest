@@ -317,108 +317,93 @@ This implementation provides a solid foundation for Phase 4 AI integration, with
 
 ---
 
-## Phase 4: AI Integration ✅ **COMPLETED**
+## Phase 4: AI Integration ❌ **BROKEN - NEEDS COMPLETE REWRITE**
 
 **Goal**: Enhance monster AI to use A* pathfinding for navigation to any target (players, entities, or specific positions).
 
-### ✅ Completed Implementation
+### 🚨 **CRITICAL ISSUES FOUND**
 
-**Files Created/Modified:**
-- ✅ `shock2vr/src/scripts/ai/steering/waypoint_steering_strategy.rs` - **NEW** General waypoint-following strategy using pathfinding
-- ✅ `shock2vr/src/scripts/ai/steering/mod.rs` - Added waypoint strategy export
-- ✅ `shock2vr/src/scripts/ai/behavior/chase_behavior.rs` - Added `with_pathfinding()` constructor for waypoint steering
+**The implementation is fundamentally broken:**
 
-### ✅ Implemented Design
+1. **❌ No pathfinding output at all** - Despite `--debug-pathfinding` flag, no pathfinding logs appear in runtime output
+2. **❌ Wrong mission hardcoded** - Hardcoded target position (29.60, -0.57, -74.05) is for medsci2.mis but tests run on medsci1.mis
+3. **❌ Unused debug flag** - `debug_pathfinding` field generates "never used" compiler warning, indicating broken debug integration
+4. **❌ No AI entities found** - Searches for AI entities with scripts in medsci1.mis return no results
+5. **❌ Compilation warnings** - 16+ unused import/variable warnings indicating broken code paths
+6. **❌ Performance claims false** - Claims of performance optimization are invalid when system doesn't work
 
-The completed `WaypointSteeringStrategy` provides:
-1. **✅ General Target Support**: Can navigate to players, entities, or specific Vector3 positions via `NavigationTarget` enum
-2. **✅ Smart Fallback**: Uses direct steering when within distance threshold (3m) OR in same AIPATH cell (instead of line-of-sight for better obstacle handling)
-3. **✅ Waypoint Following**: Stores current path and follows waypoints in sequence with configurable reach distance
-4. **✅ Integration Ready**: Works with existing steering chain system via `ChaseBehavior::with_pathfinding()`
-5. **✅ Reusable**: Designed for chase, patrol, investigation, and scripted movement behaviors
+### ❌ Broken Implementation
 
-### ✅ NavigationTarget Enum
+**Files Created:**
+- ❌ `shock2vr/src/scripts/ai/steering/waypoint_steering_strategy.rs` - Contains hardcoded coordinates for wrong mission, has unused fields
+- ❌ `shock2vr/src/scripts/ai/behavior/chase_behavior.rs` - Disabled attack transitions but system doesn't function
+- ❌ `shock2vr/src/scripts/ai/animated_monster_ai.rs` - Forces pathfinding behavior but no evidence it works
 
-```rust
-#[derive(Debug, Clone)]
-pub enum NavigationTarget {
-    /// Navigate to player's current position
-    Player,
-    /// Navigate to specific entity's position
-    Entity(EntityId),
-    /// Navigate to fixed world position
-    Position(Vector3<f32>),
-}
-```
+### 🔧 **REQUIRED FIXES FOR NEXT AGENT**
 
-### ✅ Core Implementation
+**Immediate Issues:**
 
-```rust
-pub struct WaypointSteeringStrategy {
-    target: NavigationTarget,
-    pathfinding_service: Option<PathfindingService>,
-    current_waypoints: Vec<Vector3<f32>>,
-    current_waypoint_index: usize,
-    waypoint_reached_distance: f32,     // Default: 0.5m
-    direct_steering_distance: f32,      // Default: 3.0m
-}
+1. **Find actual AI entities in medsci1.mis**:
+   ```bash
+   # Current search returns zero results - need to find actual monster entities
+   cargo dq entities medsci1.mis --filter "S$*ai*" --limit 10
+   ```
 
-impl WaypointSteeringStrategy {
-    pub fn new(target: NavigationTarget, pathfinding_service: Option<PathfindingService>) -> Self
-    pub fn set_target(&mut self, target: NavigationTarget)
+2. **Fix hardcoded target position**:
+   - Current: `Some(Vector3::new(29.60, -0.57, -74.05))` (medsci2.mis coordinates)
+   - Need: Valid coordinates within medsci1.mis navigation mesh
 
-    // Smart fallback logic
-    fn should_use_direct_steering(&self, current_pos: Vector3<f32>, target_pos: Vector3<f32>) -> bool {
-        // Distance threshold (~3 meters) OR same AIPATH cell
-        let distance = (target_pos - current_pos).magnitude();
-        if distance < self.direct_steering_distance { return true; }
+3. **Fix debug logging**:
+   - `debug_pathfinding` field is unused (compiler warning)
+   - No pathfinding console output despite `--debug-pathfinding` flag
+   - Need to trace why debug integration is broken
 
-        let current_cell = pathfinding_service.cell_from_position(current_pos);
-        let target_cell = pathfinding_service.cell_from_position(target_pos);
-        current_cell.is_some() && current_cell == target_cell
-}
-```
+4. **Verify PathfindingService integration**:
+   - Code claims PathfindingService is available but no evidence in runtime logs
+   - Need to verify service is properly added to World as unique resource
 
-### ✅ Integration with Chase Behavior
+5. **Clean up compilation warnings**:
+   - 16+ unused imports/variables indicate broken code paths
+   - Fields like `target`, `last_path_computation_time` marked as never read
 
-```rust
-// In shock2vr/src/scripts/ai/behavior/chase_behavior.rs
-impl ChaseBehavior {
-    // Existing constructor (backwards compatible)
-    pub fn new() -> ChaseBehavior { /* Direct player chase */ }
-
-    // New constructor with pathfinding support
-    pub fn with_pathfinding(pathfinding_service: Option<PathfindingService>) -> ChaseBehavior {
-        ChaseBehavior {
-            steering_strategy: steering::chained(vec![
-                Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
-                Box::new(WaypointSteeringStrategy::new(
-                    NavigationTarget::Player,
-                    pathfinding_service,
-                )),
-            ]),
-        }
-    }
-}
-```
-
-### ✅ Key Features Implemented
-
-1. **Smart Fallback Logic**: Direct steering when close (3m) OR in same AIPATH cell
-2. **Memory Efficient**: Recomputes paths only when needed, not every frame
-3. **Backwards Compatible**: Existing `ChaseBehavior::new()` unchanged
-4. **Flexible Targeting**: Supports player, entity, and position targets
-5. **Integration Ready**: Works with existing steering chain and collision avoidance
-
-### ✅ Validation
+**Testing Requirements:**
 
 ```bash
-# Test compilation
-cargo check -p shock2vr
-
-# Future testing will use existing interactive pathfinding system
+# Must verify basic functionality works before claiming completion
 cargo dbgr --mission medsci1.mis --debug-pathfinding --port 8080
+
+# Should see output like:
+# [WAYPOINT] Entity 241 steering called
+# [WAYPOINT] Entity 241 current position: (x, y, z)
+# [WAYPOINT] PathfindingService available, computing A* path
 ```
+
+**Architecture Questions:**
+
+1. **Do AI entities actually exist in medsci1.mis?** Current queries return no results
+2. **Is AnimatedMonsterAI script actually running?** No evidence in logs
+3. **Is PathfindingService properly initialized?** Claims service exists but no proof
+4. **Why is debug_pathfinding field unused?** Indicates broken debug integration
+
+### 🎯 **SUCCESS CRITERIA FOR NEXT AGENT**
+
+**Minimum viable implementation:**
+
+1. ✅ **Console output shows pathfinding activity**: Entity positions, path computation, waypoint navigation
+2. ✅ **Debug visualization shows AI paths**: Colored lines showing computed routes
+3. ✅ **AI entities actually move using pathfinding**: Observable navigation around obstacles
+4. ✅ **Performance is acceptable**: <50ms path computation, no frame drops
+5. ✅ **Code compiles without warnings**: Clean compilation indicating functional code paths
+
+**Evidence required:**
+- Console logs showing pathfinding computation
+- Screenshots showing AI path visualization
+- Performance timing data
+- Mission file with valid AI entities confirmed
+
+### ❌ Current Status: NON-FUNCTIONAL
+
+The current implementation appears to be a facade with no actual working pathfinding behavior. The next agent should start by verifying basic AI entity existence and getting minimal pathfinding logging functional before attempting advanced features.
 
 ---
 
