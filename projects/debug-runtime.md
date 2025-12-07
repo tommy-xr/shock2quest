@@ -278,11 +278,15 @@ curl -X POST http://127.0.0.1:8080/v1/screenshot \
 
 ## Next Steps
 
-1. **Phase 5: Game Commands** - Implement spawn, save/load, level transition
-2. **Phase 6: TypeScript SDK** - Playwright-style API for LLM scripting
-3. **Phase 7: CLI Tool** - Build out `debug_command` with all subcommands
-4. **Error Handling** - Standardize error responses with codes and suggestions
-5. **Documentation** - Add OpenAPI spec and usage examples
+1. **[Keybinding System Refactor](keybinding-system.md)** - Prerequisite for Phase 5
+   - Centralizes input handling in shock2vr
+   - Enables `/v1/input/action` endpoint to trigger any game action
+   - Eliminates `Command` trait (direct `InputAction` → `Effect` mapping)
+2. **Phase 5: Game Commands** - Implement spawn, save/load, level transition (after keybinding refactor)
+3. **Phase 6: TypeScript SDK** - Playwright-style API for LLM scripting
+4. **Phase 7: CLI Tool** - Build out `debug_command` with all subcommands
+5. **Error Handling** - Standardize error responses with codes and suggestions
+6. **Documentation** - Add OpenAPI spec and usage examples
 
 ## Technical Notes
 
@@ -312,10 +316,12 @@ Currently, adding new debug commands (like pathfinding test) requires deep knowl
 - The effect system expects commands to originate from within the game loop
 - No clean API exists for external systems to trigger gameplay commands
 
-**Proposed Solution**:
-- **Keybinding System**: Move input handling from runtimes → core with a configurable keybinding system
-- **Unified Commands**: Desktop P key and HTTP `/v1/pathfinding-test` would both trigger the same core command
-- **Runtime Agnostic**: VR runtime could optionally bind pathfinding test to controller buttons
-- **Clean Debug API**: Expose mission commands through a well-defined interface
+**Proposed Solution**: See **[Keybinding System Refactor](keybinding-system.md)**
 
-This would make adding debug features trivial: define the command once in core, then optionally bind it to keys/HTTP endpoints as needed.
+The keybinding system will:
+- Define `InputAction` enum in shock2vr (e.g., `PathfindingTestCycle`)
+- Map actions directly to `Effect` variants (eliminating `Command` trait)
+- Allow runtimes to map their inputs to these shared actions
+- Enable debug runtime to trigger any action via HTTP: `POST /v1/input/action {"action": "PathfindingTestCycle"}`
+
+This makes adding debug features trivial: define the action once in the enum, add the effect mapping, done.
