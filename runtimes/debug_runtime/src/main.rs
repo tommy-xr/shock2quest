@@ -25,7 +25,7 @@ use commands::*;
 // Game engine imports
 extern crate glfw;
 use self::glfw::{Context, WindowEvent};
-use cgmath::{Quaternion, vec2, vec3};
+use cgmath::{Quaternion, Rotation, Rotation3, vec2, vec3};
 use dark::SCALE_FACTOR;
 use engine::{
     EngineRenderContext, profile, scene::Scene, util::compute_view_matrix_from_render_context,
@@ -174,6 +174,12 @@ async fn start_http_server(
             axum::routing::post(pathfinding_test),
         )
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
+        .route("/v1/player/look-at", axum::routing::post(look_at))
+        .route(
+            "/v1/visibility/check",
+            axum::routing::post(visibility_check),
+        )
+        .route("/v1/physics/shapecast", axum::routing::post(shape_cast))
         .with_state(command_tx);
 
     // Bind to localhost only for security
@@ -302,6 +308,29 @@ fn run_game_blocking(
     let mut frames_to_step = 0u32;
     let mut target_step_time: Option<f32> = None;
 
+    // Persistent input context that can be modified via HTTP commands
+    let mut stored_input_context = InputContext {
+        head: shock2vr::input_context::Head {
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        },
+        left_hand: shock2vr::input_context::Hand {
+            position: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            thumbstick: vec2(0.0, 0.0),
+            trigger_value: 0.0,
+            squeeze_value: 0.0,
+            a_value: 0.0,
+        },
+        right_hand: shock2vr::input_context::Hand {
+            position: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            thumbstick: vec2(0.0, 0.0),
+            trigger_value: 0.0,
+            squeeze_value: 0.0,
+            a_value: 0.0,
+        },
+    };
+
     info!("Starting main game loop...");
     info!("Game is PAUSED by default - use /v1/step to advance frames");
 
@@ -325,29 +354,6 @@ fn run_game_blocking(
                 _ => {}
             }
         }
-
-        // Create minimal input context (no actual input for now)
-        let input_context = InputContext {
-            head: shock2vr::input_context::Head {
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            },
-            left_hand: shock2vr::input_context::Hand {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                thumbstick: vec2(0.0, 0.0),
-                trigger_value: 0.0,
-                squeeze_value: 0.0,
-                a_value: 0.0,
-            },
-            right_hand: shock2vr::input_context::Hand {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                thumbstick: vec2(0.0, 0.0),
-                trigger_value: 0.0,
-                squeeze_value: 0.0,
-                a_value: 0.0,
-            },
-        };
 
         let game_time = Time {
             elapsed: Duration::from_secs_f32(delta_time),
@@ -398,7 +404,13 @@ fn run_game_blocking(
                 }
                 _ => {}
             }
-            process_command(command, &mut game, &game_time, frame_counter);
+            process_command(
+                command,
+                &mut game,
+                &game_time,
+                frame_counter,
+                &mut stored_input_context,
+            );
         }
 
         // No commands for now
@@ -408,7 +420,7 @@ fn run_game_blocking(
         let actual_game_time = if !is_paused || step_requested {
             profile!(
                 "game.update",
-                game.update(&game_time, &input_context, commands)
+                game.update(&game_time, &stored_input_context, commands)
             );
 
             if step_requested {
@@ -469,7 +481,7 @@ fn run_game_blocking(
             // Still call update with zero time to maintain state consistency
             profile!(
                 "game.update",
-                game.update(&zero_time, &input_context, commands)
+                game.update(&zero_time, &stored_input_context, commands)
             );
             accumulated_time // Use accumulated time, not real time
         };
@@ -543,7 +555,13 @@ fn run_game_blocking(
 }
 
 /// Process a command from the HTTP server
-fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_counter: u64) {
+fn process_command(
+    command: RuntimeCommand,
+    game: &mut Game,
+    time: &Time,
+    frame_counter: u64,
+    stored_input_context: &mut InputContext,
+) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
             let snapshot = capture_frame_snapshot(game, time, frame_counter);
@@ -972,10 +990,389 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
                 );
             }
         }
+        RuntimeCommand::LookAt(request, reply) => {
+            let result = process_look_at(game, &request, stored_input_context);
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send look-at result - receiver dropped");
+            }
+        }
+        RuntimeCommand::VisibilityCheck(request, reply) => {
+            let result = process_visibility_check(game, &request, stored_input_context);
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send visibility check result - receiver dropped");
+            }
+        }
+        RuntimeCommand::ShapeCast(request, reply) => {
+            let result = process_shape_cast(game, &request);
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send shape cast result - receiver dropped");
+            }
+        }
         RuntimeCommand::Shutdown => {
             // Shutdown is handled in the main loop, this is just for completeness
             tracing::info!("Processing shutdown command");
         }
+    }
+}
+
+// ============================================================================
+// New Testing Primitives Implementation
+// ============================================================================
+
+/// Calculate the quaternion to look from one position toward another
+fn calculate_look_at_rotation(from: Vector3<f32>, to: Vector3<f32>) -> Quaternion<f32> {
+    use cgmath::InnerSpace;
+
+    let direction = to - from;
+    if direction.magnitude2() < 0.0001 {
+        // Target is at same position, return identity
+        return Quaternion::new(1.0, 0.0, 0.0, 0.0);
+    }
+
+    let direction = direction.normalize();
+
+    // We want to look along -Z (forward in our convention)
+    // Calculate yaw (rotation around Y axis)
+    let yaw = (-direction.x).atan2(-direction.z);
+
+    // Calculate pitch (rotation around X axis)
+    let horizontal_dist = (direction.x * direction.x + direction.z * direction.z).sqrt();
+    let pitch = direction.y.atan2(horizontal_dist);
+
+    // Create rotation: first yaw around Y, then pitch around X
+    let yaw_quat = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Rad(yaw));
+    let pitch_quat = Quaternion::from_axis_angle(vec3(1.0, 0.0, 0.0), cgmath::Rad(-pitch));
+
+    yaw_quat * pitch_quat
+}
+
+/// Process look-at command
+fn process_look_at(
+    game: &Game,
+    request: &LookAtRequest,
+    stored_input_context: &mut InputContext,
+) -> LookAtResult {
+    use cgmath::InnerSpace;
+
+    // Get debug scene
+    let debug_scene = match game.debug_scene() {
+        Some(scene) => scene,
+        None => {
+            return LookAtResult {
+                success: false,
+                message: "No debug scene available".to_string(),
+                target_position: None,
+                new_head_rotation: None,
+                distance: None,
+            };
+        }
+    };
+
+    // Get player position (add eye height offset)
+    let player_pos = debug_scene.player_position();
+    let eye_height = 1.6 / dark::SCALE_FACTOR; // Approximate eye height
+    let eye_pos = player_pos + vec3(0.0, eye_height, 0.0);
+
+    // Determine target position
+    let target_pos = if let Some(entity_id) = request.entity_id {
+        // Look at entity
+        let entity_id = EntityId::new_from_index_and_gen(entity_id as u64, 0);
+        match debug_scene.entity_detail(entity_id) {
+            Some(detail) => {
+                let mut pos = vec3(detail.position[0], detail.position[1], detail.position[2]);
+                // Apply offset if provided
+                if let Some(offset) = request.offset {
+                    pos += vec3(offset[0], offset[1], offset[2]);
+                }
+                pos
+            }
+            None => {
+                return LookAtResult {
+                    success: false,
+                    message: format!("Entity {} not found", entity_id.inner()),
+                    target_position: None,
+                    new_head_rotation: None,
+                    distance: None,
+                };
+            }
+        }
+    } else if let Some(position) = request.position {
+        let mut pos = vec3(position[0], position[1], position[2]);
+        if let Some(offset) = request.offset {
+            pos += vec3(offset[0], offset[1], offset[2]);
+        }
+        pos
+    } else {
+        return LookAtResult {
+            success: false,
+            message: "Must specify either entity_id or position".to_string(),
+            target_position: None,
+            new_head_rotation: None,
+            distance: None,
+        };
+    };
+
+    // Calculate distance
+    let distance = (target_pos - eye_pos).magnitude();
+
+    // Calculate rotation to look at target
+    let rotation = calculate_look_at_rotation(eye_pos, target_pos);
+
+    // Update the stored input context
+    stored_input_context.head.rotation = rotation;
+
+    tracing::info!(
+        "Look-at: targeting position {:?}, distance {:.2}, rotation {:?}",
+        target_pos,
+        distance,
+        rotation
+    );
+
+    LookAtResult {
+        success: true,
+        message: "Successfully oriented toward target".to_string(),
+        target_position: Some([target_pos.x, target_pos.y, target_pos.z]),
+        new_head_rotation: Some([rotation.v.x, rotation.v.y, rotation.v.z, rotation.s]),
+        distance: Some(distance),
+    }
+}
+
+/// Process visibility check command
+fn process_visibility_check(
+    game: &Game,
+    request: &VisibilityRequest,
+    stored_input_context: &InputContext,
+) -> VisibilityResult {
+    use cgmath::InnerSpace;
+    use shock2vr::game_scene::RaycastMask;
+
+    // Get debug scene
+    let debug_scene = match game.debug_scene() {
+        Some(scene) => scene,
+        None => {
+            return VisibilityResult {
+                visible: false,
+                in_fov: false,
+                occluded: false,
+                angle_from_center: 0.0,
+                distance: 0.0,
+                occlusion_hit: None,
+            };
+        }
+    };
+
+    // Get player position and eye position
+    let player_pos = debug_scene.player_position();
+    let eye_height = 1.6 / dark::SCALE_FACTOR;
+    let eye_pos = player_pos + vec3(0.0, eye_height, 0.0);
+
+    // Determine target position
+    let target_pos = if let Some(entity_id) = request.entity_id {
+        let entity_id = EntityId::new_from_index_and_gen(entity_id as u64, 0);
+        match debug_scene.entity_detail(entity_id) {
+            Some(detail) => vec3(detail.position[0], detail.position[1], detail.position[2]),
+            None => {
+                return VisibilityResult {
+                    visible: false,
+                    in_fov: false,
+                    occluded: false,
+                    angle_from_center: 0.0,
+                    distance: 0.0,
+                    occlusion_hit: None,
+                };
+            }
+        }
+    } else if let Some(position) = request.position {
+        vec3(position[0], position[1], position[2])
+    } else {
+        return VisibilityResult {
+            visible: false,
+            in_fov: false,
+            occluded: false,
+            angle_from_center: 0.0,
+            distance: 0.0,
+            occlusion_hit: None,
+        };
+    };
+
+    // Calculate direction and distance to target
+    let to_target = target_pos - eye_pos;
+    let distance = to_target.magnitude();
+
+    if distance < 0.001 {
+        // Target is at eye position
+        return VisibilityResult {
+            visible: true,
+            in_fov: true,
+            occluded: false,
+            angle_from_center: 0.0,
+            distance: 0.0,
+            occlusion_hit: None,
+        };
+    }
+
+    let to_target_normalized = to_target / distance;
+
+    // Get player forward direction from head rotation
+    let forward = stored_input_context
+        .head
+        .rotation
+        .rotate_vector(vec3(0.0, 0.0, -1.0))
+        .normalize();
+
+    // Calculate angle from center (dot product gives cos of angle)
+    let dot = forward.dot(to_target_normalized);
+    let angle_rad = dot.clamp(-1.0, 1.0).acos();
+    let angle_deg = angle_rad.to_degrees();
+
+    // Check FOV (default 90 degrees = 45 degrees from center)
+    let fov = request.fov_degrees.unwrap_or(90.0);
+    let half_fov = fov / 2.0;
+    let in_fov = angle_deg <= half_fov;
+
+    // Perform raycast to check occlusion
+    let start = cgmath::Point3::new(eye_pos.x, eye_pos.y, eye_pos.z);
+    let end = cgmath::Point3::new(target_pos.x, target_pos.y, target_pos.z);
+    let mask = RaycastMask {
+        groups: vec!["level".to_string(), "entity".to_string()],
+    };
+
+    let hit = debug_scene.raycast(start, end, mask);
+
+    // Check if the hit is before the target
+    let occluded = if hit.hit {
+        if let Some(hit_distance) = hit.distance {
+            // Allow small tolerance for the target itself
+            hit_distance < distance - 0.1
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let occlusion_hit = if occluded {
+        hit.hit_point.map(|hp| OcclusionHit {
+            entity_id: hit.entity_id,
+            entity_name: hit.entity_name,
+            hit_point: hp,
+            distance: hit.distance.unwrap_or(0.0),
+        })
+    } else {
+        None
+    };
+
+    let visible = in_fov && !occluded;
+
+    VisibilityResult {
+        visible,
+        in_fov,
+        occluded,
+        angle_from_center: angle_deg,
+        distance,
+        occlusion_hit,
+    }
+}
+
+/// Process shape cast command
+fn process_shape_cast(game: &Game, request: &ShapeCastRequest) -> ShapeCastResult {
+    // Get debug scene for physics access
+    let _debug_scene = match game.debug_scene() {
+        Some(scene) => scene,
+        None => {
+            return ShapeCastResult {
+                fits: false,
+                collisions: vec![ShapeCollision {
+                    entity_id: None,
+                    entity_name: Some("No debug scene available".to_string()),
+                    collision_point: request.position,
+                    penetration_depth: 0.0,
+                }],
+            };
+        }
+    };
+
+    // Determine shape parameters
+    let (radius, half_height) = match request.shape.as_str() {
+        "player" => {
+            // Default player capsule: ~0.5m radius, ~1.8m height
+            (0.5 / dark::SCALE_FACTOR, 0.9 / dark::SCALE_FACTOR)
+        }
+        "capsule" => {
+            let r = request.radius.unwrap_or(0.5) / dark::SCALE_FACTOR;
+            let h = request.height.unwrap_or(1.8) / dark::SCALE_FACTOR;
+            (r, h / 2.0)
+        }
+        "sphere" => {
+            let r = request.radius.unwrap_or(0.5) / dark::SCALE_FACTOR;
+            (r, 0.0) // Sphere has no height
+        }
+        _ => {
+            return ShapeCastResult {
+                fits: false,
+                collisions: vec![ShapeCollision {
+                    entity_id: None,
+                    entity_name: Some(format!("Unknown shape type: {}", request.shape)),
+                    collision_point: request.position,
+                    penetration_depth: 0.0,
+                }],
+            };
+        }
+    };
+
+    // For now, we'll do a simple sphere-based proximity check using raycasts
+    // A proper implementation would use Rapier's intersection_with_shape
+    // This is a simplified implementation that checks key points
+
+    let center = vec3(request.position[0], request.position[1], request.position[2]);
+
+    // Cast rays in multiple directions to check for nearby geometry
+    let directions: [Vector3<f32>; 6] = [
+        vec3(1.0, 0.0, 0.0),
+        vec3(-1.0, 0.0, 0.0),
+        vec3(0.0, 0.0, 1.0),
+        vec3(0.0, 0.0, -1.0),
+        vec3(0.0, 1.0, 0.0),
+        vec3(0.0, -1.0, 0.0),
+    ];
+
+    let debug_scene = game.debug_scene().unwrap();
+    let mut collisions = Vec::new();
+
+    for dir in &directions {
+        let check_distance = if dir.y.abs() > 0.5 { half_height } else { radius };
+
+        let start = cgmath::Point3::new(center.x, center.y, center.z);
+        let end = cgmath::Point3::new(
+            center.x + dir.x * check_distance * 2.0,
+            center.y + dir.y * check_distance * 2.0,
+            center.z + dir.z * check_distance * 2.0,
+        );
+
+        let mask = shock2vr::game_scene::RaycastMask {
+            groups: vec!["level".to_string()],
+        };
+
+        let hit = debug_scene.raycast(start, end, mask);
+
+        if hit.hit {
+            if let Some(hit_distance) = hit.distance {
+                if hit_distance < check_distance {
+                    let penetration = check_distance - hit_distance;
+                    collisions.push(ShapeCollision {
+                        entity_id: hit.entity_id,
+                        entity_name: hit.entity_name,
+                        collision_point: hit.hit_point.unwrap_or(request.position),
+                        penetration_depth: penetration,
+                    });
+                }
+            }
+        }
+    }
+
+    ShapeCastResult {
+        fits: collisions.is_empty(),
+        collisions,
     }
 }
 
@@ -1655,6 +2052,105 @@ async fn pathfinding_test(
         Err(_) => {
             tracing::error!("Failed to receive PathfindingTest result - sender dropped");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// ============================================================================
+// New Testing Primitives HTTP Handlers
+// ============================================================================
+
+/// HTTP handler for look-at command
+async fn look_at(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<LookAtRequest>,
+) -> Json<LookAtResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::LookAt(request, reply_tx)) {
+        tracing::error!("Failed to send LookAt command - game loop receiver dropped");
+        return Json(LookAtResult {
+            success: false,
+            message: "Failed to send look-at command".to_string(),
+            target_position: None,
+            new_head_rotation: None,
+            distance: None,
+        });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive look-at result - sender dropped");
+            Json(LookAtResult {
+                success: false,
+                message: "Failed to receive look-at result".to_string(),
+                target_position: None,
+                new_head_rotation: None,
+                distance: None,
+            })
+        }
+    }
+}
+
+/// HTTP handler for visibility check
+async fn visibility_check(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<VisibilityRequest>,
+) -> Json<VisibilityResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::VisibilityCheck(request, reply_tx)) {
+        tracing::error!("Failed to send VisibilityCheck command - game loop receiver dropped");
+        return Json(VisibilityResult {
+            visible: false,
+            in_fov: false,
+            occluded: false,
+            angle_from_center: 0.0,
+            distance: 0.0,
+            occlusion_hit: None,
+        });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive visibility check result - sender dropped");
+            Json(VisibilityResult {
+                visible: false,
+                in_fov: false,
+                occluded: false,
+                angle_from_center: 0.0,
+                distance: 0.0,
+                occlusion_hit: None,
+            })
+        }
+    }
+}
+
+/// HTTP handler for shape cast
+async fn shape_cast(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<ShapeCastRequest>,
+) -> Json<ShapeCastResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::ShapeCast(request, reply_tx)) {
+        tracing::error!("Failed to send ShapeCast command - game loop receiver dropped");
+        return Json(ShapeCastResult {
+            fits: false,
+            collisions: vec![],
+        });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive shape cast result - sender dropped");
+            Json(ShapeCastResult {
+                fits: false,
+                collisions: vec![],
+            })
         }
     }
 }

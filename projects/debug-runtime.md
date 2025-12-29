@@ -38,17 +38,17 @@ The debug runtime binds to `127.0.0.1:8080` (localhost only) and provides a REST
 | Game state info (`/v1/info`)       | ✅     |
 | Shutdown endpoint (`/v1/shutdown`) | ✅     |
 
-### Phase 3: Entity System ✅ COMPLETE
+### Phase 3: Entity System ✅ MOSTLY COMPLETE
 
-| Task                                    | Status |
-| --------------------------------------- | ------ |
-| `DebuggableScene` trait                 | ✅     |
-| Entity listing (`/v1/entities`)         | ✅     |
-| Entity detail (`/v1/entities/{id}`)     | ✅     |
-| Name filtering with wildcards           | ✅     |
-| Distance-based sorting                  | ✅     |
-| Player position (`/v1/player/position`) | ✅     |
-| Player teleport (`/v1/player/teleport`) | ✅     |
+| Task                                    | Status                   |
+| --------------------------------------- | ------------------------ |
+| `DebuggableScene` trait                 | ✅                       |
+| Entity listing (`/v1/entities`)         | ✅                       |
+| Entity detail (`/v1/entities/{id}`)     | ⚠️ Bug: off-by-one ID    |
+| Name filtering with wildcards           | ✅                       |
+| Distance-based sorting                  | ✅                       |
+| Player position (`/v1/player/position`) | ✅                       |
+| Player teleport (`/v1/player/teleport`) | ✅                       |
 
 ### Phase 4: Physics & Input ✅ MOSTLY COMPLETE
 
@@ -63,15 +63,162 @@ The debug runtime binds to `127.0.0.1:8080` (localhost only) and provides a REST
 | Input state write (`/v1/control/input` POST)    | ✅     |
 | Multi-level testing (earth.mis, medsci2.mis)    | ✅     |
 
-### Phase 5: Game Commands 🔴 NOT STARTED
+### Phase 5: Testing Primitives 🟡 IN PROGRESS
 
-| Task                                          | Status         |
-| --------------------------------------------- | -------------- |
+Essential primitives for autonomous testing - enabling LLMs to verify game state programmatically.
+
+| Task                                          | Status                    |
+| --------------------------------------------- | ------------------------- |
+| Look-at endpoint (`/v1/player/look-at`)       | ⚠️ Bug: rotation not applied |
+| Visibility check (`/v1/visibility/check`)     | ✅                        |
+| Shape cast (`/v1/physics/shapecast`)          | ✅                        |
 | Game command endpoint (`/v1/control/command`) | ❌ Placeholder |
 | Spawn command                                 | ❌             |
 | Save/load commands                            | ❌             |
 | Level transition                              | ❌             |
 | God mode, noclip                              | ❌             |
+
+#### 5.1 Look-At Endpoint
+
+**Purpose**: Point the player's view toward a specific entity or world position.
+
+**Endpoint**: `POST /v1/player/look-at`
+
+**Request**:
+```json
+// Look at entity by ID
+{ "entity_id": 445 }
+
+// Look at world position
+{ "position": [10.0, 2.0, 15.0] }
+
+// Look at entity with offset
+{ "entity_id": 445, "offset": [0.0, 1.5, 0.0] }
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "target_position": [10.0, 2.0, 15.0],
+  "new_head_rotation": [0.0, 0.707, 0.0, 0.707],
+  "distance": 5.2
+}
+```
+
+**Implementation Notes**:
+- Calculates direction from player head position to target
+- Sets `head.rotation` in InputContext to face the target
+- For entities, use their current position (optionally with offset for eye-level)
+- Should work with both entity IDs and raw positions
+
+#### 5.2 Visibility Check Endpoint
+
+**Purpose**: Verify if a target entity or position is visible to the player (in FOV and not occluded).
+
+**Endpoint**: `POST /v1/visibility/check`
+
+**Request**:
+```json
+// Check if entity is visible
+{ "entity_id": 445 }
+
+// Check if position is visible
+{ "position": [10.0, 2.0, 15.0] }
+
+// Check with custom FOV (default: 90 degrees)
+{ "entity_id": 445, "fov_degrees": 120.0 }
+```
+
+**Response**:
+```json
+{
+  "visible": true,
+  "in_fov": true,
+  "occluded": false,
+  "angle_from_center": 23.5,
+  "distance": 5.2,
+  "occlusion_hit": null
+}
+
+// If occluded:
+{
+  "visible": false,
+  "in_fov": true,
+  "occluded": true,
+  "angle_from_center": 23.5,
+  "distance": 5.2,
+  "occlusion_hit": {
+    "entity_id": 123,
+    "entity_name": "Wall",
+    "hit_point": [8.0, 2.0, 12.0],
+    "distance": 3.1
+  }
+}
+```
+
+**Implementation Notes**:
+- FOV check: Calculate angle between player forward vector and direction to target
+- Raycast: Cast ray from player eye position to target position
+- If raycast hits something before reaching target distance, it's occluded
+- Useful for testing AI detection, line-of-sight mechanics, etc.
+
+#### 5.3 Shape Cast Endpoint
+
+**Purpose**: Check if a position has enough clearance for the player (useful for testing spawn points, teleport destinations).
+
+**Endpoint**: `POST /v1/physics/shapecast`
+
+**Request**:
+```json
+// Check if player-sized capsule fits at position
+{
+  "position": [10.0, 2.0, 15.0],
+  "shape": "player"  // Uses player's collision shape
+}
+
+// Check with custom capsule
+{
+  "position": [10.0, 2.0, 15.0],
+  "shape": "capsule",
+  "radius": 0.5,
+  "height": 1.8
+}
+
+// Check with sphere
+{
+  "position": [10.0, 2.0, 15.0],
+  "shape": "sphere",
+  "radius": 0.5
+}
+```
+
+**Response**:
+```json
+{
+  "fits": true,
+  "collisions": []
+}
+
+// If doesn't fit:
+{
+  "fits": false,
+  "collisions": [
+    {
+      "entity_id": 123,
+      "entity_name": "Wall",
+      "collision_point": [10.2, 2.0, 15.0],
+      "penetration_depth": 0.3
+    }
+  ]
+}
+```
+
+**Implementation Notes**:
+- Uses Rapier's intersection test (not a moving shape cast)
+- Player shape: typically a capsule with ~0.5m radius, ~1.8m height
+- Returns all colliding bodies, not just the first
+- Useful for validating teleport destinations, spawn points, pathfinding waypoints
 
 ### Phase 6: TypeScript API 🔴 NOT STARTED
 
@@ -199,21 +346,24 @@ describe('Camera AI', () => {
 ## Available HTTP Endpoints
 
 ```
-GET  /v1/health           - Health check
-GET  /v1/info             - Game state snapshot
-POST /v1/step             - Step simulation (frames or duration)
-POST /v1/shutdown         - Graceful shutdown
-GET  /v1/entities         - List entities (with ?limit=N&filter=pattern)
-GET  /v1/entities/{id}    - Entity details
-GET  /v1/player/position  - Player position
-POST /v1/player/teleport  - Teleport player
-POST /v1/physics/raycast  - Physics raycast
-GET  /v1/physics/bodies   - List physics bodies
+GET  /v1/health             - Health check
+GET  /v1/info               - Game state snapshot
+POST /v1/step               - Step simulation (frames or duration)
+POST /v1/shutdown           - Graceful shutdown
+GET  /v1/entities           - List entities (with ?limit=N&filter=pattern)
+GET  /v1/entities/{id}      - Entity details
+GET  /v1/player/position    - Player position
+POST /v1/player/teleport    - Teleport player
+POST /v1/player/look-at     - Look at entity/position
+POST /v1/visibility/check   - Check if target is visible
+POST /v1/physics/raycast    - Physics raycast
+POST /v1/physics/shapecast  - Shape intersection test
+GET  /v1/physics/bodies     - List physics bodies
 GET  /v1/physics/bodies/{id} - Physics body details
-GET  /v1/control/input    - Get input state
-POST /v1/control/input    - Set input channel
-POST /v1/control/command  - Execute game command (placeholder)
-POST /v1/screenshot       - Capture screenshot
+GET  /v1/control/input      - Get input state
+POST /v1/control/input      - Set input channel
+POST /v1/control/command    - Execute game command (placeholder)
+POST /v1/screenshot         - Capture screenshot
 ```
 
 ## Usage
@@ -319,3 +469,42 @@ Currently, adding new debug commands (like pathfinding test) requires deep knowl
 - **Clean Debug API**: Expose mission commands through a well-defined interface
 
 This would make adding debug features trivial: define the command once in core, then optionally bind it to keys/HTTP endpoints as needed.
+
+### Look-At Rotation Not Applied to Camera
+
+**Status**: Bug - look-at calculates rotation but doesn't affect rendered view
+
+The `/v1/player/look-at` endpoint correctly calculates the target rotation and stores it in `stored_input_context.head.rotation`, but the camera orientation in the rendered view doesn't change.
+
+**Symptoms**:
+- Endpoint returns success with correct `new_head_rotation` quaternion
+- Before/after screenshots show identical views
+- Position-based operations (teleport) work correctly
+
+**Root Cause**: The render pipeline uses internal cached head rotation state rather than reading from the `InputContext` passed during `update()`. The `stored_input_context.head.rotation` is passed to `game.update()`, but the scene's render function uses its own stored `self.head_rotation` which may not be updated from the input context.
+
+**Investigation Areas**:
+1. Check how `MissionCore::render()` determines camera orientation
+2. Verify `update()` copies `input_context.head.rotation` to internal state
+3. Compare with how other scenes (debug_map, cutscene_player) handle head rotation
+
+**Workaround**: Use teleport to position player facing the desired direction, or investigate the render pipeline to find where camera rotation is determined.
+
+### Entity Detail Endpoint Returns Wrong Entity
+
+**Status**: Bug - entity IDs are off by one
+
+The `/v1/entities/:id` endpoint returns the wrong entity - consistently off by +1 from the requested ID.
+
+**Symptoms**:
+```bash
+curl /v1/entities/149  # Returns entity 150 (Wedge Wall Light)
+curl /v1/entities/150  # Returns entity 151 (New Tripwire)
+curl /v1/entities/547  # Returns entity 548 (New Tripwire)
+```
+
+**Workaround**: Use the `/v1/entities?filter=*name*` endpoint which returns correct entity IDs and positions. The list endpoint works correctly; only the detail endpoint has this issue.
+
+**Investigation Areas**:
+1. Check the `get_entity_detail` handler's ID parsing
+2. Verify entity lookup logic in `DebuggableScene::get_entity_detail()`

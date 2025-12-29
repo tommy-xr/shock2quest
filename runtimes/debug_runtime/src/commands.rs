@@ -34,6 +34,15 @@ pub enum RuntimeCommand {
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
+    /// Look at an entity or position
+    LookAt(LookAtRequest, oneshot::Sender<LookAtResult>),
+
+    /// Check visibility of an entity or position
+    VisibilityCheck(VisibilityRequest, oneshot::Sender<VisibilityResult>),
+
+    /// Perform a shape intersection test
+    ShapeCast(ShapeCastRequest, oneshot::Sender<ShapeCastResult>),
+
     /// Execute a game command (spawn, save, etc.)
     RunGameCommand(String, Vec<String>, oneshot::Sender<CommandResult>),
 
@@ -388,4 +397,117 @@ impl FrameSnapshot {
             },
         }
     }
+}
+
+// ============================================================================
+// Look-At Request/Response Types
+// ============================================================================
+
+/// Request for looking at an entity or position
+#[derive(Debug, Deserialize)]
+pub struct LookAtRequest {
+    /// Entity ID to look at (mutually exclusive with position)
+    pub entity_id: Option<i32>,
+    /// World position to look at (mutually exclusive with entity_id)
+    pub position: Option<[f32; 3]>,
+    /// Optional offset from entity position (e.g., [0.0, 1.5, 0.0] for eye level)
+    #[serde(default)]
+    pub offset: Option<[f32; 3]>,
+}
+
+/// Result of look-at operation
+#[derive(Debug, Serialize)]
+pub struct LookAtResult {
+    pub success: bool,
+    pub message: String,
+    /// The world position that was looked at
+    pub target_position: Option<[f32; 3]>,
+    /// The new head rotation quaternion [x, y, z, w]
+    pub new_head_rotation: Option<[f32; 4]>,
+    /// Distance from player to target
+    pub distance: Option<f32>,
+}
+
+// ============================================================================
+// Visibility Check Request/Response Types
+// ============================================================================
+
+/// Request for checking visibility of an entity or position
+#[derive(Debug, Deserialize)]
+pub struct VisibilityRequest {
+    /// Entity ID to check visibility of (mutually exclusive with position)
+    pub entity_id: Option<i32>,
+    /// World position to check visibility of (mutually exclusive with entity_id)
+    pub position: Option<[f32; 3]>,
+    /// Field of view in degrees (default: 90)
+    #[serde(default)]
+    pub fov_degrees: Option<f32>,
+}
+
+/// Result of visibility check
+#[derive(Debug, Serialize)]
+pub struct VisibilityResult {
+    /// Whether the target is visible (in FOV and not occluded)
+    pub visible: bool,
+    /// Whether the target is within the field of view
+    pub in_fov: bool,
+    /// Whether the target is blocked by geometry/entities
+    pub occluded: bool,
+    /// Angle from player forward vector to target (degrees)
+    pub angle_from_center: f32,
+    /// Distance from player to target
+    pub distance: f32,
+    /// Information about what is blocking visibility (if occluded)
+    pub occlusion_hit: Option<OcclusionHit>,
+}
+
+/// Information about what is blocking visibility
+#[derive(Debug, Serialize)]
+pub struct OcclusionHit {
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub hit_point: [f32; 3],
+    pub distance: f32,
+}
+
+// ============================================================================
+// Shape Cast Request/Response Types
+// ============================================================================
+
+/// Request for shape intersection test
+#[derive(Debug, Deserialize)]
+pub struct ShapeCastRequest {
+    /// World position to test
+    pub position: [f32; 3],
+    /// Shape type: "player", "capsule", "sphere"
+    #[serde(default = "default_shape")]
+    pub shape: String,
+    /// Radius (used for capsule and sphere)
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// Height (used for capsule)
+    #[serde(default)]
+    pub height: Option<f32>,
+}
+
+fn default_shape() -> String {
+    "player".to_string()
+}
+
+/// Result of shape intersection test
+#[derive(Debug, Serialize)]
+pub struct ShapeCastResult {
+    /// Whether the shape fits at the position without collisions
+    pub fits: bool,
+    /// List of collisions if the shape doesn't fit
+    pub collisions: Vec<ShapeCollision>,
+}
+
+/// Information about a collision in shape cast
+#[derive(Debug, Serialize)]
+pub struct ShapeCollision {
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub collision_point: [f32; 3],
+    pub penetration_depth: f32,
 }
