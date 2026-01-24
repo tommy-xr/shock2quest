@@ -1,4 +1,6 @@
-# Claude Development Guidelines
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 For a concise contributor checklist, see `AGENTS.md`. This document serves as the extended reference for workflows and engine internals.
 
@@ -31,8 +33,12 @@ Before making any changes, review these documents:
 ### Reference Materials
 
 - **`references/`** - Technical specifications and data formats
+  - `entities.md` - Comprehensive entity system documentation (templates, properties, links)
   - `cutscene_formats.md` - Cutscene format documentation
+  - `pathfinding.md` - AI pathfinding and navigation mesh documentation
+  - `dark_engine_climbing_info.md` - Climbing mechanics reference
   - Various `.spew` files with animation and sound data
+- **`projects/`** - In-progress feature documentation and design notes
 
 ## Project Structure
 
@@ -220,6 +226,8 @@ For faster development, the project includes convenient cargo aliases (defined i
 - `cargo dr` - Desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
 - `cargo dq` - Dark query CLI tool (shorthand for `cargo run -p dark_query --`)
 - `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
+- `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run -p debug_runtime --`)
+- `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
 
 Example usage:
 ```bash
