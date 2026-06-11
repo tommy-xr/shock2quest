@@ -108,7 +108,6 @@ pub struct PlayerInfo {
 #[derive(Unique, Clone, Default)]
 pub struct DebugOptions {
     pub debug_ai: bool,
-    pub debug_pathfinding: bool,
 }
 
 #[derive(Unique, Clone)]
@@ -251,7 +250,6 @@ impl MissionCore {
         world.add_unique(speech_registry);
         world.add_unique(DebugOptions {
             debug_ai: game_options.debug_ai,
-            debug_pathfinding: game_options.debug_pathfinding,
         });
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
