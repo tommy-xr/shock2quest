@@ -296,32 +296,36 @@ curl -X POST http://127.0.0.1:8080/v1/screenshot \
 - Frame counter tracks actual game frames (not wall time)
 - macOS Retina displays: viewport size auto-detected for correct screenshots
 
-## Known Architectural Issues
+## Input Action Injection ✅ COMPLETE
 
-### Command Integration Complexity
+The [Keybinding System Refactor](keybinding-system.md) resolved the previous
+"Command Integration Complexity" architectural issue. Discrete input actions
+are now defined centrally in `shock2vr::input::InputAction` and can be
+injected over HTTP:
 
-Currently, adding new debug commands (like pathfinding test) requires deep knowledge of the codebase internals and manual integration at multiple layers. This is exemplified by the `/v1/pathfinding-test` HTTP endpoint which cannot easily call the mission's pathfinding test functionality.
+```bash
+# List available actions
+curl http://127.0.0.1:8080/v1/input/actions
 
-**Root Cause**: Input handling is scattered across runtime-specific implementations (desktop P key, VR controller buttons) rather than centralized in the core game logic.
+# Trigger any action (as if the bound key was pressed)
+curl -X POST http://127.0.0.1:8080/v1/input/action \
+  -H "Content-Type: application/json" \
+  -d '{"action": "PathfindingTestCycle"}'
 
-**What Makes This So Challenging**:
-1. **Module Privacy**: The `Mission` struct is in a private module, making downcast access complex
-2. **Trait Boundaries**: Debug runtime uses `debug_scene()` trait which doesn't expose mission-specific methods
-3. **Multiple Abstraction Layers**: Commands flow through Game → Scene → Mission → MissionCore requiring knowledge of each layer
-4. **Runtime-Specific Logic**: Desktop runtime handles P key directly in GLFW event loop, bypassing the command system
-5. **Effect System Mismatch**: The command/effect system isn't designed for external (HTTP) command injection
+# Pathfinding test: trigger a cycle (POST) and read back state (GET)
+curl -X POST http://127.0.0.1:8080/v1/pathfinding-test \
+  -H "Content-Type: application/json" -d '{"action": "cycle"}'
+curl http://127.0.0.1:8080/v1/pathfinding-test
+# => {"state":"WaitingForGoal","test_path_waypoints":0}
+```
 
-**Current Workaround Attempts Failed Because**:
-- Direct mission access requires unsafe downcasting through trait objects
-- The effect system expects commands to originate from within the game loop
-- No clean API exists for external systems to trigger gameplay commands
+Injected actions are consumed by the next `game.update()` (they apply even
+while paused, since the paused loop runs zero-time updates). The pathfinding
+test GET endpoint exists specifically so HTTP clients can *verify* that a
+triggered action executed, without scraping logs.
 
-**Proposed Solution**: See **[Keybinding System Refactor](keybinding-system.md)**
-
-The keybinding system will:
-- Define `InputAction` enum in shock2vr (e.g., `PathfindingTestCycle`)
-- Map actions directly to `Effect` variants (eliminating `Command` trait)
-- Allow runtimes to map their inputs to these shared actions
-- Enable debug runtime to trigger any action via HTTP: `POST /v1/input/action {"action": "PathfindingTestCycle"}`
-
-This makes adding debug features trivial: define the action once in the enum, add the effect mapping, done.
+Adding a new debug action is now trivial:
+1. Add a variant to `shock2vr/src/input/actions.rs` (and its `all()`/`as_str()` entries)
+2. Map it to an `Effect` in `shock2vr/src/input/dispatcher.rs`
+3. It is immediately triggerable via `/v1/input/action` and bindable to keys
+   via `DesktopInputMapper`

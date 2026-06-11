@@ -12,12 +12,6 @@ use engine::scene::Scene;
 use engine::util::compute_view_matrix_from_render_context;
 use glfw::GlfwReceiver;
 use glfw::Modifiers;
-use shock2vr::command::LoadCommand;
-use shock2vr::command::MoveInventoryCommand;
-use shock2vr::command::PathfindingTestCommand;
-
-use shock2vr::command::SaveCommand;
-use shock2vr::command::SpawnItemCommand;
 
 use shock2vr::GameOptions;
 use shock2vr::SpawnLocation;
@@ -28,10 +22,13 @@ extern crate gl;
 use cgmath::prelude::*;
 use cgmath::vec2;
 use cgmath::{Quaternion, Vector3, vec3};
-use shock2vr::command::Command;
 
 use glfw::MouseButton;
+use shock2vr::input::InputActionState;
 use shock2vr::input_context::InputContext;
+
+mod input_mapper;
+use input_mapper::DesktopInputMapper;
 use shock2vr::time::Time;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -271,7 +268,8 @@ pub fn main() {
     let start_time = last_time;
 
     let mut _frame = 0;
-    let mut last_input_state = InputState::new();
+    let mut input_mapper = DesktopInputMapper::new();
+    let mut action_state = InputActionState::new();
 
     let _mode = Mode::Gameplay;
     // render loop
@@ -283,15 +281,15 @@ pub fn main() {
         let delta_time = time - last_time;
         last_time = time;
 
-        let (input_context, new_input_state, commands, _effects) = process_events(
+        let (input_context, input_state) = process_events(
             &mut window,
             &mut camera_context,
             &mut hand_context,
-            &last_input_state,
             &events,
             delta_time,
+            &mut input_mapper,
+            &mut action_state,
         );
-        last_input_state = new_input_state;
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
             cgmath::perspective(cgmath::Deg(45.0), ratio, 0.1, 1000.0);
@@ -301,17 +299,16 @@ pub fn main() {
             total: Duration::from_secs_f32(time - start_time),
         };
 
-        profile!("game.update", game.update(&time, &input_context, commands));
+        profile!(
+            "game.update",
+            game.update(&time, &input_context, &mut action_state)
+        );
 
         let screen_size = vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32);
 
         let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", game.render());
 
-        let head_height = if last_input_state.is_crouching {
-            1.5
-        } else {
-            4.0
-        };
+        let head_height = if input_state.is_crouching { 1.5 } else { 4.0 };
         let render_context = engine::EngineRenderContext {
             time: glfw.get_time() as f32,
             camera_offset: pawn_offset,
@@ -390,20 +387,12 @@ fn parse_mission(mission: &str) -> (String, SpawnLocation) {
 }
 
 struct InputState {
-    quick_load_pressed: bool,
-    quick_save_pressed: bool,
-    space_pressed: bool,
     is_crouching: bool,
-    pathfinding_test_pressed: bool,
 }
 impl InputState {
     pub fn new() -> Self {
         Self {
-            quick_load_pressed: false,
-            quick_save_pressed: false,
-            space_pressed: false,
             is_crouching: false,
-            pathfinding_test_pressed: false,
         }
     }
 }
@@ -414,18 +403,15 @@ fn process_events(
     window: &mut glfw::Window,
     camera_context: &mut CameraContext,
     hand_context: &mut HandContext,
-    last_input_state: &InputState,
     events: &GlfwReceiver<(f64, glfw::WindowEvent)>,
     delta_time: f32,
-) -> (InputContext, InputState, Vec<Box<dyn Command>>, Vec<Effect>) {
+    input_mapper: &mut DesktopInputMapper,
+    action_state: &mut InputActionState,
+) -> (InputContext, InputState) {
     let _speed = 20.0;
     let head_rot_speed = 10.0;
 
-    let effects = Vec::new();
-
     let _movement = cgmath::Vector3::new(0.0, 0.0, 0.0);
-    let mut commands: Vec<Box<dyn Command>> = vec![];
-    //let mut forward = cgmath::Vector3::new(0.0, );
 
     trace!("delta time: {delta_time}");
     let mut rot_yaw = 0.0;
@@ -584,42 +570,11 @@ fn process_events(
     // input_context.left_hand.squeeze_value = squeeze_value;
 
     let mut input_state = InputState::new();
-    if window.get_key(Key::Space) == Action::Press {
-        input_state.space_pressed = true;
-
-        if !last_input_state.space_pressed {
-            // commands.push(Box::new(SavePositionCommand::new()));
-            commands.push(Box::new(SpawnItemCommand::new(input_context.head.rotation)))
-        }
-    }
-
-    if window.get_key(Key::S) == Action::Press && is_alt_pressed {
-        input_state.quick_save_pressed = true;
-        if !last_input_state.quick_save_pressed {
-            commands.push(Box::new(SaveCommand::new()));
-        }
-    }
-
-    if window.get_key(Key::L) == Action::Press && is_alt_pressed {
-        input_state.quick_load_pressed = true;
-        if !last_input_state.quick_load_pressed {
-            commands.push(Box::new(LoadCommand::new()));
-        }
-    }
-
     input_state.is_crouching = window.get_key(Key::LeftControl) == Action::Press;
 
-    if window.get_key(Key::I) == Action::Press {
-        //commands.push(Box::new(SavePositionCommand::new()));
-        commands.push(Box::new(MoveInventoryCommand::new(head_rotation)))
-    }
+    // Discrete actions (spawn, save/load, inventory, pathfinding test) are
+    // handled by the mapper, which edge-detects key presses.
+    input_mapper.poll(window, action_state);
 
-    // Pathfinding test system - P key cycles through test states
-    if window.get_key(Key::P) == Action::Press {
-        input_state.pathfinding_test_pressed = true;
-        if !last_input_state.pathfinding_test_pressed {
-            commands.push(Box::new(PathfindingTestCommand::new()));
-        }
-    }
-    (input_context, input_state, commands, effects)
+    (input_context, input_state)
 }

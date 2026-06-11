@@ -372,4 +372,20 @@ pub trait DebuggableScene {
     /// - `set_input("right_hand.trigger_value", 1.0)` - Full trigger press
     /// - `set_input("left_hand.thumbstick", [0.5, -0.8])` - Thumbstick input
     fn set_input(&mut self, channel: &str, value: serde_json::Value) -> bool;
+
+    /// Get the current pathfinding test status
+    ///
+    /// Returns the state of the interactive pathfinding test system, so
+    /// remote clients (e.g. the debug runtime) can verify that triggered
+    /// pathfinding actions actually executed.
+    fn pathfinding_test_status(&self) -> DebugPathfindingTestStatus;
+}
+
+/// Status of the interactive pathfinding test system
+#[derive(Debug, Clone)]
+pub struct DebugPathfindingTestStatus {
+    /// Current state: "WaitingForStart", "WaitingForGoal", or "ShowingPath"
+    pub state: String,
+    /// Number of waypoints in the computed test path (0 if no path computed)
+    pub test_path_waypoints: usize,
 }

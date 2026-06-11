@@ -1603,6 +1603,36 @@ impl MissionCore {
                         rotation,
                     )
                 }
+                Effect::SpawnInFrontOfPlayer {
+                    template_id,
+                    head_rotation,
+                } => {
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation * head_rotation)
+                    };
+                    let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -10.0 / SCALE_FACTOR);
+                    self.create_entity_with_position(
+                        asset_cache,
+                        template_id,
+                        pos + forward,
+                        rot,
+                        Matrix4::identity(),
+                        CreateEntityOptions::default(),
+                    );
+                }
+                Effect::PositionInventoryRelativeToPlayer { head_rotation } => {
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (player.pos, player.rotation * head_rotation)
+                    };
+                    let forward = rot * vec3(0.0, 0.5 / SCALE_FACTOR, -8.0 / SCALE_FACTOR);
+                    PlayerInventoryEntity::set_position_rotation(
+                        &mut self.world,
+                        pos + forward,
+                        Quaternion::from_angle_y(cgmath::Deg(180.0)) * rot,
+                    )
+                }
                 Effect::TurnOffTweqs { entity_id } => {
                     self.world.run_with_data(turn_off_tweqs, entity_id);
                 }
@@ -2810,6 +2840,27 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             channel
         );
         false
+    }
+
+    fn pathfinding_test_status(&self) -> crate::game_scene::DebugPathfindingTestStatus {
+        use crate::mission::pathfinding_test::PathfindingTestState;
+
+        let state = match self.pathfinding_test.state {
+            PathfindingTestState::WaitingForStart => "WaitingForStart",
+            PathfindingTestState::WaitingForGoal => "WaitingForGoal",
+            PathfindingTestState::ShowingPath => "ShowingPath",
+        };
+        let test_path_waypoints = self
+            .path_visualization
+            .paths
+            .get("test_path")
+            .map(|path| path.waypoints.len())
+            .unwrap_or(0);
+
+        crate::game_scene::DebugPathfindingTestStatus {
+            state: state.to_string(),
+            test_path_waypoints,
+        }
     }
 }
 
