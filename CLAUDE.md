@@ -123,7 +123,7 @@ For debugging visual/rendering changes without a full interactive session:
    cargo dv grunt_p.bin --debug-no-render
    ```
 
-2. **Debug Runtime** (in progress, see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
+2. **Debug Runtime** (see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
 
    ```bash
    # Start debug runtime
@@ -133,11 +133,37 @@ For debugging visual/rendering changes without a full interactive session:
    curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
    curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
 
+   # Trigger discrete input actions (same actions as desktop keybindings)
+   curl http://127.0.0.1:8080/v1/input/actions
+   curl -X POST http://127.0.0.1:8080/v1/input/action -d '{"action": "PathfindingTestCycle"}'
+
    # IMPORTANT: Always shut down when done to avoid interfering with user's session
    curl -X POST http://127.0.0.1:8080/v1/shutdown
    ```
 
-3. **Debug Scenes**: Minimal test scenes for isolating specific features. Pass as the `--mission` argument:
+3. **TypeScript SDK (`tools/shock2-sdk`)** — **preferred for multi-step testing and verification**. A Playwright-style wrapper over the debug runtime HTTP API that handles the full lifecycle: spawning the runtime, waiting for readiness, capturing logs, and automatic shutdown via `await using`. See `tools/shock2-sdk/README.md` for the full API.
+
+   ```bash
+   cd tools/shock2-sdk
+   npm install         # first time only
+   npm test            # fast unit tests
+   npm run test:e2e    # launches real debug runtimes (pathfinding scenario, mission load smoke tests)
+   ```
+
+   ```ts
+   import { GameServer } from "@shock2vr/sdk";
+
+   await using game = await GameServer.launch({ mission: "medsci1.mis", port: 8091 });
+   await game.step({ frames: 10 });
+   await game.input.trigger("PathfindingTestCycle");
+   await game.waitFor(
+     async () => (await game.pathfindingTest.status()).state === "WaitingForGoal",
+   );
+   ```
+
+   **When to use which**: raw `curl` is fine for one-off pokes at a running instance; use the SDK whenever a task needs launch/verify/shutdown or multi-step assertions. Write durable scenario tests as `tools/shock2-sdk/test/*.e2e.test.ts` (gated behind `SHOCK2_E2E=1` so `npm test` stays fast). `test/missions.e2e.test.ts` verifies every mission in `Data/` loads — run it after changes to level loading or entity instantiation.
+
+4. **Debug Scenes**: Minimal test scenes for isolating specific features. Pass as the `--mission` argument:
 
    | Scene                    | Purpose                                      |
    | ------------------------ | -------------------------------------------- |
@@ -176,6 +202,8 @@ For testing entity queries and game features, these mission files are available 
 | `command1.mis`| Command deck 1                 |
 
 Use with `dark_query`: `cargo dq entities earth.mis --limit 10`
+
+This table lists the most commonly used levels; `Data/` contains the full set (23 `.mis` files including `hydro2/3`, `ops2-4`, `rec2/3`, `command2`, `rick1-3`, `many`, `shodan`). The SDK smoke test `tools/shock2-sdk/test/missions.e2e.test.ts` verifies all of them load.
 
 ### File Format Investigation
 

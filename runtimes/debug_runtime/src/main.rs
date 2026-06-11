@@ -1098,7 +1098,6 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
     );
 
     // TODO: Find player entity specifically
-    // TODO: Get actual mission name from game scene
     // TODO: Track frame counter
 
     FrameSnapshot {
@@ -1107,7 +1106,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
             elapsed_ms: time.elapsed.as_millis() as f32,
             total_ms: time.total.as_millis() as f32,
         },
-        mission: "earth.mis".to_string(), // TODO: Get actual mission name
+        mission: game.scene_name().to_string(),
         player: PlayerInfo {
             entity_id: None,                       // TODO: Get player entity ID
             position: [0.0, 0.0, 0.0],             // TODO: Get player position
