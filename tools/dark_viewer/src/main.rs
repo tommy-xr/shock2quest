@@ -32,10 +32,6 @@ use engine::scene::Scene;
 use engine::scene::SceneObject;
 use engine::scene::TextVertex;
 use shock2vr::GameOptions;
-use shock2vr::command::Command;
-use shock2vr::command::SaveCommand;
-use shock2vr::command::SpawnItemCommand;
-use shock2vr::command::TransitionLevelCommand;
 use shock2vr::paths;
 use tracing::trace;
 
@@ -390,8 +386,7 @@ pub fn main() {
         let delta_time = time - last_time;
         last_time = time;
 
-        let (_input_context, _commands) =
-            process_events(&mut window, &mut camera_context, &events, delta_time);
+        let _input_context = process_events(&mut window, &mut camera_context, &events, delta_time);
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
             cgmath::perspective(cgmath::Deg(45.0), ratio, 0.1, 1000.0);
@@ -438,7 +433,7 @@ fn process_events(
     camera_context: &mut CameraContext,
     events: &GlfwReceiver<(f64, glfw::WindowEvent)>,
     _delta_time: f32,
-) -> (InputContext, Vec<Box<dyn Command>>) {
+) -> InputContext {
     for (_, event) in glfw::flush_messages(events) {
         match event {
             glfw::WindowEvent::FramebufferSize(width, height) => unsafe {
@@ -459,5 +454,5 @@ fn process_events(
         }
     }
 
-    (InputContext::default(), Vec::new())
+    InputContext::default()
 }

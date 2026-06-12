@@ -218,6 +218,19 @@ pub enum Effect {
 
     /// Interactive pathfinding test system
     PathfindingTest,
+
+    /// Spawn an entity in front of the player (player position is resolved
+    /// by the effect handler; head rotation comes from the input context,
+    /// since it isn't stored in the world)
+    SpawnInFrontOfPlayer {
+        template_id: i32,
+        head_rotation: Quaternion<f32>,
+    },
+
+    /// Reposition the inventory in front of the player
+    PositionInventoryRelativeToPlayer {
+        head_rotation: Quaternion<f32>,
+    },
 }
 
 impl Effect {

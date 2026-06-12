@@ -5,6 +5,7 @@
 
 use cgmath::Vector3;
 use serde::{Deserialize, Serialize};
+use shock2vr::input::InputAction;
 use tokio::sync::oneshot;
 
 /// Commands that can be sent from HTTP handlers to the game loop
@@ -39,6 +40,12 @@ pub enum RuntimeCommand {
 
     /// Pathfinding test command (set_start, set_goal, reset)
     PathfindingTest(String, oneshot::Sender<CommandResult>),
+
+    /// Trigger a discrete input action (as if a bound key was pressed)
+    TriggerAction(InputAction, oneshot::Sender<CommandResult>),
+
+    /// Get the current pathfinding test status
+    GetPathfindingTestStatus(oneshot::Sender<PathfindingTestStatusResult>),
 
     /// List entities near the player
     ListEntities {
@@ -241,6 +248,15 @@ pub struct CommandResult {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
+}
+
+/// Current status of the interactive pathfinding test system
+#[derive(Debug, Serialize)]
+pub struct PathfindingTestStatusResult {
+    /// "WaitingForStart", "WaitingForGoal", or "ShowingPath"
+    pub state: String,
+    /// Number of waypoints in the computed test path (0 if no path computed)
+    pub test_path_waypoints: usize,
 }
 
 /// List of entities
