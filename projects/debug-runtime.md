@@ -73,23 +73,25 @@ The debug runtime binds to `127.0.0.1:8080` (localhost only) and provides a REST
 | Level transition                              | ❌             |
 | God mode, noclip                              | ❌             |
 
-### Phase 6: TypeScript API 🔴 NOT STARTED
+### Phase 6: TypeScript API ✅ COMPLETE
 
-A Playwright-inspired TypeScript/JavaScript SDK for driving the game programmatically. Enables LLMs to write test scripts and automation without dealing with raw HTTP.
+A Playwright-inspired TypeScript/JavaScript SDK for driving the game programmatically. Enables LLMs to write test scripts and automation without dealing with raw HTTP. See `tools/shock2-sdk/README.md` for usage.
 
-**Location:** `tools/shock2-sdk/` (npm package)
+**Location:** `tools/shock2-sdk/` (npm package, zero runtime dependencies)
 
 | Task                          | Status |
 | ----------------------------- | ------ |
-| Package setup (TypeScript)    | ❌     |
-| `GameServer.launch()` API     | ❌     |
-| `game.step()` / `game.wait()` | ❌     |
-| `game.player` accessors       | ❌     |
-| `game.entities` query API     | ❌     |
-| `game.screenshot()`           | ❌     |
-| `game.input.*` controls       | ❌     |
-| Auto-spawn debug_runtime      | ❌     |
-| Connection retry/reconnect    | ❌     |
+| Package setup (TypeScript)    | ✅     |
+| `GameServer.launch()` API     | ✅ (health polling, log capture, `await using` auto-shutdown) |
+| `game.step()` / `game.waitFor()` | ✅  |
+| `game.player` accessors       | ✅     |
+| `game.entities` query API     | ✅ (`list({filter, limit})`, `detail(id)`) |
+| `game.screenshot()`           | ✅     |
+| `game.input.*` controls       | ✅ (discrete actions + continuous channels) |
+| `game.pathfindingTest.*`      | ✅ (cycle + status verification) |
+| Auto-spawn debug_runtime      | ✅     |
+| Connection retry/reconnect    | ✅ (`GameServer.connect()`) |
+| E2E scenario test             | ✅ (`npm run test:e2e` replays the pathfinding scenario) |
 
 #### API Design
 

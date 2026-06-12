@@ -193,6 +193,12 @@ impl Game {
         self.active_game_scene.world()
     }
 
+    /// Name of the currently active scene (e.g. "medsci1.mis"), tracking
+    /// level transitions
+    pub fn scene_name(&self) -> &str {
+        self.active_game_scene.scene_name()
+    }
+
     /// Get access to the debug scene interface if available
     ///
     /// Returns a reference to the current scene as a DebuggableScene trait object
