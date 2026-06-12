@@ -1153,54 +1153,56 @@ async fn health_check() -> Json<Value> {
 /// Get current game state snapshot
 async fn get_info(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-) -> Json<FrameSnapshot> {
+) -> Result<Json<FrameSnapshot>, (StatusCode, String)> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
     // Send command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::GetInfo(reply_tx)) {
         tracing::error!("Failed to send GetInfo command - game loop receiver dropped");
-        return Json(FrameSnapshot::new());
+        return Err(game_loop_unavailable());
     }
 
     // Wait for response
     match reply_rx.await {
-        Ok(snapshot) => Json(snapshot),
+        Ok(snapshot) => Ok(Json(snapshot)),
         Err(_) => {
             tracing::error!("Failed to receive frame snapshot - sender dropped");
-            Json(FrameSnapshot::new())
+            Err(game_loop_unavailable())
         }
     }
+}
+
+/// Error response used when the game loop's command channel is gone.
+///
+/// The HTTP server runs on its own thread, so it can outlive the game
+/// thread (e.g. a panic during mission load). Surfacing 503 here keeps
+/// clients from mistaking a dead game for a healthy one.
+fn game_loop_unavailable() -> (StatusCode, String) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Game loop unavailable - the game thread may have crashed (check the debug_runtime process output)".to_string(),
+    )
 }
 
 /// Step the simulation forward by one frame or time duration
 async fn step_frame(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     Json(step_spec): Json<StepSpec>,
-) -> Json<StepResult> {
+) -> Result<Json<StepResult>, (StatusCode, String)> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
     // Send command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::Step(step_spec, reply_tx)) {
         tracing::error!("Failed to send Step command - game loop receiver dropped");
-        return Json(StepResult {
-            frames_advanced: 0,
-            time_advanced: 0.0,
-            new_frame_index: 0,
-            new_total_time: 0.0,
-        });
+        return Err(game_loop_unavailable());
     }
 
     // Wait for response
     match reply_rx.await {
-        Ok(result) => Json(result),
+        Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive step result - sender dropped");
-            Json(StepResult {
-                frames_advanced: 0,
-                time_advanced: 0.0,
-                new_frame_index: 0,
-                new_total_time: 0.0,
-            })
+            Err(game_loop_unavailable())
         }
     }
 }
@@ -1335,27 +1337,23 @@ struct PathfindingTestRequest {
 /// HTTP handler for getting player position
 async fn get_player_position(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-) -> Json<PositionResponse> {
+) -> Result<Json<PositionResponse>, (StatusCode, String)> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
     // Send command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::GetPlayerPosition(reply_tx)) {
         tracing::error!("Failed to send GetPlayerPosition command - game loop receiver dropped");
-        return Json(PositionResponse {
-            position: [0.0, 0.0, 0.0],
-        });
+        return Err(game_loop_unavailable());
     }
 
     // Wait for response
     match reply_rx.await {
-        Ok(position) => Json(PositionResponse {
+        Ok(position) => Ok(Json(PositionResponse {
             position: [position.x, position.y, position.z],
-        }),
+        })),
         Err(_) => {
             tracing::error!("Failed to receive player position - sender dropped");
-            Json(PositionResponse {
-                position: [0.0, 0.0, 0.0],
-            })
+            Err(game_loop_unavailable())
         }
     }
 }
@@ -1364,41 +1362,32 @@ async fn get_player_position(
 async fn teleport_player(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     Json(request): Json<TeleportRequest>,
-) -> Json<TeleportResponse> {
+) -> Result<Json<TeleportResponse>, (StatusCode, String)> {
     let target_position = Vector3::new(request.x, request.y, request.z);
 
     // Send teleport command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::MovePlayer(target_position)) {
         tracing::error!("Failed to send MovePlayer command - game loop receiver dropped");
-        return Json(TeleportResponse {
-            success: false,
-            message: "Failed to send teleport command".to_string(),
-            new_position: [0.0, 0.0, 0.0],
-        });
+        return Err(game_loop_unavailable());
     }
 
     // Get the new position to confirm the teleport
     let (reply_tx, reply_rx) = oneshot::channel();
     if let Err(_) = command_tx.send(RuntimeCommand::GetPlayerPosition(reply_tx)) {
         tracing::error!("Failed to send GetPlayerPosition command after teleport");
-        return Json(TeleportResponse {
-            success: true,
-            message: "Teleport command sent but unable to verify position".to_string(),
-            new_position: [request.x, request.y, request.z],
-        });
+        return Err(game_loop_unavailable());
     }
 
     match reply_rx.await {
-        Ok(position) => Json(TeleportResponse {
+        Ok(position) => Ok(Json(TeleportResponse {
             success: true,
-            message: format!("Player teleported successfully"),
+            message: "Player teleported successfully".to_string(),
             new_position: [position.x, position.y, position.z],
-        }),
-        Err(_) => Json(TeleportResponse {
-            success: true,
-            message: "Teleport command sent but unable to verify position".to_string(),
-            new_position: [request.x, request.y, request.z],
-        }),
+        })),
+        Err(_) => {
+            tracing::error!("Failed to receive player position after teleport - sender dropped");
+            Err(game_loop_unavailable())
+        }
     }
 }
 

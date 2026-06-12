@@ -147,7 +147,12 @@ export class GameServer extends Game implements AsyncDisposable {
         throw new Error(`process exited early with code ${this.child.exitCode}`);
       }
       try {
-        await this.health();
+        // /v1/info round-trips through the game loop's command channel, so
+        // it only succeeds once the game thread is actually running. (The
+        // HTTP server starts before - and can outlive - the game thread,
+        // so /v1/health alone would accept a runtime whose game thread
+        // crashed during mission load.)
+        await this.info();
         return;
       } catch {
         if (Date.now() >= deadline) {
