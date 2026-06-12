@@ -1,6 +1,5 @@
 use crate::SCALE_FACTOR;
 use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
-use crate::ss2_common::{read_point3, read_u8, read_vec3};
 use byteorder::ReadBytesExt;
 use cgmath::Vector3;
 use std::io;
@@ -55,6 +54,41 @@ pub struct PathDatabase {
     pub links: Vec<PathCellLink>,
 }
 
+/// On-disk layout of the AIPATH chunk, keyed by the chunk version.
+///
+/// Version 2.9 (every shipped SS2 mission except shodan.mis) stores cell and
+/// link IDs as packed u16s (sAIPathCell = 32 bytes, sAIPathCellLink = 8 bytes).
+/// Version 3.4 (shodan.mis) widens those IDs to u32 (44-byte cells, 16-byte
+/// links); planes, vertices, and cell-vertex links are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AiPathLayout {
+    PackedIds, // version 2.9
+    WideIds,   // version 3.4
+}
+
+fn read_u8_opt<T: io::Read>(reader: &mut T) -> Option<u8> {
+    reader.read_u8().ok()
+}
+
+fn read_u16_opt<T: io::Read>(reader: &mut T) -> Option<u16> {
+    reader.read_u16::<byteorder::LittleEndian>().ok()
+}
+
+fn read_u32_opt<T: io::Read>(reader: &mut T) -> Option<u32> {
+    reader.read_u32::<byteorder::LittleEndian>().ok()
+}
+
+/// Fallible version of `ss2_common::read_vec3`: same axis remap, NaNs zeroed.
+fn read_vec3_opt<T: io::Read>(reader: &mut T) -> Option<Vector3<f32>> {
+    let mut components = [0.0f32; 3];
+    for component in &mut components {
+        let v = reader.read_f32::<byteorder::LittleEndian>().ok()?;
+        *component = if v.is_nan() { 0.0 } else { v };
+    }
+    let [neg_x, z, y] = components;
+    Some(Vector3::new(-neg_x, y, z))
+}
+
 impl PathDatabase {
     /// Read the AIPATH chunk to load pathfinding data
     pub fn read<T: io::Read + io::Seek>(
@@ -69,10 +103,35 @@ impl PathDatabase {
         }
 
         let aipath_chunk = aipath_chunk.unwrap();
-        reader.seek(SeekFrom::Start(aipath_chunk.offset)).unwrap();
+        let version = (aipath_chunk.version_major, aipath_chunk.version_minor);
+        let layout = match version {
+            (2, 9) => AiPathLayout::PackedIds,
+            (3, 4) => AiPathLayout::WideIds,
+            _ => {
+                warn!(
+                    "Unsupported AIPATH chunk version {}.{}; loading mission without pathfinding data",
+                    version.0, version.1
+                );
+                return None;
+            }
+        };
+
+        // Slurp the chunk into memory so a malformed file can never read past
+        // the chunk boundary into unrelated data - every read below fails
+        // cleanly at the chunk end instead.
+        if reader.seek(SeekFrom::Start(aipath_chunk.offset)).is_err() {
+            warn!("Failed to seek to AIPATH chunk");
+            return None;
+        }
+        let mut chunk_data = vec![0u8; aipath_chunk.length as usize];
+        if reader.read_exact(&mut chunk_data).is_err() {
+            warn!("AIPATH chunk is truncated; loading mission without pathfinding data");
+            return None;
+        }
+        let mut cursor = io::Cursor::new(chunk_data.as_slice());
 
         // Read pathfinding initialization flag
-        let pathfind_inited = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        let pathfind_inited = read_u32_opt(&mut cursor)?;
         debug!("Pathfinding initialized: {}", pathfind_inited);
 
         if pathfind_inited == 0 {
@@ -80,13 +139,32 @@ impl PathDatabase {
             return None;
         }
 
+        let result = Self::parse(&mut cursor, layout);
+        if result.is_none() {
+            warn!(
+                "Malformed AIPATH chunk (version {}.{}); loading mission without pathfinding data",
+                version.0, version.1
+            );
+        }
+        result
+    }
+
+    fn parse(reader: &mut io::Cursor<&[u8]>, layout: AiPathLayout) -> Option<PathDatabase> {
+        // Cell/link IDs are packed u16s in version 2.9, u32s in version 3.4
+        let read_id = |reader: &mut io::Cursor<&[u8]>| -> Option<u32> {
+            match layout {
+                AiPathLayout::PackedIds => read_u16_opt(reader).map(u32::from),
+                AiPathLayout::WideIds => read_u32_opt(reader),
+            }
+        };
+
         // Skip unknown data - based on hex analysis, second value varies
-        let unknown = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        // (the original engine reads and discards an `obsolete` int here)
+        let unknown = read_u32_opt(reader)?;
         debug!("Second value (unknown): {}", unknown);
 
-        // Read number of cells (this should be at offset 8, value 4694 from hex dump)
         // According to Dark Engine source: reads m_nCells + 1
-        let m_n_cells_raw = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        let m_n_cells_raw = read_u32_opt(reader)?;
         let num_cells = m_n_cells_raw + 1;
         debug!(
             "Raw m_nCells: {}, actual cells: {} (m_nCells + 1)",
@@ -98,35 +176,47 @@ impl PathDatabase {
             return None;
         }
 
-        // Read cell data (32 bytes per cell according to sAIPathCell structure)
+        // Read cell data (sAIPathCell: 32 bytes in v2.9, 44 bytes in v3.4)
         let mut cells = Vec::new();
         let mut cell_link_info = Vec::new(); // Store (first_cell, cell_count) for each cell
         let mut cell_vertex_info = Vec::new(); // Store (first_vertex, vertex_count) for each cell
 
         for i in 0..num_cells {
-            // Parse sAIPathCell structure (32 bytes total)
-            let first_vertex = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 0
-            let first_cell = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 2
-            let _plane = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 4
-            let _next = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 6
-            let _best_neighbor = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 8
-            let _link_from_neighbor = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 10
+            let first_vertex = read_id(reader)?; // index into cell-vertex link array
+            let first_cell = read_id(reader)?; // index into links array
+            let _plane = read_id(reader)?;
+            let _next = read_id(reader)?; // A* scratch, garbage on disk
+            let _best_neighbor = read_id(reader)?; // A* scratch, garbage on disk
+            let _link_from_neighbor = read_id(reader)?; // A* scratch, garbage on disk
 
-            let vertex_count = read_u8(reader); // offset 12
-            let path_flags = read_u8(reader); // offset 13
-            let cell_count = read_u8(reader); // offset 14
-            let _wrap_flags = read_u8(reader); // offset 15
+            let (vertex_count, path_flags, cell_count) = match layout {
+                AiPathLayout::PackedIds => {
+                    let vertex_count = read_u8_opt(reader)?;
+                    let path_flags = read_u8_opt(reader)?;
+                    let cell_count = read_u8_opt(reader)?;
+                    let _wrap_flags = read_u8_opt(reader)?;
+                    (vertex_count, path_flags, cell_count)
+                }
+                AiPathLayout::WideIds => {
+                    // v3.4 packs the counts as (vertexCount: u16, pathFlags: u8,
+                    // cellCount: u8); wrapFlags is gone
+                    let vertex_count = read_u16_opt(reader)? as u8;
+                    let path_flags = read_u8_opt(reader)?;
+                    let cell_count = read_u8_opt(reader)?;
+                    (vertex_count, path_flags, cell_count)
+                }
+            };
 
-            // Read center point (cMxsVector - 12 bytes: 3 floats) using standard reader
-            let center = read_vec3(reader) / SCALE_FACTOR;
+            // Read center point (cMxsVector - 12 bytes: 3 floats)
+            let center = read_vec3_opt(reader)? / SCALE_FACTOR;
 
-            // Read bitfields (4 bytes total, offsets 28-31)
-            let _bitfield_data = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+            // Read cell-info bitfields (4 bytes: light level, ramp/stair, etc.)
+            let _bitfield_data = read_u32_opt(reader)?;
             let flags = PathCellFlags::from_bits_truncate(path_flags as u32);
 
             // Store the link and vertex range information for this cell
-            cell_link_info.push((first_cell as u32, cell_count as u32));
-            cell_vertex_info.push((first_vertex as u32, vertex_count as u32));
+            cell_link_info.push((first_cell, cell_count as u32));
+            cell_vertex_info.push((first_vertex, vertex_count as u32));
 
             cells.push(PathCell {
                 id: i,
@@ -150,15 +240,14 @@ impl PathDatabase {
             }
         }
 
-        // Read number of planes and skip plane data
-        let current_pos = reader.seek(SeekFrom::Current(0)).unwrap();
         debug!(
-            "File position after reading {} cells: {}",
-            num_cells, current_pos
+            "Cursor position after reading {} cells: {}",
+            num_cells,
+            reader.position()
         );
 
         // According to Dark Engine source: reads m_nPlanes + 1 (similar to cells)
-        let m_n_planes_raw = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        let m_n_planes_raw = read_u32_opt(reader)?;
         let num_planes = m_n_planes_raw + 1;
         debug!(
             "Raw m_nPlanes: {}, actual planes: {} (m_nPlanes + 1)",
@@ -171,13 +260,16 @@ impl PathDatabase {
         }
 
         // Skip plane data (16 bytes per plane, according to sAIPathCellPlane)
-        reader
-            .seek(SeekFrom::Current((num_planes * 16) as i64))
-            .unwrap();
+        let planes_end = reader.position() + (num_planes as u64) * 16;
+        if planes_end > reader.get_ref().len() as u64 {
+            warn!("Plane data extends past end of AIPATH chunk");
+            return None;
+        }
+        reader.set_position(planes_end);
 
         // Read number of vertices
         // According to Dark Engine source: likely also reads m_nVertices + 1
-        let m_n_vertices_raw = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        let m_n_vertices_raw = read_u32_opt(reader)?;
         let num_vertices = m_n_vertices_raw + 1;
         debug!(
             "Raw m_nVertices: {}, actual vertices: {} (m_nVertices + 1)",
@@ -189,14 +281,13 @@ impl PathDatabase {
             return None;
         }
 
-        // Read vertex data (16 bytes per vertex: 3 floats + 1 u32)
+        // Read vertex data (sAIPathVertex - 16 bytes: 3 floats + 1 u32)
         let mut vertices = Vec::new();
         for i in 0..num_vertices {
-            // Read vertex coordinates using standard reader, then convert to Vector3
-            let vertex_point = read_point3(reader) / SCALE_FACTOR;
-            let _pt_info = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+            let vertex_point = read_vec3_opt(reader)? / SCALE_FACTOR;
+            let _pt_info = read_u32_opt(reader)?;
 
-            vertices.push(Vector3::new(vertex_point.x, vertex_point.y, vertex_point.z));
+            vertices.push(vertex_point);
 
             if i < 10 {
                 debug!(
@@ -206,8 +297,8 @@ impl PathDatabase {
             }
         }
 
-        // Read Links array (sAIPathCellLink)
-        let m_n_links_raw = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        // Read Links array (sAIPathCellLink: 8 bytes in v2.9, 16 bytes in v3.4)
+        let m_n_links_raw = read_u32_opt(reader)?;
         let num_links = m_n_links_raw + 1;
         debug!(
             "Raw m_nLinks: {}, actual links: {} (m_nLinks + 1)",
@@ -216,18 +307,28 @@ impl PathDatabase {
 
         let mut links = Vec::new();
         for i in 0..num_links {
-            // Parse sAIPathCellLink structure (8 bytes total)
-            let dest = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 0: destination cell
-            let vertex_1 = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 2: first vertex
-            let vertex_2 = reader.read_u16::<byteorder::LittleEndian>().unwrap(); // offset 4: second vertex
-            let ok_bits_raw = read_u8(reader); // offset 6: movement bits
-            let cost = read_u8(reader); // offset 7: traversal cost
+            let dest = read_id(reader)?; // destination cell
+            let vertex_1 = read_id(reader)?; // first vertex of shared edge
+            let vertex_2 = read_id(reader)?; // second vertex of shared edge
+            let (ok_bits_raw, cost) = match layout {
+                AiPathLayout::PackedIds => {
+                    let ok_bits_raw = read_u8_opt(reader)?;
+                    let cost = read_u8_opt(reader)?;
+                    (ok_bits_raw, cost)
+                }
+                AiPathLayout::WideIds => {
+                    // v3.4 widens okBits and cost to u16 each
+                    let ok_bits_raw = read_u16_opt(reader)? as u8;
+                    let cost = read_u16_opt(reader)? as u8;
+                    (ok_bits_raw, cost)
+                }
+            };
 
             links.push(PathCellLink {
                 from_cell: 0, // Will populate after reading all data
-                to_cell: dest as u32,
-                edge_vertex_a: vertex_1 as u32,
-                edge_vertex_b: vertex_2 as u32,
+                to_cell: dest,
+                edge_vertex_a: vertex_1,
+                edge_vertex_b: vertex_2,
                 ok_bits: MovementBits::from_bits_truncate(ok_bits_raw as u32),
                 cost,
             });
@@ -241,7 +342,7 @@ impl PathDatabase {
         }
 
         // Read CellVertices array (sAIPathCell2VertexLink)
-        let m_n_cell_vertices_raw = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        let m_n_cell_vertices_raw = read_u32_opt(reader)?;
         let num_cell_vertices = m_n_cell_vertices_raw + 1;
         debug!(
             "Raw m_nCellVertices: {}, actual cell-vertex links: {} (m_nCellVertices + 1)",
@@ -249,28 +350,12 @@ impl PathDatabase {
         );
 
         // Read cell-vertex links (sAIPathCell2VertexLink - 4 bytes each)
-        let pos_before_cell_vertices = reader.seek(SeekFrom::Current(0)).unwrap();
-        let chunk_end = aipath_chunk.offset + aipath_chunk.length as u64;
-        let remaining_bytes = chunk_end.saturating_sub(pos_before_cell_vertices);
-        debug!(
-            "Before cell-vertex links: {} bytes remaining for {} links",
-            remaining_bytes, num_cell_vertices
-        );
-
         let mut cell_vertex_links = Vec::new();
-        if remaining_bytes < (num_cell_vertices * 4) as u64 {
-            warn!(
-                "Not enough bytes remaining for cell-vertex links: need {} but only have {}",
-                num_cell_vertices * 4,
-                remaining_bytes
-            );
-        } else {
-            for i in 0..num_cell_vertices {
-                let vertex_id = reader.read_u32::<byteorder::LittleEndian>().unwrap();
-                cell_vertex_links.push(vertex_id);
-                if i < 5 {
-                    debug!("Cell-vertex link {}: vertex_id={}", i, vertex_id);
-                }
+        for i in 0..num_cell_vertices {
+            let vertex_id = read_u32_opt(reader)?;
+            cell_vertex_links.push(vertex_id);
+            if i < 5 {
+                debug!("Cell-vertex link {}: vertex_id={}", i, vertex_id);
             }
         }
 
