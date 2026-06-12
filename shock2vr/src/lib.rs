@@ -1,5 +1,5 @@
-pub mod command;
 pub mod game_scene;
+pub mod input;
 pub mod input_context;
 pub mod inventory;
 pub mod map_renderer;
@@ -38,7 +38,6 @@ use std::{
 };
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
-use command::Command;
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
@@ -395,19 +394,18 @@ impl Game {
         &mut self,
         time: &Time,
         input_context: &input_context::InputContext,
-        commands: Vec<Box<dyn Command>>,
+        actions: &mut input::InputActionState,
     ) {
         let span = span!(Level::INFO, "update");
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
         trace!("delta_time: {}", delta_time);
 
-        // Process commands into effects
-        let mut command_effects = Vec::new();
-        for command in commands {
-            let eff = command.execute(self.active_game_scene.world());
-            command_effects.push(eff);
-        }
+        // Convert triggered actions into effects; triggered actions are
+        // consumed here so injected actions (e.g. from the debug runtime)
+        // apply exactly once.
+        let action_effects = input::ActionDispatcher::dispatch(actions, input_context);
+        actions.clear_triggered();
 
         // Update the scene (handles movement, physics, collision, teleport internally)
         let effects = self.active_game_scene.update(
@@ -415,7 +413,7 @@ impl Game {
             input_context,
             &mut self.asset_cache,
             &self.options,
-            command_effects,
+            action_effects,
         );
 
         // Handle ambient audio

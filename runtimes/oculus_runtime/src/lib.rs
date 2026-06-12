@@ -438,6 +438,10 @@ fn main() {
     };
     let mut game = shock2vr::Game::init(options, bundle_storage);
 
+    // No discrete actions are mapped for VR controllers yet; this stays empty
+    // until an OculusInputMapper is added.
+    let mut action_state = shock2vr::input::InputActionState::new();
+
     let _camera_pos = vec3(0.0, 5.0, 10.0);
 
     let render_time = Instant::now();
@@ -596,7 +600,7 @@ fn main() {
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
-        game.update(&time_context, &input_context, vec![]);
+        game.update(&time_context, &input_context, &mut action_state);
 
         // Must be called before any rendering is done!
         frame_stream.begin().unwrap();

@@ -1,6 +1,13 @@
 # Keybinding System Refactor
 
-## Project Status: 📋 PLANNING
+## Project Status: ✅ IMPLEMENTED (Phase 5 - Oculus mapper - pending)
+
+Phases 1-4 and 6 are complete: the `Command` trait is gone, all runtimes pass
+`InputActionState` to `Game::update`, the desktop runtime uses
+`DesktopInputMapper`, and the debug runtime can inject actions via
+`POST /v1/input/action` (verified end-to-end against medsci1.mis). The
+oculus runtime passes an empty action state until an `OculusInputMapper`
+is added (Phase 5).
 
 A unified input action system that centralizes action definitions in `shock2vr`, allowing runtimes to map platform-specific inputs to shared actions. This enables the debug runtime to simulate any action via HTTP.
 
@@ -164,15 +171,21 @@ impl InputActionState {
 **Key insight: We can eliminate the `Command` trait entirely.**
 
 Looking at current commands:
-| Command | Uses `world`? | Purpose |
-|---------|---------------|---------|
-| `SaveCommand` | ❌ | Returns `Effect::GlobalEffect(Save)` |
-| `LoadCommand` | ❌ | Returns `Effect::GlobalEffect(Load)` |
-| `PathfindingTestCommand` | ❌ | Returns `Effect::PathfindingTest` |
-| `SpawnItemCommand` | ✅ | Reads player pos → `Effect::CreateEntity` |
-| `MoveInventoryCommand` | ✅ | Reads player pos → `Effect::PositionInventory` |
+| Command | Uses `world`? | Uses input context? | Purpose |
+|---------|---------------|---------------------|---------|
+| `SaveCommand` | ❌ | ❌ | Returns `Effect::GlobalEffect(Save)` |
+| `LoadCommand` | ❌ | ❌ | Returns `Effect::GlobalEffect(Load)` |
+| `PathfindingTestCommand` | ❌ | ❌ | Returns `Effect::PathfindingTest` |
+| `TransitionLevelCommand` | ❌ | ❌ | **Unused** (no call sites) — delete |
+| `SpawnItemCommand` | ✅ | ✅ (head rotation) | Reads player pos → `Effect::CreateEntity` |
+| `MoveInventoryCommand` | ✅ | ✅ (head rotation) | Reads player pos → `Effect::PositionInventory` |
 
-4 of 6 commands are trivial mappers. The other 2 read player position, which the **effect handler** could do instead.
+4 of 6 commands are trivial mappers (one of which is dead code). The other 2 read
+player position from the world **and** head rotation from the runtime's
+`InputContext`. Player *body* rotation lives in `PlayerInfo`, but head rotation
+does not exist in the world — so the dispatcher takes `&InputContext` and embeds
+`head_rotation` in the emitted effects. The effect handler (which has world
+access) resolves the player position.
 
 ```rust
 // shock2vr/src/input/dispatcher.rs
@@ -181,7 +194,7 @@ pub struct ActionDispatcher;
 
 impl ActionDispatcher {
     /// Convert triggered actions directly into effects (no Command indirection)
-    pub fn dispatch(state: &InputActionState) -> Vec<Effect> {
+    pub fn dispatch(state: &InputActionState, input_context: &InputContext) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if state.just_triggered(InputAction::PathfindingTestCycle) {
@@ -189,13 +202,15 @@ impl ActionDispatcher {
         }
         if state.just_triggered(InputAction::QuickSave) {
             effects.push(Effect::GlobalEffect(GlobalEffect::Save {
-                file_name: "quicksave.sav".to_string(),
+                file_name: "save1.sav".to_string(),
             }));
         }
         if state.just_triggered(InputAction::SpawnDebugItem) {
-            // Effect handler will resolve player position
+            // Head rotation comes from input context; effect handler
+            // resolves player position from the world.
             effects.push(Effect::SpawnInFrontOfPlayer {
                 template_id: -17, // Pistol
+                head_rotation: input_context.head.rotation,
             });
         }
         // ... other mappings
@@ -213,14 +228,22 @@ impl ActionDispatcher {
 
 ### Layer 4: Runtime Input Mappers
 
-Each runtime maps platform inputs to actions:
+Each runtime maps platform inputs to actions.
+
+**Note on polling vs events**: The desktop runtime polls key state every frame
+via `window.get_key()` inside `process_events()` (it does not consume
+`WindowEvent::Key` events for these bindings), edge-detecting manually through
+the `InputState` struct. The mapper therefore works on polled state and tracks
+previous-frame key state internally to trigger actions on rising edges only.
 
 ```rust
-// Example: desktop_runtime input mapper
+// Example: desktop_runtime input mapper (polling-based)
 
 pub struct DesktopInputMapper {
     key_bindings: HashMap<Key, InputAction>,
     modifier_bindings: HashMap<(Key, Modifier), InputAction>,
+    /// Keys that were down last frame (for edge detection)
+    prev_down: HashSet<(Key, bool)>, // (key, alt_held)
 }
 
 impl DesktopInputMapper {
@@ -234,26 +257,22 @@ impl DesktopInputMapper {
         modifier_bindings.insert((Key::S, Modifier::Alt), InputAction::QuickSave);
         modifier_bindings.insert((Key::L, Modifier::Alt), InputAction::QuickLoad);
 
-        Self { key_bindings, modifier_bindings }
+        Self { key_bindings, modifier_bindings, prev_down: HashSet::new() }
     }
 
-    pub fn process_key(&self, key: Key, modifiers: Modifiers, state: &mut InputActionState) {
-        // Check modifier combos first
-        for modifier in [Modifier::Alt, Modifier::Ctrl, Modifier::Shift] {
-            if modifiers.contains(modifier) {
-                if let Some(action) = self.modifier_bindings.get(&(key, modifier)) {
-                    state.trigger(*action);
-                    return;
-                }
-            }
-        }
-        // Then plain keys
-        if let Some(action) = self.key_bindings.get(&key) {
-            state.trigger(*action);
-        }
+    /// Call once per frame from process_events(). Polls bound keys,
+    /// triggers actions on rising edges.
+    pub fn poll(&mut self, window: &Window, state: &mut InputActionState) {
+        // For each binding: check window.get_key(key) == Action::Press
+        // (plus modifier state), compare against prev_down, and call
+        // state.trigger(action) only on the rising edge.
     }
 }
 ```
+
+**Behavior change (intentional)**: the current `I` key (MoveInventory) has no
+debounce and fires every frame while held. Migrating to edge-triggered actions
+fixes this — it will fire once per press.
 
 ### Layer 5: Debug Runtime Integration
 
@@ -299,39 +318,48 @@ Debug:    HTTP /v1/input/action → InputActionState → ActionDispatcher → Ef
 
 ## Implementation Plan
 
-### Phase 1: Core Types
+### Phase 1: Core Types ✅
 - [ ] Create `shock2vr/src/input/mod.rs` module
 - [ ] Define `InputAction` enum with serde support (non-contextual actions only)
 - [ ] Implement `InputActionState` struct
 - [ ] Add unit tests for state management
 
-### Phase 2: Action Dispatcher + Effect Changes
-- [ ] Create `ActionDispatcher::dispatch()` → `Vec<Effect>`
-- [ ] Add new `Effect` variants for player-relative actions:
-  - `Effect::SpawnInFrontOfPlayer { template_id }`
-  - `Effect::PositionInventoryRelativeToPlayer`
+### Phase 2: Action Dispatcher + Effect Changes ✅
+- [ ] Create `ActionDispatcher::dispatch(state, input_context)` → `Vec<Effect>`
+- [ ] Add new `Effect` variants for player-relative actions (carry head rotation
+      from input context, since it isn't stored in the world):
+  - `Effect::SpawnInFrontOfPlayer { template_id, head_rotation }`
+  - `Effect::PositionInventoryRelativeToPlayer { head_rotation }`
 - [ ] Add effect handlers in `mission_core.rs` that read player position
-- [ ] Update `Game::update()` signature: remove `commands: Vec<Box<dyn Command>>`
-- [ ] Pass `InputActionState` instead, call dispatcher internally
+- [ ] Update `Game::update()` signature: remove `commands: Vec<Box<dyn Command>>`,
+      pass `&InputActionState` instead, call dispatcher internally
+- [ ] Update all 3 call sites atomically (desktop, debug ×2, oculus) — only
+      3 call sites exist, so no dual-path migration needed
 
-### Phase 3: Desktop Migration
-- [ ] Create `DesktopInputMapper` with current key bindings
+### Phase 3: Desktop Migration ✅
+- [ ] Create `DesktopInputMapper` with current key bindings (polling-based)
 - [ ] Refactor `process_events()` to populate `InputActionState`
 - [ ] Remove inline command creation (no more `Box::new(PathfindingTestCommand)`)
-- [ ] Verify all existing keybinds work identically
+- [ ] Remove unused `Vec<Effect>` return from `process_events()` (currently
+      discarded as `_effects` at the call site)
+- [ ] Verify existing keybinds work identically (exception: `I` key gains
+      debounce — see behavior change note above)
 
-### Phase 4: Debug Runtime Integration
+### Phase 4: Debug Runtime Integration ✅
 - [ ] Add `RuntimeCommand::TriggerAction(InputAction)`
 - [ ] Implement `/v1/input/action` HTTP endpoint
 - [ ] Implement `/v1/input/actions` GET endpoint (list available actions)
+- [ ] Implement the existing `RuntimeCommand::PathfindingTest` stub
+      (debug_runtime/src/main.rs — currently returns "requires keybinding
+      system refactor") by funneling through action injection
 - [ ] Test pathfinding via HTTP: `curl -X POST .../v1/input/action -d '{"action":"PathfindingTestCycle"}'`
 
-### Phase 5: Oculus Runtime
+### Phase 5: Oculus Runtime 🔲 PENDING
 - [ ] Create `OculusInputMapper` for VR controllers
 - [ ] Map A/B/X/Y buttons to appropriate actions
 - [ ] Verify VR controls work correctly
 
-### Phase 6: Deprecate Command Module
+### Phase 6: Deprecate Command Module ✅
 - [ ] Remove `shock2vr/src/command/` module entirely
 - [ ] Remove `Command` trait
 - [ ] Update any remaining references
@@ -430,9 +458,11 @@ impl OculusInputMapper {
 ## Migration Strategy
 
 1. **Additive first**: Add new input module without breaking existing code
-2. **Dual path**: Support both old `Vec<Command>` and new `InputActionState` temporarily
-3. **Migrate incrementally**: Move one runtime at a time
-4. **Remove deprecated**: Clean up old paths once all runtimes migrated
+2. **Atomic signature change**: `Game::update()` has only 3 call sites
+   (desktop, debug ×2, oculus passes `vec![]`) — change them all in one PR
+   rather than maintaining a dual path
+3. **Remove deprecated**: Delete the `command/` module (including the unused
+   `TransitionLevelCommand`) once runtimes are migrated
 
 ## Benefits
 

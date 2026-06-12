@@ -275,6 +275,10 @@ impl crate::game_scene::DebuggableScene for Mission {
     fn set_input(&mut self, channel: &str, value: serde_json::Value) -> bool {
         self.mission_core.set_input(channel, value)
     }
+
+    fn pathfinding_test_status(&self) -> crate::game_scene::DebugPathfindingTestStatus {
+        self.mission_core.pathfinding_test_status()
+    }
 }
 
 /// Creates a physics collider from level geometry

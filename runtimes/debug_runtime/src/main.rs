@@ -31,7 +31,10 @@ use engine::{
     EngineRenderContext, profile, scene::Scene, util::compute_view_matrix_from_render_context,
 };
 use shock2vr::{
-    Game, GameOptions, SpawnLocation, command::Command, input_context::InputContext, time::Time,
+    Game, GameOptions, SpawnLocation,
+    input::{InputAction, InputActionState},
+    input_context::InputContext,
+    time::Time,
 };
 
 // Property imports for state queries
@@ -171,8 +174,13 @@ async fn start_http_server(
         .route("/v1/control/command", axum::routing::post(run_game_command))
         .route(
             "/v1/pathfinding-test",
-            axum::routing::post(pathfinding_test),
+            axum::routing::post(pathfinding_test).get(pathfinding_test_status),
         )
+        .route(
+            "/v1/input/action",
+            axum::routing::post(trigger_input_action),
+        )
+        .route("/v1/input/actions", get(list_input_actions))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
@@ -194,6 +202,10 @@ async fn start_http_server(
     info!("  GET  /v1/control/input    - Retrieve controller/input state");
     info!("  POST /v1/control/input    - Update controller/input channels");
     info!("  POST /v1/control/command  - Execute gameplay commands (save, spawn, etc.)");
+    info!(
+        "  POST /v1/input/action     - Trigger a discrete input action (e.g. PathfindingTestCycle)"
+    );
+    info!("  GET  /v1/input/actions    - List available input actions");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
@@ -301,6 +313,7 @@ fn run_game_blocking(
     let mut frame_counter = 0u64;
     let mut frames_to_step = 0u32;
     let mut target_step_time: Option<f32> = None;
+    let mut action_state = InputActionState::new();
 
     info!("Starting main game loop...");
     info!("Game is PAUSED by default - use /v1/step to advance frames");
@@ -398,17 +411,20 @@ fn run_game_blocking(
                 }
                 _ => {}
             }
-            process_command(command, &mut game, &game_time, frame_counter);
+            process_command(
+                command,
+                &mut game,
+                &game_time,
+                frame_counter,
+                &mut action_state,
+            );
         }
-
-        // No commands for now
-        let commands: Vec<Box<dyn Command>> = vec![];
 
         // Only update the game if not paused or if step was requested
         let actual_game_time = if !is_paused || step_requested {
             profile!(
                 "game.update",
-                game.update(&game_time, &input_context, commands)
+                game.update(&game_time, &input_context, &mut action_state)
             );
 
             if step_requested {
@@ -469,7 +485,7 @@ fn run_game_blocking(
             // Still call update with zero time to maintain state consistency
             profile!(
                 "game.update",
-                game.update(&zero_time, &input_context, commands)
+                game.update(&zero_time, &input_context, &mut action_state)
             );
             accumulated_time // Use accumulated time, not real time
         };
@@ -543,7 +559,13 @@ fn run_game_blocking(
 }
 
 /// Process a command from the HTTP server
-fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_counter: u64) {
+fn process_command(
+    command: RuntimeCommand,
+    game: &mut Game,
+    time: &Time,
+    frame_counter: u64,
+    action_state: &mut InputActionState,
+) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
             let snapshot = capture_frame_snapshot(game, time, frame_counter);
@@ -717,19 +739,59 @@ fn process_command(command: RuntimeCommand, game: &mut Game, time: &Time, frame_
             }
         }
         RuntimeCommand::PathfindingTest(action, reply) => {
-            // TODO: Implement pathfinding test command execution
-            // This requires broader architectural changes to input/command handling.
-            // See "Known Architectural Issues" section in projects/debug-runtime.md
-            let result = CommandResult {
-                success: false,
-                message: format!(
-                    "Pathfinding test action '{}' not yet implemented - requires keybinding system refactor",
-                    action
-                ),
-                data: None,
+            // "cycle" matches the desktop P key behavior; it is injected as an
+            // input action and consumed by the next game update.
+            let result = if action == "cycle" {
+                action_state.trigger(InputAction::PathfindingTestCycle);
+                action_state.release(InputAction::PathfindingTestCycle);
+                CommandResult {
+                    success: true,
+                    message: "Pathfinding test cycle triggered - applies on next update"
+                        .to_string(),
+                    data: None,
+                }
+            } else {
+                CommandResult {
+                    success: false,
+                    message: format!(
+                        "Unsupported pathfinding test action '{}' - only 'cycle' is currently supported (matches the desktop P key)",
+                        action
+                    ),
+                    data: None,
+                }
             };
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send pathfinding test result - receiver dropped");
+            }
+        }
+        RuntimeCommand::TriggerAction(action, reply) => {
+            action_state.trigger(action);
+            // Single-shot semantics: don't leave the action held
+            action_state.release(action);
+            let result = CommandResult {
+                success: true,
+                message: format!("Triggered action '{}' - applies on next update", action),
+                data: None,
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send trigger action result - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetPathfindingTestStatus(reply) => {
+            let result = if let Some(debug_scene) = game.debug_scene() {
+                let status = debug_scene.pathfinding_test_status();
+                PathfindingTestStatusResult {
+                    state: status.state,
+                    test_path_waypoints: status.test_path_waypoints,
+                }
+            } else {
+                PathfindingTestStatusResult {
+                    state: "Unavailable".to_string(),
+                    test_path_waypoints: 0,
+                }
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send pathfinding test status - receiver dropped");
             }
         }
         RuntimeCommand::ListEntities {
@@ -1657,6 +1719,80 @@ async fn pathfinding_test(
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
+}
+
+/// HTTP endpoint handler: Get the current pathfinding test status
+async fn pathfinding_test_status(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<PathfindingTestStatusResult>, StatusCode> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::GetPathfindingTestStatus(reply_tx))
+        .is_err()
+    {
+        tracing::error!("Failed to send GetPathfindingTestStatus - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive pathfinding test status - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct TriggerActionRequest {
+    action: String,
+}
+
+/// HTTP endpoint handler: Trigger a discrete input action
+async fn trigger_input_action(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Json(request): Json<TriggerActionRequest>,
+) -> Result<Json<CommandResult>, StatusCode> {
+    let action = match request.action.parse::<InputAction>() {
+        Ok(action) => action,
+        Err(_) => {
+            let available: Vec<&str> = InputAction::all().iter().map(|a| a.as_str()).collect();
+            return Ok(Json(CommandResult {
+                success: false,
+                message: format!(
+                    "Unknown action '{}'. Available actions: {}",
+                    request.action,
+                    available.join(", ")
+                ),
+                data: None,
+            }));
+        }
+    };
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::TriggerAction(action, reply_tx))
+        .is_err()
+    {
+        tracing::error!("Failed to send TriggerAction command - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive TriggerAction result - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// HTTP endpoint handler: List available input actions
+async fn list_input_actions() -> Json<Value> {
+    let actions: Vec<&str> = InputAction::all().iter().map(|a| a.as_str()).collect();
+    Json(serde_json::json!({ "actions": actions }))
 }
 
 /// Wait for shutdown signal (Ctrl+C)
