@@ -361,4 +361,3 @@ pub struct HandSnapshot {
     pub squeeze: f32,
     pub a: f32,
 }
-
