@@ -25,6 +25,7 @@ members = [
     "tools/dark_query",
     "tools/debug_command",
     "tools/hitbox_analyzer",
+    "tools/bench",
 ]
 
 [workspace.lints.rust]

@@ -157,6 +157,22 @@ cargo dq speech 2 +concept:spotplayer +alertlevel:three  # query clips by tag fi
 
 Tips: use `--limit N` for quick iteration; all filters are case-insensitive and inheritance-aware.
 
+### Benchmarks (`tools/bench`)
+
+`cargo bn` is the benchmark CLI, namespaced by subsystem so new domains (e.g. mission loading) can be added beside `path`. The `path` domain loads AIPATH data straight from mission files (no game session) and exercises `shock2vr::pathfinding::PathfindingService`, so pathfinding changes are measurable:
+
+```bash
+cargo bn path stats medsci1.mis     # cell/link counts, flag + okBits audit, walk connectivity
+cargo bn path bench --all           # seeded queries: latency, success rate, path quality (inflation/turn)
+cargo bn path bench medsci1.mis --queries 500 --json   # machine-readable, reproducible via --seed
+cargo bn path show medsci1.mis --from "-10,0,5" --to "20,0,30"  # dump one path's waypoints
+cargo bn path cell medsci1.mis --at "20,0,30"   # all cells overlapping a position, with links
+```
+
+Run `cargo bn path bench` before and after touching `shock2vr/src/pathfinding/` or `dark/src/mission/path_database.rs` and compare the tables (fixed `--seed` makes runs comparable).
+
+To visualize a path in-game instead of numerically: launch the debug runtime, set start/goal with the `PathfindingTestCycle` input action (bound to P on desktop), and screenshot - see "Iterating on Visual Features" below.
+
 ### Iterating on Visual Features
 
 For debugging visual/rendering changes without a full interactive session:
@@ -372,6 +388,7 @@ For faster development, the project includes convenient cargo aliases (defined i
 - `cargo dv` - Dark viewer tool (shorthand for `cargo run -p dark_viewer --`)
 - `cargo dbgr` - Debug runtime with HTTP control (shorthand for `cargo run -p debug_runtime --`)
 - `cargo dbgc` - Debug command client (shorthand for `cargo run -p debug_command --`)
+- `cargo bn` - Benchmark CLI (shorthand for `cargo run --release -p bench --`; `bench` collides with the built-in cargo command)
 
 Example usage:
 ```bash
