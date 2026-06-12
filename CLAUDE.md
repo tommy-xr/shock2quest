@@ -51,10 +51,17 @@ This is a Rust-based VR port of System Shock 2. Key components:
   - `mission/` - Mission running logic
   - `save_load/` - Game state serialization
   - `creature/` - Creature definitions and hitboxes
+  - `input/` - Discrete input actions shared across runtimes (see Input Action System below)
+  - `pathfinding/` - A* pathfinding service and path visualization
 - `runtimes/` - Platform-specific runtime implementations
   - `desktop_runtime/` - Desktop version
   - `oculus_runtime/` - Oculus Quest VR version
-- `tools/` - Development CLI tools (dark_query, dark_viewer)
+  - `debug_runtime/` - HTTP-controlled runtime for automation and testing
+- `tools/` - Development tools
+  - `dark_query/`, `dark_viewer/` - CLI tools for inspecting game data
+  - `shock2-sdk/` - TypeScript SDK for driving the debug runtime (npm package)
+  - `debug_command/` - CLI client for the debug runtime (placeholder)
+  - `shodan/` - Automation experiments
 
 ## Entity System Workflow
 
@@ -87,31 +94,55 @@ Runtime:
 └── shock2vr/src/scripts/    - Entity behavior implementations
 ```
 
+## Input Action System
+
+Discrete, non-contextual inputs (quick save/load, debug spawns, pathfinding test) flow through a unified action system in `shock2vr/src/input/` rather than per-runtime key handling:
+
+```
+Desktop:  GLFW polling → DesktopInputMapper → InputActionState → ActionDispatcher → Effects
+Debug:    HTTP POST /v1/input/action      → InputActionState → ActionDispatcher → Effects
+Oculus:   (no mapper yet - passes an empty InputActionState)
+```
+
+- **`InputAction`** (`input/actions.rs`) - serde-enabled enum of all discrete actions
+- **`InputActionState`** (`input/state.rs`) - edge-triggered action state, consumed once per `Game::update`
+- **`ActionDispatcher`** (`input/dispatcher.rs`) - maps triggered actions to `Effect`s; takes `&InputContext` because player-relative actions need head rotation
+
+**Contextual** hand interactions (trigger pull, grab, drop) are NOT actions - they depend on game state and are handled by `VirtualHand` reading `InputContext` directly.
+
+### Adding a New Action
+
+1. Add a variant to `InputAction` plus its `all()` / `as_str()` entries (`shock2vr/src/input/actions.rs`)
+2. Map it to an `Effect` in `ActionDispatcher::dispatch` (`shock2vr/src/input/dispatcher.rs`)
+3. Optional: bind a key in `DesktopInputMapper` (`runtimes/desktop_runtime/src/input_mapper.rs`)
+4. It is now triggerable via HTTP (`POST /v1/input/action`) and the SDK (`game.input.trigger(...)`) with no further wiring
+
 ## Tooling Notes
 
-### dark_query Speech Explorer
+### Entity, Motion & Speech Queries (`dark_query`)
 
-Use the `dark_query` CLI to inspect speech metadata without launching the game:
+`cargo dq` inspects gamesys/mission data without launching the game — use it to understand entity relationships and debug complex interactions (`cargo dq --help` for full usage):
 
-- List available voices and sample hints:
+```bash
+# Entities and templates (positive IDs = entities, negative = templates)
+cargo dq entities earth.mis --limit 5          # list entities in a mission
+cargo dq entities earth.mis 443                # entity detail: properties, links (both directions), inheritance tree
+cargo dq templates 22                          # template -22 detail (avoids awkward negative-ID args)
+cargo dq entities earth.mis --filter "*Door*"  # wildcard search across names, properties, links, scripts
+cargo dq entities earth.mis --filter "P$SymName:*Robot*"  # property-value filter
+cargo dq entities earth.mis --filter "S$stddoor"          # script filter (inheritance-aware)
+cargo dq entities --only-unparsed              # find entities with unparsed data
 
-  ```bash
-  cargo run -p dark_query -- speech
-  ```
+# Motion database (creature animations, tag-based like the original spew files)
+cargo dq motion human +playspecmotion --limit 5  # creature by name or ActorType id (0=human, 2=droid, ...)
+cargo dq motion 0 +cs:184                        # tags support values (e.g. a specific cutscene)
 
-- Show all concepts and tags for a specific voice (index or alias like `voice6`):
+# Speech database (voices, concepts, tags)
+cargo dq speech                                  # list voices
+cargo dq speech 2 +concept:spotplayer +alertlevel:three  # query clips by tag filters
+```
 
-  ```bash
-  cargo run -p dark_query -- speech 2
-  ```
-
-- Query clips by tag filters (supports `+concept:name`, enum tags such as `+alertlevel:two`, and numeric ranges):
-
-  ```bash
-  cargo run -p dark_query -- speech 2 +concept:spotplayer +alertlevel:three
-  ```
-
-If no tags are supplied for a voice, the tool prints the concept list and per-tag metadata. When tags are provided, every matching schema and its samples (with frequency weights) are shown.
+Tips: use `--limit N` for quick iteration; all filters are case-insensitive and inheritance-aware.
 
 ### Iterating on Visual Features
 
@@ -205,6 +236,8 @@ Use with `dark_query`: `cargo dq entities earth.mis --limit 10`
 
 This table lists the most commonly used levels; `Data/` contains the full set (23 `.mis` files including `hydro2/3`, `ops2-4`, `rec2/3`, `command2`, `rick1-3`, `many`, `shodan`). The SDK smoke test `tools/shock2-sdk/test/missions.e2e.test.ts` verifies all of them load.
 
+**Known issue**: `shodan.mis` currently crashes on load (AIPATH parser, [#267](https://github.com/tommy-xr/shock2quest/issues/267)).
+
 ### File Format Investigation
 
 When working with entity data, you may need to examine raw game files:
@@ -295,24 +328,7 @@ The project supports experimental flags for gating in-progress features during d
    }
    ```
 
-2. **Initialize with conditional logic**:
-
-   ```rust
-   let feature_system = if options.experimental_features.contains("feature_name") {
-       FeatureSystem::enabled()
-   } else {
-       FeatureSystem::disabled()
-   };
-   ```
-
-3. **Update this documentation** to list the new experimental feature
-
-This approach allows:
-
-- Safe iteration on experimental features without affecting stable gameplay
-- Easy enabling/disabling of features for testing
-- Gradual rollout and user testing
-- Clean separation between stable and experimental code paths
+2. **Update this documentation** to list the new experimental feature
 
 ### Code Quality
 
@@ -324,6 +340,18 @@ This approach allows:
 ### Build Validation
 
 **MANDATORY: Core crates must compile before committing any changes.**
+
+#### CI Compiles with `-D warnings`
+
+The Build & Unit Test workflow sets `RUSTFLAGS="-D warnings"`, so **any warning (including `dead_code`) fails CI** even though it compiles locally. Validate with CI's flags before pushing:
+
+```bash
+RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime
+```
+
+#### Always Scope to Packages (`-p`)
+
+Do not run bare `cargo check`/`cargo build` at the workspace root on desktop - the workspace includes Android-only crates (`oculus_runtime` → `ndk-sys`, `oboe-sys`) that fail to compile for non-Android targets. CI scopes every build per-package for the same reason.
 
 #### Standard Validation
 
@@ -373,20 +401,14 @@ cargo apk check
 
 - Make minimal changes to achieve one specific goal
 - If there are issues found, like a bug or potential refactoring, that are outside of the scope of the current goal, you _MAY_ open an issue with enough details to make it actionable in a separate pass.
+- It may be necessary to create one-off CLI tools to exercise functionality - feel free to add these as part of the PR. This is especially useful when a change requires understanding game metadata (the .gam or .mis files) - querying the data with existing parsing tools helps with understanding the format.
 - Follow existing code patterns and naming conventions
-- **CRITICAL: Run `cargo check -p shock2vr` after each logical group of changes**
-  - Especially important for trait/interface changes that affect multiple files
-  - Validate compilation before moving to next step
-- Test on desktop runtime first
-- Validate each step before proceeding
+- **Run `cargo check -p shock2vr` after each logical group of changes** (see Build Validation for CI's exact flags)
 
 ### 4. Validation Phase
 
-- **MANDATORY: Ensure code compiles before committing**
-  - Run `cargo check` and `cargo clippy`
-  - Fix all compilation errors - never commit broken code
-  - For trait changes: verify ALL implementations are updated
-- Test core functionality on desktop
+- Validate per **Build Validation** above - never commit code that doesn't compile warning-free
+- Test core functionality on desktop (debug runtime / SDK for anything needing a running game)
 - Verify VR compatibility if changes affect rendering
 - Update documentation if architectural changes were made
 
@@ -401,203 +423,6 @@ When modifying trait definitions or function signatures:
 5. **Only commit when compilation is successful**
 
 This pattern prevents leaving the codebase in a broken state and ensures all implementations stay in sync.
-
-## Entity Query CLI Tool (`dark_query`)
-
-The `dark_query` CLI tool in `tools/dark_query` provides powerful analysis capabilities for debugging and understanding System Shock 2's entity system and motion database.
-
-### Overview
-
-```bash
-# Run from project root directory
-cargo dq --help  # Using cargo alias
-# OR: cargo run -p dark_query -- --help
-
-# Basic entity commands
-cargo dq entities                    # List all entities and templates (gamesys only)
-cargo dq entities earth.mis         # List entities with mission
-cargo dq entities earth.mis 443     # Show detailed entity info
-
-# Template commands (easier for negative template IDs)
-cargo dq templates                   # List templates only (negative IDs)
-cargo dq templates 22                # Show template -22 details (converts 22 to -22)
-cargo dq templates 22 earth.mis     # Show template -22 with mission data
-
-# Motion database commands
-cargo dq motion 0                    # Show animations for ActorType::Human (0)
-cargo dq motion human +playspecmotion +human  # Query specific tags
-cargo dq motion 0 +cs:184            # Query with tag value
-```
-
-### Key Features
-
-1. **Entity and Template Listing**:
-   - Lists all templates (negative IDs) and entities (positive IDs)
-   - **Templates command**: Use `cargo dq templates 22` instead of dealing with negative IDs like `-22`
-   - Shows names, template IDs, property counts, link counts
-   - Inheritance-aware name resolution (finds names from template hierarchy)
-   - Supports filtering: `--filter "*Railing*"`, `--filter "P$SymName:*Robot*"`
-   - Unparsed data detection: `--only-unparsed`
-
-2. **Detailed Entity Analysis**:
-   - Complete entity information with inheritance-aware names
-   - **Bidirectional link analysis** with "Outgoing Links" and "Incoming Links" sections
-   - **Inheritance tree visualization** from most specific to most general
-   - Property details at each inheritance level
-   - Demonstrates property inheritance and overrides
-
-3. **Mission Support**:
-   - Load entity data from gamesys only: `cargo run -p dark_query -- entities`
-   - Load gamesys + mission: `cargo run -p dark_query -- entities earth.mis`
-   - Automatically merges and resolves entity hierarchies
-
-### Usage Examples
-
-#### Basic Entity Exploration
-```bash
-# Find all entities with "Railing" in the name
-cargo dq entities earth.mis --filter "*Railing*"
-
-# Find entities with unparsed data (useful for development)
-cargo dq entities --only-unparsed
-
-# Show property value filtering
-cargo dq entities --filter "P$SymName:*Robot*"
-
-# Limit results for quick iteration and testing
-cargo dq entities earth.mis --limit 5
-cargo dq entities earth.mis --filter "*Door*" --limit 10
-```
-
-#### Detailed Entity Analysis
-```bash
-# Analyze entity 443 (Railing) inheritance and relationships
-cargo dq entities earth.mis 443
-
-# Analyze entity 442 (Tripwire) to see its switch links
-cargo dq entities earth.mis 442
-
-# Analyze template -1718 to understand railing template structure
-cargo dq templates 1718 earth.mis   # Much easier than: cargo dq entities earth.mis -- -1718
-```
-
-#### Understanding Entity Relationships
-```bash
-# Entity 442 (Tripwire) shows:
-# Outgoing Links:
-#   1. SwitchLink -> Entity 445 (Sound Trap)
-#   2. SwitchLink -> Entity 503 (Inverter)
-
-# Entity 445 (Sound Trap) shows:
-# Incoming Links:
-#   1. Entity 442 (New Tripwire) -> SwitchLink here
-```
-
-#### Script Filtering Examples
-```bash
-# Search for entities with specific scripts using property value syntax (case-insensitive)
-cargo dq entities earth.mis --filter "P$Scripts:stddoor"
-
-# Search for entities with script names containing pattern (case-insensitive)
-cargo dq entities earth.mis --filter "P$Scripts:*camera*"
-
-# Alternative script search using S$ prefix (case-insensitive)
-cargo dq entities earth.mis --filter "S$*stddoor*"
-
-# Exact script name with S$ prefix (case-insensitive)
-cargo dq entities earth.mis --filter "S$stddoor"
-
-# General search across all entity data (properties, links, scripts)
-cargo dq entities earth.mis --filter "*StdDoor*"
-
-# Use --limit for quick iteration when testing script searches
-cargo dq entities earth.mis --filter "S$stddoor" --limit 5
-```
-
-**Script Filtering Notes:**
-- **Case-insensitive**: All script searches are now case-insensitive
-- Use `P$Scripts:pattern` to search for entities with specific script names
-- Use `S$pattern` as a shorthand for script-only searches
-- Supports wildcards: `*pattern*` matches scripts containing "pattern"
-- Scripts are inheritance-aware - child entities inherit parent scripts
-- Matched items display shows full script names (e.g., `P$Scripts:StdDoor`, `S$cameradeath`)
-- Improved display truncation shows up to 50 characters of matched items
-- **Use `--limit N`** to show only first N results for quick iteration and testing
-
-## Motion Database Queries
-
-The `motion` command provides powerful querying capabilities for the System Shock 2 motion database, allowing you to explore creature animations and their tag-based organization.
-
-### Motion Database Overview
-
-```bash
-# Basic motion queries
-cargo dq motion 0                    # List available animations for Human
-cargo dq motion human                # Same as above using name
-cargo dq motion droid                # List animations for Droid
-```
-
-### Creature Types (ActorType Enum)
-
-```bash
-# Available creature types
-cargo dq motion 0        # Human (ActorType::Human)
-cargo dq motion 1        # PlayerLimb (ActorType::PlayerLimb)
-cargo dq motion 2        # Droid (ActorType::Droid)
-cargo dq motion 3        # Overlord (ActorType::Overlord)
-cargo dq motion 4        # Arachnid (ActorType::Arachnid)
-```
-
-### Tag-Based Animation Queries
-
-```bash
-# Query with basic tags
-cargo dq motion 0 +human +playspecmotion
-cargo dq motion 0 +locomote
-
-# Query with tag values (similar to spew files)
-cargo dq motion 0 +cs:184           # Specific cutscene animation
-cargo dq motion 0 +cs:116           # Another cutscene
-
-# Multiple tags for specific animations
-cargo dq motion 0 +playspecmotion +human --limit 10
-```
-
-### Motion Query Examples
-
-```bash
-# Find all human animations
-cargo dq motion human +playspecmotion +human
-
-# Find specific cutscene animations
-cargo dq motion 0 +cs:184
-
-# Explore droid animations
-cargo dq motion droid +playspecmotion
-
-# Limited results for quick exploration
-cargo dq motion 0 --limit 5
-```
-
-### Motion Database Features
-
-1. **Tag-Based Queries**: Uses the same hierarchical tag system as the original Dark Engine
-2. **Creature Type Support**: Supports both numeric IDs (0, 1, 2...) and names (human, droid, etc.)
-3. **Value Tags**: Supports tags with values like `+cs:184` for specific cutscenes
-4. **Spew File Compatible**: Output format similar to original animation spew files
-5. **Multiple Tags**: Combine multiple tags to find specific animation sets
-
-### Understanding Motion Database Output
-
-The motion database organizes animations hierarchically using tags:
-
-- **`+playspecmotion`**: General animation category
-- **`+human`**: Human-specific animations
-- **`+cs:VALUE`**: Cutscene animations with specific IDs
-- **`+locomote`**: Movement animations
-- **Creature-specific tags**: `+midwife`, `+droid`, etc.
-
-This system matches the tag database structure found in the original spew files and allows precise animation queries for debugging AI behavior and animation systems.
 
 ## Data Path Management
 
@@ -638,19 +463,7 @@ cargo run -p dark_query -- entities
 
 **Note**: The `engine` crate cannot depend on `shock2vr`, so `engine/src/gl_engine.rs` keeps its hardcoded path.
 
-## Getting Help
-
-- Check existing code for similar patterns
-- Follow the incremental development process outlined above
-- Focus on code analysis tasks:
-  - Performance bottleneck identification
-  - Code pattern consistency
-  - Memory usage optimization
-  - Rendering pipeline efficiency
-- Use desktop runtime for rapid iteration and debugging
-- **Use `dark_query` CLI tool** to understand entity relationships and debug complex interactions
-- It may be necessary to create one-off CLI tools to exercise functionality - feel free to add these as part of the PR. This is especially useful when a change may require understanding the games metadata (ie, the .gam or .mis files) - using our existing parsing tools to query the data can help with understanding the format.
-
 ## Testing
 
 - Make sure, when adding a test that exercises code in a PR, to do a _negative_ test first - it should fail without the necessary change. Then, validate the code change makes it green
+- For behavior that needs a running game (level loading, AI, input, gameplay), write an SDK scenario test in `tools/shock2-sdk/test/*.e2e.test.ts` (gated behind `SHOCK2_E2E=1`) - see "Iterating on Visual Features" above

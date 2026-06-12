@@ -1,15 +1,15 @@
 
 # shock2quest
 
-[![Build & Unit Test](https://github.com/tommybuilds/shock2quest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tommybuilds/shock2quest/actions/workflows/build.yml) [![Build Android](https://github.com/tommybuilds/shock2quest/actions/workflows/build-android.yml/badge.svg)](https://github.com/tommybuilds/shock2quest/actions/workflows/build-android.yml)
+[![Build & Unit Test](https://github.com/tommy-xr/shock2quest/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/tommy-xr/shock2quest/actions/workflows/build.yml) [![Build Android](https://github.com/tommy-xr/shock2quest/actions/workflows/build-android.yml/badge.svg)](https://github.com/tommy-xr/shock2quest/actions/workflows/build-android.yml)
 
-A project to experience the of System Shock 2 in virtual reality. System Shock 2 is one of my favorite games of all time, and the story and ambience would be a great for VR. 
+A project to experience System Shock 2 in virtual reality. System Shock 2 is one of my favorite games of all time, and the story and ambience would be great for VR. 
 
 This project is a [game engine recreation](https://en.wikipedia.org/wiki/Game_engine_recreation) of the [Dark engine](https://en.wikipedia.org/wiki/Dark_Engine) - geared towards VR experiences.
 
 You'll need a full retail copy of System Shock 2 in order to play - recommend purchasing at either [GoG](https://www.gog.com/game/system_shock_2) or [Steam](https://store.steampowered.com/app/238210/System_Shock_2/). 
 
->NOTE: This is currently in a a _pre-alpha_ state and not really playable in any meaningful way, yet. I also have to apologize for the quality of the code, this is my first Rust project - so certainly a lot of room for improvement (and a lot of hacks and experiments!) It's a project done in bits of spare time, but wanted to share out in case it is fun or useful for anyone.
+>NOTE: This is currently in a _pre-alpha_ state and not really playable in any meaningful way, yet. I also have to apologize for the quality of the code, this is my first Rust project - so certainly a lot of room for improvement (and a lot of hacks and experiments!) It's a project done in bits of spare time, but wanted to share out in case it is fun or useful for anyone.
 
 ## Screenshots
 
@@ -35,12 +35,17 @@ This is geared towards VR, so the control scheme is really meant for VR headsets
 
 However, you can play with a keyboard and a mouse, using the following hard-coded keys:
 - `Mouse` - look around with headset, when `Q` and `E` are not pressed
-- `W` `A` `S` `D` - move around
+- `W` `A` `S` `D` - move around (hold `Shift` to move faster)
 - `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
+- `Ctrl` - crouch
+- `I` - move the floating inventory in front of you
+- `Alt+S` / `Alt+L` - quick save / quick load
+- `Space` - spawn a debug item
+- `P` - cycle the pathfinding test (set start → set goal → show path)
 
 ## Building
 
-See [DEVELOPMENT.md](DEVELOPMENT.MD)
+See [DEVELOPMENT.md](DEVELOPMENT.md)
 
 ### Quick Start with Cargo Aliases
 
@@ -48,6 +53,7 @@ The project includes convenient cargo aliases:
 - `cargo dr` - Run desktop runtime (shorthand for `cargo run -p desktop_runtime --`)
 - `cargo dq` - Run dark_query CLI tool (shorthand for `cargo run -p dark_query --`)
 - `cargo dv` - Run dark_viewer tool (shorthand for `cargo run -p dark_viewer --`)
+- `cargo dbgr` - Run the HTTP-controlled debug runtime (used for automation/testing; see `tools/shock2-sdk` for the TypeScript SDK that drives it)
 
 Example usage:
 ```bash
