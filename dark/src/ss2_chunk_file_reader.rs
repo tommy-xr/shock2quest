@@ -21,6 +21,8 @@ use crate::ss2_common::read_string_with_size;
 pub struct Chunk {
     pub offset: u64, // Offset of the chunk, in bytes
     pub length: u64, // Length of chunk, in bytes
+    pub version_major: u32,
+    pub version_minor: u32,
 }
 
 #[derive(Debug)]
@@ -65,12 +67,21 @@ pub fn read_table_of_contents<T: io::Read + io::Seek>(reader: &mut T) -> ChunkFi
 
     let chunk_count = reader.read_u32::<byteorder::LittleEndian>().unwrap();
 
-    let mut dictionary = HashMap::new();
+    let mut entries = Vec::new();
     for _ in 0..chunk_count {
         let chunk_name = read_string_with_size(reader, 12);
 
         let offset = reader.read_u32::<byteorder::LittleEndian>().unwrap();
         let length = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        entries.push((chunk_name, offset, length));
+    }
+
+    let mut dictionary = HashMap::new();
+    for (chunk_name, offset, length) in entries {
+        // The version lives in the per-chunk header, after the 12-byte name
+        reader.seek(SeekFrom::Start((offset + 12) as u64)).unwrap();
+        let version_major = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+        let version_minor = reader.read_u32::<byteorder::LittleEndian>().unwrap();
 
         dictionary.insert(
             chunk_name,
@@ -78,6 +89,8 @@ pub fn read_table_of_contents<T: io::Read + io::Seek>(reader: &mut T) -> ChunkFi
                 // Always skip the header
                 offset: (offset + CHUNK_HEADER_SIZE) as u64,
                 length: length as u64,
+                version_major,
+                version_minor,
             },
         );
     }

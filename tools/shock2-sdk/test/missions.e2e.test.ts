@@ -34,10 +34,7 @@ const MISSIONS = [
   "rick2.mis",
   "rick3.mis",
   "many.mis",
-  // Known issue: AIPATH path database parser panics with unexpected EOF on
-  // this mission. Re-enable once fixed.
-  // https://github.com/tommy-xr/shock2quest/issues/267
-  // "shodan.mis",
+  "shodan.mis",
 ];
 
 const BASE_PORT = Number(process.env.SHOCK2_E2E_PORT ?? 8100);
