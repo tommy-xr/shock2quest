@@ -27,8 +27,13 @@ test(
         );
         assert.match(
           error.message,
-          /panicked|No such file/,
-          "error should include the panic output from the runtime logs",
+          /panicked at/,
+          "error should include the panic message from the runtime logs",
+        );
+        assert.match(
+          error.message,
+          /stack backtrace:/,
+          "error should include the callstack (RUST_BACKTRACE=1 is set by launch)",
         );
         return true;
       },

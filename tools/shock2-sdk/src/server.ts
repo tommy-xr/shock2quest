@@ -45,6 +45,25 @@ export function findRepoRoot(startDir: string): string | undefined {
 
 const MAX_LOG_LINES = 2000;
 
+/** Max lines included in a launch-failure error message. */
+const MAX_ERROR_LOG_LINES = 120;
+
+/**
+ * Pick the most useful slice of runtime output for an error message.
+ *
+ * If the output contains a panic, return everything from the (last) panic
+ * line onward - that keeps the message and the full backtrace together.
+ * Otherwise fall back to the last few lines.
+ */
+export function formatCrashOutput(logLines: string[]): string {
+  const panicIndex = logLines.findLastIndex((line) =>
+    line.includes("panicked at"),
+  );
+  // Include a couple of lines of context before the panic itself.
+  const start = panicIndex >= 0 ? Math.max(0, panicIndex - 2) : -30;
+  return logLines.slice(start).slice(0, MAX_ERROR_LOG_LINES).join("\n");
+}
+
 /**
  * A Game whose debug runtime process is owned by this SDK.
  *
@@ -106,6 +125,9 @@ export class GameServer extends Game implements AsyncDisposable {
       env: {
         ...process.env,
         RUST_LOG: options.rustLog ?? "debug_runtime=info,shock2vr=info",
+        // Capture a callstack in the logs if the game thread panics
+        // (respects an explicit override, e.g. RUST_BACKTRACE=full)
+        RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -131,9 +153,8 @@ export class GameServer extends Game implements AsyncDisposable {
       await server.waitUntilReady(options.launchTimeoutMs ?? 300_000);
     } catch (error) {
       child.kill("SIGKILL");
-      const recentLogs = logLines.slice(-30).join("\n");
       throw new Error(
-        `debug_runtime failed to start: ${error}\nRecent output:\n${recentLogs}`,
+        `debug_runtime failed to start: ${error}\nRecent output:\n${formatCrashOutput(logLines)}`,
       );
     }
 

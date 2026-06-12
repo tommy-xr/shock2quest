@@ -75,5 +75,8 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
   paused (with zero delta time).
 - `game.logs()` returns recent runtime output (also included in launch
   failure errors). Pass `echoLogs: true` to stream it to stderr.
+- If the game thread panics during launch, the error includes the panic
+  message and full callstack — `launch()` sets `RUST_BACKTRACE=1` for the
+  spawned runtime (export `RUST_BACKTRACE=full` yourself for more frames).
 - Writing a new scenario test: copy `test/pathfinding.e2e.test.ts`. Gate
   long-running tests behind `SHOCK2_E2E=1` so `npm test` stays fast.
