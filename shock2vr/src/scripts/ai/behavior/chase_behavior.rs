@@ -5,14 +5,15 @@ use dark::{SCALE_FACTOR, motion::MotionQueryItem, properties::PropPosition};
 use rand::Rng;
 use shipyard::*;
 
+use crate::scripts::ai::ai_util::has_ranged_weapon;
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{
         Effect,
         ai::steering::{
-            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy, SteeringOutput,
-            SteeringStrategy,
+            self, ChasePlayerSteeringStrategy, CollisionAvoidanceSteeringStrategy,
+            PathFollowSteeringStrategy, SteeringOutput, SteeringStrategy,
         },
     },
     time::Time,
@@ -31,6 +32,10 @@ impl ChaseBehavior {
                 Box::new(
                     CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
                 ),
+                // Route to the player through the navigation mesh; falls
+                // through to the direct chase when there is no AIPATH data
+                // or no route.
+                Box::new(PathFollowSteeringStrategy::chase_player()),
                 Box::new(ChasePlayerSteeringStrategy),
             ]),
         }
@@ -84,7 +89,13 @@ impl Behavior for ChaseBehavior {
         if let Ok(prop_pos) = v_current_pos.get(entity_id) {
             let distance = (prop_pos.position - u_player.pos).magnitude();
 
-            if distance > ranged_min_attack_distance && distance < ranged_max_attack_distance {
+            // Only ranged-armed AIs stop to shoot; melee AIs must keep
+            // chasing or they stall at mid-range bouncing between chase and
+            // ranged-attack behaviors.
+            if distance > ranged_min_attack_distance
+                && distance < ranged_max_attack_distance
+                && has_ranged_weapon(world, entity_id)
+            {
                 return NextBehavior::Next(Box::new(RefCell::new(RangedAttackBehavior)));
             }
             if distance < melee_attack_distance {

@@ -125,6 +125,11 @@ pub struct DebugOptions {
     pub debug_ai: bool,
 }
 
+/// Pathfinding service accessible from scripts (steering strategies) via
+/// UniqueView. None when the mission has no AIPATH data (e.g. debug scenes).
+#[derive(Unique, Clone)]
+pub struct GlobalPathfinding(pub Option<Arc<PathfindingService>>);
+
 #[derive(Unique, Clone)]
 pub struct EffectQueue {
     effects: Vec<Effect>,
@@ -223,7 +228,7 @@ pub struct MissionCore {
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
     pub path_database: Option<dark::mission::PathDatabase>,
-    pub pathfinding_service: Option<PathfindingService>,
+    pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
@@ -540,6 +545,14 @@ impl MissionCore {
             }
         }
 
+        let pathfinding_service = abstract_mission
+            .path_database
+            .as_ref()
+            .map(|db| Arc::new(PathfindingService::new(Arc::new(db.clone()))));
+        // Steering strategies path through this unique; MissionCore keeps its
+        // own handle for the interactive pathfinding test.
+        world.add_unique(GlobalPathfinding(pathfinding_service.clone()));
+
         MissionCore {
             interaction,
             level_name: mission,
@@ -567,10 +580,7 @@ impl MissionCore {
             pending_entity_triggers: Vec::new(),
             obj_map: abstract_mission.obj_map,
             path_database: abstract_mission.path_database.clone(),
-            pathfinding_service: abstract_mission
-                .path_database
-                .as_ref()
-                .map(|db| PathfindingService::new(Arc::new(db.clone()))),
+            pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
