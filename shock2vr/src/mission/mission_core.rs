@@ -3390,6 +3390,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         self.world.run(
             |_entities_iter: EntitiesView,
              v_pos: View<dark::properties::PropPosition>,
+             v_transform: View<crate::runtime_props::RuntimePropTransform>,
              v_sym_name: View<dark::properties::PropSymName>,
              v_scripts: View<dark::properties::PropScripts>,
              v_links: View<dark::properties::Links>| {
@@ -3406,7 +3407,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         }
                     }
 
-                    let position = [pos.position.x, pos.position.y, pos.position.z];
+                    // Prefer the live transform; PropPosition can lag for
+                    // entities moved by animation/physics (e.g. walking AIs)
+                    let live_pos = v_transform
+                        .get(entity_id)
+                        .map(|xform| {
+                            use cgmath::Transform;
+                            let p = xform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+                            cgmath::vec3(p.x, p.y, p.z)
+                        })
+                        .unwrap_or(pos.position);
+                    let position = [live_pos.x, live_pos.y, live_pos.z];
                     let distance = (cgmath::Vector3::from(position) - player_pos).magnitude();
 
                     let script_count = v_scripts
