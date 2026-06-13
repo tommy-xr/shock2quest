@@ -87,6 +87,14 @@ enum PathCommand {
         #[arg(long)]
         at: String,
     },
+    /// Show the walk component containing a position and its frontier links
+    /// (how the component connects - or fails to connect - to neighbors)
+    Component {
+        mission: String,
+        /// Position as "x,y,z"
+        #[arg(long)]
+        at: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -139,9 +147,57 @@ fn run_path_command(command: PathCommand) -> Result<()> {
             let db = load_path_database(&mission)?;
             dump_cells_at(db, parse_vec3(&at)?);
         }
+        PathCommand::Component { mission, at } => {
+            let db = load_path_database(&mission)?;
+            dump_component_at(db, parse_vec3(&at)?);
+        }
     }
 
     Ok(())
+}
+
+/// Show the walk component containing a position, plus every link that
+/// leaves the component and why it doesn't extend it (okBits / dest flags).
+fn dump_component_at(db: PathDatabase, at: Vector3<f32>) {
+    let service = PathfindingService::new(Arc::new(db));
+    let Some(cell_id) = service.cell_from_position(at) else {
+        println!("no cell contains that position");
+        return;
+    };
+    let db = &service.path_database;
+    let components = walk_components(db);
+    let Some(component) = components.iter().find(|c| c.contains(&cell_id)) else {
+        println!("cell {cell_id} is not in any walk component (unpathable?)");
+        return;
+    };
+    let members: std::collections::HashSet<u32> = component.iter().copied().collect();
+    println!(
+        "cell {cell_id} is in a walk component of {} cells",
+        component.len()
+    );
+
+    // Collect frontier links: source inside, destination outside
+    let mut frontier: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for link in &db.links {
+        if !members.contains(&link.from_cell) || members.contains(&link.to_cell) {
+            continue;
+        }
+        let dest_flags = db
+            .cells
+            .get(link.to_cell as usize)
+            .map(|c| format!("{:?}", c.flags))
+            .unwrap_or_else(|| "out-of-range".to_string());
+        let key = format!(
+            "okBits=[{}] dest_flags={}",
+            describe_bits(link.ok_bits),
+            dest_flags
+        );
+        *frontier.entry(key).or_default() += 1;
+    }
+    println!("frontier links (leaving the component): ");
+    for (desc, count) in &frontier {
+        println!("  {count:>5}  {desc}");
+    }
 }
 
 fn resolve_missions(mission: Option<String>, all: bool) -> Result<Vec<String>> {
@@ -255,6 +311,25 @@ fn print_stats(mission: &str, db: PathDatabase) {
     );
     println!(
         "audit: walk links into unpathable/blocking-OBB cells (rejected): {into_blocked_cell}"
+    );
+
+    // Door audit: how are links into BELOW_DOOR cells tagged? If they carry
+    // no okBits the mesh fragments at every doorway.
+    let mut door_links_walkable = 0;
+    let mut door_links_dead = 0;
+    for link in &db.links {
+        if let Some(dest) = db.cells.get(link.to_cell as usize) {
+            if dest.flags.contains(PathCellFlags::BELOW_DOOR) {
+                if link.ok_bits.intersects(MovementBits::WALK) {
+                    door_links_walkable += 1;
+                } else if link.ok_bits.is_empty() {
+                    door_links_dead += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "audit: links into below-door cells: walkable={door_links_walkable} zero-bits={door_links_dead}"
     );
 
     // Walk-graph connectivity for a plain WALK query. Links are treated as
@@ -665,6 +740,17 @@ fn dump_cells_at(db: PathDatabase, at: Vector3<f32>) {
         }
     }
 
+    // Component membership helps explain "no path found" between two
+    // positions that each look fine in isolation.
+    let components = walk_components(db);
+    let component_of = |cell_id: u32| -> Option<(usize, usize)> {
+        components
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.contains(&cell_id))
+            .map(|(i, c)| (i, c.len()))
+    };
+
     println!(
         "{} cell(s) contain ({:.2}, {:.2}, {:.2}) in the XZ plane:",
         matches.len(),
@@ -673,8 +759,11 @@ fn dump_cells_at(db: PathDatabase, at: Vector3<f32>) {
         at.z
     );
     for cell in matches {
+        let component = component_of(cell.id)
+            .map(|(idx, size)| format!("walk component #{idx} ({size} cells)"))
+            .unwrap_or_else(|| "no walk component (unpathable?)".to_string());
         println!(
-            "  cell {} center=({:.2}, {:.2}, {:.2}) flags={:?}",
+            "  cell {} center=({:.2}, {:.2}, {:.2}) flags={:?} {component}",
             cell.id, cell.center.x, cell.center.y, cell.center.z, cell.flags
         );
         for link in db.links.iter().filter(|l| l.from_cell == cell.id) {
