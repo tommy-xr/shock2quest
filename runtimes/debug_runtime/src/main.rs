@@ -886,24 +886,34 @@ fn process_command(
             }
         }
         RuntimeCommand::SendEntityMessage { id, message, reply } => {
-            let result = if let Some(debug_scene) = game.debug_scene_mut() {
-                let entity_id = EntityId::new_from_index_and_gen(id as u64, 0);
-                let queued = debug_scene.send_entity_message(entity_id, message);
-                CommandResult {
-                    success: queued,
-                    message: if queued {
-                        format!("Message queued for entity {}", id)
-                    } else {
-                        format!("Entity {} not found or not alive", id)
-                    },
-                    data: None,
+            // The list/detail endpoints expose `EntityId::inner() as i32`, which
+            // for a live entity is `index + 1`. `from_inner` is the exact
+            // inverse; `new_from_index_and_gen(id, 0)` would double the +1 and
+            // resolve the wrong entity.
+            let entity_id = EntityId::from_inner(id as u64);
+            let result = match (entity_id, game.debug_scene_mut()) {
+                (Some(entity_id), Some(debug_scene)) => {
+                    let queued = debug_scene.send_entity_message(entity_id, message);
+                    CommandResult {
+                        success: queued,
+                        message: if queued {
+                            format!("Message queued for entity {}", id)
+                        } else {
+                            format!("Entity {} not found or not alive", id)
+                        },
+                        data: None,
+                    }
                 }
-            } else {
-                CommandResult {
+                (None, _) => CommandResult {
+                    success: false,
+                    message: format!("Invalid entity id {}", id),
+                    data: None,
+                },
+                (_, None) => CommandResult {
                     success: false,
                     message: "No debuggable scene available".to_string(),
                     data: None,
-                }
+                },
             };
 
             if let Err(_) = reply.send(result) {
