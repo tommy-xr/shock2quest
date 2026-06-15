@@ -10,3 +10,6 @@ target/
 output.txt
 projects/
 references/
+
+# Local research notes (not committed)
+research/
