@@ -38,6 +38,10 @@ await game.player.teleport({ x: pos.x + 5, y: pos.y, z: pos.z });
 const doors = await game.entities.list({ filter: "*Door*", limit: 10 });
 const detail = await game.entities.detail(doors.entities[0].id);
 
+// Inject a script message into an entity (damage, frob, AI signal)
+await game.entities.sendMessage(doors.entities[0].id, { type: "Damage", amount: 5 });
+await game.entities.sendMessage(doors.entities[0].id, { type: "Frob" });
+
 // Discrete input actions (the keybinding system)
 await game.input.actions(); // ["PathfindingTestCycle", "QuickSave", ...]
 await game.input.trigger("PathfindingTestCycle");
