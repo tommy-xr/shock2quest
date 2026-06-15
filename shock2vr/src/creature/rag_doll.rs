@@ -140,7 +140,7 @@ impl RagDollManager {
                 handle,
                 SharedShape::ball(DEFAULT_JOINT_RADIUS),
                 1.0,
-                CollisionGroup::selectable(),
+                CollisionGroup::ragdoll(),
             );
 
             joint_to_body.insert(bone.joint_id as u32, handle);
