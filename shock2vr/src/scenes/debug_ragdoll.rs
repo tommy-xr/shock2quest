@@ -32,7 +32,7 @@ const KILL_DELAY_FRAMES: u32 = 30;
 /// corpse is straight ahead, and used as the look-at target for the fixed debug
 /// camera so the spawn is always framed.
 fn ragdoll_focus_point() -> Point3<f32> {
-    Point3::new(0.0, 5.0 / SCALE_FACTOR, -5.0)
+    Point3::new(-5.0, 5.0 / SCALE_FACTOR, -0.0)
 }
 
 pub struct DebugRagdollScene;
@@ -262,23 +262,5 @@ impl DebugSceneHooks for RagdollHooks {
             );
             self.killed = true;
         }
-    }
-
-    fn after_render(
-        &mut self,
-        _core: &mut MissionCore,
-        _scene_objects: &mut Vec<engine::scene::SceneObject>,
-        camera_position: &mut Vector3<f32>,
-        camera_rotation: &mut Quaternion<f32>,
-        _asset_cache: &mut AssetCache,
-        _options: &GameOptions,
-    ) {
-        // Pin the camera to a fixed vantage point aimed at the ragdoll spawn so
-        // the corpse is always framed, independent of player head orientation.
-        let target = ragdoll_focus_point();
-        let cam_pos = vec3(0.0, target.y + 2.0, 4.0);
-        let forward = (vec3(target.x, target.y, target.z) - cam_pos).normalize();
-        *camera_position = cam_pos;
-        *camera_rotation = Quaternion::from_arc(vec3(0.0, 0.0, -1.0), forward, None);
     }
 }
