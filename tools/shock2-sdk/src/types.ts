@@ -41,6 +41,16 @@ export interface PathfindingTestStatus {
   test_path_waypoints: number;
 }
 
+/**
+ * A script message that can be injected into a specific entity.
+ *
+ * Mirrors the engine's `DebugEntityMessage`; the `type` field is the serde tag.
+ */
+export type DebugEntityMessage =
+  | { type: "Damage"; amount: number }
+  | { type: "Frob" }
+  | { type: "Signal"; name: string };
+
 export interface EntitySummary {
   id: number;
   name: string;

@@ -4,7 +4,7 @@ use engine::{
     audio::AudioContext,
     scene::{SceneObject, light::SpotLight},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, World};
 use std::any::Any;
 
@@ -379,6 +379,31 @@ pub trait DebuggableScene {
     /// remote clients (e.g. the debug runtime) can verify that triggered
     /// pathfinding actions actually executed.
     fn pathfinding_test_status(&self) -> DebugPathfindingTestStatus;
+
+    /// Inject a script message into a specific entity.
+    ///
+    /// Queues the message for delivery on the next scene update, letting debug
+    /// clients exercise script behaviors (damage, frob, AI signals) without a
+    /// physical interaction in the world. Returns `true` if the entity is alive
+    /// and the message was queued.
+    fn send_entity_message(&mut self, id: EntityId, message: DebugEntityMessage) -> bool;
+}
+
+/// A script message a debug client can inject into a specific entity.
+///
+/// This is intentionally a small, serde-friendly subset of the engine's full
+/// `MessagePayload` enum, surfaced so remote clients (HTTP / SDK) can exercise
+/// script behaviors directly without simulating a world interaction. Extend it
+/// as new debug scenarios need more message kinds (e.g. `TurnOn` / `TurnOff`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum DebugEntityMessage {
+    /// Deal `amount` damage (drives `InternalSimpleHealth` / AI health).
+    Damage { amount: f32 },
+    /// Frob (use) the entity.
+    Frob,
+    /// Send a named AI signal.
+    Signal { name: String },
 }
 
 /// Status of the interactive pathfinding test system

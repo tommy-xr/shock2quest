@@ -1,6 +1,7 @@
 import { HttpClient } from "./client.js";
 import type {
   CommandResult,
+  DebugEntityMessage,
   EntityDetailResult,
   EntityListResult,
   FrameSnapshot,
@@ -62,6 +63,24 @@ export class EntitiesApi {
 
   async detail(id: number): Promise<EntityDetailResult> {
     return this.client.get<EntityDetailResult>(`/v1/entities/${id}`);
+  }
+
+  /**
+   * Inject a script message into an entity (damage, frob, AI signal).
+   *
+   * The message is queued and delivered on the next step(); throws if the
+   * entity is not found or not alive.
+   */
+  async sendMessage(
+    id: number,
+    message: DebugEntityMessage,
+  ): Promise<CommandResult> {
+    return unwrap(
+      await this.client.post<CommandResult>(
+        `/v1/entities/${id}/message`,
+        message,
+      ),
+    );
   }
 }
 

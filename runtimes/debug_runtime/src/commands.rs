@@ -60,6 +60,13 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Option<EntityDetailResult>>,
     },
 
+    /// Inject a script message into a specific entity (damage, frob, signal)
+    SendEntityMessage {
+        id: i32,
+        message: shock2vr::game_scene::DebugEntityMessage,
+        reply: oneshot::Sender<CommandResult>,
+    },
+
     /// List physics rigid bodies
     ListPhysicsBodies {
         limit: Option<usize>,
