@@ -70,6 +70,9 @@ pub enum RuntimeCommand {
     /// List physics rigid bodies
     ListPhysicsBodies {
         limit: Option<usize>,
+        /// Optional filter: only return bodies owned by this entity id. Useful
+        /// for scoping to the many bodies of a single ragdoll.
+        entity_id: Option<i32>,
         reply: oneshot::Sender<PhysicsBodyListResult>,
     },
 

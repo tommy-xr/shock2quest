@@ -1,4 +1,4 @@
-use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, vec3};
+use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, Vector3, vec3};
 use dark::{SCALE_FACTOR, properties::PropTemplateId};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::{EntityId, IntoIter, IntoWithId};
@@ -20,6 +20,20 @@ use crate::{
 
 const IMPULSE_STRENGTH: f32 = 1.0;
 const PULL_FORCE: f32 = 1.0;
+
+/// Number of update frames to wait after spawning the pipe hybrid before killing
+/// it and spawning the ragdoll. Frame-based (not wall-clock) so the trigger is
+/// deterministic under headless stepping, where a single frame can carry a large
+/// or irregular delta time.
+const KILL_DELAY_FRAMES: u32 = 30;
+
+/// World-space point where the pipe hybrid (and therefore the ragdoll) spawns.
+/// Placed directly in front of the default player spawn (which faces -Z) so the
+/// corpse is straight ahead, and used as the look-at target for the fixed debug
+/// camera so the spawn is always framed.
+fn ragdoll_focus_point() -> Point3<f32> {
+    Point3::new(0.0, 5.0 / SCALE_FACTOR, -5.0)
+}
 
 pub struct DebugRagdollScene;
 
@@ -52,7 +66,8 @@ impl DebugRagdollScene {
 
 struct RagdollHooks {
     pipe_hybrid_spawned: bool,
-    slay_timer: f32,
+    frames_since_spawn: u32,
+    killed: bool,
     last_left_impulse: bool,
     last_right_pull: bool,
 }
@@ -67,7 +82,8 @@ impl RagdollHooks {
 
         Self {
             pipe_hybrid_spawned: false,
-            slay_timer: 0.0,
+            frames_since_spawn: 0,
+            killed: false,
             last_left_impulse: false,
             last_right_pull: false,
         }
@@ -85,7 +101,7 @@ impl RagdollHooks {
             return;
         }
 
-        let spawn_position = Point3::new(-5.0, 5.0 / SCALE_FACTOR, -0.0);
+        let spawn_position = ragdoll_focus_point();
 
         let spawn_effect = Effect::CreateEntity {
             template_id: -397,
@@ -109,7 +125,7 @@ impl RagdollHooks {
         );
 
         self.pipe_hybrid_spawned = true;
-        self.slay_timer = 1.0;
+        self.frames_since_spawn = 0;
         println!("Spawned pipe hybrid for ragdoll testing");
     }
 
@@ -198,9 +214,9 @@ impl RagdollHooks {
         self.last_right_pull = input_context.right_hand.squeeze_value > 0.05;
     }
 
-    fn update_slay_timer(&mut self, delta: f32) {
-        if self.pipe_hybrid_spawned && self.slay_timer > 0.0 {
-            self.slay_timer -= delta;
+    fn advance_kill_counter(&mut self) {
+        if self.pipe_hybrid_spawned && !self.killed {
+            self.frames_since_spawn += 1;
         }
     }
 }
@@ -214,8 +230,9 @@ impl DebugSceneHooks for RagdollHooks {
         _asset_cache: &mut AssetCache,
         _game_options: &GameOptions,
     ) {
+        let _ = time;
         self.handle_ragdoll_input(core, input_context);
-        self.update_slay_timer(time.elapsed.as_secs_f32());
+        self.advance_kill_counter();
     }
 
     fn before_handle_effects(
@@ -235,7 +252,7 @@ impl DebugSceneHooks for RagdollHooks {
                 asset_cache,
                 audio_context,
             );
-        } else if self.slay_timer <= 0.0 && self.slay_timer > -0.5 {
+        } else if !self.killed && self.frames_since_spawn >= KILL_DELAY_FRAMES {
             self.kill_spawned_entity(
                 core,
                 global_context,
@@ -243,7 +260,25 @@ impl DebugSceneHooks for RagdollHooks {
                 asset_cache,
                 audio_context,
             );
-            self.slay_timer = -1.0;
+            self.killed = true;
         }
+    }
+
+    fn after_render(
+        &mut self,
+        _core: &mut MissionCore,
+        _scene_objects: &mut Vec<engine::scene::SceneObject>,
+        camera_position: &mut Vector3<f32>,
+        camera_rotation: &mut Quaternion<f32>,
+        _asset_cache: &mut AssetCache,
+        _options: &GameOptions,
+    ) {
+        // Pin the camera to a fixed vantage point aimed at the ragdoll spawn so
+        // the corpse is always framed, independent of player head orientation.
+        let target = ragdoll_focus_point();
+        let cam_pos = vec3(0.0, target.y + 2.0, 4.0);
+        let forward = (vec3(target.x, target.y, target.z) - cam_pos).normalize();
+        *camera_position = cam_pos;
+        *camera_rotation = Quaternion::from_arc(vec3(0.0, 0.0, -1.0), forward, None);
     }
 }

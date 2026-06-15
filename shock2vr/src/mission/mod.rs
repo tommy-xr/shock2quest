@@ -218,6 +218,14 @@ impl crate::game_scene::GameScene for Mission {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }
+
+    fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {
+        Some(self)
+    }
+
+    fn as_debuggable_mut(&mut self) -> Option<&mut dyn crate::game_scene::DebuggableScene> {
+        Some(self)
+    }
 }
 
 // ============================================================================

@@ -207,10 +207,7 @@ impl Game {
     ///
     /// Returns None if the current scene doesn't implement DebuggableScene.
     pub fn debug_scene(&self) -> Option<&dyn game_scene::DebuggableScene> {
-        self.active_game_scene
-            .as_any()
-            .and_then(|any| any.downcast_ref::<mission::Mission>())
-            .map(|mission| mission as &dyn game_scene::DebuggableScene)
+        self.active_game_scene.as_debuggable()
     }
 
     /// Get mutable access to the debug scene interface if available
@@ -221,10 +218,7 @@ impl Game {
     ///
     /// Returns None if the current scene doesn't implement DebuggableScene.
     pub fn debug_scene_mut(&mut self) -> Option<&mut dyn game_scene::DebuggableScene> {
-        self.active_game_scene
-            .as_any_mut()
-            .and_then(|any| any.downcast_mut::<mission::Mission>())
-            .map(|mission| mission as &mut dyn game_scene::DebuggableScene)
+        self.active_game_scene.as_debuggable_mut()
     }
 
     pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> Game {
