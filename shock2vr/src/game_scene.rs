@@ -122,6 +122,20 @@ pub trait GameScene {
     fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
         None
     }
+
+    /// Expose this scene's debug/introspection interface, if it has one.
+    ///
+    /// Implemented by full missions and by the debug scenes (which forward to
+    /// their inner `MissionCore`), so the debug runtime's HTTP endpoints work
+    /// against `debug_*` scenes too.
+    fn as_debuggable(&self) -> Option<&dyn DebuggableScene> {
+        None
+    }
+
+    /// Mutable variant of [`as_debuggable`].
+    fn as_debuggable_mut(&mut self) -> Option<&mut dyn DebuggableScene> {
+        None
+    }
 }
 
 // ============================================================================

@@ -1048,4 +1048,127 @@ impl PhysicsWorld {
     pub fn get_body_transform(&self, handle: RigidBodyHandle) -> Option<Isometry<Real>> {
         self.rigid_body_set.get(handle).map(|body| *body.position())
     }
+
+    /// Enumerate every rigid body in the simulation for debug tooling.
+    ///
+    /// This iterates the raw Rapier `RigidBodySet` rather than the
+    /// `entity_id_to_body` map, so it surfaces *all* bodies - including the
+    /// many bodies that share a single `EntityId` (e.g. ragdoll limbs) and
+    /// bodies with no entity at all.
+    pub fn debug_list_bodies(&self) -> Vec<DebugBodyInfo> {
+        self.rigid_body_set
+            .iter()
+            .map(|(handle, body)| self.debug_body_info(handle, body))
+            .collect()
+    }
+
+    /// Look up a single body's debug info by its `body_id` (the rigid body
+    /// handle index, as reported by [`debug_list_bodies`]).
+    pub fn debug_body_detail(&self, body_id: u32) -> Option<DebugBodyInfo> {
+        self.rigid_body_set
+            .iter()
+            .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
+            .map(|(handle, body)| self.debug_body_info(handle, body))
+    }
+
+    fn debug_body_info(&self, handle: RigidBodyHandle, body: &RigidBody) -> DebugBodyInfo {
+        let (index, generation) = handle.into_raw_parts();
+
+        let entity_id = if body.user_data != 0 {
+            Some(body.user_data as i32)
+        } else {
+            None
+        };
+
+        let body_type = match body.body_type() {
+            RigidBodyType::Dynamic => "dynamic",
+            RigidBodyType::Fixed => "static",
+            RigidBodyType::KinematicPositionBased | RigidBodyType::KinematicVelocityBased => {
+                "kinematic"
+            }
+        };
+
+        let translation = body.translation();
+        let rotation = body.rotation();
+        let linvel = body.linvel();
+        let angvel = body.angvel();
+        let com = body.center_of_mass();
+
+        // Pull shape/group/sensor data from the body's first collider, if any.
+        let mut collision_groups = Vec::new();
+        let mut is_sensor = false;
+        if let Some(collider_handle) = body.colliders().first() {
+            if let Some(collider) = self.collider_set.get(*collider_handle) {
+                is_sensor = collider.is_sensor();
+                collision_groups =
+                    collision_group_names(collider.collision_groups().memberships.bits());
+            }
+        }
+
+        DebugBodyInfo {
+            body_id: index,
+            generation,
+            entity_id,
+            body_type,
+            position: [translation.x, translation.y, translation.z],
+            rotation: [rotation.i, rotation.j, rotation.k, rotation.w],
+            linear_velocity: [linvel.x, linvel.y, linvel.z],
+            angular_velocity: [angvel.x, angvel.y, angvel.z],
+            mass: body.mass(),
+            center_of_mass: [com.x, com.y, com.z],
+            gravity_scale: body.gravity_scale(),
+            linear_damping: body.linear_damping(),
+            angular_damping: body.angular_damping(),
+            collision_groups,
+            is_sensor,
+            is_enabled: body.is_enabled(),
+            is_sleeping: body.is_sleeping(),
+        }
+    }
+}
+
+/// Rapier-free description of a rigid body, for debug tooling / HTTP introspection.
+#[derive(Debug, Clone)]
+pub struct DebugBodyInfo {
+    /// Stable-within-session id: the rigid body handle's index.
+    pub body_id: u32,
+    /// Handle generation - distinguishes a reused index across removals.
+    pub generation: u32,
+    /// Owning entity (from `RigidBody::user_data`). Non-unique: many bodies
+    /// (e.g. ragdoll limbs) can report the same entity.
+    pub entity_id: Option<i32>,
+    pub body_type: &'static str,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub linear_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub mass: f32,
+    pub center_of_mass: [f32; 3],
+    pub gravity_scale: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub collision_groups: Vec<String>,
+    pub is_sensor: bool,
+    pub is_enabled: bool,
+    pub is_sleeping: bool,
+}
+
+/// Decode an `InteractionGroups` membership bitmask into human-readable names.
+fn collision_group_names(bits: u32) -> Vec<String> {
+    let mut names = Vec::new();
+    let candidates = [
+        (InternalCollisionGroups::WORLD, "world"),
+        (InternalCollisionGroups::ENTITY, "entity"),
+        (InternalCollisionGroups::SELECTABLE, "selectable"),
+        (InternalCollisionGroups::PLAYER, "player"),
+        (InternalCollisionGroups::UI, "ui"),
+        (InternalCollisionGroups::HITBOX, "hitbox"),
+        (InternalCollisionGroups::RAYCAST, "raycast"),
+    ];
+    for (group, name) in candidates {
+        if bits & group.bits != 0 {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
