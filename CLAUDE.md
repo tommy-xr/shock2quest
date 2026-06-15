@@ -168,6 +168,10 @@ For debugging visual/rendering changes without a full interactive session:
    curl http://127.0.0.1:8080/v1/input/actions
    curl -X POST http://127.0.0.1:8080/v1/input/action -d '{"action": "PathfindingTestCycle"}'
 
+   # Inject a script message into an entity (damage/frob/AI signal) - drives script
+   # behavior directly without a world interaction. Body is a tagged DebugEntityMessage.
+   curl -X POST http://127.0.0.1:8080/v1/entities/122/message -d '{"type": "Damage", "amount": 5.0}'
+
    # IMPORTANT: Always shut down when done to avoid interfering with user's session
    curl -X POST http://127.0.0.1:8080/v1/shutdown
    ```
