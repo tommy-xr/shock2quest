@@ -164,6 +164,10 @@ async fn start_http_server(
         .route("/v1/shutdown", axum::routing::post(shutdown_server))
         .route("/v1/entities", get(list_entities))
         .route("/v1/entities/:id", get(get_entity_detail))
+        .route(
+            "/v1/entities/:id/message",
+            axum::routing::post(send_entity_message),
+        )
         .route("/v1/player/position", get(get_player_position))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
@@ -196,6 +200,7 @@ async fn start_http_server(
     info!("  POST /v1/shutdown         - Shutdown the debug runtime gracefully");
     info!("  GET  /v1/entities         - List entities with optional limit and filter");
     info!("  GET  /v1/entities/{{id}}    - Get detailed entity information");
+    info!("  POST /v1/entities/{{id}}/message - Inject a script message (damage/frob/signal)");
     info!("  GET  /v1/player/position  - Get current player position");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates");
     info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
@@ -880,6 +885,31 @@ fn process_command(
                 tracing::warn!("Failed to send entity detail - receiver dropped");
             }
         }
+        RuntimeCommand::SendEntityMessage { id, message, reply } => {
+            let result = if let Some(debug_scene) = game.debug_scene_mut() {
+                let entity_id = EntityId::new_from_index_and_gen(id as u64, 0);
+                let queued = debug_scene.send_entity_message(entity_id, message);
+                CommandResult {
+                    success: queued,
+                    message: if queued {
+                        format!("Message queued for entity {}", id)
+                    } else {
+                        format!("Entity {} not found or not alive", id)
+                    },
+                    data: None,
+                }
+            } else {
+                CommandResult {
+                    success: false,
+                    message: "No debuggable scene available".to_string(),
+                    data: None,
+                }
+            };
+
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send entity message result - receiver dropped");
+            }
+        }
         RuntimeCommand::ListPhysicsBodies { limit, reply } => {
             if let Some(debug_scene) = game.debug_scene() {
                 let bodies = debug_scene.list_physics_bodies(limit);
@@ -1294,6 +1324,42 @@ async fn get_entity_detail(
         Err(_) => {
             tracing::error!("Failed to receive entity detail - sender dropped");
             Json(None)
+        }
+    }
+}
+
+/// Inject a script message (damage, frob, signal) into a specific entity.
+///
+/// Body is a tagged `DebugEntityMessage`, e.g. `{"type":"Damage","amount":1.0}`.
+async fn send_entity_message(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Path(id): Path<i32>,
+    Json(message): Json<shock2vr::game_scene::DebugEntityMessage>,
+) -> Json<CommandResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::SendEntityMessage {
+        id,
+        message,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send SendEntityMessage command - game loop receiver dropped");
+        return Json(CommandResult {
+            success: false,
+            message: "Game loop unavailable".to_string(),
+            data: None,
+        });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive send-message result - sender dropped");
+            Json(CommandResult {
+                success: false,
+                message: "No response from game loop".to_string(),
+                data: None,
+            })
         }
     }
 }

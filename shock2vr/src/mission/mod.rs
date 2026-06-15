@@ -279,6 +279,14 @@ impl crate::game_scene::DebuggableScene for Mission {
     fn pathfinding_test_status(&self) -> crate::game_scene::DebugPathfindingTestStatus {
         self.mission_core.pathfinding_test_status()
     }
+
+    fn send_entity_message(
+        &mut self,
+        id: EntityId,
+        message: crate::game_scene::DebugEntityMessage,
+    ) -> bool {
+        self.mission_core.send_entity_message(id, message)
+    }
 }
 
 /// Creates a physics collider from level geometry
