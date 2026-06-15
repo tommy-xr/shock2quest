@@ -839,10 +839,12 @@ fn process_command(
         }
         RuntimeCommand::EntityDetail { id, reply } => {
             let result = if let Some(debug_scene) = game.debug_scene() {
-                // Convert i32 id to EntityId
-                let entity_id = EntityId::new_from_index_and_gen(id as u64, 0);
-                debug_scene
-                    .entity_detail(entity_id)
+                // `id` is `EntityId::inner() as i32` (= index + 1) from the list
+                // endpoint; `from_inner` is its exact inverse. Using
+                // `new_from_index_and_gen(id, 0)` here resolved the wrong entity.
+                let entity_id = EntityId::from_inner(id as u64);
+                entity_id
+                    .and_then(|entity_id| debug_scene.entity_detail(entity_id))
                     .map(|detail| EntityDetailResult {
                         entity_id: detail.entity_id,
                         name: detail.name,
