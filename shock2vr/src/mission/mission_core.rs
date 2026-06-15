@@ -2860,6 +2860,35 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             test_path_waypoints,
         }
     }
+
+    fn send_entity_message(
+        &mut self,
+        id: EntityId,
+        message: crate::game_scene::DebugEntityMessage,
+    ) -> bool {
+        use crate::game_scene::DebugEntityMessage;
+        use shipyard::EntitiesView;
+
+        let is_alive = self
+            .world
+            .borrow::<EntitiesView>()
+            .map(|entities| entities.is_alive(id))
+            .unwrap_or(false);
+
+        if !is_alive {
+            tracing::warn!("send_entity_message: entity {:?} is not alive", id);
+            return false;
+        }
+
+        let payload = match message {
+            DebugEntityMessage::Damage { amount } => MessagePayload::Damage { amount },
+            DebugEntityMessage::Frob => MessagePayload::Frob,
+            DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
+        };
+
+        self.script_world.dispatch(Message { to: id, payload });
+        true
+    }
 }
 
 // Helper function for wildcard matching
