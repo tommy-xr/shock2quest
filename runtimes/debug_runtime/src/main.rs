@@ -90,6 +90,27 @@ struct Args {
     experimental: Option<String>,
 }
 
+/// Default debug-camera head rotation.
+///
+/// Matches the desktop runtime's default view orientation (`cargo dr`): at
+/// `yaw=0, pitch=0` the desktop camera forward is `(1,0,0)` fed through
+/// `look_at_rh`, so it looks toward `-X`. Mirroring it here keeps debug-runtime
+/// screenshots framed the same as what you see interactively on desktop.
+///
+/// TODO(camera-endpoint): make the debug camera aimable over HTTP - either a new
+/// `/v1/camera` endpoint or by honoring the head rotation in `/v1/control/input`
+/// - so an agent can point the camera at an arbitrary world point (e.g. wherever
+/// a ragdoll lands) instead of relying on this fixed default. Tracked in
+/// projects/debug-runtime.md.
+fn default_camera_head_rotation() -> Quaternion<f32> {
+    use cgmath::{Decomposed, Rotation, Transform, point3};
+    let forward = point3(1.0, 0.0, 0.0);
+    let up = vec3(0.0, 1.0, 0.0);
+    let decomposed: Decomposed<Vector3<f32>, Quaternion<f32>> =
+        Transform::look_at_rh(forward, point3(0.0, 0.0, 0.0), up);
+    decomposed.rot.invert()
+}
+
 /// Parse mission string (supports mission:spawn_location format)
 fn parse_mission(mission: &str) -> (String, SpawnLocation) {
     if !mission.contains(':') {
@@ -510,7 +531,7 @@ fn run_game_blocking(
             camera_offset: pawn_offset,
             camera_rotation: pawn_rotation,
             head_offset: vec3(0.0, 1.6 / SCALE_FACTOR, 0.0), // Default head height
-            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0), // Identity rotation
+            head_rotation: default_camera_head_rotation(),   // Match desktop default view (-X)
             projection_matrix,
             screen_size,
         };

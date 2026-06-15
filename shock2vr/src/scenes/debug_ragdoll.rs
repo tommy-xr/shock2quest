@@ -1,4 +1,4 @@
-use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, vec3};
 use dark::{SCALE_FACTOR, properties::PropTemplateId};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::{EntityId, IntoIter, IntoWithId};

@@ -297,6 +297,15 @@ curl -X POST http://127.0.0.1:8080/v1/screenshot \
 4. **Phase 7: CLI Tool** - Build out `debug_command` with all subcommands
 5. **Error Handling** - Standardize error responses with codes and suggestions
 6. **Documentation** - Add OpenAPI spec and usage examples
+7. **Aimable debug camera** - Let callers point the debug camera at an arbitrary
+   world position/orientation, so agents can frame whatever they're inspecting
+   (e.g. wherever a ragdoll lands) instead of relying on a fixed default view.
+   Either a new `/v1/camera` endpoint (set position + look-at target, or
+   position + rotation) or by honoring the head rotation already present in
+   `POST /v1/control/input`. Today the debug runtime hardcodes the camera head
+   rotation to the desktop default (`default_camera_head_rotation()` in
+   `runtimes/debug_runtime/src/main.rs`, looking toward -X); screenshots are only
+   representative when the subject happens to be in that default view.
 
 ## Technical Notes
 
