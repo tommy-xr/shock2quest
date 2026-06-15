@@ -7,6 +7,40 @@
 - Spawn a dedicated ragdoll entity on death that inherits the deceased model pose, then simulate it using Rapier rigid bodies and joints.
 - Keep visual skinning and hit detection in sync with the simulated skeleton so the corpse interacts believably with the world.
 
+## Current Status (2026-06-15): Broken — root causes identified
+
+The "✅ Implemented" markers on Parts 3–5 below are **misleading**: the rig was
+wired up end-to-end but is not convincing because it is broken, not merely
+untuned. Verified via the new physics-body introspection harness (run
+`debug_ragdoll`, frame-step ~30 frames, `GET /v1/physics/bodies?entity_id=<corpse>`):
+the ragdoll **explodes** — max linear speed ≈ 133, bodies driven from y≈1.8 down
+to y≈-904 (through the floor) within a few frames.
+
+Root causes in `shock2vr/src/creature/rag_doll.rs`:
+
+1. **Self-collision between jointed bodies.** Each bone body uses
+   `CollisionGroup::selectable()`, whose filter `ALL_COLLIDABLE` *includes*
+   `SELECTABLE`. Adjacent joint bodies spawn overlapping and the solver ejects
+   them every frame. Fix: disable contacts between jointed bodies (joint
+   `contacts_enabled(false)` or a self-excluding group). **This is the dominant bug.**
+2. **No joint limits.** Joints use `JointAxesMask::LOCKED_SPHERICAL_AXES` — a free
+   ball joint with no cone/twist/hinge limits, so the body folds through itself.
+3. **Colliders ignore hitboxes.** Every bone is a uniform `SharedShape::ball(0.06)`;
+   `model.get_hit_boxes()` is never consulted (Part 5's "derive capsules/boxes from
+   hitbox data" was never actually done). Limbs have no length/volume; mass is
+   uniform and tiny; `bone_frame_offsets` are all identity.
+4. (Separate, pre-existing) the hitbox AABBs in `hit_boxes.rs` are computed in model
+   space then re-offset by `bbox.center()` in joint-local space — likely mis-sized.
+
+Suggested fix order: (1) → (2) → (3). Each is now objectively verifiable via the
+harness (settled ragdoll = body speeds → ~0 and y near the floor).
+
+**Tooling unblocked (PR #276, branch `feat/debug-physics-body-introspection`):**
+`/v1/physics/bodies` now enumerates the raw Rapier `RigidBodySet` (was a stub),
+`?entity_id=N` scopes to one ragdoll, debug scenes are introspectable via
+`GameScene::as_debuggable()`, and `debug_ragdoll` spawns the ragdoll on a
+deterministic frame counter with a fixed camera aimed at the spawn.
+
 ## Files To Reference
 - shock2vr/src/physics/mod.rs
 - dark/src/ss2_skeleton.rs

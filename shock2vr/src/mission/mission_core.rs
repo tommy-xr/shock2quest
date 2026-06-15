@@ -2544,6 +2544,22 @@ fn play_environmental_sound(
 // DebuggableScene Implementation for MissionCore
 // ============================================================================
 
+impl MissionCore {
+    /// Build a lookup from `EntityId::inner() as i32` to symbolic name, matching
+    /// the id convention used by the entity-listing debug endpoints.
+    fn entity_names_by_inner(&self) -> std::collections::HashMap<i32, String> {
+        use shipyard::*;
+        let mut names = std::collections::HashMap::new();
+        self.world
+            .run(|v_sym_name: View<dark::properties::PropSymName>| {
+                for (entity_id, sym_name) in v_sym_name.iter().with_id() {
+                    names.insert(entity_id.inner() as i32, sym_name.0.clone());
+                }
+            });
+        names
+    }
+}
+
 impl crate::game_scene::DebuggableScene for MissionCore {
     fn list_entities(
         &self,
@@ -2805,22 +2821,68 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
     fn list_physics_bodies(
         &self,
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> Vec<crate::game_scene::DebugPhysicsBodySummary> {
-        // TODO: Implement physics body enumeration
-        // For now, return empty list as placeholder
-        tracing::warn!("Physics body enumeration not yet implemented");
-        vec![]
+        let names = self.entity_names_by_inner();
+        let mut bodies: Vec<_> = self
+            .physics
+            .debug_list_bodies()
+            .into_iter()
+            .map(|info| {
+                let entity_name = info.entity_id.and_then(|id| names.get(&id).cloned());
+                crate::game_scene::DebugPhysicsBodySummary {
+                    body_id: info.body_id,
+                    entity_id: info.entity_id,
+                    entity_name,
+                    body_type: info.body_type.to_string(),
+                    position: info.position,
+                    rotation: info.rotation,
+                    mass: Some(info.mass),
+                    velocity: info.linear_velocity,
+                    angular_velocity: info.angular_velocity,
+                    collision_groups: info.collision_groups,
+                    is_sensor: info.is_sensor,
+                    is_enabled: info.is_enabled,
+                }
+            })
+            .collect();
+
+        if let Some(limit) = limit {
+            bodies.truncate(limit);
+        }
+        bodies
     }
 
     fn physics_body_detail(
         &self,
-        _body_id: u32,
+        body_id: u32,
     ) -> Option<crate::game_scene::DebugPhysicsBodyDetail> {
-        // TODO: Implement physics body detail inspection
-        // For now, return None as placeholder
-        tracing::warn!("Physics body detail inspection not yet implemented");
-        None
+        let info = self.physics.debug_body_detail(body_id)?;
+        let entity_name = info
+            .entity_id
+            .and_then(|id| self.entity_names_by_inner().get(&id).cloned());
+        Some(crate::game_scene::DebugPhysicsBodyDetail {
+            body_id: info.body_id,
+            entity_id: info.entity_id,
+            entity_name,
+            body_type: info.body_type.to_string(),
+            position: info.position,
+            rotation: info.rotation,
+            linear_velocity: info.linear_velocity,
+            angular_velocity: info.angular_velocity,
+            mass: Some(info.mass),
+            center_of_mass: info.center_of_mass,
+            // Not yet surfaced from Rapier; velocity is the primary settle signal.
+            moment_of_inertia: None,
+            gravity_scale: info.gravity_scale,
+            linear_damping: info.linear_damping,
+            angular_damping: info.angular_damping,
+            collision_groups: info.collision_groups,
+            is_sensor: info.is_sensor,
+            is_enabled: info.is_enabled,
+            is_sleeping: info.is_sleeping,
+            contact_count: 0,
+        })
     }
 
     fn get_input_state(&self) -> crate::input_context::InputContext {

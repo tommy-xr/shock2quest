@@ -156,12 +156,20 @@ For debugging visual/rendering changes without a full interactive session:
 2. **Debug Runtime** (see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
 
    ```bash
-   # Start debug runtime
-   cargo dbgr -- --mission medsci1.mis --port 8080
+   # Start debug runtime. NOTE: do NOT add an extra `--` after `cargo dbgr` -
+   # the alias already ends in `--`, so `cargo dbgr -- --mission ...` passes a
+   # literal `--` to clap and fails with "unexpected argument '--mission'".
+   cargo dbgr --mission medsci1.mis --port 8080
 
    # Control via HTTP
    curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
    curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
+
+   # Inspect physics state (works for full missions AND debug_* scenes).
+   # Bodies are enumerated from Rapier directly, so many bodies can share one
+   # entity_id (e.g. ragdoll limbs) - use ?entity_id=N to scope to one entity.
+   curl "http://127.0.0.1:8080/v1/physics/bodies?entity_id=4"
+   curl http://127.0.0.1:8080/v1/physics/bodies/12   # detail by body_id
 
    # Trigger discrete input actions (same actions as desktop keybindings)
    curl http://127.0.0.1:8080/v1/input/actions
@@ -174,6 +182,12 @@ For debugging visual/rendering changes without a full interactive session:
    # IMPORTANT: Always shut down when done to avoid interfering with user's session
    curl -X POST http://127.0.0.1:8080/v1/shutdown
    ```
+
+   **Stepping & determinism**: time-based stepping (`-d '{"duration":"3s"}'`)
+   requires `-H 'Content-Type: application/json'`, and per-frame `delta_time` is
+   real wall-clock - a single frame after an idle period can carry a huge dt.
+   Prefer small frame batches (`{"frames": N}`) for deterministic, dt-independent
+   stepping; don't gate debug-scene logic on accumulated wall-clock time.
 
 3. **TypeScript SDK (`tools/shock2-sdk`)** — **preferred for multi-step testing and verification**. A Playwright-style wrapper over the debug runtime HTTP API that handles the full lifecycle: spawning the runtime, waiting for readiness, capturing logs, and automatic shutdown via `await using`. See `tools/shock2-sdk/README.md` for the full API.
 
@@ -213,10 +227,10 @@ For debugging visual/rendering changes without a full interactive session:
 
    ```bash
    # Use with debug runtime for programmatic control
-   cargo dbgr -- --mission debug_camera --port 8080
+   cargo dbgr --mission debug_camera --port 8080
    ```
 
-   Debug scenes are defined in `shock2vr/src/scenes/` and provide isolated environments for testing specific game systems without loading full missions.
+   Debug scenes are defined in `shock2vr/src/scenes/` and provide isolated environments for testing specific game systems without loading full missions. They are fully introspectable over HTTP (entities, physics bodies, raycast) just like real missions, via `GameScene::as_debuggable()`.
 
 ### Available Mission Files
 

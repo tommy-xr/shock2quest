@@ -922,12 +922,25 @@ fn process_command(
                 tracing::warn!("Failed to send entity message result - receiver dropped");
             }
         }
-        RuntimeCommand::ListPhysicsBodies { limit, reply } => {
+        RuntimeCommand::ListPhysicsBodies {
+            limit,
+            entity_id,
+            reply,
+        } => {
             if let Some(debug_scene) = game.debug_scene() {
-                let bodies = debug_scene.list_physics_bodies(limit);
+                // Fetch all bodies (limit applied after filtering), then scope to
+                // the requested entity id if one was provided.
+                let mut bodies = debug_scene.list_physics_bodies(None);
+                if let Some(entity_id) = entity_id {
+                    bodies.retain(|b| b.entity_id == Some(entity_id));
+                }
+                let total_count = bodies.len();
+                if let Some(limit) = limit {
+                    bodies.truncate(limit);
+                }
                 let player_pos = debug_scene.player_position();
                 let result = PhysicsBodyListResult {
-                    total_count: bodies.len(),
+                    total_count,
                     player_position: [player_pos.x, player_pos.y, player_pos.z],
                     bodies: bodies
                         .into_iter()
@@ -1514,6 +1527,8 @@ async fn perform_raycast(
 #[derive(Deserialize)]
 struct PhysicsBodyQueryParams {
     limit: Option<usize>,
+    /// Only return bodies whose owning entity id matches (scopes to one ragdoll).
+    entity_id: Option<i32>,
 }
 
 /// HTTP handler for listing physics bodies
@@ -1526,6 +1541,7 @@ async fn list_physics_bodies(
     // Send command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::ListPhysicsBodies {
         limit: params.limit,
+        entity_id: params.entity_id,
         reply: reply_tx,
     }) {
         tracing::error!("Failed to send ListPhysicsBodies command - game loop receiver dropped");

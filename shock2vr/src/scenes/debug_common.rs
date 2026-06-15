@@ -259,6 +259,14 @@ impl GameScene for DebugScene {
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.core.queue_entity_trigger(entity_name)
     }
+
+    fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {
+        Some(&self.core)
+    }
+
+    fn as_debuggable_mut(&mut self) -> Option<&mut dyn crate::game_scene::DebuggableScene> {
+        Some(&mut self.core)
+    }
 }
 
 pub trait DebugSceneHooks {
@@ -414,6 +422,14 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.core.queue_entity_trigger(entity_name)
+    }
+
+    fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {
+        Some(&self.core)
+    }
+
+    fn as_debuggable_mut(&mut self) -> Option<&mut dyn crate::game_scene::DebuggableScene> {
+        Some(&mut self.core)
     }
 }
 
