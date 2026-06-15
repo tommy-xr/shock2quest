@@ -45,6 +45,7 @@ The debug runtime binds to `127.0.0.1:8080` (localhost only) and provides a REST
 | `DebuggableScene` trait                 | ✅     |
 | Entity listing (`/v1/entities`)         | ✅     |
 | Entity detail (`/v1/entities/{id}`)     | ✅     |
+| Message injection (`/v1/entities/{id}/message`) | ✅ |
 | Name filtering with wildcards           | ✅     |
 | Distance-based sorting                  | ✅     |
 | Player position (`/v1/player/position`) | ✅     |
@@ -207,6 +208,7 @@ POST /v1/step             - Step simulation (frames or duration)
 POST /v1/shutdown         - Graceful shutdown
 GET  /v1/entities         - List entities (with ?limit=N&filter=pattern)
 GET  /v1/entities/{id}    - Entity details
+POST /v1/entities/{id}/message - Inject a script message (damage/frob/signal)
 GET  /v1/player/position  - Player position
 POST /v1/player/teleport  - Teleport player
 POST /v1/physics/raycast  - Physics raycast
@@ -251,6 +253,12 @@ curl -X POST http://127.0.0.1:8080/v1/step \
 
 # List entities
 curl "http://127.0.0.1:8080/v1/entities?limit=20&filter=*Door*"
+
+# Inject a script message into an entity (body is a tagged DebugEntityMessage:
+# {"type":"Damage","amount":N} | {"type":"Frob"} | {"type":"Signal","name":"..."})
+curl -X POST http://127.0.0.1:8080/v1/entities/122/message \
+  -H "Content-Type: application/json" \
+  -d '{"type": "Damage", "amount": 5.0}'
 
 # Teleport player
 curl -X POST http://127.0.0.1:8080/v1/player/teleport \
