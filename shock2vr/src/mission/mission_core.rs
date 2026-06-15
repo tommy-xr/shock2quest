@@ -2886,10 +2886,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
         };
 
-        self.script_world.dispatch(Message {
-            to: id,
-            payload,
-        });
+        self.script_world.dispatch(Message { to: id, payload });
         true
     }
 }
