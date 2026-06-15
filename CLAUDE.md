@@ -61,7 +61,6 @@ This is a Rust-based VR port of System Shock 2. Key components:
   - `dark_query/`, `dark_viewer/` - CLI tools for inspecting game data
   - `shock2-sdk/` - TypeScript SDK for driving the debug runtime (npm package)
   - `debug_command/` - CLI client for the debug runtime (placeholder)
-  - `shodan/` - Automation experiments
 
 ## Entity System Workflow
 

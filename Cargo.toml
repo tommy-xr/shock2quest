@@ -11,7 +11,6 @@ members = [
     "engine_ffmpeg",
     "shock2vr",
     "dark",
-    "tools/shodan",
     "tools/dark_viewer",
     "tools/dark_query",
     "tools/debug_command",
