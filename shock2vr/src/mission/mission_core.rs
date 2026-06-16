@@ -1052,6 +1052,12 @@ impl MissionCore {
             Err(_) => return,
         };
 
+        // Per-bone joint limits from the creature definition (empty for creatures
+        // without a humanoid skeleton -> ragdoll falls back to a uniform cone).
+        let joint_limits = crate::creature::get_entity_creature(&self.world, entity_id)
+            .map(|creature| creature.joint_limits.clone())
+            .unwrap_or_else(|| std::sync::Arc::new(std::collections::HashMap::new()));
+
         let offset = vec3(0.0, 1.0, 0.0);
         if self.rag_doll_manager.add_ragdoll(
             entity_id,
@@ -1059,6 +1065,7 @@ impl MissionCore {
             root_transform,
             &joint_transforms,
             offset,
+            &joint_limits,
             &mut self.physics,
         ) {
             println!("Spawned debug ragdoll for entity {:?}", entity_id);
