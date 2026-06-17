@@ -7,39 +7,86 @@
 - Spawn a dedicated ragdoll entity on death that inherits the deceased model pose, then simulate it using Rapier rigid bodies and joints.
 - Keep visual skinning and hit detection in sync with the simulated skeleton so the corpse interacts believably with the world.
 
-## Current Status (2026-06-15): Broken — root causes identified
+## Status & Investigation Log (2026-06-15)
 
-The "✅ Implemented" markers on Parts 3–5 below are **misleading**: the rig was
-wired up end-to-end but is not convincing because it is broken, not merely
-untuned. Verified via the new physics-body introspection harness (run
-`debug_ragdoll`, frame-step ~30 frames, `GET /v1/physics/bodies?entity_id=<corpse>`):
-the ragdoll **explodes** — max linear speed ≈ 133, bodies driven from y≈1.8 down
-to y≈-904 (through the floor) within a few frames.
+The rig had been wired end-to-end (Parts 3–5 below marked "✅") but was not
+convincing because it was **broken, not merely untuned**. This section records
+what was wrong, how we found it, and how each fix was verified. The "✅" markers
+on the historical plan further down are left as-is for context.
 
-Root causes in `shock2vr/src/creature/rag_doll.rs`:
+### How we test (the iteration loop)
 
-1. **Self-collision between jointed bodies.** Each bone body uses
-   `CollisionGroup::selectable()`, whose filter `ALL_COLLIDABLE` *includes*
-   `SELECTABLE`. Adjacent joint bodies spawn overlapping and the solver ejects
-   them every frame. Fix: disable contacts between jointed bodies (joint
-   `contacts_enabled(false)` or a self-excluding group). **This is the dominant bug.**
-2. **No joint limits.** Joints use `JointAxesMask::LOCKED_SPHERICAL_AXES` — a free
-   ball joint with no cone/twist/hinge limits, so the body folds through itself.
-3. **Colliders ignore hitboxes.** Every bone is a uniform `SharedShape::ball(0.06)`;
-   `model.get_hit_boxes()` is never consulted (Part 5's "derive capsules/boxes from
-   hitbox data" was never actually done). Limbs have no length/volume; mass is
-   uniform and tiny; `bone_frame_offsets` are all identity.
-4. (Separate, pre-existing) the hitbox AABBs in `hit_boxes.rs` are computed in model
-   space then re-offset by `bbox.center()` in joint-local space — likely mis-sized.
+All diagnosis was done **headlessly**, without watching a VR/desktop window, using
+the debug-runtime physics introspection added for this effort:
 
-Suggested fix order: (1) → (2) → (3). Each is now objectively verifiable via the
-harness (settled ragdoll = body speeds → ~0 and y near the floor).
+1. `cargo dbgr --mission debug_ragdoll --port N` (optionally `--debug-physics` to
+   draw colliders/joints). NOTE: no extra `--` after `cargo dbgr`.
+2. Frame-step in small deterministic batches (`POST /v1/step {"frames":10}`); the
+   scene kills the pipe hybrid and spawns the ragdoll at a fixed frame count.
+3. `GET /v1/physics/bodies?entity_id=<corpse>` and compute metrics over the
+   ragdoll's bodies: min/max **y** (floor penetration / launch), max/mean **linear
+   speed**, and max/mean **angular speed**.
+4. Interpretation: a healthy ragdoll **settles** (speeds → ~0, y near the floor);
+   a broken one either **explodes** (huge speed, y → large negative) or **diverges**
+   (speed *grows* over time = solver instability / energy injection).
+5. `POST /v1/screenshot` for a visual sanity check (camera matches desktop).
 
-**Tooling unblocked (PR #276, branch `feat/debug-physics-body-introspection`):**
-`/v1/physics/bodies` now enumerates the raw Rapier `RigidBodySet` (was a stub),
-`?entity_id=N` scopes to one ragdoll, debug scenes are introspectable via
-`GameScene::as_debuggable()`, and `debug_ragdoll` spawns the ragdoll on a
-deterministic frame counter with a fixed camera aimed at the spawn.
+### Findings, fixes, and verification (in order)
+
+1. **Spawn-time explosion — self-collision between jointed bodies.** Bodies used
+   `CollisionGroup::selectable()`, whose filter `ALL_COLLIDABLE` includes
+   `SELECTABLE`, so adjacent overlapping joint bodies ejected each other every
+   frame. **Fix:** new `CollisionGroup::ragdoll()` (members `SELECTABLE`, filter
+   `WORLD` only) — limbs hit the floor but never each other. **Verified:** max
+   speed 133 → ~1.8, y −904 → resting on floor. (PR #277)
+
+2. **Limbs were point-balls (flat puddle).** `model.get_hit_boxes()` was never
+   used. **Fix:** size each limb collider as a cuboid from the joint's hitbox
+   AABB, offset to the box center in joint-local space (body origin stays at the
+   joint so skinning is unaffected). **Verified:** limb-shaped boxes visible under
+   `--debug-physics`. (PR #278)
+
+3. **New instability after (2): the rig flailed and limbs spun forever and never
+   settled.** Root cause = **mass ratio**, not collision or joint limits. Box
+   sizing produced masses from ~0.0009 (extremity) to ~0.33 (torso), a **~365:1**
+   ratio, and Rapier's impulse-joint solver injects energy with large connected-
+   body mass ratios. **Diagnosis:** measured angular speed *climbing past 88 rad/s
+   and diverging*; reproduced with joint limits removed (so limits were not the
+   cause) and with damping-only (still diverged). **Fix:** derive per-collider
+   density for a **uniform target mass** (~1:1 ratios; inertia still scales with
+   shape) + linear/angular **damping**. **Verified:** angular speed now *decreases*
+   and fully settles (max angular → ~0.0, max linear ~0.3). (PR #278)
+
+#### Hypotheses ruled out
+
+- **Ragdoll colliding with the unremoved creature capsule / its AI hitboxes:** no.
+  The ragdoll group filters to `WORLD` only; the creature capsule is `ENTITY` and
+  its hitboxes are `HITBOX`, so the bidirectional group check fails both ways.
+- **Joint limits causing the spin-up:** no — divergence reproduced with limits
+  removed. (Naive limits *do* cause a separate problem, see below.)
+- **Rapier version:** did not upgrade (0.19 → 0.33 is a large breaking jump; a
+  newer solver might mask but wouldn't fix an extreme-mass-ratio config).
+
+### Remaining work (subsequent PRs on the stack)
+
+1. **Per-bone joint limits.** Joints are still free spherical
+   (`LOCKED_SPHERICAL_AXES`, no angular limits), so the body folds flat.
+   **Prerequisite:** naive per-axis limits inject energy because the limit "zero"
+   is measured from identity joint frames, not the bind pose — must set
+   `local_frame1/2` to the rest relative orientation first, then apply limits
+   measured from there. Per-bone limit profiles belong in the creature definitions
+   (`creature/creature_definitions.rs`), which already map each joint id to a
+   semantic role (`HUMANOID_HIT_BOXES`: Head/Neck/Abdomen/Shoulder/Elbow/Knee/…).
+2. **Seamless death→ragdoll handoff.** `debug_ragdoll` (and real death) should
+   remove the original creature and spawn the ragdoll from the creature's *current*
+   bone world transforms (no +1-unit debug offset), so the corpse takes over in
+   place instead of standing alongside a separate ragdoll.
+
+**Tooling unblocked (PR #276, merged):** `/v1/physics/bodies` enumerates the raw
+Rapier `RigidBodySet` (was a stub), `?entity_id=N` scopes to one ragdoll, debug
+scenes are introspectable via `GameScene::as_debuggable()`, and `debug_ragdoll`
+spawns the ragdoll on a deterministic frame counter with a fixed camera matching
+the desktop default view.
 
 ## Files To Reference
 - shock2vr/src/physics/mod.rs
