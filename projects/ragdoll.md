@@ -107,15 +107,28 @@ verification harness and the headline realism fix are now done; the rest remain.
    `contacts_enabled(false)` on each joint so *directly jointed* pairs don't
    re-explode. **Verified:** `max_nonadjacent_overlap` 0.44 → 0.24 while staying
    settled (max linear ~0.03, max angular ~0.34, no floor penetration).
-3. **Hitbox-fit validation across the model corpus — next.** The residual ~0.24
-   overlap is largely from oversized hitbox AABBs (limb boxes bigger than the mesh;
-   Delta 4 in the investigation log). Build an offline check (extend
-   `dark_query`/`dark_viewer`, or a test) that, for every creature `.bin` per
-   ActorType, evaluates fit: % of a joint's skinned vertices contained in its box,
-   box oversize ratio vs. the vert cloud, and overlap between sibling boxes.
-   Surface outliers so we can fix the worst-fitting joints (and validate that the
-   model-space AABB + joint-local-center placement is geometrically right). Should
-   drive `max_nonadjacent_overlap` down further; may also move limbs to capsules.
+3. **Hitbox-fit validation across the model corpus — in progress.**
+   - ✅ **Reference check (background agent):** the Dark engine has *no* authored
+     per-joint collision data. Whole-body collision is a 1–2 sphere "SphereHat" /
+     OBB (`sPhysDimsProp`, whole creature only); damage hit-location is a raycast
+     against animated mesh polygons → segment index. The LGMM `mms_segment.bbox`
+     field is never populated; `.cal` skeletons store joint positions + bone
+     lengths/directions but **no limb thickness**. Conclusion: mesh-derived shapes
+     are the source of truth — the recommended upgrade is **oriented (bone-aligned)
+     boxes/capsules** instead of axis-aligned (AABBs inflate for diagonal limbs),
+     keeping `HUMANOID_HIT_BOXES` as the semantic (damage-role) layer.
+   - ✅ **`hitbox_analyzer` tool v1 (PR #285, off main):** `cargo run -p
+     hitbox_analyzer -- <mesh|dir>` reports per joint the AABB vs an oriented (PCA)
+     bound and the "inflation" (AABB vol / OBB vol). Added
+     `SystemShock2AIMesh::joint_vertex_positions()` to `dark`. Finding: limbs are
+     ~1.0× in the standing bind pose; the diagonally-held weapon joint is ~2.3×
+     (GRUNT_P), confirming oriented colliders help most for off-axis limbs.
+   - **Next (v2):** the ragdoll's colliders live in the *joint-local* frame, so the
+     directly-relevant analysis is the AABB in joint-local space (needs the `.cal`
+     skeleton bind orientations), emitting **recommended oriented box / capsule
+     sizes per joint** to feed back into `rag_doll.rs`. Then switch the ragdoll
+     from axis-aligned cuboids to those oriented shapes and re-measure
+     `max_nonadjacent_overlap`.
 4. **Handoff pose-continuity / skinning convention.** Physics placement at handoff
    is exact *by construction* (corpse seeded from the same `world_joint_transforms`
    the renderer skins with; `max_drift` ≈ 0 right after spawn confirms no snap). The
