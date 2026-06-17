@@ -14,6 +14,7 @@ members = [
     "tools/dark_viewer",
     "tools/dark_query",
     "tools/debug_command",
+    "tools/hitbox_analyzer",
 ]
 
 [workspace.lints.rust]
