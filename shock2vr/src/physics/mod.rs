@@ -86,16 +86,20 @@ impl CollisionGroup {
     }
 
     /// Collision group for ragdoll limb bodies. Members are `SELECTABLE` (so
-    /// they remain raycast/selectable), but they only *collide* with `WORLD`
-    /// geometry. Crucially the filter excludes `SELECTABLE` itself, so ragdoll
-    /// limbs do not self-collide - adjacent jointed bodies that spawn slightly
-    /// overlapping would otherwise be violently ejected by the solver every
-    /// frame (the ragdoll "explosion"). It also avoids fighting the leftover
-    /// creature capsule (`ENTITY`) and per-joint hitboxes (`HITBOX`).
+    /// they remain raycast/selectable) and collide with `WORLD` geometry *and*
+    /// each other (`SELECTABLE`), so limbs don't pass through the torso/head.
+    ///
+    /// Limb-vs-limb collision between *directly jointed* bodies is disabled at the
+    /// joint level (`contacts_enabled(false)`), not here - otherwise adjacent
+    /// bodies that spawn slightly overlapping get violently ejected (the original
+    /// ragdoll "explosion"). The filter still excludes the leftover creature
+    /// capsule (`ENTITY`) and per-joint hitboxes (`HITBOX`).
     pub fn ragdoll() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
-            filter: InternalCollisionGroups::WORLD.bits.into(),
+            filter: (InternalCollisionGroups::WORLD.bits
+                | InternalCollisionGroups::SELECTABLE.bits)
+                .into(),
         })
     }
 }
