@@ -1,0 +1,16 @@
+[package]
+name = "hitbox_analyzer"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "hitbox_analyzer"
+path = "src/main.rs"
+
+[dependencies]
+dark = { path = "../../dark" }
+cgmath = "0.18.0"
+nalgebra = "0.32"
+clap = { version = "4.5.4", features = ["derive"] }
+anyhow = "1.0"
+glob = "0.3"
