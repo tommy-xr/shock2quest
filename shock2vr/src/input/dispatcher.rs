@@ -46,6 +46,9 @@ impl ActionDispatcher {
                 head_rotation: input_context.head.rotation,
             });
         }
+        if state.just_triggered(InputAction::DebugHitboxCyclePose) {
+            effects.push(Effect::DebugCycleHitboxPose);
+        }
 
         effects
     }

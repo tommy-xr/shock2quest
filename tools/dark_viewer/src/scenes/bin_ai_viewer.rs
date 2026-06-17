@@ -46,6 +46,7 @@ pub struct BinAiViewerScene {
     animation_player: AnimationPlayer,
     animation_controller: Option<AnimationController>,
     debug_skeletons: bool,
+    debug_hit_boxes: bool,
 }
 
 impl BinAiViewerScene {
@@ -54,6 +55,7 @@ impl BinAiViewerScene {
         clip_names: Vec<String>,
         asset_cache: &mut AssetCache,
         debug_skeletons: bool,
+        debug_hit_boxes: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let model = asset_cache.get(&MODELS_IMPORTER, mesh_file_path.as_str());
 
@@ -72,6 +74,7 @@ impl BinAiViewerScene {
             animation_player,
             animation_controller: Some(controller),
             debug_skeletons,
+            debug_hit_boxes,
         })
     }
 }
@@ -110,6 +113,7 @@ impl ToolScene for BinAiViewerScene {
             Some(&self.animation_player),
             objects,
             self.debug_skeletons,
+            self.debug_hit_boxes,
         )
     }
 }

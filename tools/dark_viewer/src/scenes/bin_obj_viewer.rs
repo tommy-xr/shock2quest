@@ -18,6 +18,7 @@ pub struct BinObjViewerScene {
     total_time: Duration,
     animation_player: AnimationPlayer,
     debug_skeletons: bool,
+    debug_hit_boxes: bool,
 }
 
 impl BinObjViewerScene {
@@ -25,6 +26,7 @@ impl BinObjViewerScene {
         model_name: String,
         _asset_cache: &AssetCache,
         debug_skeletons: bool,
+        debug_hit_boxes: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // We don't load the model here, we'll load it during render using the asset cache
         let mut animation_player = AnimationPlayer::empty();
@@ -39,6 +41,7 @@ impl BinObjViewerScene {
             total_time: Duration::ZERO,
             animation_player,
             debug_skeletons,
+            debug_hit_boxes,
         })
     }
 }
@@ -76,6 +79,7 @@ impl ToolScene for BinObjViewerScene {
             Some(&self.animation_player),
             turret_scene_objects,
             self.debug_skeletons,
+            self.debug_hit_boxes,
         )
     }
 }

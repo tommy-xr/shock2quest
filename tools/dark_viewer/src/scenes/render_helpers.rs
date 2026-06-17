@@ -6,14 +6,22 @@ use engine::scene::{
     cube, lines_mesh,
 };
 
-/// Compose a scene for a model, optionally overlaying debug skeletons
+/// Color of the fitted hit-box wireframe overlay (bright green).
+const HIT_BOX_OVERLAY_COLOR: Vector3<f32> = Vector3::new(0.2, 1.0, 0.3);
+
+/// Compose a scene for a model, optionally overlaying debug skeletons and/or the
+/// fitted per-joint hit-box shapes (`dark::hit_box`). The hit-box overlay renders
+/// exactly what `fit_hit_box_shapes` produced, transformed by the live joint
+/// transforms - so it tracks the animated mesh and reveals fit/mapping issues
+/// independent of the physics ragdoll.
 pub fn build_model_scene_with_debug_skeletons(
     model: &Model,
     animation_player: Option<&AnimationPlayer>,
     mut objects: Vec<SceneObject>,
     debug_skeletons: bool,
+    debug_hit_boxes: bool,
 ) -> Scene {
-    if debug_skeletons && model.is_animated() {
+    if (debug_skeletons || debug_hit_boxes) && model.is_animated() {
         if let Some(player) = animation_player {
             objects.iter_mut().for_each(|obj| {
                 obj.set_depth_write(false);
@@ -27,8 +35,19 @@ pub fn build_model_scene_with_debug_skeletons(
                 .map(|joint| model_transform * *joint)
                 .collect();
 
-            let mut debug_skeleton = model.draw_debug_skeleton(&world_joints);
-            objects.append(&mut debug_skeleton);
+            if debug_skeletons {
+                let mut debug_skeleton = model.draw_debug_skeleton(&world_joints);
+                objects.append(&mut debug_skeleton);
+            }
+
+            if debug_hit_boxes {
+                let mut debug_hit_boxes = dark::hit_box::draw_debug_hit_box_shapes(
+                    &model.hit_box_shapes(),
+                    &world_joints,
+                    HIT_BOX_OVERLAY_COLOR,
+                );
+                objects.append(&mut debug_hit_boxes);
+            }
         }
     }
 

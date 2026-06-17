@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use cgmath::{InnerSpace, Matrix4, Point3, SquareMatrix, Vector3, Vector4};
+use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
 
 use crate::motion::JointId;
 use crate::ss2_bin_ai_loader::SystemShock2AIMesh;
@@ -145,4 +146,170 @@ fn point_segment_distance(p: Vector3<f32>, a: Vector3<f32>, b: Vector3<f32>) -> 
     }
     let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
     (p - (a + ab * t)).magnitude()
+}
+
+// ---------------------------------------------------------------------------
+// Debug rendering
+// ---------------------------------------------------------------------------
+
+/// Number of segments per ring/arc in the capsule wireframe.
+const WIRE_SEGMENTS: usize = 12;
+
+/// Build a line-list wireframe of the per-joint fitted shapes, each transformed
+/// by its joint's world matrix (`world_joints[joint_id]`). Mirrors
+/// `Skeleton::debug_draw`: a single `SceneObject` of colored lines that overlays
+/// the animated mesh. Shared by `dark_viewer --debug-hitboxes` and the
+/// `debug_hitbox` scene so both render exactly what `fit_hit_box_shapes`
+/// produced (no physics round-trip), which separates a fit/mapping bug from a
+/// ragdoll-conversion bug.
+pub fn draw_debug_hit_box_shapes(
+    shapes: &HashMap<JointId, HitBoxShape>,
+    world_joints: &[Matrix4<f32>],
+    color: Vector3<f32>,
+) -> Vec<SceneObject> {
+    let mut verts: Vec<VertexPosition> = Vec::new();
+
+    for (joint, shape) in shapes {
+        let idx = *joint as usize;
+        if idx >= world_joints.len() {
+            continue;
+        }
+        let xform = world_joints[idx];
+        match shape {
+            HitBoxShape::Cuboid {
+                half_extents,
+                center,
+            } => append_box_lines(&mut verts, &xform, *center, *half_extents),
+            HitBoxShape::Capsule { a, b, radius } => {
+                append_capsule_lines(&mut verts, &xform, *a, *b, *radius)
+            }
+        }
+    }
+
+    if verts.is_empty() {
+        return Vec::new();
+    }
+
+    vec![SceneObject::new(
+        color_material::create(color),
+        Box::new(lines_mesh::create(verts)),
+    )]
+}
+
+/// Transform a joint-local point to world space (homogeneous, w=1).
+fn xform_point(xform: &Matrix4<f32>, p: Vector3<f32>) -> Vector3<f32> {
+    let c = xform * Vector4::new(p.x, p.y, p.z, 1.0);
+    Vector3::new(c.x, c.y, c.z)
+}
+
+fn push_segment(verts: &mut Vec<VertexPosition>, xform: &Matrix4<f32>, a: Vector3<f32>, b: Vector3<f32>) {
+    verts.push(VertexPosition {
+        position: xform_point(xform, a),
+    });
+    verts.push(VertexPosition {
+        position: xform_point(xform, b),
+    });
+}
+
+/// 12 edges of an axis-aligned box (joint-local), transformed by `xform`.
+fn append_box_lines(
+    verts: &mut Vec<VertexPosition>,
+    xform: &Matrix4<f32>,
+    center: Vector3<f32>,
+    he: Vector3<f32>,
+) {
+    // 8 corners.
+    let mut corner = [Vector3::new(0.0, 0.0, 0.0); 8];
+    let mut i = 0;
+    for sx in [-1.0f32, 1.0] {
+        for sy in [-1.0f32, 1.0] {
+            for sz in [-1.0f32, 1.0] {
+                corner[i] = center + Vector3::new(sx * he.x, sy * he.y, sz * he.z);
+                i += 1;
+            }
+        }
+    }
+    // Index layout: bit2=x, bit1=y, bit0=z.
+    let edges = [
+        (0, 1),
+        (0, 2),
+        (0, 4),
+        (1, 3),
+        (1, 5),
+        (2, 3),
+        (2, 6),
+        (3, 7),
+        (4, 5),
+        (4, 6),
+        (5, 7),
+        (6, 7),
+    ];
+    for (s, e) in edges {
+        push_segment(verts, xform, corner[s], corner[e]);
+    }
+}
+
+/// Capsule wireframe (joint-local) between `a` and `b`: end rings, longitudinal
+/// lines, and two great-circle arcs over each hemispherical cap.
+fn append_capsule_lines(
+    verts: &mut Vec<VertexPosition>,
+    xform: &Matrix4<f32>,
+    a: Vector3<f32>,
+    b: Vector3<f32>,
+    radius: f32,
+) {
+    let axis_vec = b - a;
+    let len = axis_vec.magnitude();
+    if len < 1e-5 {
+        return;
+    }
+    let axis = axis_vec / len;
+    // Two unit vectors perpendicular to the axis.
+    let mut helper = Vector3::new(0.0, 1.0, 0.0);
+    if axis.dot(helper).abs() > 0.99 {
+        helper = Vector3::new(1.0, 0.0, 0.0);
+    }
+    let u = axis.cross(helper).normalize();
+    let v = axis.cross(u).normalize();
+
+    let ring = |center: Vector3<f32>| -> Vec<Vector3<f32>> {
+        (0..WIRE_SEGMENTS)
+            .map(|k| {
+                let t = (k as f32) / (WIRE_SEGMENTS as f32) * std::f32::consts::TAU;
+                center + (u * t.cos() + v * t.sin()) * radius
+            })
+            .collect()
+    };
+
+    let ring_a = ring(a);
+    let ring_b = ring(b);
+
+    // End rings.
+    for r in [&ring_a, &ring_b] {
+        for k in 0..WIRE_SEGMENTS {
+            push_segment(verts, xform, r[k], r[(k + 1) % WIRE_SEGMENTS]);
+        }
+    }
+    // Longitudinal lines at 4 evenly spaced angles.
+    for k in (0..WIRE_SEGMENTS).step_by(WIRE_SEGMENTS / 4) {
+        push_segment(verts, xform, ring_a[k], ring_b[k]);
+    }
+    // Hemispherical caps: semicircle arcs over each end, in the (axis,u) and
+    // (axis,v) planes, bulging away from the segment.
+    let arc = |center: Vector3<f32>, plane: Vector3<f32>, cap_dir: Vector3<f32>| {
+        let mut pts = Vec::with_capacity(WIRE_SEGMENTS + 1);
+        for k in 0..=WIRE_SEGMENTS {
+            let t = (k as f32) / (WIRE_SEGMENTS as f32) * std::f32::consts::PI;
+            pts.push(center + (plane * t.cos() + cap_dir * t.sin()) * radius);
+        }
+        pts
+    };
+    for (center, cap_dir) in [(a, -axis), (b, axis)] {
+        for plane in [u, v] {
+            let pts = arc(center, plane, cap_dir);
+            for k in 0..WIRE_SEGMENTS {
+                push_segment(verts, xform, pts[k], pts[k + 1]);
+            }
+        }
+    }
 }

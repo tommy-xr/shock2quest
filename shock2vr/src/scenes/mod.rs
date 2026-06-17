@@ -22,6 +22,7 @@ pub mod cutscene_player;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gloves;
+pub mod debug_hitbox;
 pub mod debug_hud;
 pub mod debug_joint_constraint;
 pub mod debug_map;
@@ -34,6 +35,7 @@ pub mod hand_pose;
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_gloves::DebugGlovesScene;
+pub use debug_hitbox::DebugHitboxScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_joint_constraint::DebugJointConstraintScene;
 pub use debug_map::DebugMapScene;
@@ -151,6 +153,13 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("debug_ragdoll") {
         return SceneInitResult {
             scene: DebugRagdollScene::new(global_context, options, asset_cache, audio_context),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_hitbox") {
+        return SceneInitResult {
+            scene: DebugHitboxScene::new(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }

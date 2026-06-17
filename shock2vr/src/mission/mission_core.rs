@@ -184,6 +184,9 @@ pub struct MissionCore {
     pub pathfinding_service: Option<PathfindingService>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
+    /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
+    /// the next animation deterministically (debug hitbox inspection).
+    pub debug_pose_index: u32,
 }
 
 pub struct GlobalContext {
@@ -435,6 +438,7 @@ impl MissionCore {
                 .map(|db| PathfindingService::new(Arc::new(db.clone()))),
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
+            debug_pose_index: 0,
         }
     }
 
@@ -1318,6 +1322,48 @@ impl MissionCore {
                                 });
                             }
                         }
+                    }
+                }
+
+                Effect::DebugCycleHitboxPose => {
+                    // Advance every creature to the next pose in a fixed playlist of
+                    // distinct biped-human clips, so repeated triggers walk
+                    // deterministically through clearly-different poses. Used by the
+                    // `debug_hitbox` scene to inspect per-joint hitbox/ragdoll fit
+                    // across poses. We load clips by name directly (as `dark_viewer`
+                    // does) rather than via the tag-based motion query, which needs
+                    // an AI intent we don't have here.
+                    const DEBUG_POSE_CLIPS: &[&str] = &[
+                        "bh111005", // stand / idle
+                        "BH111001", // gesture
+                        "BH112020", // locomotion
+                        "bh114001", // action
+                        "BH413001", // combat
+                        "BH212oo8", // reach
+                    ];
+                    let clip_name = DEBUG_POSE_CLIPS[self.debug_pose_index as usize % DEBUG_POSE_CLIPS.len()];
+
+                    let creature_ids: Vec<EntityId> = {
+                        let v_creature = self.world.borrow::<View<PropCreature>>().unwrap();
+                        self.id_to_animation_player
+                            .keys()
+                            .filter(|id| v_creature.get(**id).is_ok())
+                            .copied()
+                            .collect()
+                    };
+
+                    if let Some(clip) =
+                        asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{clip_name}_.mc"))
+                    {
+                        for entity_id in creature_ids {
+                            if let Some(player) = self.id_to_animation_player.get_mut(&entity_id) {
+                                *player = AnimationPlayer::queue_animation(player, clip.clone());
+                            }
+                        }
+                        self.debug_pose_index = self.debug_pose_index.wrapping_add(1);
+                        game_log!(INFO, "[debug_hitbox] cycled to pose '{}'", clip_name);
+                    } else {
+                        game_log!(WARN, "[debug_hitbox] missing pose clip '{}_.mc'", clip_name);
                     }
                 }
 
