@@ -77,29 +77,25 @@ analyzer's adjacency before tuning shapes or you'll chase a phantom.
 
 ## Open issues / next work
 
-1. **Runtime capsule misplacement — thighs don't connect torso→knee.** In
-   `debug_ragdoll --debug-physics` some capsules (notably the thighs) point off-
-   axis and don't reach the child body, even though the **bind-pose analyzer shows
-   100% coverage**. So the *fit* is right but the *runtime placement* is wrong.
+1. **Construction is correct — the "thigh misplacement" is NOT a construction
+   bug (resolved 2026-06-17).** Verified end-to-end with the new `debug_hitbox`
+   scene and the actual ragdoll:
+   - **Fit** is right (green overlay tracks the mesh limbs in every pose; analyzer
+     100% coverage).
+   - **Conversion is faithful.** The scene's *red* overlay (shapes placed by
+     `add_ragdoll`'s decomposed `(position, get_rotation_from_matrix)`) was measured
+     against *green* (shapes by the full joint matrix) for **every joint**:
+     `green ≡ red`, with all joint matrices reporting column scale **1.000** and a
+     **unit** quaternion. So `get_rotation_from_matrix` is *not* scale-contaminated
+     here and the earlier "bind-vs-spawn / scale" hypotheses are both **wrong**.
+   - **`debug_ragdoll --debug-physics` at the spawn frame** shows all Rapier
+     colliders — head, torso boxes, arms, **thighs**, feet — correctly on the mesh.
 
-   **Analysis (2026-06-17): the doc's leading "bind-vs-spawn" hypothesis is almost
-   certainly NOT the cause.** Working the math: `fit_hit_box_shapes` sets the
-   capsule far endpoint `b = inv(bind_world[parent]) · bind_world[child]`, which
-   reduces to the child's *local bone offset* `L`. At spawn the body is oriented at
-   `R_anim[parent]`, so the capsule points along `R_anim[parent]·b = R_anim[parent]·L
-   = child_anim − parent_anim` — i.e. **reach is pose-independent** and `b` need not
-   be re-derived. The real suspect is the **conversion**: `add_ragdoll` sets body
-   orientation via `get_rotation_from_matrix` (`util.rs`), which shoves the raw
-   upper-3×3 into `Matrix3→Quaternion` with **no orthonormalization**. If the joint
-   world matrices carry any scale/shear (these meshes use `SCALE_FACTOR`), the
-   extracted rotation is wrong *and* the unscaled local `b` is the wrong length →
-   capsules point off-axis and fall short. This is the hitbox→ragdoll conversion,
-   not the joint/hitbox mapping.
-
-   The new `debug_hitbox` scene (below) renders both placements side by side to
-   confirm: **green** = shapes by the full joint matrix (tracks the mesh), **red** =
-   shapes by `add_ragdoll`'s decomposed `(position, get_rotation_from_matrix)`.
-   Where red diverges from green, the conversion is at fault.
+   What *does* go wrong: after ~15+ frames of simulation a single **cuboid** body
+   separates and floats off (`rag_settle` screenshot). That is a **dynamics**
+   problem (a body the joint chain fails to hold), not collider construction. Next
+   step is to identify the detaching body/joint (root/abdomen cuboid?) and why its
+   impulse joint doesn't constrain it — *not* a change to the placement math.
 2. **Wire `HitBoxShape` into `HitBoxManager`** (damage hitboxes). `add_kinematic`
    currently takes a box size; needs capsule support. Fixes location-based damage
    coverage too (same root cause).
@@ -112,8 +108,9 @@ analyzer's adjacency before tuning shapes or you'll chase a phantom.
    `--debug-skeletons`. The shared wireframe renderer is
    `dark::hit_box::draw_debug_hit_box_shapes`, also wired into
    `dark_viewer --debug-hitboxes` (physics-free, animatable via `--animation`) as
-   the fastest fit-only diagnostic. Remaining: act on the red/green divergence to
-   fix the conversion (`get_rotation_from_matrix` / scale handling).
+   the fastest fit-only diagnostic. Used to prove construction is correct (#1);
+   now the regression check for the ragdoll-dynamics work (red should stay on
+   green, colliders should stay on the mesh).
 4. **Overlap / bounds tuning** — overall overlap is low (4%) but some shapes are
    loose (LThigh 24%; head bounds look big visually). Levers: tighten capsule
    radius (e.g. high-percentile instead of max vertex distance), inset endpoints,
