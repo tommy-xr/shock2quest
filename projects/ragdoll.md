@@ -117,18 +117,27 @@ verification harness and the headline realism fix are now done; the rest remain.
      are the source of truth — the recommended upgrade is **oriented (bone-aligned)
      boxes/capsules** instead of axis-aligned (AABBs inflate for diagonal limbs),
      keeping `HUMANOID_HIT_BOXES` as the semantic (damage-role) layer.
-   - ✅ **`hitbox_analyzer` tool v1 (PR #285, off main):** `cargo run -p
-     hitbox_analyzer -- <mesh|dir>` reports per joint the AABB vs an oriented (PCA)
-     bound and the "inflation" (AABB vol / OBB vol). Added
-     `SystemShock2AIMesh::joint_vertex_positions()` to `dark`. Finding: limbs are
-     ~1.0× in the standing bind pose; the diagonally-held weapon joint is ~2.3×
-     (GRUNT_P), confirming oriented colliders help most for off-axis limbs.
-   - **Next (v2):** the ragdoll's colliders live in the *joint-local* frame, so the
-     directly-relevant analysis is the AABB in joint-local space (needs the `.cal`
-     skeleton bind orientations), emitting **recommended oriented box / capsule
-     sizes per joint** to feed back into `rag_doll.rs`. Then switch the ragdoll
-     from axis-aligned cuboids to those oriented shapes and re-measure
-     `max_nonadjacent_overlap`.
+   - ✅ **`hitbox_analyzer` tool (PR #285, off main):** `cargo run -p
+     hitbox_analyzer -- <mesh|dir>`. Added
+     `SystemShock2AIMesh::joint_vertex_positions()` to `dark`. v2 loads each mesh's
+     `.cal` skeleton and reports, per joint: current model-space AABB, recommended
+     **joint-local** AABB + center, inflation (model/local vol), and a recommended
+     capsule (axis/radius/half-height).
+   - ⚠️ **Surprising v2 result — oriented boxes do NOT reduce volume for SS2.**
+     Across all creatures inflation ≈ 1.00× and the joint-local dims are the model
+     dims with axes **permuted**: SS2 bind rotations are axis-aligned (~90° swaps),
+     so a bone-aligned box is the same volume as the AABB. The earlier ~2.3× from
+     the v1 PCA bound was vs a *PCA* orientation, which the collider can't use (it
+     must live in the joint frame).
+   - ➡️ **The real, actionable bug it surfaced:** `rag_doll.rs` sizes colliders
+     from **model-space** `bbox.dim()`/`bbox.center()` but attaches them in the
+     **joint** frame, so the box is mis-oriented (long axis pointing the wrong way)
+     and mis-offset (e.g. GRUNT_P model `0.54,0.17,0.18` vs joint-local
+     `0.18,0.17,0.54`). **Next ragdoll PR:** transform each joint's hitbox verts by
+     the joint bind transform before computing the collider dims + center (use the
+     tool's "local dim"/"local center"), then re-measure `max_nonadjacent_overlap`.
+     Validate distal joints with large local centers (e.g. toe) visually under
+     `--debug-physics`.
 4. **Handoff pose-continuity / skinning convention.** Physics placement at handoff
    is exact *by construction* (corpse seeded from the same `world_joint_transforms`
    the renderer skins with; `max_drift` ≈ 0 right after spawn confirms no snap). The
