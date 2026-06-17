@@ -80,7 +80,22 @@ the debug-runtime physics introspection added for this effort:
 2. **Seamless death→ragdoll handoff.** `debug_ragdoll` (and real death) should
    remove the original creature and spawn the ragdoll from the creature's *current*
    bone world transforms (no +1-unit debug offset), so the corpse takes over in
-   place instead of standing alongside a separate ragdoll.
+   place instead of standing alongside a separate ragdoll. Options for *when* to
+   hand off, simplest first:
+   - **Swap when the death animation finishes** (easiest, good fallback): let the
+     canned crumple animation play, then on its last frame capture the bone world
+     transforms, remove the animated creature, and spawn the ragdoll from that
+     pose. The body is mostly on the ground already, so the ragdoll just relaxes —
+     low risk of an ugly transition.
+   - **Swap at the moment of death** (more dynamic): skip/curtail the canned
+     animation and let physics do the fall, seeding the ragdoll bodies with the
+     creature's current linear/angular velocity (and ideally an impulse from the
+     killing blow) so it reacts to how it died.
+   - **Blend** animation→physics over a few frames for the smoothest result, but
+     this is the most complex (per-bone weight blend between animated and simulated
+     transforms) and only worth it if the hard swap looks jarring.
+   Prerequisite either way: the spawn-from-current-pose + creature-removal plumbing
+   above. Start with the finish-animation swap and only escalate if needed.
 
 **Tooling unblocked (PR #276, merged):** `/v1/physics/bodies` enumerates the raw
 Rapier `RigidBodySet` (was a stub), `?entity_id=N` scopes to one ragdoll, debug
