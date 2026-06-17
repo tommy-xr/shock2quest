@@ -1,17 +1,23 @@
 //! hitbox_analyzer
 //!
 //! Analyzes per-joint limb collision fit for System Shock 2 creature meshes
-//! (LGMM `.bin`). For each skeleton joint it compares the axis-aligned bounding
-//! box (AABB) of the joint's skinned vertices - which is what the ragdoll
-//! currently uses for limb colliders - against a tight *oriented* bound (OBB,
-//! via PCA of the vertex cloud). The ratio (AABB volume / OBB volume) is the
-//! "inflation": how much bigger the axis-aligned box is than a bone-aligned one.
+//! (LGMM `.bin`) and recommends tighter collider sizes for the ragdoll.
 //!
-//! Per the Dark engine reference, there is no authored per-joint collision data
+//! The ragdoll's limb colliders live in each joint's *local* frame (the body is
+//! oriented by the joint), so the box that actually matters is the bounding box
+//! of the joint's skinned vertices expressed in **joint-local space**, not model
+//! space. This tool loads the mesh + its `.cal` skeleton (bind pose), transforms
+//! each joint's vertices by the inverse of that joint's bind world transform, and
+//! reports:
+//!   - the current model-space (axis-aligned) AABB the ragdoll uses today,
+//!   - the recommended joint-local AABB (a bone-aligned box) + its center offset,
+//!   - the "inflation" (model vol / local vol) = how much the axis-aligned box
+//!     over-sizes vs a bone-aligned one,
+//!   - a recommended capsule (axis / radius / half-height) from the local box.
+//!
+//! Per the Dark engine reference there is no authored per-joint collision data
 //! (whole-body collision is a 1-2 sphere column; damage is a mesh raycast), so
-//! mesh-derived shapes are the source of truth. This tool quantifies where
-//! axis-aligned boxes inflate badly (diagonal limbs) and would benefit from
-//! oriented boxes / capsules, and reports recommended tight sizes.
+//! these mesh-derived shapes are the source of truth.
 
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
@@ -19,11 +25,11 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use cgmath::Point3;
+use cgmath::{Matrix4, Point3, SquareMatrix};
 use clap::Parser;
 use dark::ss2_bin_ai_loader::{self, SystemShock2AIMesh};
 use dark::ss2_bin_header::{self, BinFileType};
-use nalgebra::{Matrix3, Vector3};
+use dark::{ss2_cal_loader, ss2_skeleton};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -32,26 +38,31 @@ use nalgebra::{Matrix3, Vector3};
 )]
 struct Args {
     /// A single mesh `.bin` file, or a directory to scan for creature meshes.
-    /// Defaults to the standard mesh folder.
     #[arg(default_value = "Data/res/mesh")]
     path: String,
 
-    /// Only report joints whose inflation is at least this ratio (default 0 =
-    /// show all). Inflation is AABB volume / oriented-bound volume; > ~1.3 means
-    /// an oriented box/capsule would be noticeably tighter than the current AABB.
+    /// Only report joints whose inflation (model AABB vol / joint-local AABB vol)
+    /// is at least this ratio. Default 0 = show all; > ~1.3 means a bone-aligned
+    /// box/capsule would be noticeably tighter than the current axis-aligned box.
     #[arg(long, default_value_t = 0.0)]
     min_inflation: f32,
 }
 
-/// Tight AABB and oriented (PCA) bound for one joint's vertex cloud.
 struct JointFit {
     joint_id: u32,
     vert_count: usize,
-    aabb_dim: [f32; 3],
-    aabb_volume: f32,
-    obb_extents: [f32; 3], // sorted descending
-    obb_volume: f32,
+    model_dim: [f32; 3],
+    local: Option<LocalFit>,
+}
+
+/// Joint-local (bone-aligned) bound + recommended capsule.
+struct LocalFit {
+    dim: [f32; 3],
+    center: [f32; 3],
     inflation: f32,
+    capsule_axis: usize,
+    capsule_radius: f32,
+    capsule_half_height: f32,
 }
 
 fn main() -> Result<()> {
@@ -61,8 +72,7 @@ fn main() -> Result<()> {
     let files: Vec<PathBuf> = if path.is_dir() {
         let mut out = Vec::new();
         for pat in ["*.bin", "*.BIN"] {
-            let glob_pat = path.join(pat);
-            for entry in glob::glob(&glob_pat.to_string_lossy())?.flatten() {
+            for entry in glob::glob(&path.join(pat).to_string_lossy())?.flatten() {
                 out.push(entry);
             }
         }
@@ -86,7 +96,7 @@ fn main() -> Result<()> {
     for file in &files {
         match analyze_file(file, args.min_inflation) {
             Ok(true) => creature_count += 1,
-            Ok(false) => {} // not a creature mesh; skip silently
+            Ok(false) => {}
             Err(e) => eprintln!("  [skip] {}: {e:#}", file.display()),
         }
     }
@@ -99,56 +109,156 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Returns Ok(true) if the file was an analyzed creature mesh, Ok(false) if it
-/// was a non-mesh (object) `.bin` that was skipped.
 fn analyze_file(file: &Path, min_inflation: f32) -> Result<bool> {
     let mesh = match load_creature_mesh(file)? {
         Some(mesh) => mesh,
         None => return Ok(false),
     };
+    let world = load_world_transforms(file);
 
     let joint_verts = mesh.joint_vertex_positions();
-    let captured: usize = joint_verts.values().map(|v| v.len()).sum();
-    eprintln!(
-        "  [stat] {}: mesh_verts={}, joints(seg)={}, joint_map={}, captured_verts={}, joint_ids={}",
-        file.file_name().unwrap_or_default().to_string_lossy(),
-        mesh.vertices.len(),
-        mesh.joints.len(),
-        mesh.joint_map.len(),
-        captured,
-        joint_verts.len(),
-    );
     let mut fits: Vec<JointFit> = joint_verts
         .into_iter()
         .filter(|(_, verts)| !verts.is_empty())
-        .map(|(joint_id, verts)| joint_fit(joint_id, &verts))
+        .map(|(joint_id, verts)| joint_fit(joint_id, &verts, world.as_ref()))
         .collect();
 
-    // Worst (most inflated) first.
-    fits.sort_by(|a, b| b.inflation.total_cmp(&a.inflation));
+    // Worst (most inflated) first; jointless fits (no skeleton) sort last.
+    fits.sort_by(|a, b| {
+        let ia = a.local.as_ref().map(|l| l.inflation).unwrap_or(0.0);
+        let ib = b.local.as_ref().map(|l| l.inflation).unwrap_or(0.0);
+        ib.total_cmp(&ia)
+    });
 
     let name = file.file_name().unwrap_or_default().to_string_lossy();
-    println!("\n=== {name} ===");
+    let skel = if world.is_some() {
+        ""
+    } else {
+        "  (no .cal - model-space only)"
+    };
+    println!("\n=== {name} ==={skel}");
     println!(
-        "{:<10} {:>6}  {:<22} {:>8}   {:<22} {:>8}   {:>6}",
-        "joint", "verts", "aabb dim (x,y,z)", "aabb vol", "obb ext (l,m,s)", "obb vol", "inflate"
+        "{:<11} {:>5}  {:<18} {:<18} {:<18} {:>5}  {}",
+        "joint",
+        "verts",
+        "model dim",
+        "local dim (rec)",
+        "local center",
+        "infl",
+        "capsule (axis r h)"
     );
     for f in &fits {
-        if f.inflation < min_inflation {
-            continue;
+        if let Some(l) = &f.local {
+            if l.inflation < min_inflation {
+                continue;
+            }
+            println!(
+                "{:<11} {:>5}  {:<18} {:<18} {:<18} {:>4.2}x  {} r={:.3} h={:.3}",
+                format!("{} {}", f.joint_id, joint_name(f.joint_id)),
+                f.vert_count,
+                fmt3(f.model_dim),
+                fmt3(l.dim),
+                fmt3(l.center),
+                l.inflation,
+                axis_name(l.capsule_axis),
+                l.capsule_radius,
+                l.capsule_half_height,
+            );
+        } else {
+            println!(
+                "{:<11} {:>5}  {:<18} {:<18} {:<18} {:>5}",
+                format!("{} {}", f.joint_id, joint_name(f.joint_id)),
+                f.vert_count,
+                fmt3(f.model_dim),
+                "-",
+                "-",
+                "-",
+            );
         }
-        println!(
-            "{:<10} {:>6}  {:<22} {:>8.4}   {:<22} {:>8.4}   {:>5.2}x",
-            format!("{} {}", f.joint_id, joint_name(f.joint_id)),
-            f.vert_count,
-            fmt3(f.aabb_dim),
-            f.aabb_volume,
-            fmt3(f.obb_extents),
-            f.obb_volume,
-            f.inflation,
-        );
     }
     Ok(true)
+}
+
+fn joint_fit(joint_id: u32, verts: &[Point3<f32>], world: Option<&[Matrix4<f32>; 40]>) -> JointFit {
+    let (model_dim, model_vol) = aabb(verts.iter().map(|v| [v.x, v.y, v.z]));
+
+    let local = world.and_then(|wt| {
+        let m = wt.get(joint_id as usize)?;
+        let inv = m.invert()?;
+        let local_pts: Vec<[f32; 3]> = verts
+            .iter()
+            .map(|v| {
+                let h = inv * v.to_homogeneous();
+                [h.x, h.y, h.z]
+            })
+            .collect();
+        let (dim, vol) = aabb(local_pts.iter().copied());
+        let center = aabb_center(local_pts.iter().copied());
+        let inflation = if vol > 1e-9 { model_vol / vol } else { 1.0 };
+        let (capsule_axis, capsule_radius, capsule_half_height) = capsule_from_dim(dim);
+        Some(LocalFit {
+            dim,
+            center,
+            inflation,
+            capsule_axis,
+            capsule_radius,
+            capsule_half_height,
+        })
+    });
+
+    JointFit {
+        joint_id,
+        vert_count: verts.len(),
+        model_dim,
+        local,
+    }
+}
+
+/// Recommend a capsule from box dims: longest axis is the capsule axis, radius
+/// encloses the larger cross dimension, cylinder half-height is the remainder.
+fn capsule_from_dim(dim: [f32; 3]) -> (usize, f32, f32) {
+    let axis = (0..3).max_by(|&a, &b| dim[a].total_cmp(&dim[b])).unwrap();
+    let radius = 0.5
+        * (0..3)
+            .filter(|&k| k != axis)
+            .map(|k| dim[k])
+            .fold(0.0f32, f32::max);
+    let half_height = (dim[axis] * 0.5 - radius).max(0.0);
+    (axis, radius, half_height)
+}
+
+fn aabb(pts: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], f32) {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    let mut any = false;
+    for p in pts {
+        any = true;
+        for k in 0..3 {
+            min[k] = min[k].min(p[k]);
+            max[k] = max[k].max(p[k]);
+        }
+    }
+    if !any {
+        return ([0.0; 3], 0.0);
+    }
+    let dim = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    (dim, dim[0] * dim[1] * dim[2])
+}
+
+fn aabb_center(pts: impl Iterator<Item = [f32; 3]>) -> [f32; 3] {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for p in pts {
+        for k in 0..3 {
+            min[k] = min[k].min(p[k]);
+            max[k] = max[k].max(p[k]);
+        }
+    }
+    [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ]
 }
 
 fn load_creature_mesh(file: &Path) -> Result<Option<SystemShock2AIMesh>> {
@@ -156,8 +266,6 @@ fn load_creature_mesh(file: &Path) -> Result<Option<SystemShock2AIMesh>> {
     let mut reader = BufReader::new(f);
     reader.seek(SeekFrom::Start(0))?;
 
-    // Parsing can panic on malformed/unsupported variants; isolate per file so a
-    // directory scan keeps going.
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let common = ss2_bin_header::read(&mut reader);
         match common.bin_type {
@@ -172,84 +280,38 @@ fn load_creature_mesh(file: &Path) -> Result<Option<SystemShock2AIMesh>> {
     }
 }
 
-fn joint_fit(joint_id: u32, verts: &[Point3<f32>]) -> JointFit {
-    let pts: Vec<[f32; 3]> = verts.iter().map(|v| [v.x, v.y, v.z]).collect();
-
-    // AABB
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for p in &pts {
-        for k in 0..3 {
-            min[k] = min[k].min(p[k]);
-            max[k] = max[k].max(p[k]);
+/// Load the bind-pose per-joint world transforms from the mesh's `.cal` skeleton
+/// (same stem). Returns None if no `.cal` is found / it fails to parse.
+fn load_world_transforms(mesh_path: &Path) -> Option<[Matrix4<f32>; 40]> {
+    for ext in ["cal", "CAL"] {
+        let cal = mesh_path.with_extension(ext);
+        if !cal.is_file() {
+            continue;
+        }
+        let Ok(f) = File::open(&cal) else { continue };
+        let mut reader = BufReader::new(f);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let cal = ss2_cal_loader::read(&mut reader);
+            ss2_skeleton::create(cal).world_transforms()
+        }));
+        if let Ok(wt) = result {
+            return Some(wt);
         }
     }
-    let aabb_dim = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    let aabb_volume = aabb_dim[0] * aabb_dim[1] * aabb_dim[2];
-
-    let obb_extents = oriented_extents(&pts);
-    let obb_volume = obb_extents[0] * obb_extents[1] * obb_extents[2];
-    let inflation = if obb_volume > 1e-9 {
-        aabb_volume / obb_volume
-    } else {
-        1.0
-    };
-
-    JointFit {
-        joint_id,
-        vert_count: pts.len(),
-        aabb_dim,
-        aabb_volume,
-        obb_extents,
-        obb_volume,
-        inflation,
-    }
-}
-
-/// Full extents (max-min) of the vertex cloud along its three principal axes
-/// (PCA), sorted descending. This is the tight oriented bound a bone-aligned
-/// collider could achieve.
-fn oriented_extents(pts: &[[f32; 3]]) -> [f32; 3] {
-    let n = pts.len();
-    if n == 0 {
-        return [0.0; 3];
-    }
-    let mut c = [0.0f32; 3];
-    for p in pts {
-        for k in 0..3 {
-            c[k] += p[k];
-        }
-    }
-    for k in 0..3 {
-        c[k] /= n as f32;
-    }
-
-    let mut cov = Matrix3::<f32>::zeros();
-    for p in pts {
-        let d = Vector3::new(p[0] - c[0], p[1] - c[1], p[2] - c[2]);
-        cov += d * d.transpose();
-    }
-    cov /= n as f32;
-
-    let axes = cov.symmetric_eigen().eigenvectors;
-
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for p in pts {
-        for k in 0..3 {
-            let axis = axes.column(k);
-            let proj = (p[0] - c[0]) * axis[0] + (p[1] - c[1]) * axis[1] + (p[2] - c[2]) * axis[2];
-            min[k] = min[k].min(proj);
-            max[k] = max[k].max(proj);
-        }
-    }
-    let mut ext = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    ext.sort_by(|a, b| b.total_cmp(a));
-    ext
+    None
 }
 
 fn fmt3(v: [f32; 3]) -> String {
-    format!("{:.3},{:.3},{:.3}", v[0], v[1], v[2])
+    format!("{:.2},{:.2},{:.2}", v[0], v[1], v[2])
+}
+
+fn axis_name(axis: usize) -> &'static str {
+    match axis {
+        0 => "X",
+        1 => "Y",
+        2 => "Z",
+        _ => "?",
+    }
 }
 
 /// Humanoid skeleton joint names (from HUMANOID_HIT_BOXES in shock2vr's
