@@ -82,6 +82,11 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Option<PhysicsBodyDetailResult>>,
     },
 
+    /// Get per-ragdoll quality/settle metrics
+    RagdollMetrics {
+        reply: oneshot::Sender<RagdollMetricsResult>,
+    },
+
     /// Shutdown the debug runtime gracefully
     Shutdown,
 }
@@ -165,6 +170,23 @@ pub struct PhysicsBodySummary {
     pub collision_groups: Vec<String>,
     pub is_sensor: bool,
     pub is_enabled: bool,
+}
+
+/// Per-ragdoll quality/settle metrics
+#[derive(Debug, Serialize)]
+pub struct RagdollMetricsResult {
+    pub ragdolls: Vec<RagdollMetricsEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RagdollMetricsEntry {
+    pub entity_id: i32,
+    pub body_count: usize,
+    pub max_linear_speed: f32,
+    pub max_angular_speed: f32,
+    pub min_y: f32,
+    pub max_nonadjacent_overlap: f32,
+    pub max_drift: f32,
 }
 
 /// Detailed information about a physics body

@@ -276,6 +276,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.physics_body_detail(body_id)
     }
 
+    fn ragdoll_metrics(&self) -> Vec<crate::game_scene::DebugRagdollMetrics> {
+        self.mission_core.ragdoll_metrics()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         self.mission_core.get_input_state()
     }

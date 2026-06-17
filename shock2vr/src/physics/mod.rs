@@ -1095,6 +1095,38 @@ impl PhysicsWorld {
         self.rigid_body_set.get(handle).map(|body| *body.position())
     }
 
+    /// Linear and angular velocity of a rigid body by handle.
+    pub fn body_velocities(&self, handle: RigidBodyHandle) -> Option<(Vector3<f32>, Vector3<f32>)> {
+        self.rigid_body_set.get(handle).map(|body| {
+            let l = body.linvel();
+            let a = body.angvel();
+            (Vector3::new(l.x, l.y, l.z), Vector3::new(a.x, a.y, a.z))
+        })
+    }
+
+    /// World-space AABB enclosing all of a body's colliders (min, max).
+    pub fn body_world_aabb(&self, handle: RigidBodyHandle) -> Option<(Vector3<f32>, Vector3<f32>)> {
+        let body = self.rigid_body_set.get(handle)?;
+        let mut min: Option<Vector3<f32>> = None;
+        let mut max: Option<Vector3<f32>> = None;
+        for collider_handle in body.colliders() {
+            if let Some(collider) = self.collider_set.get(*collider_handle) {
+                let aabb = collider.compute_aabb();
+                let lo = Vector3::new(aabb.mins.x, aabb.mins.y, aabb.mins.z);
+                let hi = Vector3::new(aabb.maxs.x, aabb.maxs.y, aabb.maxs.z);
+                min = Some(match min {
+                    Some(m) => Vector3::new(m.x.min(lo.x), m.y.min(lo.y), m.z.min(lo.z)),
+                    None => lo,
+                });
+                max = Some(match max {
+                    Some(m) => Vector3::new(m.x.max(hi.x), m.y.max(hi.y), m.z.max(hi.z)),
+                    None => hi,
+                });
+            }
+        }
+        Some((min?, max?))
+    }
+
     /// Enumerate every rigid body in the simulation for debug tooling.
     ///
     /// This iterates the raw Rapier `RigidBodySet` rather than the
