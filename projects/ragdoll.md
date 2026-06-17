@@ -125,6 +125,15 @@ verification harness and the headline realism fix are now done; the rest remain.
 5. **True hinge joints** for knees/elbows (single-axis limits) instead of cones —
    needs the per-bone hinge axis, which the fit/skeleton analysis (#3) can help
    determine.
+6. **Wire debug-scene input over HTTP (harness gap).** `DebuggableScene::set_input`
+   is stubbed for `MissionCore`, so the debug runtime can't drive contextual hand
+   input (trigger/grab/drop) or the `debug_ragdoll` force controls (left-trigger
+   impulse, right-squeeze pull) over HTTP — they only work interactively on
+   desktop. Wiring this would let an agent exercise force-on-ragdoll tests and hand
+   interactions headlessly (e.g. verify impulse → expected velocity via
+   `/v1/ragdoll/metrics`), closing a gap in the iteration loop. Note the debug
+   runtime owns the `InputContext` at the loop level, so the fix likely lives there
+   rather than in `MissionCore`.
 
 **Tooling unblocked (PR #276, merged):** `/v1/physics/bodies` enumerates the raw
 Rapier `RigidBodySet` (was a stub), `?entity_id=N` scopes to one ragdoll, debug
