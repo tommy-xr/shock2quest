@@ -107,15 +107,45 @@ verification harness and the headline realism fix are now done; the rest remain.
    `contacts_enabled(false)` on each joint so *directly jointed* pairs don't
    re-explode. **Verified:** `max_nonadjacent_overlap` 0.44 → 0.24 while staying
    settled (max linear ~0.03, max angular ~0.34, no floor penetration).
-3. **Hitbox-fit validation across the model corpus — next.** The residual ~0.24
-   overlap is largely from oversized hitbox AABBs (limb boxes bigger than the mesh;
-   Delta 4 in the investigation log). Build an offline check (extend
-   `dark_query`/`dark_viewer`, or a test) that, for every creature `.bin` per
-   ActorType, evaluates fit: % of a joint's skinned vertices contained in its box,
-   box oversize ratio vs. the vert cloud, and overlap between sibling boxes.
-   Surface outliers so we can fix the worst-fitting joints (and validate that the
-   model-space AABB + joint-local-center placement is geometrically right). Should
-   drive `max_nonadjacent_overlap` down further; may also move limbs to capsules.
+3. **Hitbox-fit validation across the model corpus — in progress.**
+   - ✅ **Reference check (background agent):** the Dark engine has *no* authored
+     per-joint collision data. Whole-body collision is a 1–2 sphere "SphereHat" /
+     OBB (`sPhysDimsProp`, whole creature only); damage hit-location is a raycast
+     against animated mesh polygons → segment index. The LGMM `mms_segment.bbox`
+     field is never populated; `.cal` skeletons store joint positions + bone
+     lengths/directions but **no limb thickness**. Conclusion: mesh-derived shapes
+     are the source of truth — the recommended upgrade is **oriented (bone-aligned)
+     boxes/capsules** instead of axis-aligned (AABBs inflate for diagonal limbs),
+     keeping `HUMANOID_HIT_BOXES` as the semantic (damage-role) layer.
+   - ✅ **`hitbox_analyzer` tool (PR #285, off main):** `cargo run -p
+     hitbox_analyzer -- <mesh|dir>`. Added
+     `SystemShock2AIMesh::joint_vertex_positions()` to `dark`. v2 loads each mesh's
+     `.cal` skeleton and reports, per joint: current model-space AABB, recommended
+     **joint-local** AABB + center, inflation (model/local vol), and a recommended
+     capsule (axis/radius/half-height).
+   - ⚠️ **v2 inflation ≈ 1.00× across all creatures** (joint-local dims = model
+     dims with axes permuted; SS2 bind rotations are axis-aligned ~90° swaps), so a
+     bone-aligned box is never smaller than the AABB. Oriented colliders give no
+     win.
+   - ❌ **Joint-local collider sizing was tried and REVERTED — the model-space
+     boxes are already correct.** The hypothesis was that `rag_doll.rs` sizes
+     colliders from model-space dims/center but attaches them in the joint frame
+     (mis-oriented). Implementing it (transform the hitbox AABB by the inverse bind
+     world transform) **regressed**: the ragdoll no longer settled (max angular
+     ~17 vs ~0.3) and overlap was unchanged (~0.27 vs ~0.24). Reason: the bodies
+     are placed at the same per-joint transforms the mesh skins with
+     (`Skeleton::get_transforms`/`world_transforms` are both the raw
+     `global_transforms` — **no inverse-bind**), so the hitbox vertices are already
+     effectively in the collider/body frame. Applying the inverse bind a second
+     time double-transforms the box (the tool's large joint-local "centers", e.g.
+     toe 1.40, were the tell). **Conclusion:** the current model-space sizing is
+     correct; the analyzer's `model dim` column is the meaningful collider size,
+     and its `local dim`/inflation/capsule columns are based on a wrong frame
+     assumption and should be ignored (a follow-up could drop them).
+   - ➡️ The residual ~0.24 `max_nonadjacent_overlap` is therefore **genuine limb
+     overlap** of a correctly-sized rig when crumpled, not a sizing bug. No
+     collider-resize work is warranted; further realism, if pursued, comes from the
+     death-handoff (velocity-seeded) and joint-tuning items, not box sizing.
 4. **Handoff pose-continuity / skinning convention.** Physics placement at handoff
    is exact *by construction* (corpse seeded from the same `world_joint_transforms`
    the renderer skins with; `max_drift` ≈ 0 right after spawn confirms no snap). The
@@ -125,6 +155,15 @@ verification harness and the headline realism fix are now done; the rest remain.
 5. **True hinge joints** for knees/elbows (single-axis limits) instead of cones —
    needs the per-bone hinge axis, which the fit/skeleton analysis (#3) can help
    determine.
+6. **Wire debug-scene input over HTTP (harness gap).** `DebuggableScene::set_input`
+   is stubbed for `MissionCore`, so the debug runtime can't drive contextual hand
+   input (trigger/grab/drop) or the `debug_ragdoll` force controls (left-trigger
+   impulse, right-squeeze pull) over HTTP — they only work interactively on
+   desktop. Wiring this would let an agent exercise force-on-ragdoll tests and hand
+   interactions headlessly (e.g. verify impulse → expected velocity via
+   `/v1/ragdoll/metrics`), closing a gap in the iteration loop. Note the debug
+   runtime owns the `InputContext` at the loop level, so the fix likely lives there
+   rather than in `MissionCore`.
 
 **Tooling unblocked (PR #276, merged):** `/v1/physics/bodies` enumerates the raw
 Rapier `RigidBodySet` (was a stub), `?entity_id=N` scopes to one ragdoll, debug
