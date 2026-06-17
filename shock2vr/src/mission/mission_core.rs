@@ -1031,44 +1031,64 @@ impl MissionCore {
         self.world.delete_entity(entity_id);
     }
 
+    /// Spawn a ragdoll from a (dying) creature and remove the original.
+    ///
+    /// The ragdoll is created as a dedicated "corpse" entity seeded from the
+    /// creature's *current* bone world transforms (no offset), then the original
+    /// creature is removed. Using a separate entity id is important: the original
+    /// creature is torn down via `remove_entity`, which also clears any ragdoll
+    /// keyed by that id - so the corpse must live under its own id to survive.
     pub fn spawn_debug_ragdoll(&mut self, entity_id: EntityId) {
-        let model = match self.id_to_model.get(&entity_id) {
-            Some(model) if model.can_create_rag_doll() => model,
-            _ => return,
+        let spawned = {
+            let model = match self.id_to_model.get(&entity_id) {
+                Some(model) if model.can_create_rag_doll() => model,
+                _ => return,
+            };
+
+            let (root_transform, joint_transforms) = {
+                let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                let v_joint_transforms = self
+                    .world
+                    .borrow::<View<RuntimePropJointTransforms>>()
+                    .unwrap();
+
+                let root_transform = match v_transform.get(entity_id) {
+                    Ok(transform) => transform.0,
+                    Err(_) => return,
+                };
+                let joint_transforms = match v_joint_transforms.get(entity_id) {
+                    Ok(joints) => joints.0,
+                    Err(_) => return,
+                };
+                (root_transform, joint_transforms)
+            };
+
+            // Per-bone joint limits from the creature definition (empty for
+            // creatures without a humanoid skeleton -> uniform cone fallback).
+            let joint_limits = crate::creature::get_entity_creature(&self.world, entity_id)
+                .map(|creature| creature.joint_limits.clone())
+                .unwrap_or_else(|| std::sync::Arc::new(std::collections::HashMap::new()));
+
+            // Dedicated corpse entity so removing the original creature below does
+            // not tear down the ragdoll (the manager keys ragdolls by entity id).
+            let ragdoll_id = self.world.add_entity(RuntimePropDoNotSerialize {});
+
+            self.rag_doll_manager.add_ragdoll(
+                ragdoll_id,
+                model,
+                root_transform,
+                &joint_transforms,
+                vec3(0.0, 0.0, 0.0),
+                &joint_limits,
+                &mut self.physics,
+            )
         };
 
-        let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
-        let v_joint_transforms = self
-            .world
-            .borrow::<View<RuntimePropJointTransforms>>()
-            .unwrap();
-
-        let root_transform = match v_transform.get(entity_id) {
-            Ok(transform) => transform.0,
-            Err(_) => return,
-        };
-        let joint_transforms = match v_joint_transforms.get(entity_id) {
-            Ok(joints) => joints.0,
-            Err(_) => return,
-        };
-
-        // Per-bone joint limits from the creature definition (empty for creatures
-        // without a humanoid skeleton -> ragdoll falls back to a uniform cone).
-        let joint_limits = crate::creature::get_entity_creature(&self.world, entity_id)
-            .map(|creature| creature.joint_limits.clone())
-            .unwrap_or_else(|| std::sync::Arc::new(std::collections::HashMap::new()));
-
-        let offset = vec3(0.0, 1.0, 0.0);
-        if self.rag_doll_manager.add_ragdoll(
-            entity_id,
-            model,
-            root_transform,
-            &joint_transforms,
-            offset,
-            &joint_limits,
-            &mut self.physics,
-        ) {
-            println!("Spawned debug ragdoll for entity {:?}", entity_id);
+        if spawned {
+            // Replace the creature with the corpse: remove its capsule, hitboxes,
+            // AI scripts, and animated model so only the ragdoll remains.
+            self.remove_entity(entity_id);
+            println!("Spawned ragdoll and removed creature {:?}", entity_id);
         }
     }
 
