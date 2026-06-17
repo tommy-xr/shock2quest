@@ -69,33 +69,57 @@ the debug-runtime physics introspection added for this effort:
 
 ### Remaining work (subsequent PRs on the stack)
 
-1. **Per-bone joint limits.** Joints are still free spherical
-   (`LOCKED_SPHERICAL_AXES`, no angular limits), so the body folds flat.
-   **Prerequisite:** naive per-axis limits inject energy because the limit "zero"
-   is measured from identity joint frames, not the bind pose — must set
-   `local_frame1/2` to the rest relative orientation first, then apply limits
-   measured from there. Per-bone limit profiles belong in the creature definitions
-   (`creature/creature_definitions.rs`), which already map each joint id to a
-   semantic role (`HUMANOID_HIT_BOXES`: Head/Neck/Abdomen/Shoulder/Elbow/Knee/…).
-2. **Seamless death→ragdoll handoff.** `debug_ragdoll` (and real death) should
-   remove the original creature and spawn the ragdoll from the creature's *current*
-   bone world transforms (no +1-unit debug offset), so the corpse takes over in
-   place instead of standing alongside a separate ragdoll. Options for *when* to
-   hand off, simplest first:
-   - **Swap when the death animation finishes** (easiest, good fallback): let the
-     canned crumple animation play, then on its last frame capture the bone world
-     transforms, remove the animated creature, and spawn the ragdoll from that
-     pose. The body is mostly on the ground already, so the ragdoll just relaxes —
-     low risk of an ugly transition.
-   - **Swap at the moment of death** (more dynamic): skip/curtail the canned
-     animation and let physics do the fall, seeding the ragdoll bodies with the
-     creature's current linear/angular velocity (and ideally an impulse from the
-     killing blow) so it reacts to how it died.
-   - **Blend** animation→physics over a few frames for the smoothest result, but
-     this is the most complex (per-bone weight blend between animated and simulated
-     transforms) and only worth it if the hard swap looks jarring.
-   Prerequisite either way: the spawn-from-current-pose + creature-removal plumbing
-   above. Start with the finish-animation swap and only escalate if needed.
+1. ✅ **Per-bone joint limits** (PR #280). Cone limits per joint from
+   `HUMANOID_JOINT_LIMITS` in `creature/creature_definitions.rs`, measured from
+   rest-pose local frames. (Knees/elbows are still cones, not true hinges — see
+   realism backlog.)
+2. **Seamless death→ragdoll handoff.**
+   - ✅ **Step 1 (PR #281):** spawn the ragdoll as a dedicated corpse entity from
+     the creature's *current* bone world transforms (no offset) and remove the
+     original creature, so the corpse replaces it in place.
+   - **Step 2 (next): swap at the moment of death with seeded velocity** — seed the
+     corpse bodies with the creature's linear/angular velocity (and ideally an
+     impulse from the killing blow) so it reacts to how it died instead of
+     collapsing straight down.
+   - **On deck: blend** animation→physics over a few frames (per-bone weight blend)
+     for the smoothest result; only if the hard swap looks jarring. Also: wire the
+     handoff to *real* death, not just the debug scene.
+
+### Realism & verification backlog (capture now, schedule later)
+
+These came out of reviewing the settled corpse: it's much better than the puddle
+but not yet passable, and we lack objective checks for "is this right".
+
+1. **Self-collision with adjacent-pair exclusion — the main realism blocker.**
+   Self-collision is currently *fully off* (`CollisionGroup::ragdoll()` filters to
+   `WORLD` only), which is why the torso/legs/head interpenetrate when crumpled.
+   The standard fix: re-enable limb-vs-limb collision but exclude *directly jointed*
+   pairs (Rapier: `impulse_joint.contacts_enabled(false)` per joint, or a contact
+   pair filter), so adjacent bones don't re-explode while non-adjacent parts (head
+   vs torso, arm vs leg) stop passing through each other. Verify via
+   `/v1/physics/bodies`: stays settled (no divergence) *and* a new
+   max-interpenetration metric (overlap between non-adjacent limb AABBs) drops.
+2. **Handoff pose-continuity verification.** Confirm the corpse starts exactly
+   where the creature was. Capture the creature's per-joint world transforms on the
+   last live frame (e.g. its kinematic hitbox body positions, which already sit at
+   the joints) and compare to the ragdoll body positions on the first corpse frame
+   — they should match within a small epsilon, then diverge smoothly under physics.
+   A few frames later the positions should still be plausible (no teleport/snap).
+   Likely needs a small debug endpoint or log dumping the seeded vs. expected joint
+   positions. Ties into the open **physics→skinning transform convention** check:
+   make sure the mesh skins to the same place the physics bodies are (raw joint
+   transforms vs. global×inverse-bind).
+3. **Hitbox-fit validation across the model corpus.** The limb colliders are AABBs
+   of each joint's skinned verts (in model space), and they're known to be roughly
+   sized (Delta 4 in the investigation log). Build an offline check (extend
+   `dark_query`/`dark_viewer`, or a test) that, for every creature `.bin` per
+   ActorType, evaluates fit: % of a joint's skinned vertices contained in its box,
+   box oversize ratio vs. the vert cloud, and overlap between sibling boxes.
+   Surface outliers so we can fix the worst-fitting joints (and validate that the
+   model-space AABB + joint-local-center placement is geometrically right).
+4. **True hinge joints** for knees/elbows (single-axis limits) instead of cones —
+   needs the per-bone hinge axis, which the fit/skeleton analysis above can help
+   determine.
 
 **Tooling unblocked (PR #276, merged):** `/v1/physics/bodies` enumerates the raw
 Rapier `RigidBodySet` (was a stub), `?entity_id=N` scopes to one ragdoll, debug
