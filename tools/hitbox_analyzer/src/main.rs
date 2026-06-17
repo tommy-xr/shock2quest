@@ -23,8 +23,9 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use cgmath::{Matrix4, SquareMatrix, Vector4};
+use cgmath::{InnerSpace, Matrix4, SquareMatrix, Vector3, Vector4};
 use clap::Parser;
+use dark::hit_box::{self, HitBoxShape};
 use dark::motion::JointId;
 use dark::ss2_bin_ai_loader::{self, SystemShock2AIMesh};
 use dark::ss2_bin_header::{self, BinFileType};
@@ -124,13 +125,23 @@ fn analyze_file(file: &Path, samples: usize) -> Result<bool> {
         );
     }
 
+    // Fitted shapes (the shared source of truth: capsule-toward-child / box),
+    // paired with each joint's world transform for placement.
+    let fitted: HashMap<u32, (HitBoxShape, Matrix4<f32>)> =
+        hit_box::fit_hit_box_shapes(&mesh, &skeleton)
+            .into_iter()
+            .filter(|(j, _)| (*j as usize) < world.len())
+            .map(|(j, s)| (j, (s, world[j as usize])))
+            .collect();
+
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     println!("\n=== {name} ===");
 
-    // Per-bone segment coverage.
-    let mut total = 0usize;
-    let mut covered = 0usize;
-    let mut rows: Vec<(String, f32, f32)> = Vec::new(); // (label, coverage, length)
+    // Per-bone segment coverage, comparing the legacy per-joint AABB to the
+    // fitted shapes.
+    let (mut aabb_tot, mut aabb_cov) = (0usize, 0usize);
+    let (mut fit_tot, mut fit_cov) = (0usize, 0usize);
+    let mut rows: Vec<(String, f32, f32, f32)> = Vec::new(); // (label, aabb_cov, fit_cov, length)
     for bone in skeleton.bones() {
         let Some(parent) = bone.parent_id else {
             continue;
@@ -140,45 +151,96 @@ fn analyze_file(file: &Path, samples: usize) -> Result<bool> {
         if len < 1e-4 {
             continue;
         }
-        let mut bcov = 0usize;
+        let (mut a_b, mut f_b) = (0usize, 0usize);
         for i in 0..=samples {
             let t = i as f32 / samples as f32;
             let p = lerp(pw, cw, t);
-            if point_covered(p, &boxes) {
-                bcov += 1;
-                covered += 1;
+            if point_covered_aabb(p, &boxes) {
+                a_b += 1;
+                aabb_cov += 1;
             }
-            total += 1;
+            if point_covered_shapes(p, &fitted) {
+                f_b += 1;
+                fit_cov += 1;
+            }
+            aabb_tot += 1;
+            fit_tot += 1;
         }
-        let cov = bcov as f32 / (samples + 1) as f32;
+        let n = (samples + 1) as f32;
         rows.push((
             format!("{}->{}", joint_label(parent), joint_label(bone.joint_id)),
-            cov,
+            a_b as f32 / n,
+            f_b as f32 / n,
             len,
         ));
     }
 
-    rows.sort_by(|a, b| a.1.total_cmp(&b.1));
-    println!("  bone segment coverage (worst first):");
-    for (label, cov, len) in &rows {
-        println!("    {:<22} {:>5.0}%   (len {:.2})", label, cov * 100.0, len);
+    rows.sort_by(|a, b| a.2.total_cmp(&b.2));
+    println!("  bone segment coverage    aabb -> fitted   (worst-fitted first):");
+    for (label, a, f, len) in &rows {
+        println!(
+            "    {:<22} {:>4.0}% -> {:>4.0}%   (len {:.2})",
+            label,
+            a * 100.0,
+            f * 100.0,
+            len
+        );
     }
-    let overall = if total > 0 {
-        covered as f32 / total as f32 * 100.0
-    } else {
-        0.0
+    let pct = |c: usize, t: usize| {
+        if t > 0 {
+            c as f32 / t as f32 * 100.0
+        } else {
+            0.0
+        }
     };
     println!(
-        "  OVERALL bone coverage: {:.0}%  ({} joint boxes)",
-        overall,
-        boxes.len()
+        "  OVERALL bone coverage: aabb {:.0}% -> fitted {:.0}%  ({} joints)",
+        pct(aabb_cov, aabb_tot),
+        pct(fit_cov, fit_tot),
+        fitted.len()
     );
     Ok(true)
 }
 
-/// True if world point `p` lies inside any joint box (tested in that joint's
+/// True if world point `p` is inside any fitted joint shape (tested in the
+/// joint's local frame).
+fn point_covered_shapes(p: [f32; 3], shapes: &HashMap<u32, (HitBoxShape, Matrix4<f32>)>) -> bool {
+    for (shape, world) in shapes.values() {
+        let Some(inv) = world.invert() else { continue };
+        let h = inv * Vector4::new(p[0], p[1], p[2], 1.0);
+        let l = Vector3::new(h.x, h.y, h.z);
+        let inside = match shape {
+            HitBoxShape::Cuboid {
+                half_extents,
+                center,
+            } => {
+                let d = l - center;
+                d.x.abs() <= half_extents.x
+                    && d.y.abs() <= half_extents.y
+                    && d.z.abs() <= half_extents.z
+            }
+            HitBoxShape::Capsule { a, b, radius } => point_segment_dist(l, *a, *b) <= *radius,
+        };
+        if inside {
+            return true;
+        }
+    }
+    false
+}
+
+fn point_segment_dist(p: Vector3<f32>, a: Vector3<f32>, b: Vector3<f32>) -> f32 {
+    let ab = b - a;
+    let len2 = ab.magnitude2();
+    if len2 < 1e-9 {
+        return (p - a).magnitude();
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    (p - (a + ab * t)).magnitude()
+}
+
+/// True if world point `p` lies inside any legacy per-joint AABB (in that joint's
 /// local frame).
-fn point_covered(p: [f32; 3], boxes: &HashMap<u32, JointBox>) -> bool {
+fn point_covered_aabb(p: [f32; 3], boxes: &HashMap<u32, JointBox>) -> bool {
     for b in boxes.values() {
         let Some(inv) = b.world.invert() else {
             continue;
