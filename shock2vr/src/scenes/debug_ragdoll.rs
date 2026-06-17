@@ -23,9 +23,9 @@ use crate::{
 // controls are scaled for that mass.
 /// Upward impulse applied to a single ragdoll body (left trigger) - intentionally
 /// one body so you can watch the force propagate through the joints to the rest.
-const IMPULSE_STRENGTH: f32 = 5.0;
+const IMPULSE_STRENGTH: f32 = 50.0;
 /// Per-body pull force for the debug "gather toward center" control (right squeeze).
-const PULL_FORCE: f32 = 12.0;
+const PULL_FORCE: f32 = 120.0;
 
 /// Number of update frames to wait after spawning the pipe hybrid before killing
 /// it and spawning the ragdoll. Frame-based (not wall-clock) so the trigger is
