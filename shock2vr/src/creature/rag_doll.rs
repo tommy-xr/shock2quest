@@ -361,6 +361,10 @@ impl RagDollManager {
                     .limits(JointAxis::AngX, [-cone, cone])
                     .limits(JointAxis::AngY, [-cone, cone])
                     .limits(JointAxis::AngZ, [-cone, cone])
+                    // Disable contacts between this directly-jointed parent/child
+                    // pair so they can overlap at the joint without being ejected;
+                    // non-adjacent limbs still collide (via CollisionGroup::ragdoll).
+                    .contacts_enabled(false)
                     .build();
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);
