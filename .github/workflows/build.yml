@@ -56,39 +56,31 @@ jobs:
       # Build and test both run in --release so the optimized dependency tree
       # is compiled once and reused by the test step, instead of compiling the
       # whole graph a second time in the dev profile.
-      - name: Build Desktop Runtime
-        run: cargo build --verbose --release
-        working-directory: runtimes/desktop_runtime
-        env:
-          RUSTFLAGS: "-D warnings"
-      - name: Run Desktop Runtime tests
-        run: cargo test --verbose --release
-        working-directory: runtimes/desktop_runtime
-        env:
-          RUSTFLAGS: "-D warnings"
-
-      # Build and test the tools in a single cargo invocation each, so the
-      # shared dependency graph is resolved and compiled once.
+      #
+      # Everything is built (and tested) in a single cargo invocation per OS so
+      # features resolve once and the large shared workspace crates (shock2vr,
+      # engine) compile a single time, rather than being partially recompiled
+      # when each package is built in its own step.
       # Note: dark_viewer is excluded on Windows due to compilation issues.
       # TODO: Fix dark_viewer Windows compatibility and include it everywhere.
-      - name: Build tools (Unix)
+      - name: Build all (Unix)
         if: runner.os != 'Windows'
-        run: cargo build --verbose --release -p dark_viewer -p dark_query -p debug_runtime -p debug_command
+        run: cargo build --verbose --release -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
-      - name: Run tools tests (Unix)
+      - name: Run all tests (Unix)
         if: runner.os != 'Windows'
-        run: cargo test --verbose --release -p dark_viewer -p dark_query -p debug_runtime -p debug_command
+        run: cargo test --verbose --release -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
 
-      - name: Build tools (Windows)
+      - name: Build all (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --verbose --release -p dark_query -p debug_runtime -p debug_command
+        run: cargo build --verbose --release -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
-      - name: Run tools tests (Windows)
+      - name: Run all tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --verbose --release -p dark_query -p debug_runtime -p debug_command
+        run: cargo test --verbose --release -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
