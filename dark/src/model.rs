@@ -1,6 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
 use crate::{
+    hit_box::{HitBoxShape, fit_hit_box_shapes},
     motion::{AnimationClip, AnimationPlayer},
     ss2_bin_ai_loader::{self, SystemShock2AIMesh},
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
@@ -49,6 +50,7 @@ pub struct AnimatedModel {
     skeleton: Rc<Skeleton>,
     scene_objects: Vec<SceneObject>,
     hit_boxes: Rc<HashMap<u32, Aabb3<f32>>>,
+    hit_box_shapes: Rc<HashMap<u32, HitBoxShape>>,
     vhots: Vec<Vhot>,
 }
 
@@ -96,6 +98,7 @@ impl AnimatedModel {
             skeleton: self.skeleton.clone(),
             scene_objects: new_scene_objects,
             hit_boxes: self.hit_boxes.clone(),
+            hit_box_shapes: self.hit_box_shapes.clone(),
             vhots: self.vhots.clone(),
         }
     }
@@ -116,6 +119,7 @@ impl AnimatedModel {
             skeleton: model.skeleton.clone(),
             scene_objects: new_scene_objects,
             hit_boxes: model.hit_boxes.clone(),
+            hit_box_shapes: model.hit_box_shapes.clone(),
             vhots: model.vhots.clone(),
         }
     }
@@ -154,6 +158,7 @@ impl Model {
                     skeleton: Rc::new(skeleton),
                     scene_objects,
                     hit_boxes: Rc::new(hit_boxes),
+                    hit_box_shapes: Rc::new(HashMap::new()),
                     vhots: static_mesh.vhots.clone(),
                 }),
             }
@@ -176,6 +181,7 @@ impl Model {
     ) -> Model {
         let (scene_objects, hit_boxes) =
             ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
+        let hit_box_shapes = fit_hit_box_shapes(&ai_mesh, &skeleton);
         Model {
             transform: Matrix4::identity(),
             inner: InnerModel::Animated(AnimatedModel {
@@ -183,6 +189,7 @@ impl Model {
                 skeleton,
                 scene_objects,
                 hit_boxes: Rc::new(hit_boxes),
+                hit_box_shapes: Rc::new(hit_box_shapes),
                 vhots: vec![],
             }),
         }
@@ -206,6 +213,7 @@ impl Model {
                     skeleton: Rc::new(skeleton),
                     scene_objects,
                     hit_boxes: Rc::new(hit_boxes),
+                    hit_box_shapes: Rc::new(HashMap::new()),
                     vhots: vec![],
                 }),
             }
@@ -241,6 +249,16 @@ impl Model {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.vhots.clone(),
             InnerModel::Static(static_model) => static_model.vhots.clone(),
+        }
+    }
+
+    /// Per-joint fitted collision shapes (capsule-toward-child / box), the shared
+    /// source of truth for the ragdoll and damage hitboxes. Empty for static or
+    /// non-AI-bin models.
+    pub fn hit_box_shapes(&self) -> Rc<HashMap<u32, HitBoxShape>> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.hit_box_shapes.clone(),
+            InnerModel::Static(_) => Rc::new(HashMap::new()),
         }
     }
 

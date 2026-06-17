@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
-use collision::Aabb;
+use dark::hit_box::HitBoxShape;
 use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
-    na::{Translation3, UnitQuaternion},
+    na::{Point3 as NaPoint3, Translation3, UnitQuaternion},
     prelude::{
         GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, JointAxis,
         RigidBodyHandle, SharedShape,
@@ -214,10 +214,11 @@ impl RagDollManager {
             None => return false,
         };
 
-        // Per-joint bind-pose AABBs (model space), the same data that drives the
-        // damage hitboxes. We size each limb's collider from its joint's box so
-        // limbs have real volume/length instead of being point-like balls.
-        let hit_boxes = model.get_hit_boxes();
+        // Per-joint fitted collision shapes (joint-local) - capsule spanning the
+        // bone toward the child for chain joints, box otherwise. Shared with the
+        // damage hitboxes (dark::hit_box). Covers the limbs far better than the
+        // old per-joint AABB (which left bones uncovered).
+        let hit_box_shapes = model.hit_box_shapes();
 
         let offset_transform = Matrix4::from_translation(root_offset) * root_transform;
         let mut world_joint_transforms = [Matrix4::identity(); 40];
@@ -254,30 +255,43 @@ impl RagDollManager {
             physics.set_body_damping(handle, LINEAR_DAMPING, ANGULAR_DAMPING);
             spawn_positions.insert(handle, pos_vec);
 
-            // Size the collider from the joint's hitbox AABB when available: a
-            // cuboid spanning the box, offset to the box center (in joint-local
-            // space, matching how HitBoxManager places damage hitboxes). The body
-            // origin stays at the joint, so skinning is unaffected. Fall back to a
-            // small ball for joints with no hitbox (no skinned verts).
-            match hit_boxes.get(&(bone.joint_id as u32)) {
-                Some(bbox) => {
-                    let dim = bbox.dim();
-                    let center = bbox.center();
-                    let half_extents = vec3(
-                        (dim.x.abs() * 0.5).max(MIN_HALF_EXTENT),
-                        (dim.y.abs() * 0.5).max(MIN_HALF_EXTENT),
-                        (dim.z.abs() * 0.5).max(MIN_HALF_EXTENT),
+            // Build the collider from the joint's fitted shape. Density is chosen
+            // so every limb has ~TARGET_BODY_MASS regardless of size: an
+            // impulse-jointed chain is unstable when connected bodies have very
+            // different masses. Inertia still scales with the shape. Shapes are in
+            // joint-local space; the body origin is the joint, so skinning is
+            // unaffected.
+            match hit_box_shapes.get(&(bone.joint_id as u32)) {
+                Some(HitBoxShape::Capsule { a, b, radius }) => {
+                    let h = (*b - *a).magnitude();
+                    let volume = std::f32::consts::PI * radius * radius * h
+                        + 4.0 / 3.0 * std::f32::consts::PI * radius * radius * radius;
+                    let density = TARGET_BODY_MASS / volume.max(MIN_VOLUME);
+                    physics.attach_collider(
+                        handle,
+                        SharedShape::capsule(
+                            NaPoint3::new(a.x, a.y, a.z),
+                            NaPoint3::new(b.x, b.y, b.z),
+                            *radius,
+                        ),
+                        density,
+                        CollisionGroup::ragdoll(),
                     );
-                    // Density chosen so every limb has ~TARGET_BODY_MASS regardless
-                    // of box size: an impulse-jointed chain is unstable when mass
-                    // ratios between connected bodies are large (a tiny extremity
-                    // box jointed to a big torso box spins up). Inertia still scales
-                    // with the box's shape.
-                    let volume = 8.0 * half_extents.x * half_extents.y * half_extents.z;
+                }
+                Some(HitBoxShape::Cuboid {
+                    half_extents,
+                    center,
+                }) => {
+                    let he = vec3(
+                        half_extents.x.max(MIN_HALF_EXTENT),
+                        half_extents.y.max(MIN_HALF_EXTENT),
+                        half_extents.z.max(MIN_HALF_EXTENT),
+                    );
+                    let volume = 8.0 * he.x * he.y * he.z;
                     let density = TARGET_BODY_MASS / volume.max(MIN_VOLUME);
                     physics.attach_collider_with_offset(
                         handle,
-                        SharedShape::cuboid(half_extents.x, half_extents.y, half_extents.z),
+                        SharedShape::cuboid(he.x, he.y, he.z),
                         vec3(center.x, center.y, center.z),
                         density,
                         CollisionGroup::ragdoll(),
