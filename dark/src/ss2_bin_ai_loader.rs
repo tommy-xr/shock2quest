@@ -42,6 +42,37 @@ pub struct SystemShock2AIMesh {
     pub joint_map: Vec<AIJointMapEntry>,
 }
 
+impl SystemShock2AIMesh {
+    /// All vertex positions assigned to each skeleton joint, grouped by joint id.
+    ///
+    /// Uses each joint's full `start_vertex..start_vertex+num_vertices` range
+    /// (mapped through `joint_map`), i.e. the *complete* vertex set per joint -
+    /// unlike the damage hitboxes built in `to_vertices`, which only sample one
+    /// vertex per triangle. This is the source of truth for computing a tight
+    /// per-limb bounding volume (see the `hitbox_analyzer` tool).
+    pub fn joint_vertex_positions(&self) -> HashMap<u32, Vec<Point3<f32>>> {
+        let mut out: HashMap<u32, Vec<Point3<f32>>> = HashMap::new();
+        for joint in &self.joints {
+            let mapper_id = joint.mapper_id as usize;
+            let joint_id = match self.joint_map.get(mapper_id) {
+                Some(entry) => entry.joint as i32,
+                None => continue,
+            };
+            if joint_id < 0 {
+                continue;
+            }
+            let start = joint.start_vertex.max(0) as usize;
+            let count = joint.num_vertices.max(0) as usize;
+            let end = (start + count).min(self.vertices.len());
+            let entry = out.entry(joint_id as u32).or_default();
+            for vertex in &self.vertices[start..end] {
+                entry.push(*vertex);
+            }
+        }
+        out
+    }
+}
+
 pub struct AIMeshHeader {
     offset_joint_remap: u32,
     offset_mappers: u32,
