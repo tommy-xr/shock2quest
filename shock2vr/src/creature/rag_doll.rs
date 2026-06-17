@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use cgmath::{Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use collision::Aabb;
 use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
@@ -18,6 +19,20 @@ use crate::{
 };
 
 const DEFAULT_JOINT_RADIUS: f32 = 0.06;
+/// Minimum collider half-extent, so degenerate joint AABBs (e.g. a joint with a
+/// single skinned vertex) still get a valid, non-zero box.
+const MIN_HALF_EXTENT: f32 = DEFAULT_JOINT_RADIUS;
+/// Linear/angular damping on ragdoll limb bodies so they bleed off momentum and
+/// settle instead of spinning or flailing forever (limbs out of world contact
+/// have nothing else to slow them).
+const LINEAR_DAMPING: f32 = 0.5;
+const ANGULAR_DAMPING: f32 = 2.0;
+/// Target mass for every ragdoll limb body. Densities are derived per-collider to
+/// hit this, keeping connected-body mass ratios near 1:1 for solver stability.
+const TARGET_BODY_MASS: f32 = 1.0;
+/// Floor on collider volume when deriving density, to avoid div-by-zero / huge
+/// density on degenerate shapes.
+const MIN_VOLUME: f32 = 1e-4;
 
 pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
@@ -106,6 +121,11 @@ impl RagDollManager {
             None => return false,
         };
 
+        // Per-joint bind-pose AABBs (model space), the same data that drives the
+        // damage hitboxes. We size each limb's collider from its joint's box so
+        // limbs have real volume/length instead of being point-like balls.
+        let hit_boxes = model.get_hit_boxes();
+
         let offset_transform = Matrix4::from_translation(root_offset) * root_transform;
         let mut world_joint_transforms = [Matrix4::identity(); 40];
         for bone in &bones {
@@ -136,12 +156,49 @@ impl RagDollManager {
             let isometry = isometry_from_parts(pos_vec, rotation);
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
-            physics.attach_collider(
-                handle,
-                SharedShape::ball(DEFAULT_JOINT_RADIUS),
-                1.0,
-                CollisionGroup::ragdoll(),
-            );
+            physics.set_body_damping(handle, LINEAR_DAMPING, ANGULAR_DAMPING);
+
+            // Size the collider from the joint's hitbox AABB when available: a
+            // cuboid spanning the box, offset to the box center (in joint-local
+            // space, matching how HitBoxManager places damage hitboxes). The body
+            // origin stays at the joint, so skinning is unaffected. Fall back to a
+            // small ball for joints with no hitbox (no skinned verts).
+            match hit_boxes.get(&(bone.joint_id as u32)) {
+                Some(bbox) => {
+                    let dim = bbox.dim();
+                    let center = bbox.center();
+                    let half_extents = vec3(
+                        (dim.x.abs() * 0.5).max(MIN_HALF_EXTENT),
+                        (dim.y.abs() * 0.5).max(MIN_HALF_EXTENT),
+                        (dim.z.abs() * 0.5).max(MIN_HALF_EXTENT),
+                    );
+                    // Density chosen so every limb has ~TARGET_BODY_MASS regardless
+                    // of box size: an impulse-jointed chain is unstable when mass
+                    // ratios between connected bodies are large (a tiny extremity
+                    // box jointed to a big torso box spins up). Inertia still scales
+                    // with the box's shape.
+                    let volume = 8.0 * half_extents.x * half_extents.y * half_extents.z;
+                    let density = TARGET_BODY_MASS / volume.max(MIN_VOLUME);
+                    physics.attach_collider_with_offset(
+                        handle,
+                        SharedShape::cuboid(half_extents.x, half_extents.y, half_extents.z),
+                        vec3(center.x, center.y, center.z),
+                        density,
+                        CollisionGroup::ragdoll(),
+                    );
+                }
+                None => {
+                    let r = DEFAULT_JOINT_RADIUS;
+                    let volume = 4.0 / 3.0 * std::f32::consts::PI * r * r * r;
+                    let density = TARGET_BODY_MASS / volume.max(MIN_VOLUME);
+                    physics.attach_collider(
+                        handle,
+                        SharedShape::ball(r),
+                        density,
+                        CollisionGroup::ragdoll(),
+                    );
+                }
+            }
 
             joint_to_body.insert(bone.joint_id as u32, handle);
             bone_offsets.insert(bone.joint_id as u32, Matrix4::identity());
@@ -172,6 +229,12 @@ impl RagDollManager {
                 let child_to_parent = parent_pos - child_pos;
                 let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
 
+                // Ball joint (translation locked). NOTE: angular limits are
+                // intentionally not set here yet - naive per-axis limits measured
+                // from identity joint frames inject energy (the rig spins up),
+                // because the limit "zero" doesn't match the bind-pose relative
+                // orientation. Correct cone/twist limits need local_frame1/2 set
+                // to the rest pose first (tracked as follow-up).
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
                     .local_anchor1(Point3::origin())
                     .local_anchor2(Point3::new(

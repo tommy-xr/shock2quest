@@ -1013,6 +1013,17 @@ impl PhysicsWorld {
         self.rigid_body_set.insert(rigid_body)
     }
 
+    /// Set linear and angular damping on a rigid body. Ragdoll limbs need
+    /// non-zero damping (especially angular) so that a limb not in contact with
+    /// the world bleeds off momentum and comes to rest, instead of spinning or
+    /// flailing indefinitely.
+    pub fn set_body_damping(&mut self, handle: RigidBodyHandle, linear: f32, angular: f32) {
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            body.set_linear_damping(linear);
+            body.set_angular_damping(angular);
+        }
+    }
+
     /// Create a static (fixed) rigid body without requiring an EntityId
     /// Returns the handle for use in ragdoll systems
     pub fn create_static_body(
@@ -1037,8 +1048,29 @@ impl PhysicsWorld {
         density: f32,
         collision_group: CollisionGroup,
     ) {
+        self.attach_collider_with_offset(
+            handle,
+            shape,
+            Vector3::new(0.0, 0.0, 0.0),
+            density,
+            collision_group,
+        );
+    }
+
+    /// Attach a collider to a body with a local-space translation offset. Used by
+    /// the ragdoll rig so a limb's collider can sit at its hitbox center rather
+    /// than at the joint origin.
+    pub fn attach_collider_with_offset(
+        &mut self,
+        handle: RigidBodyHandle,
+        shape: SharedShape,
+        offset: Vector3<f32>,
+        density: f32,
+        collision_group: CollisionGroup,
+    ) {
         let collider = ColliderBuilder::new(shape)
             .density(density)
+            .translation(vec_to_nvec(offset))
             .collision_groups(collision_group.0)
             .active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
             .build();
