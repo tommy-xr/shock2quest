@@ -18,8 +18,14 @@ use crate::{
     time::Time,
 };
 
-const IMPULSE_STRENGTH: f32 = 1.0;
-const PULL_FORCE: f32 = 1.0;
+// Ragdoll limb bodies now use a uniform ~1.0 mass (see rag_doll.rs
+// TARGET_BODY_MASS), ~1000x heavier than the old point-balls, so these debug
+// controls are scaled for that mass.
+/// Upward impulse applied to a single ragdoll body (left trigger) - intentionally
+/// one body so you can watch the force propagate through the joints to the rest.
+const IMPULSE_STRENGTH: f32 = 5.0;
+/// Per-body pull force for the debug "gather toward center" control (right squeeze).
+const PULL_FORCE: f32 = 12.0;
 
 /// Number of update frames to wait after spawning the pipe hybrid before killing
 /// it and spawning the ragdoll. Frame-based (not wall-clock) so the trigger is
@@ -184,10 +190,12 @@ impl RagdollHooks {
             input_context.left_hand.trigger_value > 0.5 && !self.last_left_impulse;
 
         if left_impulse_pressed {
+            // Single body on purpose: lets you watch the impulse propagate through
+            // the joints to the rest of the ragdoll.
             if let Some(first_body) = core.rag_doll_manager.get_first_ragdoll_body() {
-                let impulse = vec3(0.0, IMPULSE_STRENGTH / SCALE_FACTOR, 0.0);
+                let impulse = vec3(0.0, IMPULSE_STRENGTH, 0.0);
                 core.physics.apply_impulse(first_body, impulse);
-                println!("Applied upward impulse to ragdoll");
+                println!("Applied upward impulse to a single ragdoll body");
             }
         }
 
@@ -203,7 +211,7 @@ impl RagdollHooks {
                     );
 
                     let pull_direction = (center_position - body_position).normalize();
-                    let pull_force = pull_direction * PULL_FORCE / SCALE_FACTOR;
+                    let pull_force = pull_direction * PULL_FORCE;
 
                     core.physics.apply_force(body_handle, pull_force);
                 }
