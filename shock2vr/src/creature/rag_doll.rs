@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
 use collision::Aabb;
 use dark::model::Model;
 use engine::scene::SceneObject;
@@ -40,6 +40,23 @@ const MIN_VOLUME: f32 = 1e-4;
 /// itself. Per-bone limit profiles (hinge knees, cone shoulders) are a follow-up.
 const JOINT_CONE_LIMIT: f32 = 1.05;
 
+/// Quality/settle metrics for one ragdoll, for the verification harness.
+#[derive(Clone, Debug)]
+pub struct RagDollMetrics {
+    pub body_count: usize,
+    /// Max body linear speed (a settled ragdoll trends to ~0).
+    pub max_linear_speed: f32,
+    /// Max body angular speed (catches "spinning forever" / divergence).
+    pub max_angular_speed: f32,
+    /// Lowest body position (floor penetration shows up as min_y below the floor).
+    pub min_y: f32,
+    /// Largest interpenetration depth between non-adjacent limb AABBs - the
+    /// realism signal for self-collision work (lower is better).
+    pub max_nonadjacent_overlap: f32,
+    /// Largest distance any body has moved from where it spawned.
+    pub max_drift: f32,
+}
+
 pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
     joint_handles: Vec<ImpulseJointHandle>,
@@ -47,9 +64,16 @@ pub struct RagDoll {
     bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
     latest_global_transforms: [Matrix4<f32>; 40],
     scene_objects: Vec<SceneObject>,
+    /// Directly jointed body pairs (parent/child), excluded from the
+    /// non-adjacent-overlap metric since they are meant to overlap at the joint.
+    joint_pairs: Vec<(RigidBodyHandle, RigidBodyHandle)>,
+    /// World position each body was spawned at, for the drift / pose-continuity
+    /// metric.
+    spawn_positions: HashMap<RigidBodyHandle, Vector3<f32>>,
 }
 
 impl RagDoll {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         joint_to_body: HashMap<u32, RigidBodyHandle>,
         physics_bodies: Vec<RigidBodyHandle>,
@@ -57,6 +81,8 @@ impl RagDoll {
         initial_world: [Matrix4<f32>; 40],
         bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
         scene_objects: Vec<SceneObject>,
+        joint_pairs: Vec<(RigidBodyHandle, RigidBodyHandle)>,
+        spawn_positions: HashMap<RigidBodyHandle, Vector3<f32>>,
     ) -> Self {
         Self {
             physics_bodies,
@@ -65,6 +91,66 @@ impl RagDoll {
             bone_frame_offsets,
             latest_global_transforms: initial_world,
             scene_objects,
+            joint_pairs,
+            spawn_positions,
+        }
+    }
+
+    /// Compute settle/quality metrics for this ragdoll from the live physics state.
+    fn metrics(&self, physics: &PhysicsWorld) -> RagDollMetrics {
+        let mut max_linear_speed: f32 = 0.0;
+        let mut max_angular_speed: f32 = 0.0;
+        let mut min_y = f32::INFINITY;
+        let mut max_drift: f32 = 0.0;
+
+        for handle in &self.physics_bodies {
+            if let Some((lin, ang)) = physics.body_velocities(*handle) {
+                max_linear_speed = max_linear_speed.max(lin.magnitude());
+                max_angular_speed = max_angular_speed.max(ang.magnitude());
+            }
+            if let Some(iso) = physics.get_body_transform(*handle) {
+                min_y = min_y.min(iso.translation.y);
+                if let Some(spawn) = self.spawn_positions.get(handle) {
+                    let pos = Vector3::new(iso.translation.x, iso.translation.y, iso.translation.z);
+                    max_drift = max_drift.max((pos - spawn).magnitude());
+                }
+            }
+        }
+
+        // Largest interpenetration between non-adjacent limb AABBs (axis-aligned
+        // overlap depth = min over axes; 0 if separated on any axis).
+        let adjacent = |a: RigidBodyHandle, b: RigidBodyHandle| {
+            self.joint_pairs
+                .iter()
+                .any(|(p, c)| (*p == a && *c == b) || (*p == b && *c == a))
+        };
+        let mut max_nonadjacent_overlap: f32 = 0.0;
+        for i in 0..self.physics_bodies.len() {
+            for j in (i + 1)..self.physics_bodies.len() {
+                let (ha, hb) = (self.physics_bodies[i], self.physics_bodies[j]);
+                if adjacent(ha, hb) {
+                    continue;
+                }
+                if let (Some((amin, amax)), Some((bmin, bmax))) =
+                    (physics.body_world_aabb(ha), physics.body_world_aabb(hb))
+                {
+                    let ox = (amax.x.min(bmax.x) - amin.x.max(bmin.x)).max(0.0);
+                    let oy = (amax.y.min(bmax.y) - amin.y.max(bmin.y)).max(0.0);
+                    let oz = (amax.z.min(bmax.z) - amin.z.max(bmin.z)).max(0.0);
+                    if ox > 0.0 && oy > 0.0 && oz > 0.0 {
+                        max_nonadjacent_overlap = max_nonadjacent_overlap.max(ox.min(oy).min(oz));
+                    }
+                }
+            }
+        }
+
+        RagDollMetrics {
+            body_count: self.physics_bodies.len(),
+            max_linear_speed,
+            max_angular_speed,
+            min_y: if min_y.is_finite() { min_y } else { 0.0 },
+            max_nonadjacent_overlap,
+            max_drift,
         }
     }
 
@@ -148,6 +234,8 @@ impl RagDollManager {
         let mut joint_handles = Vec::new();
         let mut joint_to_body = HashMap::new();
         let mut bone_offsets = HashMap::new();
+        let mut joint_pairs = Vec::new();
+        let mut spawn_positions = HashMap::new();
         let mut joint_positions = vec![Vector3::new(0.0, 0.0, 0.0); world_joint_transforms.len()];
 
         for bone in &bones {
@@ -164,6 +252,7 @@ impl RagDollManager {
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
             physics.set_body_damping(handle, LINEAR_DAMPING, ANGULAR_DAMPING);
+            spawn_positions.insert(handle, pos_vec);
 
             // Size the collider from the joint's hitbox AABB when available: a
             // cuboid spanning the box, offset to the box center (in joint-local
@@ -275,6 +364,7 @@ impl RagDollManager {
                     .build();
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);
+                joint_pairs.push((parent_handle, child_handle));
             }
         }
 
@@ -285,6 +375,8 @@ impl RagDollManager {
             world_joint_transforms,
             bone_offsets,
             model.clone_scene_objects(),
+            joint_pairs,
+            spawn_positions,
         );
         self.ragdolls.insert(entity_id, ragdoll);
         true
@@ -294,6 +386,14 @@ impl RagDollManager {
         for ragdoll in self.ragdolls.values_mut() {
             ragdoll.update(physics);
         }
+    }
+
+    /// Per-ragdoll quality metrics (keyed by the corpse entity id).
+    pub fn debug_metrics(&self, physics: &PhysicsWorld) -> Vec<(EntityId, RagDollMetrics)> {
+        self.ragdolls
+            .iter()
+            .map(|(id, ragdoll)| (*id, ragdoll.metrics(physics)))
+            .collect()
     }
 
     pub fn render_scene_objects(&self) -> Vec<SceneObject> {

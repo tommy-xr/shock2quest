@@ -263,6 +263,18 @@ pub struct DebugPhysicsBodyDetail {
     pub contact_count: usize,
 }
 
+/// Per-ragdoll quality/settle metrics for the verification harness.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugRagdollMetrics {
+    pub entity_id: i32,
+    pub body_count: usize,
+    pub max_linear_speed: f32,
+    pub max_angular_speed: f32,
+    pub min_y: f32,
+    pub max_nonadjacent_overlap: f32,
+    pub max_drift: f32,
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -357,6 +369,13 @@ pub trait DebuggableScene {
     /// # Returns
     /// Detailed physics body information, or None if body doesn't exist
     fn physics_body_detail(&self, body_id: u32) -> Option<DebugPhysicsBodyDetail>;
+
+    /// Quality/settle metrics for every active ragdoll, for the verification
+    /// harness (settle speeds, floor penetration, non-adjacent interpenetration,
+    /// drift). Empty when the scene has no ragdolls.
+    fn ragdoll_metrics(&self) -> Vec<DebugRagdollMetrics> {
+        Vec::new()
+    }
 
     /// Get current input context state
     ///

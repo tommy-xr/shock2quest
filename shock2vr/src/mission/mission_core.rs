@@ -2912,6 +2912,22 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         })
     }
 
+    fn ragdoll_metrics(&self) -> Vec<crate::game_scene::DebugRagdollMetrics> {
+        self.rag_doll_manager
+            .debug_metrics(&self.physics)
+            .into_iter()
+            .map(|(id, m)| crate::game_scene::DebugRagdollMetrics {
+                entity_id: id.inner() as i32,
+                body_count: m.body_count,
+                max_linear_speed: m.max_linear_speed,
+                max_angular_speed: m.max_angular_speed,
+                min_y: m.min_y,
+                max_nonadjacent_overlap: m.max_nonadjacent_overlap,
+                max_drift: m.max_drift,
+            })
+            .collect()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         // MissionCore doesn't store InputContext directly - it's passed to update()
         // For debugging purposes, return a default state
