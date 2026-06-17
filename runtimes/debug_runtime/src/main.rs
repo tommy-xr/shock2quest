@@ -194,6 +194,7 @@ async fn start_http_server(
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
+        .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
         .route("/v1/control/command", axum::routing::post(run_game_command))
@@ -1028,6 +1029,29 @@ fn process_command(
                 tracing::warn!("Failed to send physics body detail - receiver dropped");
             }
         }
+        RuntimeCommand::RagdollMetrics { reply } => {
+            let ragdolls = game
+                .debug_scene()
+                .map(|scene| {
+                    scene
+                        .ragdoll_metrics()
+                        .into_iter()
+                        .map(|m| commands::RagdollMetricsEntry {
+                            entity_id: m.entity_id,
+                            body_count: m.body_count,
+                            max_linear_speed: m.max_linear_speed,
+                            max_angular_speed: m.max_angular_speed,
+                            min_y: m.min_y,
+                            max_nonadjacent_overlap: m.max_nonadjacent_overlap,
+                            max_drift: m.max_drift,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Err(_) = reply.send(commands::RagdollMetricsResult { ragdolls }) {
+                tracing::warn!("Failed to send ragdoll metrics - receiver dropped");
+            }
+        }
         RuntimeCommand::GetInput(reply) => {
             // Get current input state from the debug scene
             if let Some(debuggable) = game.debug_scene() {
@@ -1609,6 +1633,26 @@ async fn get_physics_body_detail(
         Err(_) => {
             tracing::error!("Failed to receive physics body detail - sender dropped");
             Json(None)
+        }
+    }
+}
+
+/// HTTP handler for per-ragdoll quality metrics
+async fn get_ragdoll_metrics(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<RagdollMetricsResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::RagdollMetrics { reply: reply_tx }) {
+        tracing::error!("Failed to send RagdollMetrics command - game loop receiver dropped");
+        return Json(RagdollMetricsResult { ragdolls: vec![] });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive ragdoll metrics - sender dropped");
+            Json(RagdollMetricsResult { ragdolls: vec![] })
         }
     }
 }
