@@ -1,68 +1,57 @@
 //! hitbox_analyzer
 //!
 //! Analyzes per-joint limb collision fit for System Shock 2 creature meshes
-//! (LGMM `.bin`) and recommends tighter collider sizes for the ragdoll.
+//! (LGMM `.bin`) — the data the ragdoll uses to build limb colliders.
 //!
-//! The ragdoll's limb colliders live in each joint's *local* frame (the body is
-//! oriented by the joint), so the box that actually matters is the bounding box
-//! of the joint's skinned vertices expressed in **joint-local space**, not model
-//! space. This tool loads the mesh + its `.cal` skeleton (bind pose), transforms
-//! each joint's vertices by the inverse of that joint's bind world transform, and
-//! reports:
-//!   - the current model-space (axis-aligned) AABB the ragdoll uses today,
-//!   - the recommended joint-local AABB (a bone-aligned box) + its center offset,
-//!   - the "inflation" (model vol / local vol) = how much the axis-aligned box
-//!     over-sizes vs a bone-aligned one,
-//!   - a recommended capsule (axis / radius / half-height) from the local box.
+//! Mesh verts are stored in *joint-local* space (each joint's verts cluster
+//! around that joint's origin; confirmed by comparing vertex-AABB centers to
+//! joint world positions). So each joint's collider is the joint-local AABB of
+//! the verts weighted to it, placed at the joint. That's geometrically fine, but
+//! it can leave the *bone segments between joints* uncovered when few verts are
+//! weighted to a mid-limb joint (elbow, knee).
 //!
-//! Per the Dark engine reference there is no authored per-joint collision data
-//! (whole-body collision is a 1-2 sphere column; damage is a mesh raycast), so
-//! these mesh-derived shapes are the source of truth.
+//! This tool reports, per creature:
+//!   - each joint's box dims (joint-local AABB), and
+//!   - **bone-segment coverage**: for every skeleton bone (parent→child), what
+//!     fraction of the segment is inside the union of the joint boxes. Low
+//!     coverage = the limb is not enclosed (the "small cubes at joints" problem).
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use cgmath::{Matrix4, Point3, SquareMatrix};
+use cgmath::{Matrix4, SquareMatrix, Vector4};
 use clap::Parser;
+use dark::motion::JointId;
 use dark::ss2_bin_ai_loader::{self, SystemShock2AIMesh};
 use dark::ss2_bin_header::{self, BinFileType};
-use dark::{ss2_cal_loader, ss2_skeleton};
+use dark::ss2_cal_loader;
+use dark::ss2_skeleton::{self, Skeleton};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "hitbox_analyzer",
-    about = "Analyze per-joint limb collision fit for SS2 creature meshes"
+    about = "Analyze per-joint limb collision fit / coverage for SS2 creature meshes"
 )]
 struct Args {
     /// A single mesh `.bin` file, or a directory to scan for creature meshes.
     #[arg(default_value = "Data/res/mesh")]
     path: String,
 
-    /// Only report joints whose inflation (model AABB vol / joint-local AABB vol)
-    /// is at least this ratio. Default 0 = show all; > ~1.3 means a bone-aligned
-    /// box/capsule would be noticeably tighter than the current axis-aligned box.
-    #[arg(long, default_value_t = 0.0)]
-    min_inflation: f32,
+    /// Samples per bone segment for the coverage test.
+    #[arg(long, default_value_t = 12)]
+    samples: usize,
 }
 
-struct JointFit {
-    joint_id: u32,
-    vert_count: usize,
-    model_dim: [f32; 3],
-    local: Option<LocalFit>,
-}
-
-/// Joint-local (bone-aligned) bound + recommended capsule.
-struct LocalFit {
-    dim: [f32; 3],
-    center: [f32; 3],
-    inflation: f32,
-    capsule_axis: usize,
-    capsule_radius: f32,
-    capsule_half_height: f32,
+/// A joint's collider box, in joint-local space (min/max), with its bind world
+/// transform for placement.
+struct JointBox {
+    min: [f32; 3],
+    max: [f32; 3],
+    world: Matrix4<f32>,
 }
 
 fn main() -> Result<()> {
@@ -82,190 +71,161 @@ fn main() -> Result<()> {
     } else if path.is_file() {
         vec![path.to_path_buf()]
     } else {
-        anyhow::bail!(
-            "path not found: {} (run from the repo root, or pass a mesh/dir)",
-            args.path
-        );
+        anyhow::bail!("path not found: {}", args.path);
     };
-
     if files.is_empty() {
         anyhow::bail!("no .bin files found at {}", args.path);
     }
 
     let mut creature_count = 0;
     for file in &files {
-        match analyze_file(file, args.min_inflation) {
+        match analyze_file(file, args.samples) {
             Ok(true) => creature_count += 1,
             Ok(false) => {}
             Err(e) => eprintln!("  [skip] {}: {e:#}", file.display()),
         }
     }
-
     println!(
-        "\nScanned {} file(s); {} creature mesh(es) analyzed.",
+        "\nScanned {} file(s); {} creature(s).",
         files.len(),
         creature_count
     );
     Ok(())
 }
 
-fn analyze_file(file: &Path, min_inflation: f32) -> Result<bool> {
+fn analyze_file(file: &Path, samples: usize) -> Result<bool> {
     let mesh = match load_creature_mesh(file)? {
         Some(mesh) => mesh,
         None => return Ok(false),
     };
-    let world = load_world_transforms(file);
+    let skeleton = match load_skeleton(file) {
+        Some(s) => s,
+        None => {
+            eprintln!("  [skip] {}: no .cal skeleton", file.display());
+            return Ok(false);
+        }
+    };
+    let world = skeleton.world_transforms();
 
-    let joint_verts = mesh.joint_vertex_positions();
-    let mut fits: Vec<JointFit> = joint_verts
-        .into_iter()
-        .filter(|(_, verts)| !verts.is_empty())
-        .map(|(joint_id, verts)| joint_fit(joint_id, &verts, world.as_ref()))
-        .collect();
-
-    // Worst (most inflated) first; jointless fits (no skeleton) sort last.
-    fits.sort_by(|a, b| {
-        let ia = a.local.as_ref().map(|l| l.inflation).unwrap_or(0.0);
-        let ib = b.local.as_ref().map(|l| l.inflation).unwrap_or(0.0);
-        ib.total_cmp(&ia)
-    });
+    // Per-joint joint-local AABB box (collider), keyed by joint id.
+    let mut boxes: HashMap<u32, JointBox> = HashMap::new();
+    for (joint_id, verts) in mesh.joint_vertex_positions() {
+        if verts.is_empty() || (joint_id as usize) >= world.len() {
+            continue;
+        }
+        let (min, max) = aabb_min_max(verts.iter().map(|v| [v.x, v.y, v.z]));
+        boxes.insert(
+            joint_id,
+            JointBox {
+                min,
+                max,
+                world: world[joint_id as usize],
+            },
+        );
+    }
 
     let name = file.file_name().unwrap_or_default().to_string_lossy();
-    let skel = if world.is_some() {
-        ""
-    } else {
-        "  (no .cal - model-space only)"
-    };
-    println!("\n=== {name} ==={skel}");
-    println!(
-        "{:<11} {:>5}  {:<18} {:<18} {:<18} {:>5}  {}",
-        "joint",
-        "verts",
-        "model dim",
-        "local dim (rec)",
-        "local center",
-        "infl",
-        "capsule (axis r h)"
-    );
-    for f in &fits {
-        if let Some(l) = &f.local {
-            if l.inflation < min_inflation {
-                continue;
-            }
-            println!(
-                "{:<11} {:>5}  {:<18} {:<18} {:<18} {:>4.2}x  {} r={:.3} h={:.3}",
-                format!("{} {}", f.joint_id, joint_name(f.joint_id)),
-                f.vert_count,
-                fmt3(f.model_dim),
-                fmt3(l.dim),
-                fmt3(l.center),
-                l.inflation,
-                axis_name(l.capsule_axis),
-                l.capsule_radius,
-                l.capsule_half_height,
-            );
-        } else {
-            println!(
-                "{:<11} {:>5}  {:<18} {:<18} {:<18} {:>5}",
-                format!("{} {}", f.joint_id, joint_name(f.joint_id)),
-                f.vert_count,
-                fmt3(f.model_dim),
-                "-",
-                "-",
-                "-",
-            );
+    println!("\n=== {name} ===");
+
+    // Per-bone segment coverage.
+    let mut total = 0usize;
+    let mut covered = 0usize;
+    let mut rows: Vec<(String, f32, f32)> = Vec::new(); // (label, coverage, length)
+    for bone in skeleton.bones() {
+        let Some(parent) = bone.parent_id else {
+            continue;
+        };
+        let (cw, pw) = (joint_pos(&world, bone.joint_id), joint_pos(&world, parent));
+        let len = dist(pw, cw);
+        if len < 1e-4 {
+            continue;
         }
+        let mut bcov = 0usize;
+        for i in 0..=samples {
+            let t = i as f32 / samples as f32;
+            let p = lerp(pw, cw, t);
+            if point_covered(p, &boxes) {
+                bcov += 1;
+                covered += 1;
+            }
+            total += 1;
+        }
+        let cov = bcov as f32 / (samples + 1) as f32;
+        rows.push((
+            format!("{}->{}", joint_label(parent), joint_label(bone.joint_id)),
+            cov,
+            len,
+        ));
     }
+
+    rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+    println!("  bone segment coverage (worst first):");
+    for (label, cov, len) in &rows {
+        println!("    {:<22} {:>5.0}%   (len {:.2})", label, cov * 100.0, len);
+    }
+    let overall = if total > 0 {
+        covered as f32 / total as f32 * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "  OVERALL bone coverage: {:.0}%  ({} joint boxes)",
+        overall,
+        boxes.len()
+    );
     Ok(true)
 }
 
-fn joint_fit(joint_id: u32, verts: &[Point3<f32>], world: Option<&[Matrix4<f32>; 40]>) -> JointFit {
-    let (model_dim, model_vol) = aabb(verts.iter().map(|v| [v.x, v.y, v.z]));
-
-    let local = world.and_then(|wt| {
-        let m = wt.get(joint_id as usize)?;
-        let inv = m.invert()?;
-        let local_pts: Vec<[f32; 3]> = verts
-            .iter()
-            .map(|v| {
-                let h = inv * v.to_homogeneous();
-                [h.x, h.y, h.z]
-            })
-            .collect();
-        let (dim, vol) = aabb(local_pts.iter().copied());
-        let center = aabb_center(local_pts.iter().copied());
-        let inflation = if vol > 1e-9 { model_vol / vol } else { 1.0 };
-        let (capsule_axis, capsule_radius, capsule_half_height) = capsule_from_dim(dim);
-        Some(LocalFit {
-            dim,
-            center,
-            inflation,
-            capsule_axis,
-            capsule_radius,
-            capsule_half_height,
-        })
-    });
-
-    JointFit {
-        joint_id,
-        vert_count: verts.len(),
-        model_dim,
-        local,
-    }
-}
-
-/// Recommend a capsule from box dims: longest axis is the capsule axis, radius
-/// encloses the larger cross dimension, cylinder half-height is the remainder.
-fn capsule_from_dim(dim: [f32; 3]) -> (usize, f32, f32) {
-    let axis = (0..3).max_by(|&a, &b| dim[a].total_cmp(&dim[b])).unwrap();
-    let radius = 0.5
-        * (0..3)
-            .filter(|&k| k != axis)
-            .map(|k| dim[k])
-            .fold(0.0f32, f32::max);
-    let half_height = (dim[axis] * 0.5 - radius).max(0.0);
-    (axis, radius, half_height)
-}
-
-fn aabb(pts: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], f32) {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    let mut any = false;
-    for p in pts {
-        any = true;
-        for k in 0..3 {
-            min[k] = min[k].min(p[k]);
-            max[k] = max[k].max(p[k]);
+/// True if world point `p` lies inside any joint box (tested in that joint's
+/// local frame).
+fn point_covered(p: [f32; 3], boxes: &HashMap<u32, JointBox>) -> bool {
+    for b in boxes.values() {
+        let Some(inv) = b.world.invert() else {
+            continue;
+        };
+        let h = inv * Vector4::new(p[0], p[1], p[2], 1.0);
+        let l = [h.x, h.y, h.z];
+        if (0..3).all(|k| l[k] >= b.min[k] && l[k] <= b.max[k]) {
+            return true;
         }
     }
-    if !any {
-        return ([0.0; 3], 0.0);
-    }
-    let dim = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    (dim, dim[0] * dim[1] * dim[2])
+    false
 }
 
-fn aabb_center(pts: impl Iterator<Item = [f32; 3]>) -> [f32; 3] {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for p in pts {
-        for k in 0..3 {
-            min[k] = min[k].min(p[k]);
-            max[k] = max[k].max(p[k]);
-        }
-    }
+fn joint_pos(world: &[Matrix4<f32>; 40], joint: JointId) -> [f32; 3] {
+    let m = world[joint as usize];
+    [m.w.x, m.w.y, m.w.z]
+}
+
+fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [
-        (min[0] + max[0]) * 0.5,
-        (min[1] + max[1]) * 0.5,
-        (min[2] + max[2]) * 0.5,
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
     ]
+}
+
+fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+}
+
+fn aabb_min_max(pts: impl Iterator<Item = [f32; 3]>) -> ([f32; 3], [f32; 3]) {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for p in pts {
+        for k in 0..3 {
+            min[k] = min[k].min(p[k]);
+            max[k] = max[k].max(p[k]);
+        }
+    }
+    (min, max)
 }
 
 fn load_creature_mesh(file: &Path) -> Result<Option<SystemShock2AIMesh>> {
     let f = File::open(file).with_context(|| format!("open {}", file.display()))?;
     let mut reader = BufReader::new(f);
     reader.seek(SeekFrom::Start(0))?;
-
     let result = panic::catch_unwind(AssertUnwindSafe(|| {
         let common = ss2_bin_header::read(&mut reader);
         match common.bin_type {
@@ -273,16 +233,13 @@ fn load_creature_mesh(file: &Path) -> Result<Option<SystemShock2AIMesh>> {
             BinFileType::Obj => None,
         }
     }));
-
     match result {
         Ok(mesh) => Ok(mesh),
         Err(_) => anyhow::bail!("failed to parse (panic)"),
     }
 }
 
-/// Load the bind-pose per-joint world transforms from the mesh's `.cal` skeleton
-/// (same stem). Returns None if no `.cal` is found / it fails to parse.
-fn load_world_transforms(mesh_path: &Path) -> Option<[Matrix4<f32>; 40]> {
+fn load_skeleton(mesh_path: &Path) -> Option<Skeleton> {
     for ext in ["cal", "CAL"] {
         let cal = mesh_path.with_extension(ext);
         if !cal.is_file() {
@@ -291,33 +248,17 @@ fn load_world_transforms(mesh_path: &Path) -> Option<[Matrix4<f32>; 40]> {
         let Ok(f) = File::open(&cal) else { continue };
         let mut reader = BufReader::new(f);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            let cal = ss2_cal_loader::read(&mut reader);
-            ss2_skeleton::create(cal).world_transforms()
+            ss2_skeleton::create(ss2_cal_loader::read(&mut reader))
         }));
-        if let Ok(wt) = result {
-            return Some(wt);
+        if let Ok(s) = result {
+            return Some(s);
         }
     }
     None
 }
 
-fn fmt3(v: [f32; 3]) -> String {
-    format!("{:.2},{:.2},{:.2}", v[0], v[1], v[2])
-}
-
-fn axis_name(axis: usize) -> &'static str {
-    match axis {
-        0 => "X",
-        1 => "Y",
-        2 => "Z",
-        _ => "?",
-    }
-}
-
-/// Humanoid skeleton joint names (from HUMANOID_HIT_BOXES in shock2vr's
-/// creature_definitions). Other ids fall back to a generic label.
-fn joint_name(id: u32) -> &'static str {
-    match id {
+fn joint_label(id: JointId) -> String {
+    let name = match id {
         2 => "LToe",
         3 => "RToe",
         4 => "LKnee",
@@ -333,6 +274,11 @@ fn joint_name(id: u32) -> &'static str {
         14 => "LWeap",
         15 => "RWeap",
         18 => "Abdomen",
-        _ => "-",
+        _ => "",
+    };
+    if name.is_empty() {
+        format!("j{id}")
+    } else {
+        format!("{id}:{name}")
     }
 }
