@@ -46,64 +46,49 @@ jobs:
         if: runner.os == 'Windows'
         run: echo "Windows build will use default-features = false to skip FFmpeg"
 
+      # Caches ~/.cargo/registry, ~/.cargo/git, and target/ with smart
+      # partial-hit keys (restore-keys), so a Cargo.lock change no longer
+      # forces a fully cold build. Replaces the previous target-only cache.
       - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
 
-      # Actual build steps
+      # Actual build steps.
+      # Build and test both run in --release so the optimized dependency tree
+      # is compiled once and reused by the test step, instead of compiling the
+      # whole graph a second time in the dev profile.
       - name: Build Desktop Runtime
         run: cargo build --verbose --release
         working-directory: runtimes/desktop_runtime
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run Desktop Runtime tests
-        run: cargo test --verbose
+        run: cargo test --verbose --release
         working-directory: runtimes/desktop_runtime
         env:
           RUSTFLAGS: "-D warnings"
 
-      # Build and test dark_viewer tool
-      # Note: Windows build for dark_viewer is currently disabled due to compilation issues
-      # TODO: Fix dark_viewer Windows compatibility and re-enable
-      - name: Build dark_viewer tool (Unix only)
+      # Build and test the tools in a single cargo invocation each, so the
+      # shared dependency graph is resolved and compiled once.
+      # Note: dark_viewer is excluded on Windows due to compilation issues.
+      # TODO: Fix dark_viewer Windows compatibility and include it everywhere.
+      - name: Build tools (Unix)
         if: runner.os != 'Windows'
-        run: cargo build --verbose --release -p dark_viewer
+        run: cargo build --verbose --release -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
-      - name: Run dark_viewer tests (Unix only)
+      - name: Run tools tests (Unix)
         if: runner.os != 'Windows'
-        run: cargo test --verbose -p dark_viewer
+        run: cargo test --verbose --release -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
 
-      # Build and test dark_query tool
-      - name: Build dark_query tool
-        run: cargo build --verbose --release -p dark_query
+      - name: Build tools (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --verbose --release -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
-      - name: Run dark_query tests
-        run: cargo test --verbose -p dark_query
-        env:
-          RUSTFLAGS: "-D warnings"
-
-      # Build and test debug_runtime
-      - name: Build debug_runtime
-        run: cargo build --verbose --release -p debug_runtime
-        env:
-          RUSTFLAGS: "-D warnings"
-      - name: Run debug_runtime tests
-        run: cargo test --verbose -p debug_runtime
-        env:
-          RUSTFLAGS: "-D warnings"
-
-      # Build and test debug_command CLI tool
-      - name: Build debug_command CLI
-        run: cargo build --verbose --release -p debug_command
-        env:
-          RUSTFLAGS: "-D warnings"
-      - name: Run debug_command tests
-        run: cargo test --verbose -p debug_command
+      - name: Run tools tests (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --verbose --release -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
