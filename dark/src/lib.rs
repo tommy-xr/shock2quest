@@ -4,6 +4,7 @@ pub mod font;
 pub mod gamesys;
 pub mod glb_model;
 pub mod glb_skeleton;
+pub mod hit_box;
 pub mod map;
 pub mod mission;
 pub mod model;
