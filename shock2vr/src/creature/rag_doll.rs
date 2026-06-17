@@ -5,10 +5,10 @@ use collision::Aabb;
 use dark::model::Model;
 use engine::scene::SceneObject;
 use rapier3d::{
-    na::{Point3, Translation3},
+    na::{Translation3, UnitQuaternion},
     prelude::{
-        GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, RigidBodyHandle,
-        SharedShape,
+        GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, JointAxis,
+        RigidBodyHandle, SharedShape,
     },
 };
 use shipyard::EntityId;
@@ -33,6 +33,10 @@ const TARGET_BODY_MASS: f32 = 1.0;
 /// Floor on collider volume when deriving density, to avoid div-by-zero / huge
 /// density on degenerate shapes.
 const MIN_VOLUME: f32 = 1e-4;
+/// Uniform per-axis angular limit (radians, ~60°) for the limb ball joints,
+/// measured from the bind/rest pose. Keeps the rig from folding/twisting through
+/// itself. Per-bone limit profiles (hinge knees, cone shoulders) are a follow-up.
+const JOINT_CONE_LIMIT: f32 = 1.05;
 
 pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
@@ -224,24 +228,40 @@ impl RagDollManager {
 
                 let parent_pos = joint_positions[parent_idx];
                 let child_pos = joint_positions[child_idx];
+                let parent_world = world_joint_transforms[parent_idx];
+                let parent_rot = get_rotation_from_matrix(&parent_world);
                 let child_world = world_joint_transforms[child_idx];
                 let child_rot = get_rotation_from_matrix(&child_world);
                 let child_to_parent = parent_pos - child_pos;
                 let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
 
-                // Ball joint (translation locked). NOTE: angular limits are
-                // intentionally not set here yet - naive per-axis limits measured
-                // from identity joint frames inject energy (the rig spins up),
-                // because the limit "zero" doesn't match the bind-pose relative
-                // orientation. Correct cone/twist limits need local_frame1/2 set
-                // to the rest pose first (tracked as follow-up).
-                let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
-                    .local_anchor1(Point3::origin())
-                    .local_anchor2(Point3::new(
+                // Ball joint (translation locked) with angular limits so the body
+                // can't fold/twist through itself.
+                //
+                // The limits are measured relative to the joints' local frames, so
+                // they only behave if "zero angle" corresponds to the bind/rest
+                // pose. We align both frames to the child's rest world orientation:
+                //   frame1 (parent-local) rotation = R_parent^-1 * R_child
+                //   frame2 (child-local)  rotation = identity
+                // At spawn, R_parent * frame1 == R_child == R_child * frame2, so the
+                // relative angle is exactly 0 and within limits - no energy is
+                // injected (the bug we hit when limits used identity frames).
+                let frame1_rot = quat_to_nquat(parent_rot.invert() * child_rot);
+                let frame1 = Isometry::from_parts(Translation3::new(0.0, 0.0, 0.0), frame1_rot);
+                let frame2 = Isometry::from_parts(
+                    Translation3::new(
                         child_local_anchor.x,
                         child_local_anchor.y,
                         child_local_anchor.z,
-                    ))
+                    ),
+                    UnitQuaternion::identity(),
+                );
+                let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
+                    .local_frame1(frame1)
+                    .local_frame2(frame2)
+                    .limits(JointAxis::AngX, [-JOINT_CONE_LIMIT, JOINT_CONE_LIMIT])
+                    .limits(JointAxis::AngY, [-JOINT_CONE_LIMIT, JOINT_CONE_LIMIT])
+                    .limits(JointAxis::AngZ, [-JOINT_CONE_LIMIT, JOINT_CONE_LIMIT])
                     .build();
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);
