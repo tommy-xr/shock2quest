@@ -18,6 +18,8 @@ use crate::{
     util::{get_position_from_matrix, get_rotation_from_matrix, point3_to_vec3},
 };
 
+use super::JointLimit;
+
 const DEFAULT_JOINT_RADIUS: f32 = 0.06;
 /// Minimum collider half-extent, so degenerate joint AABBs (e.g. a joint with a
 /// single skinned vertex) still get a valid, non-zero box.
@@ -114,6 +116,7 @@ impl RagDollManager {
         root_transform: Matrix4<f32>,
         joint_transforms: &[Matrix4<f32>; 40],
         root_offset: Vector3<f32>,
+        joint_limits: &HashMap<u32, JointLimit>,
         physics: &mut PhysicsWorld,
     ) -> bool {
         if !model.can_create_rag_doll() {
@@ -256,12 +259,19 @@ impl RagDollManager {
                     ),
                     UnitQuaternion::identity(),
                 );
+                // Per-bone cone limit from the creature definition (e.g. tight for
+                // head/neck/spine, wide for shoulders/hips), falling back to a
+                // uniform default for joints/creatures without a profile.
+                let cone = joint_limits
+                    .get(&(bone.joint_id as u32))
+                    .map(|limit| limit.cone)
+                    .unwrap_or(JOINT_CONE_LIMIT);
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
                     .local_frame1(frame1)
                     .local_frame2(frame2)
-                    .limits(JointAxis::AngX, [-JOINT_CONE_LIMIT, JOINT_CONE_LIMIT])
-                    .limits(JointAxis::AngY, [-JOINT_CONE_LIMIT, JOINT_CONE_LIMIT])
-                    .limits(JointAxis::AngZ, [-JOINT_CONE_LIMIT, JOINT_CONE_LIMIT])
+                    .limits(JointAxis::AngX, [-cone, cone])
+                    .limits(JointAxis::AngY, [-cone, cone])
+                    .limits(JointAxis::AngZ, [-cone, cone])
                     .build();
                 let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                 joint_handles.push(handle);
