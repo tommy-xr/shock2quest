@@ -28,12 +28,27 @@ pub enum ActorType {
     Arachnid = 4,
 }
 
+/// Articulation limit for a single skeleton joint, used when building ragdolls.
+/// `cone` is a symmetric half-angle (radians) applied to each angular axis of the
+/// limb's ball joint, measured from the bind/rest pose.
+#[derive(Clone, Copy, Debug)]
+pub struct JointLimit {
+    pub cone: f32,
+}
+
+impl JointLimit {
+    pub fn cone(cone: f32) -> Self {
+        Self { cone }
+    }
+}
+
 pub struct CreatureDefinition {
     pub actor_type: ActorType,
     pub physics_offset_height: f32,
     pub bounding_size: Vector3<f32>,
     joint_map: Vec<i32>,
     pub hit_boxes: Arc<HashMap<u32, HitBoxType>>,
+    pub joint_limits: Arc<HashMap<u32, JointLimit>>,
 }
 
 impl CreatureDefinition {
@@ -88,6 +103,34 @@ pub const HUMANOID_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> = Lazy::new(||
     ]))
 });
 
+/// Per-joint articulation limits for humanoid ragdolls, keyed by the same
+/// skeleton joint ids as `HUMANOID_HIT_BOXES`. Wider cones for the big limb
+/// joints (shoulders/hips/knees/elbows), tight cones for head/neck/spine and
+/// extremities (toes/weapon hands) so they don't flop unrealistically.
+/// (Knees/elbows are really hinges; approximated as moderate cones for now.)
+pub const HUMANOID_JOINT_LIMITS: Lazy<Arc<HashMap<u32, JointLimit>>> = Lazy::new(|| {
+    Arc::new(HashMap::from_iter(vec![
+        (2, JointLimit::cone(0.3)),  // LToe
+        (3, JointLimit::cone(0.3)),  // RToe
+        (4, JointLimit::cone(1.2)),  // LKnee
+        (5, JointLimit::cone(1.2)),  // RKnee
+        (6, JointLimit::cone(1.2)),  // LThigh
+        (7, JointLimit::cone(1.2)),  // RThigh
+        (8, JointLimit::cone(0.5)),  // Neck
+        (9, JointLimit::cone(0.4)),  // Head
+        (10, JointLimit::cone(1.4)), // LShoulder
+        (11, JointLimit::cone(1.4)), // RShoulder
+        (12, JointLimit::cone(1.2)), // LElbow
+        (13, JointLimit::cone(1.2)), // RElbow
+        (14, JointLimit::cone(0.3)), // LWeap
+        (15, JointLimit::cone(0.3)), // RWeap
+        (18, JointLimit::cone(0.4)), // Abdomen
+    ]))
+});
+
+pub const EMPTY_JOINT_LIMITS: Lazy<Arc<HashMap<u32, JointLimit>>> =
+    Lazy::new(|| Arc::new(HashMap::new()));
+
 pub const SPIDER_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> =
     Lazy::new(|| Arc::new(HashMap::from_iter(vec![(0, HitBoxType::Body)])));
 
@@ -106,6 +149,7 @@ pub const HUMAN: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, 19, 9, 18, 8, 10, 11, 12, 13, 14, 15, 16, 17, 6, 7, 4, 5, 2, 3, 0, 1, -1,
         ],
         hit_boxes: HUMANOID_HIT_BOXES.clone(),
+        joint_limits: HUMANOID_JOINT_LIMITS.clone(),
     })
 });
 
@@ -116,6 +160,7 @@ pub const PLAYER_LIMB: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
         actor_type: ActorType::PlayerLimb,
         joint_map: vec![],
         hit_boxes: EMPTY_HIT_BOXES.clone(),
+        joint_limits: EMPTY_JOINT_LIMITS.clone(),
     })
 });
 
@@ -128,6 +173,7 @@ pub const AVATAR: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, 19, 9, 18, 8, 10, 11, 12, 13, 14, 15, 16, 17, 6, 7, 4, 5, 2, 3, 0, 1, -1,
         ],
         hit_boxes: HUMANOID_HIT_BOXES.clone(),
+        joint_limits: HUMANOID_JOINT_LIMITS.clone(),
     })
 });
 
@@ -140,6 +186,7 @@ pub const RUMBLER: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, 19, 9, 18, 8, 10, 11, 12, 13, 14, 15, 16, 17, 6, 7, 4, 5, 2, 3, 0, 1, -1,
         ],
         hit_boxes: HUMANOID_HIT_BOXES.clone(),
+        joint_limits: HUMANOID_JOINT_LIMITS.clone(),
     })
 });
 
@@ -152,6 +199,7 @@ pub const DROID: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, 17, 10, 9, 8, 11, 12, 13, 14, 15, 16, -1, -1, 6, 7, 4, 5, 2, 3, 0, 1, -1,
         ],
         hit_boxes: HUMANOID_HIT_BOXES.clone(),
+        joint_limits: HUMANOID_JOINT_LIMITS.clone(),
     })
 });
 
@@ -162,6 +210,7 @@ pub const OVERLORD: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
         actor_type: ActorType::Overlord,
         joint_map: vec![],
         hit_boxes: OVERLORD_HIT_BOXES.clone(),
+        joint_limits: EMPTY_JOINT_LIMITS.clone(),
     })
 });
 
@@ -175,6 +224,7 @@ pub const ARACHNID: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, -1, -1,
         ],
         hit_boxes: SPIDER_HIT_BOXES.clone(),
+        joint_limits: EMPTY_JOINT_LIMITS.clone(),
     })
 });
 
@@ -187,6 +237,7 @@ pub const MONKEY: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, 19, 9, 18, 8, 10, 11, 12, 13, 14, 15, 16, 17, 6, 7, 4, 5, 2, 3, 0, 1, -1,
         ],
         hit_boxes: HUMANOID_HIT_BOXES.clone(),
+        joint_limits: HUMANOID_JOINT_LIMITS.clone(),
     })
 });
 
@@ -200,6 +251,7 @@ pub const BABY_ARACHNID: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, -1, -1,
         ],
         hit_boxes: SPIDER_HIT_BOXES.clone(),
+        joint_limits: EMPTY_JOINT_LIMITS.clone(),
     })
 });
 
@@ -212,6 +264,7 @@ pub const SHODAN: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
             -1, 19, 9, 18, 8, 10, 11, 12, 13, 14, 15, 16, 17, 6, 7, 4, 5, 2, 3, 0, 1, -1,
         ],
         hit_boxes: HUMANOID_HIT_BOXES.clone(),
+        joint_limits: HUMANOID_JOINT_LIMITS.clone(),
     })
 });
 
