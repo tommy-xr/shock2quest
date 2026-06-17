@@ -23,12 +23,15 @@ the debug-runtime physics introspection added for this effort:
    draw colliders/joints). NOTE: no extra `--` after `cargo dbgr`.
 2. Frame-step in small deterministic batches (`POST /v1/step {"frames":10}`); the
    scene kills the pipe hybrid and spawns the ragdoll at a fixed frame count.
-3. `GET /v1/physics/bodies?entity_id=<corpse>` and compute metrics over the
-   ragdoll's bodies: min/max **y** (floor penetration / launch), max/mean **linear
-   speed**, and max/mean **angular speed**.
-4. Interpretation: a healthy ragdoll **settles** (speeds → ~0, y near the floor);
-   a broken one either **explodes** (huge speed, y → large negative) or **diverges**
-   (speed *grows* over time = solver instability / energy injection).
+3. `GET /v1/ragdoll/metrics` (added in PR #282) for the purpose-built per-corpse
+   numbers: `max_linear_speed`, `max_angular_speed`, `min_y` (floor penetration),
+   `max_nonadjacent_overlap` (interpenetration between non-adjacent limb AABBs),
+   and `max_drift`. (`GET /v1/physics/bodies?entity_id=<corpse>` is the lower-level
+   fallback for raw per-body position/velocity.)
+4. Interpretation: a healthy ragdoll **settles** (speeds → ~0, y near the floor)
+   with low `max_nonadjacent_overlap`; a broken one either **explodes** (huge speed,
+   y → large negative), **diverges** (speed *grows* over time = solver instability /
+   energy injection), or **interpenetrates** (high overlap).
 5. `POST /v1/screenshot` for a visual sanity check (camera matches desktop).
 
 ### Findings, fixes, and verification (in order)
@@ -85,40 +88,42 @@ the debug-runtime physics introspection added for this effort:
      for the smoothest result; only if the hard swap looks jarring. Also: wire the
      handoff to *real* death, not just the debug scene.
 
-### Realism & verification backlog (capture now, schedule later)
+### Realism & verification backlog
 
 These came out of reviewing the settled corpse: it's much better than the puddle
-but not yet passable, and we lack objective checks for "is this right".
+but not yet passable, and we lacked objective checks for "is this right". The
+verification harness and the headline realism fix are now done; the rest remain.
 
-1. **Self-collision with adjacent-pair exclusion — the main realism blocker.**
-   Self-collision is currently *fully off* (`CollisionGroup::ragdoll()` filters to
-   `WORLD` only), which is why the torso/legs/head interpenetrate when crumpled.
-   The standard fix: re-enable limb-vs-limb collision but exclude *directly jointed*
-   pairs (Rapier: `impulse_joint.contacts_enabled(false)` per joint, or a contact
-   pair filter), so adjacent bones don't re-explode while non-adjacent parts (head
-   vs torso, arm vs leg) stop passing through each other. Verify via
-   `/v1/physics/bodies`: stays settled (no divergence) *and* a new
-   max-interpenetration metric (overlap between non-adjacent limb AABBs) drops.
-2. **Handoff pose-continuity verification.** Confirm the corpse starts exactly
-   where the creature was. Capture the creature's per-joint world transforms on the
-   last live frame (e.g. its kinematic hitbox body positions, which already sit at
-   the joints) and compare to the ragdoll body positions on the first corpse frame
-   — they should match within a small epsilon, then diverge smoothly under physics.
-   A few frames later the positions should still be plausible (no teleport/snap).
-   Likely needs a small debug endpoint or log dumping the seeded vs. expected joint
-   positions. Ties into the open **physics→skinning transform convention** check:
-   make sure the mesh skins to the same place the physics bodies are (raw joint
-   transforms vs. global×inverse-bind).
-3. **Hitbox-fit validation across the model corpus.** The limb colliders are AABBs
-   of each joint's skinned verts (in model space), and they're known to be roughly
-   sized (Delta 4 in the investigation log). Build an offline check (extend
+1. ✅ **Verification harness (PR #282).** `GET /v1/ragdoll/metrics` reports
+   `max_linear_speed`, `max_angular_speed`, `min_y`, `max_nonadjacent_overlap`
+   (interpenetration between non-adjacent limb AABBs; jointed pairs excluded), and
+   `max_drift`. Built on `PhysicsWorld::body_velocities`/`body_world_aabb` and
+   per-ragdoll adjacency/spawn-position tracking. This is what makes the items
+   below objectively verifiable.
+2. ✅ **Self-collision with adjacent-pair exclusion (PR #283) — the main realism
+   blocker.** Self-collision had been *fully off* (`CollisionGroup::ragdoll()`
+   filtered to `WORLD` only), so torso/legs/head interpenetrated. Fix: filter now
+   `WORLD | SELECTABLE` (limbs collide with each other) plus
+   `contacts_enabled(false)` on each joint so *directly jointed* pairs don't
+   re-explode. **Verified:** `max_nonadjacent_overlap` 0.44 → 0.24 while staying
+   settled (max linear ~0.03, max angular ~0.34, no floor penetration).
+3. **Hitbox-fit validation across the model corpus — next.** The residual ~0.24
+   overlap is largely from oversized hitbox AABBs (limb boxes bigger than the mesh;
+   Delta 4 in the investigation log). Build an offline check (extend
    `dark_query`/`dark_viewer`, or a test) that, for every creature `.bin` per
    ActorType, evaluates fit: % of a joint's skinned vertices contained in its box,
    box oversize ratio vs. the vert cloud, and overlap between sibling boxes.
    Surface outliers so we can fix the worst-fitting joints (and validate that the
-   model-space AABB + joint-local-center placement is geometrically right).
-4. **True hinge joints** for knees/elbows (single-axis limits) instead of cones —
-   needs the per-bone hinge axis, which the fit/skeleton analysis above can help
+   model-space AABB + joint-local-center placement is geometrically right). Should
+   drive `max_nonadjacent_overlap` down further; may also move limbs to capsules.
+4. **Handoff pose-continuity / skinning convention.** Physics placement at handoff
+   is exact *by construction* (corpse seeded from the same `world_joint_transforms`
+   the renderer skins with; `max_drift` ≈ 0 right after spawn confirms no snap). The
+   open piece is the **physics→skinning transform convention** — does the mesh skin
+   to the same place the physics bodies are (raw joint transforms vs.
+   global×inverse-bind)? Needs a render-side check, not a physics metric.
+5. **True hinge joints** for knees/elbows (single-axis limits) instead of cones —
+   needs the per-bone hinge axis, which the fit/skeleton analysis (#3) can help
    determine.
 
 **Tooling unblocked (PR #276, merged):** `/v1/physics/bodies` enumerates the raw
