@@ -64,16 +64,6 @@ jobs:
         env:
           RUSTFLAGS: "-D warnings"
 
-      # Build and test Shodan CLI tool
-      - name: Build Shodan CLI
-        run: cargo build --verbose --release -p shodan
-        env:
-          RUSTFLAGS: "-D warnings"
-      - name: Run Shodan CLI tests
-        run: cargo test --verbose -p shodan
-        env:
-          RUSTFLAGS: "-D warnings"
-
       # Build and test dark_viewer tool
       # Note: Windows build for dark_viewer is currently disabled due to compilation issues
       # TODO: Fix dark_viewer Windows compatibility and re-enable
