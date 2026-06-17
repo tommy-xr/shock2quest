@@ -123,21 +123,29 @@ verification harness and the headline realism fix are now done; the rest remain.
      `.cal` skeleton and reports, per joint: current model-space AABB, recommended
      **joint-local** AABB + center, inflation (model/local vol), and a recommended
      capsule (axis/radius/half-height).
-   - ⚠️ **Surprising v2 result — oriented boxes do NOT reduce volume for SS2.**
-     Across all creatures inflation ≈ 1.00× and the joint-local dims are the model
-     dims with axes **permuted**: SS2 bind rotations are axis-aligned (~90° swaps),
-     so a bone-aligned box is the same volume as the AABB. The earlier ~2.3× from
-     the v1 PCA bound was vs a *PCA* orientation, which the collider can't use (it
-     must live in the joint frame).
-   - ➡️ **The real, actionable bug it surfaced:** `rag_doll.rs` sizes colliders
-     from **model-space** `bbox.dim()`/`bbox.center()` but attaches them in the
-     **joint** frame, so the box is mis-oriented (long axis pointing the wrong way)
-     and mis-offset (e.g. GRUNT_P model `0.54,0.17,0.18` vs joint-local
-     `0.18,0.17,0.54`). **Next ragdoll PR:** transform each joint's hitbox verts by
-     the joint bind transform before computing the collider dims + center (use the
-     tool's "local dim"/"local center"), then re-measure `max_nonadjacent_overlap`.
-     Validate distal joints with large local centers (e.g. toe) visually under
-     `--debug-physics`.
+   - ⚠️ **v2 inflation ≈ 1.00× across all creatures** (joint-local dims = model
+     dims with axes permuted; SS2 bind rotations are axis-aligned ~90° swaps), so a
+     bone-aligned box is never smaller than the AABB. Oriented colliders give no
+     win.
+   - ❌ **Joint-local collider sizing was tried and REVERTED — the model-space
+     boxes are already correct.** The hypothesis was that `rag_doll.rs` sizes
+     colliders from model-space dims/center but attaches them in the joint frame
+     (mis-oriented). Implementing it (transform the hitbox AABB by the inverse bind
+     world transform) **regressed**: the ragdoll no longer settled (max angular
+     ~17 vs ~0.3) and overlap was unchanged (~0.27 vs ~0.24). Reason: the bodies
+     are placed at the same per-joint transforms the mesh skins with
+     (`Skeleton::get_transforms`/`world_transforms` are both the raw
+     `global_transforms` — **no inverse-bind**), so the hitbox vertices are already
+     effectively in the collider/body frame. Applying the inverse bind a second
+     time double-transforms the box (the tool's large joint-local "centers", e.g.
+     toe 1.40, were the tell). **Conclusion:** the current model-space sizing is
+     correct; the analyzer's `model dim` column is the meaningful collider size,
+     and its `local dim`/inflation/capsule columns are based on a wrong frame
+     assumption and should be ignored (a follow-up could drop them).
+   - ➡️ The residual ~0.24 `max_nonadjacent_overlap` is therefore **genuine limb
+     overlap** of a correctly-sized rig when crumpled, not a sizing bug. No
+     collider-resize work is warranted; further realism, if pursued, comes from the
+     death-handoff (velocity-seeded) and joint-tuning items, not box sizing.
 4. **Handoff pose-continuity / skinning convention.** Physics placement at handoff
    is exact *by construction* (corpse seeded from the same `world_joint_transforms`
    the renderer skins with; `max_drift` ≈ 0 right after spawn confirms no snap). The
