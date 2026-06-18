@@ -2,6 +2,11 @@
 [profile.dev.package.rapier3d]
 opt-level = 3
 
+# Strip debug info from third-party dependencies (our own crates keep it). Keeps
+# the dev `target/` dir far smaller without affecting debuggability of our code.
+[profile.dev.package."*"]
+debug = false
+
 [workspace]
 resolver = "2"
 
