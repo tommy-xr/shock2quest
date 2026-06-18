@@ -1,22 +1,25 @@
 //! Flatscreen first-person player controller.
 //!
 //! The dedicated flatscreen analog of `VirtualHand`: it wields a single weapon
-//! as a first-person viewmodel and fires it on the trigger. It produces the
-//! same `VirtualHandEffect`s the VR hands do (`HoldItem`, `SetPositionRotation`,
-//! `OutMessage { TriggerPull/Release }`), so `mission_core` processes VR and
-//! flat through one shared path, and the weapon-firing scripts fire unchanged.
+//! as a first-person viewmodel, fires it on the trigger, and uses/frobs/picks
+//! up the object under the crosshair. It produces the same `VirtualHandEffect`s
+//! the VR hands do (`HoldItem`, `DropItem`, `SetPositionRotation`,
+//! `OutMessage { TriggerPull/Release/Frob }`), so `mission_core` processes VR
+//! and flat through one shared path, and the weapon/frob scripts run unchanged.
 //!
-//! See `projects/flatscreen-and-vr-architecture.md` (Slice 5).
+//! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Quaternion, Rotation, Vector3, vec3};
-use shipyard::{EntityId, World};
+use cgmath::{Quaternion, Rotation, Vector3, point3, vec3};
+use shipyard::{EntityId, Get, View, World};
 
-use dark::SCALE_FACTOR;
+use dark::{SCALE_FACTOR, properties::PropFrobInfo};
 
 use crate::{
     input_context::Hand,
+    physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::{Message, MessagePayload},
-    virtual_hand::VirtualHandEffect,
+    util::resolve_proxy_entity,
+    virtual_hand::{VirtualHandEffect, can_grab_item},
     vr_config::{self, Handedness},
 };
 
@@ -29,6 +32,7 @@ const HEAD_HEIGHT: f32 = 5.0;
 pub struct FlatPlayerController {
     wielded_entity: Option<EntityId>,
     last_fire_pressed: bool,
+    last_use_pressed: bool,
 }
 
 impl FlatPlayerController {
@@ -36,19 +40,31 @@ impl FlatPlayerController {
         Self {
             wielded_entity: None,
             last_fire_pressed: false,
+            last_use_pressed: false,
         }
     }
 
-    /// Wield `entity_id` as the first-person weapon: hold it (becomes
-    /// non-physical and swaps to its hand model) and track it.
-    pub fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
-        self.wielded_entity = Some(entity_id);
-        self.last_fire_pressed = false;
-        vec![VirtualHandEffect::HoldItem { entity_id }]
+    pub fn is_wielding(&self) -> bool {
+        self.wielded_entity.is_some()
     }
 
-    /// Per-frame: place the viewmodel in front of the camera and fire on the
-    /// trigger's rising edge (release on the falling edge).
+    /// Wield `entity_id` as the first-person weapon. Any previously-wielded
+    /// weapon is dropped back into the world (regains physics + world model).
+    pub fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
+        let mut effects = Vec::new();
+        if let Some(prev) = self.wielded_entity {
+            if prev != entity_id {
+                effects.push(VirtualHandEffect::DropItem { entity_id: prev });
+            }
+        }
+        self.wielded_entity = Some(entity_id);
+        self.last_fire_pressed = false;
+        effects.push(VirtualHandEffect::HoldItem { entity_id });
+        effects
+    }
+
+    /// Per-frame update. Returns the effects to apply plus the entity currently
+    /// under the crosshair (for highlight rendering), if any.
     pub fn update(
         &mut self,
         input: &Hand,
@@ -56,54 +72,71 @@ impl FlatPlayerController {
         player_rotation: Quaternion<f32>,
         head_rotation: Quaternion<f32>,
         world: &World,
-    ) -> Vec<VirtualHandEffect> {
+        physics: &PhysicsWorld,
+    ) -> (Vec<VirtualHandEffect>, Option<EntityId>) {
         let mut effects = Vec::new();
 
-        let Some(entity_id) = self.wielded_entity else {
-            self.last_fire_pressed = false;
-            return effects;
-        };
-
-        // Camera/look transform. Position the weapon in front of the camera,
-        // oriented to fire forward (the same orientation correction the VR hand
-        // uses, so the firing scripts launch along the look direction).
         let look = player_rotation * head_rotation;
         let camera_pos = player_pos + vec3(0.0, HEAD_HEIGHT / SCALE_FACTOR, 0.0);
-        let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
-            entity_id,
-            world,
-            Handedness::Right,
-        );
-        let position = camera_pos + look.rotate_vector(VIEWMODEL_OFFSET / SCALE_FACTOR);
-        let rotation = look * adjustments.rotation;
 
-        effects.push(VirtualHandEffect::SetPositionRotation {
-            entity_id,
-            position,
-            rotation,
-            scale: adjustments.scale,
-        });
+        // Crosshair raycast: the frobbable entity under the reticle (resolving
+        // hitbox proxies to their parent, and ignoring the weapon we hold).
+        let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
+        let highlighted = physics
+            .ray_cast(
+                point3(camera_pos.x, camera_pos.y, camera_pos.z),
+                forward,
+                InternalCollisionGroups::ENTITY
+                    | InternalCollisionGroups::SELECTABLE
+                    | InternalCollisionGroups::WORLD
+                    | InternalCollisionGroups::UI
+                    | InternalCollisionGroups::RAYCAST,
+            )
+            .and_then(|r| r.maybe_entity_id)
+            .map(|e| resolve_proxy_entity(world, e))
+            .filter(|e| Some(*e) != self.wielded_entity && is_frobbable(world, *e));
 
-        // Fire on the trigger edge.
-        let fire_pressed = input.trigger_value > 0.5;
-        if fire_pressed && !self.last_fire_pressed {
-            effects.push(VirtualHandEffect::OutMessage {
-                message: Message {
-                    to: entity_id,
-                    payload: MessagePayload::TriggerPull,
-                },
+        // Place the viewmodel + fire on the trigger edge.
+        if let Some(entity_id) = self.wielded_entity {
+            let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
+                entity_id,
+                world,
+                Handedness::Right,
+            );
+            effects.push(VirtualHandEffect::SetPositionRotation {
+                entity_id,
+                position: camera_pos + look.rotate_vector(VIEWMODEL_OFFSET / SCALE_FACTOR),
+                rotation: look * adjustments.rotation,
+                scale: adjustments.scale,
             });
-        } else if !fire_pressed && self.last_fire_pressed {
-            effects.push(VirtualHandEffect::OutMessage {
-                message: Message {
-                    to: entity_id,
-                    payload: MessagePayload::TriggerRelease,
-                },
-            });
+
+            let fire_pressed = input.trigger_value > 0.5;
+            if fire_pressed && !self.last_fire_pressed {
+                effects.push(out_message(entity_id, MessagePayload::TriggerPull));
+            } else if !fire_pressed && self.last_fire_pressed {
+                effects.push(out_message(entity_id, MessagePayload::TriggerRelease));
+            }
+            self.last_fire_pressed = fire_pressed;
+        } else {
+            self.last_fire_pressed = false;
         }
-        self.last_fire_pressed = fire_pressed;
 
-        effects
+        // Use / frob / pickup on the use-button (squeeze) rising edge.
+        let use_pressed = input.squeeze_value > 0.5;
+        if use_pressed && !self.last_use_pressed {
+            if let Some(target) = highlighted {
+                if can_grab_item(world, target) {
+                    // A pickup-able object (e.g. a weapon): wield it.
+                    effects.extend(self.wield(target));
+                } else {
+                    // Otherwise interact with it.
+                    effects.push(out_message(target, MessagePayload::Frob));
+                }
+            }
+        }
+        self.last_use_pressed = use_pressed;
+
+        (effects, highlighted)
     }
 }
 
@@ -111,4 +144,19 @@ impl Default for FlatPlayerController {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn out_message(to: EntityId, payload: MessagePayload) -> VirtualHandEffect {
+    VirtualHandEffect::OutMessage {
+        message: Message { to, payload },
+    }
+}
+
+/// Whether an entity is worth highlighting / interacting with (it has frob
+/// info), which excludes plain world geometry the ray also hits.
+fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropFrobInfo>>()
+        .map(|v| v.get(entity_id).is_ok())
+        .unwrap_or(false)
 }

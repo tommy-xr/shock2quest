@@ -179,6 +179,8 @@ pub struct MissionCore {
     pub left_hand: VirtualHand,
     pub right_hand: VirtualHand,
     pub flat_player: FlatPlayerController,
+    /// Entity under the crosshair in flat mode (for hover-highlight rendering).
+    flat_highlighted: Option<EntityId>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
@@ -411,6 +413,7 @@ impl MissionCore {
             left_hand,
             right_hand,
             flat_player: FlatPlayerController::new(),
+            flat_highlighted: None,
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             script_world,
@@ -603,13 +606,15 @@ impl MissionCore {
         if game_options.presentation_mode == crate::PresentationMode::Vr {
             self.update_avatar_hands(asset_cache, player_pos, player_rot, input_context);
         } else {
-            let msgs = self.flat_player.update(
+            let (msgs, highlighted) = self.flat_player.update(
                 &input_context.right_hand,
                 player_pos,
                 player_rot,
                 input_context.head.rotation,
                 &self.world,
+                &self.physics,
             );
+            self.flat_highlighted = highlighted;
             self.process_virtual_hand_effects(asset_cache, msgs);
         }
 
@@ -1730,8 +1735,12 @@ impl MissionCore {
                         CreateEntityOptions::default(),
                     );
                     // Flat presentation: auto-wield the spawned weapon as the
-                    // first-person viewmodel (debug spawn-and-wield for Slice 5).
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                    // first-person viewmodel for debug testing, but only when not
+                    // already armed - extra spawns fall to the ground as world
+                    // pickups (world model + physics) to be picked up.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat
+                        && !self.flat_player.is_wielding()
+                    {
                         let msgs = self.flat_player.wield(info.entity_id);
                         self.process_virtual_hand_effects(asset_cache, msgs);
                     }
@@ -1818,6 +1827,29 @@ impl MissionCore {
                 options.debug_show_ids,
             ));
         };
+
+        // Flat presentation: highlight the entity under the crosshair, reusing
+        // the same brackets + name overlay as the VR hover.
+        if let Some(hit_entity) = self.flat_highlighted {
+            ret.extend(draw_item_outline(
+                asset_cache,
+                &self.physics,
+                hit_entity,
+                view,
+                projection,
+                screen_size,
+            ));
+            ret.extend(draw_item_name(
+                asset_cache,
+                &self.physics,
+                hit_entity,
+                &self.world,
+                view,
+                projection,
+                screen_size,
+                options.debug_show_ids,
+            ));
+        }
 
         ret.extend(self.visibility_engine.debug_render(asset_cache));
 
