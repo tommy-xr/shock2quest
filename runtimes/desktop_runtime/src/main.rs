@@ -122,6 +122,12 @@ struct Args {
     // count: u8,
     #[arg(short, long, default_value = None)]
     experimental: Option<Vec<String>>,
+
+    /// Run the emulated VR rig (mouse-driven hands, forearm HUD panels). The
+    /// default presentation is flatscreen (screen-space 2D HUD, clean
+    /// first-person view).
+    #[arg(long)]
+    vr: bool,
 }
 struct MouseUpdateResult {
     delta_x: f32,
@@ -236,8 +242,17 @@ pub fn main() {
 
     let (mission, spawn_location) = parse_mission(&args.mission);
 
+    // Flatscreen is the default desktop presentation; --vr opts into the
+    // emulated VR rig.
+    let presentation_mode = if args.vr {
+        shock2vr::PresentationMode::Vr
+    } else {
+        shock2vr::PresentationMode::Flat
+    };
+
     let options = GameOptions {
         mission,
+        presentation_mode,
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
