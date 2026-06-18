@@ -322,7 +322,7 @@ pub fn main() {
             cursor_visible = wants_pointer;
         }
 
-        let (input_context, input_state) = process_events(
+        let (mut input_context, input_state) = process_events(
             &mut window,
             &mut camera_context,
             &mut hand_context,
@@ -332,6 +332,18 @@ pub fn main() {
             &mut action_state,
             wants_pointer,
         );
+
+        // Flat first-person: left mouse button fires the wielded weapon (the
+        // flat controller reads the right-hand trigger).
+        if !args.vr {
+            input_context.right_hand.trigger_value =
+                if window.get_mouse_button(MouseButton::Button1) == Action::Press {
+                    1.0
+                } else {
+                    0.0
+                };
+        }
+
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
             cgmath::perspective(cgmath::Deg(45.0), ratio, 0.1, 1000.0);

@@ -63,6 +63,7 @@ use tracing::{info, trace, warn};
 use crate::{
     GameOptions,
     creature::{HitBoxManager, RagDollManager, get_creature_definition},
+    flat_player_controller::FlatPlayerController,
     game_scene::AmbientAudioState,
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
@@ -177,6 +178,7 @@ pub struct MissionCore {
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     pub left_hand: VirtualHand,
     pub right_hand: VirtualHand,
+    pub flat_player: FlatPlayerController,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
@@ -408,6 +410,7 @@ impl MissionCore {
         MissionCore {
             left_hand,
             right_hand,
+            flat_player: FlatPlayerController::new(),
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             script_world,
@@ -595,7 +598,20 @@ impl MissionCore {
             &mut self.id_to_physics,
         );
 
-        self.update_avatar_hands(asset_cache, player_pos, player_rot, input_context);
+        // VR drives two hands; flat drives a single first-person weapon
+        // controller. Both feed the same effect-processing path.
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            self.update_avatar_hands(asset_cache, player_pos, player_rot, input_context);
+        } else {
+            let msgs = self.flat_player.update(
+                &input_context.right_hand,
+                player_pos,
+                player_rot,
+                input_context.head.rotation,
+                &self.world,
+            );
+            self.process_virtual_hand_effects(asset_cache, msgs);
+        }
 
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
@@ -1684,7 +1700,7 @@ impl MissionCore {
                         (vec3_to_point3(player.pos), player.rotation * head_rotation)
                     };
                     let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -10.0 / SCALE_FACTOR);
-                    self.create_entity_with_position(
+                    let info = self.create_entity_with_position(
                         asset_cache,
                         template_id,
                         pos + forward,
@@ -1692,6 +1708,12 @@ impl MissionCore {
                         Matrix4::identity(),
                         CreateEntityOptions::default(),
                     );
+                    // Flat presentation: auto-wield the spawned weapon as the
+                    // first-person viewmodel (debug spawn-and-wield for Slice 5).
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        let msgs = self.flat_player.wield(info.entity_id);
+                        self.process_virtual_hand_effects(asset_cache, msgs);
+                    }
                 }
                 Effect::PositionInventoryRelativeToPlayer { head_rotation } => {
                     let (pos, rot) = {
@@ -2240,7 +2262,18 @@ impl MissionCore {
 
         left_hand_msgs.append(&mut right_hand_msgs);
 
-        for msg in left_hand_msgs {
+        self.process_virtual_hand_effects(asset_cache, left_hand_msgs);
+    }
+
+    /// Apply the effects produced by an interaction controller (the VR hands or
+    /// the flat first-person controller). Shared so both presentations go
+    /// through one path.
+    fn process_virtual_hand_effects(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        msgs: Vec<VirtualHandEffect>,
+    ) {
+        for msg in msgs {
             match msg {
                 VirtualHandEffect::OutMessage { message } => self.script_world.dispatch(message),
                 VirtualHandEffect::ApplyForce {
