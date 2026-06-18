@@ -90,9 +90,10 @@ impl HandContext {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Name of the person to greet
-    #[arg(short, long, default_value = "earth.mis")]
-    mission: String,
+    /// Mission or debug scene to load. If omitted, boots the main menu in flat
+    /// mode, or earth.mis in --vr mode.
+    #[arg(short, long)]
+    mission: Option<String>,
 
     #[arg(long = "debug-physics")]
     debug_physics: bool,
@@ -240,8 +241,6 @@ pub fn main() {
     let experimental_features: HashSet<String> =
         args.experimental.unwrap_or(vec![]).into_iter().collect();
 
-    let (mission, spawn_location) = parse_mission(&args.mission);
-
     // Flatscreen is the default desktop presentation; --vr opts into the
     // emulated VR rig.
     let presentation_mode = if args.vr {
@@ -249,6 +248,17 @@ pub fn main() {
     } else {
         shock2vr::PresentationMode::Flat
     };
+
+    // With no explicit mission, flat boots the (mouse-driven) main menu; the VR
+    // rig has no pointer, so it boots straight into the first mission.
+    let mission_arg = args.mission.clone().unwrap_or_else(|| {
+        if args.vr {
+            "earth.mis".to_owned()
+        } else {
+            "main_menu".to_owned()
+        }
+    });
+    let (mission, spawn_location) = parse_mission(&mission_arg);
 
     let options = GameOptions {
         mission,
@@ -284,6 +294,10 @@ pub fn main() {
 
     let mut _frame = 0;
     let mut input_mapper = DesktopInputMapper::new();
+
+    // Tracks whether the OS cursor is currently visible (Normal) vs captured
+    // for mouse-look (Disabled). The window starts with the cursor disabled.
+    let mut cursor_visible = false;
     let mut action_state = InputActionState::new();
 
     let _mode = Mode::Gameplay;
@@ -296,6 +310,18 @@ pub fn main() {
         let delta_time = time - last_time;
         last_time = time;
 
+        // A scene (e.g. the main menu) may want a visible 2D cursor instead of
+        // captured mouse-look. Toggle the OS cursor when that changes.
+        let wants_pointer = game.wants_pointer();
+        if wants_pointer != cursor_visible {
+            window.set_cursor_mode(if wants_pointer {
+                glfw::CursorMode::Normal
+            } else {
+                glfw::CursorMode::Disabled
+            });
+            cursor_visible = wants_pointer;
+        }
+
         let (input_context, input_state) = process_events(
             &mut window,
             &mut camera_context,
@@ -304,6 +330,7 @@ pub fn main() {
             delta_time,
             &mut input_mapper,
             &mut action_state,
+            wants_pointer,
         );
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
@@ -318,6 +345,11 @@ pub fn main() {
             "game.update",
             game.update(&time, &input_context, &mut action_state)
         );
+
+        // A scene may request quitting (e.g. the main menu's Quit item).
+        if game.should_quit() {
+            window.set_should_close(true);
+        }
 
         let screen_size = vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32);
 
@@ -422,6 +454,7 @@ fn process_events(
     delta_time: f32,
     input_mapper: &mut DesktopInputMapper,
     action_state: &mut InputActionState,
+    wants_pointer: bool,
 ) -> (InputContext, InputState) {
     let _speed = 20.0;
     let head_rot_speed = 10.0;
@@ -583,6 +616,17 @@ fn process_events(
     input_context.left_hand.a_value = f32_from_bool(hand_context.left_a_pressed);
     // input_context.left_hand.trigger_value = trigger_value;
     // input_context.left_hand.squeeze_value = squeeze_value;
+
+    // Flatscreen UI (menus) reads an absolute 2D pointer rather than the VR
+    // hands. The cursor is in Normal mode here, so positions are window coords.
+    if wants_pointer {
+        if let Some(MousePosition { x, y }) = &camera_context.mouse_position {
+            input_context.pointer = Some(shock2vr::input_context::Pointer2D {
+                position: vec2(x / SCR_WIDTH as f32, y / SCR_HEIGHT as f32),
+                pressed: window.get_mouse_button(MouseButton::Button1) == Action::Press,
+            });
+        }
+    }
 
     let mut input_state = InputState::new();
     input_state.is_crouching = window.get_key(Key::LeftControl) == Action::Press;
