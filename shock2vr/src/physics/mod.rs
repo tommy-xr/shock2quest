@@ -180,6 +180,39 @@ pub struct PhysicsWorld {
     events: PhysicsEvents,
 }
 
+/// Clamp a collider's full size to finite, positive, bounded values. Some Dark
+/// objects (notably certain trigger/`Ecology` objects) resolve to a non-finite
+/// (e.g. infinite) collider dimension, producing a collider with a NaN/infinite
+/// AABB. The old SAP broad-phase tolerated that; rapier's BVH broad-phase panics
+/// on it (parry binned build, "index out of bounds"). Sanitize at the source and
+/// log the offender so the bad data is traceable.
+fn sanitize_collider_size(
+    entity_id: EntityId,
+    context: &str,
+    size: Vector3<f32>,
+) -> Vector3<f32> {
+    const MIN_SIZE: f32 = 0.01;
+    const MAX_SIZE: f32 = 1.0e4;
+    let clamp = |v: f32| -> f32 {
+        if v.is_finite() && v > 0.0 {
+            v.min(MAX_SIZE)
+        } else {
+            MIN_SIZE
+        }
+    };
+    let out = Vector3::new(clamp(size.x), clamp(size.y), clamp(size.z));
+    if out != size {
+        tracing::warn!(
+            "[physics] {} entity {:?}: invalid collider size {:?} -> clamped to {:?}",
+            context,
+            entity_id,
+            size,
+            out
+        );
+    }
+    out
+}
+
 impl PhysicsWorld {
     pub fn add_level_geometry(&mut self, entity_id: EntityId, level: &SystemShock2Level) {
         /* Create the ground. */
@@ -473,7 +506,7 @@ impl PhysicsWorld {
                     .build()
             }
             PhysicsShape::Cuboid(size) => {
-                assert!(size.x > 0.0 && size.y > 0.0 && size.z > 0.0);
+                let size = sanitize_collider_size(entity_id, "add_dynamic", size);
                 ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
                     //.rotation(vector!(angles.0, angles.1, angles.2))
                     //.rotation(vector!(facing.z, facing.x, facing.y))
@@ -541,7 +574,7 @@ impl PhysicsWorld {
             .build();
         rigid_body.user_data = entity_id.inner() as u128;
         let handle = &self.rigid_body_set.insert(rigid_body);
-        assert!(size.x >= 0.0 && size.y >= 0.0 && size.z >= 0.0);
+        let size = sanitize_collider_size(entity_id, "add_kinematic", size);
         let mut collider = ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
             //.rotation(vector!(angles.0, angles.1, angles.2))
             //.rotation(vector!(facing.z, facing.x, facing.y))
