@@ -1058,11 +1058,14 @@ impl MissionCore {
     /// creature is removed. Using a separate entity id is important: the original
     /// creature is torn down via `remove_entity`, which also clears any ragdoll
     /// keyed by that id - so the corpse must live under its own id to survive.
-    pub fn spawn_debug_ragdoll(&mut self, entity_id: EntityId) {
+    /// Replace a creature with a physics ragdoll of its current pose. `use_multibody`
+    /// selects reduced-coordinate (multibody) joints over the default impulse joints.
+    /// Returns true if a ragdoll was spawned (the creature is then removed).
+    pub fn spawn_ragdoll(&mut self, entity_id: EntityId, use_multibody: bool) -> bool {
         let spawned = {
             let model = match self.id_to_model.get(&entity_id) {
                 Some(model) if model.can_create_rag_doll() => model,
-                _ => return,
+                _ => return false,
             };
 
             let (root_transform, joint_transforms) = {
@@ -1074,11 +1077,11 @@ impl MissionCore {
 
                 let root_transform = match v_transform.get(entity_id) {
                     Ok(transform) => transform.0,
-                    Err(_) => return,
+                    Err(_) => return false,
                 };
                 let joint_transforms = match v_joint_transforms.get(entity_id) {
                     Ok(joints) => joints.0,
-                    Err(_) => return,
+                    Err(_) => return false,
                 };
                 (root_transform, joint_transforms)
             };
@@ -1100,6 +1103,7 @@ impl MissionCore {
                 &joint_transforms,
                 vec3(0.0, 0.0, 0.0),
                 &joint_limits,
+                use_multibody,
                 &mut self.physics,
             )
         };
@@ -1110,6 +1114,7 @@ impl MissionCore {
             self.remove_entity(entity_id);
             println!("Spawned ragdoll and removed creature {:?}", entity_id);
         }
+        spawned
     }
 
     pub fn handle_effects(
@@ -1591,7 +1596,23 @@ impl MissionCore {
                             )
                         }
 
-                        self.remove_entity(entity_id);
+                        // With the `ragdoll` experimental flag, replace the slain
+                        // creature with a physics ragdoll of its death pose (the
+                        // spawn removes the creature itself). `ragdoll_multibody`
+                        // selects the experimental reduced-coordinate joints. Without
+                        // the flag (or for non-ragdoll-able entities), fall back to
+                        // the plain removal.
+                        let spawned_ragdoll =
+                            game_options.experimental_features.contains("ragdoll")
+                                && self.spawn_ragdoll(
+                                    entity_id,
+                                    game_options
+                                        .experimental_features
+                                        .contains("ragdoll_multibody"),
+                                );
+                        if !spawned_ragdoll {
+                            self.remove_entity(entity_id);
+                        }
                     }
                 }
                 Effect::StopSound { handle } => {

@@ -171,7 +171,12 @@ impl RagdollHooks {
                 asset_cache,
                 audio_context,
             );
-            core.spawn_debug_ragdoll(entity_id);
+            core.spawn_ragdoll(
+                entity_id,
+                game_options
+                    .experimental_features
+                    .contains("ragdoll_multibody"),
+            );
             println!(
                 "Applied massive damage to pipe hybrid entity {:?} for ragdoll testing",
                 entity_id
