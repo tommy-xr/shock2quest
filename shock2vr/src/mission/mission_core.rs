@@ -1768,6 +1768,16 @@ impl MissionCore {
             }
         }
 
+        // Flat (non-VR) presentation draws a screen-space 2D HUD here, where the
+        // screen size is available. The VR forearm HUD is built in `render`.
+        if options.presentation_mode == crate::PresentationMode::Flat {
+            ret.extend(crate::hud::create_flat_hud(
+                asset_cache,
+                &self.world,
+                screen_size,
+            ));
+        }
+
         ret
     }
 
@@ -1979,16 +1989,19 @@ impl MissionCore {
         scene.append(&mut self.left_hand.render());
         scene.append(&mut self.right_hand.render());
 
-        // Render forearm HUD panels with health/psi overlays
-        let mut hud_panels = crate::hud::create_arm_hud_panels(
-            asset_cache,
-            &self.world,
-            self.left_hand.get_position(),
-            self.left_hand.get_rotation(),
-            self.right_hand.get_position(),
-            self.right_hand.get_rotation(),
-        );
-        scene.append(&mut hud_panels);
+        // Render forearm HUD panels with health/psi overlays (VR only). The flat
+        // presentation draws a screen-space 2D HUD in `render_per_eye` instead.
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            let mut hud_panels = crate::hud::create_arm_hud_panels(
+                asset_cache,
+                &self.world,
+                self.left_hand.get_position(),
+                self.left_hand.get_rotation(),
+                self.right_hand.get_position(),
+                self.right_hand.get_rotation(),
+            );
+            scene.append(&mut hud_panels);
+        }
 
         // Render inventory
         let inventory_objs = PlayerInventoryEntity::render(&self.world);

@@ -21,6 +21,7 @@ impl DebugTeleportScene {
 
         let teleport_options = GameOptions {
             mission: game_options.mission.clone(),
+            presentation_mode: game_options.presentation_mode,
             spawn_location: game_options.spawn_location.clone(),
             save_file: game_options.save_file.clone(),
             render_particles: game_options.render_particles,
