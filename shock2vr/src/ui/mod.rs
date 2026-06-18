@@ -64,6 +64,60 @@ pub enum VAlign {
     Bottom,
 }
 
+/// How a canvas maps onto a target when their aspect ratios differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScaleMode {
+    /// Fill the target, stretching each axis independently (may distort).
+    Stretch,
+    /// Uniform scale that fits the canvas inside the target, centered, leaving
+    /// empty bars on the longer axis (letterbox / pillarbox).
+    PreserveAspect,
+}
+
+/// Canvas->target mapping such that `target_px = canvas_px * scale + offset`.
+fn fit(
+    canvas: Vector2<f32>,
+    target: Vector2<f32>,
+    mode: ScaleMode,
+) -> (Vector2<f32>, Vector2<f32>) {
+    match mode {
+        ScaleMode::Stretch => (
+            vec2(target.x / canvas.x, target.y / canvas.y),
+            vec2(0.0, 0.0),
+        ),
+        ScaleMode::PreserveAspect => {
+            let s = (target.x / canvas.x).min(target.y / canvas.y);
+            let offset = vec2(
+                (target.x - canvas.x * s) / 2.0,
+                (target.y - canvas.y * s) / 2.0,
+            );
+            (vec2(s, s), offset)
+        }
+    }
+}
+
+/// Map a normalized pointer (`InputContext::pointer`, `[0,1]`) to canvas pixels
+/// for a `canvas_size` canvas shown on `screen_size` under `mode`. Returns
+/// `None` when the pointer falls in the letterbox bars (outside the canvas).
+pub fn pointer_to_canvas(
+    canvas_size: Vector2<f32>,
+    normalized: Vector2<f32>,
+    screen_size: Vector2<f32>,
+    mode: ScaleMode,
+) -> Option<Vector2<f32>> {
+    let (scale, offset) = fit(canvas_size, screen_size, mode);
+    let screen = vec2(normalized.x * screen_size.x, normalized.y * screen_size.y);
+    let canvas = vec2(
+        (screen.x - offset.x) / scale.x,
+        (screen.y - offset.y) / scale.y,
+    );
+    if canvas.x < 0.0 || canvas.y < 0.0 || canvas.x > canvas_size.x || canvas.y > canvas_size.y {
+        None
+    } else {
+        Some(canvas)
+    }
+}
+
 enum UiElement {
     Image {
         rect: Rect,
@@ -100,12 +154,6 @@ impl UiCanvas {
             size,
             elements: Vec::new(),
         }
-    }
-
-    /// Convert a normalized pointer (`InputContext::pointer`, `[0,1]`) to canvas
-    /// coordinates, so scenes can hit-test their `Rect`s against it.
-    pub fn to_canvas(&self, normalized: Vector2<f32>) -> Vector2<f32> {
-        vec2(normalized.x * self.size.x, normalized.y * self.size.y)
     }
 
     pub fn element_count(&self) -> usize {
@@ -166,14 +214,15 @@ impl UiCanvas {
         self
     }
 
-    /// Render the canvas as a screen-space overlay scaled to fill `screen_size`.
+    /// Render the canvas as a screen-space overlay on `screen_size`, mapped via
+    /// `mode` (stretch-to-fill or aspect-preserving letterbox).
     pub fn render_screen_space(
         &self,
         asset_cache: &mut AssetCache,
         screen_size: Vector2<f32>,
+        mode: ScaleMode,
     ) -> Vec<SceneObject> {
-        let sx = screen_size.x / self.size.x;
-        let sy = screen_size.y / self.size.y;
+        let (scale, offset) = fit(self.size, screen_size, mode);
         let texture_options = TextureOptions { wrap: false };
         let mut objs = Vec::with_capacity(self.elements.len());
 
@@ -187,8 +236,8 @@ impl UiCanvas {
                     let tex = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
-                        vec2(rect.x * sx, rect.y * sy),
-                        vec2(rect.w * sx, rect.h * sy),
+                        vec2(rect.x * scale.x + offset.x, rect.y * scale.y + offset.y),
+                        vec2(rect.w * scale.x, rect.h * scale.y),
                         *opacity,
                     ));
                 }
@@ -206,8 +255,8 @@ impl UiCanvas {
                     let mut obj =
                         SceneObject::new(material, Box::new(engine::scene::quad::create()));
                     obj.set_local_transform(screen_space_quad_transform(
-                        vec2(rect.x * sx, rect.y * sy),
-                        vec2(rect.w * sx, rect.h * sy),
+                        vec2(rect.x * scale.x + offset.x, rect.y * scale.y + offset.y),
+                        vec2(rect.w * scale.x, rect.h * scale.y),
                     ));
                     objs.push(obj);
                 }
@@ -221,13 +270,13 @@ impl UiCanvas {
                     opacity,
                 } => {
                     let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
-                    let font_size = size * sy;
+                    let font_size = size * scale.y;
                     let width = measure_text_width(&**font_obj, text, font_size);
 
-                    let rx = rect.x * sx;
-                    let ry = rect.y * sy;
-                    let rw = rect.w * sx;
-                    let rh = rect.h * sy;
+                    let rx = rect.x * scale.x + offset.x;
+                    let ry = rect.y * scale.y + offset.y;
+                    let rw = rect.w * scale.x;
+                    let rh = rect.h * scale.y;
                     let x = match h {
                         HAlign::Left => rx,
                         HAlign::Center => rx + (rw - width) / 2.0,
@@ -273,9 +322,42 @@ mod tests {
     }
 
     #[test]
-    fn to_canvas_scales_normalized_pointer() {
-        let c = UiCanvas::new(vec2(640.0, 480.0));
-        assert_eq!(c.to_canvas(vec2(0.5, 0.5)), vec2(320.0, 240.0));
-        assert_eq!(c.to_canvas(vec2(1.0, 1.0)), vec2(640.0, 480.0));
+    fn stretch_maps_pointer_independent_of_screen_size() {
+        // Stretch: normalized maps straight to the canvas regardless of screen.
+        let canvas = vec2(640.0, 480.0);
+        let p = pointer_to_canvas(
+            canvas,
+            vec2(0.5, 0.5),
+            vec2(1920.0, 1080.0),
+            ScaleMode::Stretch,
+        );
+        assert_eq!(p, Some(vec2(320.0, 240.0)));
+    }
+
+    #[test]
+    fn preserve_aspect_letterboxes_and_centers() {
+        // 640x480 (4:3) canvas in a 1280x480 (wider) target: uniform scale 1.0,
+        // 320px pillarbox bars on each side. Screen center maps to canvas center.
+        let canvas = vec2(640.0, 480.0);
+        let screen = vec2(1280.0, 480.0);
+        let center = pointer_to_canvas(canvas, vec2(0.5, 0.5), screen, ScaleMode::PreserveAspect);
+        assert_eq!(center, Some(vec2(320.0, 240.0)));
+
+        // A point inside the left pillarbox bar is outside the canvas.
+        let in_bar = pointer_to_canvas(canvas, vec2(0.1, 0.5), screen, ScaleMode::PreserveAspect);
+        assert_eq!(in_bar, None);
+    }
+
+    #[test]
+    fn preserve_aspect_is_stretch_when_aspect_matches() {
+        // 4:3 canvas on a 4:3 screen: no bars, so it matches stretch.
+        let canvas = vec2(640.0, 480.0);
+        let p = pointer_to_canvas(
+            canvas,
+            vec2(0.5, 0.25),
+            vec2(800.0, 600.0),
+            ScaleMode::PreserveAspect,
+        );
+        assert_eq!(p, Some(vec2(320.0, 120.0)));
     }
 }

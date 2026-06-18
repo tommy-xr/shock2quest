@@ -27,7 +27,7 @@ use crate::{
     quest_info::QuestInfo,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{HAlign, Rect, UiCanvas, VAlign},
+    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
 };
 
 /// Mission loaded when the player chooses "New Game".
@@ -36,7 +36,10 @@ const NEW_GAME_MISSION: &str = "earth.mis";
 /// The menu is authored on the original 640x480 `MAIN.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
+const MENU_FONT: &str = "mainaa.fon"; // anti-aliased menu font (vs the bitmap mainfont)
 const MENU_FONT_SIZE: f32 = 19.0; // canvas pixels (~0.04 * height)
+/// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
+const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
@@ -70,15 +73,22 @@ const MENU_ITEMS: &[MenuItem] = &[
 
 /// Pure click resolution: on a rising press edge over an item, return its
 /// action. Also returns the new `last_pressed` to track for the next frame.
-fn resolve_click(pointer: Option<Pointer2D>, last_pressed: bool) -> (Option<MenuAction>, bool) {
+fn resolve_click(
+    pointer: Option<Pointer2D>,
+    last_pressed: bool,
+    screen_size: Vector2<f32>,
+) -> (Option<MenuAction>, bool) {
     match pointer {
         Some(p) => {
-            let canvas_pos = vec2(p.position.x * CANVAS_W, p.position.y * CANVAS_H);
             let action = if p.pressed && !last_pressed {
-                MENU_ITEMS
-                    .iter()
-                    .find(|it| it.rect.contains(canvas_pos))
-                    .map(|it| it.action)
+                pointer_to_canvas(
+                    vec2(CANVAS_W, CANVAS_H),
+                    p.position,
+                    screen_size,
+                    SCALE_MODE,
+                )
+                .and_then(|c| MENU_ITEMS.iter().find(|it| it.rect.contains(c)))
+                .map(|it| it.action)
             } else {
                 None
             };
@@ -95,6 +105,9 @@ pub struct MainMenuScene {
     pointer: Option<Pointer2D>,
     /// Whether the pointer was pressed last frame (for rising-edge clicks).
     last_pressed: bool,
+    /// Screen size from the latest render, so `update` can map the pointer into
+    /// canvas space consistently with how the canvas is drawn.
+    last_screen_size: Vector2<f32>,
 }
 
 impl MainMenuScene {
@@ -128,6 +141,7 @@ impl MainMenuScene {
             scene_name: "main_menu".to_owned(),
             pointer: None,
             last_pressed: false,
+            last_screen_size: vec2(CANVAS_W, CANVAS_H),
         }
     }
 }
@@ -152,7 +166,11 @@ impl GameScene for MainMenuScene {
         }
 
         self.pointer = input_context.pointer;
-        let (action, last_pressed) = resolve_click(input_context.pointer, self.last_pressed);
+        let (action, last_pressed) = resolve_click(
+            input_context.pointer,
+            self.last_pressed,
+            self.last_screen_size,
+        );
         self.last_pressed = last_pressed;
 
         match action {
@@ -190,22 +208,28 @@ impl GameScene for MainMenuScene {
         screen_size: Vector2<f32>,
         _options: &GameOptions,
     ) -> Vec<SceneObject> {
+        self.last_screen_size = screen_size;
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
         // Full-screen backdrop.
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
 
         // Clickable items, centered in their button and brighter when hovered.
-        let pointer_canvas = self
-            .pointer
-            .map(|p| vec2(p.position.x * CANVAS_W, p.position.y * CANVAS_H));
+        let pointer_canvas = self.pointer.and_then(|p| {
+            pointer_to_canvas(
+                vec2(CANVAS_W, CANVAS_H),
+                p.position,
+                screen_size,
+                SCALE_MODE,
+            )
+        });
         for item in MENU_ITEMS {
             let hovered = pointer_canvas.is_some_and(|pp| item.rect.contains(pp));
             canvas
                 .text(
                     item.rect,
                     item.label,
-                    "mainfont.fon",
+                    MENU_FONT,
                     MENU_FONT_SIZE,
                     HAlign::Center,
                     VAlign::Middle,
@@ -213,7 +237,7 @@ impl GameScene for MainMenuScene {
                 .opacity(if hovered { 1.0 } else { 0.6 });
         }
 
-        canvas.render_screen_space(asset_cache, screen_size)
+        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
     }
 
     fn handle_effects(
@@ -261,37 +285,41 @@ mod tests {
         })
     }
 
+    // The runtimes render at a 4:3 resolution, so PreserveAspect == stretch and
+    // normalized coords map straight to the 640x480 canvas.
+    const SCREEN: Vector2<f32> = Vector2 { x: 800.0, y: 600.0 };
+
     #[test]
     fn rising_edge_over_new_game_activates_it() {
         // Press edge over the top button (normalized ~ canvas (512, 37)).
-        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), false);
+        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), false, SCREEN);
         assert_eq!(action, Some(MenuAction::NewGame));
         assert!(last);
     }
 
     #[test]
     fn rising_edge_over_quit_activates_it() {
-        let (action, _) = resolve_click(pointer_at(0.8, 0.870, true), false);
+        let (action, _) = resolve_click(pointer_at(0.8, 0.870, true), false, SCREEN);
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
     #[test]
     fn held_press_does_not_re_activate() {
         // Already pressed last frame -> no new activation even over an item.
-        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), true);
+        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), true, SCREEN);
         assert_eq!(action, None);
         assert!(last);
     }
 
     #[test]
     fn click_outside_items_does_nothing() {
-        let (action, _) = resolve_click(pointer_at(0.05, 0.05, true), false);
+        let (action, _) = resolve_click(pointer_at(0.05, 0.05, true), false, SCREEN);
         assert_eq!(action, None);
     }
 
     #[test]
     fn no_pointer_means_no_action() {
-        let (action, last) = resolve_click(None, true);
+        let (action, last) = resolve_click(None, true, SCREEN);
         assert_eq!(action, None);
         assert!(!last);
     }

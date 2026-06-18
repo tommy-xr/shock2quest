@@ -11,7 +11,7 @@ use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
 use super::{get_health_percentage, get_psi_percentage};
-use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
+use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
 
 /// The original SS2 HUD is authored against a 640x480 display.
 const VIRTUAL_W: f32 = 640.0;
@@ -63,7 +63,8 @@ pub(crate) fn create_flat_hud(
     screen_size: cgmath::Vector2<f32>,
 ) -> Vec<SceneObject> {
     let canvas = build_flat_hud_canvas(get_health_percentage(world), get_psi_percentage(world));
-    canvas.render_screen_space(asset_cache, screen_size)
+    // Keep the crosshair square and bars undistorted on non-4:3 windows.
+    canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
 }
 
 #[cfg(test)]
