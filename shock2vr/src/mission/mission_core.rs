@@ -2031,9 +2031,12 @@ impl MissionCore {
         let mut _player = SceneObject::new(player_mat, Box::new(engine::scene::cube::create()));
         _player.set_transform(Matrix4::from_translation(player.pos));
 
-        // Render hands
-        scene.append(&mut self.left_hand.render());
-        scene.append(&mut self.right_hand.render());
+        // Render the VR hands (and anything held in them). The flat presentation
+        // has no floating hands - a first-person weapon viewmodel comes later.
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            scene.append(&mut self.left_hand.render());
+            scene.append(&mut self.right_hand.render());
+        }
 
         // Render forearm HUD panels with health/psi overlays (VR only). The flat
         // presentation draws a screen-space 2D HUD in `render_per_eye` instead.
