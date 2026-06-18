@@ -8,7 +8,7 @@ use rapier3d::{
     na::{Point3 as NaPoint3, Translation3, UnitQuaternion},
     prelude::{
         GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, JointAxis,
-        RigidBodyHandle, SharedShape,
+        RigidBodyHandle, SharedShape, SpringCoefficients,
     },
 };
 use shipyard::EntityId;
@@ -395,6 +395,17 @@ impl RagDollManager {
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
                     .local_frame1(frame1)
                     .local_frame2(frame2)
+                    // Compliant joints (rapier 0.31+): the default softness is
+                    // near-rigid (natural_frequency 1e6), which rigidly fights the
+                    // unavoidable constraint residual on this hub-and-spoke
+                    // skeleton each step and pumps energy (the ragdoll never
+                    // settles). A spring-like, well-damped joint absorbs the
+                    // residual instead. ~60 Hz is well above the step rate (stiff
+                    // enough to hold limbs together) but far from rigid.
+                    .softness(SpringCoefficients {
+                        natural_frequency: 60.0,
+                        damping_ratio: 2.0,
+                    })
                     .limits(JointAxis::AngX, [-cone, cone])
                     .limits(JointAxis::AngY, [-cone, cone])
                     .limits(JointAxis::AngZ, [-cone, cone])
