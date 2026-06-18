@@ -327,8 +327,19 @@ impl RagDollManager {
             body_handles.push(handle);
         }
 
+        // A child body must be jointed to its parent exactly once. The Dark
+        // skeleton legitimately lists some joints twice - once as a torso's main
+        // joint and once as a fixed point on the parent torso (see
+        // ss2_skeleton::create) - which would otherwise create a duplicate
+        // impulse joint between the same body pair and over-constrain the hub
+        // (e.g. the abdomen, joint 18, under the pelvis hub, joint 8).
+        let mut jointed_children: HashMap<u32, ()> = HashMap::new();
+
         for bone in &bones {
             if let Some(parent_id) = bone.parent_id {
+                if jointed_children.insert(bone.joint_id as u32, ()).is_some() {
+                    continue;
+                }
                 let parent_handle = match joint_to_body.get(&(parent_id as u32)) {
                     Some(handle) => *handle,
                     None => continue,
