@@ -1,22 +1,20 @@
 //! Flatscreen main menu.
 //!
 //! A minimal `GameScene` that draws the original `MAIN.PCX` backdrop with
-//! mouse-clickable "New Game" / "Quit" items. It reads `InputContext::pointer`
-//! (normalized screen coords) and emits a `GlobalEffect` on click:
-//! New Game -> `TransitionLevel` into the first mission, Quit -> `Quit`.
+//! mouse-clickable "New Game" / "Quit" items, described on the shared
+//! [`UiCanvas`]. It reads `InputContext::pointer` (normalized screen coords) and
+//! emits a `GlobalEffect` on click: New Game -> `TransitionLevel` into the first
+//! mission, Quit -> `Quit`.
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slice 3).
 
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
     scene::{SceneObject, light::SpotLight},
-    texture::{TextureOptions, TextureTrait},
 };
 use shipyard::{EntityId, UniqueViewMut, World};
 
@@ -29,10 +27,19 @@ use crate::{
     quest_info::QuestInfo,
     scripts::{Effect, GlobalEffect},
     time::Time,
+    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
 };
 
 /// Mission loaded when the player chooses "New Game".
 const NEW_GAME_MISSION: &str = "earth.mis";
+
+/// The menu is authored on the original 640x480 `MAIN.PCX` canvas.
+const CANVAS_W: f32 = 640.0;
+const CANVAS_H: f32 = 480.0;
+const MENU_FONT: &str = "mainaa.fon"; // anti-aliased menu font (vs the bitmap mainfont)
+const MENU_FONT_SIZE: f32 = 19.0; // canvas pixels (~0.04 * height)
+/// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
+const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
@@ -43,51 +50,45 @@ enum MenuAction {
 struct MenuItem {
     label: &'static str,
     action: MenuAction,
-    /// Normalized [0, 1] hit rect over the MAIN.PCX button:
-    /// (min_x, min_y, max_x, max_y), origin top-left.
-    rect: (f32, f32, f32, f32),
-    /// Normalized [0, 1] top-left where the label text is drawn (inside `rect`).
-    text_pos: (f32, f32),
+    /// Hit/draw rect in canvas pixels, over the MAIN.PCX button.
+    rect: Rect,
 }
 
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
-// side; their normalized vertical centers (measured from the art's red marker
-// rows) are 0.078, 0.236, 0.395, 0.553, 0.711, 0.870, each ~0.158 tall, with the
-// left edge at x ~= 0.633. New Game goes in the top button, Quit in the bottom.
-// Text is left-aligned at a common inset and vertically centered on the button
-// (label top = center - font_height/2, with TEXT_FONT_FRAC/2 = 0.02).
-const TEXT_LEFT: f32 = 0.670;
-const TEXT_FONT_FRAC: f32 = 0.04; // font height as a fraction of screen height
-
+// side; centers (measured from the art's marker rows) are y = 37, 113, 190, 266,
+// 341, 418, each ~76 tall, left edge x ~= 405. New Game = top button, Quit =
+// bottom button. Labels are centered in the button rect.
 const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         label: "NEW GAME",
         action: MenuAction::NewGame,
-        rect: (0.633, 0.000, 0.965, 0.157),
-        text_pos: (TEXT_LEFT, 0.078 - TEXT_FONT_FRAC / 2.0),
+        rect: Rect::new(405.0, 0.0, 213.0, 76.0),
     },
     MenuItem {
         label: "QUIT",
         action: MenuAction::Quit,
-        rect: (0.633, 0.791, 0.965, 0.949),
-        text_pos: (TEXT_LEFT, 0.870 - TEXT_FONT_FRAC / 2.0),
+        rect: Rect::new(405.0, 380.0, 213.0, 76.0),
     },
 ];
 
-fn in_rect(rect: (f32, f32, f32, f32), p: Vector2<f32>) -> bool {
-    p.x >= rect.0 && p.y >= rect.1 && p.x <= rect.2 && p.y <= rect.3
-}
-
 /// Pure click resolution: on a rising press edge over an item, return its
 /// action. Also returns the new `last_pressed` to track for the next frame.
-fn resolve_click(pointer: Option<Pointer2D>, last_pressed: bool) -> (Option<MenuAction>, bool) {
+fn resolve_click(
+    pointer: Option<Pointer2D>,
+    last_pressed: bool,
+    screen_size: Vector2<f32>,
+) -> (Option<MenuAction>, bool) {
     match pointer {
         Some(p) => {
             let action = if p.pressed && !last_pressed {
-                MENU_ITEMS
-                    .iter()
-                    .find(|it| in_rect(it.rect, p.position))
-                    .map(|it| it.action)
+                pointer_to_canvas(
+                    vec2(CANVAS_W, CANVAS_H),
+                    p.position,
+                    screen_size,
+                    SCALE_MODE,
+                )
+                .and_then(|c| MENU_ITEMS.iter().find(|it| it.rect.contains(c)))
+                .map(|it| it.action)
             } else {
                 None
             };
@@ -104,6 +105,9 @@ pub struct MainMenuScene {
     pointer: Option<Pointer2D>,
     /// Whether the pointer was pressed last frame (for rising-edge clicks).
     last_pressed: bool,
+    /// Screen size from the latest render, so `update` can map the pointer into
+    /// canvas space consistently with how the canvas is drawn.
+    last_screen_size: Vector2<f32>,
 }
 
 impl MainMenuScene {
@@ -137,6 +141,7 @@ impl MainMenuScene {
             scene_name: "main_menu".to_owned(),
             pointer: None,
             last_pressed: false,
+            last_screen_size: vec2(CANVAS_W, CANVAS_H),
         }
     }
 }
@@ -161,7 +166,11 @@ impl GameScene for MainMenuScene {
         }
 
         self.pointer = input_context.pointer;
-        let (action, last_pressed) = resolve_click(input_context.pointer, self.last_pressed);
+        let (action, last_pressed) = resolve_click(
+            input_context.pointer,
+            self.last_pressed,
+            self.last_screen_size,
+        );
         self.last_pressed = last_pressed;
 
         match action {
@@ -199,37 +208,36 @@ impl GameScene for MainMenuScene {
         screen_size: Vector2<f32>,
         _options: &GameOptions,
     ) -> Vec<SceneObject> {
-        let texture_options = TextureOptions { wrap: false };
-        let mut objs = Vec::new();
+        self.last_screen_size = screen_size;
+        let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
         // Full-screen backdrop.
-        let bg = asset_cache.get_ext(&TEXTURE_IMPORTER, "MAIN.PCX", &texture_options);
-        objs.push(SceneObject::screen_space_quad(
-            bg.clone() as Rc<dyn TextureTrait>,
-            vec2(0.0, 0.0),
-            screen_size,
-        ));
+        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
 
-        // Clickable items, brighter when hovered.
-        let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon").clone();
-        let pointer_pos = self.pointer.map(|p| p.position);
+        // Clickable items, centered in their button and brighter when hovered.
+        let pointer_canvas = self.pointer.and_then(|p| {
+            pointer_to_canvas(
+                vec2(CANVAS_W, CANVAS_H),
+                p.position,
+                screen_size,
+                SCALE_MODE,
+            )
+        });
         for item in MENU_ITEMS {
-            let hovered = pointer_pos.is_some_and(|pp| in_rect(item.rect, pp));
-            let x = item.text_pos.0 * screen_size.x;
-            let y = item.text_pos.1 * screen_size.y;
-            let font_size = TEXT_FONT_FRAC * screen_size.y;
-            let opacity = if hovered { 1.0 } else { 0.6 };
-            objs.push(SceneObject::screen_space_text(
-                item.label,
-                font.clone(),
-                font_size,
-                opacity,
-                x,
-                y,
-            ));
+            let hovered = pointer_canvas.is_some_and(|pp| item.rect.contains(pp));
+            canvas
+                .text(
+                    item.rect,
+                    item.label,
+                    MENU_FONT,
+                    MENU_FONT_SIZE,
+                    HAlign::Center,
+                    VAlign::Middle,
+                )
+                .opacity(if hovered { 1.0 } else { 0.6 });
         }
 
-        objs
+        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
     }
 
     fn handle_effects(
@@ -277,37 +285,41 @@ mod tests {
         })
     }
 
+    // The runtimes render at a 4:3 resolution, so PreserveAspect == stretch and
+    // normalized coords map straight to the 640x480 canvas.
+    const SCREEN: Vector2<f32> = Vector2 { x: 800.0, y: 600.0 };
+
     #[test]
     fn rising_edge_over_new_game_activates_it() {
-        // Press edge: not pressed last frame, pressed now, over the top button.
-        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), false);
+        // Press edge over the top button (normalized ~ canvas (512, 37)).
+        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), false, SCREEN);
         assert_eq!(action, Some(MenuAction::NewGame));
         assert!(last);
     }
 
     #[test]
     fn rising_edge_over_quit_activates_it() {
-        let (action, _) = resolve_click(pointer_at(0.8, 0.870, true), false);
+        let (action, _) = resolve_click(pointer_at(0.8, 0.870, true), false, SCREEN);
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
     #[test]
     fn held_press_does_not_re_activate() {
         // Already pressed last frame -> no new activation even over an item.
-        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), true);
+        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), true, SCREEN);
         assert_eq!(action, None);
         assert!(last);
     }
 
     #[test]
     fn click_outside_items_does_nothing() {
-        let (action, _) = resolve_click(pointer_at(0.05, 0.05, true), false);
+        let (action, _) = resolve_click(pointer_at(0.05, 0.05, true), false, SCREEN);
         assert_eq!(action, None);
     }
 
     #[test]
     fn no_pointer_means_no_action() {
-        let (action, last) = resolve_click(None, true);
+        let (action, last) = resolve_click(None, true, SCREEN);
         assert_eq!(action, None);
         assert!(!last);
     }
