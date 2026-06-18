@@ -58,11 +58,21 @@ The debug runtime binds to `127.0.0.1:8080` (localhost only) and provides a REST
 | Raycast (`/v1/physics/raycast`)                 | ✅     |
 | Physics body listing (`/v1/physics/bodies`)     | ✅     |
 | Physics body detail (`/v1/physics/bodies/{id}`) | ✅     |
+| Impulse joint diagnostics (`/v1/physics/joints`) | ✅    |
+| Per-ragdoll metrics (`/v1/ragdoll/metrics`)     | ✅     |
 | Screenshot capture (`/v1/screenshot`)           | ✅     |
 | macOS Retina scaling fix                        | ✅     |
 | Input state read (`/v1/control/input`)          | ✅     |
 | Input state write (`/v1/control/input` POST)    | ✅     |
 | Multi-level testing (earth.mis, medsci2.mis)    | ✅     |
+
+**Deterministic stepping (2026-06-18):** `/v1/step` advances at a fixed 60 Hz
+timestep, so `{"frames":N}` == N/60 s of sim time and `{"duration":T}` runs
+exactly T·60 frames, independent of HTTP request timing. (Previously it used the
+real wall-clock dt between requests, which made physics-settle measurements —
+e.g. a ragdoll falling — erratic.) `/v1/physics/joints` reports each impulse
+joint's anchor separation + applied impulse (bone-labeled) for ragdoll
+constraint diagnostics.
 
 ### Phase 5: Game Commands 🔴 NOT STARTED
 

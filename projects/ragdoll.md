@@ -7,6 +7,60 @@
 - Spawn a dedicated ragdoll entity on death that inherits the deceased model pose, then simulate it using Rapier rigid bodies and joints.
 - Keep visual skinning and hit detection in sync with the simulated skeleton so the corpse interacts believably with the world.
 
+## Update (2026-06-18): the rig settles — rapier 0.31 + compliant joints
+
+The 2026-06-15 work below got the rig *built*, but it never came to rest: it
+perpetually jittered (`max_linear_speed` stuck at 3–7 even after landing). Root
+cause and fixes, all verified headlessly via the debug runtime:
+
+- **Not detachment or self-collision — the joints injected energy.** The new
+  `GET /v1/physics/joints` endpoint (per-joint anchor separation + applied
+  impulse, labeled by bone) showed the impulse joints holding a permanent
+  unsatisfiable residual at "rest". rapier's near-rigid default joint stiffness
+  (`SpringCoefficients.natural_frequency` defaults to 1e6) rigidly fights that
+  residual every step on the hub-and-spoke skeleton and pumps energy.
+- **Fix: upgrade rapier 0.19 → 0.31 + compliant joints.** 0.31 brings the v0.29
+  velocity-solver rework and v0.31 per-joint `softness`. Compliant joints
+  (`SpringCoefficients { natural_frequency: 60, damping_ratio: 2.0 }`) absorb the
+  residual instead of fighting it — the rig now collapses into a heap and rests.
+  (0.31 is the last nalgebra-based release; 0.32+ migrates the math to glam, a
+  much larger change, so we pinned 0.31. Note: higher `damping_ratio` = *more*
+  compliant per rapier's API.)
+- **Dedupe joints.** The Dark skeleton lists some joints twice (a torso's main
+  joint is also a fixed point on the parent torso; see `ss2_skeleton::create`),
+  building a *duplicate* impulse joint between the same body pair (pelvis hub 8 ↔
+  abdomen 18) and over-constraining the hub. Now exactly one joint per child body.
+- **Degenerate colliders crashed the new broad-phase.** rapier 0.31's BVH
+  broad-phase panics (`parry bvh_binned_build`, "index out of bounds") on a
+  collider with a non-finite/zero AABB. We were creating such colliders for some
+  objects (zero-size triggers; earth.mis entity 7 had an *infinite* dimension) —
+  `add_kinematic`'s `size >= 0.0` assert passed both 0 and ∞. The old SAP
+  broad-phase tolerated them; the BVH one does not. **Fix:**
+  `sanitize_collider_size` clamps every cuboid collider's size to a finite,
+  positive, bounded range at the `add_dynamic`/`add_kinematic` boundary.
+- **Deterministic stepping.** The debug runtime now steps at a fixed 60 Hz, so
+  `{"frames":N}` advances a real, predictable amount of sim time (it used to use
+  wall-clock dt, which made ragdoll-settle measurements erratic).
+
+### Known remaining issue: the hips sag (~4 cm)
+
+`GET /v1/physics/joints` localizes it: only the two hip joints (bone 8 → 6/7)
+hold ~4 cm separation while every other joint closes to <0.5 cm — the heavy
+thighs stretch the compliant joint under gravity. Stiffness tuning is
+non-monotonic (stiffer re-introduces energy). Candidate fixes (untried / partly
+tried): per-joint stiffer hips/shoulders; child-origin joint anchoring (worse on
+0.19, may behave on 0.31's solver); or giving the tiny pelvis-hub body real
+inertia.
+
+### New diagnostic tooling (this effort)
+
+- `GET /v1/physics/joints` — per-impulse-joint anchor separation + impulse, bone-labeled.
+- `debug_hitbox` scene + `dark_viewer --debug-hitboxes` — overlay fitted hitbox
+  shapes (green) vs the ragdoll's decomposed collider placement (red) to separate
+  a fit/mapping bug from a conversion bug; the `DebugHitboxCyclePose` input action
+  cycles poses (HTTP-drivable). The construction/fit was verified correct; the
+  remaining issues are dynamics, not placement.
+
 ## Status & Investigation Log (2026-06-15)
 
 The rig had been wired end-to-end (Parts 3–5 below marked "✅") but was not
