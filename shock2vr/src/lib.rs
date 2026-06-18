@@ -668,7 +668,10 @@ impl Game {
         // 4 years earlier
         // Ramsey Recruitment Ctr
         // let text_string = "Ramsey Recruitment Ctr.";
-        objs.extend(vec![hand_obj /*  text_obj_dynamic*/]);
+        // Debug placeholder cube; keep it out of the clean flatscreen view.
+        if self.options.presentation_mode == PresentationMode::Vr {
+            objs.extend(vec![hand_obj /*  text_obj_dynamic*/]);
+        }
         objs
     }
 
