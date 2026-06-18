@@ -31,6 +31,7 @@ pub mod debug_ragdoll;
 pub mod debug_teleport;
 pub mod debug_turret;
 pub mod hand_pose;
+pub mod main_menu;
 
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
@@ -43,6 +44,7 @@ pub use debug_minimal::DebugMinimalScene;
 pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
+pub use main_menu::MainMenuScene;
 
 pub struct SceneInitResult {
     pub scene: Box<dyn GameScene>,
@@ -72,6 +74,13 @@ pub fn create_initial_scene(
         });
         return SceneInitResult {
             scene: Box::new(cutscene),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("main_menu") {
+        return SceneInitResult {
+            scene: Box::new(MainMenuScene::new()),
             mission_save_data: HashMap::new(),
         };
     }

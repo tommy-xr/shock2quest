@@ -405,6 +405,7 @@ fn run_game_blocking(
                 squeeze_value: 0.0,
                 a_value: 0.0,
             },
+            pointer: None,
         };
 
         let game_time = Time {
