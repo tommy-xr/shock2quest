@@ -151,6 +151,9 @@ For debugging visual/rendering changes without a full interactive session:
 
    ```bash
    cargo dv grunt_p.bin --debug-no-render
+   # Overlay the fitted per-joint hitbox shapes (capsules/boxes) on the animated
+   # mesh - physics-free, animatable - to eyeball fit across poses:
+   cargo dv grunt_p.bin --animation <clip> --debug-hitboxes --debug-skeletons
    ```
 
 2. **Debug Runtime** (see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
@@ -171,6 +174,13 @@ For debugging visual/rendering changes without a full interactive session:
    curl "http://127.0.0.1:8080/v1/physics/bodies?entity_id=4"
    curl http://127.0.0.1:8080/v1/physics/bodies/12   # detail by body_id
 
+   # Inspect impulse joints (ragdoll constraint health): per-joint anchor
+   # separation + applied impulse, labeled by skeleton bone. A healthy ball
+   # joint at rest has separation ~0 and a small impulse; persistent values mean
+   # the rig is fighting itself.
+   curl http://127.0.0.1:8080/v1/physics/joints
+   curl http://127.0.0.1:8080/v1/ragdoll/metrics   # per-ragdoll settle metrics
+
    # Trigger discrete input actions (same actions as desktop keybindings)
    curl http://127.0.0.1:8080/v1/input/actions
    curl -X POST http://127.0.0.1:8080/v1/input/action -d '{"action": "PathfindingTestCycle"}'
@@ -183,11 +193,13 @@ For debugging visual/rendering changes without a full interactive session:
    curl -X POST http://127.0.0.1:8080/v1/shutdown
    ```
 
-   **Stepping & determinism**: time-based stepping (`-d '{"duration":"3s"}'`)
-   requires `-H 'Content-Type: application/json'`, and per-frame `delta_time` is
-   real wall-clock - a single frame after an idle period can carry a huge dt.
-   Prefer small frame batches (`{"frames": N}`) for deterministic, dt-independent
-   stepping; don't gate debug-scene logic on accumulated wall-clock time.
+   **Stepping & determinism**: stepping uses a **fixed 60 Hz timestep**, so
+   `{"frames": N}` advances exactly `N/60` s of simulation time and
+   `{"duration":"3s"}` runs exactly `3 * 60` frames - deterministic and
+   independent of HTTP request timing (a settling ragdoll falls at a real rate
+   regardless of how fast you poll). Time-based stepping (`-d '{"duration":"3s"}'`)
+   requires `-H 'Content-Type: application/json'`. Only free-running (not stepping)
+   uses real wall-clock dt.
 
 3. **TypeScript SDK (`tools/shock2-sdk`)** — **preferred for multi-step testing and verification**. A Playwright-style wrapper over the debug runtime HTTP API that handles the full lifecycle: spawning the runtime, waiting for readiness, capturing logs, and automatic shutdown via `await using`. See `tools/shock2-sdk/README.md` for the full API.
 
@@ -218,6 +230,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_camera`           | Test security camera AI behavior             |
    | `debug_turret`           | Test turret AI and targeting                 |
    | `debug_ragdoll`          | Test ragdoll physics                         |
+   | `debug_hitbox`           | View fitted hitbox shapes vs ragdoll colliders across poses |
    | `debug_gloves`           | Test VR hand/glove rendering                 |
    | `debug_teleport`         | Test VR teleport locomotion                  |
    | `debug_joint_constraint` | Test physics joint constraints               |

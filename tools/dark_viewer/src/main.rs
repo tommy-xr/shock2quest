@@ -78,6 +78,10 @@ struct Cli {
     /// Overlay skeleton joints for supported model files (.bin/.ai).
     #[arg(long)]
     debug_skeletons: bool,
+
+    /// Overlay the fitted per-joint hit-box shapes (capsules/boxes) for AI meshes (.bin).
+    #[arg(long)]
+    debug_hitboxes: bool,
 }
 
 fn resolve_data_path(resource: &str) -> String {
@@ -220,6 +224,7 @@ fn create_scene(
     asset_cache: &mut engine::assets::asset_cache::AssetCache,
     data_resolver: fn(&str) -> String,
     debug_skeletons: bool,
+    debug_hit_boxes: bool,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
     let lower = filename.to_ascii_lowercase();
     if lower.ends_with(".avi") {
@@ -231,8 +236,12 @@ fn create_scene(
         }
     } else if lower.ends_with(".bin") {
         if animations.is_empty() {
-            let scene =
-                BinObjViewerScene::from_model(filename.to_string(), asset_cache, debug_skeletons)?;
+            let scene = BinObjViewerScene::from_model(
+                filename.to_string(),
+                asset_cache,
+                debug_skeletons,
+                debug_hit_boxes,
+            )?;
             Ok(Box::new(scene))
         } else {
             let scene = BinAiViewerScene::from_clips(
@@ -240,6 +249,7 @@ fn create_scene(
                 animations.to_vec(),
                 asset_cache,
                 debug_skeletons,
+                debug_hit_boxes,
             )?;
             Ok(Box::new(scene))
         }
@@ -282,6 +292,18 @@ pub fn main() {
             eprintln!(
                 "Warning: --debug-skeletons is only available for .bin, .ai, or .glb files. Ignoring flag."
             );
+            false
+        }
+    } else {
+        false
+    };
+
+    let debug_hit_boxes = if cli.debug_hitboxes {
+        let lower = filename.to_ascii_lowercase();
+        if lower.ends_with(".bin") || lower.ends_with(".ai") {
+            true
+        } else {
+            eprintln!("Warning: --debug-hitboxes is only available for .bin/.ai AI meshes. Ignoring flag.");
             false
         }
     } else {
@@ -350,6 +372,7 @@ pub fn main() {
             &mut game.asset_cache,
             resolve_data_path,
             debug_skeletons,
+            debug_hit_boxes,
         ) {
             Ok(_) => println!("Scene creation succeeded."),
             Err(err) => println!("Error creating scene: {err}"),
@@ -365,6 +388,7 @@ pub fn main() {
         &mut game.asset_cache,
         resolve_data_path,
         debug_skeletons,
+        debug_hit_boxes,
     ) {
         Ok(scene) => scene,
         Err(err) => {

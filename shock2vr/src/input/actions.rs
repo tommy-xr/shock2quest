@@ -25,6 +25,9 @@ pub enum InputAction {
 
     /// Reposition the inventory in front of the player
     MoveInventory,
+
+    /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)
+    DebugHitboxCyclePose,
 }
 
 impl InputAction {
@@ -37,6 +40,7 @@ impl InputAction {
             InputAction::QuickLoad,
             InputAction::SpawnDebugItem,
             InputAction::MoveInventory,
+            InputAction::DebugHitboxCyclePose,
         ]
     }
 
@@ -47,6 +51,7 @@ impl InputAction {
             InputAction::QuickLoad => "QuickLoad",
             InputAction::SpawnDebugItem => "SpawnDebugItem",
             InputAction::MoveInventory => "MoveInventory",
+            InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
         }
     }
 }
