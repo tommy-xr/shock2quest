@@ -303,7 +303,9 @@ pub fn main() {
         if lower.ends_with(".bin") || lower.ends_with(".ai") {
             true
         } else {
-            eprintln!("Warning: --debug-hitboxes is only available for .bin/.ai AI meshes. Ignoring flag.");
+            eprintln!(
+                "Warning: --debug-hitboxes is only available for .bin/.ai AI meshes. Ignoring flag."
+            );
             false
         }
     } else {

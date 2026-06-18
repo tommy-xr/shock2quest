@@ -186,11 +186,7 @@ pub struct PhysicsWorld {
 /// AABB. The old SAP broad-phase tolerated that; rapier's BVH broad-phase panics
 /// on it (parry binned build, "index out of bounds"). Sanitize at the source and
 /// log the offender so the bad data is traceable.
-fn sanitize_collider_size(
-    entity_id: EntityId,
-    context: &str,
-    size: Vector3<f32>,
-) -> Vector3<f32> {
+fn sanitize_collider_size(entity_id: EntityId, context: &str, size: Vector3<f32>) -> Vector3<f32> {
     const MIN_SIZE: f32 = 0.01;
     const MAX_SIZE: f32 = 1.0e4;
     let clamp = |v: f32| -> f32 {
@@ -978,8 +974,7 @@ impl PhysicsWorld {
             filter,
         );
 
-        if let Some((handle, intersection)) =
-            queries.cast_ray_and_get_normal(&ray, max_toi, solid)
+        if let Some((handle, intersection)) = queries.cast_ray_and_get_normal(&ray, max_toi, solid)
         {
             // This is similar to `QueryPipeline::cast_ray` illustrated above except
             // that it also returns the normal of the collider shape at the hit point.
@@ -1227,8 +1222,7 @@ impl PhysicsWorld {
                 let separation = (a1.translation.vector - a2.translation.vector).norm();
                 // impulses: first 3 components are linear (translation), last 3 angular.
                 let imp = joint.impulses;
-                let linear_impulse =
-                    (imp[0] * imp[0] + imp[1] * imp[1] + imp[2] * imp[2]).sqrt();
+                let linear_impulse = (imp[0] * imp[0] + imp[1] * imp[1] + imp[2] * imp[2]).sqrt();
                 let angular_impulse = if imp.len() >= 6 {
                     (imp[3] * imp[3] + imp[4] * imp[4] + imp[5] * imp[5]).sqrt()
                 } else {

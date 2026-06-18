@@ -1341,7 +1341,8 @@ impl MissionCore {
                         "BH413001", // combat
                         "BH212oo8", // reach
                     ];
-                    let clip_name = DEBUG_POSE_CLIPS[self.debug_pose_index as usize % DEBUG_POSE_CLIPS.len()];
+                    let clip_name =
+                        DEBUG_POSE_CLIPS[self.debug_pose_index as usize % DEBUG_POSE_CLIPS.len()];
 
                     let creature_ids: Vec<EntityId> = {
                         let v_creature = self.world.borrow::<View<PropCreature>>().unwrap();

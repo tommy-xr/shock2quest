@@ -26,10 +26,10 @@ impl DebugRenderer {
             OrderedFloat(color.y),
             OrderedFloat(color.z),
         );
-        self.lines
-            .entry(key)
-            .or_default()
-            .extend([VertexPosition { position: a }, VertexPosition { position: b }]);
+        self.lines.entry(key).or_default().extend([
+            VertexPosition { position: a },
+            VertexPosition { position: b },
+        ]);
     }
 
     /// Small 3-axis cross marker at `p`.
