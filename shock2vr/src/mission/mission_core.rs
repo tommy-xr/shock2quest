@@ -1890,9 +1890,30 @@ impl MissionCore {
             }
         }
 
-        // Flat (non-VR) presentation draws a screen-space 2D HUD here, where the
-        // screen size is available. The VR forearm HUD is built in `render`.
         if options.presentation_mode == crate::PresentationMode::Flat {
+            // First-person weapon viewmodel: draw the wielded weapon's model on
+            // top of the world with depth-test disabled, so it does not clip into
+            // geometry. It is skipped in the world pass and drawn here, last.
+            if let Some(weapon) = self.flat_player.wielded_entity() {
+                if let Some(model) = self.id_to_model.get(&weapon) {
+                    let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                    if let Ok(xform) = v_transform.get(weapon).map(|p| p.0) {
+                        let scene_objs = match self.id_to_animation_player.get(&weapon) {
+                            Some(player) => model.to_animated_scene_objects(player),
+                            None => model.to_scene_objects().clone(),
+                        };
+                        for obj in scene_objs {
+                            let mut o = obj.clone();
+                            o.set_transform(xform);
+                            o.set_depth_test(false);
+                            ret.push(o);
+                        }
+                    }
+                }
+            }
+
+            // Flat 2D HUD (screen size is available here; the VR forearm HUD is
+            // built in `render`). Drawn after the viewmodel so it stays on top.
             ret.extend(crate::hud::create_flat_hud(
                 asset_cache,
                 &self.world,
@@ -2002,9 +2023,20 @@ impl MissionCore {
         let mut total_model_count = 0;
         let mut rendered_model_count = 0;
 
+        // In flat mode the wielded weapon is drawn as a first-person viewmodel in
+        // `render_per_eye` (on top, depth-test off), so skip it in the world pass.
+        let flat_viewmodel_entity = if options.presentation_mode == crate::PresentationMode::Flat {
+            self.flat_player.wielded_entity()
+        } else {
+            None
+        };
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
+            if Some(*entity_id) == flat_viewmodel_entity {
+                continue;
+            }
             if !has_refs(&self.world, *entity_id) {
                 continue;
             }

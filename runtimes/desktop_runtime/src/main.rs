@@ -333,21 +333,22 @@ pub fn main() {
             wants_pointer,
         );
 
-        // Flat first-person: left mouse button fires the wielded weapon and
-        // right mouse button uses/frobs/picks up (the flat controller reads the
-        // right-hand trigger + squeeze).
+        // Flat first-person: left mouse button fires the wielded weapon; right
+        // mouse button - or shift+left-click, which is easier on a trackpad -
+        // uses/frobs/picks up. (The flat controller reads the right-hand trigger
+        // + squeeze.)
         if !args.vr {
             let pressed = |b| window.get_mouse_button(b) == Action::Press;
-            input_context.right_hand.trigger_value = if pressed(MouseButton::Button1) {
-                1.0
-            } else {
-                0.0
-            };
-            input_context.right_hand.squeeze_value = if pressed(MouseButton::Button2) {
-                1.0
-            } else {
-                0.0
-            };
+            let shift = window.get_key(Key::LeftShift) == Action::Press
+                || window.get_key(Key::RightShift) == Action::Press;
+            let lmb = pressed(MouseButton::Button1);
+            input_context.right_hand.trigger_value = if lmb && !shift { 1.0 } else { 0.0 };
+            input_context.right_hand.squeeze_value =
+                if pressed(MouseButton::Button2) || (lmb && shift) {
+                    1.0
+                } else {
+                    0.0
+                };
         }
 
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;

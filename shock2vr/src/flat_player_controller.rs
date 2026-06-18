@@ -48,6 +48,10 @@ impl FlatPlayerController {
         self.wielded_entity.is_some()
     }
 
+    pub fn wielded_entity(&self) -> Option<EntityId> {
+        self.wielded_entity
+    }
+
     /// Wield `entity_id` as the first-person weapon. Any previously-wielded
     /// weapon is dropped back into the world (regains physics + world model).
     pub fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
