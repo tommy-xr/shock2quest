@@ -8,7 +8,7 @@ use crate::scene::light::LightArray;
 use crate::shader_program::ShaderProgram;
 use crate::texture::TextureTrait;
 use c_string::*;
-use cgmath::{Matrix, Matrix4};
+use cgmath::{Matrix, Matrix4, SquareMatrix, ortho};
 use once_cell::sync::OnceCell;
 
 // Simple vertex shader - no normals needed for UI elements
@@ -73,6 +73,10 @@ where
     has_initialized: bool,
     diffuse_texture: T,
     clip_percentage: f32, // 0.0 to 1.0
+    // When true, draw in screen space: build an orthographic projection from the
+    // render context's screen size (pixels, origin top-left) and ignore the 3D
+    // camera. The world matrix then positions the quad directly in pixels.
+    screen_space: bool,
 }
 
 impl<T> ClippedScreenMaterial<T>
@@ -98,11 +102,26 @@ where
         unsafe {
             gl::UseProgram(shader_program.gl_id);
 
-            let projection = render_context.projection_matrix;
+            // In screen-space mode, substitute an orthographic projection (pixels,
+            // origin top-left) and an identity view so the world matrix places the
+            // quad directly in screen pixels - matching ScreenSpaceMaterial.
+            let (projection, view) = if self.screen_space {
+                let ortho_projection = ortho(
+                    0.0,
+                    render_context.screen_size.x,
+                    render_context.screen_size.y,
+                    0.0,
+                    0.0,
+                    1.0,
+                );
+                (ortho_projection, Matrix4::identity())
+            } else {
+                (render_context.projection_matrix, *view_matrix)
+            };
 
             // Set transformation matrices
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
-            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
+            gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view.as_ptr());
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
 
             // Set clipping value
@@ -195,5 +214,21 @@ where
         diffuse_texture,
         has_initialized: false,
         clip_percentage: clip_percentage.clamp(0.0, 1.0),
+        screen_space: false,
+    })
+}
+
+/// Like [`create`], but draws in screen space (orthographic, pixel coordinates,
+/// origin top-left) rather than against the 3D camera. Used for the flat HUD's
+/// horizontally-filling bars.
+pub fn create_screen_space<T>(diffuse_texture: T, clip_percentage: f32) -> Box<dyn Material>
+where
+    T: Deref<Target = dyn TextureTrait> + 'static,
+{
+    Box::new(ClippedScreenMaterial {
+        diffuse_texture,
+        has_initialized: false,
+        clip_percentage: clip_percentage.clamp(0.0, 1.0),
+        screen_space: true,
     })
 }
