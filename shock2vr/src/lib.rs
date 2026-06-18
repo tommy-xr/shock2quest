@@ -71,8 +71,23 @@ pub fn resource_path(str: &str) -> String {
     paths::data_root().join(str).to_string_lossy().into_owned()
 }
 
+/// How the game is presented and controlled.
+///
+/// `Vr` is the existing head/hands interaction model (forearm HUD panels,
+/// `VirtualHand` grab-and-hold). `Flat` is the classic flatscreen presentation:
+/// a screen-space 2D HUD, 2D menus, and first-person interaction. The flag is
+/// threaded only to the presentation/interaction edges - the simulation is
+/// shared. See `projects/flatscreen-and-vr-architecture.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PresentationMode {
+    #[default]
+    Vr,
+    Flat,
+}
+
 pub struct GameOptions {
     pub mission: String,
+    pub presentation_mode: PresentationMode,
     pub spawn_location: SpawnLocation,
     pub save_file: Option<String>,
     pub render_particles: bool,
@@ -90,6 +105,7 @@ impl Default for GameOptions {
     fn default() -> Self {
         Self {
             mission: "earth.mis".to_owned(),
+            presentation_mode: PresentationMode::Vr,
             spawn_location: SpawnLocation::MapDefault,
             save_file: None,
             debug_draw: false,

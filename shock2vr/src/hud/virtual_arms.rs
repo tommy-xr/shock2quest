@@ -112,7 +112,7 @@ fn create_overlay_transform(
 }
 
 /// Get player health percentage (0.0 to 1.0)
-fn get_health_percentage(world: &World) -> f32 {
+pub(crate) fn get_health_percentage(world: &World) -> f32 {
     // Get player entity from PlayerInfo
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let player_entity = player_info.entity_id;
@@ -137,7 +137,7 @@ fn get_health_percentage(world: &World) -> f32 {
 
 /// Get player psi percentage (0.0 to 1.0)
 /// TODO: Implement actual psi property access when available
-fn get_psi_percentage(_world: &World) -> f32 {
+pub(crate) fn get_psi_percentage(_world: &World) -> f32 {
     0.75 // Placeholder - 75% psi for testing
 }
 

@@ -88,6 +88,11 @@ struct Args {
     /// Enable experimental features (comma-separated)
     #[arg(long)]
     experimental: Option<String>,
+
+    /// Use the flatscreen (non-VR) presentation: screen-space 2D HUD instead of
+    /// the VR forearm panels.
+    #[arg(long)]
+    flat: bool,
 }
 
 /// Default debug-camera head rotation.
@@ -307,8 +312,15 @@ fn run_game_blocking(
     let (mission, spawn_location) = parse_mission(&args.mission);
     info!("Mission parsed: {} with spawn location", mission);
 
+    let presentation_mode = if args.flat {
+        shock2vr::PresentationMode::Flat
+    } else {
+        shock2vr::PresentationMode::Vr
+    };
+
     let options = GameOptions {
         mission: mission.clone(),
+        presentation_mode,
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
