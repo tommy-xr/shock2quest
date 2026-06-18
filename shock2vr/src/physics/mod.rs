@@ -1153,6 +1153,41 @@ impl PhysicsWorld {
             .map(|(handle, body)| self.debug_body_info(handle, body))
     }
 
+    /// Enumerate every impulse joint with its anchor separation and applied
+    /// impulse, for ragdoll diagnostics. A healthy ball joint at rest has
+    /// `separation ≈ 0` and a small impulse; a persistent separation/impulse
+    /// means the constraint can't be satisfied (the rig fights itself).
+    pub fn debug_list_joints(&self) -> Vec<DebugJointInfo> {
+        self.impulse_joint_set
+            .iter()
+            .filter_map(|(_handle, joint)| {
+                let b1 = self.rigid_body_set.get(joint.body1)?;
+                let b2 = self.rigid_body_set.get(joint.body2)?;
+                let a1 = b1.position() * joint.data.local_frame1;
+                let a2 = b2.position() * joint.data.local_frame2;
+                let separation = (a1.translation.vector - a2.translation.vector).norm();
+                // impulses: first 3 components are linear (translation), last 3 angular.
+                let imp = joint.impulses;
+                let linear_impulse =
+                    (imp[0] * imp[0] + imp[1] * imp[1] + imp[2] * imp[2]).sqrt();
+                let angular_impulse = if imp.len() >= 6 {
+                    (imp[3] * imp[3] + imp[4] * imp[4] + imp[5] * imp[5]).sqrt()
+                } else {
+                    0.0
+                };
+                Some(DebugJointInfo {
+                    body1_id: joint.body1.into_raw_parts().0,
+                    body2_id: joint.body2.into_raw_parts().0,
+                    anchor1: [a1.translation.x, a1.translation.y, a1.translation.z],
+                    anchor2: [a2.translation.x, a2.translation.y, a2.translation.z],
+                    separation,
+                    linear_impulse,
+                    angular_impulse,
+                })
+            })
+            .collect()
+    }
+
     fn debug_body_info(&self, handle: RigidBodyHandle, body: &RigidBody) -> DebugBodyInfo {
         let (index, generation) = handle.into_raw_parts();
 
@@ -1207,6 +1242,22 @@ impl PhysicsWorld {
             is_sleeping: body.is_sleeping(),
         }
     }
+}
+
+/// Rapier-free description of an impulse joint, for ragdoll diagnostics.
+#[derive(Debug, Clone)]
+pub struct DebugJointInfo {
+    pub body1_id: u32,
+    pub body2_id: u32,
+    /// World anchor on each body (should coincide for a satisfied ball joint).
+    pub anchor1: [f32; 3],
+    pub anchor2: [f32; 3],
+    /// Distance between the two anchors - the translation-constraint violation.
+    pub separation: f32,
+    /// Magnitude of the linear (translation) constraint impulse this step.
+    pub linear_impulse: f32,
+    /// Magnitude of the angular (limit) constraint impulse this step.
+    pub angular_impulse: f32,
 }
 
 /// Rapier-free description of a rigid body, for debug tooling / HTTP introspection.

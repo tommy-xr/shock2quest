@@ -275,6 +275,22 @@ pub struct DebugRagdollMetrics {
     pub max_drift: f32,
 }
 
+/// One impulse joint's state, for ragdoll diagnostics. `separation` and the
+/// impulses staying non-zero at rest mean the constraint can't be satisfied.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugPhysicsJoint {
+    pub body1_id: u32,
+    pub body2_id: u32,
+    /// Skeleton joint id each body represents, if it's a ragdoll body.
+    pub bone1: Option<u32>,
+    pub bone2: Option<u32>,
+    pub anchor1: [f32; 3],
+    pub anchor2: [f32; 3],
+    pub separation: f32,
+    pub linear_impulse: f32,
+    pub angular_impulse: f32,
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -374,6 +390,12 @@ pub trait DebuggableScene {
     /// harness (settle speeds, floor penetration, non-adjacent interpenetration,
     /// drift). Empty when the scene has no ragdolls.
     fn ragdoll_metrics(&self) -> Vec<DebugRagdollMetrics> {
+        Vec::new()
+    }
+
+    /// Every impulse joint with its anchor separation + applied impulse, for
+    /// ragdoll diagnostics. Empty when the scene has no joints.
+    fn list_physics_joints(&self) -> Vec<DebugPhysicsJoint> {
         Vec::new()
     }
 

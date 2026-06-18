@@ -87,6 +87,11 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<RagdollMetricsResult>,
     },
 
+    /// List impulse joints with anchor separation + applied impulse
+    ListPhysicsJoints {
+        reply: oneshot::Sender<PhysicsJointsResult>,
+    },
+
     /// Shutdown the debug runtime gracefully
     Shutdown,
 }
@@ -187,6 +192,25 @@ pub struct RagdollMetricsEntry {
     pub min_y: f32,
     pub max_nonadjacent_overlap: f32,
     pub max_drift: f32,
+}
+
+/// Impulse joint diagnostics (ragdoll constraint health).
+#[derive(Debug, Serialize)]
+pub struct PhysicsJointsResult {
+    pub joints: Vec<PhysicsJointEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhysicsJointEntry {
+    pub body1_id: u32,
+    pub body2_id: u32,
+    pub bone1: Option<u32>,
+    pub bone2: Option<u32>,
+    pub anchor1: [f32; 3],
+    pub anchor2: [f32; 3],
+    pub separation: f32,
+    pub linear_impulse: f32,
+    pub angular_impulse: f32,
 }
 
 /// Detailed information about a physics body

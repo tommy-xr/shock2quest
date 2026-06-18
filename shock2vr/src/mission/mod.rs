@@ -280,6 +280,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.ragdoll_metrics()
     }
 
+    fn list_physics_joints(&self) -> Vec<crate::game_scene::DebugPhysicsJoint> {
+        self.mission_core.list_physics_joints()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         self.mission_core.get_input_state()
     }

@@ -2974,6 +2974,25 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .collect()
     }
 
+    fn list_physics_joints(&self) -> Vec<crate::game_scene::DebugPhysicsJoint> {
+        let body_to_bone = self.rag_doll_manager.body_to_joint_id();
+        self.physics
+            .debug_list_joints()
+            .into_iter()
+            .map(|j| crate::game_scene::DebugPhysicsJoint {
+                bone1: body_to_bone.get(&j.body1_id).copied(),
+                bone2: body_to_bone.get(&j.body2_id).copied(),
+                body1_id: j.body1_id,
+                body2_id: j.body2_id,
+                anchor1: j.anchor1,
+                anchor2: j.anchor2,
+                separation: j.separation,
+                linear_impulse: j.linear_impulse,
+                angular_impulse: j.angular_impulse,
+            })
+            .collect()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         // MissionCore doesn't store InputContext directly - it's passed to update()
         // For debugging purposes, return a default state

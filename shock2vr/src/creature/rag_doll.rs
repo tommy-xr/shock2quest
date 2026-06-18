@@ -195,6 +195,18 @@ impl RagDollManager {
         }
     }
 
+    /// Map each ragdoll body's raw handle id to the skeleton joint id it
+    /// represents, so debug tooling can label physics bodies/joints by bone.
+    pub fn body_to_joint_id(&self) -> HashMap<u32, u32> {
+        let mut out = HashMap::new();
+        for ragdoll in self.ragdolls.values() {
+            for (joint_id, handle) in &ragdoll.joint_to_body {
+                out.insert(handle.into_raw_parts().0, *joint_id);
+            }
+        }
+        out
+    }
+
     pub fn add_ragdoll(
         &mut self,
         entity_id: EntityId,
