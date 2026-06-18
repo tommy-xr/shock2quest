@@ -16,7 +16,7 @@
 //!     fraction of the segment is inside the union of the joint boxes. Low
 //!     coverage = the limb is not enclosed (the "small cubes at joints" problem).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::panic::{self, AssertUnwindSafe};
@@ -136,6 +136,37 @@ fn analyze_file(file: &Path, samples: usize) -> Result<bool> {
 
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     println!("\n=== {name} ===");
+    let mut shape_rows: Vec<(u32, String)> = fitted
+        .iter()
+        .map(|(j, (s, _))| {
+            let desc = match s {
+                HitBoxShape::Capsule { a, b, radius } => format!(
+                    "capsule a=({:.2},{:.2},{:.2}) b=({:.2},{:.2},{:.2}) r={:.3} len={:.2}",
+                    a.x,
+                    a.y,
+                    a.z,
+                    b.x,
+                    b.y,
+                    b.z,
+                    radius,
+                    (b - a).magnitude()
+                ),
+                HitBoxShape::Cuboid {
+                    half_extents,
+                    center,
+                } => format!(
+                    "cuboid half=({:.2},{:.2},{:.2}) center=({:.2},{:.2},{:.2})",
+                    half_extents.x, half_extents.y, half_extents.z, center.x, center.y, center.z
+                ),
+            };
+            (*j, format!("{} {}", joint_label(*j), desc))
+        })
+        .collect();
+    shape_rows.sort_by_key(|(j, _)| *j);
+    println!("  fitted shapes:");
+    for (_, d) in &shape_rows {
+        println!("    {d}");
+    }
 
     // Per-bone segment coverage, comparing the legacy per-joint AABB to the
     // fitted shapes.
@@ -199,33 +230,137 @@ fn analyze_file(file: &Path, samples: usize) -> Result<bool> {
         pct(fit_cov, fit_tot),
         fitted.len()
     );
+
+    // Vertex (surface) coverage: fraction of the mesh's skinned verts inside the
+    // union of shapes. Unlike bone-segment coverage this IS sensitive to radius,
+    // so it's the guard when tightening capsule radii.
+    let (mut v_tot, mut v_in) = (0usize, 0usize);
+    for (joint_id, verts) in mesh.joint_vertex_positions() {
+        if (joint_id as usize) >= world.len() {
+            continue;
+        }
+        let jw = world[joint_id as usize];
+        for v in &verts {
+            let w = jw * Vector4::new(v.x, v.y, v.z, 1.0);
+            if point_covered_shapes([w.x, w.y, w.z], &fitted) {
+                v_in += 1;
+            }
+            v_tot += 1;
+        }
+    }
+    println!("  vertex (surface) coverage: {:.0}%", pct(v_in, v_tot));
+
+    // Overlap: fraction of each shape's volume that lies inside a NON-adjacent
+    // shape (adjacent/jointed pairs are meant to meet at the joint).
+    let mut adjacency: HashSet<(u32, u32)> = HashSet::new();
+    for bone in skeleton.bones() {
+        if let Some(p) = bone.parent_id {
+            adjacency.insert((p.min(bone.joint_id), p.max(bone.joint_id)));
+        }
+    }
+    let (mut ov_total, mut ov_hit) = (0usize, 0usize);
+    let mut ov_rows: Vec<(String, f32)> = Vec::new();
+    for (jid, (shape, world)) in &fitted {
+        let samples = sample_shape_points(shape);
+        if samples.is_empty() {
+            continue;
+        }
+        let mut overlapped = 0usize;
+        for s in &samples {
+            let w = world * Vector4::new(s.x, s.y, s.z, 1.0);
+            let wp = [w.x, w.y, w.z];
+            let in_other = fitted.iter().any(|(ojid, (osh, ow))| {
+                if ojid == jid {
+                    return false;
+                }
+                let key = (*jid.min(ojid), *jid.max(ojid));
+                if adjacency.contains(&key) {
+                    return false;
+                }
+                point_in_shape_world(wp, osh, ow)
+            });
+            if in_other {
+                overlapped += 1;
+            }
+        }
+        ov_total += samples.len();
+        ov_hit += overlapped;
+        ov_rows.push((joint_label(*jid), overlapped as f32 / samples.len() as f32));
+    }
+    ov_rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+    println!("  shape overlap into non-adjacent shapes (worst first):");
+    for (label, f) in ov_rows.iter().take(8) {
+        println!("    {:<22} {:>5.0}%", label, f * 100.0);
+    }
+    println!("  OVERALL shape overlap: {:.0}%", pct(ov_hit, ov_total));
     Ok(true)
 }
 
 /// True if world point `p` is inside any fitted joint shape (tested in the
 /// joint's local frame).
 fn point_covered_shapes(p: [f32; 3], shapes: &HashMap<u32, (HitBoxShape, Matrix4<f32>)>) -> bool {
-    for (shape, world) in shapes.values() {
-        let Some(inv) = world.invert() else { continue };
-        let h = inv * Vector4::new(p[0], p[1], p[2], 1.0);
-        let l = Vector3::new(h.x, h.y, h.z);
-        let inside = match shape {
-            HitBoxShape::Cuboid {
-                half_extents,
-                center,
-            } => {
-                let d = l - center;
-                d.x.abs() <= half_extents.x
-                    && d.y.abs() <= half_extents.y
-                    && d.z.abs() <= half_extents.z
+    shapes
+        .values()
+        .any(|(shape, world)| point_in_shape_world(p, shape, world))
+}
+
+/// True if world point `p` is inside `shape` placed at `world`.
+fn point_in_shape_world(p: [f32; 3], shape: &HitBoxShape, world: &Matrix4<f32>) -> bool {
+    let Some(inv) = world.invert() else {
+        return false;
+    };
+    let h = inv * Vector4::new(p[0], p[1], p[2], 1.0);
+    shape_contains_local(shape, Vector3::new(h.x, h.y, h.z))
+}
+
+fn shape_contains_local(shape: &HitBoxShape, l: Vector3<f32>) -> bool {
+    match shape {
+        HitBoxShape::Cuboid {
+            half_extents,
+            center,
+        } => {
+            let d = l - center;
+            d.x.abs() <= half_extents.x
+                && d.y.abs() <= half_extents.y
+                && d.z.abs() <= half_extents.z
+        }
+        HitBoxShape::Capsule { a, b, radius } => point_segment_dist(l, *a, *b) <= *radius,
+    }
+}
+
+/// Sample points inside `shape` (joint-local), for overlap estimation.
+fn sample_shape_points(shape: &HitBoxShape) -> Vec<Vector3<f32>> {
+    let (min, max) = match shape {
+        HitBoxShape::Cuboid {
+            half_extents,
+            center,
+        } => (center - half_extents, center + half_extents),
+        HitBoxShape::Capsule { a, b, radius } => {
+            let r = Vector3::new(*radius, *radius, *radius);
+            (
+                Vector3::new(a.x.min(b.x), a.y.min(b.y), a.z.min(b.z)) - r,
+                Vector3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z)) + r,
+            )
+        }
+    };
+    let n = 5;
+    let mut pts = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                let t = |idx: usize| (idx as f32 + 0.5) / n as f32;
+                let p = Vector3::new(
+                    min.x + (max.x - min.x) * t(i),
+                    min.y + (max.y - min.y) * t(j),
+                    min.z + (max.z - min.z) * t(k),
+                );
+                if shape_contains_local(shape, p) {
+                    pts.push(p);
+                }
             }
-            HitBoxShape::Capsule { a, b, radius } => point_segment_dist(l, *a, *b) <= *radius,
-        };
-        if inside {
-            return true;
         }
     }
-    false
+    pts
 }
 
 fn point_segment_dist(p: Vector3<f32>, a: Vector3<f32>, b: Vector3<f32>) -> f32 {

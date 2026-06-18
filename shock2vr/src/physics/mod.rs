@@ -57,6 +57,7 @@ impl CollisionGroup {
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
             filter: InternalCollisionGroups::RAYCAST.bits.into(),
+            test_mode: Default::default(),
         })
     }
 
@@ -64,6 +65,7 @@ impl CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: InternalCollisionGroups::UI.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
         })
     }
 
@@ -75,6 +77,7 @@ impl CollisionGroup {
                 | InternalCollisionGroups::SELECTABLE.bits
                 | InternalCollisionGroups::ENTITY.bits)
                 .into(),
+            test_mode: Default::default(),
         })
     }
 
@@ -82,6 +85,7 @@ impl CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
         })
     }
 
@@ -100,6 +104,7 @@ impl CollisionGroup {
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::SELECTABLE.bits)
                 .into(),
+            test_mode: Default::default(),
         })
     }
 }
@@ -149,12 +154,11 @@ pub struct PhysicsWorld {
     integration_parameters: IntegrationParameters,
     physics_pipeline: PhysicsPipeline,
     island_manager: IslandManager,
-    broad_phase: BroadPhaseMultiSap,
+    broad_phase: DefaultBroadPhase,
     narrow_phase: NarrowPhase,
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
     ccd_solver: CCDSolver,
-    query_pipeline: QueryPipeline,
     collider_set: ColliderSet,
     rigid_body_set: RigidBodySet,
 
@@ -174,6 +178,39 @@ pub struct PhysicsWorld {
 
     // Collision Events
     events: PhysicsEvents,
+}
+
+/// Clamp a collider's full size to finite, positive, bounded values. Some Dark
+/// objects (notably certain trigger/`Ecology` objects) resolve to a non-finite
+/// (e.g. infinite) collider dimension, producing a collider with a NaN/infinite
+/// AABB. The old SAP broad-phase tolerated that; rapier's BVH broad-phase panics
+/// on it (parry binned build, "index out of bounds"). Sanitize at the source and
+/// log the offender so the bad data is traceable.
+fn sanitize_collider_size(
+    entity_id: EntityId,
+    context: &str,
+    size: Vector3<f32>,
+) -> Vector3<f32> {
+    const MIN_SIZE: f32 = 0.01;
+    const MAX_SIZE: f32 = 1.0e4;
+    let clamp = |v: f32| -> f32 {
+        if v.is_finite() && v > 0.0 {
+            v.min(MAX_SIZE)
+        } else {
+            MIN_SIZE
+        }
+    };
+    let out = Vector3::new(clamp(size.x), clamp(size.y), clamp(size.z));
+    if out != size {
+        tracing::warn!(
+            "[physics] {} entity {:?}: invalid collider size {:?} -> clamped to {:?}",
+            context,
+            entity_id,
+            size,
+            out
+        );
+    }
+    out
 }
 
 impl PhysicsWorld {
@@ -202,11 +239,14 @@ impl PhysicsWorld {
             }
         }
 
-        let mut collider = ColliderBuilder::trimesh(vertices, indices).build();
+        let mut collider = ColliderBuilder::trimesh(vertices, indices)
+            .expect("level geometry trimesh")
+            .build();
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(InteractionGroups {
             memberships: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
         });
         self.collider_set.insert(collider);
     }
@@ -216,6 +256,7 @@ impl PhysicsWorld {
         collider.set_collision_groups(InteractionGroups {
             memberships: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
         });
         self.collider_set.insert(collider);
     }
@@ -447,7 +488,7 @@ impl PhysicsWorld {
         let mut rigid_body = RigidBodyBuilder::dynamic()
             // TODO: How can we make this more reliable? Seems to slow down the projectile randomly...
             // .ccd_enabled(true)
-            .position(test)
+            .pose(test)
             .build();
         rigid_body.user_data = entity_id.inner() as u128;
         rigid_body.set_gravity_scale(opts.gravity_scale, false);
@@ -465,7 +506,7 @@ impl PhysicsWorld {
                     .build()
             }
             PhysicsShape::Cuboid(size) => {
-                assert!(size.x > 0.0 && size.y > 0.0 && size.z > 0.0);
+                let size = sanitize_collider_size(entity_id, "add_dynamic", size);
                 ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
                     //.rotation(vector!(angles.0, angles.1, angles.2))
                     //.rotation(vector!(facing.z, facing.x, facing.y))
@@ -529,11 +570,11 @@ impl PhysicsWorld {
         };
 
         let mut rigid_body = RigidBodyBuilder::kinematic_position_based()
-            .position(test)
+            .pose(test)
             .build();
         rigid_body.user_data = entity_id.inner() as u128;
         let handle = &self.rigid_body_set.insert(rigid_body);
-        assert!(size.x >= 0.0 && size.y >= 0.0 && size.z >= 0.0);
+        let size = sanitize_collider_size(entity_id, "add_kinematic", size);
         let mut collider = ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
             //.rotation(vector!(angles.0, angles.1, angles.2))
             //.rotation(vector!(facing.z, facing.x, facing.y))
@@ -593,6 +634,7 @@ impl PhysicsWorld {
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            Default::default(),
         ));
         collider = collider.user_data(player_entity_user_data);
 
@@ -626,12 +668,11 @@ impl PhysicsWorld {
         };
         let physics_pipeline = PhysicsPipeline::new();
         let island_manager = IslandManager::new();
-        let broad_phase = BroadPhaseMultiSap::new();
+        let broad_phase = DefaultBroadPhase::new();
         let narrow_phase = NarrowPhase::new();
         let impulse_joint_set = ImpulseJointSet::new();
         let multibody_joint_set = MultibodyJointSet::new();
         let ccd_solver = CCDSolver::new();
-        let mut query_pipeline = QueryPipeline::new();
 
         let debug_pipeline = DebugRenderPipeline::new(
             DebugRenderStyle::default(),
@@ -641,7 +682,6 @@ impl PhysicsWorld {
                 | DebugRenderMode::CONTACTS,
         );
 
-        query_pipeline.update(&rigid_body_set, &collider_set);
         PhysicsWorld {
             gravity,
             integration_parameters,
@@ -653,7 +693,6 @@ impl PhysicsWorld {
             impulse_joint_set,
             multibody_joint_set,
             ccd_solver,
-            query_pipeline,
             rigid_body_set,
             rigid_bodies_with_forces: Vec::new(),
             // TODO:
@@ -702,15 +741,9 @@ impl PhysicsWorld {
                 &mut self.impulse_joint_set,
                 &mut self.multibody_joint_set,
                 &mut self.ccd_solver,
-                Some(&mut self.query_pipeline),
                 &(),
                 &self.events,
             )
-        });
-
-        profile!(scope: "physics", level: TRACE, "physics.update_query_pipeline", {
-            self.query_pipeline
-                .update(&self.rigid_body_set, &self.collider_set)
         });
 
         // Update character controller
@@ -734,8 +767,16 @@ impl PhysicsWorld {
     ) -> (Vec<CollisionEvent>, &RigidBody) {
         let character_body = &self.rigid_body_set[player_handle.character_handle];
         let original_position = *character_body.position();
+        let character_user_data = character_body.user_data;
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let _character_mass = character_body.mass();
+
+        // In rapier 0.31 the `QueryPipeline` is a transient view built from the
+        // broad-phase BVH, and it borrows the body/collider sets. Snapshot the
+        // character shape (cheap Arc clone) and position up front so those
+        // borrows are released before we build the query pipeline below.
+        let character_shape = character_collider.shared_shape().clone();
+        let character_pos = *character_collider.position();
 
         let step_size = Vector::y() * MOVEMENT_STEP_SIZE * self.integration_parameters.dt;
 
@@ -747,30 +788,39 @@ impl PhysicsWorld {
         let movement_with_upward = desired_movement + step_size;
 
         let mut gravity = -0.5 / SCALE_FACTOR;
-        gravity *= character_body.gravity_scale();
+        gravity *= self.rigid_body_set[player_handle.character_handle].gravity_scale();
 
         let gravity_movement = Vector::y() * gravity - step_size;
+
+        // Filter shared by both movement passes: only collide with the
+        // collidable groups as the player, ignore the player body and sensors.
+        let movement_filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                Default::default(),
+            ))
+            .exclude_rigid_body(player_handle.character_handle)
+            .exclude_sensors();
+        let dispatcher = self.narrow_phase.query_dispatcher();
 
         //let mut collisions = vec![];
         let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             // HACK: For rapier v0.19.0, our previous strategy of combining the movement + gravity
             // caused us to snag on physics geometry. In order to counter this, we'll do the movement in two phases
             // a forward phase to move and then an application of gravity
-            (player_handle.controller.move_shape(
-                self.integration_parameters.dt,
+            let queries = self.broad_phase.as_query_pipeline(
+                dispatcher,
                 &self.rigid_body_set,
                 &self.collider_set,
-                &self.query_pipeline,
-                character_collider.shape(),
-                character_collider.position(),
+                movement_filter,
+            );
+            (player_handle.controller.move_shape(
+                self.integration_parameters.dt,
+                &queries,
+                character_shape.as_ref(),
+                &character_pos,
                 movement_with_upward.cast::<Real>(),
-                QueryFilter::new()
-                    .groups(InteractionGroups::new(
-                        InternalCollisionGroups::PLAYER.bits.into(),
-                        InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
-                    ))
-                    .exclude_rigid_body(player_handle.character_handle)
-                    .exclude_sensors(),
                 |_c| (),
                 //|c| collisions.push(c),
             ),
@@ -778,19 +828,10 @@ impl PhysicsWorld {
             // Second pass: Apply gravity and undo our step size
             player_handle.controller.move_shape(
                 self.integration_parameters.dt,
-                &self.rigid_body_set,
-                &self.collider_set,
-                &self.query_pipeline,
-                character_collider.shape(),
-                character_collider.position(),
+                &queries,
+                character_shape.as_ref(),
+                &character_pos,
                 gravity_movement.cast::<Real>(),
-                QueryFilter::new()
-                    .groups(InteractionGroups::new(
-                        InternalCollisionGroups::PLAYER.bits.into(),
-                        InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
-                    ))
-                    .exclude_rigid_body(player_handle.character_handle)
-                    .exclude_sensors(),
                 |_c| (),
                 //|c| collisions.push(c),
             ))
@@ -799,36 +840,31 @@ impl PhysicsWorld {
         let mut collision_events = Vec::new();
         let mut current_sensor_intersections = HashSet::new();
         profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
-            self.query_pipeline.intersections_with_shape(
+            // Only consider sensor colliders for player/sensor intersections.
+            let sensor_filter = QueryFilter::new()
+                .predicate(&|_collider_handle: ColliderHandle, _c: &Collider| _c.is_sensor());
+            let queries = self.broad_phase.as_query_pipeline(
+                dispatcher,
                 &self.rigid_body_set,
                 &self.collider_set,
-                &original_position,
-                //&(mvt.translation + vector![0.00, 0.01, 0.00]),
-                character_collider.shape(),
-                //1.1,
-                //true,
-                //QueryFilter::new().exclude_rigid_body(player_handle.character_handle),
-                QueryFilter::new()
-                    .predicate(&|_collider_handle: ColliderHandle, _c: &Collider| _c.is_sensor()),
-                |handle| {
-                    let collider = &self.collider_set.get(handle).unwrap();
-                    // if collider.is_sensor() {
-                    //     println!("!!--!! COLLISION: {} {:?}", collider.user_data, toi)
-                    // }
-                    if collider.is_sensor() {
-                        if let (Some(_entity1_id), Some(entity2_id)) = (
-                            EntityId::from_inner(character_body.user_data as u64),
-                            EntityId::from_inner(collider.user_data as u64),
-                        ) {
-                            current_sensor_intersections.insert(entity2_id);
-                        }
+                sensor_filter,
+            );
+            for (handle, collider) in
+                queries.intersect_shape(original_position, character_shape.as_ref())
+            {
+                if collider.is_sensor() {
+                    if let (Some(_entity1_id), Some(entity2_id)) = (
+                        EntityId::from_inner(character_user_data as u64),
+                        EntityId::from_inner(collider.user_data as u64),
+                    ) {
+                        current_sensor_intersections.insert(entity2_id);
                     }
-                    true
-                },
-            )
+                }
+                let _ = handle;
+            }
         });
 
-        let player_id = EntityId::from_inner(character_body.user_data as u64).unwrap();
+        let player_id = EntityId::from_inner(character_user_data as u64).unwrap();
 
         let new_collisions: HashSet<EntityId> = current_sensor_intersections
             .difference(&self.player_sensor_intersections)
@@ -912,16 +948,19 @@ impl PhysicsWorld {
         filter = filter.groups(InteractionGroups::new(
             InternalCollisionGroups::ALL.bits.into(),
             collision_groups.bits.into(),
+            Default::default(),
         ));
 
-        if let Some((handle, intersection)) = self.query_pipeline.cast_ray_and_get_normal(
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
             &self.rigid_body_set,
             &self.collider_set,
-            &ray,
-            max_toi,
-            solid,
             filter,
-        ) {
+        );
+
+        if let Some((handle, intersection)) =
+            queries.cast_ray_and_get_normal(&ray, max_toi, solid)
+        {
             // This is similar to `QueryPipeline::cast_ray` illustrated above except
             // that it also returns the normal of the collider shape at the hit point.
             let hit_point = ray.point_at(intersection.time_of_impact);
@@ -1007,7 +1046,7 @@ impl PhysicsWorld {
         isometry: Isometry<Real>,
         user_tag: Option<EntityId>,
     ) -> RigidBodyHandle {
-        let mut rigid_body = RigidBodyBuilder::dynamic().position(isometry).build();
+        let mut rigid_body = RigidBodyBuilder::dynamic().pose(isometry).build();
 
         // Set user data if provided
         if let Some(entity_id) = user_tag {
@@ -1035,7 +1074,7 @@ impl PhysicsWorld {
         isometry: Isometry<Real>,
         user_tag: Option<EntityId>,
     ) -> RigidBodyHandle {
-        let mut rigid_body = RigidBodyBuilder::fixed().position(isometry).build();
+        let mut rigid_body = RigidBodyBuilder::fixed().pose(isometry).build();
 
         if let Some(entity_id) = user_tag {
             rigid_body.user_data = entity_id.inner() as u128;
@@ -1153,6 +1192,41 @@ impl PhysicsWorld {
             .map(|(handle, body)| self.debug_body_info(handle, body))
     }
 
+    /// Enumerate every impulse joint with its anchor separation and applied
+    /// impulse, for ragdoll diagnostics. A healthy ball joint at rest has
+    /// `separation ≈ 0` and a small impulse; a persistent separation/impulse
+    /// means the constraint can't be satisfied (the rig fights itself).
+    pub fn debug_list_joints(&self) -> Vec<DebugJointInfo> {
+        self.impulse_joint_set
+            .iter()
+            .filter_map(|(_handle, joint)| {
+                let b1 = self.rigid_body_set.get(joint.body1)?;
+                let b2 = self.rigid_body_set.get(joint.body2)?;
+                let a1 = b1.position() * joint.data.local_frame1;
+                let a2 = b2.position() * joint.data.local_frame2;
+                let separation = (a1.translation.vector - a2.translation.vector).norm();
+                // impulses: first 3 components are linear (translation), last 3 angular.
+                let imp = joint.impulses;
+                let linear_impulse =
+                    (imp[0] * imp[0] + imp[1] * imp[1] + imp[2] * imp[2]).sqrt();
+                let angular_impulse = if imp.len() >= 6 {
+                    (imp[3] * imp[3] + imp[4] * imp[4] + imp[5] * imp[5]).sqrt()
+                } else {
+                    0.0
+                };
+                Some(DebugJointInfo {
+                    body1_id: joint.body1.into_raw_parts().0,
+                    body2_id: joint.body2.into_raw_parts().0,
+                    anchor1: [a1.translation.x, a1.translation.y, a1.translation.z],
+                    anchor2: [a2.translation.x, a2.translation.y, a2.translation.z],
+                    separation,
+                    linear_impulse,
+                    angular_impulse,
+                })
+            })
+            .collect()
+    }
+
     fn debug_body_info(&self, handle: RigidBodyHandle, body: &RigidBody) -> DebugBodyInfo {
         let (index, generation) = handle.into_raw_parts();
 
@@ -1207,6 +1281,22 @@ impl PhysicsWorld {
             is_sleeping: body.is_sleeping(),
         }
     }
+}
+
+/// Rapier-free description of an impulse joint, for ragdoll diagnostics.
+#[derive(Debug, Clone)]
+pub struct DebugJointInfo {
+    pub body1_id: u32,
+    pub body2_id: u32,
+    /// World anchor on each body (should coincide for a satisfied ball joint).
+    pub anchor1: [f32; 3],
+    pub anchor2: [f32; 3],
+    /// Distance between the two anchors - the translation-constraint violation.
+    pub separation: f32,
+    /// Magnitude of the linear (translation) constraint impulse this step.
+    pub linear_impulse: f32,
+    /// Magnitude of the angular (limit) constraint impulse this step.
+    pub angular_impulse: f32,
 }
 
 /// Rapier-free description of a rigid body, for debug tooling / HTTP introspection.

@@ -8,7 +8,7 @@ use rapier3d::{
     na::{Point3 as NaPoint3, Translation3, UnitQuaternion},
     prelude::{
         GenericJointBuilder, ImpulseJointHandle, Isometry, JointAxesMask, JointAxis,
-        RigidBodyHandle, SharedShape,
+        RigidBodyHandle, SharedShape, SpringCoefficients,
     },
 };
 use shipyard::EntityId;
@@ -195,6 +195,18 @@ impl RagDollManager {
         }
     }
 
+    /// Map each ragdoll body's raw handle id to the skeleton joint id it
+    /// represents, so debug tooling can label physics bodies/joints by bone.
+    pub fn body_to_joint_id(&self) -> HashMap<u32, u32> {
+        let mut out = HashMap::new();
+        for ragdoll in self.ragdolls.values() {
+            for (joint_id, handle) in &ragdoll.joint_to_body {
+                out.insert(handle.into_raw_parts().0, *joint_id);
+            }
+        }
+        out
+    }
+
     pub fn add_ragdoll(
         &mut self,
         entity_id: EntityId,
@@ -315,8 +327,19 @@ impl RagDollManager {
             body_handles.push(handle);
         }
 
+        // A child body must be jointed to its parent exactly once. The Dark
+        // skeleton legitimately lists some joints twice - once as a torso's main
+        // joint and once as a fixed point on the parent torso (see
+        // ss2_skeleton::create) - which would otherwise create a duplicate
+        // impulse joint between the same body pair and over-constrain the hub
+        // (e.g. the abdomen, joint 18, under the pelvis hub, joint 8).
+        let mut jointed_children: HashMap<u32, ()> = HashMap::new();
+
         for bone in &bones {
             if let Some(parent_id) = bone.parent_id {
+                if jointed_children.insert(bone.joint_id as u32, ()).is_some() {
+                    continue;
+                }
                 let parent_handle = match joint_to_body.get(&(parent_id as u32)) {
                     Some(handle) => *handle,
                     None => continue,
@@ -372,6 +395,17 @@ impl RagDollManager {
                 let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
                     .local_frame1(frame1)
                     .local_frame2(frame2)
+                    // Compliant joints (rapier 0.31+): the default softness is
+                    // near-rigid (natural_frequency 1e6), which rigidly fights the
+                    // unavoidable constraint residual on this hub-and-spoke
+                    // skeleton each step and pumps energy (the ragdoll never
+                    // settles). A spring-like, well-damped joint absorbs the
+                    // residual instead. ~60 Hz is well above the step rate (stiff
+                    // enough to hold limbs together) but far from rigid.
+                    .softness(SpringCoefficients {
+                        natural_frequency: 60.0,
+                        damping_ratio: 2.0,
+                    })
                     .limits(JointAxis::AngX, [-cone, cone])
                     .limits(JointAxis::AngY, [-cone, cone])
                     .limits(JointAxis::AngZ, [-cone, cone])

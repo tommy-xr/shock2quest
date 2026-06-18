@@ -204,6 +204,7 @@ async fn start_http_server(
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
+        .route("/v1/physics/joints", get(list_physics_joints))
         .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
@@ -1084,6 +1085,31 @@ fn process_command(
                 tracing::warn!("Failed to send ragdoll metrics - receiver dropped");
             }
         }
+        RuntimeCommand::ListPhysicsJoints { reply } => {
+            let joints = game
+                .debug_scene()
+                .map(|scene| {
+                    scene
+                        .list_physics_joints()
+                        .into_iter()
+                        .map(|j| commands::PhysicsJointEntry {
+                            body1_id: j.body1_id,
+                            body2_id: j.body2_id,
+                            bone1: j.bone1,
+                            bone2: j.bone2,
+                            anchor1: j.anchor1,
+                            anchor2: j.anchor2,
+                            separation: j.separation,
+                            linear_impulse: j.linear_impulse,
+                            angular_impulse: j.angular_impulse,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Err(_) = reply.send(commands::PhysicsJointsResult { joints }) {
+                tracing::warn!("Failed to send physics joints - receiver dropped");
+            }
+        }
         RuntimeCommand::GetInput(reply) => {
             // Get current input state from the debug scene
             if let Some(debuggable) = game.debug_scene() {
@@ -1685,6 +1711,26 @@ async fn get_ragdoll_metrics(
         Err(_) => {
             tracing::error!("Failed to receive ragdoll metrics - sender dropped");
             Json(RagdollMetricsResult { ragdolls: vec![] })
+        }
+    }
+}
+
+/// HTTP handler for impulse-joint diagnostics (ragdoll constraint health).
+async fn list_physics_joints(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<commands::PhysicsJointsResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::ListPhysicsJoints { reply: reply_tx }) {
+        tracing::error!("Failed to send ListPhysicsJoints command - game loop receiver dropped");
+        return Json(commands::PhysicsJointsResult { joints: vec![] });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive physics joints - sender dropped");
+            Json(commands::PhysicsJointsResult { joints: vec![] })
         }
     }
 }
