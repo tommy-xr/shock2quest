@@ -50,21 +50,27 @@ struct MenuItem {
     text_pos: (f32, f32),
 }
 
-// MAIN.PCX has a vertical stack of buttons down the right side. New Game goes in
-// the top button, Quit in the bottom one. Coordinates are normalized to the
-// full-screen backdrop.
+// MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
+// side; their normalized vertical centers (measured from the art's red marker
+// rows) are 0.078, 0.236, 0.395, 0.553, 0.711, 0.870, each ~0.158 tall, with the
+// left edge at x ~= 0.633. New Game goes in the top button, Quit in the bottom.
+// Text is left-aligned at a common inset and vertically centered on the button
+// (label top = center - font_height/2, with TEXT_FONT_FRAC/2 = 0.02).
+const TEXT_LEFT: f32 = 0.670;
+const TEXT_FONT_FRAC: f32 = 0.04; // font height as a fraction of screen height
+
 const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         label: "NEW GAME",
         action: MenuAction::NewGame,
-        rect: (0.635, 0.030, 0.965, 0.155),
-        text_pos: (0.665, 0.072),
+        rect: (0.633, 0.000, 0.965, 0.157),
+        text_pos: (TEXT_LEFT, 0.078 - TEXT_FONT_FRAC / 2.0),
     },
     MenuItem {
         label: "QUIT",
         action: MenuAction::Quit,
-        rect: (0.635, 0.755, 0.965, 0.880),
-        text_pos: (0.755, 0.797),
+        rect: (0.633, 0.791, 0.965, 0.949),
+        text_pos: (TEXT_LEFT, 0.870 - TEXT_FONT_FRAC / 2.0),
     },
 ];
 
@@ -211,7 +217,7 @@ impl GameScene for MainMenuScene {
             let hovered = pointer_pos.is_some_and(|pp| in_rect(item.rect, pp));
             let x = item.text_pos.0 * screen_size.x;
             let y = item.text_pos.1 * screen_size.y;
-            let font_size = 0.04 * screen_size.y;
+            let font_size = TEXT_FONT_FRAC * screen_size.y;
             let opacity = if hovered { 1.0 } else { 0.6 };
             objs.push(SceneObject::screen_space_text(
                 item.label,
@@ -274,21 +280,21 @@ mod tests {
     #[test]
     fn rising_edge_over_new_game_activates_it() {
         // Press edge: not pressed last frame, pressed now, over the top button.
-        let (action, last) = resolve_click(pointer_at(0.8, 0.09, true), false);
+        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), false);
         assert_eq!(action, Some(MenuAction::NewGame));
         assert!(last);
     }
 
     #[test]
     fn rising_edge_over_quit_activates_it() {
-        let (action, _) = resolve_click(pointer_at(0.8, 0.82, true), false);
+        let (action, _) = resolve_click(pointer_at(0.8, 0.870, true), false);
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
     #[test]
     fn held_press_does_not_re_activate() {
         // Already pressed last frame -> no new activation even over an item.
-        let (action, last) = resolve_click(pointer_at(0.8, 0.09, true), true);
+        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), true);
         assert_eq!(action, None);
         assert!(last);
     }
