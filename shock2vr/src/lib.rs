@@ -19,6 +19,7 @@ mod quest_info;
 mod runtime_props;
 mod scripts;
 mod systems;
+mod ui;
 mod util;
 mod virtual_hand;
 mod vr_config;
