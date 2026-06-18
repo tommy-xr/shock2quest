@@ -35,6 +35,10 @@ pub enum GlobalEffect {
 
     // Test the reload functionality (as if saving + loading)
     TestReload,
+
+    // Quit the game (e.g. from the main menu). The runtime is responsible for
+    // observing this via `Game::should_quit` and closing its window.
+    Quit,
 }
 
 #[derive(Clone, Debug)]

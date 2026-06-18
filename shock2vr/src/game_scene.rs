@@ -84,6 +84,13 @@ pub trait GameScene {
         Vec::new()
     }
 
+    /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
+    /// show the OS cursor and populate `InputContext::pointer` when true; by
+    /// default scenes capture the mouse for look.
+    fn wants_pointer(&self) -> bool {
+        false
+    }
+
     /// Get lighting information for VR enhancement
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight>;
 

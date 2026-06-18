@@ -137,6 +137,10 @@ pub struct Game {
     last_env_sound: Option<String>,
 
     mission_to_save_data: HashMap<String, EntitySaveData>,
+
+    // Set when a scene requests quitting (e.g. the main menu's Quit). The
+    // runtime observes this via `should_quit` and closes its window.
+    should_quit: bool,
 }
 
 impl Game {
@@ -207,6 +211,19 @@ impl Game {
     /// Get access to the world for debugging purposes
     pub fn world(&self) -> &shipyard::World {
         self.active_game_scene.world()
+    }
+
+    /// Whether a scene has requested to quit the game (e.g. the main menu's
+    /// Quit). Runtimes should observe this and close their window.
+    pub fn should_quit(&self) -> bool {
+        self.should_quit
+    }
+
+    /// Whether the active scene wants a 2D mouse cursor (e.g. a menu). Flat
+    /// runtimes use this to show the OS cursor and feed `InputContext::pointer`
+    /// rather than capturing the mouse for look.
+    pub fn wants_pointer(&self) -> bool {
+        self.active_game_scene.wants_pointer()
     }
 
     /// Name of the currently active scene (e.g. "medsci1.mis"), tracking
@@ -403,6 +420,7 @@ impl Game {
             last_env_sound: None,
             options,
             mission_to_save_data,
+            should_quit: false,
         }
     }
 
@@ -594,6 +612,9 @@ impl Game {
                     self.active_game_scene.scene_name().to_string(),
                     SpawnLocation::PositionRotation(position, rotation),
                 );
+            }
+            GlobalEffect::Quit => {
+                self.should_quit = true;
             }
         }
     }

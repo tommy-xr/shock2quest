@@ -13,6 +13,11 @@ pub struct InputContext {
     // Information about each of the hands
     pub left_hand: Hand,
     pub right_hand: Hand,
+
+    // 2D screen pointer (mouse) for flatscreen UI. `None` in VR, where
+    // interaction is hand/pointer-ray based. Populated by flat runtimes when a
+    // scene wants a cursor (e.g. menus).
+    pub pointer: Option<Pointer2D>,
 }
 
 impl InputContext {
@@ -22,8 +27,18 @@ impl InputContext {
 
             left_hand: Hand::default(),
             right_hand: Hand::default(),
+            pointer: None,
         }
     }
+}
+
+/// A 2D screen-space pointer for flatscreen UI. Position is normalized to
+/// `[0, 1]` on each axis with the origin at the top-left, so it is
+/// resolution-independent; scenes scale it to their own canvas.
+#[derive(Debug, Clone, Copy)]
+pub struct Pointer2D {
+    pub position: Vector2<f32>,
+    pub pressed: bool,
 }
 
 #[derive(Debug)]

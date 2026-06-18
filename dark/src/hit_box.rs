@@ -202,7 +202,12 @@ fn xform_point(xform: &Matrix4<f32>, p: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(c.x, c.y, c.z)
 }
 
-fn push_segment(verts: &mut Vec<VertexPosition>, xform: &Matrix4<f32>, a: Vector3<f32>, b: Vector3<f32>) {
+fn push_segment(
+    verts: &mut Vec<VertexPosition>,
+    xform: &Matrix4<f32>,
+    a: Vector3<f32>,
+    b: Vector3<f32>,
+) {
     verts.push(VertexPosition {
         position: xform_point(xform, a),
     });
