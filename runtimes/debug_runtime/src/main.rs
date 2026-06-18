@@ -102,6 +102,11 @@ struct Args {
 /// - so an agent can point the camera at an arbitrary world point (e.g. wherever
 /// a ragdoll lands) instead of relying on this fixed default. Tracked in
 /// projects/debug-runtime.md.
+/// Fixed simulation timestep used while stepping (`/v1/step`), so frame- and
+/// time-based stepping advance a deterministic, wall-clock-independent amount of
+/// simulation time (60 Hz, matching the game's target frame rate).
+const FIXED_STEP_DT: f32 = 1.0 / 60.0;
+
 fn default_camera_head_rotation() -> Quaternion<f32> {
     use cgmath::{Decomposed, Rotation, Transform, point3};
     let forward = point3(1.0, 0.0, 0.0);
@@ -449,6 +454,21 @@ fn run_game_blocking(
 
         // Only update the game if not paused or if step was requested
         let actual_game_time = if !is_paused || step_requested {
+            // Deterministic stepping: while stepping (frame- or time-based) advance
+            // the simulation by a FIXED timestep rather than the wall-clock dt
+            // between HTTP requests. Real dt makes `{frames:N}` non-deterministic
+            // and lets physics (e.g. a settling ragdoll) lurch in erratic slow-
+            // motion. With a fixed step, `{frames:N}` == N/FPS seconds of sim time
+            // and `{duration:T}` runs exactly T/dt frames. Free-running (not
+            // stepping) still uses real wall-clock dt.
+            let game_time = if step_requested {
+                Time {
+                    elapsed: Duration::from_secs_f32(FIXED_STEP_DT),
+                    total: Duration::from_secs_f32(accumulated_time + FIXED_STEP_DT),
+                }
+            } else {
+                game_time.clone()
+            };
             profile!(
                 "game.update",
                 game.update(&game_time, &input_context, &mut action_state)
