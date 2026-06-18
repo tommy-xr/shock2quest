@@ -720,6 +720,26 @@ impl PhysicsWorld {
             &self.narrow_phase,
         );
 
+        // Joint-anchor overlay: each impulse joint constrains a point on the
+        // parent body (anchor1, cyan cross) to coincide with a point on the child
+        // body (anchor2, magenta cross). A line connects them - a satisfied joint
+        // has overlapping crosses and an invisible line; a sagging/separated joint
+        // (e.g. the hips) shows a visible gap.
+        for (_h, joint) in self.impulse_joint_set.iter() {
+            if let (Some(b1), Some(b2)) = (
+                self.rigid_body_set.get(joint.body1),
+                self.rigid_body_set.get(joint.body2),
+            ) {
+                let a1 = b1.position() * joint.data.local_frame1;
+                let a2 = b2.position() * joint.data.local_frame2;
+                let p1 = Vector3::new(a1.translation.x, a1.translation.y, a1.translation.z);
+                let p2 = Vector3::new(a2.translation.x, a2.translation.y, a2.translation.z);
+                debug_renderer.add_cross(p1, 0.12, Vector3::new(0.0, 0.6, 1.0)); // anchor1 blue
+                debug_renderer.add_cross(p2, 0.12, Vector3::new(1.0, 0.0, 1.0)); // anchor2 magenta
+                debug_renderer.add_line(p1, p2, Vector3::new(1.0, 1.0, 0.0)); // gap (yellow)
+            }
+        }
+
         debug_renderer.render()
     }
 
