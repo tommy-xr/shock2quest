@@ -17,6 +17,27 @@ impl DebugRenderer {
             lines: HashMap::new(),
         }
     }
+
+    /// Add a colored world-space line segment (for custom debug overlays such as
+    /// joint anchors).
+    pub fn add_line(&mut self, a: Vector3<f32>, b: Vector3<f32>, color: Vector3<f32>) {
+        let key = vec3(
+            OrderedFloat(color.x),
+            OrderedFloat(color.y),
+            OrderedFloat(color.z),
+        );
+        self.lines.entry(key).or_default().extend([
+            VertexPosition { position: a },
+            VertexPosition { position: b },
+        ]);
+    }
+
+    /// Small 3-axis cross marker at `p`.
+    pub fn add_cross(&mut self, p: Vector3<f32>, size: f32, color: Vector3<f32>) {
+        self.add_line(p - vec3(size, 0.0, 0.0), p + vec3(size, 0.0, 0.0), color);
+        self.add_line(p - vec3(0.0, size, 0.0), p + vec3(0.0, size, 0.0), color);
+        self.add_line(p - vec3(0.0, 0.0, size), p + vec3(0.0, 0.0, size), color);
+    }
     pub fn render(self) -> Vec<SceneObject> {
         let mut ret = Vec::new();
         for (color, lines) in self.lines {
