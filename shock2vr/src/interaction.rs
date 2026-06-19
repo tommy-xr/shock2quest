@@ -8,18 +8,18 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
-// Foundational module: defined ahead of `mission_core` being migrated onto it.
-// The allow is removed once mission_core holds `Box<dyn PlayerInteraction>`.
-#![allow(dead_code)]
-
 use cgmath::{InnerSpace, Quaternion, Vector3, Vector4};
-use engine::scene::{SceneObject, light::SpotLight};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{SceneObject, light::SpotLight},
+};
 use rapier3d::prelude::RigidBodyHandle;
 use shipyard::{EntityId, World};
 
 use crate::{
     GameOptions,
     flat_player_controller::FlatPlayerController,
+    hud::create_arm_hud_panels,
     input_context::InputContext,
     physics::PhysicsWorld,
     virtual_hand::{VirtualHand, VirtualHandEffect},
@@ -54,9 +54,10 @@ pub trait PlayerInteraction {
         None
     }
 
-    /// 3D visuals owned by the controller (VR hand models). Flat draws nothing
-    /// here; its weapon is drawn from `viewmodel_entity`.
-    fn render(&self) -> Vec<SceneObject> {
+    /// 3D visuals owned by the controller (VR: hand models + forearm HUD
+    /// panels). Flat draws nothing here; its weapon is drawn from
+    /// `viewmodel_entity`.
+    fn render(&self, _asset_cache: &mut AssetCache, _world: &World) -> Vec<SceneObject> {
         Vec::new()
     }
 
@@ -158,9 +159,17 @@ impl PlayerInteraction for VrInteraction {
         .collect()
     }
 
-    fn render(&self) -> Vec<SceneObject> {
+    fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
         let mut objs = self.left_hand.render();
         objs.append(&mut self.right_hand.render());
+        objs.append(&mut create_arm_hud_panels(
+            asset_cache,
+            world,
+            self.left_hand.get_position(),
+            self.left_hand.get_rotation(),
+            self.right_hand.get_position(),
+            self.right_hand.get_rotation(),
+        ));
         objs
     }
 
