@@ -63,11 +63,11 @@ use tracing::{info, trace, warn};
 use crate::{
     GameOptions,
     creature::{HitBoxManager, RagDollManager, get_creature_definition},
-    flat_player_controller::FlatPlayerController,
     game_scene::AmbientAudioState,
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
     input_context::{self, InputContext},
+    interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
     mission::{SpatialQueryEngine, entity_populator::EntityPopulator},
     physics::{self, PlayerHandle},
@@ -87,7 +87,7 @@ use crate::{
     teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
-    virtual_hand::{VirtualHand, VirtualHandEffect},
+    virtual_hand::VirtualHandEffect,
     vr_config,
 };
 
@@ -176,11 +176,7 @@ pub struct MissionCore {
     pub world: World,
     pub player_handle: PlayerHandle,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
-    pub left_hand: VirtualHand,
-    pub right_hand: VirtualHand,
-    pub flat_player: FlatPlayerController,
-    /// Entity under the crosshair in flat mode (for hover-highlight rendering).
-    flat_highlighted: Option<EntityId>,
+    interaction: Box<dyn PlayerInteraction>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
@@ -271,8 +267,12 @@ impl MissionCore {
         );
 
         // Instantiate held items
-        let mut left_hand = VirtualHand::new(vr_config::Handedness::Left);
-        let mut right_hand = VirtualHand::new(vr_config::Handedness::Right);
+        let mut interaction: Box<dyn PlayerInteraction> =
+            if game_options.presentation_mode == crate::PresentationMode::Flat {
+                Box::new(FlatInteraction::new())
+            } else {
+                Box::new(VrInteraction::new())
+            };
         let (left_hand_entity, right_hand_entity, maybe_inventory_entity) =
             held_item_save_data.instantiate(&mut world);
 
@@ -357,14 +357,12 @@ impl MissionCore {
         // If the player is holding anything, we should un-physical it
 
         if let Some(entity_id) = left_hand_entity {
-            // panic!("got an lent: {:?}", entity_id);
-            left_hand = left_hand.grab_entity(&world, entity_id);
+            interaction.grab(&world, entity_id, vr_config::Handedness::Left);
             make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
         };
 
         if let Some(entity_id) = right_hand_entity {
-            // panic!("got an rent: {:?}", entity_id);
-            right_hand = right_hand.grab_entity(&world, entity_id);
+            interaction.grab(&world, entity_id, vr_config::Handedness::Right);
             make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
         };
 
@@ -410,10 +408,7 @@ impl MissionCore {
         };
 
         MissionCore {
-            left_hand,
-            right_hand,
-            flat_player: FlatPlayerController::new(),
-            flat_highlighted: None,
+            interaction,
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             script_world,
@@ -507,12 +502,7 @@ impl MissionCore {
         self.physics.clear_forces();
         self.rag_doll_manager.update(&self.physics);
 
-        let (left_hand_entity_id, right_hand_entity_id) = {
-            (
-                self.left_hand.get_held_entity(),
-                self.right_hand.get_held_entity(),
-            )
-        };
+        let (left_hand_entity_id, right_hand_entity_id) = self.interaction.held_entities();
 
         // Update player info
         let mut player_info = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
@@ -603,20 +593,15 @@ impl MissionCore {
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
-        if game_options.presentation_mode == crate::PresentationMode::Vr {
-            self.update_avatar_hands(asset_cache, player_pos, player_rot, input_context);
-        } else {
-            let (msgs, highlighted) = self.flat_player.update(
-                &input_context.right_hand,
-                player_pos,
-                player_rot,
-                input_context.head.rotation,
-                &self.world,
-                &self.physics,
-            );
-            self.flat_highlighted = highlighted;
-            self.process_virtual_hand_effects(asset_cache, msgs);
-        }
+        let interaction_msgs = self.interaction.update(&InteractionContext {
+            physics: &self.physics,
+            world: &self.world,
+            input: input_context,
+            player_pos,
+            player_rotation: player_rot,
+            head_rotation: input_context.head.rotation,
+        });
+        self.process_virtual_hand_effects(asset_cache, interaction_msgs);
 
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
@@ -1244,14 +1229,10 @@ impl MissionCore {
                     hand,
                     current_parent_id: _,
                 } => {
-                    if hand == vr_config::Handedness::Left {
-                        self.left_hand = self.left_hand.grab_entity(&self.world, entity_id);
-                    } else {
-                        self.right_hand = self.right_hand.grab_entity(&self.world, entity_id);
-                    }
+                    let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
+                    self.process_virtual_hand_effects(asset_cache, grab_effects);
 
-                    if self.right_hand.is_holding(entity_id) || self.left_hand.is_holding(entity_id)
-                    {
+                    if self.interaction.is_holding(entity_id) {
                         // Let the scripts know we are now holding the item..
                         self.script_world.dispatch(Message {
                             payload: MessagePayload::Hold,
@@ -1454,12 +1435,7 @@ impl MissionCore {
 
                     if new_entity_info.rigid_body.is_some() {
                         let rigid_body = new_entity_info.rigid_body.unwrap();
-                        self.left_hand = self.left_hand.replace_entity(
-                            entity_id,
-                            new_entity_info.entity_id,
-                            rigid_body,
-                        );
-                        self.right_hand = self.right_hand.replace_entity(
+                        self.interaction.replace_entity(
                             entity_id,
                             new_entity_info.entity_id,
                             rigid_body,
@@ -1625,8 +1601,7 @@ impl MissionCore {
                 }
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
-                    self.left_hand = self.left_hand.destroy_entity(entity_id);
-                    self.right_hand = self.right_hand.destroy_entity(entity_id);
+                    self.interaction.on_entity_destroyed(entity_id);
                     self.remove_entity(entity_id);
                 }
                 Effect::ResetGravity { entity_id } => {
@@ -1739,9 +1714,9 @@ impl MissionCore {
                     // already armed - extra spawns fall to the ground as world
                     // pickups (world model + physics) to be picked up.
                     if game_options.presentation_mode == crate::PresentationMode::Flat
-                        && !self.flat_player.is_wielding()
+                        && !self.interaction.is_wielding()
                     {
-                        let msgs = self.flat_player.wield(info.entity_id);
+                        let msgs = self.interaction.wield(info.entity_id);
                         self.process_virtual_hand_effects(asset_cache, msgs);
                     }
                 }
@@ -1785,7 +1760,7 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
-        if let Some(hit_entity) = self.left_hand.get_raytraced_entity() {
+        for hit_entity in self.interaction.highlighted_entities() {
             ret.extend(draw_item_outline(
                 asset_cache,
                 &self.physics,
@@ -1795,50 +1770,6 @@ impl MissionCore {
                 screen_size,
             ));
 
-            ret.extend(draw_item_name(
-                asset_cache,
-                &self.physics,
-                hit_entity,
-                &self.world,
-                view,
-                projection,
-                screen_size,
-                options.debug_show_ids,
-            ));
-        };
-
-        if let Some(hit_entity) = self.right_hand.get_raytraced_entity() {
-            ret.extend(draw_item_outline(
-                asset_cache,
-                &self.physics,
-                hit_entity,
-                view,
-                projection,
-                screen_size,
-            ));
-            ret.extend(draw_item_name(
-                asset_cache,
-                &self.physics,
-                hit_entity,
-                &self.world,
-                view,
-                projection,
-                screen_size,
-                options.debug_show_ids,
-            ));
-        };
-
-        // Flat presentation: highlight the entity under the crosshair, reusing
-        // the same brackets + name overlay as the VR hover.
-        if let Some(hit_entity) = self.flat_highlighted {
-            ret.extend(draw_item_outline(
-                asset_cache,
-                &self.physics,
-                hit_entity,
-                view,
-                projection,
-                screen_size,
-            ));
             ret.extend(draw_item_name(
                 asset_cache,
                 &self.physics,
@@ -1895,7 +1826,7 @@ impl MissionCore {
             // top of the world. It is skipped in the world pass and drawn here,
             // last; the depth buffer is cleared before its first object so it
             // renders over geometry while still depth-testing within itself.
-            if let Some(weapon) = self.flat_player.wielded_entity() {
+            if let Some(weapon) = self.interaction.viewmodel_entity() {
                 if let Some(model) = self.id_to_model.get(&weapon) {
                     let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
                     if let Ok(xform) = v_transform.get(weapon).map(|p| p.0) {
@@ -2029,7 +1960,7 @@ impl MissionCore {
         // In flat mode the wielded weapon is drawn as a first-person viewmodel in
         // `render_per_eye` (on top, depth-test off), so skip it in the world pass.
         let flat_viewmodel_entity = if options.presentation_mode == crate::PresentationMode::Flat {
-            self.flat_player.wielded_entity()
+            self.interaction.viewmodel_entity()
         } else {
             None
         };
@@ -2142,26 +2073,10 @@ impl MissionCore {
         let mut _player = SceneObject::new(player_mat, Box::new(engine::scene::cube::create()));
         _player.set_transform(Matrix4::from_translation(player.pos));
 
-        // Render the VR hands (and anything held in them). The flat presentation
-        // has no floating hands - a first-person weapon viewmodel comes later.
-        if options.presentation_mode == crate::PresentationMode::Vr {
-            scene.append(&mut self.left_hand.render());
-            scene.append(&mut self.right_hand.render());
-        }
-
-        // Render forearm HUD panels with health/psi overlays (VR only). The flat
-        // presentation draws a screen-space 2D HUD in `render_per_eye` instead.
-        if options.presentation_mode == crate::PresentationMode::Vr {
-            let mut hud_panels = crate::hud::create_arm_hud_panels(
-                asset_cache,
-                &self.world,
-                self.left_hand.get_position(),
-                self.left_hand.get_rotation(),
-                self.right_hand.get_position(),
-                self.right_hand.get_rotation(),
-            );
-            scene.append(&mut hud_panels);
-        }
+        // The interaction controller owns its own visuals: VR draws hand models
+        // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
+        // drawn on top in `render_per_eye`).
+        scene.append(&mut self.interaction.render(asset_cache, &self.world));
 
         // Render inventory
         let inventory_objs = PlayerInventoryEntity::render(&self.world);
@@ -2280,77 +2195,7 @@ impl MissionCore {
     /// Get hand spotlights for testing enhanced lighting system
     /// Returns a vector of SpotLight objects positioned at the player's hands
     pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
-        let mut lights = Vec::new();
-
-        if options.experimental_features.contains("enhanced_lighting") {
-            // Right hand spotlight
-            let right_hand_pos = self.right_hand.get_position();
-            let right_hand_rot = self.right_hand.get_rotation();
-
-            // Convert quaternion to direction vector (forward direction)
-            let right_direction = right_hand_rot * Vector3::new(0.0, 0.0, -1.0);
-
-            let right_spotlight = SpotLight {
-                position: right_hand_pos,
-                direction: right_direction.normalize(),
-                color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
-                inner_cone_angle: 15.0_f32.to_radians(),                   // 15 degree inner cone
-                outer_cone_angle: 30.0_f32.to_radians(),                   // 30 degree outer cone
-                range: 10.0,                                               // 10 meter range
-            };
-            lights.push(right_spotlight);
-
-            // Left hand spotlight
-            let left_hand_pos = self.left_hand.get_position();
-            let left_hand_rot = self.left_hand.get_rotation();
-
-            // Convert quaternion to direction vector (forward direction)
-            let left_direction = left_hand_rot * Vector3::new(0.0, 0.0, -1.0);
-
-            let left_spotlight = SpotLight {
-                position: left_hand_pos,
-                direction: left_direction.normalize(),
-                color_intensity: cgmath::Vector4::new(1.0, 1.0, 0.8, 2.0), // Warm white, intensity 2.0
-                inner_cone_angle: 15.0_f32.to_radians(),                   // 15 degree inner cone
-                outer_cone_angle: 30.0_f32.to_radians(),                   // 30 degree outer cone
-                range: 10.0,                                               // 10 meter range
-            };
-            lights.push(left_spotlight);
-        }
-
-        lights
-    }
-
-    fn update_avatar_hands(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        player_pos: Vector3<f32>,
-        player_rotation: Quaternion<f32>,
-        input_context: &input_context::InputContext,
-    ) {
-        let (right_hand, mut right_hand_msgs) = VirtualHand::update(
-            &self.right_hand,
-            &self.physics,
-            &self.world,
-            player_pos,
-            player_rotation,
-            &input_context.right_hand,
-        );
-        self.right_hand = right_hand;
-
-        let (left_hand, mut left_hand_msgs) = VirtualHand::update(
-            &self.left_hand,
-            &self.physics,
-            &self.world,
-            player_pos,
-            player_rotation,
-            &input_context.left_hand,
-        );
-        self.left_hand = left_hand;
-
-        left_hand_msgs.append(&mut right_hand_msgs);
-
-        self.process_virtual_hand_effects(asset_cache, left_hand_msgs);
+        self.interaction.hand_spotlights(options)
     }
 
     /// Apply the effects produced by an interaction controller (the VR hands or
