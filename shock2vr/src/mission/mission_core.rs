@@ -179,6 +179,8 @@ pub struct MissionCore {
     pub left_hand: VirtualHand,
     pub right_hand: VirtualHand,
     pub flat_player: FlatPlayerController,
+    /// Entity under the crosshair in flat mode (for hover-highlight rendering).
+    flat_highlighted: Option<EntityId>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
@@ -411,6 +413,7 @@ impl MissionCore {
             left_hand,
             right_hand,
             flat_player: FlatPlayerController::new(),
+            flat_highlighted: None,
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             script_world,
@@ -603,13 +606,15 @@ impl MissionCore {
         if game_options.presentation_mode == crate::PresentationMode::Vr {
             self.update_avatar_hands(asset_cache, player_pos, player_rot, input_context);
         } else {
-            let msgs = self.flat_player.update(
+            let (msgs, highlighted) = self.flat_player.update(
                 &input_context.right_hand,
                 player_pos,
                 player_rot,
                 input_context.head.rotation,
                 &self.world,
+                &self.physics,
             );
+            self.flat_highlighted = highlighted;
             self.process_virtual_hand_effects(asset_cache, msgs);
         }
 
@@ -1730,8 +1735,12 @@ impl MissionCore {
                         CreateEntityOptions::default(),
                     );
                     // Flat presentation: auto-wield the spawned weapon as the
-                    // first-person viewmodel (debug spawn-and-wield for Slice 5).
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                    // first-person viewmodel for debug testing, but only when not
+                    // already armed - extra spawns fall to the ground as world
+                    // pickups (world model + physics) to be picked up.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat
+                        && !self.flat_player.is_wielding()
+                    {
                         let msgs = self.flat_player.wield(info.entity_id);
                         self.process_virtual_hand_effects(asset_cache, msgs);
                     }
@@ -1819,6 +1828,29 @@ impl MissionCore {
             ));
         };
 
+        // Flat presentation: highlight the entity under the crosshair, reusing
+        // the same brackets + name overlay as the VR hover.
+        if let Some(hit_entity) = self.flat_highlighted {
+            ret.extend(draw_item_outline(
+                asset_cache,
+                &self.physics,
+                hit_entity,
+                view,
+                projection,
+                screen_size,
+            ));
+            ret.extend(draw_item_name(
+                asset_cache,
+                &self.physics,
+                hit_entity,
+                &self.world,
+                view,
+                projection,
+                screen_size,
+                options.debug_show_ids,
+            ));
+        }
+
         ret.extend(self.visibility_engine.debug_render(asset_cache));
 
         // Render debug skeletons with joint ID text overlays
@@ -1858,9 +1890,33 @@ impl MissionCore {
             }
         }
 
-        // Flat (non-VR) presentation draws a screen-space 2D HUD here, where the
-        // screen size is available. The VR forearm HUD is built in `render`.
         if options.presentation_mode == crate::PresentationMode::Flat {
+            // First-person weapon viewmodel: draw the wielded weapon's model on
+            // top of the world. It is skipped in the world pass and drawn here,
+            // last; the depth buffer is cleared before its first object so it
+            // renders over geometry while still depth-testing within itself.
+            if let Some(weapon) = self.flat_player.wielded_entity() {
+                if let Some(model) = self.id_to_model.get(&weapon) {
+                    let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                    if let Ok(xform) = v_transform.get(weapon).map(|p| p.0) {
+                        let scene_objs = match self.id_to_animation_player.get(&weapon) {
+                            Some(player) => model.to_animated_scene_objects(player),
+                            None => model.to_scene_objects().clone(),
+                        };
+                        for (i, obj) in scene_objs.into_iter().enumerate() {
+                            let mut o = obj.clone();
+                            o.set_transform(xform);
+                            if i == 0 {
+                                o.set_clear_depth(true);
+                            }
+                            ret.push(o);
+                        }
+                    }
+                }
+            }
+
+            // Flat 2D HUD (screen size is available here; the VR forearm HUD is
+            // built in `render`). Drawn after the viewmodel so it stays on top.
             ret.extend(crate::hud::create_flat_hud(
                 asset_cache,
                 &self.world,
@@ -1970,9 +2026,20 @@ impl MissionCore {
         let mut total_model_count = 0;
         let mut rendered_model_count = 0;
 
+        // In flat mode the wielded weapon is drawn as a first-person viewmodel in
+        // `render_per_eye` (on top, depth-test off), so skip it in the world pass.
+        let flat_viewmodel_entity = if options.presentation_mode == crate::PresentationMode::Flat {
+            self.flat_player.wielded_entity()
+        } else {
+            None
+        };
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
+            if Some(*entity_id) == flat_viewmodel_entity {
+                continue;
+            }
             if !has_refs(&self.world, *entity_id) {
                 continue;
             }

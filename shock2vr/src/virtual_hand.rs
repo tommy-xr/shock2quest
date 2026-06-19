@@ -482,7 +482,7 @@ fn get_held_position_orientation(
     vr_config::get_vr_hand_model_adjustments_from_entity(entity_id, world, handedness)
 }
 
-fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
+pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     let v_prop_frobinfo = world.borrow::<View<PropFrobInfo>>().unwrap();
 
     if let Ok(frob_info) = v_prop_frobinfo.get(entity_id) {
