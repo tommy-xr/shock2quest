@@ -38,6 +38,11 @@ pub struct SceneObject {
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; 40],
     pub depth_write: bool,
+    /// When true, the depth buffer is cleared *before* drawing this object, so it
+    /// (and anything drawn after it) renders on top of the world while still
+    /// depth-testing normally within itself. Used to draw the flatscreen
+    /// first-person weapon viewmodel without clipping into geometry.
+    pub clear_depth: bool,
 }
 
 impl SceneObject {
@@ -208,6 +213,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
             depth_write: true,
+            clear_depth: false,
         }
     }
 
@@ -225,6 +231,11 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
+        // Clear the depth buffer first so this (and later objects) draw on top of
+        // the world while still depth-testing normally amongst themselves.
+        if self.clear_depth {
+            unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
+        }
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
         }
@@ -295,6 +306,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
             depth_write: true,
+            clear_depth: false,
         }
     }
 
@@ -306,11 +318,16 @@ impl SceneObject {
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
+            clear_depth: self.clear_depth,
         }
     }
 
     pub fn set_depth_write(&mut self, enabled: bool) {
         self.depth_write = enabled;
+    }
+
+    pub fn set_clear_depth(&mut self, enabled: bool) {
+        self.clear_depth = enabled;
     }
 
     pub fn set_skinned_transparency(&mut self, transparency: Option<f32>) {
