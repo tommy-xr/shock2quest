@@ -348,6 +348,14 @@ The project supports experimental flags for gating in-progress features during d
   - Alternative to smooth movement that can cause motion sickness
   - Triggered via controller trigger button
 
+- **`ragdoll`**: spawn a physics ragdoll on creature death (`SlayEntity`) instead of
+  just removing the entity. Without it, death is unchanged.
+
+- **`ragdoll_multibody`**: make ragdolls use reduced-coordinate (multibody) joints
+  anchored at the limb articulation points — limbs can't separate (no hip gap), but
+  the rig is experimental (extremities can jitter on floor contact). Without it,
+  ragdolls use the stable impulse-joint rig. See `projects/ragdoll-settling-followup.md`.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:

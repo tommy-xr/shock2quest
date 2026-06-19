@@ -1148,6 +1148,23 @@ impl PhysicsWorld {
             .insert(parent, child, joint_params, true)
     }
 
+    /// Create a reduced-coordinate (multibody) joint between `parent` and `child`.
+    /// Unlike an impulse joint, the constraint is structural - translation is not a
+    /// DOF, so the bodies cannot separate, and no spring energy is injected. The
+    /// child must currently be the root of its own multibody (each rigid body has at
+    /// most one parent link); returns `None` if that invariant is violated (e.g. a
+    /// duplicate edge / cycle). Removing either body (via `remove_rigid_body_handle`)
+    /// also removes the joint.
+    pub fn create_multibody_joint(
+        &mut self,
+        parent: RigidBodyHandle,
+        child: RigidBodyHandle,
+        joint_params: GenericJoint,
+    ) -> Option<MultibodyJointHandle> {
+        self.multibody_joint_set
+            .insert(parent, child, joint_params, true)
+    }
+
     /// Get the transform (position and rotation) of a rigid body by handle
     pub fn get_body_transform(&self, handle: RigidBodyHandle) -> Option<Isometry<Real>> {
         self.rigid_body_set.get(handle).map(|body| *body.position())

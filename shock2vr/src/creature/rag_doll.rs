@@ -64,6 +64,8 @@ pub struct RagDollMetrics {
 
 pub struct RagDoll {
     physics_bodies: Vec<RigidBodyHandle>,
+    /// Impulse joints to clean up on removal. Empty for multibody rigs, whose
+    /// joints are removed automatically with their bodies.
     joint_handles: Vec<ImpulseJointHandle>,
     joint_to_body: HashMap<u32, RigidBodyHandle>,
     bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
@@ -220,6 +222,12 @@ impl RagDollManager {
         joint_transforms: &[Matrix4<f32>; 40],
         root_offset: Vector3<f32>,
         joint_limits: &HashMap<u32, JointLimit>,
+        // When true, use reduced-coordinate (multibody) joints anchored at the
+        // articulation point: limbs can't separate (no hip gap), but the rig is
+        // experimental (extremities can jitter on floor contact). When false, the
+        // stable impulse-joint rig (heavier core, soft locked translation - settles
+        // but the hip can visibly sag/separate under load).
+        use_multibody: bool,
         physics: &mut PhysicsWorld,
     ) -> bool {
         if !model.can_create_rag_doll() {
@@ -259,6 +267,14 @@ impl RagDollManager {
         for bone in &bones {
             let joint_idx = bone.joint_id as usize;
             if joint_idx >= world_joint_transforms.len() {
+                continue;
+            }
+            // The Dark skeleton lists some joints twice (a torso's main joint is
+            // also a fixed point on its parent torso - see ss2_skeleton::create).
+            // Create exactly one body per joint id; a duplicate would otherwise
+            // spawn a second, never-jointed body that falls away as a stray
+            // (invisible: rendering only draws bodies tracked in joint_to_body).
+            if joint_to_body.contains_key(&(bone.joint_id as u32)) {
                 continue;
             }
 
@@ -305,7 +321,16 @@ impl RagDollManager {
                         half_extents.z.max(MIN_HALF_EXTENT),
                     );
                     let volume = 8.0 * he.x * he.y * he.z;
-                    let density = CORE_BODY_MASS / volume.max(MIN_VOLUME);
+                    // The 4x "core" mass stabilizes the *impulse* hub-and-spoke rig
+                    // (the tiny pelvis hub otherwise gets yanked by the heavy thighs).
+                    // A reduced-coordinate multibody solves that structurally and is
+                    // actually destabilized by the mass ratio, so it uses uniform mass.
+                    let core_mass = if use_multibody {
+                        TARGET_BODY_MASS
+                    } else {
+                        CORE_BODY_MASS
+                    };
+                    let density = core_mass / volume.max(MIN_VOLUME);
                     physics.attach_collider_with_offset(
                         handle,
                         SharedShape::cuboid(he.x, he.y, he.z),
@@ -366,30 +391,13 @@ impl RagDollManager {
                 let parent_rot = get_rotation_from_matrix(&parent_world);
                 let child_world = world_joint_transforms[child_idx];
                 let child_rot = get_rotation_from_matrix(&child_world);
-                let child_to_parent = parent_pos - child_pos;
-                let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
 
-                // Ball joint (translation locked) with angular limits so the body
-                // can't fold/twist through itself.
-                //
-                // The limits are measured relative to the joints' local frames, so
-                // they only behave if "zero angle" corresponds to the bind/rest
-                // pose. We align both frames to the child's rest world orientation:
-                //   frame1 (parent-local) rotation = R_parent^-1 * R_child
-                //   frame2 (child-local)  rotation = identity
-                // At spawn, R_parent * frame1 == R_child == R_child * frame2, so the
-                // relative angle is exactly 0 and within limits - no energy is
-                // injected (the bug we hit when limits used identity frames).
+                // Both rigs align the joint frames' rotation to the rest/death pose
+                // (parent-local = R_parent^-1 * R_child, child-local = identity), so
+                // the cone limits are measured from there and the relative angle is
+                // exactly 0 at spawn - no energy injected. The anchor *translation*
+                // differs by rig type (see each branch).
                 let frame1_rot = quat_to_nquat(parent_rot.invert() * child_rot);
-                let frame1 = Isometry::from_parts(Translation3::new(0.0, 0.0, 0.0), frame1_rot);
-                let frame2 = Isometry::from_parts(
-                    Translation3::new(
-                        child_local_anchor.x,
-                        child_local_anchor.y,
-                        child_local_anchor.z,
-                    ),
-                    UnitQuaternion::identity(),
-                );
                 // Per-bone cone limit from the creature definition (e.g. tight for
                 // head/neck/spine, wide for shoulders/hips), falling back to a
                 // uniform default for joints/creatures without a profile.
@@ -397,31 +405,83 @@ impl RagDollManager {
                     .get(&(bone.joint_id as u32))
                     .map(|limit| limit.cone)
                     .unwrap_or(JOINT_CONE_LIMIT);
-                let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
-                    .local_frame1(frame1)
-                    .local_frame2(frame2)
-                    // Compliant joints (rapier 0.31+): the default softness is
-                    // near-rigid (natural_frequency 1e6), which rigidly fights the
-                    // unavoidable constraint residual on this hub-and-spoke
-                    // skeleton each step and pumps energy (the ragdoll never
-                    // settles). A spring-like, well-damped joint absorbs the
-                    // residual instead. ~60 Hz is well above the step rate (stiff
-                    // enough to hold limbs together) but far from rigid.
-                    .softness(SpringCoefficients {
-                        natural_frequency: 60.0,
-                        damping_ratio: 2.0,
-                    })
-                    .limits(JointAxis::AngX, [-cone, cone])
-                    .limits(JointAxis::AngY, [-cone, cone])
-                    .limits(JointAxis::AngZ, [-cone, cone])
-                    // Disable contacts between this directly-jointed parent/child
-                    // pair so they can overlap at the joint without being ejected;
-                    // non-adjacent limbs still collide (via CollisionGroup::ragdoll).
-                    .contacts_enabled(false)
+                let with_limits = |b: GenericJointBuilder| -> GenericJointBuilder {
+                    b.limits(JointAxis::AngX, [-cone, cone])
+                        .limits(JointAxis::AngY, [-cone, cone])
+                        .limits(JointAxis::AngZ, [-cone, cone])
+                        // Disable contacts between this directly-jointed parent/
+                        // child pair so they can overlap at the joint without
+                        // being ejected; non-adjacent limbs still collide.
+                        .contacts_enabled(false)
+                };
+
+                if use_multibody {
+                    // Reduced-coordinate ball joint anchored at the CHILD origin -
+                    // the true articulation point (e.g. the hip socket). Translation
+                    // is structurally not a DOF, so limbs can't separate (no hip gap)
+                    // and no spring energy is injected. parent_world*frame1 ==
+                    // child_world*frame2 at spawn, so multibody forward-kinematics
+                    // reproduces the captured death pose (no snap).
+                    let parent_to_child = child_pos - parent_pos;
+                    let parent_local_anchor = parent_rot.conjugate().rotate_vector(parent_to_child);
+                    let frame1 = Isometry::from_parts(
+                        Translation3::new(
+                            parent_local_anchor.x,
+                            parent_local_anchor.y,
+                            parent_local_anchor.z,
+                        ),
+                        frame1_rot,
+                    );
+                    let frame2 = Isometry::from_parts(
+                        Translation3::new(0.0, 0.0, 0.0),
+                        UnitQuaternion::identity(),
+                    );
+                    let joint = with_limits(
+                        GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
+                            .local_frame1(frame1)
+                            .local_frame2(frame2),
+                    )
                     .build();
-                let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
-                joint_handles.push(handle);
-                joint_pairs.push((parent_handle, child_handle));
+                    // Insert returns None only if the child is not a fresh root (a
+                    // duplicate edge / cycle) - dedup above prevents that, but skip
+                    // defensively rather than panic.
+                    if physics
+                        .create_multibody_joint(parent_handle, child_handle, joint)
+                        .is_some()
+                    {
+                        joint_pairs.push((parent_handle, child_handle));
+                    }
+                } else {
+                    // Impulse ball joint anchored at the PARENT origin (the heavy
+                    // hub), keeping the low-inertia pelvis from being torqued by the
+                    // joint spring. The locked translation is softened (compliant,
+                    // ~60 Hz) so this hub-and-spoke rig settles instead of pumping
+                    // energy - at the cost of the hip sagging/separating under load.
+                    let child_to_parent = parent_pos - child_pos;
+                    let child_local_anchor = child_rot.conjugate().rotate_vector(child_to_parent);
+                    let frame1 = Isometry::from_parts(Translation3::new(0.0, 0.0, 0.0), frame1_rot);
+                    let frame2 = Isometry::from_parts(
+                        Translation3::new(
+                            child_local_anchor.x,
+                            child_local_anchor.y,
+                            child_local_anchor.z,
+                        ),
+                        UnitQuaternion::identity(),
+                    );
+                    let joint = with_limits(
+                        GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
+                            .local_frame1(frame1)
+                            .local_frame2(frame2)
+                            .softness(SpringCoefficients {
+                                natural_frequency: 60.0,
+                                damping_ratio: 2.0,
+                            }),
+                    )
+                    .build();
+                    let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
+                    joint_handles.push(handle);
+                    joint_pairs.push((parent_handle, child_handle));
+                }
             }
         }
 
@@ -463,6 +523,10 @@ impl RagDollManager {
 
     pub fn remove_entity(&mut self, entity_id: EntityId, physics: &mut PhysicsWorld) {
         if let Some(ragdoll) = self.ragdolls.remove(&entity_id) {
+            // Impulse joints must be removed explicitly; multibody joints are
+            // removed automatically when their attached bodies are removed (see
+            // PhysicsWorld::remove_rigid_body_handle), so for multibody rigs
+            // joint_handles is empty and this loop is a no-op.
             for joint in ragdoll.joint_handles {
                 physics.remove_impulse_joint(joint);
             }

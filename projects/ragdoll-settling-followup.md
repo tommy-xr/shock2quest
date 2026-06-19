@@ -59,56 +59,160 @@ The hip gap is the same root cause (the heavy thigh stretches the compliant join
   to rest. 8× was noisier (more momentum); 4× was the sweet spot. This is the change in
   PR #301.
 
+## Investigation update — 2026-06-18 (hip "disconnect" deep-dive)
+
+Focused on the **thigh joint visually disconnecting from the hip**. Findings, all
+verified against `debug_ragdoll` / `debug_hitbox` over the debug runtime:
+
+- **Rotation extraction is NOT the bug (ruled out, hard).** Dumped the 3×3 of every
+  joint world-matrix the ragdoll consumes (`add_ragdoll`): **all perfectly
+  orthonormal** — column norms 1.000, off-diagonal dot-products 0.000, det 1.000,
+  including the thighs. So `get_rotation_from_matrix` (raw 3×3 → quat, no
+  orthonormalization) corrupts nothing, and red==green in `debug_hitbox`. The old
+  `debug_hitbox` doc comment ("red diverges at the thighs due to scale/shear") was a
+  wrong guess and has been corrected in code.
+
+- **The joints are positioned ~29 cm from where the limbs articulate (quantified).**
+  Added a joint overlay to `debug_hitbox` (see Tooling). For the hips:
+  `add_ragdoll` anchors **both** hip joints at the **same** point — the bone-8
+  (pelvis) origin — because `frame1`'s translation is `(0,0,0)`. That origin sits
+  ~11 cm above, ~13 cm behind, and ~18 cm lateral of each real hip socket — measured
+  anchor→socket distance **0.287 m / 0.289 m** for L/R. So each thigh pivots about a
+  point up at the sacrum, and its top swings off the pelvis as it rotates → the
+  pose-dependent disconnect.
+
+- **Anchoring at the correct hip socket (child origin) is geometrically right but
+  destabilizes (ruled out as a standalone fix).** A/B'd via a `RAGDOLL_ANCHOR=child`
+  env toggle: offsetting the anchor from the heavy pelvis hub torques it and *adds*
+  energy — left hip went 12→16 cm and the rig got jumpier. The parent-origin anchor
+  is the *stable* choice precisely because it doesn't torque the hub.
+
+- **Stiffening the soft translation lock closes the gap but diverges on contact
+  (confirms the doc's warning, even with the heavy core).** Swept
+  `natural_frequency` via `RAGDOLL_FREQ`. At 60 (current) the rig is **stable** —
+  `min_y` steady, `max_lin` decays 0.20→0.065 — but the left hip holds **9 cm** at
+  rest (right ~2.4 cm; the asymmetry is systematic, the loaded hip hitting its 60°
+  cone limit and the soft translation letting it squirt out). At 500/1e6 the hip gap
+  closes to ~2 cm transiently, then **`max_ang` climbs to 27+ once it hits the
+  floor**. So you cannot get correct-pivot + closed-gap + stability out of impulse
+  joints on this hub-and-spoke skeleton.
+
+**Conclusion:** the visible disconnect is a *real positioning issue* (anchor far
+from the articulation point) compounded by the *soft translation lock* (needed for
+hub stability) — and the two cannot be reconciled within impulse joints. The
+principled fix is **multibody joints** (next steps, now the chosen direction).
+
+## Investigation update — 2026-06-18 (multibody conversion, behind a flag)
+
+Implemented multibody joints and made them **opt-in via experimental flags**, with
+the impulse rig kept as the stable default:
+
+- `--experimental ragdoll` — spawn a ragdoll on creature death (`SlayEntity`) instead
+  of just removing the entity. Without it, death is unchanged. (Before this there was
+  *no* ragdoll-on-death path at all — ragdolls only existed in the `debug_ragdoll`
+  scene.)
+- `--experimental ragdoll_multibody` — the ragdoll uses reduced-coordinate multibody
+  joints (anchored at the child/hip articulation point, uniform mass, no softness);
+  otherwise it uses the impulse rig (parent-origin anchor, heavy core, soft
+  translation). Routing verified: default → 19 impulse joints; multibody flag → 0
+  impulse joints, bodies stay connected (~1.6 m extent).
+
+**What the multibody fixes:** translation is structurally not a DOF, so limbs
+**cannot separate** — the hip gap is gone, and we can finally anchor at the true
+articulation point (child origin) without the hub-torque instability impulse joints
+had. Forward-kinematics reproduces the captured death pose at spawn (frames are
+death-pose-aligned), so there's **no snap** — the failure mode of the earlier naive
+drop-in (which exploded because bodies spawned independently of the reduced-coord
+rest config).
+
+**Multibody stability findings (verified, env-swept then baked in):**
+- **Drop the heavy core — biggest win.** The 4× `CORE_BODY_MASS` is an *impulse* hub
+  crutch; a proper articulated solver is *destabilized* by the mass ratio. Uniform
+  mass took `max_ang` from ~44 → ~3. The multibody branch now uses `TARGET_BODY_MASS`
+  for the core.
+- **Joint-friction motors inject energy → explode** (`motor_velocity(0, factor)`,
+  Acceleration-based, drove `max_ang` to 9e4 and through the floor). Do **not** use
+  motors to damp; ruled out.
+- **Soft contacts** (`IntegrationParameters::contact_softness` natural_frequency
+  30→10) remove the spawn/floor-**impact** spike — but this is a *global* physics knob,
+  so it was reverted (not safe to change world-wide for an experimental rig).
+- **More solver iterations** (4→16) help marginally then *hurt* with uniform mass.
+- **Self-collision off** doesn't help the churn.
+- **Body-creation dedup bug found + fixed:** the Dark skeleton lists joint 18 twice,
+  and body creation (unlike joint creation) wasn't deduped → a second, never-jointed
+  **orphan body** for joint 18 fell away as an invisible stray (and inflated the body
+  bbox to 6 m). Now one body per joint id.
+
+**The remaining blocker (multibody):** even at the best config the corpse does **not
+fully settle on the floor** — the core comes to rest but **extremities jitter in a
+contact limit-cycle** (one-body `max_ang`~8, `lin`~5; bulk drift only ~0.08 m/s, so
+it's localized limb buzz, not bulk sliding). Body linear/angular damping doesn't bleed
+the multibody's *constrained* DOF, and the obvious fix (joint-friction motors) injects
+energy. This is why multibody stays **experimental / opt-in**, not the default.
+
+**Net trade-off (concrete):**
+- *Impulse (default):* settles cleanly (`lin`→0.065) but the hip **gaps ~9 cm**.
+- *Multibody (flag):* **no gap, can't separate**, but **extremities won't settle**
+  (contact jitter) and the in-game death path is gated behind `--experimental ragdoll`.
+
 ## Recommended next steps (ranked)
 
-### 1. Use Rapier auto-sleep for "stops twitching, still pokeable" (do this first)
-The user wants the corpse to stop twitching **without** losing interactivity. Rapier's
-**island sleeping** is exactly that: a body whose linear/angular velocity stays below a
-threshold for `time_to_sleep` seconds **sleeps** (drops out of simulation), but
-**auto-wakes on contact or applied force** — so you can still walk into / shoot / push
-the corpse and it springs back to life. We do **not** disable sleeping anywhere (we only
-read `is_sleeping` for debug).
+### 0. Crack the multibody floor-contact jitter (the one blocker left)
+Make the multibody rig settle so it can graduate from experimental to default. Ideas
+not yet tried / not yet working:
+- **Stable joint damping that doesn't inject energy** — the multibody's per-DOF
+  `damping` vector (set by `MultibodyJoint::default_damping` on append) rather than a
+  velocity *motor*; or a very low-gain Force-based motor. Motors at the gains tried
+  exploded; needs care.
+- **Contact handling for the ragdoll only** — per-collider contact softness/friction
+  (not the global `IntegrationParameters`), or temporarily softer contacts while the
+  rig is "fresh".
+- **Velocity clamp / extra substeps** for the first ~1 s after spawn to absorb the
+  transient, then release.
+- Watch with `/v1/ragdoll/metrics` (`max_ang`/`max_lin` should decay, not limit-cycle)
+  and the `debug_hitbox` joint overlay (anchor stays at the articulation point).
 
-- Check whether the ragdoll bodies actually sleep once quiescent:
-  `GET /v1/physics/bodies/:id` → `is_sleeping`. If the residual ~40 s twitch keeps them
-  awake, the fix is to help them cross the sleep threshold sooner: a bit more damping,
-  and/or lowering `IntegrationParameters::{normalized_linear_/angular_}? sleep thresholds`
-  / `time_to_sleep` for the ragdoll. (Confirm the exact field names in rapier 0.31.)
-- This is the interaction-friendly alternative to a hard freeze/kinematic-pin — **prefer
-  it.** A hard freeze would make the corpse un-pokeable; auto-sleep keeps the fun.
+### 1. ⭐ Multibody (reduced-coordinate) joints — IMPLEMENTED (behind `ragdoll_multibody`)
+Done in this pass (see `add_ragdoll`'s `use_multibody` branch): anchored at the
+child/hip articulation point, dropped `softness`, uniform core mass, death-pose-aligned
+frames so forward-kinematics reproduces the spawn pose (no snap), parent-before-child
+insertion (insert is order-robust given per-child dedup), body-creation dedup, joints
+auto-removed with bodies. `PhysicsWorld::create_multibody_joint` →
+`multibody_joint_set.insert`. **Remaining:** the floor-contact jitter (step 0) — until
+that's solved this stays experimental, and `/v1/physics/joints` + the `--debug-physics`
+anchor viz still iterate only the **impulse** set (extend to the multibody set for
+multibody diagnostics).
 
-### 2. Close the hip gap — per-joint stiffer hips
-Make just the **hip** (and probably shoulder) joints less compliant than the rest — a
-higher `SpringCoefficients::natural_frequency` (or a per-bone stiffness profile keyed off
-the joint id, like the existing per-bone `JointLimit` cone profile). The heavy core (step
-done in #301) now absorbs more joint stiffness without re-exploding, so stiffer hips are
-likely tolerable. Verify with the **joint-anchor viz** + `/v1/physics/joints` that the
-hip separation closes **without** re-introducing energy (watch `max_linear_speed`).
-
-### 3. Multibody (reduced-coordinate) joints, done properly (bigger, principled fix)
-Reduced-coordinate joints **cannot separate** (no hip gap) and inject **no** residual
-energy — the right tool for an articulated tree. To make them stable here:
-- **Forward-kinematic the body spawn poses from the root**: build the bodies root-first,
-  positioning each child from `parent_pose * joint_local_transform` (not from the
-  independently-captured death-pose transforms), so the multibody's rest config matches
-  the spawn state and nothing snaps.
-- Insert joints **parent-before-child** (topological / depth order — the Dark bone list is
-  not sorted).
-- **Drop the `softness`** (multibody is rigid; a spring oscillates).
-- Mind the tiny-hub inertia (combine with the heavy-core change, or give the hub real size).
-- API: `PhysicsWorld::create_multibody_joint(parent, child, GenericJoint)` →
-  `multibody_joint_set.insert(parent, child, joint, true)` (was prototyped then reverted;
-  re-add it). Note `/v1/physics/joints` + the joint-anchor viz currently iterate the
-  **impulse** joint set — extend them to the multibody set if you switch.
+### 2. Fallback if multibody proves too unstable — accept gap + auto-sleep
+Keep the stable soft impulse joints, stop fighting the residual ~9 cm hip gap, and add
+Rapier **island sleeping** so the corpse goes still but stays pokeable: a body whose
+linear/angular velocity stays below threshold for `time_to_sleep` **sleeps** (drops out
+of simulation) but **auto-wakes on contact or applied force** — so you can still walk
+into / shoot / push the corpse and it springs back to life. We don't disable sleeping
+anywhere (only read `is_sleeping` for debug); check `GET /v1/physics/bodies/:id` →
+`is_sleeping`, and help it cross the threshold sooner via a bit more damping and/or
+lower `IntegrationParameters` sleep thresholds / `time_to_sleep` (confirm field names in
+rapier 0.31). Interaction-friendly alternative to a hard freeze/kinematic-pin (which
+would make the corpse un-pokeable). The gap remains visible — pragmatic fallback, not
+the fix.
 
 ### Avoid
 - **Hard freeze / kinematic pin** of the settled corpse — kills interactivity (the user
-  explicitly wants to be able to poke it). Use auto-sleep (step 1) instead.
+  explicitly wants to be able to poke it). Use auto-sleep (fallback step 2) instead.
 
 ## Tooling & methodology (important gotchas)
 
 - `cargo dbgr --mission debug_ragdoll --debug-physics --port N` (no extra `--`). The
   joint-anchor viz draws cyan/magenta anchor crosses + a yellow gap line per joint.
+- `cargo dbgr --mission debug_hitbox --port N` — **physics-free** joint overlay
+  (added 2026-06-18). Per parent→child joint, drawn from the live posed skeleton:
+  **blue** = bone segment, **yellow** = the impulse-joint anchor `add_ragdoll` uses
+  (parent origin), **magenta** = closest/contact points between the two fitted shapes
+  (`parry::query::contact`). Cycle poses with the `DebugHitboxCyclePose` input action.
+  Use it to see joint placement *vs* where the limbs meet without any solver noise —
+  this is how the ~29 cm hip anchor↔socket offset was measured. (Caveat: the debug
+  scene camera is fixed and far; the markers read small from the side. Improving the
+  framing — move the creature closer / bigger per-joint markers — is a nice follow-up.)
 - `GET /v1/physics/joints` — anchor separation + linear/angular impulse, bone-labeled.
 - `GET /v1/ragdoll/metrics` — `max_linear_speed` / `max_angular_speed` (settle signal),
   `min_y` (floor contact), `max_drift`, `max_nonadjacent_overlap`.
@@ -133,3 +237,8 @@ energy — the right tool for an articulated tree. To make them stable here:
   overlay), `debug_list_joints`, `multibody_joint_set` (wired into `step`, ready to use).
 - `shock2vr/src/scenes/debug_ragdoll.rs`: the test scene (spawns a pipe hybrid, kills it,
   spawns the ragdoll).
+- `shock2vr/src/scenes/debug_hitbox.rs`: physics-free pose/joint inspector —
+  `draw_joint_debug` (bone/anchor/contact overlay) + `parry_shape` (build a parry shape +
+  world isometry from a fitted `HitBoxShape`, matching `add_ragdoll`'s collider placement).
+- `shock2vr/src/util.rs` → `get_rotation_from_matrix`: raw 3×3 → quat. Verified safe here
+  (joint matrices are orthonormal), but note it does NOT orthonormalize.
