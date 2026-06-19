@@ -1,8 +1,15 @@
 # Loading Screen — Design Note
 
-> Status: 🧭 Investigation complete; stacked-PR plan proposed 2026-06-19.
+> Status: 🧭 Investigation + measurement spike complete; plan updated 2026-06-19.
 > Goal: show `LOADING.PCX` with a real, animated progress bar while a level loads
 > **in the background**, instead of freezing the window on a black frame.
+>
+> **PR 0 (measurement spike) is done** — §2 has the numbers across all 23 missions.
+> Headline results: Gate B **passes** (≈45–63% of load is off-threadable CPU work,
+> better than expected once `physics_spatial` is counted alongside `parse`); Gate C
+> mostly passes with named exceptions (the lightmap-atlas upload and a handful of fat
+> models exceed one frame). Gate A (GL-free PCX dims + `Send` proof) is the **one spike
+> step still open**. The plan below (§4) is revised to match.
 
 ---
 
@@ -61,6 +68,13 @@ What **is** `Send + Sync` and shareable across threads: `Arc<dyn Storage>`
 (`shock2vr/src/zip_asset_path.rs:13`). **File reads + pure parsing are the part that
 can move off-thread.** GPU upload cannot.
 
+> **Spike refinement (§2):** the off-threadable set is bigger than just `parse`. The
+> physics-collider + spatial-index build (`create_physics_collider` +
+> `LevelSpatialData::from_level`, `mission/mod.rs:78-79`) is also pure CPU/no-GL, and is
+> a substantial phase (~13–38% of load). Counting it with `parse` is what lifts the
+> off-thread fraction to ~45–63%. So "off-thread work" = **parse + physics_spatial**,
+> not parse alone.
+
 ### The design strategy
 
 Three independent improvements, deliverable as a stack. Each is independently valuable
@@ -76,15 +90,29 @@ and reviewable:
    (0%→100% across one frame), but it builds the *plumbing* the bar consumes and the
    phase taxonomy is reusable.
 
-3. **Background loading** — move the heavy *parse* (`dark::mission::read` → `Send` CPU
-   data) onto a worker thread, keep GPU upload + entity instantiation on the main
-   thread, time-sliced across frames. The `LoadingScene` keeps animating because the
-   loop keeps presenting frames. This is the real win and the largest change.
+3. **Background loading** — move the off-threadable CPU work (`parse` +
+   `physics_spatial` → `Send` CPU data) onto a worker thread, keep GPU upload + entity
+   instantiation on the main thread, time-sliced across frames. The `LoadingScene` keeps
+   animating because the loop keeps presenting frames. This is the real win and the
+   largest change.
 
 We deliberately split the easy, faithful, low-risk part (1+2: a real loading screen
 that *renders*) from the hard concurrency refactor (3). Even if we stop after PR 2,
 the user-visible result is already "a loading screen with a progress bar" rather than a
 frozen window — the bar just fills in fewer steps.
+
+**Two design constraints the spike (§2) locked in:**
+
+- **PR 4's time-slicer must be time-budget-based, not entity-count-based.** Per-entity
+  cost is extremely skewed — thousands of ~0ms `AssetCache` hits sprinkled with a few
+  10–30ms cold model loads (the cost is per-*unique-model* cold load, not per-entity).
+  A count-based slicer is lumpy; a "instantiate until ~8ms elapsed this frame, then
+  yield" slicer self-corrects regardless of where the fat models fall.
+- **`to_scene` needs two slicing strategies, because its two halves differ.** The
+  geometry/texture loop is a sliceable per-group loop (4–48ms, scales with texture
+  groups); the lightmap-atlas upload is one **indivisible ~30ms blob** that can't be
+  per-group sliced — it's a single ~2-frame hitch to hide behind the loading screen (or
+  to attack with the perf work in §4, PR 6).
 
 ### Architecture sketch (end state)
 
@@ -106,7 +134,151 @@ frozen window — the bar just fills in fewer steps.
 
 ---
 
-## 2. Key Code References
+## 2. Spike Results (PR 0, measured 2026-06-19)
+
+All numbers are **desktop** (a fast dev machine), captured by instrumenting the load
+path with `[load-timing]`-prefixed logs and driving every mission through the debug
+runtime (`cargo dbgr --mission X`). Quest hardware is ~2–4× slower, so treat absolute ms
+as desktop-relative; the **ratios** (off-thread fraction, per-entity skew, phase shares)
+transfer. Instrumentation lives on branch `spike/loading-screen-load-timing`.
+
+> Harness note: the debug runtime is the right driver (it loads a mission at startup and
+> logs the phase timings; `tools/shock2-sdk/test/missions.e2e.test.ts` already enumerates
+> all 23). `dark_viewer` is per-model, not per-mission — not useful here.
+
+### 2.1 Per-mission load breakdown (all 23 missions)
+
+Phases: `parse` = `dark::mission::read`; `phys` = `create_physics_collider` +
+`LevelSpatialData`; `to_scene` = geometry+lightmap GPU build; `entities` = the
+instantiation loop. **off-thread%** = `(parse + phys) / total` — the CPU work movable to
+a worker thread. `max_ent` = slowest single entity (cold model load).
+
+| Mission | total | parse | phys | to_scene | entities | off-thread% | max_ent |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| eng1 | 2309 | 546 | 874 | 80 | 520 | **61%** | 10.8 |
+| medsci1 | 2050 | 437 | 580 | 73 | 655 | 50% | 11.0 |
+| rick1 | 2000 | 442 | 531 | 70 | 641 | 49% | 10.6 |
+| eng2 | 1980 | 445 | 621 | 59 | 568 | 54% | **29.9** |
+| hydro2 | 1964 | 443 | 494 | 34 | 685 | 48% | 10.9 |
+| command2 | 1942 | 436 | 585 | 70 | 567 | 53% | 10.9 |
+| rec1 | 1848 | 435 | 533 | 56 | 555 | 52% | 10.8 |
+| medsci2 | 1847 | 399 | 482 | 66 | 609 | 48% | 11.0 |
+| many | 1734 | 403 | 593 | 36 | 457 | 57% | 10.7 |
+| rec2 | 1626 | 409 | 375 | 55 | 534 | 48% | 10.8 |
+| ops2 | 1602 | 418 | 390 | 58 | 476 | 51% | **15.3** |
+| rec3 | 1489 | 387 | 333 | 52 | 482 | 48% | **14.6** |
+| command1 | 1431 | 398 | 327 | 60 | 390 | 51% | 11.0 |
+| ops4 | 1427 | 372 | 312 | 62 | 430 | 48% | 11.0 |
+| ops3 | 1417 | 383 | 255 | 60 | 454 | 45% | 10.8 |
+| earth | 1237 | 412 | 309 | 49 | 232 | 58% | 11.3 |
+| hydro1 | 1151 | 328 | 252 | 29 | 300 | 50% | 10.7 |
+| station | 1150 | 353 | 252 | 62 | 265 | 53% | 8.6 |
+| rick3 | 1105 | 343 | 299 | 52 | 210 | 58% | 10.9 |
+| shodan¹ | 1045 | 417 | 237 | 30 | 137 | 63% | 7.3 |
+| hydro3 | 842 | 290 | 128 | 29 | 190 | 50% | 10.9 |
+| rick2 | 745 | 268 | 64 | 41 | 173 | 45% | 10.6 |
+| ops1 | 609 | 253 | 44 | 30 | 89 | 49% | 10.6 |
+
+¹ `shodan.mis` **loaded fine** in the spike — its known crash ([#267]) is later, in
+rendering, not load.
+
+### 2.2 Gate verdicts
+
+- **Gate A — feasibility (off-threadable + `Send`): NOT YET RUN.** The GL-free PCX
+  dimension read and the `LevelData` `Send` proof are the remaining spike step. The crux
+  is confirmed small and self-contained (see §4, PR 0 / PR 3) but unproven until coded.
+- **Gate B — worth it: ✅ PASS, comfortably.** Off-threadable work (parse + physics) is
+  **45–63% of load on every mission** — well above the ~40–50% bar. Background loading is
+  clearly worthwhile. (Bonus finding: counting `physics_spatial`, not just `parse`,
+  is what got us here — `parse` alone is only ~20–35%.)
+- **Gate C — slicing smoothness: ⚠️ mostly pass, two named exceptions.**
+  - The **entity loop slices cleanly**: ~1000–2000 entities averaging <0.5ms each, so a
+    time-budget slicer stays under frame budget easily.
+  - **Exception 1 — fat single models.** 4 missions have one entity exceeding the 72Hz
+    budget (13.9ms): `eng2` **29.9ms** (`sarclose` / "Closed Protocol Box"), `ops2`
+    15.3ms (`lightr`), `rec3` 14.6ms (`malseat`). One model's GPU upload can't be split
+    without sub-asset streaming.
+  - **Exception 2 — the lightmap atlas.** `to_scene_lightmap` is a fixed ~26–36ms single
+    upload regardless of mission (see §2.4) — one indivisible ~2-frame hitch.
+  - Neither is fatal for a *loading screen*: a dropped frame behind a static reprojected
+    image is invisible. They only matter if we want a perfectly smooth bar → §4 PR 6.
+
+### 2.3 Why "max_ent" ≈ 11ms on nearly every mission (per-model cold-load reframing)
+
+The "heavy entities" are mundane props (a box, a light, a bench). The cost isn't the
+entity — it's being the **first** entity to reference a given **unique model**.
+`AssetCache` keys on model name, so the first reference pays the full parse + mesh +
+texture GPU upload; every later reference is a ~0ms cache hit. Consequences:
+
+- The cache is **already optimal** (each model loaded exactly once) — there is nothing to
+  dedupe or "fix" about per-model loading.
+- The recurring ~11ms `max_ent` floor across almost all missions is suspicious — likely a
+  **one-time first-GPU-upload / pipeline warmup** attributed to whoever loads first, not
+  an intrinsic per-entity cost. *Optional* cheap win: pay it once explicitly at
+  loading-screen start (pipeline pre-warm) — needs confirming first.
+- True outliers above the floor (`sarclose` 30ms) are specific heavier models → Exception
+  1 above. So "per-entity slicing" is really "per-unique-model cold-load slicing."
+- Caveat: `max_entity_id` is a runtime `EntityId`; it usually maps to a `.mis` object but
+  not always (e.g. `earth`'s winner was a runtime/room entity with no `.mis` row).
+
+### 2.4 `to_scene` split — geometry vs lightmap
+
+`to_scene` has two halves with **opposite profiles** (sampled, ms):
+
+| Mission | lightmap upload | geometry loop | texture groups |
+| --- | ---: | ---: | ---: |
+| eng1 | 35.9 | 48.3 | 107 |
+| medsci1 | 35.6 | 45.8 | 99 |
+| command2 | 29.9 | 42.2 | 76 |
+| rick1 | 28.6 | 45.1 | 79 |
+| hydro2 | 30.3 | 7.1 | 79 |
+| ops1 | 26.4 | 4.4 | 23 |
+
+- **Lightmap = fixed ~26–36ms, always 1 atlas, mission-independent.** A single indivisible
+  GL upload. Plus it's partly wasteful: `generate_texture()` does
+  `self.img.clone().into_raw()` (`engine/src/texture_atlas.rs:49`) — a full CPU copy of
+  the atlas before upload. The assembly/clone is off-threadable; only the final
+  `TexImage2D` must stay on the main thread.
+- **Geometry = 4–48ms, scales with texture-group count.** A `for`-loop over groups, each
+  doing a texture + mesh upload — naturally sliceable. Its `geometry.verts.clone()`
+  grouping is CPU/off-threadable too.
+
+### 2.5 Parse breakdown — where the parse time goes (and can it be optimized?)
+
+Parse (~250–550ms) decomposes as (sampled):
+
+| Mission | cells | bsp | entity_info | texlist | create_geometry | parse |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| eng1 | 270 | 6 | 24 | 23 | 123 | 480 |
+| medsci1 | 248 | 5 | 28 | 23 | 115 | 445 |
+| eng2 | 264 | 4 | 22 | 23 | 85 | 426 |
+| command2 | 272 | 8 | 23 | 23 | 98 | 447 |
+| ops1 | 189 | 0 | 10 | 22 | 31 | 257 |
+
+- **`cells` dominates parse (~55–60%).** And — surprise — the lightmap pixel decode +
+  atlas packing is only **12–21% of `cells`** (2% on ops1). The other ~80% is
+  **byte-by-byte stream deserialization**: `Cell::read` pulls every vertex/poly/index/
+  plane one `read_u8()`/`read_u32()`/`read_vec3()` call at a time, across hundreds of
+  cells (`dark/src/mission/cell.rs:39`).
+- **`create_geometry` is second (~25%)** — CPU vertex-buffer building plus the
+  `texture_dimensions` GPU work (the relocation candidate; see §4 PR 0/PR 3).
+- `bsp`/`entity_info`/`texlist` are minor (~10% combined).
+
+**Can parse be optimized?** Yes — the highest-value lever is **bulk-read + slice-parse**
+the cell data (read the WR chunk into a `Vec<u8>` once, parse fields from an in-memory
+`&[u8]` cursor instead of per-call reads off the `BufReader`). Typically 2–3× on
+deserialization-bound code → plausibly `cells` ~250ms → ~120–150ms.
+
+**But it's decoupled from the loading screen.** Once parse runs off-thread (PR 3), its
+speed no longer gates the compositor — it only shortens total wall-clock (the coarse
+design is parse→build sequential) and speeds the flat/desktop baseline (which has no
+loading screen). So parse optimization is a **separate, optional perf PR** (§4 PR 6),
+sequenced after PR 3 and gated on whether re-measured Quest totals are too long — not
+part of the core loading-screen stack.
+
+---
+
+## 3. Key Code References
 
 | Concern | Location |
 | --- | --- |
@@ -127,97 +299,53 @@ frozen window — the bar just fills in fewer steps.
 
 ---
 
-## 3. Stacked PR Breakdown
+## 4. Stacked PR Breakdown
 
 The stack is ordered so each PR compiles, passes CI (`RUSTFLAGS="-D warnings" cargo
 check -p shock2vr -p desktop_runtime -p debug_runtime`), and delivers standalone value.
-**PR 0 is a front-loaded feasibility spike that retires PR 3's risk before we commit
-to the stack;** PRs 1–2 are low-risk and faithful; PR 3 is the concurrency refactor;
-PRs 4–5 polish.
+**PR 0 (the feasibility spike) is largely done** — measurement complete (§2), with only
+Gate A (GL-free PCX dims + `Send` proof) remaining; PRs 1–2 are low-risk and faithful;
+PR 3 is the concurrency refactor; PRs 4–5 polish; **PR 6 is an optional, decoupled parse
+perf pass** gated on Quest numbers.
 
 ### PR 0 — Feasibility spike: measure & de-risk (gates PR 3)
 
-**Why this exists:** PR 3 (background parse) is simultaneously the highest-risk change,
-the crux of the whole feature, *and* carries open unknowns. That's the wrong thing to
-discover mid-implementation. This spike answers three questions **with numbers**, on a
-throwaway branch, before we build the real stack:
+**Status: measurement done (§2). Gate A still open.** The spike de-risks PR 3 (the
+highest-risk change) by answering, with numbers on a throwaway branch, whether the
+parse/build split is feasible (Gate A), worth it (Gate B ✅), and sliceable under a frame
+budget (Gate C ⚠️) — *before* writing the concurrency code. Full results in §2.
 
-1. **Is `dark::mission::read` actually off-threadable?** (the `Send` / GL-leak question)
-2. **Is it worth it?** — i.e. what fraction of load time is off-threadable *parse* vs.
-   stuck-on-main-thread *GPU build*. If build dominates, background parse alone won't
-   keep the Quest compositor alive and the plan must change.
-3. **Can the main-thread remainder be sliced under a VR frame budget?** — the actual
-   "will the compositor stay alive" test.
+**Done — landable instrumentation** (branch `spike/loading-screen-load-timing`): per-
+phase `[load-timing]` timers in `Mission::load`, the entity loop, `to_scene` (lightmap vs
+geometry), and `dark::mission::read` sub-phases — producing the §2 tables across all 23
+missions. (Note: the old `"loading level took {}s"` log at `mission_core.rs:229-233` was
+useless — it bracketed only a field move, not the real work.)
 
-**The crux is smaller than it looked.** The only GPU call inside `dark::mission::read`
-is `texture_dimensions` (`dark/src/mission/mod.rs:480`), which calls
-`asset_cache.get(&TEXTURE_IMPORTER, …)` solely to read `.width()/.height()` — it decodes
-*and uploads* a whole texture to get two integers that live in the **PCX header**
-(`engine/src/texture_format.rs:61`). Replacing it with a GL-free header read is a small,
-self-contained change with no threading, and it removes the sole GL dependency from
-parse. The spike validates exactly this.
+**Still to do — Gate A (the one unproven step):**
+1. **GL-free PCX dimension read.** The only GPU call inside `dark::mission::read` is
+   `texture_dimensions` (`dark/src/mission/mod.rs:480`), which calls
+   `asset_cache.get(&TEXTURE_IMPORTER, …)` solely to read `.width()/.height()` — decoding
+   *and uploading* a whole texture for two integers that live in the **PCX header**
+   (`engine/src/texture_format.rs:61`). Replace with a header read; confirm
+   `dark::mission::read` no longer touches `AssetCache`/GL. *Honest nuance:* this is a
+   **relocation, not a speedup** — the texture decode+upload moves into `to_scene` as a
+   cold load (total work unchanged); its value is enabling off-threading.
+2. **Prove `Send`.** Add `fn assert_send<T: Send>() {}` against the proposed `LevelData`
+   boundary; let the compiler enumerate any `Rc`/GL leakage to move into `build`.
+3. *(Optional)* **Throwaway threaded prototype** on `medsci1`/`eng1`: actually move
+   parse+physics to a `std::thread`, run `build` time-sliced, and measure real max
+   main-thread slice + frames-pumped-during-load. §2 already implies this passes (via the
+   per-entity distribution + to_scene split), but the prototype confirms it directly.
 
-> ⚠️ Note: the existing `"loading level took {}s"` log
-> (`mission_core.rs:229-233`) is misleading — it brackets only a field move
-> (`let scene = abstract_mission.scene_objects;`), **not** the heavy parse or the
-> entity loop. We have no usable timing today; real instrumentation is step 1.
+**Gate verdicts (detail in §2.2):** Gate A — *not yet run* (crux confirmed small). Gate B
+— **✅ pass** (45–63% off-threadable). Gate C — **⚠️ mostly pass**, with two named
+exceptions (lightmap atlas ~30ms; fat models up to 30ms) that are invisible behind a
+loading screen and only matter for §4 PR 6.
 
-**Spike steps:**
-
-1. **Instrument the real phases** (cheap, no refactor, no risk — land this for real):
-   add timers around the four genuine cost centers and log per-phase ms:
-   - `parse` → `dark::mission::read` (`dark/src/mission/mod.rs:125`) — the off-threadable candidate.
-   - `geometry/lightmap` → `to_scene` (`scene_builder.rs:13`) — main-thread GPU.
-   - `entities` → the `entities_to_instantiate` loop (`mission_core.rs:330`), plus a
-     per-entity max — main-thread GPU (per-entity model/texture uploads, `entity_creator.rs:350`).
-   - `finalize` → player/audio init.
-2. **Prove the crux:** prototype a GL-free PCX-dimension read (parse the PCX header for
-   width/height) and swap it into `texture_dimensions`. Confirm `dark::mission::read`
-   no longer touches `AssetCache`/GL. *(This is safe enough to land standalone and feed PR 3.)*
-3. **Prove `Send`:** add a `fn assert_send<T: Send>() {}` against the proposed
-   `LevelData` boundary (the `Send` output of parse). Let the compiler enumerate any
-   remaining `Rc`/GL leakage. Record what, if anything, has to move into `build`.
-4. **Throwaway threaded prototype** on 1–2 representative missions (dense `medsci1.mis`,
-   plus a large one like `eng1.mis`/`command1.mis`): actually move `parse` to a
-   `std::thread`, keep the `LoadingScene` (PR 1) animating, and run `build` time-sliced
-   on the main thread. Measure max main-thread slice and frames pumped during load.
-
-**Deliverable — a before/after table across all 23 missions** (steps 1–3 give every
-row; step 4 measures the slicing columns on the sampled missions and we model the rest):
-
-| Mission | Total sync (ms) | Parse, off-thread (ms) | Main-thread build (ms) | Off-thread % | Slices @ ~10ms | Max single-asset upload (ms) | Frames pumped (72Hz) | Verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| medsci1 | … | … | … | … | … | … | … | ✅ / ⚠️ |
-| … (all 23) | | | | | | | | |
-
-Measurement harness: the debug runtime / SDK
-(`tools/shock2-sdk/test/missions.e2e.test.ts` already loads every mission) is the
-natural driver — extend it to record the per-phase timings emitted by step 1.
-
-**Decision gates the spike must answer (these reshape the stack if they fail):**
-
-- **Gate A — feasibility:** after step 2, is `dark::mission::read` GL-free and is
-  `LevelData` `Send`? *If no:* per-asset streaming or a deeper `AssetCache` refactor is
-  required — PR 3 grows substantially; reassess before starting the stack.
-- **Gate B — worth it:** is `Parse / Total` a meaningful fraction (target ≳ 40–50%) on
-  most missions? *If build dominates instead,* background parse alone won't keep the
-  compositor alive — promote PR 4 (time-slicing) ahead of / merge it into PR 3, since
-  the main-thread work is the real bottleneck.
-- **Gate C — smoothness:** is the **max single-asset upload** (one texture atlas / one
-  big model) below the Quest frame budget (13.9 ms @ 72 Hz, 11.1 ms @ 90 Hz)? *If a
-  single indivisible upload blows the budget,* note it — slicing can't go finer than one
-  asset without sub-asset streaming, which becomes a PR 4 scope decision.
-
-**Compositor-alive criterion (what "enough" means):** the Quest compositor reprojects
-the last submitted frame, so it survives short gaps but a multi-second main-thread block
-freezes the headset / trips the guardian. Success = the main thread returns to submit a
-fresh loading-bar frame at least once per frame budget — i.e. **max slice < ~13 ms**,
-with the off-thread parse covering the bulk of the wall-clock. The table makes this
-pass/fail per mission instead of a guess.
-
-**Outcome:** PR 0 lands the two safe, independently-useful pieces (real instrumentation +
-GL-free PCX dimensions) and produces the numbers that confirm the PR 3→4 design — or
-tell us to reshape it — *before* we write the concurrency code.
+**Compositor-alive criterion:** the Quest compositor reprojects the last submitted frame,
+surviving short gaps but freezing on a multi-second block. Success = main thread returns
+to submit a fresh loading-bar frame at least ~once per frame budget (max slice ≲ 13ms),
+with off-thread parse+physics covering the wall-clock bulk.
 
 ### PR 1 — `LoadingScene` rendering `LOADING.PCX` (static, no threading)
 
@@ -290,10 +418,12 @@ do GPU upload + entity instantiation on the main thread.
 
 **Approach (coarse, lowest-risk first — *not* per-asset streaming):**
 1. Split `Mission::load` into:
-   - `parse(storage, mission_name, progress_sender) -> LevelData` — pure file I/O +
-     CPU parse (`dark::mission::read` + raw texture/vertex bytes), **no GL, no
-     `AssetCache`**. Operates only on `Arc<dyn Storage>` + the `Send + Sync`
-     `ZipAssetPath` layer. Returns a `Send` `LevelData` struct.
+   - `parse(storage, mission_name, progress_sender) -> LevelData` — pure CPU work, **no
+     GL, no `AssetCache`**: `dark::mission::read` **plus the physics-collider + spatial-
+     index build** (`create_physics_collider` + `LevelSpatialData::from_level`), which §2
+     showed are also CPU-only and together ~45–63% of load. Operates only on
+     `Arc<dyn Storage>` + the `Send + Sync` `ZipAssetPath` layer. Returns a `Send`
+     `LevelData`. (Gate A in PR 0 is what makes `dark::mission::read` GL-free.)
    - `build(level_data, &mut AssetCache, …) -> Mission` — the existing GPU-upload +
      entity-instantiation work, on the main thread.
 2. `switch_mission` spawns `parse` on a `std::thread` with an `mpsc::Sender` for
@@ -329,24 +459,33 @@ loop is blocked for the full load. Run `tools/shock2-sdk/test/missions.e2e.test.
 
 ### PR 4 — Time-sliced GPU upload + entity instantiation
 
-**Goal:** when `LevelData` arrives, the main-thread `build` step can still be heavy
-(textures, meshes, per-entity models). Spread it across frames so the bar keeps moving
+**Goal:** when `LevelData` arrives, the main-thread `build` step (textures, meshes,
+per-entity models) is still ~500–1000ms. Spread it across frames so the bar keeps moving
 instead of one final hitch.
 
-**Changes:**
+**Changes — shaped by §2's measurements:**
 - Make `build` resumable: a `MissionBuilder` that does a bounded chunk of work per
-  `update` (e.g. ~N entities or a time budget of a few ms), reporting
-  `InstantiatingEntities { current, total }` progress, until complete then swaps the
-  scene.
-- Drive it from `Game::update`'s poll loop.
+  `update`, reporting `InstantiatingEntities { current, total }` progress, until complete
+  then swaps the scene. Drive it from `Game::update`'s poll loop.
+- **Slice by time budget, not entity count.** Per-entity cost is extremely skewed
+  (§2.3): thousands of ~0ms cache hits + a few 10–30ms cold model loads. "Instantiate
+  until ~8ms elapsed this frame, then yield" self-corrects regardless of where the fat
+  models fall; a fixed "N per frame" is lumpy.
+- **Handle `to_scene`'s two halves differently** (§2.4): the geometry/texture loop slices
+  per texture-group; the **lightmap-atlas upload is one indivisible ~30ms blob** — accept
+  it as a single ~2-frame hitch hidden behind the loading screen (or shrink it via PR 6).
 
-**Why fourth:** pure refinement of PR 3; only worth doing once background parse exists.
-Can be deferred if PR 3's main-thread `build` is already fast enough on target levels —
-**measure first** (the loader already logs `"loading level took {}s"` at
-`mission_core.rs:233`).
+**Known residual hitches (accept for now; invisible behind a static screen):**
+- 4 missions have one entity whose model upload exceeds the 72Hz budget (`eng2`
+  `sarclose` ~30ms; `ops2`, `rec3` ~15ms) — can't be split without sub-asset streaming.
+- The lightmap atlas (~30ms). Both only matter if we want a perfectly smooth bar → PR 6.
 
-**Test:** assert no single frame during `build` exceeds a dt threshold on a heavy level
-(e.g. `medsci1.mis`).
+**Why fourth:** refinement of PR 3; only worth doing once background parse exists. Don't
+guess the budget — the §2 tables (and re-measured Quest numbers) tell you the real
+per-phase costs.
+
+**Test:** assert no single frame during `build` exceeds the chosen budget on a heavy
+level (e.g. `medsci1.mis`), *except* the known indivisible uploads above.
 
 ---
 
@@ -369,11 +508,41 @@ Can be deferred if PR 3's main-thread `build` is already fast enough on target l
 
 ---
 
-## 4. Open Questions / Decisions to Make
+### PR 6 — (Optional, decoupled) Parse perf pass
+
+**Goal:** shorten total load wall-clock by speeding up the CPU parse. **Not part of the
+core loading-screen stack** — once parse runs off-thread (PR 3) its speed no longer gates
+the compositor; this only shortens how long the bar shows and speeds the flat/desktop
+baseline (which has no loading screen).
+
+**Highest-value change (from §2.5): bulk-read + slice-parse the cell data.** ~55–60% of
+parse is `cells`, and ~80% of *that* is byte-by-byte stream deserialization (`Cell::read`,
+`dark/src/mission/cell.rs:39`) — not the lightmap pixel work (only 12–21%). Read the WR
+chunk into a `Vec<u8>` once and parse fields from an in-memory `&[u8]` cursor instead of
+per-call reads off the `BufReader`. Typically 2–3× → plausibly `cells` ~250ms → ~120–150ms.
+
+**Secondary:** avoid the lightmap atlas `self.img.clone()` (`texture_atlas.rs:49`); move
+atlas/vertex CPU assembly off-thread (folds into PR 3's `parse`).
+
+**Why optional / last:** decoupled from the feature; **gate on whether re-measured Quest
+load totals are actually too long** after PR 3. The `Cell::read` rewrite carries
+parsing-bug risk, so only spend it if the numbers justify it. Run
+`tools/shock2-sdk/test/missions.e2e.test.ts` (all missions load) as the regression net.
+
+**Test:** negative test first — a checksum/equivalence test that the rewritten parser
+produces byte-identical `LevelData` to the old one on every mission, *then* confirm the
+speedup.
+
+---
+
+## 5. Open Questions / Decisions to Make
 
 - **Progress weighting:** how to map phases to a 0..1 bar so it feels roughly linear in
-  wall-clock. **PR 0's per-phase table answers this directly** — weight phases by their
-  measured ms share.
+  wall-clock. **§2.1 answers this** — weight by measured ms share (roughly: parse ~25%,
+  physics ~20%, to_scene ~5%, entities ~35%, remainder ~15%; re-weight from Quest numbers).
+- **Re-measure on Quest.** All §2 numbers are desktop. Quest is ~2–4× slower, so totals of
+  0.6–2.3s become ~2–8s — which makes the compositor-alive payoff bigger and may change
+  whether PR 6 (parse perf) is worth it. Re-run the §2 harness on-device after PR 3.
 - **`Game::init` first-load:** the *very first* mission load happens in `Game::init`
   before any loop. Do we also want a loading screen there (requires the runtime loop to
   start before `init` completes), or is that acceptable to leave blocking initially?
@@ -390,7 +559,7 @@ Can be deferred if PR 3's main-thread `build` is already fast enough on target l
 
 ---
 
-## 5. Comparison to the Original Dark Engine
+## 6. Comparison to the Original Dark Engine
 
 The original SS2 / Dark Engine loaded **synchronously on a single thread** behind a
 **static `LOADING.PCX`** with no progress bar (the engine is so single-threaded it has
