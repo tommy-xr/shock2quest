@@ -12,6 +12,7 @@ mod creature;
 mod flat_player_controller;
 mod gui;
 mod hud;
+mod interaction;
 mod mission;
 pub mod pathfinding;
 pub mod paths;
