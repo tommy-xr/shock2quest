@@ -32,6 +32,11 @@ const ANGULAR_DAMPING: f32 = 2.0;
 /// Target mass for every ragdoll limb body. Densities are derived per-collider to
 /// hit this, keeping connected-body mass ratios near 1:1 for solver stability.
 const TARGET_BODY_MASS: f32 = 1.0;
+/// Mass for the cuboid "core" bodies (pelvis hub / abdomen / torso). Heavier than
+/// the limbs so the core anchors them - the tiny pelvis hub otherwise gets yanked
+/// around by the heavy thighs (the hip-sag / never-settle). Kept a modest ratio
+/// (impulse joints destabilize at extreme connected-body mass ratios).
+const CORE_BODY_MASS: f32 = 4.0;
 /// Floor on collider volume when deriving density, to avoid div-by-zero / huge
 /// density on degenerate shapes.
 const MIN_VOLUME: f32 = 1e-4;
@@ -300,7 +305,7 @@ impl RagDollManager {
                         half_extents.z.max(MIN_HALF_EXTENT),
                     );
                     let volume = 8.0 * he.x * he.y * he.z;
-                    let density = TARGET_BODY_MASS / volume.max(MIN_VOLUME);
+                    let density = CORE_BODY_MASS / volume.max(MIN_VOLUME);
                     physics.attach_collider_with_offset(
                         handle,
                         SharedShape::cuboid(he.x, he.y, he.z),
