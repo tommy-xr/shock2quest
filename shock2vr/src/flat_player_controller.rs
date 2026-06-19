@@ -52,6 +52,21 @@ impl FlatPlayerController {
         self.wielded_entity
     }
 
+    /// Stop wielding `entity_id` if it was the held weapon (e.g. it was
+    /// destroyed).
+    pub fn on_entity_destroyed(&mut self, entity_id: EntityId) {
+        if self.wielded_entity == Some(entity_id) {
+            self.wielded_entity = None;
+        }
+    }
+
+    /// If the wielded weapon was recreated as a new entity, track the new id.
+    pub fn replace_wielded(&mut self, old: EntityId, new: EntityId) {
+        if self.wielded_entity == Some(old) {
+            self.wielded_entity = Some(new);
+        }
+    }
+
     /// Wield `entity_id` as the first-person weapon. Any previously-wielded
     /// weapon is dropped back into the world (regains physics + world model).
     pub fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
