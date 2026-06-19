@@ -38,10 +38,11 @@ pub struct SceneObject {
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; 40],
     pub depth_write: bool,
-    /// When false, the object ignores the depth buffer (draws on top). Used for
-    /// the flatscreen first-person weapon viewmodel so it doesn't clip into the
-    /// world. Combine with drawing it last.
-    pub depth_test: bool,
+    /// When true, the depth buffer is cleared *before* drawing this object, so it
+    /// (and anything drawn after it) renders on top of the world while still
+    /// depth-testing normally within itself. Used to draw the flatscreen
+    /// first-person weapon viewmodel without clipping into geometry.
+    pub clear_depth: bool,
 }
 
 impl SceneObject {
@@ -212,7 +213,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
             depth_write: true,
-            depth_test: true,
+            clear_depth: false,
         }
     }
 
@@ -230,11 +231,13 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
+        // Clear the depth buffer first so this (and later objects) draw on top of
+        // the world while still depth-testing normally amongst themselves.
+        if self.clear_depth {
+            unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
+        }
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
-        }
-        if !self.depth_test {
-            unsafe { gl::Disable(gl::DEPTH_TEST) };
         }
 
         if self.material.borrow().draw_opaque(
@@ -247,9 +250,6 @@ impl SceneObject {
             self.geometry.draw();
         }
 
-        if !self.depth_test {
-            unsafe { gl::Enable(gl::DEPTH_TEST) };
-        }
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::TRUE) };
         }
@@ -306,7 +306,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); 40],
             depth_write: true,
-            depth_test: true,
+            clear_depth: false,
         }
     }
 
@@ -318,7 +318,7 @@ impl SceneObject {
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
-            depth_test: self.depth_test,
+            clear_depth: self.clear_depth,
         }
     }
 
@@ -326,8 +326,8 @@ impl SceneObject {
         self.depth_write = enabled;
     }
 
-    pub fn set_depth_test(&mut self, enabled: bool) {
-        self.depth_test = enabled;
+    pub fn set_clear_depth(&mut self, enabled: bool) {
+        self.clear_depth = enabled;
     }
 
     pub fn set_skinned_transparency(&mut self, transparency: Option<f32>) {

@@ -1892,8 +1892,9 @@ impl MissionCore {
 
         if options.presentation_mode == crate::PresentationMode::Flat {
             // First-person weapon viewmodel: draw the wielded weapon's model on
-            // top of the world with depth-test disabled, so it does not clip into
-            // geometry. It is skipped in the world pass and drawn here, last.
+            // top of the world. It is skipped in the world pass and drawn here,
+            // last; the depth buffer is cleared before its first object so it
+            // renders over geometry while still depth-testing within itself.
             if let Some(weapon) = self.flat_player.wielded_entity() {
                 if let Some(model) = self.id_to_model.get(&weapon) {
                     let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
@@ -1902,10 +1903,12 @@ impl MissionCore {
                             Some(player) => model.to_animated_scene_objects(player),
                             None => model.to_scene_objects().clone(),
                         };
-                        for obj in scene_objs {
+                        for (i, obj) in scene_objs.into_iter().enumerate() {
                             let mut o = obj.clone();
                             o.set_transform(xform);
-                            o.set_depth_test(false);
+                            if i == 0 {
+                                o.set_clear_depth(true);
+                            }
                             ret.push(o);
                         }
                     }
