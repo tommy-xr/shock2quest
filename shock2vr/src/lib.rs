@@ -14,6 +14,7 @@ mod gui;
 mod hud;
 mod interaction;
 mod mission;
+pub mod palette;
 pub mod pathfinding;
 pub mod paths;
 mod physics;

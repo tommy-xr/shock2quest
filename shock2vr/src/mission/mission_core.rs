@@ -671,6 +671,11 @@ impl MissionCore {
                                 .with_launch_time(Duration::from_secs_f32(pg.launch_time))
                                 .with_alpha(pg.a as f32 / 255.0)
                                 .with_fade_time(pg.fade_time)
+                                // pg.r is the primary color as an index into the
+                                // game master palette (not a literal red channel);
+                                // resolve it to RGB. cg/cb (pg.g/pg.b) drive the
+                                // lifetime fade and are handled separately.
+                                .with_color(crate::palette::index_to_rgb(pg.r))
                         });
                     particle_system.update(time.elapsed, transform.0);
                 }
@@ -2048,7 +2053,7 @@ impl MissionCore {
                 let texture: Rc<dyn TextureTrait> = objs
                     .get_frame(current_frame as usize, dark::FrameOptions::Wrap)
                     .unwrap();
-                let mat = BillboardMaterial::create(texture, 1.0, 0.0, 1.0);
+                let mat = BillboardMaterial::create(texture, vec3(1.0, 1.0, 1.0), 1.0, 0.0, 1.0);
                 let mut scene_obj = SceneObject::new(mat, Box::new(quad::create()));
                 scene_obj.set_transform(xform);
                 scene.push(scene_obj);
