@@ -4,12 +4,14 @@
 > Goal: show `LOADING.PCX` with a real, animated progress bar while a level loads
 > **in the background**, instead of freezing the window on a black frame.
 >
-> **PR 0 (measurement spike) is done** — §2 has the numbers across all 23 missions.
-> Headline results: Gate B **passes** (≈45–63% of load is off-threadable CPU work,
-> better than expected once `physics_spatial` is counted alongside `parse`); Gate C
-> mostly passes with named exceptions (the lightmap-atlas upload and a handful of fat
-> models exceed one frame). Gate A (GL-free PCX dims + `Send` proof) is the **one spike
-> step still open**. The plan below (§4) is revised to match.
+> **PR 0 (the feasibility spike) is complete** — §2 has the numbers across all 23
+> missions. All three gates resolved: **Gate A ✅** (GL-free texture-dimension read
+> validated on 1863 textures / 0 mismatches; `Send` blockers reduced to two mechanical
+> `Rc → Arc` conversions), **Gate B ✅** (≈45–63% of load is off-threadable CPU work,
+> once `physics_spatial` is counted alongside `parse`), **Gate C ⚠️** (mostly passes;
+> named exceptions: the lightmap-atlas upload and a handful of fat models exceed one
+> frame). The background-load design is de-risked; the plan below (§4) is revised to
+> match, and the stack is ready to start at PR 1.
 
 ---
 
@@ -184,9 +186,21 @@ rendering, not load.
 
 ### 2.2 Gate verdicts
 
-- **Gate A — feasibility (off-threadable + `Send`): NOT YET RUN.** The GL-free PCX
-  dimension read and the `LevelData` `Send` proof are the remaining spike step. The crux
-  is confirmed small and self-contained (see §4, PR 0 / PR 3) but unproven until coded.
+- **Gate A — feasibility (off-threadable + `Send`): ✅ PASS (tested).** Both halves
+  proven on branch `spike/loading-screen-load-timing`:
+  - *GL-free read* — the sole GL call in `dark::mission::read` (`texture_dimensions`,
+    which decodes+uploads a texture for its w/h) is replaceable by a `pcx::Reader` header
+    read fed from the `AbstractAssetPath` layer (already `Send + Sync`). A dual-path
+    `assert`-style validation across **all 23 missions — 1863 textures, 0 mismatches, 0
+    missing** — confirms identical dimensions. The header read needs only `Send + Sync`
+    layers, so removing `&mut AssetCache` from `read()` is now mechanical PR 3 work, not a
+    feasibility unknown. *(Caveat: this is a relocation — the texture decode+upload moves
+    into `to_scene`, total work unchanged.)*
+  - *`Send` output* — a compile-time `assert_send::<SystemShock2Level>()` names exactly
+    two blockers, **both `Rc`, neither GL**: `Rc<BspNode>` (BspTree) and
+    `Rc<Box<dyn Property>>` (entity_info). Fix = mechanical `Rc → Arc` (the property one
+    needs `dyn Property: Send + Sync` and ripples through the gamesys/property layer).
+    Feasible, moderate refactor, no fundamental blocker.
 - **Gate B — worth it: ✅ PASS, comfortably.** Off-threadable work (parse + physics) is
   **45–63% of load on every mission** — well above the ~40–50% bar. Background loading is
   clearly worthwhile. (Bonus finding: counting `physics_spatial`, not just `parse`,
@@ -303,44 +317,43 @@ part of the core loading-screen stack.
 
 The stack is ordered so each PR compiles, passes CI (`RUSTFLAGS="-D warnings" cargo
 check -p shock2vr -p desktop_runtime -p debug_runtime`), and delivers standalone value.
-**PR 0 (the feasibility spike) is largely done** — measurement complete (§2), with only
-Gate A (GL-free PCX dims + `Send` proof) remaining; PRs 1–2 are low-risk and faithful;
-PR 3 is the concurrency refactor; PRs 4–5 polish; **PR 6 is an optional, decoupled parse
-perf pass** gated on Quest numbers.
+**PR 0 (the feasibility spike) is complete** — measurement + all three gates resolved
+(§2). PRs 1–2 are low-risk and faithful; PR 3 is the concurrency refactor; PRs 4–5
+polish; **PR 6 is an optional, decoupled parse perf pass** gated on Quest numbers.
 
-### PR 0 — Feasibility spike: measure & de-risk (gates PR 3)
+### PR 0 — Feasibility spike: measure & de-risk (gates PR 3) ✅ DONE
 
-**Status: measurement done (§2). Gate A still open.** The spike de-risks PR 3 (the
-highest-risk change) by answering, with numbers on a throwaway branch, whether the
-parse/build split is feasible (Gate A), worth it (Gate B ✅), and sliceable under a frame
-budget (Gate C ⚠️) — *before* writing the concurrency code. Full results in §2.
+**Status: complete.** The spike de-risked PR 3 (the highest-risk change) by answering,
+with numbers on branch `spike/loading-screen-load-timing`, whether the parse/build split
+is feasible (Gate A ✅), worth it (Gate B ✅), and sliceable under a frame budget
+(Gate C ⚠️) — *before* writing the concurrency code. Full results in §2.
 
-**Done — landable instrumentation** (branch `spike/loading-screen-load-timing`): per-
-phase `[load-timing]` timers in `Mission::load`, the entity loop, `to_scene` (lightmap vs
-geometry), and `dark::mission::read` sub-phases — producing the §2 tables across all 23
-missions. (Note: the old `"loading level took {}s"` log at `mission_core.rs:229-233` was
-useless — it bracketed only a field move, not the real work.)
+**Landable instrumentation produced:** per-phase `[load-timing]` timers in `Mission::load`,
+the entity loop, `to_scene` (lightmap vs geometry), and `dark::mission::read` sub-phases —
+producing the §2 tables across all 23 missions. (The old `"loading level took {}s"` log at
+`mission_core.rs:229-233` was useless — it bracketed only a field move, not the real work.)
 
-**Still to do — Gate A (the one unproven step):**
-1. **GL-free PCX dimension read.** The only GPU call inside `dark::mission::read` is
-   `texture_dimensions` (`dark/src/mission/mod.rs:480`), which calls
-   `asset_cache.get(&TEXTURE_IMPORTER, …)` solely to read `.width()/.height()` — decoding
-   *and uploading* a whole texture for two integers that live in the **PCX header**
-   (`engine/src/texture_format.rs:61`). Replace with a header read; confirm
-   `dark::mission::read` no longer touches `AssetCache`/GL. *Honest nuance:* this is a
-   **relocation, not a speedup** — the texture decode+upload moves into `to_scene` as a
-   cold load (total work unchanged); its value is enabling off-threading.
-2. **Prove `Send`.** Add `fn assert_send<T: Send>() {}` against the proposed `LevelData`
-   boundary; let the compiler enumerate any `Rc`/GL leakage to move into `build`.
-3. *(Optional)* **Throwaway threaded prototype** on `medsci1`/`eng1`: actually move
-   parse+physics to a `std::thread`, run `build` time-sliced, and measure real max
-   main-thread slice + frames-pumped-during-load. §2 already implies this passes (via the
-   per-entity distribution + to_scene split), but the prototype confirms it directly.
+**Gate A artifacts (the feasibility proof):**
+1. **GL-free PCX dimension read — validated.** `engine::texture_format::read_pcx_dimensions`
+   (reuses `pcx::Reader`'s header parse, no GPU) + `AssetCache::get_raw_reader` (raw bytes
+   via the `Send + Sync` `AbstractAssetPath` layer). A dual-path validation across all 23
+   missions returned **1863 textures, 0 mismatches, 0 missing** — the GL-free dims are
+   byte-identical to the decode+upload path. *Honest nuance:* this is a **relocation, not a
+   speedup** — the texture decode+upload moves into `to_scene` as a cold load (total work
+   unchanged); its value is enabling off-threading. Removing `&mut AssetCache` from
+   `read()` is now mechanical PR 3 work.
+2. **`Send` proof — ran.** `assert_send::<SystemShock2Level>()` named two blockers, both
+   `Rc` (not GL): `Rc<BspNode>` (BspTree) and `Rc<Box<dyn Property>>` (entity_info). Fix =
+   `Rc → Arc` (+ `dyn Property: Send + Sync`), mechanical but ripples through the
+   gamesys/property layer.
+3. *(Not done — optional)* **Threaded prototype** to measure real max main-thread slice +
+   frames-pumped. §2 (per-entity distribution + to_scene split) already implies it passes;
+   PR 3 itself will confirm directly. Skipped as redundant for the go/no-go decision.
 
-**Gate verdicts (detail in §2.2):** Gate A — *not yet run* (crux confirmed small). Gate B
-— **✅ pass** (45–63% off-threadable). Gate C — **⚠️ mostly pass**, with two named
-exceptions (lightmap atlas ~30ms; fat models up to 30ms) that are invisible behind a
-loading screen and only matter for §4 PR 6.
+**Gate verdicts (detail in §2.2):** Gate A — **✅ pass** (GL-free dims validated; `Send` =
+2 mechanical `Rc → Arc`). Gate B — **✅ pass** (45–63% off-threadable). Gate C —
+**⚠️ mostly pass**, two named exceptions (lightmap atlas ~30ms; fat models up to 30ms),
+invisible behind a loading screen, relevant only to §4 PR 6.
 
 **Compositor-alive criterion:** the Quest compositor reprojects the last submitted frame,
 surviving short gaps but freezing on a multi-second block. Success = main thread returns
