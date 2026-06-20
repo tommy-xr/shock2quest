@@ -189,13 +189,17 @@ rendering, not load.
 - **Gate A — feasibility (off-threadable + `Send`): ✅ PASS (tested).** Both halves
   proven on branch `spike/loading-screen-load-timing`:
   - *GL-free read* — the sole GL call in `dark::mission::read` (`texture_dimensions`,
-    which decodes+uploads a texture for its w/h) is replaceable by a `pcx::Reader` header
+    which decodes+uploads a texture for its w/h) was replaced by a `pcx::Reader` header
     read fed from the `AbstractAssetPath` layer (already `Send + Sync`). A dual-path
     `assert`-style validation across **all 23 missions — 1863 textures, 0 mismatches, 0
-    missing** — confirms identical dimensions. The header read needs only `Send + Sync`
-    layers, so removing `&mut AssetCache` from `read()` is now mechanical PR 3 work, not a
-    feasibility unknown. *(Caveat: this is a relocation — the texture decode+upload moves
-    into `to_scene`, total work unchanged.)*
+    missing** — confirms identical dimensions. **Structural proof done:** `read()` /
+    `create_geometry` / `texture_dimensions` were changed to take `&dyn AbstractAssetPath`
+    + base path with **`&mut AssetCache` removed entirely** — it compiles `-D warnings`
+    and all 23 missions load, so the parse is GL-free *by construction* (no cache in
+    scope ⇒ no GPU access possible). Remaining production task: thread an owned
+    `Arc<dyn AbstractAssetPath>` instead of `&` for the real worker thread. *(Caveat: the
+    header read is a relocation — the texture decode+upload moves into `to_scene`, total
+    work unchanged.)*
   - *`Send` output* — a compile-time `assert_send::<SystemShock2Level>()` names exactly
     two blockers, **both `Rc`, neither GL**: `Rc<BspNode>` (BspTree) and
     `Rc<Box<dyn Property>>` (entity_info). Fix = mechanical `Rc → Arc` (the property one
@@ -562,10 +566,14 @@ speedup.
   Recommendation: scope PRs 1–4 to **mid-game transitions** first; handle first-boot in
   a follow-up since it touches all three runtime entry points
   (`desktop:279`, `debug:346`, `oculus:439`).
-- **Texture-dimension-during-parse** (`dark/src/mission/mod.rs:324`, `:480`):
-  *resolved direction* — the PCX header carries width/height, so a GL-free read
-  replaces the `asset_cache.get`. PR 0 validates and lands this; it is no longer an open
-  question, only a task.
+- **Texture-dimension-during-parse** (`dark/src/mission/mod.rs`): ✅ **RESOLVED &
+  VERIFIED in PR 0.** `texture_dimensions` now reads the PCX header (via
+  `engine::texture_format::read_pcx_dimensions` + the `Send + Sync` `AbstractAssetPath`
+  layer) instead of `asset_cache.get`. Validated identical on 1863 textures / 23 missions
+  (0 mismatches). Crucially, `dark::mission::read` was changed to take
+  `&dyn AbstractAssetPath` + base path **with `&mut AssetCache` removed entirely** — it
+  compiles, so the parse is GL-free *by construction*. The remaining production task is
+  threading an owned `Arc<dyn AbstractAssetPath>` (vs `&`) for the actual worker thread.
 - **Scope of "background":** coarse whole-level parse (this plan) vs. per-asset
   streaming (much larger refactor of the `AssetImporter` loader/processor thread
   boundary). Recommend coarse first; revisit streaming only if load times demand it.
