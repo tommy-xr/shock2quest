@@ -231,6 +231,13 @@ pub enum Effect {
         head_rotation: Quaternion<f32>,
     },
 
+    /// Debug: spawn the next player weapon in front of the player and wield it
+    /// as the flat viewmodel (dropping the previously wielded one). Cycles the
+    /// SS2 weapon roster for aim/viewmodel testing.
+    DebugCycleWeapon {
+        head_rotation: Quaternion<f32>,
+    },
+
     /// Reposition the inventory in front of the player
     PositionInventoryRelativeToPlayer {
         head_rotation: Quaternion<f32>,

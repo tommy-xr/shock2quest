@@ -187,6 +187,10 @@ pub struct MissionCore {
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
+
+    /// Sequential index for `Effect::DebugCycleWeapon` so each trigger wields the
+    /// next weapon in `DEBUG_WEAPONS` (flat-mode aim/viewmodel testing).
+    pub debug_weapon_index: usize,
 }
 
 pub struct GlobalContext {
@@ -440,6 +444,7 @@ impl MissionCore {
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
+            debug_weapon_index: 0,
         }
     }
 
@@ -1724,6 +1729,48 @@ impl MissionCore {
                         let msgs = self.interaction.wield(info.entity_id);
                         self.process_virtual_hand_effects(asset_cache, msgs);
                     }
+                }
+                Effect::DebugCycleWeapon { head_rotation } => {
+                    // The SS2 player-weapon roster (templates with PropPlayerGun),
+                    // cycled for flat-mode aim/viewmodel testing.
+                    const DEBUG_WEAPONS: &[i32] = &[
+                        -17, // Pistol
+                        -18, // Assault Rifle
+                        -19, // Shotgun
+                        -22, // Laser Pistol
+                        -23, // EMP Rifle
+                        -21, // Gren Launcher
+                        -25, // Stasis Field Generator
+                        -26, // Fusion Cannon
+                        -27, // Worm Launcher
+                        -29, // Viral Prolif
+                        -247, // Psi Amp
+                             // NB: Hybrid Shotgun (-4073) is omitted - it has an
+                             // unimplemented `trashedshotgun` script that panics on
+                             // creation (scripts/mod.rs). It is an enemy weapon
+                             // variant, not part of the player arsenal.
+                    ];
+                    let template_id = DEBUG_WEAPONS[self.debug_weapon_index % DEBUG_WEAPONS.len()];
+                    self.debug_weapon_index = self.debug_weapon_index.wrapping_add(1);
+
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation * head_rotation)
+                    };
+                    let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -10.0 / SCALE_FACTOR);
+                    let info = self.create_entity_with_position(
+                        asset_cache,
+                        template_id,
+                        pos + forward,
+                        rot,
+                        Matrix4::identity(),
+                        CreateEntityOptions::default(),
+                    );
+                    // Force-wield (unlike SpawnDebugItem): `wield` drops the
+                    // previously held weapon back into the world, so each cycle
+                    // swaps the viewmodel. No-op in VR (wield returns nothing).
+                    let msgs = self.interaction.wield(info.entity_id);
+                    self.process_virtual_hand_effects(asset_cache, msgs);
                 }
                 Effect::PositionInventoryRelativeToPlayer { head_rotation } => {
                     let (pos, rot) = {
