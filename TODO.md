@@ -22,7 +22,7 @@ SNACKS:
   - Have a 'script' for simulating a slow swipe (low damage) or fast swipe (high damage)
   - Add raycast test to see what is being hit
 
-- Main menu
+- [x] Main menu (flat mouse-driven menu boots by default; #297, #300)
 - Fix ranged attack when monsters only support melee
 - Nanite counting / gui upgrade for replicator
 - Cybernetic module counting / ui for upgrade stations
@@ -48,9 +48,9 @@ Can do these in parallel:
 - Skip cutscene by pressing trigger
 - What are the entry points for a cutscene? How do we know to play a cutscene?
 
-- [ ] Combat: Handle Player Health
-  - [ ] Should just be a number on player state?
-  - [ ] Render in HUD somehow...
+- [x] Combat: Handle Player Health
+  - [x] Should just be a number on player state? (PropHitPoints on player entity)
+  - [x] Render in HUD somehow... (VR forearm + flat HUD health bar; #300)
 - [ ] Combat: Handle Player Death
   - [ ] Camera fall down animation, static
 - Create a placeholder UI for 'assets not found'
