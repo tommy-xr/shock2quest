@@ -58,6 +58,15 @@ fn apply_color_key(pixels: &mut [u8], width: u32, height: u32) {
     }
 }
 
+/// GL-free PCX dimension read. Reuses the same `pcx::Reader` header parse as the full
+/// decode in `PcxFormat::load`, so `(width, height)` are guaranteed to match
+/// `Texture::width()/height()` — but WITHOUT decoding pixels or touching the GPU. This
+/// lets the level parse compute texture dimensions on a worker thread (no GL context).
+pub fn read_pcx_dimensions(buffer: &[u8]) -> Option<(u32, u32)> {
+    let pcx = pcx::Reader::new(buffer).ok()?;
+    Some((pcx.width() as u32, pcx.height() as u32))
+}
+
 pub struct PcxFormat {}
 
 impl TextureFormat for PcxFormat {
@@ -134,5 +143,32 @@ pub fn extension_to_format(str: String) -> Option<Box<dyn TextureFormat>> {
         "jpeg" => Some(Box::new(JPEG)),
         "jpg" => Some(Box::new(JPEG)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_pcx_dimensions_matches_written_size() {
+        // Round-trip: write a PCX of a known size, then read just its dimensions back.
+        let (w, h): (u16, u16) = (7, 5);
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let mut writer = pcx::WriterRgb::new(&mut buf, (w, h), (96, 96)).unwrap();
+            let row = vec![0u8; (w as usize) * 3];
+            for _ in 0..h {
+                writer.write_row(&row).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        assert_eq!(read_pcx_dimensions(&buf), Some((w as u32, h as u32)));
+    }
+
+    #[test]
+    fn read_pcx_dimensions_rejects_non_pcx() {
+        assert_eq!(read_pcx_dimensions(&[0u8; 4]), None);
+        assert_eq!(read_pcx_dimensions(&[]), None);
     }
 }

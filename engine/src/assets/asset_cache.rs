@@ -25,6 +25,29 @@ impl AssetCache {
         }
     }
 
+    /// The `Send + Sync` asset-path layer + base path, so GL-free code (e.g.
+    /// `dark::mission::read`) can resolve raw files WITHOUT holding the `!Send`
+    /// `AssetCache`. This is what lets `read()` drop its `&mut AssetCache`.
+    pub fn asset_paths(&self) -> &dyn AbstractAssetPath {
+        &**self.path
+    }
+
+    pub fn base_path(&self) -> &str {
+        &self.base_path
+    }
+
+    /// Raw byte access to an asset, bypassing the importer/GL — straight to the
+    /// `AbstractAssetPath` layer (already `Send + Sync`). Used to read a PCX header for
+    /// its dimensions without decoding+uploading the whole texture. Names are resolved
+    /// case-insensitively (matching `get_ext_opt`).
+    pub fn get_raw_reader(
+        &self,
+        asset_name: &str,
+    ) -> Option<std::cell::RefCell<Box<dyn super::asset_paths::ReadableAndSeekable>>> {
+        self.path
+            .get_reader(self.base_path.clone(), asset_name.to_ascii_lowercase())
+    }
+
     pub fn load_from_cache<TData: 'static, TOutput: 'static, TConfig: 'static + Hash + Default>(
         &mut self,
         importer: &AssetImporter<TData, TOutput, TConfig>,
