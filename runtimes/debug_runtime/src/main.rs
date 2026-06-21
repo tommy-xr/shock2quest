@@ -45,6 +45,34 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, View};
 const SCR_WIDTH: u32 = 800;
 const SCR_HEIGHT: u32 = 600;
 
+/// A request-body extractor that parses JSON **regardless of the `Content-Type`
+/// header**, unlike axum's `Json`. This debug/test API is driven by ad-hoc
+/// clients (`curl -d '{...}'` without a header, the SDK, etc.); requiring
+/// `Content-Type: application/json` just produces silent rejections that look
+/// like the command did nothing (e.g. `/v1/step` becoming a no-op). An empty
+/// body is treated as `{}` so endpoints whose fields are all optional work with
+/// no body at all.
+struct LenientJson<T>(T);
+
+#[axum::async_trait]
+impl<S, T> axum::extract::FromRequest<S> for LenientJson<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, String);
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        let bytes = axum::body::Bytes::from_request(req, state)
+            .await
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to read body: {e}")))?;
+        let slice: &[u8] = if bytes.is_empty() { b"{}" } else { &bytes };
+        let value = serde_json::from_slice(slice)
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid JSON body: {e}")))?;
+        Ok(LenientJson(value))
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "debug_runtime")]
 #[command(about = "HTTP-controlled game runtime for LLM testing and automation")]
@@ -360,6 +388,18 @@ fn run_game_blocking(
     let mut target_step_time: Option<f32> = None;
     let mut action_state = InputActionState::new();
 
+    // Deferred replies so HTTP commands observe a complete, post-render frame:
+    // - `Step` replies only after all requested frames have actually run, so
+    //   `/v1/step` blocks until stepping is done (otherwise screenshots/queries
+    //   race the still-running step and read a stale frame).
+    // - `Screenshot` captures after the frame is fully rendered (below), not at
+    //   command-receive time (which is before this iteration's render/swap and
+    //   would read a stale/blank back buffer -> intermittent black screenshots).
+    let mut pending_step_reply: Option<oneshot::Sender<StepResult>> = None;
+    let mut frames_advanced_this_step = 0u32;
+    let mut pending_screenshots: Vec<(ScreenshotSpec, oneshot::Sender<ScreenshotResult>)> =
+        Vec::new();
+
     info!("Starting main game loop...");
     info!("Game is PAUSED by default - use /v1/step to advance frames");
 
@@ -413,27 +453,24 @@ fn run_game_blocking(
             total: Duration::from_secs_f32(time - start_time),
         };
 
-        // Process commands from HTTP server
+        // Process commands from HTTP server. Step and Screenshot replies are
+        // deferred (see below) so callers observe a complete, post-render frame;
+        // every other command is handled synchronously here.
         while let Ok(command) = command_rx.try_recv() {
-            match &command {
-                RuntimeCommand::Step(step_spec, _) => {
+            match command {
+                RuntimeCommand::Step(step_spec, reply) => {
                     match step_spec {
                         StepSpec::Frames { frames } => {
-                            frames_to_step = *frames;
+                            frames_to_step = frames;
                             target_step_time = None;
-                            step_requested = true;
-                            is_paused = false;
                             tracing::info!("Starting step: {} frames", frames);
                         }
                         StepSpec::Duration { duration } => {
-                            // Parse duration string using humantime
                             match duration.parse::<humantime::Duration>() {
                                 Ok(parsed_duration) => {
                                     let duration_secs = parsed_duration.as_secs_f32();
                                     target_step_time = Some(accumulated_time + duration_secs);
                                     frames_to_step = 0;
-                                    step_requested = true;
-                                    is_paused = false;
                                     tracing::info!(
                                         "Starting step: {} ({:.3}s)",
                                         duration,
@@ -446,24 +483,43 @@ fn run_game_blocking(
                                         duration,
                                         e
                                     );
+                                    // Nothing to step; reply immediately so the
+                                    // caller isn't left hanging.
+                                    let _ = reply.send(StepResult {
+                                        frames_advanced: 0,
+                                        time_advanced: 0.0,
+                                        new_frame_index: frame_counter,
+                                        new_total_time: accumulated_time,
+                                    });
+                                    continue;
                                 }
                             }
                         }
                     }
+                    step_requested = true;
+                    is_paused = false;
+                    frames_advanced_this_step = 0;
+                    // Reply is sent once stepping actually completes (below).
+                    pending_step_reply = Some(reply);
+                }
+                RuntimeCommand::Screenshot(spec, reply) => {
+                    // Captured after this frame finishes rendering (below).
+                    pending_screenshots.push((spec, reply));
                 }
                 RuntimeCommand::Shutdown => {
                     shutdown_requested = true;
                     tracing::info!("Shutdown requested via API");
                 }
-                _ => {}
+                other => {
+                    process_command(
+                        other,
+                        &mut game,
+                        &game_time,
+                        frame_counter,
+                        &mut action_state,
+                    );
+                }
             }
-            process_command(
-                command,
-                &mut game,
-                &game_time,
-                frame_counter,
-                &mut action_state,
-            );
         }
 
         // Only update the game if not paused or if step was requested
@@ -491,6 +547,7 @@ fn run_game_blocking(
             if step_requested {
                 // Increment frame counter and accumulated time
                 frame_counter += 1;
+                frames_advanced_this_step += 1;
                 accumulated_time += game_time.elapsed.as_secs_f32();
 
                 // Check if we should continue stepping or pause
@@ -534,6 +591,17 @@ fn run_game_blocking(
                     is_paused = true;
                     target_step_time = None;
                     frames_to_step = 0;
+                    // Stepping finished: now answer the /v1/step caller. (The final
+                    // frame is rendered later this same loop iteration, so by the
+                    // time the HTTP response is observed the frame is up to date.)
+                    if let Some(reply) = pending_step_reply.take() {
+                        let _ = reply.send(StepResult {
+                            frames_advanced: frames_advanced_this_step,
+                            time_advanced: frames_advanced_this_step as f32 * FIXED_STEP_DT,
+                            new_frame_index: frame_counter,
+                            new_total_time: accumulated_time,
+                        });
+                    }
                 }
             }
             accumulated_time
@@ -607,6 +675,17 @@ fn run_game_blocking(
             game.finish_render(view, projection_matrix, screen_size)
         });
 
+        // Service deferred screenshots now that the frame is fully drawn to the
+        // back buffer (before the swap, so we read the just-rendered contents).
+        if !pending_screenshots.is_empty() {
+            for (spec, reply) in pending_screenshots.drain(..) {
+                let result = capture_screenshot_to_result(spec);
+                if reply.send(result).is_err() {
+                    tracing::warn!("Failed to send screenshot result - receiver dropped");
+                }
+            }
+        }
+
         // Swap buffers
         window.swap_buffers();
     }
@@ -634,71 +713,10 @@ fn process_command(
                 tracing::warn!("Failed to send frame snapshot - receiver dropped");
             }
         }
-        RuntimeCommand::Step(spec, reply) => {
-            // Step command will be handled by the game loop logic above
-            // Return result based on the step specification
-            let (frames_requested, time_requested) = match spec {
-                StepSpec::Frames { frames } => (frames, None),
-                StepSpec::Duration { duration } => {
-                    let parsed_time = duration
-                        .parse::<humantime::Duration>()
-                        .map(|d| d.as_secs_f32())
-                        .unwrap_or(0.0);
-                    (0, Some(parsed_time))
-                }
-            };
-
-            let result = StepResult {
-                frames_advanced: frames_requested.max(1), // At least 1 frame will be processed
-                time_advanced: time_requested.unwrap_or(0.016), // Default ~60fps frame time
-                new_frame_index: frame_counter,
-                new_total_time: time.total.as_secs_f32(),
-            };
-            if let Err(_) = reply.send(result) {
-                tracing::warn!("Failed to send step result - receiver dropped");
-            }
-        }
-        RuntimeCommand::Screenshot(spec, reply) => {
-            let filename = spec.filename.unwrap_or_else(|| {
-                format!(
-                    "screenshot_{}.png",
-                    chrono::Utc::now().format("%Y%m%d_%H%M%S")
-                )
-            });
-
-            // Create directory if it doesn't exist
-            let screenshots_dir = std::path::Path::new("/tmp/claude");
-            std::fs::create_dir_all(screenshots_dir).unwrap_or_else(|e| {
-                tracing::warn!("Failed to create screenshots directory: {}", e);
-            });
-
-            let full_path = screenshots_dir.join(&filename);
-
-            // Capture OpenGL framebuffer
-            let result = match capture_screenshot(&full_path, SCR_WIDTH, SCR_HEIGHT) {
-                Ok(size_bytes) => {
-                    tracing::info!("Screenshot saved to: {}", full_path.display());
-                    ScreenshotResult {
-                        filename: filename.clone(),
-                        full_path: full_path.to_string_lossy().to_string(),
-                        resolution: [SCR_WIDTH, SCR_HEIGHT],
-                        size_bytes,
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to capture screenshot: {}", e);
-                    ScreenshotResult {
-                        filename: filename.clone(),
-                        full_path: full_path.to_string_lossy().to_string(),
-                        resolution: [0, 0],
-                        size_bytes: 0,
-                    }
-                }
-            };
-
-            if let Err(_) = reply.send(result) {
-                tracing::warn!("Failed to send screenshot result - receiver dropped");
-            }
+        // Step and Screenshot are intercepted in the game loop (deferred replies),
+        // so they never reach process_command.
+        RuntimeCommand::Step(..) | RuntimeCommand::Screenshot(..) => {
+            unreachable!("Step/Screenshot are handled in the game loop")
         }
         RuntimeCommand::RayCast(request, reply) => {
             let result = if let Some(debug_scene) = game.debug_scene() {
@@ -1346,7 +1364,7 @@ fn game_loop_unavailable() -> (StatusCode, String) {
 /// Step the simulation forward by one frame or time duration
 async fn step_frame(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(step_spec): Json<StepSpec>,
+    LenientJson(step_spec): LenientJson<StepSpec>,
 ) -> Result<Json<StepResult>, (StatusCode, String)> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -1463,7 +1481,7 @@ async fn get_entity_detail(
 async fn send_entity_message(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     Path(id): Path<i32>,
-    Json(message): Json<shock2vr::game_scene::DebugEntityMessage>,
+    LenientJson(message): LenientJson<shock2vr::game_scene::DebugEntityMessage>,
 ) -> Json<CommandResult> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -1556,7 +1574,7 @@ async fn get_player_position(
 /// HTTP handler for teleporting player
 async fn teleport_player(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(request): Json<TeleportRequest>,
+    LenientJson(request): LenientJson<TeleportRequest>,
 ) -> Result<Json<TeleportResponse>, (StatusCode, String)> {
     let target_position = Vector3::new(request.x, request.y, request.z);
 
@@ -1589,7 +1607,7 @@ async fn teleport_player(
 /// HTTP handler for physics raycast
 async fn perform_raycast(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(request): Json<RayCastRequest>,
+    LenientJson(request): LenientJson<RayCastRequest>,
 ) -> Json<RayCastResult> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -1745,7 +1763,7 @@ struct ScreenshotRequest {
 /// HTTP handler for taking screenshots
 async fn take_screenshot(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(request): Json<ScreenshotRequest>,
+    LenientJson(request): LenientJson<ScreenshotRequest>,
 ) -> Json<ScreenshotResult> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -1779,6 +1797,45 @@ async fn take_screenshot(
     }
 }
 
+/// Resolve a screenshot spec to a file path, capture the freshly-rendered frame,
+/// and build the result. Called from the game loop after `finish_render` (before
+/// the buffer swap) so it reads a complete frame.
+fn capture_screenshot_to_result(spec: ScreenshotSpec) -> ScreenshotResult {
+    let filename = spec.filename.unwrap_or_else(|| {
+        format!(
+            "screenshot_{}.png",
+            chrono::Utc::now().format("%Y%m%d_%H%M%S")
+        )
+    });
+
+    let screenshots_dir = std::path::Path::new("/tmp/claude");
+    std::fs::create_dir_all(screenshots_dir).unwrap_or_else(|e| {
+        tracing::warn!("Failed to create screenshots directory: {}", e);
+    });
+    let full_path = screenshots_dir.join(&filename);
+
+    match capture_screenshot(&full_path, SCR_WIDTH, SCR_HEIGHT) {
+        Ok(size_bytes) => {
+            tracing::info!("Screenshot saved to: {}", full_path.display());
+            ScreenshotResult {
+                filename,
+                full_path: full_path.to_string_lossy().to_string(),
+                resolution: [SCR_WIDTH, SCR_HEIGHT],
+                size_bytes,
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to capture screenshot: {}", e);
+            ScreenshotResult {
+                filename,
+                full_path: full_path.to_string_lossy().to_string(),
+                resolution: [0, 0],
+                size_bytes: 0,
+            }
+        }
+    }
+}
+
 /// Capture the current OpenGL framebuffer and save it as a PNG
 fn capture_screenshot(
     path: &std::path::Path,
@@ -1786,6 +1843,10 @@ fn capture_screenshot(
     height: u32,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     unsafe {
+        // Ensure all rendering for this frame has completed before reading back,
+        // so we never capture a partially-drawn buffer.
+        gl::Finish();
+
         // Query the current viewport to see what size it actually is
         let mut viewport: [i32; 4] = [0; 4];
         gl::GetIntegerv(gl::VIEWPORT, viewport.as_mut_ptr());
@@ -1878,7 +1939,7 @@ async fn get_input_state(
 /// HTTP endpoint handler: Set input channel value
 async fn set_input_channel(
     State(command_tx): State<tokio::sync::mpsc::UnboundedSender<commands::RuntimeCommand>>,
-    Json(patch): Json<commands::InputPatch>,
+    LenientJson(patch): LenientJson<commands::InputPatch>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     if command_tx
         .send(commands::RuntimeCommand::SetInput(patch))
@@ -1898,7 +1959,7 @@ async fn set_input_channel(
 /// HTTP endpoint handler: Execute a gameplay command via the runtime
 async fn run_game_command(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(request): Json<GameCommandRequest>,
+    LenientJson(request): LenientJson<GameCommandRequest>,
 ) -> Result<Json<CommandResult>, StatusCode> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -1926,7 +1987,7 @@ async fn run_game_command(
 /// HTTP endpoint handler: Execute a pathfinding test command
 async fn pathfinding_test(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(request): Json<PathfindingTestRequest>,
+    LenientJson(request): LenientJson<PathfindingTestRequest>,
 ) -> Result<Json<CommandResult>, StatusCode> {
     let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -1978,7 +2039,7 @@ struct TriggerActionRequest {
 /// HTTP endpoint handler: Trigger a discrete input action
 async fn trigger_input_action(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    Json(request): Json<TriggerActionRequest>,
+    LenientJson(request): LenientJson<TriggerActionRequest>,
 ) -> Result<Json<CommandResult>, StatusCode> {
     let action = match request.action.parse::<InputAction>() {
         Ok(action) => action,

@@ -197,9 +197,18 @@ For debugging visual/rendering changes without a full interactive session:
    `{"frames": N}` advances exactly `N/60` s of simulation time and
    `{"duration":"3s"}` runs exactly `3 * 60` frames - deterministic and
    independent of HTTP request timing (a settling ragdoll falls at a real rate
-   regardless of how fast you poll). Time-based stepping (`-d '{"duration":"3s"}'`)
-   requires `-H 'Content-Type: application/json'`. Only free-running (not stepping)
-   uses real wall-clock dt.
+   regardless of how fast you poll). Only free-running (not stepping) uses real
+   wall-clock dt.
+
+   **Reliable control (no headers/retries/sleeps needed)**: `/v1/step` **blocks
+   until all requested frames have actually run**, and `/v1/screenshot` captures
+   the **fully-rendered** frame, so a plain `step` then `screenshot` is
+   deterministic - no `sleep`, no re-shooting to dodge blank frames. JSON bodies
+   are parsed **regardless of `Content-Type`**, so `curl -d '{"frames":120}'`
+   (without `-H 'Content-Type: application/json'`) works; an omitted body is
+   treated as `{}`. (Note: time-based systems - particles, animation - only
+   advance via `/v1/step`; physics also advances while free-running because it
+   uses its own fixed substep.)
 
 3. **TypeScript SDK (`tools/shock2-sdk`)** — **preferred for multi-step testing and verification**. A Playwright-style wrapper over the debug runtime HTTP API that handles the full lifecycle: spawning the runtime, waiting for readiness, capturing logs, and automatic shutdown via `await using`. See `tools/shock2-sdk/README.md` for the full API.
 
