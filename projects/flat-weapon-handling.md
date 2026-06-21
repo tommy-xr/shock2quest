@@ -42,12 +42,29 @@ Verified: the pistol hit-spang and the grenade land dead-center on the crosshair
 
 Remaining (follow-ups):
 
-- **Viewmodel framing / per-weapon position** — the viewmodel sits low after the
-  eye-height drop, and position still uses a single shared `VIEWMODEL_OFFSET`.
-  Wire per-weapon `PropPlayerGun.model_offset` (original-engine view-space units;
-  needs axis-mapping + scale calibration — raw values put the gun off-screen;
-  ref `darkengine` `PlayerGunDescGetModelOffset` / `m_posOffset`). Nudge the
-  shared offset up in the meantime.
+- **TODO(fable model): per-weapon viewmodel framing from `PropPlayerGun.model_offset`.**
+  Currently the flat viewmodel uses a single shared `VIEWMODEL_OFFSET` for every
+  weapon (playable: all 11 frame bottom-right with the crosshair clear).
+  Investigated wiring per-weapon `model_offset` and it does NOT reduce to one
+  scalar — revisit with a fresh approach (a Fable-model pass). Findings:
+  - Axis mapping that works: Dark view space `(x=forward, y=left, z=up)` ->
+    look space `(+x right, +y up, -z forward)` = `vec3(-mo.y, mo.z, mo.x)`.
+  - **FOV mismatch is the blocker.** SS2 authors the *pistol* more cornered
+    (`model_offset` ~38° down-right) than the *big guns* (EMP/AR ~18°). Our
+    renderer's FOV clips the cornered pistol, while we'd want the opposite for
+    playability. So:
+    - a uniform scale on the whole offset keeps each weapon's authored angle ->
+      big guns frame great (bottom-right, reticle clear) but the pistol clips
+      off the corner at any scale;
+    - a forward-only gain (`mo.x * ~2`) pulls the pistol in nicely but centers
+      the big guns over the crosshair ("breaks visibility");
+    - `/SCALE_FACTOR` puts every gun ~0.4 world units from the eye (fills view).
+  - Likely correct fix: render the viewmodel pass with its own **wider FOV /
+    separate projection** (standard FPS technique), then faithful `model_offset`
+    frames all weapons as authored. Verify per weapon in `debug_weapons`.
+  - Ref: `darkengine` `PlayerGunDescGetModelOffset` / `m_posOffset`. The
+    experiment code lived on the abandoned `feat/flat-viewmodel-offset` branch
+    (see git reflog) if useful.
 - **Muzzle flash is world-pinned** — created at the weapon's fire-time transform
   and not re-parented, so it doesn't track the weapon. Attach it to the muzzle
   vhot / render it in viewmodel space.
