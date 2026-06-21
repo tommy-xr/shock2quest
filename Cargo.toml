@@ -1,9 +1,14 @@
 
+# Line-tables-only debug info for our own crates: keeps file/line numbers in
+# backtraces and panics, but drops full DWARF (no local-variable inspection in
+# a debugger). Roughly halves the size of our workspace .rlib artifacts.
+[profile.dev]
+debug = 1
+
 [profile.dev.package.rapier3d]
 opt-level = 3
 
 # Strip debug info from all third-party dependencies to shrink target/.
-# Our own crates keep full debug info; opt in per-dep above if needed.
 [profile.dev.package."*"]
 debug = false
 
