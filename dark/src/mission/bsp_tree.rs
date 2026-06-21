@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, rc::Rc};
+use std::{collections::HashMap, io, sync::Arc};
 
 use cgmath::Vector3;
 
@@ -9,16 +9,24 @@ pub type BspNodeId = u32;
 
 #[derive(Debug, Clone)]
 pub struct BspTree {
-    root_node: Rc<BspNode>,
+    root_node: Arc<BspNode>,
 }
+
+// Background level loading (projects/loading-screen.md, PR S1) parses the level on a
+// worker thread, so the parse output must be `Send + Sync`. This compile-time assertion
+// guards that `BspTree` stays thread-safe.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<BspTree>();
+};
 
 #[derive(Debug, Clone)]
 pub enum BspNode {
     Split {
         cell_idx: i32,
         plane: Plane,
-        front: Option<Rc<BspNode>>,
-        back: Option<Rc<BspNode>>,
+        front: Option<Arc<BspNode>>,
+        back: Option<Arc<BspNode>>,
     },
     Leaf {
         cell_idx: i32,
@@ -53,7 +61,7 @@ impl BspTree {
         Self::cell_from_position_recursive(self.root_node.clone(), position)
     }
 
-    fn cell_from_position_recursive(node: Rc<BspNode>, position: Vector3<f32>) -> Option<u32> {
+    fn cell_from_position_recursive(node: Arc<BspNode>, position: Vector3<f32>) -> Option<u32> {
         match node.as_ref() {
             BspNode::Leaf { cell_idx } => Some(*cell_idx as u32),
             BspNode::Split {
@@ -164,7 +172,7 @@ impl BspTree {
         );
 
         BspTree {
-            root_node: Rc::new(root_node),
+            root_node: Arc::new(root_node),
         }
     }
     fn create_node_recursive(
@@ -186,7 +194,7 @@ impl BspTree {
                 let front_node = if *front == 0xFFFFFF {
                     None
                 } else {
-                    Some(Rc::new(Self::create_node_recursive(
+                    Some(Arc::new(Self::create_node_recursive(
                         cells,
                         raw_node_map,
                         raw_node_map.get(front).unwrap(),
@@ -197,7 +205,7 @@ impl BspTree {
                 let back_node = if *back == 0xFFFFFF {
                     None
                 } else {
-                    Some(Rc::new(Self::create_node_recursive(
+                    Some(Arc::new(Self::create_node_recursive(
                         cells,
                         raw_node_map,
                         raw_node_map.get(back).unwrap(),
