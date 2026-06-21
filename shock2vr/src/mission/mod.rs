@@ -63,8 +63,11 @@ impl Mission {
 
         let f = File::open(resource_path(&mission)).unwrap();
         let mut reader = BufReader::new(f);
+        // `read` is GL-free: it takes the Send + Sync asset-path layer, not the cache.
+        let base_path = asset_cache.base_path().to_string();
         let level = dark::mission::read(
-            asset_cache,
+            asset_cache.asset_paths(),
+            &base_path,
             &mut reader,
             &global_context.gamesys,
             links,
