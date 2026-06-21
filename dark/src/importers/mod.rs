@@ -10,6 +10,7 @@ mod skeleton_importer;
 mod song_importer;
 mod strings_importer;
 mod texture_importer;
+mod ui_layout_importer;
 
 pub use animation_clip_importer::*;
 pub use audio_importer::*;
@@ -23,3 +24,4 @@ pub use skeleton_importer::*;
 pub use song_importer::*;
 pub use strings_importer::*;
 pub use texture_importer::*;
+pub use ui_layout_importer::*;

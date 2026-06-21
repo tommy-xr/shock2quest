@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
+use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -44,25 +45,31 @@ const PROGRESS_TEXTURE: &str = "meters/PROGRESS.PCX";
 /// The 4:3 art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
-// Overlay rects are the original pixel-perfect layout from `res/intrface/loadingr.BIN`
-// — a list of LTRB int16 rectangles, one per widget. Decoded:
-//   rect[0] = (184,120)-(456,392)  272x272  rotating disc
-//   rect[1] = (197,394)-(443,414)  246x20   progress bar
-//   rect[2] = (118,69)-(512,97)    394x28   status-text banner (see polish backlog)
+/// Original widget layout for the loading screen — a list of LTRB rects (`UI_LAYOUT_IMPORTER`).
+/// Index order is the screen's convention: `[0]` = disc, `[1]` = bar, `[2]` = status text.
+const LAYOUT_FILE: &str = "loadingr.BIN";
+const DISC_RECT_INDEX: usize = 0;
+const BAR_RECT_INDEX: usize = 1;
+/// Fallbacks if `loadingr.BIN` is missing — the values decoded from it.
+const DISC_FALLBACK: Rect = Rect::new(184.0, 120.0, 272.0, 272.0);
+const BAR_FALLBACK: Rect = Rect::new(197.0, 394.0, 246.0, 20.0);
 
-/// The rotating center disc (`meters/LOADA_01..20.PCX`, 272x272), top-left at (184,120).
-const DISC_X: f32 = 184.0;
-const DISC_Y: f32 = 120.0;
-const DISC_SIZE: f32 = 272.0;
 const LOADA_FRAME_COUNT: u32 = 20;
 /// Rotation speed; 20 frames at 15 fps -> a full cycle every ~1.3s.
 const LOADA_FPS: f32 = 15.0;
 
-/// The "% Transfer Completed" bar fill (`meters/PROGRESS.PCX`, 246x20), top-left at (197,394).
-const BAR_X: f32 = 197.0;
-const BAR_Y: f32 = 394.0;
-const BAR_W: f32 = 246.0;
-const BAR_H: f32 = 20.0;
+/// Convert a `loadingr.BIN` rect at `index` to a canvas `Rect`, or `fallback` if absent.
+fn layout_rect(layout: Option<&[MapRect]>, index: usize, fallback: Rect) -> Rect {
+    match layout.and_then(|rects| rects.get(index)) {
+        Some(r) => Rect::new(
+            r.ul_x as f32,
+            r.ul_y as f32,
+            r.width() as f32,
+            r.height() as f32,
+        ),
+        None => fallback,
+    }
+}
 
 /// Demo sweep period (seconds) for the `debug_loading` scene: fill 0->1, repeat.
 const DEMO_FILL_SECS: f32 = 4.0;
@@ -185,22 +192,22 @@ impl GameScene for LoadingScene {
     ) -> Vec<SceneObject> {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
+        // Widget rects come from the original `loadingr.BIN` layout (cached by the asset
+        // cache after the first load); fall back to the decoded values if it's absent.
+        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
+        let layout = layout.as_deref().map(|rects| rects.as_slice());
+        let disc_rect = layout_rect(layout, DISC_RECT_INDEX, DISC_FALLBACK);
+        let bar_rect = layout_rect(layout, BAR_RECT_INDEX, BAR_FALLBACK);
+
         // 1. Full-screen backdrop.
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
         // 2. Rotating center disc (cycled LOADA frames).
         let disc_frame = self.current_disc_frame();
-        canvas.image(
-            Rect::new(DISC_X, DISC_Y, DISC_SIZE, DISC_SIZE),
-            &disc_frame,
-        );
+        canvas.image(disc_rect, &disc_frame);
 
         // 3. Progress bar fill (clipped 0..1).
-        canvas.bar(
-            Rect::new(BAR_X, BAR_Y, BAR_W, BAR_H),
-            PROGRESS_TEXTURE,
-            self.progress,
-        );
+        canvas.bar(bar_rect, PROGRESS_TEXTURE, self.progress);
 
         canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
     }
