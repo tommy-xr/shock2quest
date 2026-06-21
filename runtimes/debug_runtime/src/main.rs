@@ -267,6 +267,11 @@ async fn start_http_server(
     // Bind to localhost only for security
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     info!("Debug runtime listening on http://{}", addr);
+    info!(
+        "camera eye height (standing): {} SS2 units = {} world units (above pawn) - shared with desktop via PLAYER_EYE_HEIGHT",
+        shock2vr::PLAYER_EYE_HEIGHT,
+        shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR
+    );
 
     // Log available endpoints
     info!("Available endpoints:");
@@ -635,10 +640,10 @@ fn run_game_blocking(
             time: actual_game_time, // Use accumulated game time, not real time
             camera_offset: pawn_offset,
             camera_rotation: pawn_rotation,
-            // Standing eye height, matching desktop (head_height 4.0) and the
-            // flat controller's HEAD_HEIGHT, so shots originate at the rendered
-            // eye and land on the crosshair.
-            head_offset: vec3(0.0, 4.0 / SCALE_FACTOR, 0.0),
+            // Standing eye height, shared with desktop and the flat controller
+            // via shock2vr::PLAYER_EYE_HEIGHT, so the debug-runtime camera sits
+            // at the same height as desktop and shots land on the crosshair.
+            head_offset: vec3(0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0),
             // Same head rotation fed to game.update, so the rendered view and the
             // flat viewmodel agree. Controllable via `/v1/control/input` head.look.
             head_rotation: current_input.head.rotation,

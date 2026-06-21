@@ -235,6 +235,11 @@ pub fn main() {
         "es3 extension supported: {}",
         glfw.extension_supported("GL_ARB_ES3_compatibility")
     );
+    println!(
+        "camera eye height (standing): {} SS2 units = {} world units (above pawn)",
+        shock2vr::PLAYER_EYE_HEIGHT,
+        shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR
+    );
 
     let engine = engine::opengl();
     let bundle_storage = engine.get_storage();
@@ -374,7 +379,11 @@ pub fn main() {
 
         let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", game.render());
 
-        let head_height = if input_state.is_crouching { 1.5 } else { 4.0 };
+        let head_height = if input_state.is_crouching {
+            1.5
+        } else {
+            shock2vr::PLAYER_EYE_HEIGHT
+        };
         let render_context = engine::EngineRenderContext {
             time: glfw.get_time() as f32,
             camera_offset: pawn_offset,
