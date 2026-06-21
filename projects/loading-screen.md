@@ -1,19 +1,23 @@
 # Loading Screen — Design Note
 
-> Status: 🧭 Investigation + measurement spike complete; plan updated 2026-06-19.
-> Goal: show `LOADING.PCX` with a real, animated progress bar while a level loads
-> **in the background**, instead of freezing the window on a black frame.
+> Status: 🚧 In progress; foundation + UI rendering landed. Updated 2026-06-20.
+> Goal: show the original animated loading screen while a level loads **in the
+> background**, instead of freezing the window on a black frame.
 >
-> **PR 0 (the feasibility spike) is complete** — §2 has the numbers across all 23
-> missions. All three gates resolved: **Gate A ✅** (GL-free texture-dimension read
-> validated on 1863 textures / 0 mismatches; `Send` blockers reduced to two mechanical
-> `Rc → Arc` conversions), **Gate B ✅** (≈45–63% of load is off-threadable CPU work,
-> once `physics_spatial` is counted alongside `parse`), **Gate C ⚠️** (mostly passes;
-> named exceptions: the lightmap-atlas upload and a handful of fat models exceed one
-> frame). The background-load design is de-risked. The plan below (§4) then runs **two
-> parallel tracks** into PR 3: a **foundation track** (PR S1/S2 — mechanical `Rc → Arc`
-> `Send` refactors, no behavior change) and a **UI track** (PR 1–2 — loading scene +
-> progress). Ready to start on either.
+> **Progress so far:**
+> - **PR 0 (spike) — done.** All three gates resolved (§2): Gate A ✅ (GL-free
+>   texture-dimension read validated on 1863 textures / 0 mismatches; parse made GL-free
+>   by construction), Gate B ✅ (≈45–63% off-threadable), Gate C ⚠️ (named exceptions).
+> - **Foundation track — done & merged.** PR S1 (`BspTree` `Rc→Arc`, #309) + PR S2
+>   (Property `Send+Sync`, #312). `SystemShock2Level` is now `Send + Sync` (capstone
+>   guard in place) — the `Send` half of Gate A is fully closed.
+> - **UI track — PR 1 done (#313).** The `LoadingScene` renders the *animated* original
+>   loading screen (rotating disc + filling bar — see §6.1), with a `debug_loading` scene
+>   to inspect it. This folded in the bar/disc *rendering* originally sketched for PR 2.
+>
+> **Remaining:** PR 2 (real progress *source* → `set_progress`), PR 3 (background parse +
+> scene swap — the actual async win), PR 4–5 (slicing + polish), PR 6 (optional parse
+> perf). Plus UI polish (§6.1). The hard concurrency prerequisites are all de-risked.
 
 ---
 
@@ -410,7 +414,7 @@ assert_send_sync<T: Send + Sync>() {} assert_send_sync::<TheType>(); };` asserti
 it did the job. Plus the existing test suite + `tools/shock2-sdk/test/missions.e2e.test.ts`
 (all 23 missions load identically) guards against behavior drift.
 
-### PR S1 — `BspTree`: `Rc<BspNode>` → `Arc<BspNode>`
+### PR S1 — `BspTree`: `Rc<BspNode>` → `Arc<BspNode>` ✅ DONE (#309, merged)
 
 **Scope:** contained entirely to `dark/src/mission/bsp_tree.rs`. Change `root_node:
 Rc<BspNode>` and the enum's `front`/`back: Option<Rc<BspNode>>` to `Arc`, and the
@@ -420,7 +424,12 @@ Rc<BspNode>` and the enum's `front`/`back: Option<Rc<BspNode>>` to `Arc`, and th
 **Why first:** tiny, zero-risk, removes one of the two named blockers; good warm-up that
 establishes the `assert_send_sync` test pattern.
 
-### PR S2 — Property system: `Send + Sync` supertrait + `Rc<Box<dyn Property>>` → `Arc`
+### PR S2 — Property system: `Send + Sync` supertrait + `Rc<Box<dyn Property>>` → `Arc` ✅ DONE (#312, merged)
+
+> Outcome: compiled exactly as predicted (the blanket impls already required `Send +
+> Sync`). One extra ripple the spike-era grep had missed — `dark_query` helpers took
+> `&[Rc<Box<dyn Property>>]` — caught immediately by the capstone
+> `assert_send_sync::<SystemShock2Level>()` guard, now permanently in `dark/src/mission/mod.rs`.
 
 **Scope:** the second named blocker. Two coordinated changes:
 1. Add `Send + Sync` as supertraits to `Property` (`dark/src/properties/mod.rs:1480`).
@@ -441,41 +450,33 @@ bound first, then the `HashMap` Arc conversion). No logic changes.
 
 ---
 
-### PR 1 — `LoadingScene` rendering `LOADING.PCX` (static, no threading)
+### PR 1 — `LoadingScene` (animated) + `debug_loading` ✅ DONE (#313)
 
-**Goal:** kill the black/frozen frame. Show the authentic loading bitmap during a
-transition, even though the load itself is still blocking.
+**Delivered:** `shock2vr/src/scenes/loading.rs` — a `GameScene` (modeled on
+`MainMenuScene`) that renders the **original animated loading screen** (§6.1), plus a
+`debug_loading` scene to inspect it via the debug runtime, independent of any real load.
 
-**Changes:**
-- New `shock2vr/src/scenes/loading.rs` — a `GameScene` modeled on `MainMenuScene`.
-  `render_per_eye` builds a `UiCanvas`, draws `canvas.image(full_rect, "LOADING.PCX")`,
-  emits via `render_screen_space(..., ScaleMode::PreserveAspect)`. `update` is a no-op
-  for now (or returns the effect that kicks the real load).
-- Wire it into `switch_mission` / the `TransitionLevel` handler (`lib.rs:150`, `:589`):
-  set `active_game_scene = LoadingScene` and force at least one rendered frame before
-  the blocking `Mission::load` runs. (The cleanest expression: split the transition
-  into "show loading scene → next frame, perform load"; a small state field on `Game`
-  like `pending_transition: Option<MissionTransition>` consumed in `update`.)
+**Grew beyond the original "static `LOADING.PCX`" plan:** inspecting `intrface.crf`'s
+`meters/` folder via the debug scene revealed the loading screen is a 3-layer animated
+composite (backdrop + rotating disc + filling bar). Rendering all three was the natural
+unit, so it folded in the bar/disc *rendering* originally sketched for PR 2. See §6.1.
 
-**Why first:** zero concurrency risk, reuses existing UI stack entirely, and
-immediately upgrades the worst symptom (frozen window). Establishes the scene the later
-PRs animate.
+**Not yet wired into transitions.** This PR only adds the scene + the debug view. Showing
+it during an actual level load — and driving its `progress` — is PR 3 (with the progress
+*source* from PR 2). `LoadingScene::set_progress` is the seam, already in place.
 
-**Test:** SDK e2e (`tools/shock2-sdk/test/*.e2e.test.ts`, gated `SHOCK2_E2E=1`): trigger
-a level transition, step one frame, screenshot, assert the loading scene is active /
-`LOADING.PCX` is on screen. Negative test first: confirm pre-change the transition
-frame is black.
-
-**Caveat to flag in PR:** with a blocking load this shows `LOADING.PCX` for a single
-frame then the load stalls the loop until done — a static screen, not yet animated. PR
-3 makes it animate.
+**Verified:** builds `-D warnings`; `cargo test -p shock2vr loading::` (frame cycling,
+progress clamp, transition save-data uniques); `debug_loading` screenshots reviewed at
+multiple progress levels.
 
 ---
 
-### PR 2 — Progress reporting plumbing
+### PR 2 — Progress reporting plumbing (now just the *source*)
 
-**Goal:** introduce a `LoadProgress` reporting channel and a phase taxonomy, consumed
-by `LoadingScene` to draw a `UiCanvas::bar`. Still synchronous load.
+**Narrowed by PR 1:** the bar/disc *rendering* and `LoadingScene::set_progress` already
+shipped in #313. PR 2 is now only the progress **producer** — a `LoadProgress` reporting
+channel + phase taxonomy → fraction, feeding `set_progress`. Still on the synchronous load
+(drives a coarse bar); the wire format is then reused unchanged in PR 3.
 
 **Changes:**
 - New small type, e.g. `LoadProgress { phase: LoadPhase, current: u32, total: u32 }`
@@ -676,7 +677,42 @@ OpenDarkEngine reimplementation both kept the **blocking** resource-manager mode
 
 **We emulate** the authentic asset (`LOADING.PCX` from `intrface.crf`, drawn on the
 existing 2D path with the `SHOCKPAL` palette / `MAINFONT` text) and the per-transition
-timing. **We improve** on it by *not blocking*: background parse + a real animated
-progress bar, which is both a UX win and, for VR, a requirement (the compositor must
-keep getting frames). The port's own `projects/ffmpeg-anr-fix.md` already establishes
-the "move I/O to a background thread + show loading state" pattern we reuse here.
+timing. **We improve** on it by *not blocking*: background parse keeps the compositor
+fed, which is both a UX win and, for VR, a requirement. The port's own
+`projects/ffmpeg-anr-fix.md` already establishes the "move I/O to a background thread +
+show loading state" pattern we reuse here.
+
+> Correction (from PR 1): the original loading screen was **not** a static bitmap — see
+> §6.1. The single-threaded *load* blocked, but the screen itself was an animated meter
+> the engine ticked. So "improve by not blocking" is about the load thread; the *visual*
+> we're matching, not improving.
+
+### 6.1 The loading screen is an animated 3-layer composite (PR 1 finding)
+
+Inspecting `intrface.crf`'s `meters/` folder (via the `debug_loading` scene) showed the
+loading screen is built from three layers, all shipped in `intrface.crf`:
+
+| Layer | Asset | Size | Role |
+| --- | --- | --- | --- |
+| Backdrop | `LOADING.PCX` | 640×480 | frame + empty bracket |
+| Rotating disc | `meters/LOADA_01..20.PCX` | 272×272 | cycled (~15 fps) → rotation |
+| Progress bar | `meters/PROGRESS.PCX` | 246×20 | "% Transfer Completed", clipped 0→1 |
+
+Plus support files: `loading.str` (status strings — `"Accessing..."`, `"Synchronizing..."`,
+`"Hit 'ESC' again to abort..."`) and `loadingr.BIN` (24 bytes — the original anchor/layout
+coords for the overlays).
+
+`LoadingScene` (#313) renders all three: rotation driven by the frame clock (always
+animates), bar fill driven by `progress`. The `debug_loading` scene sweeps `progress`
+0→1 so the whole thing animates with no real load.
+
+**Polish backlog (deferred — the screen is functional):**
+- **Exact placement.** Disc/bar positions are eyeballed constants in `loading.rs`; decode
+  `loadingr.BIN` for the original pixel-perfect anchors.
+- **Status text.** Draw the `loading.str` string (`"Accessing..."`) using `saveload.fon`
+  (the original loading font), instead of leaving the bracket text static.
+- **Bar/disc blend.** Verify the `PROGRESS.PCX` fill blends over the baked bracket as the
+  original did (color-key / additive), and that the disc overlay seams cleanly with the
+  backdrop frame across all 20 frames.
+- **Demo loop.** The demo sweep snaps 1→0; fine for inspection, but consider a hold-at-100%
+  or ease for a nicer debug view.
