@@ -1484,7 +1484,9 @@ pub trait Property: fmt::Debug + Send + Sync {
     fn initialize(&self, world: &mut World, entity: EntityId);
 }
 
-pub trait PropertyDefinition<R: io::Read + io::Seek> {
+// `Send + Sync` so the shared `GlobalContext` (which holds these definition objects)
+// can be borrowed by the background level-parse thread (projects/loading-screen.md, PR S3).
+pub trait PropertyDefinition<R: io::Read + io::Seek>: Send + Sync {
     fn name(&self) -> String;
 
     fn read(&self, reader: &mut R, prop_len: u32) -> Box<dyn Property>;
@@ -1499,7 +1501,7 @@ pub trait PropertyDefinition<R: io::Read + io::Seek> {
     );
 }
 
-pub trait LinkDefinition {
+pub trait LinkDefinition: Send + Sync {
     fn name(&self) -> String;
 
     fn convert(&self, link: ToTemplateLinkInfo) -> ToTemplateLink;
@@ -1510,7 +1512,7 @@ struct LinkDefinitionStruct {
     converter: Converter<ToTemplateLinkInfo, Link>,
 }
 
-pub trait LinkDefinitionWithData {
+pub trait LinkDefinitionWithData: Send + Sync {
     fn link_chunk_name(&self) -> String;
     fn link_data_chunk_name(&self) -> String;
 
