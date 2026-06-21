@@ -1477,7 +1477,10 @@ where
     }
 }
 
-pub trait Property: fmt::Debug {
+// `Send + Sync` is required so the level parse (which builds `Vec<Arc<Box<dyn Property>>>`)
+// can run on a background thread (projects/loading-screen.md, PR S2). This is satisfied
+// for free: both blanket impls below already require `C: Send + Sync`.
+pub trait Property: fmt::Debug + Send + Sync {
     fn initialize(&self, world: &mut World, entity: EntityId);
 }
 

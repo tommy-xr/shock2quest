@@ -86,6 +86,15 @@ pub struct SystemShock2Level {
     pub path_database: Option<PathDatabase>,
 }
 
+// Capstone for the loading-screen "foundation track" (projects/loading-screen.md, PR
+// S1+S2): the full level-parse output is now `Send + Sync`, so it can cross to a worker
+// thread for background loading (PR 3). This guard fails to compile if any future field
+// reintroduces a non-thread-safe type (e.g. an `Rc`).
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<SystemShock2Level>();
+};
+
 impl SystemShock2Level {
     pub fn get_cell_idx_from_position(&self, position: Vector3<f32>) -> Option<u32> {
         self.bsp_tree.cell_from_position(position)

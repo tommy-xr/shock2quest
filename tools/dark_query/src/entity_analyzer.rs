@@ -6,7 +6,7 @@ use dark::{
 };
 use glob::Pattern;
 use shipyard::{Get, View, World};
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub enum EntityType {
@@ -66,7 +66,7 @@ pub struct FilterCriteria {
 }
 
 /// Extract name properties by creating a temporary world and reading components
-pub fn extract_names_public(properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
+pub fn extract_names_public(properties: &[Arc<Box<dyn Property>>]) -> EntityNames {
     extract_names(properties)
 }
 
@@ -132,7 +132,7 @@ pub fn extract_template_id_with_inheritance(
     ancestors.last().copied()
 }
 
-fn extract_names(properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
+fn extract_names(properties: &[Arc<Box<dyn Property>>]) -> EntityNames {
     let mut world = World::new();
     let entity = world.add_entity(());
 
@@ -172,7 +172,7 @@ fn extract_names(properties: &[Rc<Box<dyn Property>>]) -> EntityNames {
     }
 }
 
-fn extract_template_id(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
+fn extract_template_id(properties: &[Arc<Box<dyn Property>>]) -> Option<i32> {
     let mut world = World::new();
     let entity = world.add_entity(());
 
@@ -294,7 +294,7 @@ fn pattern_matches_simple_glob(text: &str, pattern: &str) -> bool {
 }
 
 /// Get property type names from the property list
-fn get_property_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
+fn get_property_names(properties: &[Arc<Box<dyn Property>>]) -> Vec<String> {
     properties
         .iter()
         .map(|prop| {
@@ -419,7 +419,7 @@ fn get_link_types_with_inheritance(
 }
 
 /// Extract script names from properties
-fn get_script_names(properties: &[Rc<Box<dyn Property>>]) -> Vec<String> {
+fn get_script_names(properties: &[Arc<Box<dyn Property>>]) -> Vec<String> {
     // Create a temporary world to extract script information
     let mut world = World::new();
     let entity = world.add_entity(());
