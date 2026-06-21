@@ -106,6 +106,10 @@ pub struct PlayerInfo {
     pub inventory_entity_id: EntityId,
 }
 
+/// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
+/// used to pose the flat melee viewmodel in its ready stance.
+const MELEE_IDLE_CLIP: &str = "ph212203";
+
 /// Debug options accessible from scripts via UniqueView
 #[derive(Unique, Clone, Default)]
 pub struct DebugOptions {
@@ -1915,28 +1919,39 @@ impl MissionCore {
                 // so EVERY weapon gets its proper FP model, not just those listed
                 // in the VR hand-model table. Other items fall back to the
                 // entity's current model.
-                let fp_model_name = self
+                let gun_model = self
                     .world
                     .borrow::<View<PropPlayerGun>>()
                     .ok()
-                    .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()))
-                    .or_else(|| {
-                        self.world
-                            .borrow::<View<PropLimbModel>>()
-                            .ok()
-                            .and_then(|v| v.get(weapon).ok().map(|m| m.0.clone()))
-                    });
+                    .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()));
+                let limb_model = self
+                    .world
+                    .borrow::<View<PropLimbModel>>()
+                    .ok()
+                    .and_then(|v| v.get(weapon).ok().map(|m| m.0.clone()));
+                let is_melee = limb_model.is_some();
+                let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
                     let scene_objs = if let Some(name) = fp_model_name {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
-                        // Pose at the rest/bind pose: FP meshes are articulated
-                        // (hand + arm + weapon as skeleton sub-objects), so the
-                        // unskinned `to_scene_objects` leaves the parts unposed
-                        // (the wrench looked mid-swing). An empty AnimationPlayer
-                        // applies the bind transforms; a no-op for static meshes.
-                        model
-                            .as_ref()
-                            .to_animated_scene_objects(&AnimationPlayer::empty())
+                        // FP meshes are articulated (hand + arm + weapon as
+                        // skeleton sub-objects), so the unskinned `to_scene_objects`
+                        // leaves them unposed (the wrench looked mid-swing). Pose
+                        // them with an AnimationPlayer: melee weapons hold the
+                        // player-melee idle stance (motiondb ActorType 1); guns use
+                        // the empty/bind pose. No-op for static meshes.
+                        let player = if is_melee {
+                            asset_cache
+                                .get_opt(
+                                    &ANIMATION_CLIP_IMPORTER,
+                                    &format!("{MELEE_IDLE_CLIP}_.mc"),
+                                )
+                                .map(AnimationPlayer::from_animation)
+                                .unwrap_or_else(AnimationPlayer::empty)
+                        } else {
+                            AnimationPlayer::empty()
+                        };
+                        model.as_ref().to_animated_scene_objects(&player)
                     } else if let Some(model) = self.id_to_model.get(&weapon) {
                         match self.id_to_animation_player.get(&weapon) {
                             Some(player) => model.to_animated_scene_objects(player),
