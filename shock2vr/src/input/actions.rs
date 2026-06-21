@@ -28,6 +28,11 @@ pub enum InputAction {
 
     /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)
     DebugHitboxCyclePose,
+
+    /// Wield the next player weapon (debug: spawn-and-wield, dropping the
+    /// previous). Cycles the full SS2 weapon roster for flat-mode aim/viewmodel
+    /// testing.
+    CycleWeapon,
 }
 
 impl InputAction {
@@ -41,6 +46,7 @@ impl InputAction {
             InputAction::SpawnDebugItem,
             InputAction::MoveInventory,
             InputAction::DebugHitboxCyclePose,
+            InputAction::CycleWeapon,
         ]
     }
 
@@ -52,6 +58,7 @@ impl InputAction {
             InputAction::SpawnDebugItem => "SpawnDebugItem",
             InputAction::MoveInventory => "MoveInventory",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
+            InputAction::CycleWeapon => "CycleWeapon",
         }
     }
 }

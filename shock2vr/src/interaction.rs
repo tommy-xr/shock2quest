@@ -8,7 +8,7 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
-use cgmath::{InnerSpace, Quaternion, Vector3, Vector4};
+use cgmath::{InnerSpace, Point3, Quaternion, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, light::SpotLight},
@@ -92,6 +92,12 @@ pub trait PlayerInteraction {
 
     fn is_wielding(&self) -> bool {
         false
+    }
+
+    /// The flatscreen camera/crosshair fire ray (origin, forward), if this
+    /// controller drives a crosshair. `None` for VR (which aims by hand pose).
+    fn flat_aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
+        None
     }
 }
 
@@ -294,5 +300,9 @@ impl PlayerInteraction for FlatInteraction {
 
     fn is_wielding(&self) -> bool {
         self.controller.is_wielding()
+    }
+
+    fn flat_aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
+        self.controller.aim_ray()
     }
 }

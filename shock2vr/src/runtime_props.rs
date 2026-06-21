@@ -7,7 +7,7 @@
  * - They are not part of SS2 / Dark - just convenience properties for implementing the game.
  * - They are not serialized / deserialized
  */
-use cgmath::Matrix4;
+use cgmath::{Matrix4, Point3, Vector3};
 use dark::ss2_bin_obj_loader::Vhot;
 use shipyard::Component;
 
@@ -38,3 +38,14 @@ pub struct RuntimePropDoNotSerialize;
 // RuntimePropProxyEntity - pointer to the parent entity (for example, hitboxes use this to point to the parent entity)
 #[derive(Component)]
 pub struct RuntimePropProxyEntity(pub shipyard::EntityId);
+
+// RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
+// set each frame on the player's wielded weapon. When present, weapon firing
+// spawns projectiles from `origin` along `forward` (camera-origin aim) instead
+// of the weapon's barrel transform, so shots track the crosshair regardless of
+// the viewmodel's framing. Absent on AI/VR weapons, leaving their aim unchanged.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropFlatAim {
+    pub origin: Point3<f32>,
+    pub forward: Vector3<f32>,
+}

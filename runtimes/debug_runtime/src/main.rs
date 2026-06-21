@@ -140,13 +140,28 @@ struct Args {
 /// simulation time (60 Hz, matching the game's target frame rate).
 const FIXED_STEP_DT: f32 = 1.0 / 60.0;
 
-fn default_camera_head_rotation() -> Quaternion<f32> {
+/// Head rotation for a yaw/pitch (degrees), matching the desktop runtime's
+/// camera convention (`camera_forward` / `camera_rotation`): at `yaw=pitch=0`
+/// the forward is `(1,0,0)` fed through `look_at_rh`, i.e. looking toward `-X`.
+/// The SAME rotation drives both the render camera and `InputContext.head`, so
+/// the flat viewmodel (placed relative to the head) and the rendered view always
+/// agree - otherwise the viewmodel renders off-axis as a giant side-on slab.
+fn head_rotation_from_yaw_pitch(yaw_deg: f32, pitch_deg: f32) -> Quaternion<f32> {
     use cgmath::{Decomposed, Rotation, Transform, point3};
-    let forward = point3(1.0, 0.0, 0.0);
+    let (yaw, pitch) = (yaw_deg.to_radians(), pitch_deg.to_radians());
+    let forward = point3(
+        yaw.cos() * pitch.cos(),
+        pitch.sin(),
+        yaw.sin() * pitch.cos(),
+    );
     let up = vec3(0.0, 1.0, 0.0);
     let decomposed: Decomposed<Vector3<f32>, Quaternion<f32>> =
         Transform::look_at_rh(forward, point3(0.0, 0.0, 0.0), up);
     decomposed.rot.invert()
+}
+
+fn default_camera_head_rotation() -> Quaternion<f32> {
+    head_rotation_from_yaw_pitch(0.0, 0.0)
 }
 
 /// Parse mission string (supports mission:spawn_location format)
@@ -252,6 +267,11 @@ async fn start_http_server(
     // Bind to localhost only for security
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     info!("Debug runtime listening on http://{}", addr);
+    info!(
+        "camera eye height (standing): {} SS2 units = {} world units (above pawn) - shared with desktop via PLAYER_EYE_HEIGHT",
+        shock2vr::PLAYER_EYE_HEIGHT,
+        shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR
+    );
 
     // Log available endpoints
     info!("Available endpoints:");
@@ -388,6 +408,16 @@ fn run_game_blocking(
     let mut target_step_time: Option<f32> = None;
     let mut action_state = InputActionState::new();
 
+    // Persistent input state, patched over HTTP via `/v1/control/input` and fed
+    // to `game.update` each frame. Unlike discrete actions (consumed once),
+    // these are level-held values (trigger held down, head aimed somewhere), so
+    // they must persist across frames rather than be rebuilt to zero each frame.
+    // The head starts at the desktop default view; the SAME head rotation also
+    // drives the render camera (below), so the flat viewmodel stays aligned with
+    // what is rendered.
+    let mut current_input = InputContext::default();
+    current_input.head.rotation = default_camera_head_rotation();
+
     // Deferred replies so HTTP commands observe a complete, post-render frame:
     // - `Step` replies only after all requested frames have actually run, so
     //   `/v1/step` blocks until stepping is done (otherwise screenshots/queries
@@ -423,30 +453,6 @@ fn run_game_blocking(
                 _ => {}
             }
         }
-
-        // Create minimal input context (no actual input for now)
-        let input_context = InputContext {
-            head: shock2vr::input_context::Head {
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            },
-            left_hand: shock2vr::input_context::Hand {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                thumbstick: vec2(0.0, 0.0),
-                trigger_value: 0.0,
-                squeeze_value: 0.0,
-                a_value: 0.0,
-            },
-            right_hand: shock2vr::input_context::Hand {
-                position: vec3(0.0, 0.0, 0.0),
-                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                thumbstick: vec2(0.0, 0.0),
-                trigger_value: 0.0,
-                squeeze_value: 0.0,
-                a_value: 0.0,
-            },
-            pointer: None,
-        };
 
         let game_time = Time {
             elapsed: Duration::from_secs_f32(delta_time),
@@ -517,6 +523,7 @@ fn run_game_blocking(
                         &game_time,
                         frame_counter,
                         &mut action_state,
+                        &mut current_input,
                     );
                 }
             }
@@ -541,7 +548,7 @@ fn run_game_blocking(
             };
             profile!(
                 "game.update",
-                game.update(&game_time, &input_context, &mut action_state)
+                game.update(&game_time, &current_input, &mut action_state)
             );
 
             if step_requested {
@@ -614,7 +621,7 @@ fn run_game_blocking(
             // Still call update with zero time to maintain state consistency
             profile!(
                 "game.update",
-                game.update(&zero_time, &input_context, &mut action_state)
+                game.update(&zero_time, &current_input, &mut action_state)
             );
             accumulated_time // Use accumulated time, not real time
         };
@@ -633,8 +640,13 @@ fn run_game_blocking(
             time: actual_game_time, // Use accumulated game time, not real time
             camera_offset: pawn_offset,
             camera_rotation: pawn_rotation,
-            head_offset: vec3(0.0, 1.6 / SCALE_FACTOR, 0.0), // Default head height
-            head_rotation: default_camera_head_rotation(),   // Match desktop default view (-X)
+            // Standing eye height, shared with desktop and the flat controller
+            // via shock2vr::PLAYER_EYE_HEIGHT, so the debug-runtime camera sits
+            // at the same height as desktop and shots land on the crosshair.
+            head_offset: vec3(0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0),
+            // Same head rotation fed to game.update, so the rendered view and the
+            // flat viewmodel agree. Controllable via `/v1/control/input` head.look.
+            head_rotation: current_input.head.rotation,
             projection_matrix,
             screen_size,
         };
@@ -705,6 +717,7 @@ fn process_command(
     time: &Time,
     frame_counter: u64,
     action_state: &mut InputActionState,
+    current_input: &mut InputContext,
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
@@ -1130,84 +1143,25 @@ fn process_command(
             }
         }
         RuntimeCommand::GetInput(reply) => {
-            // Get current input state from the debug scene
-            if let Some(debuggable) = game.debug_scene() {
-                let input_context = debuggable.get_input_state();
-                let input_state = commands::InputState {
-                    head: commands::InputHead {
-                        rotation: [
-                            input_context.head.rotation.v.x,
-                            input_context.head.rotation.v.y,
-                            input_context.head.rotation.v.z,
-                            input_context.head.rotation.s,
-                        ],
-                    },
-                    left_hand: commands::InputHand {
-                        position: [
-                            input_context.left_hand.position.x,
-                            input_context.left_hand.position.y,
-                            input_context.left_hand.position.z,
-                        ],
-                        rotation: [
-                            input_context.left_hand.rotation.v.x,
-                            input_context.left_hand.rotation.v.y,
-                            input_context.left_hand.rotation.v.z,
-                            input_context.left_hand.rotation.s,
-                        ],
-                        thumbstick: [
-                            input_context.left_hand.thumbstick.x,
-                            input_context.left_hand.thumbstick.y,
-                        ],
-                        trigger_value: input_context.left_hand.trigger_value,
-                        squeeze_value: input_context.left_hand.squeeze_value,
-                        a_value: input_context.left_hand.a_value,
-                    },
-                    right_hand: commands::InputHand {
-                        position: [
-                            input_context.right_hand.position.x,
-                            input_context.right_hand.position.y,
-                            input_context.right_hand.position.z,
-                        ],
-                        rotation: [
-                            input_context.right_hand.rotation.v.x,
-                            input_context.right_hand.rotation.v.y,
-                            input_context.right_hand.rotation.v.z,
-                            input_context.right_hand.rotation.s,
-                        ],
-                        thumbstick: [
-                            input_context.right_hand.thumbstick.x,
-                            input_context.right_hand.thumbstick.y,
-                        ],
-                        trigger_value: input_context.right_hand.trigger_value,
-                        squeeze_value: input_context.right_hand.squeeze_value,
-                        a_value: input_context.right_hand.a_value,
-                    },
-                };
-                if let Err(_) = reply.send(input_state) {
-                    tracing::warn!("Failed to send input state - receiver dropped");
-                }
-            } else {
-                tracing::warn!("Current scene is not a debuggable mission scene");
-                if let Err(_) = reply.send(commands::InputState::default()) {
-                    tracing::warn!("Failed to send default input state - receiver dropped");
-                }
+            // Report the runtime-owned input state (what is fed to game.update).
+            let input_state = input_state_from_context(current_input);
+            if let Err(_) = reply.send(input_state) {
+                tracing::warn!("Failed to send input state - receiver dropped");
             }
         }
         RuntimeCommand::SetInput(patch) => {
-            // Set input channel value on the debug scene
-            if let Some(debuggable) = game.debug_scene_mut() {
-                let success = debuggable.set_input(&patch.channel, patch.value);
-                if success {
-                    tracing::info!(
-                        "Successfully set input channel '{}' via remote control",
-                        patch.channel
-                    );
-                } else {
-                    tracing::warn!("Failed to set input channel '{}'", patch.channel);
-                }
+            // Patch the runtime-owned input state directly; it is fed to
+            // game.update each frame and persists until changed.
+            let success = apply_input_patch(current_input, &patch.channel, &patch.value);
+            if success {
+                tracing::info!(
+                    "Successfully set input channel '{}' via remote control",
+                    patch.channel
+                );
             } else {
                 tracing::warn!(
-                    "Current scene is not a debuggable mission scene - cannot set input"
+                    "Failed to set input channel '{}' (unrecognized channel or bad value)",
+                    patch.channel
                 );
             }
         }
@@ -1215,6 +1169,120 @@ fn process_command(
             // Shutdown is handled in the main loop, this is just for completeness
             tracing::info!("Processing shutdown command");
         }
+    }
+}
+
+/// Build the serializable `InputState` reported by `GET /v1/control/input`.
+fn input_state_from_context(input: &InputContext) -> commands::InputState {
+    fn hand(h: &shock2vr::input_context::Hand) -> commands::InputHand {
+        commands::InputHand {
+            position: [h.position.x, h.position.y, h.position.z],
+            rotation: [h.rotation.v.x, h.rotation.v.y, h.rotation.v.z, h.rotation.s],
+            thumbstick: [h.thumbstick.x, h.thumbstick.y],
+            trigger_value: h.trigger_value,
+            squeeze_value: h.squeeze_value,
+            a_value: h.a_value,
+        }
+    }
+    commands::InputState {
+        head: commands::InputHead {
+            rotation: [
+                input.head.rotation.v.x,
+                input.head.rotation.v.y,
+                input.head.rotation.v.z,
+                input.head.rotation.s,
+            ],
+        },
+        left_hand: hand(&input.left_hand),
+        right_hand: hand(&input.right_hand),
+    }
+}
+
+/// Patch a single channel of the runtime-owned input state, returning false for
+/// an unrecognized channel or a value of the wrong shape. These persist across
+/// frames (a held trigger, a fixed aim), unlike the edge-triggered actions of
+/// `/v1/input/action`.
+///
+/// Recognized channels:
+/// - `head.rotation`                : `[x, y, z, w]` quaternion
+/// - `head.look`                    : `[yaw_deg, pitch_deg]` convenience (forward = -Z)
+/// - `{left,right}_hand.trigger`    : number in [0, 1] (alias `trigger_value`)
+/// - `{left,right}_hand.squeeze`    : number in [0, 1] (alias `squeeze_value`)
+/// - `{left,right}_hand.a`          : number in [0, 1] (alias `a_value`)
+/// - `{left,right}_hand.thumbstick` : `[x, y]`
+fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> bool {
+    use cgmath::Vector2;
+
+    fn parse_f32(v: &Value) -> Option<f32> {
+        v.as_f64().map(|f| f as f32)
+    }
+    fn parse_arr(v: &Value, n: usize) -> Option<Vec<f32>> {
+        let a = v.as_array()?;
+        if a.len() != n {
+            return None;
+        }
+        a.iter().map(parse_f32).collect()
+    }
+
+    // Hand channels: "<left|right>_hand.<field>"
+    if let Some((side, field)) = channel.split_once("_hand.") {
+        let hand = match side {
+            "left" => &mut input.left_hand,
+            "right" => &mut input.right_hand,
+            _ => return false,
+        };
+        return match field {
+            "trigger" | "trigger_value" => match parse_f32(value) {
+                Some(v) => {
+                    hand.trigger_value = v;
+                    true
+                }
+                None => false,
+            },
+            "squeeze" | "squeeze_value" => match parse_f32(value) {
+                Some(v) => {
+                    hand.squeeze_value = v;
+                    true
+                }
+                None => false,
+            },
+            "a" | "a_value" => match parse_f32(value) {
+                Some(v) => {
+                    hand.a_value = v;
+                    true
+                }
+                None => false,
+            },
+            "thumbstick" => match parse_arr(value, 2) {
+                Some(a) => {
+                    hand.thumbstick = Vector2::new(a[0], a[1]);
+                    true
+                }
+                None => false,
+            },
+            _ => false,
+        };
+    }
+
+    match channel {
+        "head.rotation" => match parse_arr(value, 4) {
+            Some(q) => {
+                input.head.rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
+                true
+            }
+            None => false,
+        },
+        // Desktop camera convention (yaw=pitch=0 looks toward -X); drives both
+        // the render camera and the viewmodel. Convenient for pointing the
+        // camera without hand-authoring a quaternion.
+        "head.look" => match parse_arr(value, 2) {
+            Some(yp) => {
+                input.head.rotation = head_rotation_from_yaw_pitch(yp[0], yp[1]);
+                true
+            }
+            None => false,
+        },
+        _ => false,
     }
 }
 

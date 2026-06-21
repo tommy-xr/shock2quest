@@ -246,6 +246,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_hud`              | Test HUD rendering                           |
    | `debug_map`              | Test map/automap rendering                   |
    | `debug_minimal`          | Bare minimum scene for basic testing         |
+   | `debug_weapons`          | Flat weapon viewmodel + aim (wall ahead; cycle weapons with `CycleWeapon`) |
 
    ```bash
    # Use with debug runtime for programmatic control

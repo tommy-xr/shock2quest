@@ -5,7 +5,7 @@
 
 use cgmath::{Quaternion, Vector2, Vector3, Zero};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InputContext {
     // Information about the head position
     pub head: Head,
@@ -41,7 +41,7 @@ pub struct Pointer2D {
     pub pressed: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Head {
     pub rotation: Quaternion<f32>,
 }
@@ -58,7 +58,7 @@ impl Head {
 }
 
 // Context for an individual hand (motion controller)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Hand {
     pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
