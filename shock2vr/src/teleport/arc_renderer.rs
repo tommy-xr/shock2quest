@@ -83,9 +83,10 @@ impl ArcRenderer {
                 let emissivity = (color.x.max(color.y).max(color.z) * 1.5).min(1.0); // Boost emissivity for glow effect
                 let material = BillboardMaterial::create(
                     particle_texture,
-                    emissivity,  // Enhanced glow
-                    1.0 - alpha, // transparency (1.0 = fully transparent)
-                    0.06,        // Slightly larger particle size (6cm diameter)
+                    vec3(1.0, 1.0, 1.0), // texture is already color-tinted; no extra tint
+                    emissivity,          // Enhanced glow
+                    1.0 - alpha,         // transparency (1.0 = fully transparent)
+                    0.06,                // Slightly larger particle size (6cm diameter)
                 );
 
                 // Create scene object for this particle
