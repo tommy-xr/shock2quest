@@ -68,6 +68,9 @@ pub struct ParticleSystem {
     launch_lifetime: (f32, f32),
     root_transform: Matrix4<f32>,
     particle_size: (f32, f32),
+    /// Tint applied to the sprite (resolved from the group's palette color
+    /// index upstream). Defaults to white = untinted full texture.
+    color: Vector3<f32>,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -119,7 +122,12 @@ impl ParticleSystem {
             particles: vec![],
             particle_size: (0.08, 0.08),
             root_transform: Matrix4::identity(),
+            color: vec3(1.0, 1.0, 1.0),
         }
+    }
+
+    pub fn with_color(self, color: Vector3<f32>) -> ParticleSystem {
+        ParticleSystem { color, ..self }
     }
 
     pub fn with_lifetime(self, min: f32, max: f32) -> ParticleSystem {
@@ -222,6 +230,10 @@ impl ParticleSystem {
                 //    let mat = BillboardMaterial::create(some_texture, 1.0, 0.0);
                 let mat = BillboardMaterial::create(
                     particle_texture.clone(),
+                    self.color,
+                    // Emissive so particles self-glow (visible in dark scenes); the
+                    // glow is tinted by `color` in the shader, so it stays the
+                    // palette color rather than washing to white.
                     1.0,
                     1.0 - (self.particle_alpha * alpha),
                     p.scale,

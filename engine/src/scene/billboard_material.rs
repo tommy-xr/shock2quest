@@ -9,6 +9,7 @@ use crate::shader_program::ShaderProgram;
 use crate::texture::TextureTrait;
 use c_string::*;
 use cgmath::Matrix4;
+use cgmath::Vector3;
 use cgmath::prelude::*;
 
 use once_cell::sync::OnceCell;
@@ -47,16 +48,13 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float transparency;
 
         void main() {
-
-            // TODO: Revert
-            //fragColor = vec4(texCoord.xy, 0.0, 1.0);
             vec4 texColor = texture(texture1, texCoord);
             if (texColor.a < 0.1) discard;
-            fragColor = texColor * vec4(0.5, 0.5, 0.5, 1.0);
-            fragColor.rgb += texColor.rgb * emissivity;
+            fragColor = texColor * vec4(inColor, 1.0);
+            // Emissive glow is tinted by inColor so it matches the particle color
+            // (callers that want an untinted sprite pass inColor = white).
+            fragColor.rgb += texColor.rgb * inColor * emissivity;
             fragColor.a *= 1.0 - transparency;
-            //fragColor = vec4(vertexColor.rgb, 1.0);
-
         }
 "#;
 
@@ -64,6 +62,7 @@ struct Uniforms {
     world_loc: i32,
     view_loc: i32,
     projection_loc: i32,
+    in_color_loc: i32,
     emissivity_loc: i32,
     transparency_loc: i32,
     scale_loc: i32,
@@ -77,6 +76,7 @@ where
 {
     has_initialized: bool,
     diffuse_texture: T,
+    color: Vector3<f32>,
     emissivity: f32,
     transparency: f32,
     scale: f32,
@@ -88,6 +88,7 @@ where
 {
     pub fn create(
         diffuse_texture: T,
+        color: Vector3<f32>,
         emissivity: f32,
         transparency: f32,
         scale: f32,
@@ -95,6 +96,7 @@ where
         Box::new(BillboardMaterial {
             diffuse_texture,
             has_initialized: false,
+            color,
             emissivity,
             transparency,
             scale,
@@ -121,6 +123,12 @@ where
             gl::UniformMatrix4fv(uniforms.world_loc, 1, gl::FALSE, world_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.view_loc, 1, gl::FALSE, view_matrix.as_ptr());
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
+            gl::Uniform3f(
+                uniforms.in_color_loc,
+                self.color.x,
+                self.color.y,
+                self.color.z,
+            );
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
             gl::Uniform1f(uniforms.scale_loc, self.scale);
@@ -167,6 +175,7 @@ where
                 let uniforms = Uniforms {
                     world_loc: gl::GetUniformLocation(shader.gl_id, c_str!("world").as_ptr()),
                     view_loc: gl::GetUniformLocation(shader.gl_id, c_str!("view").as_ptr()),
+                    in_color_loc: gl::GetUniformLocation(shader.gl_id, c_str!("inColor").as_ptr()),
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
