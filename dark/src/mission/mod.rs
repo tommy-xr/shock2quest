@@ -31,11 +31,10 @@ use texture_list::*;
 use crate::properties::LinkDefinition;
 use crate::ss2_common::read_i32;
 
-use crate::importers::TEXTURE_IMPORTER;
 use crate::ss2_common::read_u32;
 use cgmath::Vector4;
 use cgmath::vec4;
-use engine::assets::asset_cache::AssetCache;
+use engine::assets::asset_paths::AbstractAssetPath;
 use engine::scene::VertexPositionTextureLightmapAtlasNormal;
 pub use scene_builder::to_scene;
 
@@ -131,8 +130,13 @@ pub struct UVCalculationInfo {
     lrs_y: f32,
 }
 
+// `read` takes only the `Send + Sync` asset-path layer + base path, NOT `&mut
+// AssetCache`. With no `AssetCache` in scope it cannot touch the GPU — the level parse
+// is GL-free *by construction*, so it can run on a worker thread (the background-load
+// goal, projects/loading-screen.md).
 pub fn read<T: io::Read + io::Seek>(
-    asset_cache: &mut AssetCache,
+    asset_paths: &dyn AbstractAssetPath,
+    base_path: &str,
     reader: &mut T,
     gamesys: &Gamesys,
     links: &Vec<Box<dyn LinkDefinition>>,
@@ -217,7 +221,7 @@ pub fn read<T: io::Read + io::Seek>(
         obj_texture_families,
         reader,
     );
-    let all_geometry = create_geometry(asset_cache, &cells, &textures.0);
+    let all_geometry = create_geometry(asset_paths, base_path, &cells, &textures.0);
 
     let _render_params = RenderParams::read(&table_of_contents, reader);
     let room_database = RoomDatabase::read(&table_of_contents, reader);
@@ -290,7 +294,8 @@ fn read_obj_map<T: io::Read + io::Seek>(
 }
 
 fn create_geometry(
-    asset_cache: &mut AssetCache,
+    asset_paths: &dyn AbstractAssetPath,
+    base_path: &str,
     cells: &Vec<Cell>,
     textures: &Vec<SystemShock2Texture>,
 ) -> Vec<SystemShock2Geometry> {
@@ -330,7 +335,7 @@ fn create_geometry(
             let sh_v = render_poly.v / 4096.0;
 
             let tex_info = &textures[render_poly.texture_num as usize];
-            let texture_dim = texture_dimensions(asset_cache, tex_info);
+            let texture_dim = texture_dimensions(asset_paths, base_path, tex_info);
 
             let rs_x = (texture_dim.width as f32) / 64.0;
             let rs_y = (texture_dim.height as f32) / 64.0;
@@ -486,23 +491,45 @@ fn vert(
     }
 }
 
-fn texture_dimensions(asset_cache: &mut AssetCache, tex_info: &SystemShock2Texture) -> TextureSize {
+// GL-free: dimensions come from the PCX header via the `AbstractAssetPath` layer
+// (Send + Sync), NOT from `asset_cache.get` (decode + GPU upload). This is what keeps
+// `dark::mission::read` GL-free so it can run on a worker thread. The header read uses
+// the same `pcx::Reader` parse as the decoder, so the dimensions are identical.
+fn texture_dimensions(
+    asset_paths: &dyn AbstractAssetPath,
+    base_path: &str,
+    tex_info: &SystemShock2Texture,
+) -> TextureSize {
     if tex_info.texture_filename == "null" {
-        TextureSize {
+        return TextureSize {
             width: 1,
             height: 1,
-        }
-    } else {
-        let tex_name = format!(
-            "{}/{}.PCX",
-            tex_info.family.to_uppercase(),
-            tex_info.texture_filename
-        );
-        let texture = asset_cache.get(&TEXTURE_IMPORTER, &tex_name);
+        };
+    }
+    // Lowercase to match the case-insensitive asset resolution (zip index is lowercased).
+    let tex_name = format!(
+        "{}/{}.PCX",
+        tex_info.family.to_uppercase(),
+        tex_info.texture_filename
+    )
+    .to_ascii_lowercase();
 
-        TextureSize {
-            width: texture.width(),
-            height: texture.height(),
+    let dims = asset_paths
+        .get_reader(base_path.to_string(), tex_name.clone())
+        .and_then(|r| {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut *r.borrow_mut(), &mut bytes).ok()?;
+            engine::texture_format::read_pcx_dimensions(&bytes)
+        });
+
+    match dims {
+        Some((width, height)) => TextureSize { width, height },
+        None => {
+            tracing::warn!("texture_dimensions: could not read PCX header for {tex_name}");
+            TextureSize {
+                width: 1,
+                height: 1,
+            }
         }
     }
 }
