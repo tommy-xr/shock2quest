@@ -34,8 +34,9 @@ use dark::{
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
         PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
         PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
-        PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
+        PropPhysState, PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts,
+        PropTeleported, PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags,
+        WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -73,8 +74,8 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform,
-        RuntimePropVhots,
+        RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -187,6 +188,10 @@ pub struct MissionCore {
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
+
+    /// Sequential index for `Effect::DebugCycleWeapon` so each trigger wields the
+    /// next weapon in `DEBUG_WEAPONS` (flat-mode aim/viewmodel testing).
+    pub debug_weapon_index: usize,
 }
 
 pub struct GlobalContext {
@@ -440,6 +445,7 @@ impl MissionCore {
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
+            debug_weapon_index: 0,
         }
     }
 
@@ -602,6 +608,18 @@ impl MissionCore {
             head_rotation: input_context.head.rotation,
         });
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
+
+        // Tag the wielded weapon with the flat camera/crosshair fire ray so its
+        // firing scripts spawn projectiles along the crosshair (camera-origin
+        // aim) rather than the offset barrel. Only the player's wielded weapon
+        // gets this; AI/VR weapons are untouched.
+        if let (Some((origin, forward)), Some(weapon)) = (
+            self.interaction.flat_aim_ray(),
+            self.interaction.viewmodel_entity(),
+        ) {
+            self.world
+                .add_component(weapon, RuntimePropFlatAim { origin, forward });
+        }
 
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
@@ -1725,6 +1743,48 @@ impl MissionCore {
                         self.process_virtual_hand_effects(asset_cache, msgs);
                     }
                 }
+                Effect::DebugCycleWeapon { head_rotation } => {
+                    // The SS2 player-weapon roster (templates with PropPlayerGun),
+                    // cycled for flat-mode aim/viewmodel testing.
+                    const DEBUG_WEAPONS: &[i32] = &[
+                        -17, // Pistol
+                        -18, // Assault Rifle
+                        -19, // Shotgun
+                        -22, // Laser Pistol
+                        -23, // EMP Rifle
+                        -21, // Gren Launcher
+                        -25, // Stasis Field Generator
+                        -26, // Fusion Cannon
+                        -27, // Worm Launcher
+                        -29, // Viral Prolif
+                        -247, // Psi Amp
+                             // NB: Hybrid Shotgun (-4073) is omitted - it has an
+                             // unimplemented `trashedshotgun` script that panics on
+                             // creation (scripts/mod.rs). It is an enemy weapon
+                             // variant, not part of the player arsenal.
+                    ];
+                    let template_id = DEBUG_WEAPONS[self.debug_weapon_index % DEBUG_WEAPONS.len()];
+                    self.debug_weapon_index = self.debug_weapon_index.wrapping_add(1);
+
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation * head_rotation)
+                    };
+                    let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -10.0 / SCALE_FACTOR);
+                    let info = self.create_entity_with_position(
+                        asset_cache,
+                        template_id,
+                        pos + forward,
+                        rot,
+                        Matrix4::identity(),
+                        CreateEntityOptions::default(),
+                    );
+                    // Force-wield (unlike SpawnDebugItem): `wield` drops the
+                    // previously held weapon back into the world, so each cycle
+                    // swaps the viewmodel. No-op in VR (wield returns nothing).
+                    let msgs = self.interaction.wield(info.entity_id);
+                    self.process_virtual_hand_effects(asset_cache, msgs);
+                }
                 Effect::PositionInventoryRelativeToPlayer { head_rotation } => {
                     let (pos, rot) = {
                         let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -1832,21 +1892,39 @@ impl MissionCore {
             // last; the depth buffer is cleared before its first object so it
             // renders over geometry while still depth-testing within itself.
             if let Some(weapon) = self.interaction.viewmodel_entity() {
-                if let Some(model) = self.id_to_model.get(&weapon) {
+                let maybe_xform = {
                     let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
-                    if let Ok(xform) = v_transform.get(weapon).map(|p| p.0) {
-                        let scene_objs = match self.id_to_animation_player.get(&weapon) {
+                    v_transform.get(weapon).map(|p| p.0).ok()
+                };
+                // Flat first-person model: prefer the weapon's native
+                // PropPlayerGun.hand_model (the SS2 FP mesh), loaded directly so
+                // EVERY gun gets its proper first-person model - not just those
+                // listed in the VR hand-model table. Non-guns fall back to the
+                // entity's current model.
+                let hand_model_name = self
+                    .world
+                    .borrow::<View<PropPlayerGun>>()
+                    .ok()
+                    .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()));
+                if let Some(xform) = maybe_xform {
+                    let scene_objs = if let Some(name) = hand_model_name {
+                        let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
+                        model.as_ref().to_scene_objects().clone()
+                    } else if let Some(model) = self.id_to_model.get(&weapon) {
+                        match self.id_to_animation_player.get(&weapon) {
                             Some(player) => model.to_animated_scene_objects(player),
                             None => model.to_scene_objects().clone(),
-                        };
-                        for (i, obj) in scene_objs.into_iter().enumerate() {
-                            let mut o = obj.clone();
-                            o.set_transform(xform);
-                            if i == 0 {
-                                o.set_clear_depth(true);
-                            }
-                            ret.push(o);
                         }
+                    } else {
+                        Vec::new()
+                    };
+                    for (i, obj) in scene_objs.into_iter().enumerate() {
+                        let mut o = obj.clone();
+                        o.set_transform(xform);
+                        if i == 0 {
+                            o.set_clear_depth(true);
+                        }
+                        ret.push(o);
                     }
                 }
             }

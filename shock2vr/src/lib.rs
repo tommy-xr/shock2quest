@@ -33,6 +33,15 @@ use scenes::{SceneInitResult, create_initial_scene, load_mission_from_save_data}
 pub use mission::SpawnLocation;
 pub use mission::visibility_engine::CullingInfo;
 
+/// Player eye (camera) height above the body/feet position, in SS2 units
+/// (before the `dark::SCALE_FACTOR` world-scale divide). Shared by every
+/// runtime's render camera (`head_offset`) AND the flat controller's
+/// shot/viewmodel origin, so the rendered view and where shots come from stay
+/// consistent - if these drift, shots no longer line up with the crosshair and
+/// the debug runtime renders at a different height than desktop. Desktop crouch
+/// lowers the camera separately.
+pub const PLAYER_EYE_HEIGHT: f32 = 4.0;
+
 use std::{
     collections::{HashMap, HashSet},
     fs::{File, OpenOptions},
