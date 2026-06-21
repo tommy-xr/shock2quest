@@ -202,6 +202,14 @@ pub struct GlobalContext {
     pub motiondb: MotionDB,
 }
 
+// [Gate A / PR S3] Background level loading parses on a worker thread that borrows the
+// shared `GlobalContext` (gamesys + property/link definitions), so it must be
+// `Send + Sync`. This compile-time assertion guards that.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<GlobalContext>();
+};
+
 pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
     pub song_params: SongParams,
