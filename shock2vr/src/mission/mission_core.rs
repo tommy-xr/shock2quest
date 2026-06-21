@@ -74,8 +74,8 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropJointTransforms, RuntimePropTransform,
-        RuntimePropVhots,
+        RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -608,6 +608,18 @@ impl MissionCore {
             head_rotation: input_context.head.rotation,
         });
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
+
+        // Tag the wielded weapon with the flat camera/crosshair fire ray so its
+        // firing scripts spawn projectiles along the crosshair (camera-origin
+        // aim) rather than the offset barrel. Only the player's wielded weapon
+        // gets this; AI/VR weapons are untouched.
+        if let (Some((origin, forward)), Some(weapon)) = (
+            self.interaction.flat_aim_ray(),
+            self.interaction.viewmodel_entity(),
+        ) {
+            self.world
+                .add_component(weapon, RuntimePropFlatAim { origin, forward });
+        }
 
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position

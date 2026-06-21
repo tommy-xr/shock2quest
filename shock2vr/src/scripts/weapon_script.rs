@@ -1,14 +1,25 @@
-use cgmath::{Deg, Matrix4, Quaternion, Rotation, Rotation3, Transform, point3};
-use dark::properties::{GunFlashOptions, Link, ProjectileOptions};
+use cgmath::{
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Quaternion, Rotation, Rotation3, Transform, point3,
+};
+use dark::{
+    SCALE_FACTOR,
+    properties::{GunFlashOptions, Link, ProjectileOptions},
+};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
     physics::PhysicsWorld,
-    runtime_props::{RuntimePropTransform, RuntimePropVhots},
+    runtime_props::{RuntimePropFlatAim, RuntimePropTransform, RuntimePropVhots},
+    util::get_rotation_from_forward_vector,
     vr_config,
 };
+
+/// How far in front of the camera a flat-aimed projectile spawns, so a slow
+/// physics projectile (e.g. a grenade) clears the player's own collider instead
+/// of spawning inside it. World units.
+const FLAT_MUZZLE_CLEARANCE: f32 = SCALE_FACTOR;
 
 use super::{
     Effect, MessagePayload, Script,
@@ -167,6 +178,32 @@ fn create_projectile(
     projectile_template_id: i32,
     _options: &ProjectileOptions,
 ) -> Effect {
+    // Flatscreen camera-origin aim: if the weapon carries a flat fire ray, spawn
+    // the projectile just ahead of the camera travelling straight along the
+    // crosshair, ignoring the offset/rotated barrel transform. This makes both
+    // hitscan bullets and slow physics projectiles (grenades) track the
+    // crosshair. VR/AI weapons have no RuntimePropFlatAim and fall through.
+    {
+        let v_flat_aim = world.borrow::<View<RuntimePropFlatAim>>().unwrap();
+        if let Ok(aim) = v_flat_aim.get(entity_id) {
+            let origin = aim.origin + aim.forward.normalize() * FLAT_MUZZLE_CLEARANCE;
+            // get_rotation_from_forward_vector puts `forward` in the +Z column,
+            // and projectile velocity is root_transform * (0,0,mag) - so the
+            // shot travels along the crosshair ray.
+            let rot: Matrix4<f32> =
+                get_rotation_from_forward_vector(aim.forward.normalize()).into();
+            return Effect::CreateEntity {
+                template_id: projectile_template_id,
+                position: point3(0.0, 0.0, 0.0),
+                orientation: Quaternion::from_angle_y(Deg(90.0)),
+                root_transform: Matrix4::from_translation(origin.to_vec()) * rot,
+                options: CreateEntityOptions {
+                    force_visible: true,
+                },
+            };
+        }
+    }
+
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_vhots = world.borrow::<View<RuntimePropVhots>>().unwrap();
 

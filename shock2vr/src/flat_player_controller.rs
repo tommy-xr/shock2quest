@@ -9,7 +9,7 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Deg, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
+use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
 use shipyard::{EntityId, Get, View, World};
 
 use dark::{SCALE_FACTOR, properties::PropFrobInfo};
@@ -39,6 +39,9 @@ pub struct FlatPlayerController {
     wielded_entity: Option<EntityId>,
     last_fire_pressed: bool,
     last_use_pressed: bool,
+    /// Camera/crosshair fire ray (world space) from the last `update`, so the
+    /// firing path can spawn projectiles along the crosshair (camera-origin aim).
+    last_aim: Option<(Point3<f32>, Vector3<f32>)>,
 }
 
 impl FlatPlayerController {
@@ -47,6 +50,7 @@ impl FlatPlayerController {
             wielded_entity: None,
             last_fire_pressed: false,
             last_use_pressed: false,
+            last_aim: None,
         }
     }
 
@@ -56,6 +60,11 @@ impl FlatPlayerController {
 
     pub fn wielded_entity(&self) -> Option<EntityId> {
         self.wielded_entity
+    }
+
+    /// The camera/crosshair fire ray (origin, forward) from the last `update`.
+    pub fn aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
+        self.last_aim
     }
 
     /// Stop wielding `entity_id` if it was the held weapon (e.g. it was
@@ -107,6 +116,7 @@ impl FlatPlayerController {
         // Crosshair raycast: the frobbable entity under the reticle (resolving
         // hitbox proxies to their parent, and ignoring the weapon we hold).
         let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
+        self.last_aim = Some((point3(camera_pos.x, camera_pos.y, camera_pos.z), forward));
         let highlighted = physics
             .ray_cast(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
