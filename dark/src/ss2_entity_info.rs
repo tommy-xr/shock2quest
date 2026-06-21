@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io::{self, SeekFrom},
-    rc::Rc,
+    sync::Arc,
 };
 
 use shipyard::{EntityId, World};
@@ -32,7 +32,7 @@ pub struct UnparsedLinkData {
 
 #[derive(Debug)]
 pub struct SystemShock2EntityInfo {
-    pub entity_to_properties: HashMap<i32, Vec<Rc<Box<dyn Property>>>>,
+    pub entity_to_properties: HashMap<i32, Vec<Arc<Box<dyn Property>>>>,
     pub template_to_links: HashMap<i32, TemplateLinks>,
     pub unparsed_properties: HashMap<String, Vec<UnparsedProperty>>,
     pub unparsed_links: HashMap<String, Vec<Link>>,
@@ -46,6 +46,14 @@ pub struct SystemShock2EntityInfo {
     // For each template id, store a list of ancestor template ids
     hierarchy: HashMap<i32, Vec<i32>>,
 }
+
+// Background level loading (projects/loading-screen.md, PR S2) parses the level on a
+// worker thread, so the parse output must be `Send + Sync`. This compile-time assertion
+// guards that the entity-info (the second `Rc` blocker) stays thread-safe.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<SystemShock2EntityInfo>();
+};
 
 impl SystemShock2EntityInfo {
     /// Create an empty SystemShock2EntityInfo for debug or testing purposes
@@ -474,7 +482,7 @@ fn read_all_properties<R: io::Read + io::Seek>(
     toc: &ChunkFileTableOfContents,
     properties: &Vec<Box<dyn PropertyDefinition<R>>>,
     ref_reader: &mut R,
-) -> HashMap<i32, Vec<Rc<Box<dyn Property>>>> {
+) -> HashMap<i32, Vec<Arc<Box<dyn Property>>>> {
     let mut ent_to_props = HashMap::new();
     for prop in properties {
         let name = prop.name();
@@ -507,7 +515,7 @@ fn read_all_properties<R: io::Read + io::Seek>(
                     ref_reader.stream_position().unwrap()
                 );
 
-                props.push(Rc::new(prop));
+                props.push(Arc::new(prop));
 
                 ref_reader.seek(SeekFrom::Start(expected_pos)).unwrap();
             }

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    rc::Rc,
+    sync::Arc,
 };
 
 use anyhow::{Result, anyhow, bail};
@@ -391,7 +391,7 @@ impl SpeechAnalyzer {
         None
     }
 
-    fn extract_voice_index_from_properties(properties: &[Rc<Box<dyn Property>>]) -> Option<i32> {
+    fn extract_voice_index_from_properties(properties: &[Arc<Box<dyn Property>>]) -> Option<i32> {
         let mut world = World::new();
         let entity = world.add_entity(());
 

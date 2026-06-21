@@ -456,7 +456,7 @@ fn show_inheritance_tree(
 
 fn show_properties_for_entity(
     _entity_id: i32,
-    properties: &[std::rc::Rc<Box<dyn dark::properties::Property>>],
+    properties: &[std::sync::Arc<Box<dyn dark::properties::Property>>],
     depth: usize,
 ) {
     let indent = "  ".repeat(depth);
