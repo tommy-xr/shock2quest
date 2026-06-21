@@ -109,6 +109,10 @@ pub struct PlayerInfo {
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
 /// used to pose the flat melee viewmodel in its ready stance.
 const MELEE_IDLE_CLIP: &str = "ph212203";
+/// First-person player-melee swing clip (motiondb `+plyrmelee:2 +plyrmeleeswing`),
+/// played once on a melee attack then auto-returns to the idle. The shipped game
+/// always uses the medium-left swing.
+const MELEE_SWING_CLIP: &str = "leftswing";
 
 /// Debug options accessible from scripts via UniqueView
 #[derive(Unique, Clone, Default)]
@@ -196,6 +200,11 @@ pub struct MissionCore {
     /// Sequential index for `Effect::DebugCycleWeapon` so each trigger wields the
     /// next weapon in `DEBUG_WEAPONS` (flat-mode aim/viewmodel testing).
     pub debug_weapon_index: usize,
+
+    /// First-person animation for the flat melee viewmodel: the wielded melee
+    /// entity and its motion player (loops the player-melee idle; a swing is
+    /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
+    flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
 }
 
 pub struct GlobalContext {
@@ -458,6 +467,7 @@ impl MissionCore {
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
+            flat_melee_anim: None,
         }
     }
 
@@ -632,6 +642,9 @@ impl MissionCore {
             self.world
                 .add_component(weapon, RuntimePropFlatAim { origin, forward });
         }
+
+        // Advance the flat melee swing animation (returns to static idle on end).
+        self.update_flat_melee_anim(time.elapsed);
 
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
@@ -1190,6 +1203,10 @@ impl MissionCore {
                             })
                         }
                     }
+                }
+
+                Effect::FlatMeleeSwing { entity_id } => {
+                    self.queue_flat_melee_swing(asset_cache, entity_id);
                 }
 
                 Effect::CreateEntityByTemplateName {
@@ -1833,6 +1850,41 @@ impl MissionCore {
 
         global_effects
     }
+
+    /// Advance the flat melee swing animation. Only an active swing uses the
+    /// persistent player; the idle is the static head-up pose (rendered directly,
+    /// since the looping idle clip carries root motion meant to be cancelled by
+    /// the original engine's camSynch, which we don't implement). When the swing
+    /// completes - or the weapon changes - we drop the player and fall back to
+    /// the static idle.
+    fn update_flat_melee_anim(&mut self, dt: std::time::Duration) {
+        let Some((entity, player)) = self.flat_melee_anim.take() else {
+            return;
+        };
+        if self.interaction.viewmodel_entity() != Some(entity) {
+            return; // weapon changed; leave None -> static idle
+        }
+        let (next, _flags, events, _disp) = AnimationPlayer::update(&player, dt);
+        let completed = events
+            .iter()
+            .any(|e| matches!(e, AnimationEvent::Completed));
+        if !completed {
+            self.flat_melee_anim = Some((entity, next));
+        }
+    }
+
+    /// Start a one-shot swing on the flat melee viewmodel (it plays once, then
+    /// `update_flat_melee_anim` drops it back to the static idle). Driven by
+    /// `Effect::FlatMeleeSwing` on a melee attack.
+    fn queue_flat_melee_swing(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+        if let Some(clip) =
+            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{MELEE_SWING_CLIP}_.mc"))
+        {
+            let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip);
+            self.flat_melee_anim = Some((entity_id, player));
+        }
+    }
+
     pub fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -1937,19 +1989,25 @@ impl MissionCore {
                         // FP meshes are articulated (hand + arm + weapon as
                         // skeleton sub-objects), so the unskinned `to_scene_objects`
                         // leaves them unposed (the wrench looked mid-swing). Pose
-                        // them with an AnimationPlayer: melee weapons hold the
-                        // player-melee idle stance (motiondb ActorType 1); guns use
-                        // the empty/bind pose. No-op for static meshes.
-                        let player = if is_melee {
-                            asset_cache
+                        // them with an AnimationPlayer: a melee weapon mid-swing
+                        // uses its swing player; otherwise melee holds the static
+                        // player-melee idle (frame 0 = head-up ready stance); guns
+                        // use the empty/bind pose. No-op for static meshes.
+                        let swing_player = self
+                            .flat_melee_anim
+                            .as_ref()
+                            .filter(|(e, _)| *e == weapon)
+                            .map(|(_, p)| p.clone());
+                        let player = match (is_melee, swing_player) {
+                            (_, Some(p)) => p,
+                            (true, None) => asset_cache
                                 .get_opt(
                                     &ANIMATION_CLIP_IMPORTER,
                                     &format!("{MELEE_IDLE_CLIP}_.mc"),
                                 )
                                 .map(AnimationPlayer::from_animation)
-                                .unwrap_or_else(AnimationPlayer::empty)
-                        } else {
-                            AnimationPlayer::empty()
+                                .unwrap_or_else(AnimationPlayer::empty),
+                            (false, None) => AnimationPlayer::empty(),
                         };
                         model.as_ref().to_animated_scene_objects(&player)
                     } else if let Some(model) = self.id_to_model.get(&weapon) {

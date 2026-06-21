@@ -86,7 +86,7 @@ impl Script for WeaponScript {
                         .get(entity_id)
                         .copied()
                     {
-                        return melee_swing(world, physics, aim);
+                        return melee_swing(physics, entity_id, aim, world);
                     }
                 }
 
@@ -156,9 +156,17 @@ impl Script for WeaponScript {
     }
 }
 
-/// A flat melee swing: raycast a short distance along the crosshair ray and, if
-/// it hits an entity, deal melee damage (hitbox proxies resolve to their parent).
-fn melee_swing(world: &World, physics: &PhysicsWorld, aim: RuntimePropFlatAim) -> Effect {
+/// A flat melee swing: play the swing animation, and raycast a short distance
+/// along the crosshair ray - a hit deals melee damage (hitbox proxies resolve to
+/// their parent). The swing animation plays whether or not the swing connects.
+fn melee_swing(
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    aim: RuntimePropFlatAim,
+    world: &World,
+) -> Effect {
+    let mut effects = vec![Effect::FlatMeleeSwing { entity_id }];
+
     let hit = physics.ray_cast(
         aim.origin,
         aim.forward.normalize() * MELEE_RANGE,
@@ -172,17 +180,16 @@ fn melee_swing(world: &World, physics: &PhysicsWorld, aim: RuntimePropFlatAim) -
     }) = hit
     {
         let target = resolve_proxy_entity(world, target);
-        Effect::Send {
+        effects.push(Effect::Send {
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
                     amount: MELEE_DAMAGE,
                 },
             },
-        }
-    } else {
-        Effect::NoEffect
+        });
     }
+    Effect::Multiple(effects)
 }
 
 fn create_muzzle_flash(
