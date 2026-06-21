@@ -33,6 +33,7 @@ pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
 pub mod hand_pose;
+pub mod loading;
 pub mod main_menu;
 
 pub use cutscene_player::CutscenePlayerScene;
@@ -48,6 +49,7 @@ pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
+pub use loading::LoadingScene;
 pub use main_menu::MainMenuScene;
 
 pub struct SceneInitResult {
@@ -85,6 +87,15 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("main_menu") {
         return SceneInitResult {
             scene: Box::new(MainMenuScene::new()),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    // Visual-only scene to inspect the loading screen UI (projects/loading-screen.md,
+    // PR 1) independent of any real loading.
+    if options.mission.eq_ignore_ascii_case("debug_loading") {
+        return SceneInitResult {
+            scene: Box::new(LoadingScene::new_demo()),
             mission_save_data: HashMap::new(),
         };
     }
