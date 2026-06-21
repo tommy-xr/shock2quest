@@ -44,21 +44,25 @@ const PROGRESS_TEXTURE: &str = "meters/PROGRESS.PCX";
 /// The 4:3 art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
-/// The rotating center disc (`meters/LOADA_01..20.PCX`, 272x272), centered on the
-/// backdrop's circular frame.
+// Overlay rects are the original pixel-perfect layout from `res/intrface/loadingr.BIN`
+// — a list of LTRB int16 rectangles, one per widget. Decoded:
+//   rect[0] = (184,120)-(456,392)  272x272  rotating disc
+//   rect[1] = (197,394)-(443,414)  246x20   progress bar
+//   rect[2] = (118,69)-(512,97)    394x28   status-text banner (see polish backlog)
+
+/// The rotating center disc (`meters/LOADA_01..20.PCX`, 272x272), top-left at (184,120).
+const DISC_X: f32 = 184.0;
+const DISC_Y: f32 = 120.0;
 const DISC_SIZE: f32 = 272.0;
-const DISC_CENTER_X: f32 = 320.0;
-const DISC_CENTER_Y: f32 = 268.0;
 const LOADA_FRAME_COUNT: u32 = 20;
 /// Rotation speed; 20 frames at 15 fps -> a full cycle every ~1.3s.
 const LOADA_FPS: f32 = 15.0;
 
-/// The "% Transfer Completed" bar fill (`meters/PROGRESS.PCX`, 246x20), in the
-/// backdrop's bracket near the bottom.
+/// The "% Transfer Completed" bar fill (`meters/PROGRESS.PCX`, 246x20), top-left at (197,394).
+const BAR_X: f32 = 197.0;
+const BAR_Y: f32 = 394.0;
 const BAR_W: f32 = 246.0;
 const BAR_H: f32 = 20.0;
-const BAR_X: f32 = (CANVAS_W - BAR_W) / 2.0;
-const BAR_Y: f32 = 398.0;
 
 /// Demo sweep period (seconds) for the `debug_loading` scene: fill 0->1, repeat.
 const DEMO_FILL_SECS: f32 = 4.0;
@@ -187,12 +191,7 @@ impl GameScene for LoadingScene {
         // 2. Rotating center disc (cycled LOADA frames).
         let disc_frame = self.current_disc_frame();
         canvas.image(
-            Rect::new(
-                DISC_CENTER_X - DISC_SIZE / 2.0,
-                DISC_CENTER_Y - DISC_SIZE / 2.0,
-                DISC_SIZE,
-                DISC_SIZE,
-            ),
+            Rect::new(DISC_X, DISC_Y, DISC_SIZE, DISC_SIZE),
             &disc_frame,
         );
 
