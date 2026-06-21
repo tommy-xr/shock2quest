@@ -1,11 +1,11 @@
-use std::{collections::HashMap, io, rc::Rc};
+use std::{collections::HashMap, io, sync::Arc};
 
 use crate::ss2_common::{read_i32, read_single, read_u32};
 
 #[derive(Debug, Clone)]
 pub struct TagDatabase {
     data: Vec<TagDatabaseData>,
-    branches: HashMap<TagDatabaseKey, Rc<TagDatabase>>,
+    branches: HashMap<TagDatabaseKey, Arc<TagDatabase>>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,7 +75,7 @@ impl TagDatabase {
             let key = TagDatabaseKey::read(reader);
             let db = TagDatabase::read(reader);
 
-            branches.insert(key, Rc::new(db));
+            branches.insert(key, Arc::new(db));
         }
 
         TagDatabase { data, branches }
