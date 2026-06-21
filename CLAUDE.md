@@ -303,6 +303,26 @@ cargo dq entities medsci1.mis
    - Each property has a length prefix and binary data
    - Property parsing must exactly match Dark Engine format
 
+### 2D Screen Layouts (`*R.BIN` widget rects)
+
+Each frontend/HUD screen in `res/intrface/` pairs a `*.PCX` backdrop with a `<SCREEN>R.BIN`
+**layout file** giving the pixel-perfect widget positions — so don't eyeball overlay
+coordinates, read them from the BIN. Examples: `LOADING.PCX` + `loadingr.BIN` (loading
+screen: disc, bar, status text), `MAIN.PCX` + `MAINR.BIN` (main menu: 6 buttons + corner),
+`NEWGAME.PCX` + `NEWGAMER.BIN`, `OPTION*.PCX` + `OPTION*R.BIN`, `GAMELODR/GAMESAVR.BIN`.
+
+Format: a header-less list of **LTRB `int16` rectangles** in the 640×480 UI canvas, 8 bytes
+each (`file_size / 8` = widget count), in a screen-defined order. Load via
+`dark::importers::UI_LAYOUT_IMPORTER` → `Vec<MapRect>` (same binary format as the
+map-position files). See `shock2vr/src/scenes/loading.rs` for a usage example, and
+`projects/loading-screen.md` §6.1 for the loading-screen breakdown.
+
+Quick peek (decode the rects directly):
+
+```bash
+python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); v=struct.unpack('<%dh'%(len(d)//2),d); print([(v[i],v[i+1],v[i+2]-v[i],v[i+3]-v[i+1]) for i in range(0,len(v),4)])" /path/to/res/intrface/loadingr.BIN
+```
+
 ### Entity System Reference
 
 See `references/entities.md` for comprehensive documentation of:
