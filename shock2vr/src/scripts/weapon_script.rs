@@ -22,7 +22,7 @@ use crate::{
 const FLAT_MUZZLE_CLEARANCE: f32 = SCALE_FACTOR;
 
 /// Reach of a flat melee swing (raycast along the crosshair ray), in world units.
-const MELEE_RANGE: f32 = 2.5;
+const MELEE_RANGE: f32 = 1.2;
 /// Damage dealt by a flat melee hit. TODO: derive from the weapon's `Melee Typ`.
 const MELEE_DAMAGE: f32 = 6.0;
 
