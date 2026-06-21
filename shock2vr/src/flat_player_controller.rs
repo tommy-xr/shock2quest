@@ -26,8 +26,11 @@ use crate::{
 /// before the world-scale divide. Used for all wielded items for now; per-weapon
 /// `PropPlayerGun.model_offset` placement is a TODO.
 const VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -5.0);
-/// Camera height above the player's feet position (world units before scale).
-const HEAD_HEIGHT: f32 = 5.0;
+/// Camera (eye) height above the player's feet, in SS2 units before the
+/// world-scale divide. MUST match the runtimes' render-camera `head_offset`
+/// (desktop standing = 4.0) so the shot origin coincides with the rendered eye -
+/// otherwise horizontal shots land above/below the crosshair.
+const HEAD_HEIGHT: f32 = 4.0;
 
 /// Base yaw applied to every first-person gun model before its per-weapon
 /// `PropPlayerGun.heading`. The pistol (`atek_h`, heading 0) renders correctly
