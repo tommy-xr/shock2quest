@@ -70,14 +70,45 @@ Remaining (follow-ups):
   vhot / render it in viewmodel space.
 - **Melee weapons** — Wrench / Electro Shock / Crystal Shard / PsiSword.
   - Done: render their `PropLimbModel` FP mesh in the flat viewmodel (they have
-    no `PropPlayerGun`), added to the CycleWeapon roster, and a basic flat swing
+    no `PropPlayerGun`), added to the CycleWeapon roster, a flat swing
     (no-projectile branch in `WeaponScript`: short raycast along the crosshair
-    ray + `MELEE_DAMAGE` to the hit entity). All four render correctly bottom-
-    right; VR melee (physical-collision `MeleeWeapon`) is unchanged.
-  - Remaining: verify swing damage against a live enemy (debug_weapons has no
-    target in reach); derive damage from the weapon's `Melee Typ`; add a swing
-    arc/animation + sound. (Player melee `-928` etc. use `WeaponScript`, not the
+    ray + `MELEE_DAMAGE`, damage verified on a live enemy), a closer melee
+    viewmodel offset, the **idle pose**, and the **swing animation**. VR melee
+    (physical-collision `MeleeWeapon`) is unchanged.
+  - Remaining: derive damage from the weapon's `Melee Typ`; swing sound;
+    camSynch (below). (Player melee `-928` etc. use `WeaponScript`, not the
     `wrench`->`MeleeWeapon` script, which belongs to the Maintenance Tool -2949.)
+
+### First-person weapon animation (from the darkEngine reference)
+
+The FP weapon is a **skeletoned actor (ActorType 1 = `PlayerLimb`)** driven by
+the motion system, not a static prop. The original engine layers two motions:
+
+1. **`camSynch`** (virtual, every frame) — bolts the arm's root joint to the
+   camera: `armPos = camPos + camRot*posOffset`, `armRoot = angOffset ∘ camRot`.
+   This **cancels the clips' root motion**; the relative joints carry the gesture.
+2. **a gesture clip** — the idle (`+plyrmelee:0` = `ph212203`, the ready stance)
+   or a swing (`+plyrmelee:2 +plyrmeleeswing` = `leftswing`/`rightswing`/
+   `highswing`; shipped game uses left). Press=windup, release=swing.
+
+Other reference facts: orientation/placement come from a **separate**
+`sMPlayerLimbOffsets` property ("Arm Pos/Ang Offset"), NOT `PropPlayerGun`; no
+FP-specific FOV/scale; melee damage opens a collision window on a swing keyframe
+(`MF_TRIGGER1`) and lands on physical overlap.
+
+What we implemented (this PR):
+- Pose the FP mesh via an `AnimationPlayer` (was unskinned -> looked mid-swing).
+- **Idle**: the static frame-0 of `ph212203` (head-up ready stance). Static
+  because the looping clip carries root motion we'd otherwise need camSynch to
+  cancel.
+- **Swing**: `Effect::FlatMeleeSwing` plays `leftswing` once on attack, then
+  returns to the static idle.
+
+**TODO(camSynch / root override)**: implement the camSynch equivalent - override
+the FP model's root joint to our viewmodel transform each frame so the clips'
+root motion is cancelled. Then the idle can loop animated and the swing won't
+drift. Also: derive the swing direction/length from hold time (medium vs. long),
+and tie damage to the swing keyframe rather than a fixed raycast.
 - **Crouch-accurate aim** — `PLAYER_EYE_HEIGHT` is the standing value; desktop
   crouch (1.5) lowers the camera but the flat controller's shot origin is fixed,
   so crouched shots land slightly high. Pass the actual eye height into the
