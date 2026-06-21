@@ -1921,7 +1921,14 @@ impl MissionCore {
                 if let Some(xform) = maybe_xform {
                     let scene_objs = if let Some(name) = fp_model_name {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
-                        model.as_ref().to_scene_objects().clone()
+                        // Pose at the rest/bind pose: FP meshes are articulated
+                        // (hand + arm + weapon as skeleton sub-objects), so the
+                        // unskinned `to_scene_objects` leaves the parts unposed
+                        // (the wrench looked mid-swing). An empty AnimationPlayer
+                        // applies the bind transforms; a no-op for static meshes.
+                        model
+                            .as_ref()
+                            .to_animated_scene_objects(&AnimationPlayer::empty())
                     } else if let Some(model) = self.id_to_model.get(&weapon) {
                         match self.id_to_animation_player.get(&weapon) {
                             Some(player) => model.to_animated_scene_objects(player),
