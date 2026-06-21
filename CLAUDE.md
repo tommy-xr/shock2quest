@@ -386,6 +386,13 @@ The project supports experimental flags for gating in-progress features during d
   the rig is experimental (extremities can jitter on floor contact). Without it,
   ragdolls use the stable impulse-joint rig. See `projects/ragdoll-settling-followup.md`.
 
+- **`loading_screen`**: show the animated loading screen during level transitions
+  (`GlobalEffect::TransitionLevel` / `TestReload`) instead of switching instantly. The
+  transition is deferred: the outgoing scene is saved, the `LoadingScene` renders for a
+  brief minimum, then the (currently synchronous) load runs. The `DebugReloadLevel` input
+  action reloads the current level in place to exercise this. See
+  `projects/loading-screen.md`. Without it, transitions are synchronous and unchanged.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:
