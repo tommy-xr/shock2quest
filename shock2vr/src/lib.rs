@@ -48,6 +48,7 @@ use std::{
     io::BufReader,
     rc::Rc,
     sync::Arc,
+    thread,
 };
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
@@ -144,21 +145,26 @@ struct PendingTransition {
     entities_to_trigger: Vec<String>,
     quest_info: QuestInfo,
     held_data: HeldItemSaveData,
+    /// The CPU parse running on a worker thread. While this is in flight the loading
+    /// screen renders (and animates) every frame; once it finishes, the main thread runs
+    /// the GPU `build` and swaps to the mission.
+    parse_handle: thread::JoinHandle<dark::mission::SystemShock2Level>,
     /// Frames the loading screen has rendered so far (frame-counted, so it works under
-    /// the debug runtime's zero-dt stepping). The load is deferred until this reaches
-    /// [`MIN_LOADING_FRAMES`] so the loading screen is shown (and animates) for a
-    /// perceptible moment rather than a single flash.
+    /// the debug runtime's zero-dt stepping). A minimum display so the loading screen is
+    /// shown for a perceptible moment even if the parse finishes very quickly.
     frames_shown: u32,
 }
 
-/// Minimum number of frames to show the loading screen before performing the (currently
-/// synchronous, blocking) load. ~0.4s at 60fps.
+/// Minimum number of frames to show the loading screen before swapping to the mission,
+/// even if the background parse finished sooner. ~0.4s at 60fps.
 const MIN_LOADING_FRAMES: u32 = 24;
 
 pub struct Game {
     options: GameOptions,
     pub asset_cache: AssetCache,
-    global_context: GlobalContext,
+    // `Arc` so the gamesys + definitions can be cloned into a background level-parse
+    // thread (projects/loading-screen.md). Shared immutably after init.
+    global_context: Arc<GlobalContext>,
     active_game_scene: Box<dyn GameScene>,
     /// Set while a deferred transition is in flight (loading screen showing).
     pending_transition: Option<PendingTransition>,
@@ -255,17 +261,32 @@ impl Game {
         self.load_mission_into_scene(level_name, spawn_loc, quest_info, held_data);
     }
 
-    /// Start a deferred transition: save the outgoing scene now, swap to the loading
-    /// screen, and defer the blocking load to the next `update` (so the loading screen
-    /// renders at least one frame before the loop stalls on the load).
+    /// Start a background transition: save the outgoing scene, spawn the GL-free level
+    /// parse on a worker thread, and swap to the loading screen. The loading screen
+    /// animates while the parse runs; `update` completes it once the parse finishes.
     fn begin_transition(
         &mut self,
         level_name: String,
         spawn_loc: SpawnLocation,
         entities_to_trigger: Vec<String>,
     ) {
-        tracing::info!("[loading-screen] begin_transition -> {} (showing loading scene)", level_name);
+        tracing::info!(
+            "[loading-screen] begin_transition -> {} (background parse)",
+            level_name
+        );
         let (quest_info, held_data) = self.save_active_scene();
+
+        // Spawn the GL-free parse off-thread. It owns `Arc`s of the asset-path layer and
+        // the global context (gamesys + definitions), all `Send + Sync`, and produces a
+        // `Send` `SystemShock2Level`.
+        let asset_paths = self.asset_cache.asset_paths_arc();
+        let base_path = self.asset_cache.base_path().to_string();
+        let global_context = Arc::clone(&self.global_context);
+        let parse_name = level_name.clone();
+        let parse_handle = thread::spawn(move || {
+            Mission::parse(&**asset_paths, &base_path, &parse_name, &global_context)
+        });
+
         self.active_game_scene = Box::new(LoadingScene::new());
         self.pending_transition = Some(PendingTransition {
             level_name,
@@ -273,19 +294,48 @@ impl Game {
             entities_to_trigger,
             quest_info,
             held_data,
+            parse_handle,
             frames_shown: 0,
         });
     }
 
-    /// Complete a deferred transition queued by [`begin_transition`].
+    /// Complete a background transition queued by [`begin_transition`]: join the finished
+    /// parse and run the main-thread GPU `build`, then swap to the mission.
     fn finish_transition(&mut self, pending: PendingTransition) {
-        tracing::info!("[loading-screen] finish_transition -> {} (loading now)", pending.level_name);
-        self.load_mission_into_scene(
+        tracing::info!(
+            "[loading-screen] finish_transition -> {} (parse done, building)",
+            pending.level_name
+        );
+        let level = pending
+            .parse_handle
+            .join()
+            .expect("background level-parse thread panicked");
+
+        let populator: Box<dyn EntityPopulator> = {
+            if let Some(save_data) = self
+                .mission_to_save_data
+                .get(&pending.level_name.to_ascii_lowercase())
+            {
+                Box::new(SaveFileEntityPopulator::create(save_data.clone()))
+            } else {
+                Box::new(MissionEntityPopulator::create())
+            }
+        };
+
+        let mission = Mission::build(
+            level,
             pending.level_name,
+            &mut self.asset_cache,
+            &mut self.audio_context,
+            &self.global_context,
             pending.spawn_loc,
             pending.quest_info,
+            populator,
             pending.held_data,
+            &self.options,
         );
+        self.active_game_scene = Box::new(mission);
+
         for entity_name in pending.entities_to_trigger {
             self.active_game_scene.queue_entity_trigger(entity_name);
         }
@@ -515,7 +565,7 @@ impl Game {
             audio_context,
             active_game_scene,
             pending_transition: None,
-            global_context,
+            global_context: Arc::new(global_context),
             last_music_cue: None,
             last_env_sound: None,
             options,
@@ -535,11 +585,14 @@ impl Game {
         let delta_time = time.elapsed.as_secs_f32();
         trace!("delta_time: {}", delta_time);
 
-        // Drive a deferred transition: show the loading screen for a minimum number of
-        // frames, then perform the (blocking) load and swap to the mission.
+        // Drive a background transition: the loading screen animates while the parse
+        // runs on its worker thread. Once the parse has finished AND the loading screen
+        // has shown for its minimum, run the main-thread build and swap to the mission.
         if let Some(pending) = self.pending_transition.as_mut() {
             pending.frames_shown += 1;
-            if pending.frames_shown >= MIN_LOADING_FRAMES {
+            let ready =
+                pending.parse_handle.is_finished() && pending.frames_shown >= MIN_LOADING_FRAMES;
+            if ready {
                 let pending = self.pending_transition.take().unwrap();
                 self.finish_transition(pending);
             }
@@ -633,7 +686,7 @@ impl Game {
             save_data,
             &mut self.asset_cache,
             &mut self.audio_context,
-            &mut self.global_context,
+            &self.global_context,
             &self.options,
         );
         self.active_game_scene = Box::new(mission);

@@ -19,7 +19,7 @@ use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
 use rapier3d::prelude::{Collider, ColliderBuilder};
 
 use engine::{
-    assets::asset_cache::AssetCache,
+    assets::{asset_cache::AssetCache, asset_paths::AbstractAssetPath},
     audio::AudioContext,
     scene::{SceneObject, light::SpotLight},
 };
@@ -43,7 +43,35 @@ pub struct Mission {
 }
 
 impl Mission {
-    pub fn load(
+    /// The GL-free, CPU-only first phase of a level load: read + parse the `.mis` into a
+    /// `Send` `SystemShock2Level`. Takes only the `Send + Sync` asset-path layer and the
+    /// gamesys/definitions (borrowed), so a worker thread can run it by owning `Arc`s of
+    /// those and passing references in (projects/loading-screen.md). No GL, no AssetCache.
+    pub fn parse(
+        asset_paths: &dyn AbstractAssetPath,
+        base_path: &str,
+        mission: &str,
+        global_context: &GlobalContext,
+    ) -> dark::mission::SystemShock2Level {
+        info!("starting level load");
+        let f = File::open(resource_path(mission)).unwrap();
+        let mut reader = BufReader::new(f);
+        dark::mission::read(
+            asset_paths,
+            base_path,
+            &mut reader,
+            &global_context.gamesys,
+            &global_context.links,
+            &global_context.links_with_data,
+            &global_context.properties,
+        )
+    }
+
+    /// The main-thread second phase: GPU upload (`to_scene`) + physics/spatial build +
+    /// entity instantiation. Consumes the parsed level.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build(
+        level: dark::mission::SystemShock2Level,
         mission: String,
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
@@ -54,27 +82,6 @@ impl Mission {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> Mission {
-        let properties = &global_context.properties;
-        let links = &global_context.links;
-        let links_with_data = &global_context.links_with_data;
-        let _motiondb = &global_context.motiondb;
-
-        info!("starting level load");
-
-        let f = File::open(resource_path(&mission)).unwrap();
-        let mut reader = BufReader::new(f);
-        // `read` is GL-free: it takes the Send + Sync asset-path layer, not the cache.
-        let base_path = asset_cache.base_path().to_string();
-        let level = dark::mission::read(
-            asset_cache.asset_paths(),
-            &base_path,
-            &mut reader,
-            &global_context.gamesys,
-            links,
-            links_with_data,
-            properties,
-        );
-
         let scene_objects = dark::mission::to_scene(&level, asset_cache);
         let song_params = level.song_params.clone();
         let room_db = level.room_database.clone();
@@ -107,6 +114,40 @@ impl Mission {
             game_options,
         );
         Mission { mission_core }
+    }
+
+    /// Synchronous load: `parse` then `build` on the calling thread (unchanged behavior).
+    #[allow(clippy::too_many_arguments)]
+    pub fn load(
+        mission: String,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+        global_context: &GlobalContext,
+        spawn_loc: SpawnLocation,
+        quest_info: QuestInfo,
+        entity_populator: Box<dyn EntityPopulator>,
+        held_item_save_data: HeldItemSaveData,
+        game_options: &GameOptions,
+    ) -> Mission {
+        let base_path = asset_cache.base_path().to_string();
+        let level = Self::parse(
+            asset_cache.asset_paths(),
+            &base_path,
+            &mission,
+            global_context,
+        );
+        Self::build(
+            level,
+            mission,
+            asset_cache,
+            audio_context,
+            global_context,
+            spawn_loc,
+            quest_info,
+            entity_populator,
+            held_item_save_data,
+            game_options,
+        )
     }
 
     pub fn update(
