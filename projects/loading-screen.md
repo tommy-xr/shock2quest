@@ -10,8 +10,10 @@
 > `Rc → Arc` conversions), **Gate B ✅** (≈45–63% of load is off-threadable CPU work,
 > once `physics_spatial` is counted alongside `parse`), **Gate C ⚠️** (mostly passes;
 > named exceptions: the lightmap-atlas upload and a handful of fat models exceed one
-> frame). The background-load design is de-risked; the plan below (§4) is revised to
-> match, and the stack is ready to start at PR 1.
+> frame). The background-load design is de-risked. The plan below (§4) then runs **two
+> parallel tracks** into PR 3: a **foundation track** (PR S1/S2 — mechanical `Rc → Arc`
+> `Send` refactors, no behavior change) and a **UI track** (PR 1–2 — loading scene +
+> progress). Ready to start on either.
 
 ---
 
@@ -202,9 +204,24 @@ rendering, not load.
     work unchanged.)*
   - *`Send` output* — a compile-time `assert_send::<SystemShock2Level>()` names exactly
     two blockers, **both `Rc`, neither GL**: `Rc<BspNode>` (BspTree) and
-    `Rc<Box<dyn Property>>` (entity_info). Fix = mechanical `Rc → Arc` (the property one
-    needs `dyn Property: Send + Sync` and ripples through the gamesys/property layer).
-    Feasible, moderate refactor, no fundamental blocker.
+    `Rc<Box<dyn Property>>` (entity_info). Fix = mechanical `Rc → Arc`. **The fix is
+    provably bounded** (not just hopefully) — verified by inspecting the inner types:
+    - The top-level `assert_send` audits the **whole transitive graph** in one pass and
+      reports every distinct non-`Send` leaf, so everything else (`RoomDatabase`,
+      `TextureList`, `Vec<Cell>`, `path_database`, `template_to_links`, …) is *already*
+      `Send`. Only these 2 leaves remain.
+    - `BspNode` is plain data (`i32`, `Plane`, recursive `Rc<BspNode>` children) — the
+      `Arc` conversion is contained to `bsp_tree.rs`; `Arc<BspNode>: Send` needs only
+      `Plane: Send + Sync` (geometry data, trivially yes).
+    - `dyn Property` is wired via two **blanket impls that already require `C: Send +
+      Sync`** (shipyard `Component` storage demands it), and a scan of all of
+      `dark/src/properties/` finds **zero `Rc`/`RefCell`/`Cell`/raw pointers**. So every
+      concrete property is already `Send + Sync`; adding `Send + Sync` as a `Property`
+      supertrait is guaranteed to compile. The `Rc` wrapper is the *sole* blocker.
+
+    There is no hidden third blocker. Scope: mechanical, but spans `bsp_tree.rs`,
+    `properties/mod.rs`, `ss2_entity_info.rs`, and the gamesys merge — so the plan
+    lands it as standalone **preparatory refactors (PR S1/S2) before PR 3** (§4).
 - **Gate B — worth it: ✅ PASS, comfortably.** Off-threadable work (parse + physics) is
   **45–63% of load on every mission** — well above the ~40–50% bar. Background loading is
   clearly worthwhile. (Bonus finding: counting `physics_spatial`, not just `parse`,
@@ -322,8 +339,21 @@ part of the core loading-screen stack.
 The stack is ordered so each PR compiles, passes CI (`RUSTFLAGS="-D warnings" cargo
 check -p shock2vr -p desktop_runtime -p debug_runtime`), and delivers standalone value.
 **PR 0 (the feasibility spike) is complete** — measurement + all three gates resolved
-(§2). PRs 1–2 are low-risk and faithful; PR 3 is the concurrency refactor; PRs 4–5
-polish; **PR 6 is an optional, decoupled parse perf pass** gated on Quest numbers.
+(§2). The work then splits into **two parallel tracks that converge at PR 3**:
+
+- **Foundation track — preparatory `Send`/`Sync` refactors (PR S1, S2).** Pure
+  mechanical `Rc → Arc` with **no behavior change**, landing the `Send` half of Gate A as
+  standalone, independently-reviewable PRs *before* PR 3 needs them. They touch no
+  loading-screen code, so they can land immediately and in parallel with the UI track.
+- **UI track — PR 1–2.** Low-risk, faithful: a `LoadingScene` + progress plumbing.
+
+PR 3 (the concurrency refactor) depends on *both* tracks; PRs 4–5 polish; **PR 6 is an
+optional, decoupled parse perf pass** gated on Quest numbers.
+
+Why split the `Send` work out instead of doing it inside PR 3: it's ~entirely orthogonal
+to threading (a transparent `Rc → Arc`), it's verifiable on its own (the codebase still
+behaves identically; `assert_send` flips green), and it keeps PR 3 focused on the genuinely
+novel part (the worker thread + channel + scene swap) rather than a sprawling type change.
 
 ### PR 0 — Feasibility spike: measure & de-risk (gates PR 3) ✅ DONE
 
@@ -347,9 +377,9 @@ producing the §2 tables across all 23 missions. (The old `"loading level took {
    unchanged); its value is enabling off-threading. Removing `&mut AssetCache` from
    `read()` is now mechanical PR 3 work.
 2. **`Send` proof — ran.** `assert_send::<SystemShock2Level>()` named two blockers, both
-   `Rc` (not GL): `Rc<BspNode>` (BspTree) and `Rc<Box<dyn Property>>` (entity_info). Fix =
-   `Rc → Arc` (+ `dyn Property: Send + Sync`), mechanical but ripples through the
-   gamesys/property layer.
+   `Rc` (not GL): `Rc<BspNode>` (BspTree) and `Rc<Box<dyn Property>>` (entity_info).
+   Inspection of the inner types proved the fix is **bounded** — no hidden third blocker
+   (§2.2). The mechanical `Rc → Arc` is split out as the foundation track (**PR S1/S2**).
 3. *(Not done — optional)* **Threaded prototype** to measure real max main-thread slice +
    frames-pumped. §2 (per-entity distribution + to_scene split) already implies it passes;
    PR 3 itself will confirm directly. Skipped as redundant for the go/no-go decision.
@@ -363,6 +393,53 @@ invisible behind a loading screen, relevant only to §4 PR 6.
 surviving short gaps but freezing on a multi-second block. Success = main thread returns
 to submit a fresh loading-bar frame at least ~once per frame budget (max slice ≲ 13ms),
 with off-thread parse+physics covering the wall-clock bulk.
+
+---
+
+## Foundation track — preparatory `Send`/`Sync` refactors
+
+These land the `Send` half of Gate A (§2.2) as standalone PRs. **No behavior change** —
+each is a transparent `Rc → Arc` that leaves the game identical; the only observable
+difference is that a previously-`!Send` type becomes `Send + Sync`. They're independent of
+the loading screen and can land immediately, parallel to PR 1–2. Sequence S1 → S2 (S1 is
+trivial and self-contained; S2 is larger and touches the property/gamesys layer).
+
+**Shared verification pattern (negative-test-first):** add a `const _: fn() = || { fn
+assert_send_sync<T: Send + Sync>() {} assert_send_sync::<TheType>(); };` assertion — it
+**fails to compile before** the refactor and **passes after**, so the PR's own diff proves
+it did the job. Plus the existing test suite + `tools/shock2-sdk/test/missions.e2e.test.ts`
+(all 23 missions load identically) guards against behavior drift.
+
+### PR S1 — `BspTree`: `Rc<BspNode>` → `Arc<BspNode>`
+
+**Scope:** contained entirely to `dark/src/mission/bsp_tree.rs`. Change `root_node:
+Rc<BspNode>` and the enum's `front`/`back: Option<Rc<BspNode>>` to `Arc`, and the
+`.clone()`/recursion sites. `Arc<BspNode>: Send + Sync` needs only `Plane: Send + Sync`
+(plain `Vector3`/`f32` data — already true).
+
+**Why first:** tiny, zero-risk, removes one of the two named blockers; good warm-up that
+establishes the `assert_send_sync` test pattern.
+
+### PR S2 — Property system: `Send + Sync` supertrait + `Rc<Box<dyn Property>>` → `Arc`
+
+**Scope:** the second named blocker. Two coordinated changes:
+1. Add `Send + Sync` as supertraits to `Property` (`dark/src/properties/mod.rs:1480`).
+   This is **guaranteed to compile**: both blanket impls (`impl<C> Property for C` and
+   `… for WrappedProperty<C>`) *already* require `C: Send + Sync`, and the whole
+   `dark/src/properties/` module has zero `Rc`/`RefCell`/`Cell`/raw pointers (§2.2). So
+   every concrete property is already `Send + Sync`.
+2. Change `entity_to_properties: HashMap<i32, Vec<Rc<Box<dyn Property>>>>`
+   (`ss2_entity_info.rs:34`) to `Arc`, plus the construction/clone sites in the property
+   read path and the gamesys `merge_with_gamesys`.
+
+**After S1 + S2:** `assert_send::<SystemShock2Level>()` compiles — the parse output is
+fully `Send`, retiring the Gate A `Send` requirement that PR 3 depends on.
+
+**Risk / size:** larger blast radius than S1 (property + gamesys + entity_info), but every
+edit is mechanical `Rc → Arc`. If the diff is unwieldy it can split further (e.g. supertrait
+bound first, then the `HashMap` Arc conversion). No logic changes.
+
+---
 
 ### PR 1 — `LoadingScene` rendering `LOADING.PCX` (static, no threading)
 
@@ -450,22 +527,32 @@ do GPU upload + entity instantiation on the main thread.
    `LevelData` arrives, run `build` (optionally time-sliced — see PR 4), then swap
    `active_game_scene` → `Mission`.
 
-**Risks — already retired by PR 0:** the GL-leak crux (`texture_dimensions` →
-GL-free PCX header read) and the `LevelData` `Send` proof land in PR 0, and Gate B/C
-numbers confirm the parse/build split is worth it before this PR starts. By the time we
-write PR 3, it is "wire up the threading the spike already proved," not "discover whether
-it's possible." If any PR 0 gate failed, the design is reshaped *first* (see Gate
-fallbacks above) rather than absorbed here.
+**Risks — retired before this PR even starts:**
+- *GL-leak crux:* PR 0 already replaced `texture_dimensions` with the GL-free header read
+  and **compiled `read()` with `&mut AssetCache` removed** — the parse is GL-free by
+  construction.
+- *`Send` output:* delivered by the foundation track (**PR S1 + S2**) — by the time PR 3
+  starts, `assert_send::<SystemShock2Level>()` already passes. PR 3 does **not** contain
+  any `Rc → Arc` work.
+- *Worth it:* Gate B/C numbers (§2) confirm the split pays off.
+
+So PR 3 is now narrowly "wire up the threading the prerequisites already proved" — no
+discovery, no sprawling type change. If any PR 0 gate had failed, the design would have
+been reshaped first (see Gate fallbacks) rather than absorbed here.
 
 Remaining work specific to this PR:
 - Land the production `parse`/`build` split (PR 0's prototype was throwaway).
+- Thread an **owned `Arc<dyn AbstractAssetPath>`** into `read()` (PR 0 passed a borrow,
+  enough for the GL-free compile proof; a worker thread needs ownership). `AssetCache`
+  holds the path as `Rc` today → expose an `Arc` clone.
 - The per-entity model/texture loads (`entity_creator.rs:350`) stay on the main thread
   in `build` — they're GPU work and dominate on entity-dense levels, which is why PR 4's
   time-slicing matters for keeping the bar smooth (PR 0's table quantifies how much).
 
-**Why third:** depends on PR 1 (scene to animate), PR 2 (progress wire), and PR 0
-(crux retired + numbers in hand). Isolating it keeps the earlier wins shippable if this
-stalls.
+**Why third:** the convergence point — depends on the foundation track (**S1 + S2** for a
+`Send` `LevelData`), the UI track (**PR 1** scene to animate, **PR 2** progress wire), and
+**PR 0** (crux retired + numbers in hand). Isolating it keeps the earlier wins shippable if
+this stalls.
 
 **Test:** SDK e2e: trigger a transition, assert frames keep advancing (e.g. a frame
 counter / screenshot diff) *during* the load — the negative test is that pre-PR-3 the
