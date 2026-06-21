@@ -2,12 +2,13 @@ TODO:
 - [ ] Get CI green for changes
 
 Recent work
+- (in progress) flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
 - flat runtime -> fix alpha transparency / z-order break
-- flat runtime -> fix aiming ofset
+- flat runtime -> fix aiming ofset (viewmodel framing offsets still first-pass, want interactive tuning)
 - modernize combat: add recoil / accuracy modifier (like counter-strike)
 
-- Fable: finish ragdolls
-- Fabel: finish AI pathing & testing
+- Fable: finish ragdolls (in progress) - hitbox-fitted colliders + rapier 0.31 compliant joints settle into a heap; on-death ragdoll behind `--experimental ragdoll`; multibody rig still experimental (extremity jitter / hip-sag), see projects/ragdoll-settling-followup.md
+- Fabel: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
 
 
 SNACKS:
@@ -61,9 +62,9 @@ Can do these in parallel:
   - Implement 'Signal'?
   - Example 'grassi app' in medsci
   - Quick iteration: spawn near that one
-- Fix slay
+- Fix slay (in progress)
   - Make robots blow up, spawn items
-  - Create corpse and make container available
+  - Create corpse and make container available (corpse-on-death handoff step 1 done, #281; container TODO)
   - Maybe there's another way to figure out what to slay?
 - command2.mis:
   - Why is door not transparent?
@@ -442,6 +443,11 @@ Release Checklist
 - Fixed shodan.mis AIPATH crash: parser now handles chunk version 3.4 (widened IDs) and fails gracefully on malformed data; smoke test 23/23 (#267)
 - First green CI (Build & Unit Test) since December
 - Wound animation, attack/death sounds
+- Combat: props respect hit points instead of one-hit-kill (#273); player health on PropHitPoints, rendered in HUD
+- Flatscreen runtime (in progress): desktop defaults to flat presentation, mouse-driven main menu, screen-space 2D HUD, first-person weapon viewmodel + click-to-fire, crosshair frob/pickup; PlayerInteraction trait unifies VR + flat behind one Box<dyn> (slices 1-6, #295-#305)
+- UiCanvas: placement-agnostic 2D UI layer (HUD + menu migrated, #300)
+- Ragdoll (in progress): hitbox-fitted limb colliders, rapier 0.19 -> 0.31 upgrade, compliant joints that settle into a heap; on-death ragdoll + corpse handoff behind `--experimental` (#278-#304)
+- Debug runtime: physics body/joint introspection, ragdoll metrics, fixed-timestep deterministic stepping
 
 2026: Things I hope we can do
 
