@@ -67,7 +67,8 @@ use engine::{
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
 
-use save_load::{EntitySaveData, GlobalData, SaveData};
+use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
+use scenes::LoadingScene;
 use scripts::GlobalEffect;
 use shipyard::*;
 use time::Time;
@@ -134,11 +135,33 @@ impl Default for GameOptions {
     }
 }
 
+/// A level transition that has been started (outgoing scene already saved, loading
+/// screen showing) and whose blocking load is deferred to the next `update` frame.
+/// Only used when the experimental `loading_screen` feature is enabled.
+struct PendingTransition {
+    level_name: String,
+    spawn_loc: SpawnLocation,
+    entities_to_trigger: Vec<String>,
+    quest_info: QuestInfo,
+    held_data: HeldItemSaveData,
+    /// Frames the loading screen has rendered so far (frame-counted, so it works under
+    /// the debug runtime's zero-dt stepping). The load is deferred until this reaches
+    /// [`MIN_LOADING_FRAMES`] so the loading screen is shown (and animates) for a
+    /// perceptible moment rather than a single flash.
+    frames_shown: u32,
+}
+
+/// Minimum number of frames to show the loading screen before performing the (currently
+/// synchronous, blocking) load. ~0.4s at 60fps.
+const MIN_LOADING_FRAMES: u32 = 24;
+
 pub struct Game {
     options: GameOptions,
     pub asset_cache: AssetCache,
     global_context: GlobalContext,
     active_game_scene: Box<dyn GameScene>,
+    /// Set while a deferred transition is in flight (loading screen showing).
+    pending_transition: Option<PendingTransition>,
     // physics: PhysicsWorld,
     // script_world: ScriptWorld,
     audio_context: AudioContext<EntityId, String>,
@@ -157,7 +180,17 @@ pub struct Game {
 }
 
 impl Game {
-    fn switch_mission(&mut self, level_name: String, spawn_loc: SpawnLocation) {
+    /// Whether the experimental loading screen (deferred transitions) is enabled.
+    fn loading_screen_enabled(&self) -> bool {
+        self.options
+            .experimental_features
+            .contains("loading_screen")
+    }
+
+    /// Capture the outgoing scene's save data (so its state survives the transition)
+    /// and return the context the new mission needs. Must run while the outgoing scene
+    /// is still active.
+    fn save_active_scene(&mut self) -> (QuestInfo, HeldItemSaveData) {
         let current_quest_info = self
             .active_game_scene
             .world()
@@ -178,6 +211,18 @@ impl Game {
             current_save_data,
         );
 
+        (current_quest_info, held_data)
+    }
+
+    /// Load a mission (using previously-captured save context) and make it the active
+    /// scene. This is the blocking part of a transition.
+    fn load_mission_into_scene(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        quest_info: QuestInfo,
+        held_data: HeldItemSaveData,
+    ) {
         let populator: Box<dyn EntityPopulator> = {
             if let Some(save_data) = self
                 .mission_to_save_data
@@ -197,12 +242,59 @@ impl Game {
             &mut self.audio_context,
             &self.global_context,
             spawn_loc,
-            current_quest_info,
+            quest_info,
             populator,
             held_data,
             &self.options,
         );
         self.active_game_scene = Box::new(active_mission);
+    }
+
+    fn switch_mission(&mut self, level_name: String, spawn_loc: SpawnLocation) {
+        let (quest_info, held_data) = self.save_active_scene();
+        self.load_mission_into_scene(level_name, spawn_loc, quest_info, held_data);
+    }
+
+    /// Start a deferred transition: save the outgoing scene now, swap to the loading
+    /// screen, and defer the blocking load to the next `update` (so the loading screen
+    /// renders at least one frame before the loop stalls on the load).
+    fn begin_transition(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        entities_to_trigger: Vec<String>,
+    ) {
+        tracing::info!(
+            "[loading-screen] begin_transition -> {} (showing loading scene)",
+            level_name
+        );
+        let (quest_info, held_data) = self.save_active_scene();
+        self.active_game_scene = Box::new(LoadingScene::new());
+        self.pending_transition = Some(PendingTransition {
+            level_name,
+            spawn_loc,
+            entities_to_trigger,
+            quest_info,
+            held_data,
+            frames_shown: 0,
+        });
+    }
+
+    /// Complete a deferred transition queued by [`begin_transition`].
+    fn finish_transition(&mut self, pending: PendingTransition) {
+        tracing::info!(
+            "[loading-screen] finish_transition -> {} (loading now)",
+            pending.level_name
+        );
+        self.load_mission_into_scene(
+            pending.level_name,
+            pending.spawn_loc,
+            pending.quest_info,
+            pending.held_data,
+        );
+        for entity_name in pending.entities_to_trigger {
+            self.active_game_scene.queue_entity_trigger(entity_name);
+        }
     }
 
     fn switch_mission_with_trigger(
@@ -428,6 +520,7 @@ impl Game {
             asset_cache,
             audio_context,
             active_game_scene,
+            pending_transition: None,
             global_context,
             last_music_cue: None,
             last_env_sound: None,
@@ -447,6 +540,16 @@ impl Game {
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
         trace!("delta_time: {}", delta_time);
+
+        // Drive a deferred transition: show the loading screen for a minimum number of
+        // frames, then perform the (blocking) load and swap to the mission.
+        if let Some(pending) = self.pending_transition.as_mut() {
+            pending.frames_shown += 1;
+            if pending.frames_shown >= MIN_LOADING_FRAMES {
+                let pending = self.pending_transition.take().unwrap();
+                self.finish_transition(pending);
+            }
+        }
 
         // Convert triggered actions into effects; triggered actions are
         // consumed here so injected actions (e.g. from the debug runtime)
@@ -610,7 +713,11 @@ impl Game {
                     Some(marker) => SpawnLocation::Marker(marker),
                 };
 
-                self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
+                if self.loading_screen_enabled() {
+                    self.begin_transition(level_file, spawn_loc, entities_to_trigger);
+                } else {
+                    self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
+                }
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = {
@@ -621,10 +728,13 @@ impl Game {
                         .unwrap();
                     (player_info.pos, player_info.rotation)
                 };
-                self.switch_mission(
-                    self.active_game_scene.scene_name().to_string(),
-                    SpawnLocation::PositionRotation(position, rotation),
-                );
+                let level_name = self.active_game_scene.scene_name().to_string();
+                let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
+                if self.loading_screen_enabled() {
+                    self.begin_transition(level_name, spawn_loc, vec![]);
+                } else {
+                    self.switch_mission(level_name, spawn_loc);
+                }
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;
