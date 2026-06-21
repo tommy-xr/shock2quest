@@ -34,8 +34,9 @@ use dark::{
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
         PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
         PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScripts, PropTeleported,
-        PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags, WrappedEntityId,
+        PropPhysState, PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts,
+        PropTeleported, PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags,
+        WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -1879,21 +1880,39 @@ impl MissionCore {
             // last; the depth buffer is cleared before its first object so it
             // renders over geometry while still depth-testing within itself.
             if let Some(weapon) = self.interaction.viewmodel_entity() {
-                if let Some(model) = self.id_to_model.get(&weapon) {
+                let maybe_xform = {
                     let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
-                    if let Ok(xform) = v_transform.get(weapon).map(|p| p.0) {
-                        let scene_objs = match self.id_to_animation_player.get(&weapon) {
+                    v_transform.get(weapon).map(|p| p.0).ok()
+                };
+                // Flat first-person model: prefer the weapon's native
+                // PropPlayerGun.hand_model (the SS2 FP mesh), loaded directly so
+                // EVERY gun gets its proper first-person model - not just those
+                // listed in the VR hand-model table. Non-guns fall back to the
+                // entity's current model.
+                let hand_model_name = self
+                    .world
+                    .borrow::<View<PropPlayerGun>>()
+                    .ok()
+                    .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()));
+                if let Some(xform) = maybe_xform {
+                    let scene_objs = if let Some(name) = hand_model_name {
+                        let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
+                        model.as_ref().to_scene_objects().clone()
+                    } else if let Some(model) = self.id_to_model.get(&weapon) {
+                        match self.id_to_animation_player.get(&weapon) {
                             Some(player) => model.to_animated_scene_objects(player),
                             None => model.to_scene_objects().clone(),
-                        };
-                        for (i, obj) in scene_objs.into_iter().enumerate() {
-                            let mut o = obj.clone();
-                            o.set_transform(xform);
-                            if i == 0 {
-                                o.set_clear_depth(true);
-                            }
-                            ret.push(o);
                         }
+                    } else {
+                        Vec::new()
+                    };
+                    for (i, obj) in scene_objs.into_iter().enumerate() {
+                        let mut o = obj.clone();
+                        o.set_transform(xform);
+                        if i == 0 {
+                            o.set_clear_depth(true);
+                        }
+                        ret.push(o);
                     }
                 }
             }

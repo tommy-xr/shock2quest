@@ -9,7 +9,7 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Quaternion, Rotation, Vector3, point3, vec3};
+use cgmath::{Deg, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
 use shipyard::{EntityId, Get, View, World};
 
 use dark::{SCALE_FACTOR, properties::PropFrobInfo};
@@ -20,14 +20,20 @@ use crate::{
     scripts::{Message, MessagePayload},
     util::resolve_proxy_entity,
     virtual_hand::{VirtualHandEffect, can_grab_item},
-    vr_config::{self, Handedness},
 };
 
-/// Where the wielded weapon sits relative to the camera, in look space (+x
-/// right, +y up, -z forward), before the world-scale divide. Tunable framing.
+/// Shared viewmodel framing offset (look space: +x right, +y up, -z forward),
+/// before the world-scale divide. Used for all wielded items for now; per-weapon
+/// `PropPlayerGun.model_offset` placement is a TODO.
 const VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -5.0);
 /// Camera height above the player's feet position (world units before scale).
 const HEAD_HEIGHT: f32 = 5.0;
+
+/// Base yaw applied to every first-person gun model before its per-weapon
+/// `PropPlayerGun.heading`. The pistol (`atek_h`, heading 0) renders correctly
+/// at -90deg; `heading` then corrects models authored at other angles (e.g. the
+/// shotgun's 90deg). Tuned against the FP models, NOT the VR hand-model table.
+const VIEWMODEL_BASE_YAW_DEG: f32 = -90.0;
 
 pub struct FlatPlayerController {
     wielded_entity: Option<EntityId>,
@@ -117,16 +123,22 @@ impl FlatPlayerController {
 
         // Place the viewmodel + fire on the trigger edge.
         if let Some(entity_id) = self.wielded_entity {
-            let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
-                entity_id,
-                world,
-                Handedness::Right,
-            );
+            // First-person framing from the weapon's native PropPlayerGun
+            // (model_offset + heading), falling back to a fixed offset for
+            // non-gun pickups. This intentionally ignores the VR hand-model
+            // table, which is keyed inconsistently and drops per-weapon heading.
+            // The first-person `hand_model` meshes all share one orientation,
+            // corrected by a single base yaw. NB: PropPlayerGun.heading is NOT
+            // the FP model's rotation - applying it over-rotates exactly by its
+            // value (the shotgun/assault 90deg, the psi-amp 180deg), so it is
+            // deliberately not used here. Position uses a shared framing offset
+            // for now (per-weapon model_offset placement is a TODO).
+            let rotation = look * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG));
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
                 position: camera_pos + look.rotate_vector(VIEWMODEL_OFFSET / SCALE_FACTOR),
-                rotation: look * adjustments.rotation,
-                scale: adjustments.scale,
+                rotation,
+                scale: vec3(1.0, 1.0, 1.0),
             });
 
             let fire_pressed = input.trigger_value > 0.5;
