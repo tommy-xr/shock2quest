@@ -95,7 +95,7 @@ pub fn create_initial_scene(
     // PR 1) independent of any real loading.
     if options.mission.eq_ignore_ascii_case("debug_loading") {
         return SceneInitResult {
-            scene: Box::new(LoadingScene::new()),
+            scene: Box::new(LoadingScene::new_demo()),
             mission_save_data: HashMap::new(),
         };
     }
