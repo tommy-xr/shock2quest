@@ -92,6 +92,12 @@ pub enum Effect {
         lines: Vec<(Point3<f32>, Point3<f32>, Vector4<f32>)>,
     },
 
+    /// Play the flat melee viewmodel's swing animation for `entity_id` (the
+    /// wielded melee weapon). Emitted by the melee attack; a no-op in VR.
+    FlatMeleeSwing {
+        entity_id: EntityId,
+    },
+
     DestroyEntity {
         entity_id: EntityId,
     },
