@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     rc::Rc,
+    sync::Arc,
 };
 use tracing::{self, debug, info};
 
@@ -13,14 +14,16 @@ type ImporterAssetMap = HashMap<TypeId, HashMap<u64, HashMap<String, Option<Rc<d
 pub struct AssetCache {
     base_path: String,
     importer_to_assets: ImporterAssetMap,
-    path: Rc<Box<dyn AbstractAssetPath>>,
+    // `Arc` (not `Rc`) so the `Send + Sync` asset-path layer can be cloned out and handed
+    // to a background level-parse thread (projects/loading-screen.md).
+    path: Arc<Box<dyn AbstractAssetPath>>,
 }
 
 impl AssetCache {
     pub fn new(base_path: String, path: Box<dyn AbstractAssetPath>) -> AssetCache {
         AssetCache {
             base_path,
-            path: Rc::new(path),
+            path: Arc::new(path),
             importer_to_assets: HashMap::new(),
         }
     }
@@ -30,6 +33,12 @@ impl AssetCache {
     /// `AssetCache`. This is what lets `read()` drop its `&mut AssetCache`.
     pub fn asset_paths(&self) -> &dyn AbstractAssetPath {
         &**self.path
+    }
+
+    /// An owned, `Send + Sync` handle to the asset-path layer — for moving into a
+    /// background level-parse thread.
+    pub fn asset_paths_arc(&self) -> Arc<Box<dyn AbstractAssetPath>> {
+        Arc::clone(&self.path)
     }
 
     pub fn base_path(&self) -> &str {
