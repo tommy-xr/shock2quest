@@ -32,11 +32,11 @@ use dark::{
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
-        PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
-        PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts,
-        PropTeleported, PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags,
-        WrappedEntityId,
+        PropFrameAnimState, PropHasRefs, PropLimbModel, PropLocalPlayer, PropModelName,
+        PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions,
+        PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPlayerGun, PropPosition,
+        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropertyDefinition, RenderType,
+        ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -1755,21 +1755,26 @@ impl MissionCore {
                     // The SS2 player-weapon roster (templates with PropPlayerGun),
                     // cycled for flat-mode aim/viewmodel testing.
                     const DEBUG_WEAPONS: &[i32] = &[
-                        -17, // Pistol
-                        -18, // Assault Rifle
-                        -19, // Shotgun
-                        -22, // Laser Pistol
-                        -23, // EMP Rifle
-                        -21, // Gren Launcher
-                        -25, // Stasis Field Generator
-                        -26, // Fusion Cannon
-                        -27, // Worm Launcher
-                        -29, // Viral Prolif
+                        -17,  // Pistol
+                        -18,  // Assault Rifle
+                        -19,  // Shotgun
+                        -22,  // Laser Pistol
+                        -23,  // EMP Rifle
+                        -21,  // Gren Launcher
+                        -25,  // Stasis Field Generator
+                        -26,  // Fusion Cannon
+                        -27,  // Worm Launcher
+                        -29,  // Viral Prolif
                         -247, // Psi Amp
-                             // NB: Hybrid Shotgun (-4073) is omitted - it has an
-                             // unimplemented `trashedshotgun` script that panics on
-                             // creation (scripts/mod.rs). It is an enemy weapon
-                             // variant, not part of the player arsenal.
+                        // Melee weapons (PropLimbModel, no PropPlayerGun):
+                        -928, // Wrench
+                        -24,  // Electro Shock (rapier)
+                        -28,  // Crystal Shard
+                        -2291, // PsiSword
+                              // NB: Hybrid Shotgun (-4073) is omitted - it has an
+                              // unimplemented `trashedshotgun` script that panics on
+                              // creation (scripts/mod.rs). It is an enemy weapon
+                              // variant, not part of the player arsenal.
                     ];
                     let template_id = DEBUG_WEAPONS[self.debug_weapon_index % DEBUG_WEAPONS.len()];
                     self.debug_weapon_index = self.debug_weapon_index.wrapping_add(1);
@@ -1905,19 +1910,33 @@ impl MissionCore {
                     v_transform.get(weapon).map(|p| p.0).ok()
                 };
                 // Flat first-person model: prefer the weapon's native
-                // PropPlayerGun.hand_model (the SS2 FP mesh), loaded directly so
-                // EVERY gun gets its proper first-person model - not just those
-                // listed in the VR hand-model table. Non-guns fall back to the
+                // first-person mesh - PropPlayerGun.hand_model for guns,
+                // PropLimbModel for melee weapons (wrench etc.) - loaded directly
+                // so EVERY weapon gets its proper FP model, not just those listed
+                // in the VR hand-model table. Other items fall back to the
                 // entity's current model.
-                let hand_model_name = self
+                let fp_model_name = self
                     .world
                     .borrow::<View<PropPlayerGun>>()
                     .ok()
-                    .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()));
+                    .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()))
+                    .or_else(|| {
+                        self.world
+                            .borrow::<View<PropLimbModel>>()
+                            .ok()
+                            .and_then(|v| v.get(weapon).ok().map(|m| m.0.clone()))
+                    });
                 if let Some(xform) = maybe_xform {
-                    let scene_objs = if let Some(name) = hand_model_name {
+                    let scene_objs = if let Some(name) = fp_model_name {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
-                        model.as_ref().to_scene_objects().clone()
+                        // Pose at the rest/bind pose: FP meshes are articulated
+                        // (hand + arm + weapon as skeleton sub-objects), so the
+                        // unskinned `to_scene_objects` leaves the parts unposed
+                        // (the wrench looked mid-swing). An empty AnimationPlayer
+                        // applies the bind transforms; a no-op for static meshes.
+                        model
+                            .as_ref()
+                            .to_animated_scene_objects(&AnimationPlayer::empty())
                     } else if let Some(model) = self.id_to_model.get(&weapon) {
                         match self.id_to_animation_player.get(&weapon) {
                             Some(player) => model.to_animated_scene_objects(player),

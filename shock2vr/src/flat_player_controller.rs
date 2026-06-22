@@ -12,7 +12,10 @@
 use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
 use shipyard::{EntityId, Get, View, World};
 
-use dark::{SCALE_FACTOR, properties::PropFrobInfo};
+use dark::{
+    SCALE_FACTOR,
+    properties::{PropFrobInfo, PropLimbModel},
+};
 
 use crate::{
     input_context::Hand,
@@ -23,9 +26,13 @@ use crate::{
 };
 
 /// Shared viewmodel framing offset (look space: +x right, +y up, -z forward),
-/// before the world-scale divide. Used for all wielded items for now; per-weapon
+/// before the world-scale divide. Used for guns for now; per-weapon
 /// `PropPlayerGun.model_offset` placement is a TODO.
 const VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -5.0);
+/// Viewmodel offset for melee weapons (PropLimbModel, no PropPlayerGun). They
+/// sit closer to the camera (smaller forward) than guns so they read larger /
+/// further back, matching how the FP melee meshes are framed.
+const MELEE_VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -3.0);
 /// Camera (eye) height above the player's feet, in SS2 units before the
 /// world-scale divide. Shared with the runtimes' render-camera `head_offset` via
 /// `crate::PLAYER_EYE_HEIGHT` so the shot/viewmodel origin coincides with the
@@ -146,10 +153,21 @@ impl FlatPlayerController {
             // value (the shotgun/assault 90deg, the psi-amp 180deg), so it is
             // deliberately not used here. Position uses a shared framing offset
             // for now (per-weapon model_offset placement is a TODO).
+            // Melee weapons (PropLimbModel, no model_offset) use a closer offset
+            // so they read larger; guns use the shared offset.
+            let is_melee = world
+                .borrow::<View<PropLimbModel>>()
+                .map(|v| v.get(entity_id).is_ok())
+                .unwrap_or(false);
+            let offset = if is_melee {
+                MELEE_VIEWMODEL_OFFSET
+            } else {
+                VIEWMODEL_OFFSET
+            };
             let rotation = look * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG));
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
-                position: camera_pos + look.rotate_vector(VIEWMODEL_OFFSET / SCALE_FACTOR),
+                position: camera_pos + look.rotate_vector(offset / SCALE_FACTOR),
                 rotation,
                 scale: vec3(1.0, 1.0, 1.0),
             });
