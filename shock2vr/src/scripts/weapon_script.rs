@@ -10,9 +10,9 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
-    physics::PhysicsWorld,
+    physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{RuntimePropFlatAim, RuntimePropTransform, RuntimePropVhots},
-    util::get_rotation_from_forward_vector,
+    util::{get_rotation_from_forward_vector, resolve_proxy_entity},
     vr_config,
 };
 
@@ -21,8 +21,13 @@ use crate::{
 /// of spawning inside it. World units.
 const FLAT_MUZZLE_CLEARANCE: f32 = SCALE_FACTOR;
 
+/// Reach of a flat melee swing (raycast along the crosshair ray), in world units.
+const MELEE_RANGE: f32 = 1.2;
+/// Damage dealt by a flat melee hit. TODO: derive from the weapon's `Melee Typ`.
+const MELEE_DAMAGE: f32 = 6.0;
+
 use super::{
-    Effect, MessagePayload, Script,
+    Effect, Message, MessagePayload, Script,
     script_util::{
         get_all_links_with_template, get_first_link_with_template_and_data,
         play_environmental_sound,
@@ -50,7 +55,7 @@ impl Script for WeaponScript {
         &mut self,
         entity_id: EntityId,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
@@ -68,6 +73,22 @@ impl Script for WeaponScript {
                         Link::Projectile(data) => Some(*data),
                         _ => None,
                     });
+
+                // A weapon with no Projectile link is melee. In flat mode a swing
+                // is a short forward raycast along the crosshair ray
+                // (RuntimePropFlatAim); a hit deals melee damage. (VR melee
+                // damages via physical collision - MeleeWeapon's Collided handler
+                // - and has no flat aim, so it just no-ops here.)
+                if maybe_projectile.is_none() {
+                    if let Ok(aim) = world
+                        .borrow::<View<RuntimePropFlatAim>>()
+                        .unwrap()
+                        .get(entity_id)
+                        .copied()
+                    {
+                        return melee_swing(physics, entity_id, aim, world);
+                    }
+                }
 
                 // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
                 let mut projectile_class_tags: Vec<(String, String)> =
@@ -133,6 +154,42 @@ impl Script for WeaponScript {
             _ => Effect::NoEffect,
         }
     }
+}
+
+/// A flat melee swing: play the swing animation, and raycast a short distance
+/// along the crosshair ray - a hit deals melee damage (hitbox proxies resolve to
+/// their parent). The swing animation plays whether or not the swing connects.
+fn melee_swing(
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    aim: RuntimePropFlatAim,
+    world: &World,
+) -> Effect {
+    let mut effects = vec![Effect::FlatMeleeSwing { entity_id }];
+
+    let hit = physics.ray_cast(
+        aim.origin,
+        aim.forward.normalize() * MELEE_RANGE,
+        InternalCollisionGroups::ENTITY
+            | InternalCollisionGroups::HITBOX
+            | InternalCollisionGroups::SELECTABLE,
+    );
+    if let Some(RayCastResult {
+        maybe_entity_id: Some(target),
+        ..
+    }) = hit
+    {
+        let target = resolve_proxy_entity(world, target);
+        effects.push(Effect::Send {
+            msg: Message {
+                to: target,
+                payload: MessagePayload::Damage {
+                    amount: MELEE_DAMAGE,
+                },
+            },
+        });
+    }
+    Effect::Multiple(effects)
 }
 
 fn create_muzzle_flash(

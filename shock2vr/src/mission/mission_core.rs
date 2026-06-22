@@ -32,11 +32,11 @@ use dark::{
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
-        PropFrameAnimState, PropHasRefs, PropLocalPlayer, PropModelName, PropMotionActorTags,
-        PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity,
-        PropPhysState, PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts,
-        PropTeleported, PropTripFlags, PropertyDefinition, RenderType, ToLink, TripFlags,
-        WrappedEntityId,
+        PropFrameAnimState, PropHasRefs, PropLimbModel, PropLocalPlayer, PropModelName,
+        PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions,
+        PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPlayerGun, PropPosition,
+        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropertyDefinition, RenderType,
+        ToLink, TripFlags, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -105,6 +105,14 @@ pub struct PlayerInfo {
     pub right_hand_entity_id: Option<EntityId>,
     pub inventory_entity_id: EntityId,
 }
+
+/// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
+/// used to pose the flat melee viewmodel in its ready stance.
+const MELEE_IDLE_CLIP: &str = "ph212203";
+/// First-person player-melee swing clip (motiondb `+plyrmelee:2 +plyrmeleeswing`),
+/// played once on a melee attack then auto-returns to the idle. The shipped game
+/// always uses the medium-left swing.
+const MELEE_SWING_CLIP: &str = "leftswing";
 
 /// Debug options accessible from scripts via UniqueView
 #[derive(Unique, Clone, Default)]
@@ -192,6 +200,11 @@ pub struct MissionCore {
     /// Sequential index for `Effect::DebugCycleWeapon` so each trigger wields the
     /// next weapon in `DEBUG_WEAPONS` (flat-mode aim/viewmodel testing).
     pub debug_weapon_index: usize,
+
+    /// First-person animation for the flat melee viewmodel: the wielded melee
+    /// entity and its motion player (loops the player-melee idle; a swing is
+    /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
+    flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
 }
 
 pub struct GlobalContext {
@@ -454,6 +467,7 @@ impl MissionCore {
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
+            flat_melee_anim: None,
         }
     }
 
@@ -628,6 +642,9 @@ impl MissionCore {
             self.world
                 .add_component(weapon, RuntimePropFlatAim { origin, forward });
         }
+
+        // Advance the flat melee swing animation (returns to static idle on end).
+        self.update_flat_melee_anim(time.elapsed);
 
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
@@ -1186,6 +1203,10 @@ impl MissionCore {
                             })
                         }
                     }
+                }
+
+                Effect::FlatMeleeSwing { entity_id } => {
+                    self.queue_flat_melee_swing(asset_cache, entity_id);
                 }
 
                 Effect::CreateEntityByTemplateName {
@@ -1755,21 +1776,26 @@ impl MissionCore {
                     // The SS2 player-weapon roster (templates with PropPlayerGun),
                     // cycled for flat-mode aim/viewmodel testing.
                     const DEBUG_WEAPONS: &[i32] = &[
-                        -17, // Pistol
-                        -18, // Assault Rifle
-                        -19, // Shotgun
-                        -22, // Laser Pistol
-                        -23, // EMP Rifle
-                        -21, // Gren Launcher
-                        -25, // Stasis Field Generator
-                        -26, // Fusion Cannon
-                        -27, // Worm Launcher
-                        -29, // Viral Prolif
+                        -17,  // Pistol
+                        -18,  // Assault Rifle
+                        -19,  // Shotgun
+                        -22,  // Laser Pistol
+                        -23,  // EMP Rifle
+                        -21,  // Gren Launcher
+                        -25,  // Stasis Field Generator
+                        -26,  // Fusion Cannon
+                        -27,  // Worm Launcher
+                        -29,  // Viral Prolif
                         -247, // Psi Amp
-                             // NB: Hybrid Shotgun (-4073) is omitted - it has an
-                             // unimplemented `trashedshotgun` script that panics on
-                             // creation (scripts/mod.rs). It is an enemy weapon
-                             // variant, not part of the player arsenal.
+                        // Melee weapons (PropLimbModel, no PropPlayerGun):
+                        -928, // Wrench
+                        -24,  // Electro Shock (rapier)
+                        -28,  // Crystal Shard
+                        -2291, // PsiSword
+                              // NB: Hybrid Shotgun (-4073) is omitted - it has an
+                              // unimplemented `trashedshotgun` script that panics on
+                              // creation (scripts/mod.rs). It is an enemy weapon
+                              // variant, not part of the player arsenal.
                     ];
                     let template_id = DEBUG_WEAPONS[self.debug_weapon_index % DEBUG_WEAPONS.len()];
                     self.debug_weapon_index = self.debug_weapon_index.wrapping_add(1);
@@ -1824,6 +1850,41 @@ impl MissionCore {
 
         global_effects
     }
+
+    /// Advance the flat melee swing animation. Only an active swing uses the
+    /// persistent player; the idle is the static head-up pose (rendered directly,
+    /// since the looping idle clip carries root motion meant to be cancelled by
+    /// the original engine's camSynch, which we don't implement). When the swing
+    /// completes - or the weapon changes - we drop the player and fall back to
+    /// the static idle.
+    fn update_flat_melee_anim(&mut self, dt: std::time::Duration) {
+        let Some((entity, player)) = self.flat_melee_anim.take() else {
+            return;
+        };
+        if self.interaction.viewmodel_entity() != Some(entity) {
+            return; // weapon changed; leave None -> static idle
+        }
+        let (next, _flags, events, _disp) = AnimationPlayer::update(&player, dt);
+        let completed = events
+            .iter()
+            .any(|e| matches!(e, AnimationEvent::Completed));
+        if !completed {
+            self.flat_melee_anim = Some((entity, next));
+        }
+    }
+
+    /// Start a one-shot swing on the flat melee viewmodel (it plays once, then
+    /// `update_flat_melee_anim` drops it back to the static idle). Driven by
+    /// `Effect::FlatMeleeSwing` on a melee attack.
+    fn queue_flat_melee_swing(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+        if let Some(clip) =
+            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{MELEE_SWING_CLIP}_.mc"))
+        {
+            let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip);
+            self.flat_melee_anim = Some((entity_id, player));
+        }
+    }
+
     pub fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -1905,19 +1966,50 @@ impl MissionCore {
                     v_transform.get(weapon).map(|p| p.0).ok()
                 };
                 // Flat first-person model: prefer the weapon's native
-                // PropPlayerGun.hand_model (the SS2 FP mesh), loaded directly so
-                // EVERY gun gets its proper first-person model - not just those
-                // listed in the VR hand-model table. Non-guns fall back to the
+                // first-person mesh - PropPlayerGun.hand_model for guns,
+                // PropLimbModel for melee weapons (wrench etc.) - loaded directly
+                // so EVERY weapon gets its proper FP model, not just those listed
+                // in the VR hand-model table. Other items fall back to the
                 // entity's current model.
-                let hand_model_name = self
+                let gun_model = self
                     .world
                     .borrow::<View<PropPlayerGun>>()
                     .ok()
                     .and_then(|v| v.get(weapon).ok().map(|g| g.hand_model.clone()));
+                let limb_model = self
+                    .world
+                    .borrow::<View<PropLimbModel>>()
+                    .ok()
+                    .and_then(|v| v.get(weapon).ok().map(|m| m.0.clone()));
+                let is_melee = limb_model.is_some();
+                let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
-                    let scene_objs = if let Some(name) = hand_model_name {
+                    let scene_objs = if let Some(name) = fp_model_name {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
-                        model.as_ref().to_scene_objects().clone()
+                        // FP meshes are articulated (hand + arm + weapon as
+                        // skeleton sub-objects), so the unskinned `to_scene_objects`
+                        // leaves them unposed (the wrench looked mid-swing). Pose
+                        // them with an AnimationPlayer: a melee weapon mid-swing
+                        // uses its swing player; otherwise melee holds the static
+                        // player-melee idle (frame 0 = head-up ready stance); guns
+                        // use the empty/bind pose. No-op for static meshes.
+                        let swing_player = self
+                            .flat_melee_anim
+                            .as_ref()
+                            .filter(|(e, _)| *e == weapon)
+                            .map(|(_, p)| p.clone());
+                        let player = match (is_melee, swing_player) {
+                            (_, Some(p)) => p,
+                            (true, None) => asset_cache
+                                .get_opt(
+                                    &ANIMATION_CLIP_IMPORTER,
+                                    &format!("{MELEE_IDLE_CLIP}_.mc"),
+                                )
+                                .map(AnimationPlayer::from_animation)
+                                .unwrap_or_else(AnimationPlayer::empty),
+                            (false, None) => AnimationPlayer::empty(),
+                        };
+                        model.as_ref().to_animated_scene_objects(&player)
                     } else if let Some(model) = self.id_to_model.get(&weapon) {
                         match self.id_to_animation_player.get(&weapon) {
                             Some(player) => model.to_animated_scene_objects(player),

@@ -68,9 +68,77 @@ Remaining (follow-ups):
 - **Muzzle flash is world-pinned** — created at the weapon's fire-time transform
   and not re-parented, so it doesn't track the weapon. Attach it to the muzzle
   vhot / render it in viewmodel space.
-- **Melee weapons (deferred)** — use `PropLimbModel` (no `PropPlayerGun`, so no
-  `model_offset` / `heading`); need a parallel flat placement path before they
-  can be cycled/wielded.
+- **Melee weapons** — Wrench / Electro Shock / Crystal Shard / PsiSword.
+  - Done: render their `PropLimbModel` FP mesh in the flat viewmodel (they have
+    no `PropPlayerGun`), added to the CycleWeapon roster, a flat swing
+    (no-projectile branch in `WeaponScript`: short raycast along the crosshair
+    ray + `MELEE_DAMAGE`, damage verified on a live enemy), a closer melee
+    viewmodel offset, the **idle pose**, and the **swing animation**. VR melee
+    (physical-collision `MeleeWeapon`) is unchanged.
+  - Remaining: derive damage from the weapon's `Melee Typ`; swing sound;
+    camSynch (below). (Player melee `-928` etc. use `WeaponScript`, not the
+    `wrench`->`MeleeWeapon` script, which belongs to the Maintenance Tool -2949.)
+
+### First-person weapon animation (from the darkEngine reference)
+
+The FP weapon is a **skeletoned actor (ActorType 1 = `PlayerLimb`)** driven by
+the motion system, not a static prop. The original engine layers two motions:
+
+1. **`camSynch`** (virtual, every frame) — bolts the arm's root joint to the
+   camera: `armPos = camPos + camRot*posOffset`, `armRoot = angOffset ∘ camRot`.
+   This **cancels the clips' root motion**; the relative joints carry the gesture.
+2. **a gesture clip** — the idle (`+plyrmelee:0` = `ph212203`, the ready stance)
+   or a swing (`+plyrmelee:2 +plyrmeleeswing` = `leftswing`/`rightswing`/
+   `highswing`; shipped game uses left). Press=windup, release=swing.
+
+Other reference facts: orientation/placement come from a **separate**
+`sMPlayerLimbOffsets` property ("Arm Pos/Ang Offset"), NOT `PropPlayerGun`; no
+FP-specific FOV/scale; melee damage opens a collision window on a swing keyframe
+(`MF_TRIGGER1`) and lands on physical overlap.
+
+What we implemented (this PR):
+- Pose the FP mesh via an `AnimationPlayer` (was unskinned -> looked mid-swing).
+- **Idle**: the static frame-0 of `ph212203` (head-up ready stance). Static
+  because the looping clip carries root motion we'd otherwise need camSynch to
+  cancel.
+- **Swing**: `Effect::FlatMeleeSwing` plays `leftswing` once on attack, then
+  returns to the static idle.
+
+**TODO(camSynch / root override)** — the remaining orientation issue. Symptom:
+the idle/swing arm hangs somewhat low and the arm *stub* (open cut end) is
+visible, because the clip's root motion isn't cancelled (the original engine's
+camSynch re-anchors the arm root to the camera every frame; we don't).
+
+Investigation (how our animation system applies the root — `dark/src/`):
+- A posed FP model has **two** root-motion sources, both in
+  `ss2_skeleton::animate(skeleton, anim_info, additional_joint_transforms)`:
+  1. the **root joint's** per-frame animation transform (the joint entry for the
+     root bone in `animation_transforms`), and
+  2. a **separate per-frame `root_transform`** (`AnimationClip.root_transforms[frame]`),
+     passed into `calc_and_cache_global_transform(..., root_transform)` as the
+     base of the whole hierarchy.
+- `AnimationPlayer.additional_joint_transforms` **completely override** a joint's
+  animation transform (`animate`: `animation_transforms.insert(joint, transform)`,
+  commented "Have joint transforms completely override animation transforms").
+  So overriding the root *joint* there cancels source (1) - but NOT (2).
+
+Plan:
+1. Find the FP skeleton's root joint id (the bone with no parent / id 0).
+2. Set `additional_joint_transforms[root_joint] = identity` (or the desired arm
+   root orientation) on the melee `AnimationPlayer` to cancel source (1). The
+   `AnimationPlayer` builders already thread `additional_joint_transforms`; add a
+   small constructor/setter for it.
+3. Cancel/replace source (2): either feed an identity `root_transform` for the FP
+   weapon path, or add a flag to `animate`/`get_transforms` to ignore
+   `root_transforms`. (Cleanest: a "no root motion" mode on the player or a
+   variant of `to_animated_scene_objects` for view models.)
+4. Then re-anchor the arm to our viewmodel transform (the `SetPositionRotation`
+   already positions the model; with root motion cancelled it should sit
+   correctly) and verify: idle can loop animated without drift, arm stub
+   off-screen, swing stays anchored.
+
+Then also: derive the swing direction/length from hold time (medium vs. long),
+and tie damage to the swing keyframe (`MF_TRIGGER1`) rather than a fixed raycast.
 - **Crouch-accurate aim** — `PLAYER_EYE_HEIGHT` is the standing value; desktop
   crouch (1.5) lowers the camera but the flat controller's shot origin is fixed,
   so crouched shots land slightly high. Pass the actual eye height into the
