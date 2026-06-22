@@ -68,9 +68,16 @@ Remaining (follow-ups):
 - **Muzzle flash is world-pinned** — created at the weapon's fire-time transform
   and not re-parented, so it doesn't track the weapon. Attach it to the muzzle
   vhot / render it in viewmodel space.
-- **Melee weapons (deferred)** — use `PropLimbModel` (no `PropPlayerGun`, so no
-  `model_offset` / `heading`); need a parallel flat placement path before they
-  can be cycled/wielded.
+- **Melee weapons** — Wrench / Electro Shock / Crystal Shard / PsiSword.
+  - Done: render their `PropLimbModel` FP mesh in the flat viewmodel (they have
+    no `PropPlayerGun`), added to the CycleWeapon roster, and a basic flat swing
+    (no-projectile branch in `WeaponScript`: short raycast along the crosshair
+    ray + `MELEE_DAMAGE` to the hit entity). All four render correctly bottom-
+    right; VR melee (physical-collision `MeleeWeapon`) is unchanged.
+  - Remaining: verify swing damage against a live enemy (debug_weapons has no
+    target in reach); derive damage from the weapon's `Melee Typ`; add a swing
+    arc/animation + sound. (Player melee `-928` etc. use `WeaponScript`, not the
+    `wrench`->`MeleeWeapon` script, which belongs to the Maintenance Tool -2949.)
 - **Crouch-accurate aim** — `PLAYER_EYE_HEIGHT` is the standing value; desktop
   crouch (1.5) lowers the camera but the flat controller's shot origin is fixed,
   so crouched shots land slightly high. Pass the actual eye height into the
