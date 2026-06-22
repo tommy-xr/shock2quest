@@ -48,6 +48,7 @@ use std::{
     io::BufReader,
     rc::Rc,
     sync::Arc,
+    thread,
 };
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
@@ -67,7 +68,8 @@ use engine::{
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
 
-use save_load::{EntitySaveData, GlobalData, SaveData};
+use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
+use scenes::LoadingScene;
 use scripts::GlobalEffect;
 use shipyard::*;
 use time::Time;
@@ -134,11 +136,38 @@ impl Default for GameOptions {
     }
 }
 
+/// A level transition that has been started (outgoing scene already saved, loading
+/// screen showing) and whose blocking load is deferred to the next `update` frame.
+/// Only used when the experimental `loading_screen` feature is enabled.
+struct PendingTransition {
+    level_name: String,
+    spawn_loc: SpawnLocation,
+    entities_to_trigger: Vec<String>,
+    quest_info: QuestInfo,
+    held_data: HeldItemSaveData,
+    /// The CPU parse running on a worker thread. While this is in flight the loading
+    /// screen renders (and animates) every frame; once it finishes, the main thread runs
+    /// the GPU `build` and swaps to the mission.
+    parse_handle: thread::JoinHandle<dark::mission::SystemShock2Level>,
+    /// Frames the loading screen has rendered so far (frame-counted, so it works under
+    /// the debug runtime's zero-dt stepping). A minimum display so the loading screen is
+    /// shown for a perceptible moment even if the parse finishes very quickly.
+    frames_shown: u32,
+}
+
+/// Minimum number of frames to show the loading screen before swapping to the mission,
+/// even if the background parse finished sooner. ~0.4s at 60fps.
+const MIN_LOADING_FRAMES: u32 = 24;
+
 pub struct Game {
     options: GameOptions,
     pub asset_cache: AssetCache,
-    global_context: GlobalContext,
+    // `Arc` so the gamesys + definitions can be cloned into a background level-parse
+    // thread (projects/loading-screen.md). Shared immutably after init.
+    global_context: Arc<GlobalContext>,
     active_game_scene: Box<dyn GameScene>,
+    /// Set while a deferred transition is in flight (loading screen showing).
+    pending_transition: Option<PendingTransition>,
     // physics: PhysicsWorld,
     // script_world: ScriptWorld,
     audio_context: AudioContext<EntityId, String>,
@@ -157,7 +186,17 @@ pub struct Game {
 }
 
 impl Game {
-    fn switch_mission(&mut self, level_name: String, spawn_loc: SpawnLocation) {
+    /// Whether the experimental loading screen (deferred transitions) is enabled.
+    fn loading_screen_enabled(&self) -> bool {
+        self.options
+            .experimental_features
+            .contains("loading_screen")
+    }
+
+    /// Capture the outgoing scene's save data (so its state survives the transition)
+    /// and return the context the new mission needs. Must run while the outgoing scene
+    /// is still active.
+    fn save_active_scene(&mut self) -> (QuestInfo, HeldItemSaveData) {
         let current_quest_info = self
             .active_game_scene
             .world()
@@ -178,6 +217,18 @@ impl Game {
             current_save_data,
         );
 
+        (current_quest_info, held_data)
+    }
+
+    /// Load a mission (using previously-captured save context) and make it the active
+    /// scene. This is the blocking part of a transition.
+    fn load_mission_into_scene(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        quest_info: QuestInfo,
+        held_data: HeldItemSaveData,
+    ) {
         let populator: Box<dyn EntityPopulator> = {
             if let Some(save_data) = self
                 .mission_to_save_data
@@ -197,12 +248,97 @@ impl Game {
             &mut self.audio_context,
             &self.global_context,
             spawn_loc,
-            current_quest_info,
+            quest_info,
             populator,
             held_data,
             &self.options,
         );
         self.active_game_scene = Box::new(active_mission);
+    }
+
+    fn switch_mission(&mut self, level_name: String, spawn_loc: SpawnLocation) {
+        let (quest_info, held_data) = self.save_active_scene();
+        self.load_mission_into_scene(level_name, spawn_loc, quest_info, held_data);
+    }
+
+    /// Start a background transition: save the outgoing scene, spawn the GL-free level
+    /// parse on a worker thread, and swap to the loading screen. The loading screen
+    /// animates while the parse runs; `update` completes it once the parse finishes.
+    fn begin_transition(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        entities_to_trigger: Vec<String>,
+    ) {
+        tracing::info!(
+            "[loading-screen] begin_transition -> {} (background parse)",
+            level_name
+        );
+        let (quest_info, held_data) = self.save_active_scene();
+
+        // Spawn the GL-free parse off-thread. It owns `Arc`s of the asset-path layer and
+        // the global context (gamesys + definitions), all `Send + Sync`, and produces a
+        // `Send` `SystemShock2Level`.
+        let asset_paths = self.asset_cache.asset_paths_arc();
+        let base_path = self.asset_cache.base_path().to_string();
+        let global_context = Arc::clone(&self.global_context);
+        let parse_name = level_name.clone();
+        let parse_handle = thread::spawn(move || {
+            Mission::parse(&**asset_paths, &base_path, &parse_name, &global_context)
+        });
+
+        self.active_game_scene = Box::new(LoadingScene::new());
+        self.pending_transition = Some(PendingTransition {
+            level_name,
+            spawn_loc,
+            entities_to_trigger,
+            quest_info,
+            held_data,
+            parse_handle,
+            frames_shown: 0,
+        });
+    }
+
+    /// Complete a background transition queued by [`begin_transition`]: join the finished
+    /// parse and run the main-thread GPU `build`, then swap to the mission.
+    fn finish_transition(&mut self, pending: PendingTransition) {
+        tracing::info!(
+            "[loading-screen] finish_transition -> {} (parse done, building)",
+            pending.level_name
+        );
+        let level = pending
+            .parse_handle
+            .join()
+            .expect("background level-parse thread panicked");
+
+        let populator: Box<dyn EntityPopulator> = {
+            if let Some(save_data) = self
+                .mission_to_save_data
+                .get(&pending.level_name.to_ascii_lowercase())
+            {
+                Box::new(SaveFileEntityPopulator::create(save_data.clone()))
+            } else {
+                Box::new(MissionEntityPopulator::create())
+            }
+        };
+
+        let mission = Mission::build(
+            level,
+            pending.level_name,
+            &mut self.asset_cache,
+            &mut self.audio_context,
+            &self.global_context,
+            pending.spawn_loc,
+            pending.quest_info,
+            populator,
+            pending.held_data,
+            &self.options,
+        );
+        self.active_game_scene = Box::new(mission);
+
+        for entity_name in pending.entities_to_trigger {
+            self.active_game_scene.queue_entity_trigger(entity_name);
+        }
     }
 
     fn switch_mission_with_trigger(
@@ -428,7 +564,8 @@ impl Game {
             asset_cache,
             audio_context,
             active_game_scene,
-            global_context,
+            pending_transition: None,
+            global_context: Arc::new(global_context),
             last_music_cue: None,
             last_env_sound: None,
             options,
@@ -447,6 +584,19 @@ impl Game {
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
         trace!("delta_time: {}", delta_time);
+
+        // Drive a background transition: the loading screen animates while the parse
+        // runs on its worker thread. Once the parse has finished AND the loading screen
+        // has shown for its minimum, run the main-thread build and swap to the mission.
+        if let Some(pending) = self.pending_transition.as_mut() {
+            pending.frames_shown += 1;
+            let ready =
+                pending.parse_handle.is_finished() && pending.frames_shown >= MIN_LOADING_FRAMES;
+            if ready {
+                let pending = self.pending_transition.take().unwrap();
+                self.finish_transition(pending);
+            }
+        }
 
         // Convert triggered actions into effects; triggered actions are
         // consumed here so injected actions (e.g. from the debug runtime)
@@ -536,7 +686,7 @@ impl Game {
             save_data,
             &mut self.asset_cache,
             &mut self.audio_context,
-            &mut self.global_context,
+            &self.global_context,
             &self.options,
         );
         self.active_game_scene = Box::new(mission);
@@ -610,7 +760,11 @@ impl Game {
                     Some(marker) => SpawnLocation::Marker(marker),
                 };
 
-                self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
+                if self.loading_screen_enabled() {
+                    self.begin_transition(level_file, spawn_loc, entities_to_trigger);
+                } else {
+                    self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
+                }
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = {
@@ -621,10 +775,13 @@ impl Game {
                         .unwrap();
                     (player_info.pos, player_info.rotation)
                 };
-                self.switch_mission(
-                    self.active_game_scene.scene_name().to_string(),
-                    SpawnLocation::PositionRotation(position, rotation),
-                );
+                let level_name = self.active_game_scene.scene_name().to_string();
+                let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
+                if self.loading_screen_enabled() {
+                    self.begin_transition(level_name, spawn_loc, vec![]);
+                } else {
+                    self.switch_mission(level_name, spawn_loc);
+                }
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;

@@ -54,6 +54,9 @@ impl ActionDispatcher {
                 head_rotation: input_context.head.rotation,
             });
         }
+        if state.just_triggered(InputAction::DebugReloadLevel) {
+            effects.push(Effect::GlobalEffect(GlobalEffect::TestReload));
+        }
 
         effects
     }
