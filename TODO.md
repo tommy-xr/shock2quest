@@ -8,7 +8,8 @@ Recent work
 - modernize combat: add recoil / accuracy modifier (like counter-strike)
 
 - Fable: finish ragdolls (in progress) - hitbox-fitted colliders + rapier 0.31 compliant joints settle into a heap; on-death ragdoll behind `--experimental ragdoll`; multibody rig still experimental (extremity jitter / hip-sag), see projects/ragdoll-settling-followup.md
-- Fabel: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
+- Fable: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
+- Fable: check to see feasibility of loading the 25th anniversary assets
 
 
 SNACKS:
