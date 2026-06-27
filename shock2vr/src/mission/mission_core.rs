@@ -84,7 +84,7 @@ use crate::{
         script_util::{get_all_links_with_template, get_environmental_sound_query},
         speech_registry::SpeechVoiceRegistry,
     },
-    systems::{run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
+    systems::{run_attachment_update, run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
     teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
@@ -651,6 +651,11 @@ impl MissionCore {
         // from physics
         self.synchronize_physics_positions();
 
+        // Re-anchor attached entities (e.g. a muzzle flash) to their parent's
+        // now-current transform, so they track a moving parent rather than their
+        // spawn pose. Runs after physics sync so parents' transforms are current.
+        self.update_attached_entities();
+
         // Update scripts
         let mut script_effects = profile!(
             scope: "game", level: DEBUG, "script_world.update",
@@ -769,6 +774,17 @@ impl MissionCore {
                 v_entities.add_component(*entity_id, &mut v_transform, RuntimePropTransform(xform));
             }
         };
+    }
+
+    ///
+    /// update_attached_entities
+    ///
+    /// For every entity bolted to a parent (RuntimePropAttachment), recompute its
+    /// RuntimePropTransform as `parent.transform * local_transform`, so it tracks
+    /// the parent each frame (e.g. a muzzle flash following the first-person
+    /// weapon). Entities whose parent has gone away keep their last transform.
+    fn update_attached_entities(&mut self) {
+        self.world.run(run_attachment_update);
     }
 
     fn update_animations(&mut self, time: &Time) {
