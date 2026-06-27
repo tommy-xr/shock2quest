@@ -1242,9 +1242,9 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
             .ok_or_else(|| format!("channel '{channel}' expects a number, got {v}"))
     }
     fn arr(channel: &str, v: &Value, n: usize) -> Result<Vec<f32>, String> {
-        let a = v
-            .as_array()
-            .ok_or_else(|| format!("channel '{channel}' expects an array of {n} numbers, got {v}"))?;
+        let a = v.as_array().ok_or_else(|| {
+            format!("channel '{channel}' expects an array of {n} numbers, got {v}")
+        })?;
         if a.len() != n {
             return Err(format!(
                 "channel '{channel}' expects {n} numbers, got {} ({v})",
@@ -1386,7 +1386,10 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
             let state = game.player_state();
             PlayerInfo {
                 entity_id: state.as_ref().map(|s| s.entity_id),
-                position: state.as_ref().map(|s| s.position).unwrap_or([0.0, 0.0, 0.0]),
+                position: state
+                    .as_ref()
+                    .map(|s| s.position)
+                    .unwrap_or([0.0, 0.0, 0.0]),
                 rotation: state
                     .as_ref()
                     .map(|s| s.rotation)
