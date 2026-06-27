@@ -90,6 +90,19 @@ impl Script for WeaponScript {
                     }
                 }
 
+                // Ammo gating: weapons that carry a `PropGunState` are limited by
+                // their clip. An empty clip dry-fires (no shot/flash); a live shot
+                // consumes one round (the per-shot `m_ammoUsage` from BaseGunDesc
+                // is a TODO - one round per pull for now). Weapons without a gun
+                // state (e.g. unlimited debug weapons) are unaffected.
+                let maybe_ammo = world
+                    .borrow::<View<dark::properties::PropGunState>>()
+                    .ok()
+                    .and_then(|v| v.get(entity_id).ok().map(|g| g.ammo));
+                if maybe_ammo == Some(0) {
+                    return dry_fire(world, entity_id);
+                }
+
                 // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
                 let mut projectile_class_tags: Vec<(String, String)> =
                     if let Some((projectile_template_id, _)) = &maybe_projectile {
@@ -148,7 +161,15 @@ impl Script for WeaponScript {
                 //         * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)),
                 // };
 
-                Effect::Multiple(vec![sound_effect, muzzle_flash_effect, projectile_effect])
+                // Consume a round when the weapon tracks ammo.
+                let mut effects = vec![sound_effect, muzzle_flash_effect, projectile_effect];
+                if maybe_ammo.is_some() {
+                    effects.push(Effect::AdjustAmmo {
+                        entity_id,
+                        delta: -1,
+                    });
+                }
+                Effect::Multiple(effects)
             }
             MessagePayload::TriggerRelease => Effect::NoEffect,
             _ => Effect::NoEffect,
@@ -190,6 +211,13 @@ fn melee_swing(
         });
     }
     Effect::Multiple(effects)
+}
+
+/// An empty-clip dry fire: no projectile or muzzle flash, just the weapon's
+/// "dryfire" click (best-effort - resolves via the gun's sound schema, like the
+/// "shoot" event). Reached when a `PropGunState` weapon has 0 rounds.
+fn dry_fire(world: &World, entity_id: EntityId) -> Effect {
+    play_environmental_sound(world, entity_id, "dryfire", vec![], AudioHandle::new())
 }
 
 fn create_muzzle_flash(
