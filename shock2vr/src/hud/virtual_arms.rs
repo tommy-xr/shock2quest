@@ -141,6 +141,19 @@ pub(crate) fn get_psi_percentage(_world: &World) -> f32 {
     0.75 // Placeholder - 75% psi for testing
 }
 
+/// Current clip ammo of the wielded weapon, or `None` when unarmed or the held
+/// item has no `PropGunState` (melee / unlimited debug weapons). In flatscreen
+/// mode the wielded weapon is the player's left-hand slot (see
+/// `FlatInteraction::held_entities`).
+pub(crate) fn get_wielded_ammo(world: &World) -> Option<i32> {
+    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    let weapon = player_info.left_hand_entity_id?;
+    let v_gun_state = world
+        .borrow::<View<dark::properties::PropGunState>>()
+        .ok()?;
+    v_gun_state.get(weapon).ok().map(|g| g.ammo)
+}
+
 /// Create layered forearm HUD with health and psi bar overlays
 fn create_forearm_hud_with_overlays(
     asset_cache: &mut AssetCache,

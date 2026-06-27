@@ -39,9 +39,8 @@ test(
     await using game = await GameServer.launch({
       mission: "debug_weapons",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8096),
-      // This branch's debug runtime defaults to VR; the flat path drives the
-      // first-person fire loop. (Drop once flat is the runtime default.)
-      debugFlags: ["--flat"],
+      // Flat is the debug runtime's default presentation; the flat path drives
+      // the first-person fire loop.
     });
 
     // debug_weapons starts unarmed; CycleWeapon spawns + wields the pistol.
