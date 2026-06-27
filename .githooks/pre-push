@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# Pre-push hook: reject pushes that would fail the CI "Format Check".
+#
+# Mirrors `.github/workflows/format.yml` (`cargo fmt --all -- --check`) so
+# unformatted Rust never reaches a PR. Enable once per clone with:
+#
+#   git config core.hooksPath .githooks
+#
+# Bypass in a pinch with `git push --no-verify`.
+set -euo pipefail
+
+# Run from the repo root so cargo finds the workspace regardless of $PWD.
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "pre-push: cargo not found on PATH; skipping format check." >&2
+  exit 0
+fi
+
+echo "pre-push: checking formatting (cargo fmt --all -- --check)..."
+if ! cargo fmt --all -- --check; then
+  echo >&2
+  echo "pre-push: Rust code is not formatted. Run 'cargo fmt' and re-commit." >&2
+  echo "          (bypass with 'git push --no-verify' if you must)" >&2
+  exit 1
+fi
+
+echo "pre-push: formatting OK."
