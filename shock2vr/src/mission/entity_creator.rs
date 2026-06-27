@@ -10,7 +10,7 @@ use crate::{
 use engine::physics_log;
 
 use cgmath::{
-    EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, Transform, Vector3, Zero,
+    EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, SquareMatrix, Transform, Vector3, Zero,
     num_traits::abs, vec3,
 };
 use dark::{
@@ -114,6 +114,30 @@ pub fn create_entity_with_position(
         * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z);
 
     world.add_component(entity_id, RuntimePropTransform(transform));
+
+    // Optionally bolt this entity to a parent's transform (e.g. a muzzle flash to
+    // its weapon) so it tracks the parent each frame. Capture the spawn-time
+    // relative pose; if the parent has no transform yet, fall back to no
+    // attachment (the entity stays at its initial pose).
+    if let Some(parent) = additional_options.attach_to {
+        let maybe_local = {
+            let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+            v_transform
+                .get(parent)
+                .ok()
+                .and_then(|p| p.0.invert())
+                .map(|inv_parent| inv_parent * transform)
+        };
+        if let Some(local_transform) = maybe_local {
+            world.add_component(
+                entity_id,
+                RuntimePropAttachment {
+                    parent,
+                    local_transform,
+                },
+            );
+        }
+    }
 
     create_entity_core(
         entity_id,
@@ -785,12 +809,18 @@ pub fn create_physics_representation(
 #[derive(Clone, Debug)]
 pub struct CreateEntityOptions {
     pub force_visible: bool,
+    /// Bolt the new entity to this parent's transform for its lifetime (see
+    /// `RuntimePropAttachment`). The spawn-time relative pose is captured and the
+    /// child then tracks the parent each frame - used so a weapon's muzzle flash
+    /// follows the moving first-person viewmodel instead of snapshotting it once.
+    pub attach_to: Option<EntityId>,
 }
 
 impl Default for CreateEntityOptions {
     fn default() -> Self {
         CreateEntityOptions {
             force_visible: false,
+            attach_to: None,
         }
     }
 }

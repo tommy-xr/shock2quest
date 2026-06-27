@@ -65,9 +65,15 @@ Remaining (follow-ups):
   - Ref: `darkengine` `PlayerGunDescGetModelOffset` / `m_posOffset`. The
     experiment code lived on the abandoned `feat/flat-viewmodel-offset` branch
     (see git reflog) if useful.
-- **Muzzle flash is world-pinned** — created at the weapon's fire-time transform
-  and not re-parented, so it doesn't track the weapon. Attach it to the muzzle
-  vhot / render it in viewmodel space.
+- ~~**Muzzle flash is world-pinned**~~ **(done)** — added a generic attachment
+  mechanism: `RuntimePropAttachment { parent, local_transform }` plus a
+  `CreateEntityOptions.attach_to` that captures the spawn-time relative pose
+  (`parent.transform.invert() * child.transform`), and a per-frame
+  `run_attachment_update` system (`systems/attachment.rs`, runs after physics
+  sync) that re-anchors `child.transform = parent.transform * local`. The muzzle
+  flash now attaches to its firing weapon, so it tracks the per-frame re-placed
+  first-person viewmodel (and VR weapon) instead of snapshotting the fire-time
+  pose. Reusable for later attached effects (shell ejection, smoke).
 - **Melee weapons** — Wrench / Electro Shock / Crystal Shard / PsiSword.
   - Done: render their `PropLimbModel` FP mesh in the flat viewmodel (they have
     no `PropPlayerGun`), added to the CycleWeapon roster, a flat swing
