@@ -84,7 +84,9 @@ use crate::{
         script_util::{get_all_links_with_template, get_environmental_sound_query},
         speech_registry::SpeechVoiceRegistry,
     },
-    systems::{run_attachment_update, run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs},
+    systems::{
+        run_attachment_update, run_bitmap_animation, run_tweq, turn_off_tweqs, turn_on_tweqs,
+    },
     teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
     util::{get_email_sound_file, has_refs, vec3_to_point3},
