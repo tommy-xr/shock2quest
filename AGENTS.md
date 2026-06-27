@@ -9,6 +9,7 @@ Workspace members in `Cargo.toml` include `dark` (Dark Engine formats), `engine`
 - Desktop preview: `cd runtimes/desktop_runtime && cargo run --release` to launch the OpenXR desktop harness.
 - Quest build: `cd runtimes/oculus_runtime && source ./set_up_android_sdk.sh && cargo apk run --release` to bundle, install, and start on device.
 - Lint and check: `cargo fmt --all` followed by `RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime` before pushing. CI compiles with `-D warnings`, so any warning fails the build. Avoid `--workspace` on desktop - Android-only crates (`ndk-sys`, `oboe-sys`) fail to compile for non-Android targets; always scope with `-p`.
+- Enable the committed git hooks once per clone (`git config core.hooksPath .githooks`); the pre-push hook runs `cargo fmt --all -- --check` so unformatted Rust can't reach a PR. See DEVELOPMENT.md §2b.
 
 ## Coding Style & Naming Conventions
 Use the default Rust style (four-space indent, trailing commas, snake_case functions, UpperCamelCase types) enforced by `cargo fmt`. Prefer explicit visibility such as `pub(crate)` and comment unsafe blocks to explain invariants. Align module paths with folder names, register new crates in `Cargo.toml`, and keep asset filenames lowercase with hyphens (for example, `assets/hud-icons/health.png`).
