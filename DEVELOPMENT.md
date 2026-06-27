@@ -27,6 +27,19 @@
 
 - Copy local game files (\*.mis, res folder) into the `shock2quest/Data` folder
 
+### 2b. Enable git hooks (recommended)
+
+The repo ships a pre-push hook that runs `cargo fmt --all -- --check` so
+unformatted Rust never reaches a PR (it would otherwise fail the CI "Format
+Check"). Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook only checks formatting before a push (it does not slow down individual
+commits). Bypass in a pinch with `git push --no-verify`.
+
 ### 3. Build Locally
 
 #### 3a. Desktop (Windows, OSX)
