@@ -10,6 +10,36 @@ See also: `projects/flatscreen-and-vr-architecture.md` (the intent/outcome seam
 that all of this must respect), `projects/melee-combat.md`,
 `projects/player-damage.md`.
 
+## Status / progress (2026-06-27)
+
+Weapon **ammo** landed (#326 data/firing, #327 HUD):
+
+- Parse `P$GunState` into a `PropGunState` component (`dark`), mirroring the Dark
+  engine `sGunState` (ammo, condition, setting, modification, silence). The
+  pistol reads `ammo: 12`.
+- `WeaponScript` gates firing on ammo when a gun state is present: a live shot
+  consumes one round (`Effect::AdjustAmmo`); an empty clip dry-fires (no
+  projectile/flash, best-effort "dryfire" click). Weapons without a gun state
+  (melee, unlimited debug weapons) are unchanged. Current ammo is exposed on the
+  debug runtime's `/v1/entities/:id`; e2e test `weapon-ammo.e2e.test.ts`.
+- **Faithful flat HUD** (positions transcribed from `shkmeter.cpp` / `shkammov.cpp`,
+  not eyeballed): ammo gauge `AMMOBACK.PCX` (94×64) at (544, 414); health/psi
+  meters corrected to the 260×64 block at (2, 414) with **health above psi** (was
+  swapped) and both numeric readouts; `BIOFULL.PCX` bio-monitor backdrop behind
+  them. Note SS2 anchors HUD chrome to screen edges at native pixel size; our
+  `UiCanvas` instead scales the whole 640×480 layout (`PreserveAspect`).
+
+Ammo follow-ups (not yet done): per-shot `m_ammoUsage` and clip size from
+`BaseGunDesc` (`P$BaseGunDe`, 136 bytes, unparsed), **reload** (animation gates
+the refill), and **ammo-type switching** (guns carry multiple `Projectile`
+links - standard/AP/HE; firing currently always uses the first). A faithful
+HUD would also need an edge-anchored `ScaleMode` to keep chrome at native size.
+
+Also landed since the last entry (out of this doc's scope but related):
+muzzle flash follows the weapon via a generic `RuntimePropAttachment` (#323),
+and debug-runtime ergonomics - flat by default, wielded-entity in `/v1/info`,
+validated input (#324).
+
 ## Status / progress (2026-06-21)
 
 Landed on branch `feat/flat-aim-viewmodel` (PR: flat first-person weapons — aim +
