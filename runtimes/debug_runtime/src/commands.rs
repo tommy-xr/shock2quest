@@ -26,8 +26,10 @@ pub enum RuntimeCommand {
     /// Get current input state
     GetInput(oneshot::Sender<InputState>),
 
-    /// Set input channel values
-    SetInput(InputPatch),
+    /// Set one or more input channel values. Replies `Ok(())` when every patch
+    /// applied, or `Err(message)` describing the first invalid channel/value so
+    /// the HTTP layer can return an actionable 400 instead of a silent success.
+    SetInput(Vec<InputPatch>, oneshot::Sender<Result<(), String>>),
 
     /// Move the player to a position
     MovePlayer(Vector3<f32>),
@@ -391,6 +393,11 @@ pub struct PlayerInfo {
     pub rotation: [f32; 4], // quaternion
     pub camera_offset: [f32; 3],
     pub camera_rotation: [f32; 4], // quaternion
+    /// The wielded/first-person weapon in flatscreen mode (the player's left-hand
+    /// slot); `None` when unarmed. See `shock2vr::PlayerStateSnapshot`.
+    pub wielded_entity_id: Option<i32>,
+    /// The entity held in the right hand (VR), `None` otherwise.
+    pub right_hand_entity_id: Option<i32>,
 }
 
 /// Input state snapshot

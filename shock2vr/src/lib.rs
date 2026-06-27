@@ -185,7 +185,41 @@ pub struct Game {
     should_quit: bool,
 }
 
+/// Player state for debug introspection. Entity ids use `EntityId::inner() as
+/// i32`, matching the debug runtime's entity endpoints. In flatscreen mode
+/// `wielded_entity_id` is the first-person weapon (the controller wields into the
+/// player's "left hand" slot); in VR the two hand slots hold whatever is grabbed.
+#[derive(Clone, Debug)]
+pub struct PlayerStateSnapshot {
+    pub entity_id: i32,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub wielded_entity_id: Option<i32>,
+    pub right_hand_entity_id: Option<i32>,
+}
+
 impl Game {
+    /// A snapshot of the player (position, look rotation, held/wielded entities)
+    /// for debug tooling, or `None` if the active scene has no player (e.g. a
+    /// menu). Reads the `PlayerInfo` unique from the active world.
+    pub fn player_state(&self) -> Option<PlayerStateSnapshot> {
+        use crate::mission::mission_core::PlayerInfo;
+        let world = self.world();
+        let info = world.borrow::<shipyard::UniqueView<PlayerInfo>>().ok()?;
+        Some(PlayerStateSnapshot {
+            entity_id: info.entity_id.inner() as i32,
+            position: [info.pos.x, info.pos.y, info.pos.z],
+            rotation: [
+                info.rotation.v.x,
+                info.rotation.v.y,
+                info.rotation.v.z,
+                info.rotation.s,
+            ],
+            wielded_entity_id: info.left_hand_entity_id.map(|e| e.inner() as i32),
+            right_hand_entity_id: info.right_hand_entity_id.map(|e| e.inner() as i32),
+        })
+    }
+
     /// Whether the experimental loading screen (deferred transitions) is enabled.
     fn loading_screen_enabled(&self) -> bool {
         self.options
