@@ -31,10 +31,16 @@ const CROSSHAIR: Rect = Rect::new(
 // bar art (HPBAR/PSIBAR.PCX) is 80x14.
 const METERS_X: f32 = 2.0;
 const METERS_Y: f32 = 414.0;
+const METERS_W: f32 = 260.0;
+const METERS_H: f32 = 64.0;
 const BAR_W: f32 = 80.0;
 const BAR_H: f32 = 14.0;
 const TEXT_W: f32 = 60.0;
 const TEXT_SIZE: f32 = 16.0;
+
+/// Bio-monitor backdrop (BIOFULL.PCX, 260x64) the bars/numbers sit on, the
+/// health/psi equivalent of the ammo gauge's AMMOBACK frame (`shkmeter.cpp`).
+const METERS_BACKDROP: Rect = Rect::new(METERS_X, METERS_Y, METERS_W, METERS_H);
 
 const HEALTH_BAR: Rect = Rect::new(METERS_X + 8.0, METERS_Y + 18.0, BAR_W, BAR_H); // (10, 432)
 const PSI_BAR: Rect = Rect::new(METERS_X + 8.0, METERS_Y + 41.0, BAR_W, BAR_H); //   (10, 455)
@@ -64,6 +70,8 @@ pub(crate) fn build_flat_hud_canvas(
 
     canvas
         .image(CROSSHAIR, "CROSSHAI.PCX")
+        // Bio-monitor backdrop first; the bars + numbers render on top of it.
+        .image(METERS_BACKDROP, "BIOFULL.PCX")
         .bar(HEALTH_BAR, "HPBAR.PCX", health_fraction)
         .bar(PSI_BAR, "PSIBAR.PCX", psi_fraction);
 
@@ -122,17 +130,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canvas_has_crosshair_bars_and_readouts() {
-        // Crosshair + 2 bars + 2 stat numbers = 5 (no weapon wielded).
+    fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
+        // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
         let canvas = build_flat_hud_canvas(1.0, 0.75, None);
-        assert_eq!(canvas.element_count(), 5);
+        assert_eq!(canvas.element_count(), 6);
     }
 
     #[test]
     fn wielding_a_weapon_adds_the_ammo_gauge() {
         // ...plus the ammo backdrop + count when a clip is present.
         let canvas = build_flat_hud_canvas(1.0, 0.75, Some(12));
-        assert_eq!(canvas.element_count(), 7);
+        assert_eq!(canvas.element_count(), 8);
     }
 
     #[test]
