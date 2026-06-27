@@ -117,10 +117,12 @@ struct Args {
     #[arg(long)]
     experimental: Option<String>,
 
-    /// Use the flatscreen (non-VR) presentation: screen-space 2D HUD instead of
-    /// the VR forearm panels.
+    /// Opt into the VR presentation (forearm panels, two-handed interaction).
+    /// The debug runtime defaults to flatscreen (screen-space 2D HUD,
+    /// first-person viewmodel) to match `desktop_runtime` and because the
+    /// flat path is what most headless weapon/aim testing exercises.
     #[arg(long)]
-    flat: bool,
+    vr: bool,
 }
 
 /// Default debug-camera head rotation.
@@ -366,11 +368,14 @@ fn run_game_blocking(
     let (mission, spawn_location) = parse_mission(&args.mission);
     info!("Mission parsed: {} with spawn location", mission);
 
-    let presentation_mode = if args.flat {
-        shock2vr::PresentationMode::Flat
-    } else {
+    // Flatscreen is the default debug presentation (matching desktop_runtime);
+    // --vr opts into the VR forearm/hands path.
+    let presentation_mode = if args.vr {
         shock2vr::PresentationMode::Vr
+    } else {
+        shock2vr::PresentationMode::Flat
     };
+    info!("Presentation mode: {:?}", presentation_mode);
 
     let options = GameOptions {
         mission: mission.clone(),
@@ -1149,20 +1154,28 @@ fn process_command(
                 tracing::warn!("Failed to send input state - receiver dropped");
             }
         }
-        RuntimeCommand::SetInput(patch) => {
+        RuntimeCommand::SetInput(patches, reply) => {
             // Patch the runtime-owned input state directly; it is fed to
-            // game.update each frame and persists until changed.
-            let success = apply_input_patch(current_input, &patch.channel, &patch.value);
-            if success {
-                tracing::info!(
-                    "Successfully set input channel '{}' via remote control",
-                    patch.channel
-                );
-            } else {
-                tracing::warn!(
-                    "Failed to set input channel '{}' (unrecognized channel or bad value)",
-                    patch.channel
-                );
+            // game.update each frame and persists until changed. Apply all
+            // patches, stopping at the first invalid channel/value so the HTTP
+            // caller gets an actionable error instead of a silent partial apply.
+            let mut result = Ok(());
+            for patch in &patches {
+                match apply_input_patch(current_input, &patch.channel, &patch.value) {
+                    Ok(()) => tracing::info!(
+                        "Set input channel '{}' = {} via remote control",
+                        patch.channel,
+                        patch.value
+                    ),
+                    Err(msg) => {
+                        tracing::warn!("Rejected input patch: {}", msg);
+                        result = Err(msg);
+                        break;
+                    }
+                }
+            }
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send SetInput result - receiver dropped");
             }
         }
         RuntimeCommand::Shutdown => {
@@ -1210,18 +1223,37 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 /// - `{left,right}_hand.squeeze`    : number in [0, 1] (alias `squeeze_value`)
 /// - `{left,right}_hand.a`          : number in [0, 1] (alias `a_value`)
 /// - `{left,right}_hand.thumbstick` : `[x, y]`
-fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> bool {
+/// One line describing every recognized input channel, used in error messages so
+/// a bad request is self-documenting.
+fn input_channels_help() -> &'static str {
+    "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
+     {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
+     {left,right}_hand.thumbstick [x,y]"
+}
+
+fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> Result<(), String> {
     use cgmath::Vector2;
 
-    fn parse_f32(v: &Value) -> Option<f32> {
-        v.as_f64().map(|f| f as f32)
+    // Parse a scalar/array value for `channel`, attributing a clear error to the
+    // channel and value shape when it doesn't match.
+    fn num(channel: &str, v: &Value) -> Result<f32, String> {
+        v.as_f64()
+            .map(|f| f as f32)
+            .ok_or_else(|| format!("channel '{channel}' expects a number, got {v}"))
     }
-    fn parse_arr(v: &Value, n: usize) -> Option<Vec<f32>> {
-        let a = v.as_array()?;
+    fn arr(channel: &str, v: &Value, n: usize) -> Result<Vec<f32>, String> {
+        let a = v.as_array().ok_or_else(|| {
+            format!("channel '{channel}' expects an array of {n} numbers, got {v}")
+        })?;
         if a.len() != n {
-            return None;
+            return Err(format!(
+                "channel '{channel}' expects {n} numbers, got {} ({v})",
+                a.len()
+            ));
         }
-        a.iter().map(parse_f32).collect()
+        a.iter()
+            .map(|e| num(channel, e))
+            .collect::<Result<Vec<_>, _>>()
     }
 
     // Hand channels: "<left|right>_hand.<field>"
@@ -1229,60 +1261,56 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
         let hand = match side {
             "left" => &mut input.left_hand,
             "right" => &mut input.right_hand,
-            _ => return false,
+            _ => {
+                return Err(format!(
+                    "unknown input channel '{channel}'; {}",
+                    input_channels_help()
+                ));
+            }
         };
         return match field {
-            "trigger" | "trigger_value" => match parse_f32(value) {
-                Some(v) => {
-                    hand.trigger_value = v;
-                    true
-                }
-                None => false,
-            },
-            "squeeze" | "squeeze_value" => match parse_f32(value) {
-                Some(v) => {
-                    hand.squeeze_value = v;
-                    true
-                }
-                None => false,
-            },
-            "a" | "a_value" => match parse_f32(value) {
-                Some(v) => {
-                    hand.a_value = v;
-                    true
-                }
-                None => false,
-            },
-            "thumbstick" => match parse_arr(value, 2) {
-                Some(a) => {
-                    hand.thumbstick = Vector2::new(a[0], a[1]);
-                    true
-                }
-                None => false,
-            },
-            _ => false,
+            "trigger" | "trigger_value" => {
+                hand.trigger_value = num(channel, value)?;
+                Ok(())
+            }
+            "squeeze" | "squeeze_value" => {
+                hand.squeeze_value = num(channel, value)?;
+                Ok(())
+            }
+            "a" | "a_value" => {
+                hand.a_value = num(channel, value)?;
+                Ok(())
+            }
+            "thumbstick" => {
+                let a = arr(channel, value, 2)?;
+                hand.thumbstick = Vector2::new(a[0], a[1]);
+                Ok(())
+            }
+            _ => Err(format!(
+                "unknown input channel '{channel}'; {}",
+                input_channels_help()
+            )),
         };
     }
 
     match channel {
-        "head.rotation" => match parse_arr(value, 4) {
-            Some(q) => {
-                input.head.rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
-                true
-            }
-            None => false,
-        },
+        "head.rotation" => {
+            let q = arr(channel, value, 4)?;
+            input.head.rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
+            Ok(())
+        }
         // Desktop camera convention (yaw=pitch=0 looks toward -X); drives both
         // the render camera and the viewmodel. Convenient for pointing the
         // camera without hand-authoring a quaternion.
-        "head.look" => match parse_arr(value, 2) {
-            Some(yp) => {
-                input.head.rotation = head_rotation_from_yaw_pitch(yp[0], yp[1]);
-                true
-            }
-            None => false,
-        },
-        _ => false,
+        "head.look" => {
+            let yp = arr(channel, value, 2)?;
+            input.head.rotation = head_rotation_from_yaw_pitch(yp[0], yp[1]);
+            Ok(())
+        }
+        _ => Err(format!(
+            "unknown input channel '{channel}'; {}",
+            input_channels_help()
+        )),
     }
 }
 
@@ -1352,12 +1380,25 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
             total_ms: time.total.as_millis() as f32,
         },
         mission: game.scene_name().to_string(),
-        player: PlayerInfo {
-            entity_id: None,                       // TODO: Get player entity ID
-            position: [0.0, 0.0, 0.0],             // TODO: Get player position
-            rotation: [1.0, 0.0, 0.0, 0.0],        // TODO: Get player rotation
-            camera_offset: [0.0, 1.6, 0.0],        // TODO: Get camera offset
-            camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
+        player: {
+            // Real player state from the active world (position, look, and the
+            // held/wielded entities), or zeros when the scene has no player.
+            let state = game.player_state();
+            PlayerInfo {
+                entity_id: state.as_ref().map(|s| s.entity_id),
+                position: state
+                    .as_ref()
+                    .map(|s| s.position)
+                    .unwrap_or([0.0, 0.0, 0.0]),
+                rotation: state
+                    .as_ref()
+                    .map(|s| s.rotation)
+                    .unwrap_or([1.0, 0.0, 0.0, 0.0]),
+                camera_offset: [0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0],
+                camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
+                wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
+                right_hand_entity_id: state.as_ref().and_then(|s| s.right_hand_entity_id),
+            }
         },
         entity_count,
         debug_features: vec![], // TODO: List active debug features
@@ -2004,24 +2045,77 @@ async fn get_input_state(
     }
 }
 
-/// HTTP endpoint handler: Set input channel value
-async fn set_input_channel(
-    State(command_tx): State<tokio::sync::mpsc::UnboundedSender<commands::RuntimeCommand>>,
-    LenientJson(patch): LenientJson<commands::InputPatch>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    if command_tx
-        .send(commands::RuntimeCommand::SetInput(patch))
-        .is_err()
-    {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+/// Parse a `/v1/control/input` POST body into input patches, accepting either
+/// shape:
+/// - explicit:  `{"channel": "right_hand.trigger", "value": 1.0}`
+/// - map form:  `{"right_hand.trigger": 1.0, "head.look": [30, 0]}`
+///
+/// The map form is detected when the object does NOT have both `channel` and
+/// `value` keys. Returns an actionable error (not a silent empty patch) when the
+/// body isn't a usable object, so a malformed request fails loudly.
+fn parse_input_patches(body: &serde_json::Value) -> Result<Vec<commands::InputPatch>, String> {
+    let obj = body.as_object().ok_or_else(|| {
+        format!(
+            "request body must be a JSON object, e.g. {{\"channel\":\"right_hand.trigger\",\"value\":1.0}} \
+             or {{\"right_hand.trigger\":1.0}}; {}",
+            input_channels_help()
+        )
+    })?;
+
+    // Explicit {channel, value} form.
+    if obj.contains_key("channel") && obj.contains_key("value") {
+        let channel = obj["channel"]
+            .as_str()
+            .ok_or_else(|| "\"channel\" must be a string".to_string())?
+            .to_string();
+        return Ok(vec![commands::InputPatch {
+            channel,
+            value: obj["value"].clone(),
+        }]);
     }
 
-    // SetInput doesn't return a value, so just return success
-    let response = serde_json::json!({
-        "success": true,
-        "message": "Input channel updated"
-    });
-    Ok(Json(response))
+    if obj.is_empty() {
+        return Err(format!(
+            "no input channels in request; {}",
+            input_channels_help()
+        ));
+    }
+
+    // Map form: every key is a channel name.
+    Ok(obj
+        .iter()
+        .map(|(channel, value)| commands::InputPatch {
+            channel: channel.clone(),
+            value: value.clone(),
+        })
+        .collect())
+}
+
+/// HTTP endpoint handler: Set one or more input channel values.
+async fn set_input_channel(
+    State(command_tx): State<tokio::sync::mpsc::UnboundedSender<commands::RuntimeCommand>>,
+    LenientJson(body): LenientJson<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let patches = parse_input_patches(&body).map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    if command_tx
+        .send(commands::RuntimeCommand::SetInput(patches, reply_tx))
+        .is_err()
+    {
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(Ok(())) => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "Input channel(s) updated"
+        }))),
+        // An invalid channel/value: surface it as an actionable 400 instead of
+        // the previous silent success.
+        Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
+        Err(_) => Err(game_loop_unavailable()),
+    }
 }
 
 /// HTTP endpoint handler: Execute a gameplay command via the runtime

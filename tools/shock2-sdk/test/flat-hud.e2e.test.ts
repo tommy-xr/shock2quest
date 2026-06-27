@@ -3,9 +3,9 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 
-// End-to-end smoke test for the flatscreen (non-VR) presentation. Launches the
-// debug runtime with `--flat` so the game builds the screen-space 2D HUD in
-// `render_per_eye` instead of the VR forearm panels, then confirms a frame
+// End-to-end smoke test for the flatscreen (non-VR) presentation. The debug
+// runtime defaults to flatscreen, so the game builds the screen-space 2D HUD in
+// `render_per_eye` instead of the VR forearm panels; this confirms a frame
 // renders end-to-end without panicking. Pixel-level correctness of the HUD
 // layout is covered by the Rust unit tests in `shock2vr/src/hud/flat_hud.rs`.
 //
@@ -20,7 +20,7 @@ test(
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8093),
-      debugFlags: ["--flat"],
+      // Flatscreen is the debug runtime's default presentation now.
     });
 
     // Advance enough frames for the mission to load and render.

@@ -5,6 +5,7 @@ export type InputAction =
   | "QuickLoad"
   | "SpawnDebugItem"
   | "MoveInventory"
+  | "CycleWeapon"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
@@ -115,11 +116,23 @@ export interface RayCastResult {
   is_sensor: boolean;
 }
 
+export interface PlayerSnapshot {
+  entity_id: number | null;
+  position: Vec3;
+  rotation: [number, number, number, number];
+  camera_offset: Vec3;
+  camera_rotation: [number, number, number, number];
+  /** The wielded/first-person weapon in flatscreen mode; null when unarmed. */
+  wielded_entity_id: number | null;
+  /** The entity held in the right hand (VR); null otherwise. */
+  right_hand_entity_id: number | null;
+}
+
 export interface FrameSnapshot {
   frame_index: number;
   time: { total: number; delta: number };
   mission: string;
-  player: unknown;
+  player: PlayerSnapshot;
   entity_count: number;
   debug_features: string[];
   inputs: unknown;
