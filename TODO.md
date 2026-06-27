@@ -4,14 +4,16 @@ TODO:
 Recent work
 - (in progress) flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
 - flat runtime -> fix alpha transparency / z-order break
-- flat runtime -> fix aiming ofset (viewmodel framing offsets still first-pass, want interactive tuning)
+- [x] flat runtime -> camera-origin aim along the crosshair (#315); muzzle flash now tracks the weapon via RuntimePropAttachment (#323)
+- flat runtime -> per-weapon viewmodel framing from PropPlayerGun.model_offset (needs a separate wider-FOV viewmodel projection; see projects/flat-weapon-handling.md)
 - modernize combat: add recoil / accuracy modifier (like counter-strike)
+- weapon ammo next slices: per-shot m_ammoUsage + clip size from BaseGunDesc (P$BaseGunDe), reload, ammo-type switching (see projects/flat-weapon-handling.md)
 
 - Fable: finish ragdolls (in progress) - hitbox-fitted colliders + rapier 0.31 compliant joints settle into a heap; on-death ragdoll behind `--experimental ragdoll`; multibody rig still experimental (extremity jitter / hip-sag), see projects/ragdoll-settling-followup.md
 - Fable: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
 - Fable: check to see feasibility of loading the 25th anniversary assets
-- Fable: fix flat screen first-person melee weapon orientation
-- Fable: fix flat screen first-person ranged weapon positioning
+- Fable: fix flat screen first-person melee weapon orientation (camSynch / root-override; arm hangs low + stub visible - plan in projects/flat-weapon-handling.md)
+- Fable: fix flat screen first-person ranged weapon positioning (per-weapon model_offset framing, above)
 
 
 SNACKS:
@@ -451,6 +453,11 @@ Release Checklist
 - UiCanvas: placement-agnostic 2D UI layer (HUD + menu migrated, #300)
 - Ragdoll (in progress): hitbox-fitted limb colliders, rapier 0.19 -> 0.31 upgrade, compliant joints that settle into a heap; on-death ragdoll + corpse handoff behind `--experimental` (#278-#304)
 - Debug runtime: physics body/joint introspection, ragdoll metrics, fixed-timestep deterministic stepping
+- Flat weapons: first-person aim + viewmodel from PropPlayerGun (#315); melee render/idle/swing (#319-#321)
+- Muzzle flash follows the weapon: generic `RuntimePropAttachment` mechanism (parent transform + captured local pose, re-anchored each frame), reusable for later attached effects (#323)
+- Debug runtime ergonomics: defaults to flat (`--vr` to opt in), `/v1/info` reports player + wielded entity, `/v1/control/input` accepts both body shapes and validates (actionable 400s), e2e suite runs serially (#324)
+- Weapon ammo: parse `P$GunState`, consume a round per shot, dry-fire at empty (#326); faithful flat HUD - ammo gauge (AMMOBACK) + corrected health/psi meters + BIOFULL bio-monitor backdrop, all positioned from the original `shkmeter.cpp`/`shkammov.cpp` coords (#327)
+- Dev workflow: pre-push git hook running `cargo fmt --check` (#325)
 
 2026: Things I hope we can do
 
