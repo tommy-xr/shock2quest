@@ -547,3 +547,23 @@ cargo run -p dark_query -- entities
 
 - Make sure, when adding a test that exercises code in a PR, to do a _negative_ test first - it should fail without the necessary change. Then, validate the code change makes it green
 - For behavior that needs a running game (level loading, AI, input, gameplay), write an SDK scenario test in `tools/shock2-sdk/test/*.e2e.test.ts` (gated behind `SHOCK2_E2E=1`) - see "Iterating on Visual Features" above
+
+### Run the full e2e suite before landing a change
+
+**Before landing any non-trivial change, run the full SDK e2e suite** (skip only
+for trivial / docs / formatting edits):
+
+```bash
+cd tools/shock2-sdk && npm run test:e2e
+```
+
+CI runs only the fast `npm test` (unit tests); the e2e suite is **opt-in
+(`SHOCK2_E2E=1`) and is NOT run by CI**, so a green CI does not mean the game
+still loads or runs. `test/missions.e2e.test.ts` launches every mission in
+`Data/` and is the safety net for changes to parsing, level loading, entity
+instantiation, or serialization - exactly the class of change that can compile
+and pass unit tests while breaking every mission at runtime (e.g. a property
+parser reading the wrong byte count). If the full suite is too slow to run every
+iteration, at minimum run `missions.e2e.test.ts` plus any e2e test covering the
+system you touched, and run the full suite once before you consider the change
+done.
