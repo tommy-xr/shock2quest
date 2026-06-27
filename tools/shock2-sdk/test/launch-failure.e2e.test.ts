@@ -16,9 +16,9 @@ test(
     await assert.rejects(
       GameServer.launch({
         mission: "doesnotexist.mis",
-        // Unique port: `node --test` runs e2e files concurrently, and a port
-        // shared with another test (flat-hud was also 8093) makes this launch's
-        // health poll see the OTHER test's healthy runtime and wrongly succeed.
+        // The e2e suite runs serially (`--test-concurrency=1`), so ports don't
+        // collide across files; a unique default is just belt-and-suspenders for
+        // anyone running this file alongside others by hand.
         port: Number(process.env.SHOCK2_E2E_PORT ?? 8095),
       }),
       (error: Error) => {

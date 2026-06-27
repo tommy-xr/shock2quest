@@ -29,7 +29,9 @@ if (files.length === 0) {
 
 let passed = 0;
 for (let i = 1; i <= count; i++) {
-  const args = ["--test"];
+  // Serialize files (--test-concurrency=1): each e2e test spawns its own heavy
+  // debug runtime, so running them one at a time avoids port/resource contention.
+  const args = ["--test", "--test-concurrency=1"];
   if (pattern) args.push(`--test-name-pattern=${pattern}`);
   args.push(...files);
 
