@@ -9,6 +9,7 @@ Recent work
 
 - Fable: finish ragdolls (in progress) - hitbox-fitted colliders + rapier 0.31 compliant joints settle into a heap; on-death ragdoll behind `--experimental ragdoll`; multibody rig still experimental (extremity jitter / hip-sag), see projects/ragdoll-settling-followup.md
 - Fable: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
+- Fable: check to see feasibility of loading the 25th anniversary assets
 - Fable: fix flat screen first-person melee weapon orientation
 - Fable: fix flat screen first-person ranged weapon positioning
 
