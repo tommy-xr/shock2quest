@@ -16,7 +16,10 @@ test(
     await assert.rejects(
       GameServer.launch({
         mission: "doesnotexist.mis",
-        port: Number(process.env.SHOCK2_E2E_PORT ?? 8093),
+        // Unique port: `node --test` runs e2e files concurrently, and a port
+        // shared with another test (flat-hud was also 8093) makes this launch's
+        // health poll see the OTHER test's healthy runtime and wrongly succeed.
+        port: Number(process.env.SHOCK2_E2E_PORT ?? 8095),
       }),
       (error: Error) => {
         assert.match(error.message, /debug_runtime failed to start/);

@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc",
     "test": "tsc && node --test \"dist/test/*.test.js\"",
-    "test:e2e": "tsc && SHOCK2_E2E=1 node --test \"dist/test/*.test.js\""
+    "test:e2e": "tsc && SHOCK2_E2E=1 node --test \"dist/test/*.test.js\"",
+    "test:e2e:reliability": "tsc && node scripts/reliability.mjs"
   },
   "engines": {
     "node": ">=20"
