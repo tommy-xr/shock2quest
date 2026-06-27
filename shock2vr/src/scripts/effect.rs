@@ -65,6 +65,13 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Adjust a weapon's current clip ammo (`PropGunState.ammo`) by `delta`
+    /// (negative to consume). No-op for entities without a gun state.
+    AdjustAmmo {
+        entity_id: EntityId,
+        delta: i32,
+    },
+
     ApplyForce {
         entity_id: EntityId,
         force: Vector3<f32>,

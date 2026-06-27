@@ -1206,6 +1206,17 @@ impl MissionCore {
                     }
                 }
 
+                Effect::AdjustAmmo { entity_id, delta } => {
+                    let mut v_gun_state = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropGunState>>()
+                        .unwrap();
+
+                    if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
+                        gun_state.ammo = (gun_state.ammo + delta).max(0);
+                    }
+                }
+
                 Effect::AwardXP { amount } => {
                     warn!("!! TODO !!: Award XP {}", amount);
                 }
@@ -2901,6 +2912,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             |v_pos: View<dark::properties::PropPosition>,
              v_sym_name: View<dark::properties::PropSymName>,
              v_scripts: View<dark::properties::PropScripts>,
+             v_gun_state: View<dark::properties::PropGunState>,
              v_links: View<dark::properties::Links>| {
                 let position = v_pos.get(id).ok()?;
                 let rotation_array = [
@@ -2943,6 +2955,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "Scripts".to_string(),
                         value: scripts.scripts.join(", "),
+                    });
+                }
+
+                // Add weapon ammo (current clip) when present
+                if let Ok(gun_state) = v_gun_state.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "Ammo".to_string(),
+                        value: gun_state.ammo.to_string(),
                     });
                 }
 
