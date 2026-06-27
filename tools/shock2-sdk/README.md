@@ -84,3 +84,11 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
   spawned runtime (export `RUST_BACKTRACE=full` yourself for more frames).
 - Writing a new scenario test: copy `test/pathfinding.e2e.test.ts`. Gate
   long-running tests behind `SHOCK2_E2E=1` so `npm test` stays fast.
+- The e2e suite runs **serially** (`--test-concurrency=1`): each test spawns its
+  own heavy debug runtime, so one-at-a-time avoids port/resource contention
+  without hand-syncing ports across files (a unique default port per file is
+  still kept as a courtesy for running files individually).
+- Reliability runs (catch flakiness in timing-sensitive tests): `npm run
+  test:e2e:reliability` runs the e2e suite 10x (also serial). Target one test
+  with `node scripts/reliability.mjs <count> "<name pattern>"`, e.g.
+  `node scripts/reliability.mjs 20 "muzzle flash"`.

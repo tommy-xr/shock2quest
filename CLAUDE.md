@@ -162,6 +162,11 @@ For debugging visual/rendering changes without a full interactive session:
    # Start debug runtime. NOTE: do NOT add an extra `--` after `cargo dbgr` -
    # the alias already ends in `--`, so `cargo dbgr -- --mission ...` passes a
    # literal `--` to clap and fails with "unexpected argument '--mission'".
+   #
+   # Presentation defaults to FLATSCREEN (like desktop_runtime) - first-person
+   # viewmodel, screen-space HUD, right-hand trigger fires. Pass `--vr` for the
+   # VR forearm/two-hand path. (Flat is what most weapon/aim testing needs; in VR
+   # mode the flat weapon-wield / fire path is inactive.)
    cargo dbgr --mission medsci1.mis --port 8080
 
    # Control via HTTP
