@@ -225,7 +225,13 @@ fn create_muzzle_flash(
         position: vhot_offset,
         orientation,
         root_transform: transform.0,
-        options: CreateEntityOptions::default(),
+        // Bolt the flash to the firing weapon so it tracks the (per-frame
+        // re-placed) first-person viewmodel during its brief lifetime instead of
+        // staying pinned at the fire-time pose.
+        options: CreateEntityOptions {
+            attach_to: Some(entity_id),
+            ..CreateEntityOptions::default()
+        },
     }
 }
 
@@ -256,6 +262,7 @@ fn create_projectile(
                 root_transform: Matrix4::from_translation(origin.to_vec()) * rot,
                 options: CreateEntityOptions {
                     force_visible: true,
+                    attach_to: None,
                 },
             };
         }
@@ -301,6 +308,7 @@ fn create_projectile(
         root_transform: transform.0 * rot_matrix * projectile_rotation,
         options: CreateEntityOptions {
             force_visible: true,
+            attach_to: None,
         },
     }
 }

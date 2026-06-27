@@ -39,6 +39,20 @@ pub struct RuntimePropDoNotSerialize;
 #[derive(Component)]
 pub struct RuntimePropProxyEntity(pub shipyard::EntityId);
 
+// RuntimePropAttachment - rigidly bolts an entity to a parent's transform. Each
+// frame the child's RuntimePropTransform is recomputed as
+// `parent.transform * local_transform`, so short-lived attached effects (e.g. the
+// muzzle flash, and later shell ejection / smoke) track a moving parent - notably
+// the flat first-person weapon, which is re-placed against the camera every frame
+// - instead of staying pinned at their spawn pose. `local_transform` is captured
+// at spawn as `parent.transform.invert() * child.transform`, preserving the
+// child's own scale/orientation relative to the parent.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropAttachment {
+    pub parent: shipyard::EntityId,
+    pub local_transform: Matrix4<f32>,
+}
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead
