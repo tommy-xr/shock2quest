@@ -6,6 +6,7 @@ export type InputAction =
   | "SpawnDebugItem"
   | "MoveInventory"
   | "CycleWeapon"
+  | "CycleAmmo"
   | "Reload"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
@@ -132,6 +133,9 @@ export interface PlayerSnapshot {
   reloading: boolean;
   reload_pitch_deg: number;
   reload_progress: number;
+  /** The wielded weapon's selected ammo type (e.g. "std"/"he"/"ap"), or null
+   * when unarmed / single-ammo / melee. */
+  wielded_ammo_type: string | null;
 }
 
 export interface FrameSnapshot {

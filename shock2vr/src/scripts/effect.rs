@@ -72,6 +72,11 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Cycle the player's wielded weapon to its next ammo type (the next
+    /// `Projectile` link). No-op when no weapon is wielded or it has fewer than
+    /// two projectile links.
+    CycleAmmo,
+
     /// Reload the player's wielded weapon: refill its clip (`PropGunState.ammo`)
     /// to the magazine capacity (`PropBaseGunDesc.clip`). No-op when no weapon is
     /// wielded or it has no gun state / clip. (Reserve ammo is unlimited for now -

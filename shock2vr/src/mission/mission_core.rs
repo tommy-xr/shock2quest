@@ -75,7 +75,7 @@ use crate::{
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropReloading, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -1232,6 +1232,18 @@ impl MissionCore {
                     }
                 }
 
+                Effect::CycleAmmo => {
+                    let wielded = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .left_hand_entity_id;
+
+                    if let Some(weapon) = wielded {
+                        self.cycle_ammo(weapon);
+                    }
+                }
+
                 Effect::AwardXP { amount } => {
                     warn!("!! TODO !!: Award XP {}", amount);
                 }
@@ -2012,6 +2024,30 @@ impl MissionCore {
                 peak_deg,
             },
         );
+    }
+
+    /// Cycle `weapon` to its next ammo type (next `Projectile` link). No-op when
+    /// the weapon has fewer than two projectile links.
+    fn cycle_ammo(&mut self, weapon: EntityId) {
+        let count =
+            crate::scripts::script_util::get_all_links_with_template(&self.world, weapon, |link| {
+                match link {
+                    dark::properties::Link::Projectile(_) => Some(()),
+                    _ => None,
+                }
+            })
+            .len();
+        if count < 2 {
+            return; // single ammo type (or melee) - nothing to cycle
+        }
+        let current = self
+            .world
+            .borrow::<View<RuntimePropSelectedAmmo>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|s| s.0))
+            .unwrap_or(0);
+        self.world
+            .add_component(weapon, RuntimePropSelectedAmmo((current + 1) % count));
     }
 
     /// Advance any in-progress reload by `dt` and clear it when complete.

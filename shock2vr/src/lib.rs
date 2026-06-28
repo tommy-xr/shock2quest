@@ -203,6 +203,9 @@ pub struct PlayerStateSnapshot {
     pub reloading: bool,
     pub reload_pitch_deg: f32,
     pub reload_progress: f32,
+    /// The wielded weapon's selected ammo type (`ammotype` class-tag, e.g. "std"
+    /// / "he" / "ap"), or `None` when unarmed / single-ammo / melee.
+    pub wielded_ammo_type: Option<String>,
 }
 
 impl Game {
@@ -237,6 +240,7 @@ impl Game {
             reloading: reload.is_some(),
             reload_pitch_deg: reload.map(|(p, _)| p).unwrap_or(0.0),
             reload_progress: reload.map(|(_, p)| p).unwrap_or(0.0),
+            wielded_ammo_type: crate::hud::get_wielded_ammo_type(world),
         })
     }
 

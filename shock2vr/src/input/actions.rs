@@ -33,6 +33,8 @@ pub enum InputAction {
     /// previous). Cycles the full SS2 weapon roster for flat-mode aim/viewmodel
     /// testing.
     CycleWeapon,
+    /// Cycle the wielded weapon's ammo type (its next Projectile link).
+    CycleAmmo,
     /// Reload the wielded weapon: refill its clip to capacity.
     Reload,
     /// Reload the current level in place (debug). Exercises the level-transition path,
@@ -52,6 +54,7 @@ impl InputAction {
             InputAction::MoveInventory,
             InputAction::DebugHitboxCyclePose,
             InputAction::CycleWeapon,
+            InputAction::CycleAmmo,
             InputAction::Reload,
             InputAction::DebugReloadLevel,
         ]
@@ -66,6 +69,7 @@ impl InputAction {
             InputAction::MoveInventory => "MoveInventory",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
             InputAction::CycleWeapon => "CycleWeapon",
+            InputAction::CycleAmmo => "CycleAmmo",
             InputAction::Reload => "Reload",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
         }

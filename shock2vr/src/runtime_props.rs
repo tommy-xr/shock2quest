@@ -110,6 +110,14 @@ impl RuntimePropReloading {
     }
 }
 
+// RuntimePropSelectedAmmo - which of the wielded weapon's Projectile links is
+// selected (index into its ordered Projectile links). Many SS2 guns carry
+// several ammo types (e.g. the pistol: standard / HE / AP); firing uses the
+// selected one. Absent = index 0 (the first/default link). Cleared/ignored for
+// weapons with no Projectile links (melee).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropSelectedAmmo(pub usize);
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead

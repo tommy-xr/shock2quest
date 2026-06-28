@@ -12,7 +12,8 @@ use crate::{
     mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
-        RuntimePropFlatAim, RuntimePropReloading, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropFlatAim, RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform,
+        RuntimePropVhots,
     },
     util::{get_rotation_from_forward_vector, resolve_proxy_entity},
     vr_config,
@@ -30,10 +31,7 @@ const MELEE_DAMAGE: f32 = 6.0;
 
 use super::{
     Effect, Message, MessagePayload, Script,
-    script_util::{
-        get_all_links_with_template, get_first_link_with_template_and_data,
-        play_environmental_sound,
-    },
+    script_util::{get_all_links_with_template, play_environmental_sound},
 };
 
 /// Get ammunition type from projectile template using pre-populated class tag map
@@ -79,12 +77,22 @@ impl Script for WeaponScript {
                         _ => None,
                     });
 
-                // TODO: Handle setting or ammo type? This just picks the very first projectile
-                let maybe_projectile =
-                    get_first_link_with_template_and_data(world, entity_id, |link| match link {
+                // Pick the selected ammo type: guns carry several Projectile
+                // links (standard / HE / AP, ...); RuntimePropSelectedAmmo indexes
+                // into them (absent = the first/default link).
+                let projectiles =
+                    get_all_links_with_template(world, entity_id, |link| match link {
                         Link::Projectile(data) => Some(*data),
                         _ => None,
                     });
+                let selected_ammo = world
+                    .borrow::<View<RuntimePropSelectedAmmo>>()
+                    .ok()
+                    .and_then(|v| v.get(entity_id).ok().map(|s| s.0))
+                    .unwrap_or(0);
+                let maybe_projectile = projectiles
+                    .get(selected_ammo % projectiles.len().max(1))
+                    .cloned();
 
                 // A weapon with no Projectile link is melee. In flat mode a swing
                 // is a short forward raycast along the crosshair ray
