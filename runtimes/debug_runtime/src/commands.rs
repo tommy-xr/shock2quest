@@ -398,6 +398,11 @@ pub struct PlayerInfo {
     pub wielded_entity_id: Option<i32>,
     /// The entity held in the right hand (VR), `None` otherwise.
     pub right_hand_entity_id: Option<i32>,
+    /// Whether the wielded weapon is mid-reload, plus the current viewmodel tilt
+    /// (degrees) and reload progress (0..1). See `shock2vr::PlayerStateSnapshot`.
+    pub reloading: bool,
+    pub reload_pitch_deg: f32,
+    pub reload_progress: f32,
 }
 
 /// Input state snapshot

@@ -75,7 +75,7 @@ use crate::{
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropTransform, RuntimePropVhots,
+        RuntimePropReloading, RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -648,6 +648,9 @@ impl MissionCore {
         // Advance the flat melee swing animation (returns to static idle on end).
         self.update_flat_melee_anim(time.elapsed);
 
+        // Advance any in-progress reload (clears itself when complete).
+        self.update_flat_reload_anim(time.elapsed);
+
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
         // from physics
@@ -1218,8 +1221,6 @@ impl MissionCore {
                 }
 
                 Effect::ReloadWeapon => {
-                    // Refill the wielded weapon's clip to capacity. Reserve ammo
-                    // is unlimited for now (no inventory ammo model yet).
                     let wielded = self
                         .world
                         .borrow::<UniqueView<PlayerInfo>>()
@@ -1227,26 +1228,7 @@ impl MissionCore {
                         .left_hand_entity_id;
 
                     if let Some(weapon) = wielded {
-                        let clip = self
-                            .world
-                            .borrow::<View<dark::properties::PropBaseGunDesc>>()
-                            .unwrap()
-                            .get(weapon)
-                            .ok()
-                            .map(|d| d.clip);
-
-                        if let Some(clip) = clip {
-                            let mut v_gun_state = self
-                                .world
-                                .borrow::<ViewMut<dark::properties::PropGunState>>()
-                                .unwrap();
-                            if let Ok(gun_state) = (&mut v_gun_state).get(weapon) {
-                                // Refill to magazine capacity (clamp guards bad
-                                // data); reload sets the clip, it does not just
-                                // top up to "at least clip".
-                                gun_state.ammo = clip.max(0);
-                            }
-                        }
+                        self.begin_reload(weapon);
                     }
                 }
 
@@ -1947,6 +1929,118 @@ impl MissionCore {
         }
     }
 
+    /// Begin a reload on `weapon`: refill its clip to capacity and start the
+    /// reload animation (a `RuntimePropReloading` on the weapon). SS2's
+    /// first-person reload tilts the gun down to a peak angle, holds while the
+    /// clip is swapped, then raises it back up; the peak angle and pitch speed
+    /// come from the weapon's own data (`PropPlayerGun`'s reload pitch/rate, as
+    /// 16-bit angle units where 65536 = 360 deg) and the hold from its reload
+    /// time (`PropBaseGunDesc.reload_time_ms`). No-op for non-guns (no
+    /// `PropBaseGunDesc`) and while a reload is already in progress. Reserve ammo
+    /// is unlimited for now (no inventory ammo model yet).
+    fn begin_reload(&mut self, weapon: EntityId) {
+        // Sensible fallbacks used only when a gun has no PropPlayerGun at all, so
+        // the reload is still visible.
+        const FALLBACK_PEAK_DEG: f32 = -45.0;
+        const FALLBACK_RATE_DEG_PER_S: f32 = 180.0;
+        // 16-bit angle units (65536 = 360 deg). The tilt target is a signed
+        // shortest-path angle (e.g. the pistol's -67.5 deg); the rate is an
+        // unsigned magnitude (deg/sec), so it must NOT be read as signed.
+        fn ang16_signed_deg(a: u16) -> f32 {
+            (a as i16 as f32) / 65536.0 * 360.0
+        }
+        fn ang16_unsigned_deg(a: u16) -> f32 {
+            (a as f32) / 65536.0 * 360.0
+        }
+
+        // Only guns reload; bail (and don't restart an in-progress reload).
+        let (clip, hold) = {
+            let v_desc = self
+                .world
+                .borrow::<View<dark::properties::PropBaseGunDesc>>();
+            match v_desc.as_ref().ok().and_then(|v| v.get(weapon).ok()) {
+                Some(d) => (d.clip, d.reload_time_ms as f32 / 1000.0),
+                None => return,
+            }
+        };
+        if let Ok(v) = self.world.borrow::<View<RuntimePropReloading>>() {
+            if v.get(weapon).is_ok_and(|r| !r.is_done()) {
+                return;
+            }
+        }
+
+        // Use the weapon's own pitch/rate when it has a PropPlayerGun (even a
+        // near-zero pitch is honored - some psi weapons intentionally barely tilt
+        // - so we only fall back when the data is genuinely absent).
+        let (peak_deg, rate) = {
+            let v_gun = self.world.borrow::<View<PropPlayerGun>>();
+            match v_gun.as_ref().ok().and_then(|v| v.get(weapon).ok()) {
+                Some(g) => (
+                    ang16_signed_deg(g.reload_pitch),
+                    ang16_unsigned_deg(g.reload_rate),
+                ),
+                None => (FALLBACK_PEAK_DEG, FALLBACK_RATE_DEG_PER_S),
+            }
+        };
+        // Guard the divisor only (a zero rate would blow up `leg`).
+        let rate = if rate < 1.0 {
+            FALLBACK_RATE_DEG_PER_S
+        } else {
+            rate
+        };
+        let leg = peak_deg.abs() / rate; // tilt-down (and tilt-up) duration
+
+        // Refill now: firing is gated for the whole reload, so the exact moment
+        // the clip refills is not observable.
+        {
+            let mut v_gun_state = self
+                .world
+                .borrow::<ViewMut<dark::properties::PropGunState>>()
+                .unwrap();
+            if let Ok(gun_state) = (&mut v_gun_state).get(weapon) {
+                gun_state.ammo = clip.max(0);
+            }
+        }
+
+        self.world.add_component(
+            weapon,
+            RuntimePropReloading {
+                elapsed: 0.0,
+                down: leg,
+                hold,
+                up: leg,
+                peak_deg,
+            },
+        );
+    }
+
+    /// Advance any in-progress reload by `dt` and clear it when complete.
+    fn update_flat_reload_anim(&self, dt: std::time::Duration) {
+        let dt_s = dt.as_secs_f32();
+        let mut done = Vec::new();
+        {
+            let mut v = self
+                .world
+                .borrow::<ViewMut<RuntimePropReloading>>()
+                .unwrap();
+            for (id, r) in (&mut v).iter().with_id() {
+                r.elapsed += dt_s;
+                if r.is_done() {
+                    done.push(id);
+                }
+            }
+        }
+        if !done.is_empty() {
+            let mut v = self
+                .world
+                .borrow::<ViewMut<RuntimePropReloading>>()
+                .unwrap();
+            for id in done {
+                v.remove(id);
+            }
+        }
+    }
+
     pub fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -2046,6 +2140,30 @@ impl MissionCore {
                 let is_melee = limb_model.is_some();
                 let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
+                    // While reloading, tilt the viewmodel by the current reload
+                    // angle (ramps up, holds, then back down - see
+                    // RuntimePropReloading). Rotate about the camera's horizontal
+                    // (screen-right) axis through the gun's position, so the gun
+                    // reads as a reload tilt regardless of the model's local
+                    // orientation.
+                    let xform = match self
+                        .world
+                        .borrow::<View<RuntimePropReloading>>()
+                        .ok()
+                        .and_then(|v| v.get(weapon).ok().map(|r| r.pitch_deg()))
+                    {
+                        Some(deg) if deg.abs() > f32::EPSILON => {
+                            // Camera-right in world space = row 0 of the view
+                            // rotation (column-major: (x.x, y.x, z.x)).
+                            let right = vec3(view.x.x, view.y.x, view.z.x).normalize();
+                            let p = xform.w.truncate();
+                            Matrix4::from_translation(p)
+                                * Matrix4::from_axis_angle(right, cgmath::Deg(deg))
+                                * Matrix4::from_translation(-p)
+                                * xform
+                        }
+                        _ => xform,
+                    };
                     let scene_objs = if let Some(name) = fp_model_name {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
                         // FP meshes are articulated (hand + arm + weapon as

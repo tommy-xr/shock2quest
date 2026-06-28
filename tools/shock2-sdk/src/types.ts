@@ -127,6 +127,11 @@ export interface PlayerSnapshot {
   wielded_entity_id: number | null;
   /** The entity held in the right hand (VR); null otherwise. */
   right_hand_entity_id: number | null;
+  /** Whether the wielded weapon is mid-reload, plus the current viewmodel tilt
+   * (degrees) and reload progress (0..1). false/0/0 when not reloading. */
+  reloading: boolean;
+  reload_pitch_deg: number;
+  reload_progress: number;
 }
 
 export interface FrameSnapshot {

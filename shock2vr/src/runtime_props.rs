@@ -53,6 +53,63 @@ pub struct RuntimePropAttachment {
     pub local_transform: Matrix4<f32>,
 }
 
+// RuntimePropReloading - an in-progress weapon reload, set on the wielded weapon
+// while it reloads. Models SS2's first-person reload: the gun pitches DOWN to a
+// peak angle, HOLDS while the clip is swapped, then pitches back UP. The peak
+// angle and pitch speed come from the weapon's own data (`PropPlayerGun`'s
+// reload pitch/rate), the hold from its reload time. Drives three things from one
+// source of truth: the viewmodel tilt (render), the fire gate (you cannot fire
+// mid-reload), and debug introspection. Durations are in seconds; `peak_deg` is
+// the (signed) peak tilt in degrees.
+//
+// Like all runtime props this is not serialized: a save taken mid-reload loads
+// with the reload already "finished" (no tilt, firing allowed). That is benign -
+// `begin_reload` refills the clip up front, so there is no ammo inconsistency.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropReloading {
+    pub elapsed: f32,
+    pub down: f32,
+    pub hold: f32,
+    pub up: f32,
+    pub peak_deg: f32,
+}
+
+impl RuntimePropReloading {
+    pub fn total(&self) -> f32 {
+        self.down + self.hold + self.up
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.elapsed >= self.total()
+    }
+
+    /// Fraction complete, 0..1.
+    pub fn progress(&self) -> f32 {
+        let total = self.total();
+        if total <= 0.0 {
+            1.0
+        } else {
+            (self.elapsed / total).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Current tilt angle (degrees): ramp 0 -> peak over `down`, hold at peak for
+    /// `hold`, then ramp peak -> 0 over `up`.
+    pub fn pitch_deg(&self) -> f32 {
+        let t = self.elapsed;
+        if self.down > 0.0 && t < self.down {
+            self.peak_deg * (t / self.down)
+        } else if t < self.down + self.hold {
+            self.peak_deg
+        } else if self.up > 0.0 && t < self.total() {
+            let u = (t - self.down - self.hold) / self.up;
+            self.peak_deg * (1.0 - u)
+        } else {
+            0.0
+        }
+    }
+}
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead

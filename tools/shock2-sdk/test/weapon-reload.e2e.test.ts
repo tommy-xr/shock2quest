@@ -58,6 +58,11 @@ test(
       "reload refills the clip to capacity",
     );
 
+    // Firing is blocked while the reload animation plays, so let it finish
+    // before draining the clip again.
+    await game.step({ frames: 130 });
+    assert.equal((await game.info()).player.reloading, false, "reload finished");
+
     // Drain to empty, then a reload restores a full clip (so an empty weapon is
     // usable again - the core point of reload).
     for (let i = 0; i < clip; i++) await fireOnce(game);
