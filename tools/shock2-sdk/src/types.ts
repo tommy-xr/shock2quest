@@ -6,6 +6,7 @@ export type InputAction =
   | "SpawnDebugItem"
   | "MoveInventory"
   | "CycleWeapon"
+  | "Reload"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 

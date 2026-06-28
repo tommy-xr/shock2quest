@@ -72,6 +72,12 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Reload the player's wielded weapon: refill its clip (`PropGunState.ammo`)
+    /// to the magazine capacity (`PropBaseGunDesc.clip`). No-op when no weapon is
+    /// wielded or it has no gun state / clip. (Reserve ammo is unlimited for now -
+    /// there is no inventory ammo model yet.)
+    ReloadWeapon,
+
     ApplyForce {
         entity_id: EntityId,
         force: Vector3<f32>,
