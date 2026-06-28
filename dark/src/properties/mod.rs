@@ -8,6 +8,7 @@ mod prop_ai_device;
 mod prop_ai_mode;
 mod prop_ambient_hacked;
 mod prop_anim_tex;
+mod prop_base_gun_desc;
 mod prop_bitmap_animation;
 mod prop_collision_type;
 mod prop_creature_pose;
@@ -42,6 +43,7 @@ pub use prop_ai_device::*;
 pub use prop_ai_mode::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_tex::*;
+pub use prop_base_gun_desc::*;
 pub use prop_bitmap_animation::*;
 pub use prop_collision_type::*;
 pub use prop_creature_pose::*;
@@ -885,6 +887,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop("P$KeyDst", KeyCard::read, PropKeyDst, accumulator::latest),
         define_prop("P$KeySrc", KeyCard::read, PropKeySrc, accumulator::latest),
+        define_prop(
+            "P$BaseGunDe",
+            PropBaseGunDesc::read,
+            identity,
+            accumulator::latest,
+        ),
         define_prop(
             "P$GunState",
             PropGunState::read,

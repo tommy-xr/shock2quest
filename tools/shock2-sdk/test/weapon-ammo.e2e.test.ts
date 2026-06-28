@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntitySummary } from "../src/index.js";
+import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end regression test for weapon ammo (PropGunState): a weapon limited by
 // its clip decrements one round per shot and dry-fires (no projectile) at empty.
@@ -12,15 +13,6 @@ import type { EntitySummary } from "../src/index.js";
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-
-export async function fireOnce(game: GameServer): Promise<void> {
-  // Edge-triggered: pull (fires on the rising edge), then release, stepping a
-  // frame for each so the next pull is a fresh edge.
-  await game.input.set("right_hand.trigger", 1.0);
-  await game.step({ frames: 1 });
-  await game.input.set("right_hand.trigger", 0.0);
-  await game.step({ frames: 1 });
-}
 
 function ammoOf(detail: { properties: { name: string; value: string }[] }): number {
   const p = detail.properties.find((x) => x.name === "Ammo");

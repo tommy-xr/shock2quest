@@ -1217,6 +1217,39 @@ impl MissionCore {
                     }
                 }
 
+                Effect::ReloadWeapon => {
+                    // Refill the wielded weapon's clip to capacity. Reserve ammo
+                    // is unlimited for now (no inventory ammo model yet).
+                    let wielded = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .left_hand_entity_id;
+
+                    if let Some(weapon) = wielded {
+                        let clip = self
+                            .world
+                            .borrow::<View<dark::properties::PropBaseGunDesc>>()
+                            .unwrap()
+                            .get(weapon)
+                            .ok()
+                            .map(|d| d.clip);
+
+                        if let Some(clip) = clip {
+                            let mut v_gun_state = self
+                                .world
+                                .borrow::<ViewMut<dark::properties::PropGunState>>()
+                                .unwrap();
+                            if let Ok(gun_state) = (&mut v_gun_state).get(weapon) {
+                                // Refill to magazine capacity (clamp guards bad
+                                // data); reload sets the clip, it does not just
+                                // top up to "at least clip".
+                                gun_state.ammo = clip.max(0);
+                            }
+                        }
+                    }
+                }
+
                 Effect::AwardXP { amount } => {
                     warn!("!! TODO !!: Award XP {}", amount);
                 }
