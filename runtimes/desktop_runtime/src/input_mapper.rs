@@ -49,6 +49,11 @@ impl DesktopInputMapper {
                 action: InputAction::CycleWeapon,
             },
             Binding {
+                key: Key::R,
+                modifier: Modifier::None,
+                action: InputAction::Reload,
+            },
+            Binding {
                 key: Key::S,
                 modifier: Modifier::Alt,
                 action: InputAction::QuickSave,
