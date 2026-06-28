@@ -134,7 +134,7 @@ export interface PlayerSnapshot {
   reload_pitch_deg: number;
   reload_progress: number;
   /** The wielded weapon's selected ammo type (e.g. "std"/"he"/"ap"), or null
-   * when unarmed / single-ammo / melee. */
+   * when unarmed / melee (no projectile links). */
   wielded_ammo_type: string | null;
 }
 

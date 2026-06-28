@@ -160,14 +160,7 @@ pub(crate) fn get_wielded_ammo(world: &World) -> Option<i32> {
 pub(crate) fn wielded_selected_projectile_template(world: &World) -> Option<i32> {
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
     let weapon = player_info.left_hand_entity_id?;
-    let projectiles = crate::scripts::script_util::get_all_links_with_template(
-        world,
-        weapon,
-        |link| match link {
-            dark::properties::Link::Projectile(_) => Some(()),
-            _ => None,
-        },
-    );
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
     if projectiles.is_empty() {
         return None;
     }
@@ -189,6 +182,19 @@ pub(crate) fn get_wielded_ammo_type(world: &World) -> Option<String> {
         .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateClassTags>>()
         .ok()?;
     class_tags.0.get(&template_id)?.get("ammotype").cloned()
+}
+
+/// The object-icon bitmap filename (e.g. "STD_I.pcx") of the wielded weapon's
+/// selected ammo type, or `None`. Resolved from the selected projectile
+/// template's `P$ObjIcon` (projectiles are templates, not instantiated entities,
+/// so this reads the precomputed [`GlobalTemplateObjIcons`] map rather than a
+/// `View`).
+pub(crate) fn get_wielded_ammo_icon(world: &World) -> Option<String> {
+    let template_id = wielded_selected_projectile_template(world)?;
+    let icons = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateObjIcons>>()
+        .ok()?;
+    icons.0.get(&template_id).cloned()
 }
 
 /// Create layered forearm HUD with health and psi bar overlays

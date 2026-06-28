@@ -204,7 +204,9 @@ pub struct PlayerStateSnapshot {
     pub reload_pitch_deg: f32,
     pub reload_progress: f32,
     /// The wielded weapon's selected ammo type (`ammotype` class-tag, e.g. "std"
-    /// / "he" / "ap"), or `None` when unarmed / single-ammo / melee.
+    /// / "he" / "ap"), or `None` when unarmed or the weapon has no projectile
+    /// links (melee). Reported whenever there is a projectile link, even if there
+    /// is only one (it just cannot be cycled).
     pub wielded_ammo_type: Option<String>,
 }
 

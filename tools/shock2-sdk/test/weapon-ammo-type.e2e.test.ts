@@ -40,10 +40,12 @@ test(
       await game.step({ frames: 2 });
       sequence.push((await ammoType(game)) ?? "<null>");
     }
+    // The cycle order follows ProjectileOptions.order (the data's intended
+    // order), not the raw link order: std -> ap -> he -> std.
     assert.deepEqual(
       sequence,
-      ["he", "ap", "std"],
-      "cycling advances std -> he -> ap and wraps back to std",
+      ["ap", "he", "std"],
+      "cycling advances in ProjectileOptions.order and wraps back to std",
     );
   },
 );

@@ -153,6 +153,13 @@ pub struct GlobalTemplateIdMap(pub HashMap<i32, WrappedEntityId>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
 
+/// Global template id -> object-icon (`P$ObjIcon`) bitmap filename (e.g.
+/// "STD_I.pcx"). Used to show a projectile/ammo's icon (e.g. the wielded
+/// weapon's selected ammo type) without the projectile being an instantiated
+/// entity. Derived from the template metadata hydrated at load.
+#[derive(Unique, Clone)]
+pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
+
 impl EffectQueue {
     pub fn push(&mut self, effect: Effect) {
         self.effects.push(effect);
@@ -284,6 +291,13 @@ impl MissionCore {
         });
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
+        // Reuse the obj-icons already hydrated into the template metadata above
+        // (keyed by template id) rather than rescanning every template.
+        let template_obj_icons: HashMap<i32, String> = template_name_to_template_id
+            .values()
+            .filter_map(|m| m.obj_icon.clone().map(|icon| (m.template_id, icon)))
+            .collect();
+        world.add_unique(GlobalTemplateObjIcons(template_obj_icons));
 
         // ** Entity creation
 
@@ -2030,13 +2044,7 @@ impl MissionCore {
     /// the weapon has fewer than two projectile links.
     fn cycle_ammo(&mut self, weapon: EntityId) {
         let count =
-            crate::scripts::script_util::get_all_links_with_template(&self.world, weapon, |link| {
-                match link {
-                    dark::properties::Link::Projectile(_) => Some(()),
-                    _ => None,
-                }
-            })
-            .len();
+            crate::scripts::script_util::ordered_projectile_links(&self.world, weapon).len();
         if count < 2 {
             return; // single ammo type (or melee) - nothing to cycle
         }

@@ -111,10 +111,17 @@ impl RuntimePropReloading {
 }
 
 // RuntimePropSelectedAmmo - which of the wielded weapon's Projectile links is
-// selected (index into its ordered Projectile links). Many SS2 guns carry
-// several ammo types (e.g. the pistol: standard / HE / AP); firing uses the
-// selected one. Absent = index 0 (the first/default link). Cleared/ignored for
-// weapons with no Projectile links (melee).
+// selected (index into `ordered_projectile_links`). Many SS2 guns carry several
+// ammo types (e.g. the pistol: standard / HE / AP); firing uses the selected
+// one. Absent = index 0 (the first/default link). Ignored for weapons with no
+// Projectile links (melee).
+//
+// Scope notes (deliberate simplifications for now):
+// - Not serialized (like all runtime props), so the selection resets to the
+//   first link across save/load and level transitions.
+// - All ammo types share one clip (`PropGunState.ammo`); switching type does not
+//   switch loaded rounds. Per-ammo-type counts need an inventory-ammo model we
+//   don't have yet, so this behaves like a fire-mode selector for now.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropSelectedAmmo(pub usize);
 

@@ -31,7 +31,9 @@ const MELEE_DAMAGE: f32 = 6.0;
 
 use super::{
     Effect, Message, MessagePayload, Script,
-    script_util::{get_all_links_with_template, play_environmental_sound},
+    script_util::{
+        get_all_links_with_template, ordered_projectile_links, play_environmental_sound,
+    },
 };
 
 /// Get ammunition type from projectile template using pre-populated class tag map
@@ -79,12 +81,8 @@ impl Script for WeaponScript {
 
                 // Pick the selected ammo type: guns carry several Projectile
                 // links (standard / HE / AP, ...); RuntimePropSelectedAmmo indexes
-                // into them (absent = the first/default link).
-                let projectiles =
-                    get_all_links_with_template(world, entity_id, |link| match link {
-                        Link::Projectile(data) => Some(*data),
-                        _ => None,
-                    });
+                // into the ordered, setting-filtered list (absent = the first).
+                let projectiles = ordered_projectile_links(world, entity_id);
                 let selected_ammo = world
                     .borrow::<View<RuntimePropSelectedAmmo>>()
                     .ok()
