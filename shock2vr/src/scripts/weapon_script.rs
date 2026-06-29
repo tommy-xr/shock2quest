@@ -11,7 +11,9 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    runtime_props::{RuntimePropFlatAim, RuntimePropTransform, RuntimePropVhots},
+    runtime_props::{
+        RuntimePropFlatAim, RuntimePropReloading, RuntimePropTransform, RuntimePropVhots,
+    },
     util::{get_rotation_from_forward_vector, resolve_proxy_entity},
     vr_config,
 };
@@ -60,6 +62,16 @@ impl Script for WeaponScript {
     ) -> Effect {
         match msg {
             MessagePayload::TriggerPull => {
+                // Firing is blocked while a reload is in progress.
+                if world
+                    .borrow::<View<RuntimePropReloading>>()
+                    .ok()
+                    .and_then(|v| v.get(entity_id).ok().map(|r| !r.is_done()))
+                    == Some(true)
+                {
+                    return Effect::NoEffect;
+                }
+
                 //Create muzzle flash
                 let muzzle_flashes =
                     get_all_links_with_template(world, entity_id, |link| match link {

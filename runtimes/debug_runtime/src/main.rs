@@ -1398,6 +1398,9 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                 camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
                 wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
                 right_hand_entity_id: state.as_ref().and_then(|s| s.right_hand_entity_id),
+                reloading: state.as_ref().is_some_and(|s| s.reloading),
+                reload_pitch_deg: state.as_ref().map(|s| s.reload_pitch_deg).unwrap_or(0.0),
+                reload_progress: state.as_ref().map(|s| s.reload_progress).unwrap_or(0.0),
             }
         },
         entity_count,
