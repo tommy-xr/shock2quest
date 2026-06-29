@@ -196,6 +196,13 @@ pub struct PlayerStateSnapshot {
     pub rotation: [f32; 4],
     pub wielded_entity_id: Option<i32>,
     pub right_hand_entity_id: Option<i32>,
+    /// Whether the wielded weapon is mid-reload, and (if so) the current
+    /// viewmodel tilt angle in degrees and the reload progress (0..1). When not
+    /// reloading: `false`, `0.0`, `0.0`. Lets tooling verify the reload
+    /// animation headlessly (the angle ramps down, holds, then back to 0).
+    pub reloading: bool,
+    pub reload_pitch_deg: f32,
+    pub reload_progress: f32,
 }
 
 impl Game {
@@ -204,8 +211,18 @@ impl Game {
     /// menu). Reads the `PlayerInfo` unique from the active world.
     pub fn player_state(&self) -> Option<PlayerStateSnapshot> {
         use crate::mission::mission_core::PlayerInfo;
+        use crate::runtime_props::RuntimePropReloading;
         let world = self.world();
         let info = world.borrow::<shipyard::UniqueView<PlayerInfo>>().ok()?;
+        let reload = info.left_hand_entity_id.and_then(|weapon| {
+            world
+                .borrow::<shipyard::View<RuntimePropReloading>>()
+                .ok()
+                .and_then(|v| {
+                    use shipyard::Get;
+                    v.get(weapon).ok().map(|r| (r.pitch_deg(), r.progress()))
+                })
+        });
         Some(PlayerStateSnapshot {
             entity_id: info.entity_id.inner() as i32,
             position: [info.pos.x, info.pos.y, info.pos.z],
@@ -217,6 +234,9 @@ impl Game {
             ],
             wielded_entity_id: info.left_hand_entity_id.map(|e| e.inner() as i32),
             right_hand_entity_id: info.right_hand_entity_id.map(|e| e.inner() as i32),
+            reloading: reload.is_some(),
+            reload_pitch_deg: reload.map(|(p, _)| p).unwrap_or(0.0),
+            reload_progress: reload.map(|(_, p)| p).unwrap_or(0.0),
         })
     }
 
