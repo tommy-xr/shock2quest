@@ -10,7 +10,10 @@ use cgmath::vec2;
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
-use super::{get_health_percentage, get_psi_percentage, get_wielded_ammo};
+use super::{
+    get_health_percentage, get_psi_percentage, get_wielded_ammo, get_wielded_ammo_icon,
+    get_wielded_ammo_type,
+};
 use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
 
 /// The original SS2 HUD is authored against a 640x480 display.
@@ -57,6 +60,11 @@ const AMMO_H: f32 = 64.0;
 const AMMO_GAUGE: Rect = Rect::new(AMMO_X, AMMO_Y, AMMO_W, AMMO_H);
 const AMMO_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 22.0, AMMO_W, 20.0); // centered over the gauge
 const AMMO_TEXT_SIZE: f32 = 18.0;
+// Selected ammo-type indicator: the projectile's object icon (P$ObjIcon) just
+// left of the gauge, with its type label (std/he/ap) below the round count.
+const AMMO_ICON: Rect = Rect::new(AMMO_X - 40.0, AMMO_Y + 16.0, 32.0, 32.0);
+const AMMO_TYPE_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 44.0, AMMO_W, 16.0);
+const AMMO_TYPE_TEXT_SIZE: f32 = 12.0;
 
 /// Build the flat HUD as a resolution-independent canvas for the given player
 /// stat fractions and (optional) wielded-weapon ammo. Pure (no asset/GL
@@ -65,6 +73,8 @@ pub(crate) fn build_flat_hud_canvas(
     health_fraction: f32,
     psi_fraction: f32,
     ammo: Option<i32>,
+    ammo_icon: Option<String>,
+    ammo_type: Option<String>,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -105,6 +115,21 @@ pub(crate) fn build_flat_hud_canvas(
             HAlign::Center,
             VAlign::Middle,
         );
+
+        // Selected ammo-type indicator: the projectile's icon + type label.
+        if let Some(icon) = ammo_icon {
+            canvas.image(AMMO_ICON, &icon);
+        }
+        if let Some(ammo_type) = ammo_type {
+            canvas.text(
+                AMMO_TYPE_TEXT,
+                &ammo_type.to_ascii_uppercase(),
+                "mainfont.fon",
+                AMMO_TYPE_TEXT_SIZE,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        }
     }
 
     canvas
@@ -120,6 +145,8 @@ pub(crate) fn create_flat_hud(
         get_health_percentage(world),
         get_psi_percentage(world),
         get_wielded_ammo(world),
+        get_wielded_ammo_icon(world),
+        get_wielded_ammo_type(world),
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
@@ -132,15 +159,28 @@ mod tests {
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas = build_flat_hud_canvas(1.0, 0.75, None);
+        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, None);
         assert_eq!(canvas.element_count(), 6);
     }
 
     #[test]
     fn wielding_a_weapon_adds_the_ammo_gauge() {
         // ...plus the ammo backdrop + count when a clip is present.
-        let canvas = build_flat_hud_canvas(1.0, 0.75, Some(12));
+        let canvas = build_flat_hud_canvas(1.0, 0.75, Some(12), None, None);
         assert_eq!(canvas.element_count(), 8);
+    }
+
+    #[test]
+    fn ammo_type_adds_icon_and_label() {
+        // ...plus the ammo-type icon + label when a type is selected.
+        let canvas = build_flat_hud_canvas(
+            1.0,
+            0.75,
+            Some(12),
+            Some("STD_I.PCX".to_string()),
+            Some("std".to_string()),
+        );
+        assert_eq!(canvas.element_count(), 10);
     }
 
     #[test]
@@ -157,6 +197,6 @@ mod tests {
     #[test]
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
-        let _ = build_flat_hud_canvas(2.0, -1.0, None);
+        let _ = build_flat_hud_canvas(2.0, -1.0, None, None, None);
     }
 }

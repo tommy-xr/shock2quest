@@ -4,7 +4,8 @@ use cgmath::{Transform, point3};
 use dark::{
     EnvSoundQuery,
     properties::{
-        Link, Links, PropClassTag, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
+        Link, Links, ProjectileOptions, PropClassTag, PropGunState, PropSymName, PropTemplateId,
+        PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -38,6 +39,27 @@ pub fn get_all_links_with_template<TData>(
     };
 
     linked_entities
+}
+
+/// A weapon's selectable `Projectile` links (its ammo types), filtered to the
+/// current gun setting and ordered by `ProjectileOptions.order`. This is the
+/// canonical ammo-type list - firing, ammo-type cycling, and the HUD all derive
+/// from it so they agree. A link with a negative `setting` matches any setting;
+/// otherwise it must match the weapon's current `PropGunState.setting`
+/// (defaulting to 0 when the weapon has no gun state).
+pub fn ordered_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, ProjectileOptions)> {
+    let setting = world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|v| v.get(weapon).ok().map(|g| g.setting))
+        .unwrap_or(0);
+    let mut links = get_all_links_with_template(world, weapon, |link| match link {
+        Link::Projectile(data) => Some(*data),
+        _ => None,
+    });
+    links.retain(|(_, opts)| opts.setting < 0 || opts.setting == setting);
+    links.sort_by_key(|(_, opts)| opts.order);
+    links
 }
 
 pub fn get_first_link_with_template_and_data<TData: Clone>(
