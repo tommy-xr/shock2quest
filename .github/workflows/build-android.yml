@@ -188,3 +188,13 @@ jobs:
       - name: Build Android APK
         run: cargo apk build
         working-directory: runtimes/oculus_runtime
+
+      - name: List generated APKs
+        run: find runtimes/oculus_runtime/target -name "*.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: runtimes/oculus_runtime/target/debug/apk/**/*.apk
+          if-no-files-found: error
