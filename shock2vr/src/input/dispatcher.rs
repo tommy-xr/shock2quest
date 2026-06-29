@@ -54,6 +54,9 @@ impl ActionDispatcher {
                 head_rotation: input_context.head.rotation,
             });
         }
+        if state.just_triggered(InputAction::CycleAmmo) {
+            effects.push(Effect::CycleAmmo);
+        }
         if state.just_triggered(InputAction::Reload) {
             effects.push(Effect::ReloadWeapon);
         }

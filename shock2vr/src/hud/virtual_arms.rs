@@ -154,6 +154,49 @@ pub(crate) fn get_wielded_ammo(world: &World) -> Option<i32> {
     v_gun_state.get(weapon).ok().map(|g| g.ammo)
 }
 
+/// The template id of the wielded weapon's currently selected `Projectile` link
+/// (its ammo type), or `None` when unarmed or the weapon has no projectile links
+/// (melee). Honors `RuntimePropSelectedAmmo` (absent = the first link).
+pub(crate) fn wielded_selected_projectile_template(world: &World) -> Option<i32> {
+    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    let weapon = player_info.left_hand_entity_id?;
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
+    if projectiles.is_empty() {
+        return None;
+    }
+    let selected = world
+        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
+        .ok()
+        .and_then(|v| v.get(weapon).ok().map(|s| s.0))
+        .unwrap_or(0);
+    projectiles
+        .get(selected % projectiles.len())
+        .map(|(template_id, _)| *template_id)
+}
+
+/// The `ammotype` class-tag of the wielded weapon's selected ammo (e.g. "std",
+/// "he", "ap"), or `None`.
+pub(crate) fn get_wielded_ammo_type(world: &World) -> Option<String> {
+    let template_id = wielded_selected_projectile_template(world)?;
+    let class_tags = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateClassTags>>()
+        .ok()?;
+    class_tags.0.get(&template_id)?.get("ammotype").cloned()
+}
+
+/// The object-icon bitmap filename (e.g. "STD_I.pcx") of the wielded weapon's
+/// selected ammo type, or `None`. Resolved from the selected projectile
+/// template's `P$ObjIcon` (projectiles are templates, not instantiated entities,
+/// so this reads the precomputed [`GlobalTemplateObjIcons`] map rather than a
+/// `View`).
+pub(crate) fn get_wielded_ammo_icon(world: &World) -> Option<String> {
+    let template_id = wielded_selected_projectile_template(world)?;
+    let icons = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateObjIcons>>()
+        .ok()?;
+    icons.0.get(&template_id).cloned()
+}
+
 /// Create layered forearm HUD with health and psi bar overlays
 fn create_forearm_hud_with_overlays(
     asset_cache: &mut AssetCache,

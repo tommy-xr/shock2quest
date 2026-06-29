@@ -403,6 +403,9 @@ pub struct PlayerInfo {
     pub reloading: bool,
     pub reload_pitch_deg: f32,
     pub reload_progress: f32,
+    /// The wielded weapon's selected ammo type (e.g. "std" / "he" / "ap"), or
+    /// `null` when unarmed / melee. See `shock2vr::PlayerStateSnapshot`.
+    pub wielded_ammo_type: Option<String>,
 }
 
 /// Input state snapshot

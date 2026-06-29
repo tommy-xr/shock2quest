@@ -1401,6 +1401,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                 reloading: state.as_ref().is_some_and(|s| s.reloading),
                 reload_pitch_deg: state.as_ref().map(|s| s.reload_pitch_deg).unwrap_or(0.0),
                 reload_progress: state.as_ref().map(|s| s.reload_progress).unwrap_or(0.0),
+                wielded_ammo_type: state.as_ref().and_then(|s| s.wielded_ammo_type.clone()),
             }
         },
         entity_count,
