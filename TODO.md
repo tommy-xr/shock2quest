@@ -1,6 +1,18 @@
 TODO:
 - [ ] Get CI green for changes
 
+Needs human verification (batch these — no automated test covers "feel"):
+- [ ] Object physics: drive collider **density → mass** from `P$PhysAttr.density`
+  (currently hardcoded `0.1`). Shipped default density `1.0` is ~10× heavier, so
+  grabbed/thrown dynamic items will feel different — needs an in-VR / flat
+  playtest. Must also clamp the `density = 1000000.0` "immovable" sentinel so it
+  can't destabilize the Rapier solver. Elasticity + friction already landed; see
+  projects/object-physics-attrs.md.
+- [ ] While playtesting the above, also eyeball the **friction** change that
+  already landed: authored friction (mostly `0.0`) replaced the flat Rapier
+  default `0.5`, so dynamic props are slightly slidier. Low magnitude and covered
+  by automated tests, but confirm it feels right in the same pass.
+
 Recent work
 - (in progress) flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
 - flat runtime -> fix alpha transparency / z-order break

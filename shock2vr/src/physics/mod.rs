@@ -40,11 +40,23 @@ bitflags! {
 
 pub struct DynamicPhysicsOptions {
     pub gravity_scale: f32,
+    /// Coefficient of restitution (bounciness). Already calibrated from Dark's
+    /// authored `elasticity` at the call site; see `entity_creator`. The default
+    /// reproduces the value dynamic bodies used before per-object attributes
+    /// were threaded through.
+    pub restitution: f32,
+    /// Coefficient of friction, from Dark's authored `friction`. The default
+    /// reproduces Rapier's default friction (what dynamic bodies used before).
+    pub friction: f32,
 }
 
 impl Default for DynamicPhysicsOptions {
     fn default() -> DynamicPhysicsOptions {
-        DynamicPhysicsOptions { gravity_scale: 1.0 }
+        DynamicPhysicsOptions {
+            gravity_scale: 1.0,
+            restitution: 0.7,
+            friction: 0.5,
+        }
     }
 }
 
@@ -498,7 +510,8 @@ impl PhysicsWorld {
                     //.rotation(vector!(facing.z, facing.x, facing.y))
                     .translation(vec_to_nvec(offset))
                     //.position(test)
-                    .restitution(0.7)
+                    .restitution(opts.restitution)
+                    .friction(opts.friction)
                     .build()
             }
             PhysicsShape::Cuboid(size) => {
@@ -508,7 +521,8 @@ impl PhysicsWorld {
                     //.rotation(vector!(facing.z, facing.x, facing.y))
                     .translation(vec_to_nvec(offset))
                     //.position(test)
-                    .restitution(0.7)
+                    .restitution(opts.restitution)
+                    .friction(opts.friction)
                     .build()
             }
             PhysicsShape::Sphere(size) => {
@@ -517,7 +531,8 @@ impl PhysicsWorld {
                     //.rotation(vector!(facing.z, facing.x, facing.y))
                     .translation(vec_to_nvec(offset))
                     //.position(test)
-                    .restitution(0.7)
+                    .restitution(opts.restitution)
+                    .friction(opts.friction)
                     .build()
             }
         };
@@ -1374,4 +1389,141 @@ fn collision_group_names(bits: u32) -> Vec<String> {
         }
     }
     names
+}
+
+#[cfg(test)]
+mod tests {
+    //! Verify that per-object `DynamicPhysicsOptions` actually drive the Rapier
+    //! simulation. These are deterministic, headless physics tests (fixed 1/60
+    //! step, no mission/asset load) so an agent can confirm the plumbing.
+    use super::*;
+    use cgmath::{Quaternion, vec3};
+
+    fn identity_quat() -> Quaternion<f32> {
+        Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A world with a large static floor whose top surface is at `y = 0`, plus a
+    /// throwaway player far away (so it never interacts with the test bodies but
+    /// satisfies `update`'s signature).
+    fn world_with_floor() -> (PhysicsWorld, PlayerHandle) {
+        let mut world = PhysicsWorld::new();
+        let floor = world.create_static_body(
+            Isometry::translation(0.0, -1.0, 0.0),
+            EntityId::from_inner(1000),
+        );
+        world.attach_collider(
+            floor,
+            SharedShape::cuboid(100.0, 1.0, 100.0),
+            1.0,
+            CollisionGroup::entity(),
+        );
+        let player = world.create_player(
+            vec3(1000.0, 1000.0, 1000.0),
+            EntityId::from_inner(1001).unwrap(),
+        );
+        (world, player)
+    }
+
+    fn step(world: &mut PhysicsWorld, player: &mut PlayerHandle, frames: usize) {
+        for _ in 0..frames {
+            world.update(Vector3::new(0.0, 0.0, 0.0), player);
+        }
+    }
+
+    /// A higher-elasticity object must rebound higher than a low-elasticity one
+    /// dropped from the same height. (Negative-first: before `add_dynamic`
+    /// honored `opts.restitution`, both used the hardcoded 0.7 and reached the
+    /// same height, so this assertion failed.)
+    #[test]
+    fn higher_restitution_bounces_higher() {
+        let (mut world, mut player) = world_with_floor();
+
+        let low = world.add_dynamic(
+            EntityId::from_inner(1).unwrap(),
+            vec3(-5.0, 5.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            PhysicsShape::Sphere(0.5),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions {
+                restitution: 0.1,
+                ..Default::default()
+            },
+        );
+        let high = world.add_dynamic(
+            EntityId::from_inner(2).unwrap(),
+            vec3(5.0, 5.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            PhysicsShape::Sphere(0.5),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions {
+                restitution: 0.95,
+                ..Default::default()
+            },
+        );
+
+        // Both balls fall identically (~58 frames to first impact from y=5).
+        // Measure the rebound apex *after* that first contact, so the shared
+        // initial drop height doesn't mask the difference.
+        const SETTLE_FRAMES: usize = 70;
+        let mut low_peak = f32::MIN;
+        let mut high_peak = f32::MIN;
+        for frame in 0..300 {
+            step(&mut world, &mut player, 1);
+            if frame >= SETTLE_FRAMES {
+                low_peak = low_peak.max(world.get_position(low).unwrap().y);
+                high_peak = high_peak.max(world.get_position(high).unwrap().y);
+            }
+        }
+        assert!(
+            high_peak > low_peak + 0.1,
+            "high-restitution apex {high_peak} should exceed low-restitution apex {low_peak}"
+        );
+    }
+
+    /// A higher-friction box, given the same initial horizontal velocity on the
+    /// floor, must travel less far than a low-friction one. (Negative-first:
+    /// before `add_dynamic` honored `opts.friction`, both used Rapier's default
+    /// and traveled the same distance.)
+    #[test]
+    fn higher_friction_slides_less() {
+        let (mut world, mut player) = world_with_floor();
+
+        let make_box = |world: &mut PhysicsWorld, id: u64, z: f32, friction: f32| {
+            let entity = EntityId::from_inner(id).unwrap();
+            let handle = world.add_dynamic(
+                entity,
+                vec3(0.0, 0.5, z),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                PhysicsShape::Cuboid(vec3(1.0, 1.0, 1.0)),
+                CollisionGroup::entity(),
+                false,
+                DynamicPhysicsOptions {
+                    friction,
+                    ..Default::default()
+                },
+            );
+            // Slide, don't tumble: isolate sliding friction from rolling.
+            world.set_enabled_rotations(entity, false, false, false);
+            world.set_velocity(entity, vec3(10.0, 0.0, 0.0));
+            handle
+        };
+
+        let slippery = make_box(&mut world, 1, -5.0, 0.0);
+        let grippy = make_box(&mut world, 2, 5.0, 1.0);
+
+        step(&mut world, &mut player, 120);
+
+        let slippery_x = world.get_position(slippery).unwrap().x;
+        let grippy_x = world.get_position(grippy).unwrap().x;
+        assert!(
+            slippery_x > grippy_x + 1.0,
+            "low-friction box ({slippery_x}) should out-slide high-friction box ({grippy_x})"
+        );
+    }
 }

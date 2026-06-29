@@ -555,6 +555,36 @@ pub fn initialize_entity_with_props(
     }
 }
 
+/// Calibration constant mapping Dark's authored `elasticity` to a Rapier
+/// restitution. Dark stores elasticity in roughly `[0, 1]` (its shipped default
+/// is `1.0`, "fully elastic"); a Rapier restitution of `1.0` is a perfect,
+/// energy-conserving bounce that never settles and looks unnatural. We scale by
+/// this factor so the default-authored object (`elasticity == 1.0`) reproduces
+/// the value dynamic bodies used before this change (`0.7`), while still letting
+/// per-object variation drive the simulation. Tunable once a faithful
+/// calibration pass is done (see `projects/object-physics-attrs.md`).
+const ELASTICITY_TO_RESTITUTION: f32 = 0.7;
+
+fn dark_elasticity_to_restitution(elasticity: f32) -> f32 {
+    let restitution = elasticity * ELASTICITY_TO_RESTITUTION;
+    // Guard against corrupt/non-finite authored values (some Dark objects carry
+    // non-finite physics data - see `sanitize_collider_size`): `clamp` does not
+    // sanitize NaN, and a NaN/inf restitution can destabilize the solver.
+    if restitution.is_finite() {
+        restitution.clamp(0.0, 1.0)
+    } else {
+        DynamicPhysicsOptions::default().restitution
+    }
+}
+
+fn dark_friction(friction: f32) -> f32 {
+    if friction.is_finite() {
+        friction.max(0.0)
+    } else {
+        DynamicPhysicsOptions::default().friction
+    }
+}
+
 pub fn create_physics_representation(
     world: &mut World,
     physics: &mut PhysicsWorld,
@@ -600,6 +630,8 @@ pub fn create_physics_representation(
     let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
         DynamicPhysicsOptions {
             gravity_scale: phys_attr.gravity_scale,
+            restitution: dark_elasticity_to_restitution(phys_attr.elasticity),
+            friction: dark_friction(phys_attr.friction),
         }
     } else {
         DynamicPhysicsOptions::default()
