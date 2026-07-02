@@ -34,6 +34,10 @@ pub struct AnimationPlayer {
     current_frame: u32,
     remaining_time: f32,
     blend_state: Option<BlendState>,
+    /// Pose with the clip's root motion cancelled (see
+    /// `AnimationInfo::cancel_root_motion`). Set for first-person viewmodels,
+    /// whose entity transform is re-anchored to the camera every frame.
+    cancel_root_motion: bool,
 }
 
 impl AnimationPlayer {
@@ -46,6 +50,7 @@ impl AnimationPlayer {
             current_frame: 0,
             remaining_time: 0.0,
             blend_state: None,
+            cancel_root_motion: false,
         }
     }
     pub fn from_animation(animation_clip: Rc<AnimationClip>) -> AnimationPlayer {
@@ -58,6 +63,7 @@ impl AnimationPlayer {
             current_frame: 0,
             remaining_time: 0.0,
             blend_state: None,
+            cancel_root_motion: false,
         }
     }
     pub fn queue_animation(
@@ -91,7 +97,16 @@ impl AnimationPlayer {
             current_frame: 0,
             remaining_time: 0.0,
             blend_state,
+            cancel_root_motion: player.cancel_root_motion,
         }
+    }
+
+    /// A copy of `player` that poses with the clip's root motion cancelled
+    /// (see `AnimationInfo::cancel_root_motion`).
+    pub fn with_root_motion_cancelled(player: &AnimationPlayer) -> AnimationPlayer {
+        let mut new_player = player.clone();
+        new_player.cancel_root_motion = true;
+        new_player
     }
 
     pub fn set_additional_joint_transform(
@@ -109,6 +124,7 @@ impl AnimationPlayer {
             current_frame: player.current_frame,
             remaining_time: player.remaining_time,
             blend_state: player.blend_state.clone(),
+            cancel_root_motion: player.cancel_root_motion,
         }
     }
 
@@ -193,6 +209,7 @@ impl AnimationPlayer {
                             current_frame: next_frame - current_clip.num_frames,
                             remaining_time: remaining_duration,
                             blend_state,
+                            cancel_root_motion: player.cancel_root_motion,
                         },
                         motion_flags,
                         events,
@@ -211,6 +228,7 @@ impl AnimationPlayer {
                                 current_frame: 0,
                                 remaining_time: 0.0,
                                 blend_state,
+                                cancel_root_motion: player.cancel_root_motion,
                             },
                             motion_flags,
                             events,
@@ -238,6 +256,7 @@ impl AnimationPlayer {
                         current_frame: next_frame,
                         remaining_time: remaining_duration,
                         blend_state,
+                        cancel_root_motion: player.cancel_root_motion,
                     },
                     motion_flags,
                     events,
@@ -277,6 +296,7 @@ impl AnimationPlayer {
             current_clip,
             current_frame,
             &self.additional_joint_transforms,
+            self.cancel_root_motion,
         );
 
         if let Some(blend) = &self.blend_state {
@@ -293,6 +313,7 @@ impl AnimationPlayer {
                     &blend.from_clip,
                     frame,
                     &self.additional_joint_transforms,
+                    self.cancel_root_motion,
                 );
 
                 animated_transforms =
@@ -308,12 +329,14 @@ impl AnimationPlayer {
         clip: &AnimationClip,
         frame: u32,
         additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
+        cancel_root_motion: bool,
     ) -> [Matrix4<f32>; 40] {
         let animated_skeleton = ss2_skeleton::animate(
             skeleton,
             Some(AnimationInfo {
                 animation_clip: clip,
                 frame,
+                cancel_root_motion,
             }),
             additional_joint_transforms,
         );

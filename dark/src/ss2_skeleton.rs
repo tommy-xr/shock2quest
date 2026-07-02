@@ -389,6 +389,14 @@ fn calc_and_cache_global_transform(
 pub struct AnimationInfo<'a> {
     pub animation_clip: &'a AnimationClip,
     pub frame: u32,
+    /// Cancel the clip's root motion: both the per-frame clip root transform
+    /// and the root joint's animation transform are replaced with identity, so
+    /// the posed skeleton stays anchored at the model origin and only the
+    /// relative joints carry the gesture. Used for the first-person viewmodel,
+    /// where the entity transform is re-anchored to the camera every frame (the
+    /// original engine does this with a virtual "camSynch" motion that bolts
+    /// the arm root to the camera).
+    pub cancel_root_motion: bool,
 }
 
 pub fn animate(
@@ -403,6 +411,7 @@ pub fn animate(
     let root_transform = if let Some(AnimationInfo {
         animation_clip,
         frame,
+        cancel_root_motion,
     }) = animation_info
     {
         let normalized_frame = frame % animation_clip.num_frames;
@@ -412,12 +421,29 @@ pub fn animate(
             animation_transforms.insert(*joint, frames[normalized_frame as usize]);
         }
 
-        // Get the root transform for this frame
-        if animation_clip.root_transforms.is_empty() {
+        if cancel_root_motion {
+            // Drop the clip's transform for the root joint(s) so only the bind
+            // local applies; the per-frame clip root transform below is also
+            // skipped. The remaining joints keep only their ROTATION - the
+            // gesture is an orientation overlay on the rig's fixed bone
+            // lengths, and the clips' per-joint translations carry root-motion
+            // style displacement that would stretch the limbs. See
+            // `AnimationInfo::cancel_root_motion`.
+            for bone in &bones {
+                if bone.parent_id.is_none() {
+                    animation_transforms.remove(&bone.joint_id);
+                }
+            }
+            for transform in animation_transforms.values_mut() {
+                transform.w.x = 0.0;
+                transform.w.y = 0.0;
+                transform.w.z = 0.0;
+            }
+            Matrix4::identity()
+        } else if animation_clip.root_transforms.is_empty() {
             Matrix4::identity()
         } else {
-            let root_transform = animation_clip.root_transforms[normalized_frame as usize];
-            root_transform
+            animation_clip.root_transforms[normalized_frame as usize]
         }
     } else {
         Matrix4::identity()
@@ -450,4 +476,99 @@ pub fn animate(
 
 fn translation_from_matrix(matrix: &Matrix4<f32>) -> Vector3<f32> {
     matrix.w.truncate()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::motion::AnimationClip;
+    use std::time::Duration;
+
+    /// Two-bone skeleton (root joint 0, child joint 1 offset (1,0,0)) posed by
+    /// a one-frame clip whose root joint, child joint, and per-frame root
+    /// transform all carry translations.
+    fn test_skeleton_and_clip() -> (Skeleton, AnimationClip) {
+        let bones = vec![
+            Bone {
+                joint_id: 0,
+                parent_id: None,
+                local_transform: Matrix4::identity(),
+            },
+            Bone {
+                joint_id: 1,
+                parent_id: Some(0),
+                local_transform: Matrix4::from_translation(Vector3::new(1.0, 0.0, 0.0)),
+            },
+        ];
+        let mut joint_to_frame = HashMap::new();
+        joint_to_frame.insert(
+            0,
+            vec![Matrix4::from_translation(Vector3::new(5.0, 0.0, 0.0))],
+        );
+        joint_to_frame.insert(
+            1,
+            vec![Matrix4::from_translation(Vector3::new(2.0, 0.0, 0.0))],
+        );
+        let clip = AnimationClip {
+            num_frames: 1,
+            time_per_frame: Duration::from_millis(33),
+            duration: Duration::from_millis(33),
+            blend_length: Duration::ZERO,
+            end_rotation: Deg(0.0),
+            sliding_velocity: Vector3::new(0.0, 0.0, 0.0),
+            translation: Vector3::new(0.0, 0.0, 0.0),
+            joint_to_frame,
+            root_transforms: vec![Matrix4::from_translation(Vector3::new(0.0, 10.0, 0.0))],
+            motion_flags: Vec::new(),
+            name: None,
+        };
+        (Skeleton::create_from_bones(bones), clip)
+    }
+
+    #[test]
+    fn animate_applies_clip_root_motion_by_default() {
+        let (skeleton, clip) = test_skeleton_and_clip();
+        let posed = animate(
+            &skeleton,
+            Some(AnimationInfo {
+                animation_clip: &clip,
+                frame: 0,
+                cancel_root_motion: false,
+            }),
+            &immutable::HashTrieMap::new(),
+        );
+        let transforms = posed.get_transforms();
+        // Root = clip root transform (0,10,0) * root joint anim (5,0,0).
+        assert_eq!(
+            translation_from_matrix(&transforms[0]),
+            Vector3::new(5.0, 10.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn animate_cancel_root_motion_pins_root_and_strips_joint_translations() {
+        let (skeleton, clip) = test_skeleton_and_clip();
+        let posed = animate(
+            &skeleton,
+            Some(AnimationInfo {
+                animation_clip: &clip,
+                frame: 0,
+                cancel_root_motion: true,
+            }),
+            &immutable::HashTrieMap::new(),
+        );
+        let transforms = posed.get_transforms();
+        // Root stays at the model origin: both the per-frame clip root
+        // transform and the root joint's animation transform are cancelled.
+        assert_eq!(
+            translation_from_matrix(&transforms[0]),
+            Vector3::new(0.0, 0.0, 0.0)
+        );
+        // The child keeps its bind offset; the clip's per-joint translation
+        // (which would stretch the limb) is stripped.
+        assert_eq!(
+            translation_from_matrix(&transforms[1]),
+            Vector3::new(1.0, 0.0, 0.0)
+        );
+    }
 }

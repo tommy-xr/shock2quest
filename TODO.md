@@ -17,15 +17,15 @@ Recent work
 - (in progress) flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
 - flat runtime -> fix alpha transparency / z-order break
 - [x] flat runtime -> camera-origin aim along the crosshair (#315); muzzle flash now tracks the weapon via RuntimePropAttachment (#323)
-- flat runtime -> per-weapon viewmodel framing from PropPlayerGun.model_offset (needs a separate wider-FOV viewmodel projection; see projects/flat-weapon-handling.md)
+- [x] flat runtime -> per-weapon viewmodel framing from PropPlayerGun.model_offset (viewmodel-FOV scale + authored offsets + 11.25deg carry pitch; see projects/flat-weapon-handling.md)
 - modernize combat: add recoil / accuracy modifier (like counter-strike)
 - weapon ammo next slices: per-shot m_ammoUsage + clip size from BaseGunDesc (P$BaseGunDe), reload, ammo-type switching (see projects/flat-weapon-handling.md)
 
 - Fable: finish ragdolls (in progress) - hitbox-fitted colliders + rapier 0.31 compliant joints settle into a heap; on-death ragdoll behind `--experimental ragdoll`; multibody rig still experimental (extremity jitter / hip-sag), see projects/ragdoll-settling-followup.md
 - Fable: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
 - Fable: check to see feasibility of loading the 25th anniversary assets
-- Fable: fix flat screen first-person melee weapon orientation (camSynch / root-override; arm hangs low + stub visible - plan in projects/flat-weapon-handling.md)
-- Fable: fix flat screen first-person ranged weapon positioning (per-weapon model_offset framing, above)
+- [x] Fable: fix flat screen first-person melee weapon orientation (camSynch equivalent: root-motion cancel + authored PlayerMelee arm anchor; projects/flat-weapon-handling.md)
+- [x] Fable: fix flat screen first-person ranged weapon positioning (per-weapon model_offset framing, above)
 
 
 SNACKS:
