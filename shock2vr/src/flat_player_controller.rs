@@ -14,7 +14,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use dark::{
     SCALE_FACTOR,
-    properties::{PropFrobInfo, PropLimbModel},
+    properties::{PropFrobInfo, PropLimbModel, PropPlayerGun},
 };
 
 use crate::{
@@ -25,14 +25,21 @@ use crate::{
     virtual_hand::{VirtualHandEffect, can_grab_item},
 };
 
-/// Shared viewmodel framing offset (look space: +x right, +y up, -z forward),
-/// before the world-scale divide. Used for guns for now; per-weapon
-/// `PropPlayerGun.model_offset` placement is a TODO.
+/// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
+/// before the world-scale divide. Used only for wielded items with no
+/// `PropPlayerGun` and no `PropLimbModel` (guns and melee use authored
+/// offsets). Tuned before the viewmodel-FOV scale existed, so such items now
+/// read a bit smaller; retune if a real pickup ends up on this path.
 const VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -5.0);
-/// Viewmodel offset for melee weapons (PropLimbModel, no PropPlayerGun). They
-/// sit closer to the camera (smaller forward) than guns so they read larger /
-/// further back, matching how the FP melee meshes are framed.
-const MELEE_VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -3.0);
+/// Viewmodel offset for melee weapons (PropLimbModel, no PropPlayerGun): the
+/// authored arm anchor from the gamesys `PlayerMelee` motion archetype's
+/// "Arm Pos Offset" (0.2, -0.6, -2.4) - Dark camera axes (x back, y left,
+/// z up), same convention as `PropPlayerGun.model_offset` - pre-converted to
+/// look space. The arm ROOT sits there (below/right of and just behind the
+/// eye); the melee pose (root motion cancelled) raises the hand from it. Its
+/// "Arm Ang Offset" is zero, so the arm root takes the camera rotation
+/// directly.
+const MELEE_VIEWMODEL_OFFSET: Vector3<f32> = vec3(0.6, -2.4, 0.2);
 /// Camera (eye) height above the player's feet, in SS2 units before the
 /// world-scale divide. Shared with the runtimes' render-camera `head_offset` via
 /// `crate::PLAYER_EYE_HEIGHT` so the shot/viewmodel origin coincides with the
@@ -44,6 +51,11 @@ const HEAD_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT;
 /// at -90deg; `heading` then corrects models authored at other angles (e.g. the
 /// shotgun's 90deg). Tuned against the FP models, NOT the VR hand-model table.
 const VIEWMODEL_BASE_YAW_DEG: f32 = -90.0;
+
+/// Carried guns idle pitched down slightly; the original raises the gun to
+/// level only around firing. The same pitch also swings the framing offset
+/// down around the camera, so the carried gun sits lower on screen.
+const GUN_CARRY_PITCH_DEG: f32 = -11.25;
 
 pub struct FlatPlayerController {
     wielded_entity: Option<EntityId>,
@@ -143,31 +155,56 @@ impl FlatPlayerController {
 
         // Place the viewmodel + fire on the trigger edge.
         if let Some(entity_id) = self.wielded_entity {
-            // First-person framing from the weapon's native PropPlayerGun
-            // (model_offset + heading), falling back to a fixed offset for
-            // non-gun pickups. This intentionally ignores the VR hand-model
-            // table, which is keyed inconsistently and drops per-weapon heading.
-            // The first-person `hand_model` meshes all share one orientation,
-            // corrected by a single base yaw. NB: PropPlayerGun.heading is NOT
-            // the FP model's rotation - applying it over-rotates exactly by its
-            // value (the shotgun/assault 90deg, the psi-amp 180deg), so it is
-            // deliberately not used here. Position uses a shared framing offset
-            // for now (per-weapon model_offset placement is a TODO).
-            // Melee weapons (PropLimbModel, no model_offset) use a closer offset
-            // so they read larger; guns use the shared offset.
+            // First-person framing: guns place at their authored per-weapon
+            // `PropPlayerGun.model_offset` (plus the carry pitch below); melee
+            // arms anchor at the authored PlayerMelee arm offset; anything
+            // else falls back to `VIEWMODEL_OFFSET`. This intentionally
+            // ignores the VR hand-model table, which is keyed inconsistently
+            // and drops per-weapon heading. The first-person `hand_model`
+            // meshes all share one orientation, corrected by a single base
+            // yaw. NB: PropPlayerGun.heading is NOT the FP model's rotation -
+            // applying it over-rotates exactly by its value (the
+            // shotgun/assault 90deg, the psi-amp 180deg), so it is
+            // deliberately not used here.
             let is_melee = world
                 .borrow::<View<PropLimbModel>>()
                 .map(|v| v.get(entity_id).is_ok())
                 .unwrap_or(false);
+            // Authored offsets are in Dark camera axes (x back, y left, z up);
+            // look space is (+x right, +y up, -z forward), so the conversion
+            // is `vec3(-o.y, o.z, o.x)` (`MELEE_VIEWMODEL_OFFSET` is stored
+            // pre-converted).
+            let gun_offset = world
+                .borrow::<View<PropPlayerGun>>()
+                .ok()
+                .and_then(|v| v.get(entity_id).ok().map(|g| g.model_offset));
             let offset = if is_melee {
                 MELEE_VIEWMODEL_OFFSET
+            } else if let Some(mo) = gun_offset {
+                vec3(-mo.y, mo.z, mo.x)
             } else {
                 VIEWMODEL_OFFSET
             };
-            let rotation = look * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG));
+            // Melee arms take the camera rotation directly (camSynch semantics:
+            // root = ang offset * camera rotation, and the authored ang offset
+            // is zero); the gun meshes share one orientation corrected by a
+            // single base yaw, plus the carry pitch (which also swings the
+            // framing offset down around the camera).
+            let (rotation, position) = if is_melee {
+                (
+                    look * Quaternion::from_angle_y(Deg(180.0)),
+                    camera_pos + look.rotate_vector(offset / SCALE_FACTOR),
+                )
+            } else {
+                let pitch = Quaternion::from_angle_x(Deg(GUN_CARRY_PITCH_DEG));
+                (
+                    look * pitch * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG)),
+                    camera_pos + (look * pitch).rotate_vector(offset / SCALE_FACTOR),
+                )
+            };
             effects.push(VirtualHandEffect::SetPositionRotation {
                 entity_id,
-                position: camera_pos + look.rotate_vector(offset / SCALE_FACTOR),
+                position,
                 rotation,
                 scale: vec3(1.0, 1.0, 1.0),
             });

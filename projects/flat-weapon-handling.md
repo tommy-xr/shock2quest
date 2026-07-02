@@ -10,6 +10,53 @@ See also: `projects/flatscreen-and-vr-architecture.md` (the intent/outcome seam
 that all of this must respect), `projects/melee-combat.md`,
 `projects/player-damage.md`.
 
+## Status / progress (2026-07-01): faithful viewmodel framing + camSynch
+
+Both long-standing viewmodel TODOs below are **done** - per-weapon gun framing
+from `model_offset` (the FOV blocker is solved) and the melee camSynch/root
+override. All 15 roster weapons (11 guns + 4 melee) now frame correctly in
+`debug_weapons`.
+
+- **Viewmodel FOV, without a second render pass.** SS2 frames the FP models for
+  its original wide FOV (90 deg horizontal / ~74 vertical at 4:3); our world
+  projection is 45 deg vertical, which made faithful offsets render the
+  close-up viewmodel enormous. Instead of a separate projection pass, the
+  viewmodel is scaled toward the view axis in camera space by
+  `tan(world_fov/2) / tan(viewmodel_fov/2)` (`VIEWMODEL_FOV_Y_DEG = 73.74` in
+  `mission_core`): every vertex lands on exactly the pixel the wider-FOV
+  projection would produce (depth unchanged; only lighting normals are
+  slightly non-uniform). This one transform is what unblocked faithful
+  `model_offset` framing for every gun at once.
+- **Per-weapon gun framing** (`flat_player_controller`): guns place at their
+  authored `PropPlayerGun.model_offset`, converted from Dark view axes with
+  `look = vec3(-mo.y, mo.z, mo.x)`, plus the original's **carry pitch**: the
+  wielded gun idles pitched down 11.25 deg, and the same pitch swings the
+  framing offset down around the camera (the original raises the gun to level
+  only around firing - raise-on-fire is a possible follow-up). The old shared
+  `VIEWMODEL_OFFSET` remains only as the non-gun fallback. `heading` stays
+  deliberately unused (see 2026-06-21 note).
+- **Melee camSynch equivalent** (the "arm hangs low / stub visible" fix):
+  - `AnimationPlayer::with_root_motion_cancelled` -> `ss2_skeleton::animate`
+    `AnimationInfo.cancel_root_motion`: cancels the clip's per-frame root
+    transform AND the root joint's animation transform, and strips per-joint
+    translations so the gesture is a pure **orientation overlay** on the rig's
+    fixed bone lengths (the clips' joint translations otherwise stretch the
+    arm mid-swing). Unit-tested in `ss2_skeleton::tests`.
+  - The flat controller anchors the melee arm at the **authored** offset from
+    the gamesys `PlayerMelee` motion archetype (-761, `P$MotPlyrLi`: pos
+    (0.2, -0.6, -2.4) Dark axes, ang 0) - `MELEE_VIEWMODEL_OFFSET` documents
+    this; the property itself is still unparsed (single consumer). Rotation is
+    the camera rotation plus an empirical 180 deg yaw (the FP arm rig comes
+    out back-to-front through our CAL->skeleton conversion; the baked +90 root
+    yaw in `ss2_skeleton::create` is creature-tuned).
+  - The melee idle is still the static frame 0 of `ph212203`; a looping,
+    ticking idle player is now trivially possible (root motion no longer
+    drifts) and is a nice follow-up.
+- **Verification**: `debug_weapons` + screenshots per weapon (idle for all 15,
+  swing phases for the wrench); full SDK e2e suite green (the muzzle-flash
+  test's movement threshold was recalibrated - the pistol now sits ~0.5 world
+  units from the eye, so a 30 deg turn moves it ~0.25, not >0.3).
+
 ## Status / progress (2026-06-27)
 
 Weapon **ammo** landed (#326 data/firing, #327 HUD):
@@ -72,7 +119,8 @@ Verified: the pistol hit-spang and the grenade land dead-center on the crosshair
 
 Remaining (follow-ups):
 
-- **TODO(fable model): per-weapon viewmodel framing from `PropPlayerGun.model_offset`.**
+- ~~**TODO(fable model): per-weapon viewmodel framing from `PropPlayerGun.model_offset`.**~~
+  **(done 2026-07-01 - see status at top: viewmodel-FOV scale + authored offsets + carry pitch.)**
   Currently the flat viewmodel uses a single shared `VIEWMODEL_OFFSET` for every
   weapon (playable: all 11 frame bottom-right with the crosshair clear).
   Investigated wiring per-weapon `model_offset` and it does NOT reduce to one
@@ -140,7 +188,8 @@ What we implemented (this PR):
 - **Swing**: `Effect::FlatMeleeSwing` plays `leftswing` once on attack, then
   returns to the static idle.
 
-**TODO(camSynch / root override)** — the remaining orientation issue. Symptom:
+~~**TODO(camSynch / root override)**~~ **(done 2026-07-01 - see status at top:
+`cancel_root_motion` + authored `PlayerMelee` arm anchor.)** The original issue: Symptom:
 the idle/swing arm hangs somewhat low and the arm *stub* (open cut end) is
 visible, because the clip's root motion isn't cancelled (the original engine's
 camSynch re-anchors the arm root to the camera every frame; we don't).

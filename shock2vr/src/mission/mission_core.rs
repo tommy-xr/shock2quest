@@ -74,8 +74,9 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropAttachment, RuntimePropDoNotSerialize, RuntimePropFlatAim,
+        RuntimePropJointTransforms, RuntimePropReloading, RuntimePropSelectedAmmo,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -2217,6 +2218,12 @@ impl MissionCore {
                         // uses its swing player; otherwise melee holds the static
                         // player-melee idle (frame 0 = head-up ready stance); guns
                         // use the empty/bind pose. No-op for static meshes.
+                        // Melee poses cancel the clip's root motion: the arm is
+                        // anchored to the camera by the entity transform every
+                        // frame (the original engine's camSynch virtual motion),
+                        // so only the relative joints carry the gesture -
+                        // otherwise the arm hangs low and its open cut end is
+                        // visible.
                         let swing_player = self
                             .flat_melee_anim
                             .as_ref()
@@ -2233,6 +2240,11 @@ impl MissionCore {
                                 .unwrap_or_else(AnimationPlayer::empty),
                             (false, None) => AnimationPlayer::empty(),
                         };
+                        let player = if is_melee {
+                            AnimationPlayer::with_root_motion_cancelled(&player)
+                        } else {
+                            player
+                        };
                         model.as_ref().to_animated_scene_objects(&player)
                     } else if let Some(model) = self.id_to_model.get(&weapon) {
                         match self.id_to_animation_player.get(&weapon) {
@@ -2242,13 +2254,58 @@ impl MissionCore {
                     } else {
                         Vec::new()
                     };
+                    // The FP models are framed for the game's original, much
+                    // wider field of view (90 deg horizontal / ~74 vertical at
+                    // 4:3); under our narrower world projection the close-up
+                    // viewmodel fills the screen. Instead of a second render
+                    // pass with its own projection, scale the viewmodel toward
+                    // the view axis in camera space by
+                    // tan(world_fov/2) / tan(viewmodel_fov/2): every vertex
+                    // lands on exactly the pixel the wider-FOV projection would
+                    // put it on (depth is unchanged).
+                    const VIEWMODEL_FOV_Y_DEG: f32 = 73.74; // 90 deg horizontal at 4:3
+                    let tan_world = 1.0 / projection.y.y;
+                    let tan_vm = (VIEWMODEL_FOV_Y_DEG / 2.0).to_radians().tan();
+                    let s = tan_world / tan_vm;
+                    let squish =
+                        view.invert().unwrap() * Matrix4::from_nonuniform_scale(s, s, 1.0) * view;
                     for (i, obj) in scene_objs.into_iter().enumerate() {
                         let mut o = obj.clone();
-                        o.set_transform(xform);
+                        o.set_transform(squish * xform);
                         if i == 0 {
                             o.set_clear_depth(true);
                         }
                         ret.push(o);
+                    }
+
+                    // Entities bolted to the viewmodel (muzzle flash etc.,
+                    // skipped in the world pass) draw here too so they share
+                    // the viewmodel-FOV scale - otherwise they keep their true
+                    // camera-space offset while the weapon is scaled toward
+                    // the view axis, and float away from the barrel.
+                    let attached: Vec<(EntityId, Matrix4<f32>)> = {
+                        let v_attach = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
+                        let v_transform =
+                            self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+                        v_attach
+                            .iter()
+                            .with_id()
+                            .filter(|(_, a)| a.parent == weapon)
+                            .filter_map(|(id, _)| v_transform.get(id).ok().map(|t| (id, t.0)))
+                            .collect()
+                    };
+                    for (attached_id, attached_xform) in attached {
+                        if let Some(model) = self.id_to_model.get(&attached_id) {
+                            let objs = match self.id_to_animation_player.get(&attached_id) {
+                                Some(player) => model.to_animated_scene_objects(player),
+                                None => model.to_scene_objects().clone(),
+                            };
+                            for obj in objs {
+                                let mut o = obj.clone();
+                                o.set_transform(squish * attached_xform);
+                                ret.push(o);
+                            }
+                        }
                     }
                 }
             }
@@ -2365,17 +2422,36 @@ impl MissionCore {
         let mut rendered_model_count = 0;
 
         // In flat mode the wielded weapon is drawn as a first-person viewmodel in
-        // `render_per_eye` (on top, depth-test off), so skip it in the world pass.
-        let flat_viewmodel_entity = if options.presentation_mode == crate::PresentationMode::Flat {
-            self.interaction.viewmodel_entity()
-        } else {
-            None
-        };
+        // `render_per_eye` (on top, depth-test off), so skip it in the world
+        // pass - along with anything attached to it (muzzle flash), which is
+        // drawn in the same viewmodel pass so it shares the viewmodel-FOV
+        // scale (in the world pass the flash would keep its true camera-space
+        // offset while the weapon is scaled toward the view axis, and float
+        // away from the barrel).
+        let flat_viewmodel_skip: HashSet<EntityId> =
+            if options.presentation_mode == crate::PresentationMode::Flat {
+                self.interaction
+                    .viewmodel_entity()
+                    .map(|vm| {
+                        let v_attach = self.world.borrow::<View<RuntimePropAttachment>>().unwrap();
+                        let mut skip: HashSet<EntityId> = v_attach
+                            .iter()
+                            .with_id()
+                            .filter(|(_, a)| a.parent == vm)
+                            .map(|(id, _)| id)
+                            .collect();
+                        skip.insert(vm);
+                        skip
+                    })
+                    .unwrap_or_default()
+            } else {
+                HashSet::new()
+            };
 
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
-            if Some(*entity_id) == flat_viewmodel_entity {
+            if flat_viewmodel_skip.contains(entity_id) {
                 continue;
             }
             if !has_refs(&self.world, *entity_id) {
