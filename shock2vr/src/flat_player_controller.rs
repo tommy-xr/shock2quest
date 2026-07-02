@@ -27,15 +27,19 @@ use crate::{
 
 /// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
 /// before the world-scale divide. Used only for wielded items with no
-/// `PropPlayerGun` (guns use their authored per-weapon `model_offset`).
+/// `PropPlayerGun` and no `PropLimbModel` (guns and melee use authored
+/// offsets). Tuned before the viewmodel-FOV scale existed, so such items now
+/// read a bit smaller; retune if a real pickup ends up on this path.
 const VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -5.0);
 /// Viewmodel offset for melee weapons (PropLimbModel, no PropPlayerGun): the
 /// authored arm anchor from the gamesys `PlayerMelee` motion archetype's
-/// "Arm Pos Offset" (0.2, -0.6, -2.4) - Dark view axes (x fwd, y left, z up) -
-/// converted to look space. The arm ROOT sits there (below/right of the eye);
-/// the melee pose (root motion cancelled) raises the hand from it. Its "Arm
-/// Ang Offset" is zero, so the arm root takes the camera rotation directly.
-const MELEE_VIEWMODEL_OFFSET: Vector3<f32> = vec3(0.6, -2.4, -0.2);
+/// "Arm Pos Offset" (0.2, -0.6, -2.4) - Dark camera axes (x back, y left,
+/// z up), same convention as `PropPlayerGun.model_offset` - pre-converted to
+/// look space. The arm ROOT sits there (below/right of and just behind the
+/// eye); the melee pose (root motion cancelled) raises the hand from it. Its
+/// "Arm Ang Offset" is zero, so the arm root takes the camera rotation
+/// directly.
+const MELEE_VIEWMODEL_OFFSET: Vector3<f32> = vec3(0.6, -2.4, 0.2);
 /// Camera (eye) height above the player's feet, in SS2 units before the
 /// world-scale divide. Shared with the runtimes' render-camera `head_offset` via
 /// `crate::PLAYER_EYE_HEIGHT` so the shot/viewmodel origin coincides with the
@@ -151,24 +155,25 @@ impl FlatPlayerController {
 
         // Place the viewmodel + fire on the trigger edge.
         if let Some(entity_id) = self.wielded_entity {
-            // First-person framing from the weapon's native PropPlayerGun
-            // (model_offset + heading), falling back to a fixed offset for
-            // non-gun pickups. This intentionally ignores the VR hand-model
-            // table, which is keyed inconsistently and drops per-weapon heading.
-            // The first-person `hand_model` meshes all share one orientation,
-            // corrected by a single base yaw. NB: PropPlayerGun.heading is NOT
-            // the FP model's rotation - applying it over-rotates exactly by its
-            // value (the shotgun/assault 90deg, the psi-amp 180deg), so it is
-            // deliberately not used here. Position uses a shared framing offset
-            // for now (per-weapon model_offset placement is a TODO).
-            // Melee weapons (PropLimbModel, no model_offset) use a closer offset
-            // so they read larger; guns use the shared offset.
+            // First-person framing: guns place at their authored per-weapon
+            // `PropPlayerGun.model_offset` (plus the carry pitch below); melee
+            // arms anchor at the authored PlayerMelee arm offset; anything
+            // else falls back to `VIEWMODEL_OFFSET`. This intentionally
+            // ignores the VR hand-model table, which is keyed inconsistently
+            // and drops per-weapon heading. The first-person `hand_model`
+            // meshes all share one orientation, corrected by a single base
+            // yaw. NB: PropPlayerGun.heading is NOT the FP model's rotation -
+            // applying it over-rotates exactly by its value (the
+            // shotgun/assault 90deg, the psi-amp 180deg), so it is
+            // deliberately not used here.
             let is_melee = world
                 .borrow::<View<PropLimbModel>>()
                 .map(|v| v.get(entity_id).is_ok())
                 .unwrap_or(false);
-            // Guns use their authored per-weapon `model_offset`, converted from
-            // Dark view axes (x back, y left, z up) to look space.
+            // Authored offsets are in Dark camera axes (x back, y left, z up);
+            // look space is (+x right, +y up, -z forward), so the conversion
+            // is `vec3(-o.y, o.z, o.x)` (`MELEE_VIEWMODEL_OFFSET` is stored
+            // pre-converted).
             let gun_offset = world
                 .borrow::<View<PropPlayerGun>>()
                 .ok()
