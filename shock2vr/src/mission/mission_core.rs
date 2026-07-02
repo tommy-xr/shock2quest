@@ -161,6 +161,22 @@ pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 
+/// Global template inheritance hierarchy (template id -> MetaProp parents),
+/// so scripts can answer class questions about entities at runtime - e.g.
+/// picking a projectile's hit spang by whether the victim descends from the
+/// archetype class a `HitSpang` link targets (Hybrids, Robots, ...).
+#[derive(Unique, Clone)]
+pub struct GlobalTemplateHierarchy(pub HashMap<i32, Vec<i32>>);
+
+impl GlobalTemplateHierarchy {
+    /// Whether `template_id` is `class_template_id` or inherits from it.
+    pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
+        template_id == class_template_id
+            || dark::ss2_entity_info::get_ancestors(&self.0, &template_id)
+                .contains(&class_template_id)
+    }
+}
+
 impl EffectQueue {
     pub fn push(&mut self, effect: Effect) {
         self.effects.push(effect);
@@ -299,6 +315,9 @@ impl MissionCore {
             .filter_map(|m| m.obj_icon.clone().map(|icon| (m.template_id, icon)))
             .collect();
         world.add_unique(GlobalTemplateObjIcons(template_obj_icons));
+        world.add_unique(GlobalTemplateHierarchy(
+            ss2_entity_info::get_hierarchy(&entity_info_rc).clone(),
+        ));
 
         // ** Entity creation
 
@@ -533,7 +552,20 @@ impl MissionCore {
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
 
-        let (new_character_pos, collision_events) = {
+        // Skip physics while time is frozen (the debug runtime's paused state
+        // calls update with zero dt): the Rapier pipeline advances by a fixed
+        // internal dt per call regardless of elapsed time, so stepping it here
+        // would keep integrating bodies at wall-clock rate while scripts,
+        // animations, and particles are frozen - creatures glide across the
+        // floor and effects stick around. A paused sim must not move.
+        let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
+            let current_pos = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .map(|p| p.pos)
+                .unwrap_or_else(|_| vec3(0.0, 0.0, 0.0));
+            (current_pos, Vec::new())
+        } else {
             profile!(
                 "shock2.update.physics",
                 self.physics.update(
