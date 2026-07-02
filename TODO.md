@@ -108,8 +108,7 @@ Can do these in parallel:
 - [ ] VR: Is handedness already considered?
   - [ ] Where would the scale be factored in?
 - [ ] VR: Weapon scale
-- [ ] Hack for blood spangs
-  - [ ] Replace template with a different one
+- [x] Hack for blood spangs - replaced: projectile impacts now spawn the authored spangs (HitSpang links by victim class -> blood/sparks/grub/many; MissSpang -> terrain)
   - [ ] Add bitmap, tweq destroy
 - [ ] Camera AI - If player still visible after 3 seconds, switch to alarm - SwitchLink ecology ? How does triggering happen?
 - [ ] Security system AI
