@@ -197,9 +197,11 @@ pub struct PlayerStateSnapshot {
     pub wielded_entity_id: Option<i32>,
     pub right_hand_entity_id: Option<i32>,
     /// Whether the wielded weapon is mid-reload, and (if so) the current
-    /// viewmodel tilt angle in degrees and the reload progress (0..1). When not
-    /// reloading: `false`, `0.0`, `0.0`. Lets tooling verify the reload
-    /// animation headlessly (the angle ramps down, holds, then back to 0).
+    /// reload RAMP angle in degrees (0 -> authored peak -> 0) and the reload
+    /// progress (0..1). When not reloading: `false`, `0.0`, `0.0`. Lets tooling
+    /// verify the reload animation headlessly. NB: the applied viewmodel pitch
+    /// is not this value verbatim - the flat controller interpolates from its
+    /// carry pitch to the peak using this ramp (see `FlatPlayerController`).
     pub reloading: bool,
     pub reload_pitch_deg: f32,
     pub reload_progress: f32,
