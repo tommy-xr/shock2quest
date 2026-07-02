@@ -2185,30 +2185,11 @@ impl MissionCore {
                 let is_melee = limb_model.is_some();
                 let fp_model_name = gun_model.or(limb_model);
                 if let Some(xform) = maybe_xform {
-                    // While reloading, tilt the viewmodel by the current reload
-                    // angle (ramps up, holds, then back down - see
-                    // RuntimePropReloading). Rotate about the camera's horizontal
-                    // (screen-right) axis through the gun's position, so the gun
-                    // reads as a reload tilt regardless of the model's local
-                    // orientation.
-                    let xform = match self
-                        .world
-                        .borrow::<View<RuntimePropReloading>>()
-                        .ok()
-                        .and_then(|v| v.get(weapon).ok().map(|r| r.pitch_deg()))
-                    {
-                        Some(deg) if deg.abs() > f32::EPSILON => {
-                            // Camera-right in world space = row 0 of the view
-                            // rotation (column-major: (x.x, y.x, z.x)).
-                            let right = vec3(view.x.x, view.y.x, view.z.x).normalize();
-                            let p = xform.w.truncate();
-                            Matrix4::from_translation(p)
-                                * Matrix4::from_axis_angle(right, cgmath::Deg(deg))
-                                * Matrix4::from_translation(-p)
-                                * xform
-                        }
-                        _ => xform,
-                    };
+                    // The reload tilt is part of the entity transform itself:
+                    // the flat controller folds the reload pitch into the gun's
+                    // camera-pivot pitch (see `FlatPlayerController::update`),
+                    // so the gun dips around the eye like the original instead
+                    // of spinning in place around its own origin.
                     let scene_objs = if let Some(name) = fp_model_name {
                         let model = asset_cache.get(&MODELS_IMPORTER, &format!("{name}.BIN"));
                         // FP meshes are articulated (hand + arm + weapon as

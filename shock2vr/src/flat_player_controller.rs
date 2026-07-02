@@ -20,6 +20,7 @@ use dark::{
 use crate::{
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld},
+    runtime_props::RuntimePropReloading,
     scripts::{Message, MessagePayload},
     util::resolve_proxy_entity,
     virtual_hand::{VirtualHandEffect, can_grab_item},
@@ -188,15 +189,31 @@ impl FlatPlayerController {
             // Melee arms take the camera rotation directly (camSynch semantics:
             // root = ang offset * camera rotation, and the authored ang offset
             // is zero); the gun meshes share one orientation corrected by a
-            // single base yaw, plus the carry pitch (which also swings the
-            // framing offset down around the camera).
+            // single base yaw, plus a pitch (which also swings the framing
+            // offset down around the camera - the gun pivots around the EYE,
+            // not around its own origin, matching the original's pitch
+            // mechanism). At rest the pitch is the carry angle; a reload ramps
+            // it from there to the weapon's authored peak and back, so the gun
+            // dips out of view instead of spinning in place and exposing the
+            // FP mesh's open rear.
             let (rotation, position) = if is_melee {
                 (
                     look * Quaternion::from_angle_y(Deg(180.0)),
                     camera_pos + look.rotate_vector(offset / SCALE_FACTOR),
                 )
             } else {
-                let pitch = Quaternion::from_angle_x(Deg(GUN_CARRY_PITCH_DEG));
+                let pitch_deg = match world
+                    .borrow::<View<RuntimePropReloading>>()
+                    .ok()
+                    .and_then(|v| v.get(entity_id).ok().copied())
+                {
+                    Some(r) if r.peak_deg.abs() > f32::EPSILON => {
+                        let frac = r.pitch_deg() / r.peak_deg; // ramp 0..1..0
+                        GUN_CARRY_PITCH_DEG + (r.peak_deg - GUN_CARRY_PITCH_DEG) * frac
+                    }
+                    _ => GUN_CARRY_PITCH_DEG,
+                };
+                let pitch = Quaternion::from_angle_x(Deg(pitch_deg));
                 (
                     look * pitch * Quaternion::from_angle_y(Deg(VIEWMODEL_BASE_YAW_DEG)),
                     camera_pos + (look * pitch).rotate_vector(offset / SCALE_FACTOR),
