@@ -78,6 +78,7 @@ impl AnimatedModel {
             Some(AnimationInfo {
                 animation_clip: &animation_clip,
                 frame,
+                cancel_root_motion: false,
             }),
             &rpds::HashTrieMap::new(),
         );

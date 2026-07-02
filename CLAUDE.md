@@ -21,6 +21,20 @@ For a concise contributor checklist, see `AGENTS.md`. This document serves as th
 - Run tests after each change (if available)
 - Use descriptive commit messages that explain the "why"
 
+### 3. Visual Changes
+
+Whenever a change adds or alters something visible (a viewmodel/HUD/rendering/
+material/lighting feature, a debug scene, an animation, a shader), capture a
+short looping GIF and a still PNG of it and embed them in the PR — this is part
+of the definition of done for visual work, so reviewers (human and LLM) can see
+the result. When the change modifies an existing visual, include a before/after
+too (capture the base ref with the same deterministic request sequence). Use the
+**pr-visuals skill** (`.claude/skills/pr-visuals/`): it drives the headless
+debug-runtime capture path (`/v1/step` + `/v1/screenshot` — no window
+interaction, deterministic fixed-timestep), assembles the GIF, hosts the
+binaries in a gist, and embeds them in the PR body — and it runs the capture in
+a subagent so the image-heavy work stays out of the main context.
+
 ## Project Documentation
 
 ### Essential Reading

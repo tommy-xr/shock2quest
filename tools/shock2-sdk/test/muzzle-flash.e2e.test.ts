@@ -75,14 +75,16 @@ test(
 
     const offsetB = dist(pistolB, flashB);
 
-    // The viewmodel actually moved with the camera...
+    // The viewmodel actually moved with the camera... (the pistol's authored
+    // model_offset keeps it ~0.5 world units from the eye, so a 30deg turn
+    // moves it ~0.25)
     assert.ok(
-      dist(pistolA, pistolB) > 0.3,
+      dist(pistolA, pistolB) > 0.15,
       `pistol should move when the camera turns (moved ${dist(pistolA, pistolB).toFixed(3)})`,
     );
     // ...the flash moved too (it isn't pinned at the spawn pose)...
     assert.ok(
-      dist(flashA, flashB) > 0.3,
+      dist(flashA, flashB) > 0.15,
       `flash should move with the weapon, not stay pinned (moved ${dist(flashA, flashB).toFixed(3)})`,
     );
     // ...and crucially its rigid offset from the weapon is preserved.
