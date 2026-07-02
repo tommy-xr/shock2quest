@@ -15,7 +15,7 @@ Needs human verification (batch these — no automated test covers "feel"):
 
 Recent work
 - (in progress) flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
-- flat runtime -> fix alpha transparency / z-order break
+- [x] flat runtime -> fix alpha transparency / z-order break (viewmodel depth-clear wiped world depth before the transparent pass; engine now renders the overlay group after the world's passes)
 - [x] flat runtime -> camera-origin aim along the crosshair (#315); muzzle flash now tracks the weapon via RuntimePropAttachment (#323)
 - [x] flat runtime -> per-weapon viewmodel framing from PropPlayerGun.model_offset (viewmodel-FOV scale + authored offsets + 11.25deg carry pitch; see projects/flat-weapon-handling.md)
 - modernize combat: add recoil / accuracy modifier (like counter-strike)
