@@ -79,7 +79,7 @@ fn make_particle_group(color_index: u8) -> PropParticleGroup {
     PropParticleGroup {
         render_type: 4, // PRT_SINGLE_COLOR_DISK
         motion_type: 0,
-        animation_type: 0,
+        animation_type: 1, // launch continuous (a persistent plume showcase)
         num: 40,
         velocity: Vector3::new(0.0, 0.0, 0.0),
         // gravity is applied as acceleration (Dark units, /SCALE_FACTOR at use).

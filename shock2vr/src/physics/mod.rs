@@ -412,6 +412,18 @@ impl PhysicsWorld {
         character_body.set_translation(vec_to_nvec(position), true)
     }
 
+    /// The character body's current translation, without stepping the
+    /// simulation. Used while time is frozen (debug-runtime pause) so
+    /// teleports - which write the physics body directly - are still
+    /// reflected in `PlayerInfo`/introspection before the next real step.
+    pub fn get_player_translation(&self, player_handle: &PlayerHandle) -> Vector3<f32> {
+        let character_body = self
+            .rigid_body_set
+            .get(player_handle.character_handle)
+            .unwrap();
+        nvec_to_cgmath(*character_body.translation())
+    }
+
     pub fn get_aabb2(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);

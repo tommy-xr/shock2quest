@@ -39,6 +39,13 @@ pub struct RuntimePropDoNotSerialize;
 #[derive(Component)]
 pub struct RuntimePropProxyEntity(pub shipyard::EntityId);
 
+// RuntimePropTransientFx - a runtime-spawned, fire-and-forget effect entity
+// (e.g. an impact spang): once its one-shot particle burst expires, the entity
+// is destroyed. Level-authored particle groups never get this - their one-shot
+// burst just goes dormant, matching the original engine (the object persists).
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropTransientFx;
+
 // RuntimePropAttachment - rigidly bolts an entity to a parent's transform. Each
 // frame the child's RuntimePropTransform is recomputed as
 // `parent.transform * local_transform`, so short-lived attached effects (e.g. the

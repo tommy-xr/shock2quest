@@ -139,6 +139,10 @@ pub fn create_entity_with_position(
         }
     }
 
+    if additional_options.transient_fx {
+        world.add_component(entity_id, crate::runtime_props::RuntimePropTransientFx);
+    }
+
     create_entity_core(
         entity_id,
         template_id,
@@ -846,6 +850,10 @@ pub struct CreateEntityOptions {
     /// child then tracks the parent each frame - used so a weapon's muzzle flash
     /// follows the moving first-person viewmodel instead of snapshotting it once.
     pub attach_to: Option<EntityId>,
+    /// Mark the entity as a fire-and-forget effect (`RuntimePropTransientFx`):
+    /// it is destroyed once its one-shot particle burst expires. Used for
+    /// impact spangs so they don't accumulate at every bullet hole.
+    pub transient_fx: bool,
 }
 
 impl Default for CreateEntityOptions {
@@ -853,6 +861,7 @@ impl Default for CreateEntityOptions {
         CreateEntityOptions {
             force_visible: false,
             attach_to: None,
+            transient_fx: false,
         }
     }
 }
