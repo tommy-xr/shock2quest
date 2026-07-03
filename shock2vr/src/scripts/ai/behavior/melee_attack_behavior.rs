@@ -20,6 +20,10 @@ use super::{Behavior, ChaseBehavior, NextBehavior};
 pub struct MeleeAttackBehavior;
 
 impl Behavior for MeleeAttackBehavior {
+    fn name(&self) -> &'static str {
+        "MeleeAttack"
+    }
+
     fn animation(self: &MeleeAttackBehavior) -> Vec<MotionQueryItem> {
         vec![
             MotionQueryItem::new("meleecombat"),

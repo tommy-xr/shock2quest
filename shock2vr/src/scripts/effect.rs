@@ -50,6 +50,10 @@ pub enum AIPropertyUpdate {
     Mode {
         mode: AIMode,
     },
+    /// Name of the behavior the AI is currently running (debug introspection)
+    Behavior {
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +228,12 @@ pub enum Effect {
     SetAIProperty {
         entity_id: EntityId,
         update: AIPropertyUpdate,
+    },
+
+    /// Debug: force the alertness level of every AI in the mission (broadcast
+    /// as a SetAlertness message to each creature's script)
+    SetAllAIAlertness {
+        level: AIAlertLevel,
     },
 
     AcquireKeyCard {

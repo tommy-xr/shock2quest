@@ -45,6 +45,15 @@ pub enum InputAction {
     /// Reload the current level in place (debug). Exercises the level-transition path,
     /// including the experimental loading screen.
     DebugReloadLevel,
+
+    /// Force every monster to Moderate alertness (chase) - debug "make them
+    /// angry". A forced level is a behavior reset: it also cancels scripted
+    /// sequences (which won't restart). Dead AIs are unaffected; cameras and
+    /// turrets manage their own alertness and ignore this.
+    DebugAlertAll,
+    /// Force every monster back to Lowest alertness (idle). Same caveats as
+    /// DebugAlertAll.
+    DebugCalmAll,
 }
 
 impl InputAction {
@@ -64,6 +73,8 @@ impl InputAction {
             InputAction::Reload,
             InputAction::CyclePsiPower,
             InputAction::DebugReloadLevel,
+            InputAction::DebugAlertAll,
+            InputAction::DebugCalmAll,
         ]
     }
 
@@ -81,6 +92,8 @@ impl InputAction {
             InputAction::Reload => "Reload",
             InputAction::CyclePsiPower => "CyclePsiPower",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
+            InputAction::DebugAlertAll => "DebugAlertAll",
+            InputAction::DebugCalmAll => "DebugCalmAll",
         }
     }
 }

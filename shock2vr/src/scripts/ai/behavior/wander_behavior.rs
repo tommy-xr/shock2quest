@@ -40,6 +40,10 @@ impl WanderBehavior {
 }
 
 impl Behavior for WanderBehavior {
+    fn name(&self) -> &'static str {
+        "Wander"
+    }
+
     fn steer(
         &mut self,
         current_heading: Deg<f32>,

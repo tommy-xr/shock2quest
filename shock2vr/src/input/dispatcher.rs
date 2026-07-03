@@ -1,5 +1,6 @@
 use crate::input_context::InputContext;
 use crate::scripts::{Effect, GlobalEffect};
+use dark::properties::AIAlertLevel;
 
 use super::{InputAction, InputActionState};
 
@@ -77,6 +78,18 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::DebugReloadLevel) {
             effects.push(Effect::GlobalEffect(GlobalEffect::TestReload));
         }
+        if state.just_triggered(InputAction::DebugAlertAll) {
+            // Moderate = chase; High maps to attack behaviors, which assume
+            // the player is already in range
+            effects.push(Effect::SetAllAIAlertness {
+                level: AIAlertLevel::Moderate,
+            });
+        }
+        if state.just_triggered(InputAction::DebugCalmAll) {
+            effects.push(Effect::SetAllAIAlertness {
+                level: AIAlertLevel::Lowest,
+            });
+        }
 
         effects
     }
@@ -128,6 +141,34 @@ mod tests {
             }
             other => panic!("expected SpawnInFrontOfPlayer, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn alert_all_maps_to_moderate_broadcast() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::DebugAlertAll);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(
+            effects[0],
+            Effect::SetAllAIAlertness {
+                level: AIAlertLevel::Moderate
+            }
+        ));
+    }
+
+    #[test]
+    fn calm_all_maps_to_lowest_broadcast() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::DebugCalmAll);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(
+            effects[0],
+            Effect::SetAllAIAlertness {
+                level: AIAlertLevel::Lowest
+            }
+        ));
     }
 
     #[test]
