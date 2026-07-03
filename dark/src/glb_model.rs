@@ -121,7 +121,8 @@ impl GlbModel {
     /// Replace only the rotation of a joint's local transform, preserving the
     /// bind pose translation and scale (see `GlbAnimationState::set_joint_rotation`)
     pub fn set_joint_rotation(&mut self, joint_index: usize, rotation: cgmath::Quaternion<f32>) {
-        self.animation_state.set_joint_rotation(joint_index, rotation);
+        self.animation_state
+            .set_joint_rotation(joint_index, rotation);
     }
 
     /// Get the current local transform for a joint (uses joint index)

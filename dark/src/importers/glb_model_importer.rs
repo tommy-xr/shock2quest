@@ -127,8 +127,12 @@ fn load_glb(
     for mesh in &meshes {
         if let GlbVertexData::Skinned(vertices) = &mesh.vertex_data {
             for vertex in vertices {
-                let pos =
-                    cgmath::Vector4::new(vertex.position.x, vertex.position.y, vertex.position.z, 1.0);
+                let pos = cgmath::Vector4::new(
+                    vertex.position.x,
+                    vertex.position.y,
+                    vertex.position.z,
+                    1.0,
+                );
                 let skinned = match &bind_skinning {
                     Some(skinning) => {
                         let mut skinned = cgmath::Vector4::new(0.0, 0.0, 0.0, 0.0);

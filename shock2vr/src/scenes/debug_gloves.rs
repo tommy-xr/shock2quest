@@ -63,7 +63,12 @@ impl GloveAnimation {
         let phase = self.total_time * std::f32::consts::TAU / Self::CYCLE_SECONDS;
         let amount = 0.5 - 0.5 * phase.cos();
         let pose = self.open.blend(&self.fist, amount);
-        build_posed_glove(&self.model, &self.retarget, Some(&pose), self.texture.as_ref())
+        build_posed_glove(
+            &self.model,
+            &self.retarget,
+            Some(&pose),
+            self.texture.as_ref(),
+        )
     }
 }
 
@@ -99,12 +104,10 @@ impl DebugSceneHooks for GloveHooks {
                 // camera looks along -X toward the gloves)
                 let offset = ((count - 1.0) / 2.0 - index as f32) * GLOVE_SPACING;
                 // Fingers point up, palm toward the camera
-                let world = Matrix4::from_translation(vec3(
-                    GLOVE_POSITION.x + offset,
-                    y,
-                    GLOVE_POSITION.z,
-                )) * Matrix4::from_angle_y(Deg(90.0))
-                    * Matrix4::from_angle_x(Deg(-90.0));
+                let world =
+                    Matrix4::from_translation(vec3(GLOVE_POSITION.x + offset, y, GLOVE_POSITION.z))
+                        * Matrix4::from_angle_y(Deg(90.0))
+                        * Matrix4::from_angle_x(Deg(-90.0));
                 scene_objects.extend(clone_with_transform(&glove.objects, world));
                 scene_objects.extend(glove.debug_cubes.iter().map(|cube| {
                     let mut clone = cube.clone();
@@ -201,8 +204,9 @@ impl DebugGlovesScene {
     ) -> Box<dyn GameScene> {
         let builder = DebugSceneBuilder::new("debug_gloves")
             .with_default_floor()
+            // Far enough back that the whole two-row line-up fits the FOV
             .with_spawn_location(SpawnLocation::PositionRotation(
-                vec3(0.0, 2.5, 0.0),
+                vec3(0.0, 2.5, -0.8),
                 Quaternion::from_angle_y(Deg(90.0)),
             ));
 
