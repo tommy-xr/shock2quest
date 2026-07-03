@@ -1,5 +1,39 @@
 # PSI Powers Deep Dive
 
+## Implementation Status (updated 2026-07-03)
+
+Landed (phase 1 - all powers selectable, projectile powers castable):
+
+- **Data**: `dark` parses `P$PsiPower` (power id, activation type, psi cost,
+  4 tuning floats), `P$PsiShield` (sustained duration: `base + per_psi × PSI`
+  seconds), and `P$PsiState` (player psi pool, authored 40/50 on `The Player`
+  -384). All 35 power meta-prop templates (`MetaProperty → Psi Powers →
+  Level 1..5`) hydrate cleanly; costs equal tiers, tuning floats match the
+  published gameplay formulas (e.g. Berserk `[0.13, 1.0]` for ×(0.13×PSI²+1)).
+- **Registry/selection**: `shock2vr/src/psi.rs` hydrates every power template
+  at mission load (`GlobalPsiPowers`), including its PSI-ordered `Projectile`
+  links (order 1..8 = caster PSI level). `PsiPowerSelection` + the
+  `CyclePsiPower` input action (`Y` on desktop, HTTP/SDK everywhere) select
+  the power; default is Cryokinesis (Projected Cryokinesis).
+- **Casting**: `psiampscript` → `PsiAmpScript` casts the selected power on
+  trigger pull: checks/deducts psi points (`Effect::SpendPsiPoints`), spawns
+  the PSI-scaled projectile plus the amp's `GunFlash` (Spinning Psi Ring).
+  Non-projectile activation types log and spend nothing (yet). Effective PSI
+  stat is a fixed placeholder (5) until player stats land.
+- **HUD/introspection**: the psi bar shows the real pool; `/v1/info` (and the
+  SDK `FrameSnapshot`) expose `psi_points`, `max_psi_points`,
+  `selected_psi_power`.
+- **Testing**: `debug_psi` scene (auto-equips the amp, wall ahead) +
+  `tools/shock2-sdk/test/psi.e2e.test.ts`.
+
+Not yet implemented: trained-power gating (the player template's unparsed
+`P$PsiPower2`/`P$PsiPowerD` look like the learned-power bits), the hold-to-
+overload charge meter (+2 PSI in the yellow zone, psi burnout past it),
+sustained/shield/cursor power behaviors, PSI stat from `P$BaseStats`, psi
+point/selection persistence across save/load and level transitions (both
+reset - the pool to the authored 40, the selection to Cryokinesis), and psi
+hypos/trainers.
+
 ## High-Level Context
 
 System Shock 2 implements psionics by combining C++ runtime glue with data-driven archetypes and scripts:

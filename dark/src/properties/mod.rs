@@ -24,6 +24,7 @@ mod prop_phys_attr;
 mod prop_phys_initial_velocity;
 mod prop_phys_type;
 mod prop_player_gun;
+mod prop_psi;
 mod prop_quest_bit;
 mod prop_render_type;
 mod prop_replicator;
@@ -59,6 +60,7 @@ pub use prop_phys_attr::*;
 pub use prop_phys_initial_velocity::*;
 pub use prop_phys_type::*;
 pub use prop_player_gun::*;
+pub use prop_psi::*;
 pub use prop_quest_bit::*;
 pub use prop_render_type::*;
 pub use prop_replicator::*;
@@ -1102,6 +1104,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ObjShort",
             read_variable_length_string,
             PropObjShortName,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$PsiPower",
+            PropPsiPower::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$PsiShield",
+            PropPsiShield::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$PsiState",
+            PropPsiState::read,
+            identity,
             accumulator::latest,
         ),
         define_prop(

@@ -26,6 +26,7 @@ mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
 mod once_router;
+mod psi_amp_script;
 mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
@@ -76,6 +77,7 @@ use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
+use self::psi_amp_script::PsiAmpScript;
 use self::trap_signal::TrapSignal;
 use self::{
     base_button::BaseButton, base_elevator::BaseElevator, base_monster::BaseMonster, core_room::*,
@@ -538,7 +540,7 @@ impl ScriptWorld {
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
             "psiampscript" => Box::new(CompositeScript::new(vec![
-                Box::new(WeaponScript::new()),
+                Box::new(PsiAmpScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
             "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),

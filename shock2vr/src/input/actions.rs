@@ -40,6 +40,8 @@ pub enum InputAction {
     CycleAmmo,
     /// Reload the wielded weapon: refill its clip to capacity.
     Reload,
+    /// Select the next psi power (used when firing the psi amp).
+    CyclePsiPower,
     /// Reload the current level in place (debug). Exercises the level-transition path,
     /// including the experimental loading screen.
     DebugReloadLevel,
@@ -60,6 +62,7 @@ impl InputAction {
             InputAction::CycleWeapon,
             InputAction::CycleAmmo,
             InputAction::Reload,
+            InputAction::CyclePsiPower,
             InputAction::DebugReloadLevel,
         ]
     }
@@ -76,6 +79,7 @@ impl InputAction {
             InputAction::CycleWeapon => "CycleWeapon",
             InputAction::CycleAmmo => "CycleAmmo",
             InputAction::Reload => "Reload",
+            InputAction::CyclePsiPower => "CyclePsiPower",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
         }
     }
