@@ -825,8 +825,14 @@ impl MissionCore {
                 {
                     // Dormant groups (authored inactive) do not emit. There is
                     // no runtime activation toggle yet; when one exists this
-                    // should flip the system on rather than skip it.
+                    // should flip the system on rather than skip it. A
+                    // transient (fire-and-forget) entity that is dormant would
+                    // never finish a burst, so reap it immediately instead of
+                    // leaking an invisible entity.
                     if !pg.is_active {
+                        if v_transient_fx.contains(id) {
+                            finished_particle_entities.push(id);
+                        }
                         continue;
                     }
                     let particle_system =
@@ -1150,6 +1156,28 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
+        self.create_entity_with_position_and_rider_depth(
+            asset_cache,
+            template_id,
+            position,
+            orientation,
+            root_transform,
+            additional_options,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_entity_with_position_and_rider_depth(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_id: i32,
+        position: Point3<f32>,
+        orientation: Quaternion<f32>,
+        root_transform: Matrix4<f32>,
+        additional_options: CreateEntityOptions,
+        rider_depth: u32,
+    ) -> EntityCreationInfo {
         let transient_fx = additional_options.transient_fx;
         let created_entity = {
             entity_creator::create_entity_with_position(
@@ -1185,7 +1213,12 @@ impl MissionCore {
         // template or an ancestor) - projectile trails, psi bolt visuals.
         // Mission-placed hosts already have their particle entities placed in
         // the level, so this only runs for runtime creations; the recursion
-        // also instantiates nested attachments (a spang's own rider).
+        // also instantiates nested attachments (a spang's own rider). The
+        // depth cap bounds authored cycles (shipped data nests 2 deep).
+        const MAX_RIDER_DEPTH: u32 = 3;
+        if rider_depth >= MAX_RIDER_DEPTH {
+            return info;
+        }
         let riders: Vec<(i32, dark::properties::ParticleAttachOptions)> = {
             let hierarchy = ss2_entity_info::get_hierarchy(&self.entity_info);
             let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
@@ -1204,7 +1237,7 @@ impl MissionCore {
             // vhot/joint offsets are not applied yet - the particle rides the
             // host origin (attach type "object" covers the shipped projectile
             // trails).
-            self.create_entity_with_position(
+            let rider = self.create_entity_with_position_and_rider_depth(
                 asset_cache,
                 particle_template,
                 position,
@@ -1215,7 +1248,18 @@ impl MissionCore {
                     transient_fx,
                     ..CreateEntityOptions::default()
                 },
+                rider_depth + 1,
             );
+            // Riders are pure visuals: strip any physics the template brought
+            // (some riders are full projectile archetypes - e.g. the droid
+            // fusion shot rides the player Fusion Shot for its looks - and
+            // must not fly off / collide / slay as a second live projectile),
+            // and keep them out of saves (they are recreated with their host
+            // and would otherwise load back orphaned, since attachments are
+            // runtime-only).
+            self.make_un_physical(rider.entity_id);
+            self.world
+                .add_component(rider.entity_id, RuntimePropDoNotSerialize {});
         }
 
         info
@@ -1277,25 +1321,38 @@ impl MissionCore {
     pub fn remove_entity(&mut self, entity_id: EntityId) {
         // Entities riding this one (attached particle trails/FX) die with it -
         // otherwise a projectile's trail would linger at its last transform
-        // forever after the projectile is destroyed.
-        let attached_children: Vec<EntityId> = {
-            match self
+        // forever after the projectile is destroyed. The transitive closure is
+        // collected iteratively with a visited set so mission-authored
+        // attachment cycles can't recurse forever.
+        let mut to_remove: Vec<EntityId> = vec![entity_id];
+        let mut visited: HashSet<EntityId> = HashSet::from([entity_id]);
+        let mut frontier = vec![entity_id];
+        while let Some(parent) = frontier.pop() {
+            let children: Vec<EntityId> = match self
                 .world
                 .borrow::<View<crate::runtime_props::RuntimePropAttachment>>()
             {
                 Ok(v_attach) => v_attach
                     .iter()
                     .with_id()
-                    .filter(|(_, a)| a.parent == entity_id)
+                    .filter(|(id, a)| a.parent == parent && !visited.contains(id))
                     .map(|(id, _)| id)
                     .collect(),
                 Err(_) => Vec::new(),
+            };
+            for child in children {
+                visited.insert(child);
+                to_remove.push(child);
+                frontier.push(child);
             }
-        };
-        for child in attached_children {
-            self.remove_entity(child);
         }
+        // Children first, host last (reverse discovery order).
+        for id in to_remove.into_iter().rev() {
+            self.remove_entity_single(id);
+        }
+    }
 
+    fn remove_entity_single(&mut self, entity_id: EntityId) {
         // TODO: gui - remove entity
         self.hit_boxes.remove_entity(
             entity_id,
