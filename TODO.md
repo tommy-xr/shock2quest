@@ -309,8 +309,7 @@ Can do these in parallel:
 - [ ] Create a localized string mapper
   - [ ] Use dictionary in lookup method.
 - [ ] Weapons: Source/Stim Act/React
-- [ ] Spangs: Particle system not working correctly for blood spatter - why?
-  - [ ] Observations: Len is 324 vs 380 - so there is some difference in format not accounting for. Both the alpha and scale velocity look way off. Get smoke effect fixed.
+- [x] Spangs: Particle system not working correctly for blood spatter - SOLVED: P$ParticleG ships in two struct versions (mission 324 bytes, gamesys 380 with 8 extra bytes after gravity); the parser now handles both, and one-shot spang groups expire with their burst.
 - [ ] AI Behavior Improvements
   - Wander: Scan rays up/down to try and capture more of environment?
   - Add 'cliff' detector
