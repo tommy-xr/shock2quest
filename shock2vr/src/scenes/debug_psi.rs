@@ -129,6 +129,7 @@ impl DebugSceneHooks for PsiHooks {
         let spawn = Effect::SpawnInFrontOfPlayer {
             template_id: PSI_AMP_TEMPLATE_ID,
             head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            auto_wield: true,
         };
         core.handle_effects(
             vec![spawn],
