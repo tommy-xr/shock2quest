@@ -28,21 +28,23 @@ const CROSSHAIR: Rect = Rect::new(
     CROSSHAIR_SIZE,
 );
 
-// Health/PSI meters - positions transcribed from the original
-// (`shkmeter.cpp`): a 260x64 block at (BIO_X=2, BIO_Y=414), with health ABOVE
-// psi (HP_Y=18, PSI_Y=41) and the numeric readouts at the block's x+92. The
-// bar art (HPBAR/PSIBAR.PCX) is 80x14.
+// Health/PSI meters - positions matching the original SS2 bio-monitor
+// layout: a block at (2, 414), with health ABOVE psi (y-offsets 18 and 41)
+// and the numeric readouts at the block's x+92. The bar art
+// (HPBAR/PSIBAR.PCX) is 80x14. We draw the compact bio-monitor (BIO.PCX,
+// 128x64) as the backdrop; it is the left crop of the wider BIOFULL.PCX, so
+// the icon/bar/readout offsets below land identically on it.
 const METERS_X: f32 = 2.0;
 const METERS_Y: f32 = 414.0;
-const METERS_W: f32 = 260.0;
+const METERS_W: f32 = 128.0;
 const METERS_H: f32 = 64.0;
 const BAR_W: f32 = 80.0;
 const BAR_H: f32 = 14.0;
 const TEXT_W: f32 = 60.0;
 const TEXT_SIZE: f32 = 16.0;
 
-/// Bio-monitor backdrop (BIOFULL.PCX, 260x64) the bars/numbers sit on, the
-/// health/psi equivalent of the ammo gauge's AMMOBACK frame (`shkmeter.cpp`).
+/// Bio-monitor backdrop (BIO.PCX, 128x64) the bars/numbers sit on, the
+/// health/psi equivalent of the ammo gauge's AMMOBACK frame.
 const METERS_BACKDROP: Rect = Rect::new(METERS_X, METERS_Y, METERS_W, METERS_H);
 
 const HEALTH_BAR: Rect = Rect::new(METERS_X + 8.0, METERS_Y + 18.0, BAR_W, BAR_H); // (10, 432)
@@ -50,9 +52,9 @@ const PSI_BAR: Rect = Rect::new(METERS_X + 8.0, METERS_Y + 41.0, BAR_W, BAR_H); 
 const HEALTH_TEXT: Rect = Rect::new(METERS_X + 92.0, METERS_Y + 17.0, TEXT_W, BAR_H);
 const PSI_TEXT: Rect = Rect::new(METERS_X + 92.0, METERS_Y + 40.0, TEXT_W, BAR_H);
 
-// Ammo gauge - transcribed from `shkammov.cpp`: the compact AMMOBACK.PCX
-// (94x64) anchored at (AMMO_X=544, AMMO_Y=414), bottom-right, with the round
-// count drawn over it.
+// Ammo gauge - matching the original SS2 HUD: the compact AMMOBACK.PCX
+// (94x64) anchored at (544, 414), bottom-right, with the round count drawn
+// over it.
 const AMMO_X: f32 = 544.0;
 const AMMO_Y: f32 = 414.0;
 const AMMO_W: f32 = 94.0;
@@ -81,7 +83,7 @@ pub(crate) fn build_flat_hud_canvas(
     canvas
         .image(CROSSHAIR, "CROSSHAI.PCX")
         // Bio-monitor backdrop first; the bars + numbers render on top of it.
-        .image(METERS_BACKDROP, "BIOFULL.PCX")
+        .image(METERS_BACKDROP, "BIO.PCX")
         .bar(HEALTH_BAR, "HPBAR.PCX", health_fraction)
         .bar(PSI_BAR, "PSIBAR.PCX", psi_fraction);
 
@@ -185,7 +187,7 @@ mod tests {
 
     #[test]
     fn health_sits_above_psi() {
-        // Matches SS2 (shkmeter.cpp): HP_Y=18 < PSI_Y=41.
+        // Matches the original SS2 HUD: health sits above psi (18 < 41).
         assert!(HEALTH_BAR.y < PSI_BAR.y);
     }
 
