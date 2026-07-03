@@ -123,6 +123,13 @@ struct Args {
     /// flat path is what most headless weapon/aim testing exercises.
     #[arg(long)]
     vr: bool,
+
+    /// Show the game window. By default the runtime creates a hidden window so
+    /// it never steals focus or pops to the foreground - rendering and
+    /// `/v1/screenshot` still work via the offscreen framebuffer. Pass this to
+    /// watch the game interactively.
+    #[arg(long)]
+    visible: bool,
 }
 
 /// Default debug-camera head rotation.
@@ -327,6 +334,12 @@ fn run_game_blocking(
     ));
     #[cfg(target_os = "macos")]
     glfw.window_hint(glfw::WindowHint::OpenGlForwardCompat(true));
+
+    // Default to a hidden window so the runtime never steals focus or pops to
+    // the foreground - it's an HTTP-driven automation tool. A hidden window
+    // still has a valid GL context and default framebuffer, so rendering and
+    // `/v1/screenshot` work unchanged. `--visible` opts into a normal window.
+    glfw.window_hint(glfw::WindowHint::Visible(args.visible));
 
     // Create window
     info!("Step 2: Creating GLFW window...");
