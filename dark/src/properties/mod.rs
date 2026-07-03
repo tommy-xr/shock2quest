@@ -356,6 +356,12 @@ pub enum Link {
     /// particle group) to spawn when that projectile hits a descendant of the
     /// class (e.g. pistol bullets -> Hybrids spawns the blood spang).
     HitSpang(i32),
+    /// From a particle-group archetype to the object it rides
+    /// ("ParticleAttachement"). On an archetype host, the engine instantiates
+    /// the particle group when a concrete host is created (projectile trails,
+    /// psi bolt visuals); on a concrete (mission-placed) particle entity it
+    /// names the object to follow.
+    ParticleAttachement(ParticleAttachOptions),
     TPathInit,
     TPath(TPathData),
 }
@@ -472,6 +478,30 @@ impl CorpseOptions {
         CorpseOptions { propagate_scale }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ParticleAttachOptions {
+    /// 0 = object, 1 = vhot, 2 = joint, 3 = submodel.
+    pub attach_type: u32,
+    pub vhot: i32,
+    pub joint: i32,
+    pub submodel: i32,
+}
+
+impl ParticleAttachOptions {
+    pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> ParticleAttachOptions {
+        let attach_type = read_u32(reader);
+        let vhot = read_i32(reader);
+        let joint = read_i32(reader);
+        let submodel = read_i32(reader);
+        ParticleAttachOptions {
+            attach_type,
+            vhot,
+            joint,
+            submodel,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GunFlashOptions {
     pub vhot: u32,
@@ -733,6 +763,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "LD$Hit Span",
             |reader, _len| read_i32(reader),
             Link::HitSpang,
+        ),
+        define_link_with_data(
+            "L$ParticleA",
+            "LD$Particle",
+            ParticleAttachOptions::read,
+            Link::ParticleAttachement,
         ),
         define_link_with_data(
             "L$AIProject",
