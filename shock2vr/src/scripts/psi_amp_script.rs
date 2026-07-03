@@ -95,12 +95,11 @@ fn cast_selected_power(world: &World, amp_entity: EntityId) -> Effect {
     };
 
     // The amp's GunFlash links supply the cast visual (Spinning Psi Ring).
-    let flashes = super::script_util::get_all_links_with_template(world, amp_entity, |link| {
-        match link {
+    let flashes =
+        super::script_util::get_all_links_with_template(world, amp_entity, |link| match link {
             dark::properties::Link::GunFlash(data) => Some(*data),
             _ => None,
-        }
-    });
+        });
 
     let mut effects = vec![
         play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
@@ -119,13 +118,9 @@ fn cast_selected_power(world: &World, amp_entity: EntityId) -> Effect {
             },
         ),
     ];
-    effects.extend(
-        flashes
-            .into_iter()
-            .map(|(template_id, options)| {
-                create_muzzle_flash(world, amp_entity, template_id, &options)
-            }),
-    );
+    effects.extend(flashes.into_iter().map(|(template_id, options)| {
+        create_muzzle_flash(world, amp_entity, template_id, &options)
+    }));
 
     game_log!(
         INFO,

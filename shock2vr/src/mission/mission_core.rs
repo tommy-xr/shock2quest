@@ -310,10 +310,9 @@ impl MissionCore {
 
         // Seed the player's psi pool from `The Player` template, where the
         // gamesys authors the starting/maximum psi points (P$PsiState).
-        if let Some(psi_state) =
-            crate::scripts::script_util::hydrate_template_component::<
-                dark::properties::PropPsiState,
-            >(THE_PLAYER_TEMPLATE_ID, &entity_info_rc)
+        if let Some(psi_state) = crate::scripts::script_util::hydrate_template_component::<
+            dark::properties::PropPsiState,
+        >(THE_PLAYER_TEMPLATE_ID, &entity_info_rc)
         {
             world.add_component(player_entity, psi_state);
         }
