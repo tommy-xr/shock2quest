@@ -18,6 +18,7 @@ pub mod palette;
 pub mod pathfinding;
 pub mod paths;
 mod physics;
+mod psi;
 mod quest_info;
 mod runtime_props;
 mod scripts;
@@ -210,6 +211,12 @@ pub struct PlayerStateSnapshot {
     /// links (melee). Reported whenever there is a projectile link, even if there
     /// is only one (it just cannot be cycled).
     pub wielded_ammo_type: Option<String>,
+    /// The player's psi pool (current, max), or `None` when the player has no
+    /// psi state (e.g. gamesys not loaded).
+    pub psi_points: Option<(i32, i32)>,
+    /// The gamesys name of the currently selected psi power (what the psi amp
+    /// casts), e.g. "Cryokinesis".
+    pub selected_psi_power: Option<String>,
 }
 
 impl Game {
@@ -245,6 +252,24 @@ impl Game {
             reload_pitch_deg: reload.map(|(p, _)| p).unwrap_or(0.0),
             reload_progress: reload.map(|(_, p)| p).unwrap_or(0.0),
             wielded_ammo_type: crate::hud::get_wielded_ammo_type(world),
+            psi_points: world
+                .borrow::<shipyard::View<dark::properties::PropPsiState>>()
+                .ok()
+                .and_then(|v| {
+                    use shipyard::Get;
+                    v.get(info.entity_id)
+                        .ok()
+                        .map(|p| (p.psi_points, p.max_psi_points))
+                }),
+            selected_psi_power: (|| {
+                let powers = world
+                    .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
+                    .ok()?;
+                let selection = world
+                    .borrow::<UniqueView<crate::psi::PsiPowerSelection>>()
+                    .ok()?;
+                powers.0.get(selection.index).map(|p| p.name.clone())
+            })(),
         })
     }
 

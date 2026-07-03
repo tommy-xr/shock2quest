@@ -8,6 +8,7 @@ export type InputAction =
   | "CycleWeapon"
   | "CycleAmmo"
   | "Reload"
+  | "CyclePsiPower"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
@@ -136,6 +137,13 @@ export interface PlayerSnapshot {
   /** The wielded weapon's selected ammo type (e.g. "std"/"he"/"ap"), or null
    * when unarmed / melee (no projectile links). */
   wielded_ammo_type: string | null;
+  /** The player's current / maximum psi points, or null when the player has
+   * no psi pool. */
+  psi_points: number | null;
+  max_psi_points: number | null;
+  /** The gamesys name of the selected psi power (what the psi amp casts),
+   * e.g. "Cryokinesis". Cycle with the CyclePsiPower input action. */
+  selected_psi_power: string | null;
 }
 
 export interface FrameSnapshot {

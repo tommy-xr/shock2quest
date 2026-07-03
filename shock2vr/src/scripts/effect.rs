@@ -77,6 +77,16 @@ pub enum Effect {
     /// two projectile links.
     CycleAmmo,
 
+    /// Select the player's next psi power (advances `PsiPowerSelection`
+    /// through the `GlobalPsiPowers` registry, wrapping).
+    CyclePsiPower,
+
+    /// Deduct psi points from the player's pool (`PropPsiState`), clamped at
+    /// zero. Emitted by the psi amp when a power is cast.
+    SpendPsiPoints {
+        amount: i32,
+    },
+
     /// Reload the player's wielded weapon: refill its clip (`PropGunState.ammo`)
     /// to the magazine capacity (`PropBaseGunDesc.clip`). No-op when no weapon is
     /// wielded or it has no gun state / clip. (Reserve ammo is unlimited for now -

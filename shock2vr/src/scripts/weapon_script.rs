@@ -238,7 +238,7 @@ fn dry_fire(world: &World, entity_id: EntityId) -> Effect {
     play_environmental_sound(world, entity_id, "dryfire", vec![], AudioHandle::new())
 }
 
-fn create_muzzle_flash(
+pub(super) fn create_muzzle_flash(
     world: &World,
     entity_id: EntityId,
     muzzle_flash_template_id: i32,
@@ -281,7 +281,7 @@ fn create_muzzle_flash(
     }
 }
 
-fn create_projectile(
+pub(super) fn create_projectile(
     world: &World,
     entity_id: EntityId,
     projectile_template_id: i32,

@@ -71,6 +71,9 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::Reload) {
             effects.push(Effect::ReloadWeapon);
         }
+        if state.just_triggered(InputAction::CyclePsiPower) {
+            effects.push(Effect::CyclePsiPower);
+        }
         if state.just_triggered(InputAction::DebugReloadLevel) {
             effects.push(Effect::GlobalEffect(GlobalEffect::TestReload));
         }
