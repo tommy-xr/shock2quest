@@ -97,11 +97,18 @@ pub fn bind(texture: &Texture) {
 #[derive(Hash)]
 pub struct TextureOptions {
     pub wrap: bool,
+    /// Treat palette index 0 as transparent when decoding paletted formats
+    /// (PCX). Dark bitmap sprites (particles) are keyed this way; wall/UI
+    /// textures are not, so this is opt-in.
+    pub transparent_index_0: bool,
 }
 
 impl Default for TextureOptions {
     fn default() -> TextureOptions {
-        TextureOptions { wrap: true }
+        TextureOptions {
+            wrap: true,
+            transparent_index_0: false,
+        }
     }
 }
 

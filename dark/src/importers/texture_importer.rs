@@ -11,14 +11,17 @@ pub(crate) fn load_texture(
     name: String,
     reader: &mut Box<dyn engine::assets::asset_paths::ReadableAndSeekable>,
     _assets: &mut AssetCache,
-    _config: &TextureOptions,
+    config: &TextureOptions,
 ) -> RawTextureData {
     let extension = Path::new(&name).extension().unwrap();
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).unwrap();
+    if config.transparent_index_0 && extension.eq_ignore_ascii_case("pcx") {
+        return engine::texture_format::PCX.load_indexed(&buf, true);
+    }
     let format =
         engine::texture_format::extension_to_format(extension.to_str().unwrap().to_string())
             .unwrap();
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).unwrap();
     format.load(&buf)
 }
 
