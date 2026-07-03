@@ -746,6 +746,7 @@ impl MissionCore {
         self.world.run(
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
+             v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
                 for (id, (pg, launch_info, transform)) in
                     (&prop_particle_group, &prop_particle_launch_info, &transform)
@@ -785,13 +786,17 @@ impl MissionCore {
                                 .with_one_shot(pg.animation_type == 0)
                         });
                     particle_system.update(time.elapsed, transform.0);
-                    if particle_system.is_done() {
+                    // Only fire-and-forget effect entities (impact spangs) are
+                    // destroyed when their burst expires; a level-authored
+                    // one-shot group just goes dormant (the object persists,
+                    // like the original engine).
+                    if particle_system.is_done() && v_transient_fx.contains(id) {
                         finished_particle_entities.push(id);
                     }
                 }
             },
         );
-        // One-shot particle groups (impact spangs) expire with their burst -
+        // Transient one-shot effects (impact spangs) expire with their burst -
         // destroy the entity so spangs don't accumulate forever at every
         // bullet hole.
         for id in finished_particle_entities {

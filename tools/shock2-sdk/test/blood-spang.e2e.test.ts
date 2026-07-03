@@ -43,7 +43,7 @@ test(
     await game.input.set("right_hand.trigger", 0.0);
     await game.step({ frames: 1 });
 
-    const afterTerrain = (await game.entities.list({ filter: "Spang", limit: 10 }))
+    const afterTerrain = (await game.entities.list({ filter: "Spang", limit: 50 }))
       .entities;
     assert.ok(
       afterTerrain.some((e) => e.name === "Standard Terr Spang"),
@@ -103,7 +103,7 @@ test(
     await game.input.set("right_hand.trigger", 0.0);
     await game.step({ frames: 1 });
 
-    const afterBlood = (await game.entities.list({ filter: "Spang", limit: 10 }))
+    const afterBlood = (await game.entities.list({ filter: "Spang", limit: 50 }))
       .entities;
     const bloodSpangs = afterBlood.filter((e) => e.name === "Standard Blood Spang");
     assert.ok(
@@ -128,7 +128,7 @@ test(
     // Spangs are one-shot bursts: they expire with their particles instead of
     // accumulating forever at every bullet hole.
     await game.step({ frames: 120 }); // 2s >> the ~0.8s particle lifetime
-    const afterExpiry = (await game.entities.list({ filter: "Spang", limit: 10 }))
+    const afterExpiry = (await game.entities.list({ filter: "Spang", limit: 50 }))
       .entities;
     assert.equal(
       afterExpiry.length,

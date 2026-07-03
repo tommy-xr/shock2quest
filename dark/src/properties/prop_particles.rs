@@ -174,7 +174,7 @@ impl PropParticleGroup {
         // Remainder: rotation matrix, sim bookkeeping, attach object, and
         // (380-byte entries only) trailing fields.
         let consumed = if len >= 380 { 288u32 } else { 280u32 };
-        let _rem = read_bytes(reader, (len - consumed) as usize);
+        let _rem = read_bytes(reader, len.saturating_sub(consumed) as usize);
 
         PropParticleGroup {
             render_type,
