@@ -90,9 +90,15 @@ transform instead of the old green debug cube. The pose is driven per frame
 from the controller's analog inputs via `Pose::blend_per_finger`: the index
 finger follows the trigger, the other fingers (and thumb) follow the squeeze.
 The left hand mirrors the right-hand model with a negative-X scale (the same
-`flip_x` trick held weapons use). The glove model space already matches the
-hand frame (fingers along +Z, the direction weapon barrels face; palm inward,
-thumb up), so `grip_rotation()` is an identity hook for on-headset tuning.
+`flip_x` trick held weapons use). The hand frame's forward is **-Z** (the
+raycast/aim direction — see `VirtualHand::update`), while the glove model's
+fingers point along +Z, so the grip alignment yaws the model 180° to line the
+fingers up with where the hand points. This was validated against the raycast
+hit markers in-game (fingers must point at the hand's own hit cube).
+
+Desktop `--vr` controls: hold **E** (right hand) or **Q** (left hand) to
+possess a hand — the mouse then drives it (move = aim, LMB = trigger,
+RMB = squeeze). Bare clicks do nothing to the hands in VR mode.
 
 Test headlessly with `cargo dbgr --vr`: the debug runtime's
 `POST /v1/control/input` accepts `{left,right}_hand.position [x,y,z]`

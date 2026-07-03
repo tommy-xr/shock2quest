@@ -100,15 +100,18 @@ impl GloveRenderer {
 
         // The right-hand model is mirrored across the hand's local X for the
         // left hand (same trick as vr_config::flip_x for held weapons). The
-        // glove already matches the hand frame - fingers along +Z (the
-        // direction weapon barrels face, see vr_config's rotate_y(-90) for
-        // SS2 models), palm inward, thumb up - so no grip offset is needed;
-        // on-headset fine tuning would slot in as a rotation after `mirror`.
+        // glove's fingers point along the model's +Z; the hand frame's
+        // forward is -Z (the raycast/aim direction, see VirtualHand::update),
+        // so the grip alignment yaws the model 180 degrees to line the
+        // fingers up with where the hand points. Verified against the
+        // raycast hit markers in-game; on-headset fine tuning would adjust
+        // this rotation.
+        let grip = Matrix4::from_angle_y(cgmath::Deg(180.0));
         let mirror = match handedness {
             Handedness::Right => Matrix4::from_scale(1.0),
             Handedness::Left => Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
         };
-        let world = Matrix4::from_translation(position) * Matrix4::from(rotation) * mirror;
+        let world = Matrix4::from_translation(position) * Matrix4::from(rotation) * mirror * grip;
 
         let mut objects = self.model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(&self.materials) {
