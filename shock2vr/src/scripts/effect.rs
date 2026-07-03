@@ -249,10 +249,13 @@ pub enum Effect {
 
     /// Spawn an entity in front of the player (player position is resolved
     /// by the effect handler; head rotation comes from the input context,
-    /// since it isn't stored in the world)
+    /// since it isn't stored in the world). `auto_wield` lets flat mode pick
+    /// the spawn up as the viewmodel when empty-handed - for item spawns
+    /// only, never creatures.
     SpawnInFrontOfPlayer {
         template_id: i32,
         head_rotation: Quaternion<f32>,
+        auto_wield: bool,
     },
 
     /// Debug: spawn the next player weapon in front of the player and wield it

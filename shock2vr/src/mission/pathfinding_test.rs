@@ -4,6 +4,7 @@ use crate::pathfinding::{PathfindingService, path_visualization::PathVisualizati
 /// Provides P-key cycling through pathfinding test states and HTTP commands
 /// for the debug runtime to test A* pathfinding with visual feedback.
 use cgmath::Vector3;
+use std::sync::Arc;
 
 /// State machine for interactive pathfinding testing
 #[derive(Debug, Clone, PartialEq)]
@@ -40,7 +41,7 @@ impl PathfindingTest {
         &mut self,
         action: &str,
         player_position: Vector3<f32>,
-        pathfinding_service: &Option<PathfindingService>,
+        pathfinding_service: &Option<Arc<PathfindingService>>,
         path_visualization: &mut PathVisualizationSystem,
     ) -> String {
         // If a specific action is requested, use it
@@ -104,7 +105,7 @@ impl PathfindingTest {
     fn set_goal(
         &mut self,
         position: Vector3<f32>,
-        pathfinding_service: &Option<PathfindingService>,
+        pathfinding_service: &Option<Arc<PathfindingService>>,
         path_visualization: &mut PathVisualizationSystem,
     ) -> String {
         if !path_visualization.has_path("test_start") {

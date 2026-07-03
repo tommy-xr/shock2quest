@@ -8,6 +8,9 @@ use super::{InputAction, InputActionState};
 /// grunt og-pipe: -397, monkey - red: -1432
 const DEBUG_SPAWN_TEMPLATE_ID: i32 = -17;
 
+/// Template spawned by InputAction::SpawnDebugMonster (grunt og-pipe)
+const DEBUG_MONSTER_TEMPLATE_ID: i32 = -397;
+
 const QUICK_SAVE_FILE: &str = "save1.sav";
 
 pub struct ActionDispatcher;
@@ -39,6 +42,14 @@ impl ActionDispatcher {
             effects.push(Effect::SpawnInFrontOfPlayer {
                 template_id: DEBUG_SPAWN_TEMPLATE_ID,
                 head_rotation: input_context.head.rotation,
+                auto_wield: true,
+            });
+        }
+        if state.just_triggered(InputAction::SpawnDebugMonster) {
+            effects.push(Effect::SpawnInFrontOfPlayer {
+                template_id: DEBUG_MONSTER_TEMPLATE_ID,
+                head_rotation: input_context.head.rotation,
+                auto_wield: false,
             });
         }
         if state.just_triggered(InputAction::MoveInventory) {

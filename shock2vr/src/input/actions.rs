@@ -23,6 +23,9 @@ pub enum InputAction {
     /// Spawn a debug item in front of the player
     SpawnDebugItem,
 
+    /// Spawn a debug monster (og-pipe hybrid) in front of the player
+    SpawnDebugMonster,
+
     /// Reposition the inventory in front of the player
     MoveInventory,
 
@@ -51,6 +54,7 @@ impl InputAction {
             InputAction::QuickSave,
             InputAction::QuickLoad,
             InputAction::SpawnDebugItem,
+            InputAction::SpawnDebugMonster,
             InputAction::MoveInventory,
             InputAction::DebugHitboxCyclePose,
             InputAction::CycleWeapon,
@@ -66,6 +70,7 @@ impl InputAction {
             InputAction::QuickSave => "QuickSave",
             InputAction::QuickLoad => "QuickLoad",
             InputAction::SpawnDebugItem => "SpawnDebugItem",
+            InputAction::SpawnDebugMonster => "SpawnDebugMonster",
             InputAction::MoveInventory => "MoveInventory",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
             InputAction::CycleWeapon => "CycleWeapon",

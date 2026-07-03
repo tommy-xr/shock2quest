@@ -125,6 +125,11 @@ pub struct DebugOptions {
     pub debug_ai: bool,
 }
 
+/// Pathfinding service accessible from scripts (steering strategies) via
+/// UniqueView. None when the mission has no AIPATH data (e.g. debug scenes).
+#[derive(Unique, Clone)]
+pub struct GlobalPathfinding(pub Option<Arc<PathfindingService>>);
+
 #[derive(Unique, Clone)]
 pub struct EffectQueue {
     effects: Vec<Effect>,
@@ -223,7 +228,7 @@ pub struct MissionCore {
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
     pub path_database: Option<dark::mission::PathDatabase>,
-    pub pathfinding_service: Option<PathfindingService>,
+    pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
@@ -540,6 +545,14 @@ impl MissionCore {
             }
         }
 
+        let pathfinding_service = abstract_mission
+            .path_database
+            .as_ref()
+            .map(|db| Arc::new(PathfindingService::new(Arc::new(db.clone()))));
+        // Steering strategies path through this unique; MissionCore keeps its
+        // own handle for the interactive pathfinding test.
+        world.add_unique(GlobalPathfinding(pathfinding_service.clone()));
+
         MissionCore {
             interaction,
             level_name: mission,
@@ -567,10 +580,7 @@ impl MissionCore {
             pending_entity_triggers: Vec::new(),
             obj_map: abstract_mission.obj_map,
             path_database: abstract_mission.path_database.clone(),
-            pathfinding_service: abstract_mission
-                .path_database
-                .as_ref()
-                .map(|db| PathfindingService::new(Arc::new(db.clone()))),
+            pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
@@ -2102,6 +2112,7 @@ impl MissionCore {
                 Effect::SpawnInFrontOfPlayer {
                     template_id,
                     head_rotation,
+                    auto_wield,
                 } => {
                     let (pos, rot) = {
                         let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -2120,7 +2131,8 @@ impl MissionCore {
                     // first-person viewmodel for debug testing, but only when not
                     // already armed - extra spawns fall to the ground as world
                     // pickups (world model + physics) to be picked up.
-                    if game_options.presentation_mode == crate::PresentationMode::Flat
+                    if auto_wield
+                        && game_options.presentation_mode == crate::PresentationMode::Flat
                         && !self.interaction.is_wielding()
                     {
                         let msgs = self.interaction.wield(info.entity_id);
@@ -3380,6 +3392,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         self.world.run(
             |_entities_iter: EntitiesView,
              v_pos: View<dark::properties::PropPosition>,
+             v_transform: View<crate::runtime_props::RuntimePropTransform>,
              v_sym_name: View<dark::properties::PropSymName>,
              v_scripts: View<dark::properties::PropScripts>,
              v_links: View<dark::properties::Links>| {
@@ -3396,7 +3409,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         }
                     }
 
-                    let position = [pos.position.x, pos.position.y, pos.position.z];
+                    // Prefer the live transform; PropPosition can lag for
+                    // entities moved by animation/physics (e.g. walking AIs)
+                    let live_pos = v_transform
+                        .get(entity_id)
+                        .map(|xform| {
+                            use cgmath::Transform;
+                            let p = xform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+                            cgmath::vec3(p.x, p.y, p.z)
+                        })
+                        .unwrap_or(pos.position);
+                    let position = [live_pos.x, live_pos.y, live_pos.z];
                     let distance = (cgmath::Vector3::from(position) - player_pos).magnitude();
 
                     let script_count = v_scripts
