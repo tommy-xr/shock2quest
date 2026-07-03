@@ -351,6 +351,11 @@ pub enum Link {
     Replicator,
     SwitchLink,
     MissSpang,
+    /// From a projectile archetype to a victim archetype class; the payload is
+    /// the template id of the spang (impact effect, e.g. a blood or sparks
+    /// particle group) to spawn when that projectile hits a descendant of the
+    /// class (e.g. pistol bullets -> Hybrids spawns the blood spang).
+    HitSpang(i32),
     TPathInit,
     TPath(TPathData),
 }
@@ -722,6 +727,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "LD$Contains",
             |reader, _len| read_u32(reader),
             Link::Contains,
+        ),
+        define_link_with_data(
+            "L$Hit Spang",
+            "LD$Hit Span",
+            |reader, _len| read_i32(reader),
+            Link::HitSpang,
         ),
         define_link_with_data(
             "L$AIProject",

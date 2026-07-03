@@ -161,6 +161,22 @@ pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 
+/// Global template inheritance hierarchy (template id -> MetaProp parents),
+/// so scripts can answer class questions about entities at runtime - e.g.
+/// picking a projectile's hit spang by whether the victim descends from the
+/// archetype class a `HitSpang` link targets (Hybrids, Robots, ...).
+#[derive(Unique, Clone)]
+pub struct GlobalTemplateHierarchy(pub HashMap<i32, Vec<i32>>);
+
+impl GlobalTemplateHierarchy {
+    /// Whether `template_id` is `class_template_id` or inherits from it.
+    pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
+        template_id == class_template_id
+            || dark::ss2_entity_info::get_ancestors(&self.0, &template_id)
+                .contains(&class_template_id)
+    }
+}
+
 impl EffectQueue {
     pub fn push(&mut self, effect: Effect) {
         self.effects.push(effect);
@@ -299,6 +315,9 @@ impl MissionCore {
             .filter_map(|m| m.obj_icon.clone().map(|icon| (m.template_id, icon)))
             .collect();
         world.add_unique(GlobalTemplateObjIcons(template_obj_icons));
+        world.add_unique(GlobalTemplateHierarchy(
+            ss2_entity_info::get_hierarchy(&entity_info_rc).clone(),
+        ));
 
         // ** Entity creation
 
@@ -533,7 +552,21 @@ impl MissionCore {
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
 
-        let (new_character_pos, collision_events) = {
+        // Skip physics while time is frozen (the debug runtime's paused state
+        // calls update with zero dt): the Rapier pipeline advances by a fixed
+        // internal dt per call regardless of elapsed time, so stepping it here
+        // would keep integrating bodies at wall-clock rate while scripts,
+        // animations, and particles are frozen - creatures glide across the
+        // floor and effects stick around. A paused sim must not move. The
+        // player position is still read from the character body (not stepped)
+        // so a teleport - which writes the body directly - is reflected in
+        // PlayerInfo/introspection even before the next real step.
+        let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
+            (
+                self.physics.get_player_translation(&self.player_handle),
+                Vec::new(),
+            )
+        } else {
             profile!(
                 "shock2.update.physics",
                 self.physics.update(
@@ -709,9 +742,11 @@ impl MissionCore {
         effects.append(&mut current_effects.flush());
 
         // Update particle systems
+        let mut finished_particle_entities: Vec<EntityId> = Vec::new();
         self.world.run(
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
+             v_transient_fx: View<crate::runtime_props::RuntimePropTransientFx>,
              transform: View<RuntimePropTransform>| {
                 for (id, (pg, launch_info, transform)) in
                     (&prop_particle_group, &prop_particle_launch_info, &transform)
@@ -744,11 +779,29 @@ impl MissionCore {
                                 // resolve it to RGB. cg/cb (pg.g/pg.b) drive the
                                 // lifetime fade and are handled separately.
                                 .with_color(crate::palette::index_to_rgb(pg.r))
+                                // Animation type 0 = launch one shot: the burst
+                                // fires once and the group dies with its last
+                                // particle (impact spangs). Other types keep
+                                // launching (steam vents etc.).
+                                .with_one_shot(pg.animation_type == 0)
                         });
                     particle_system.update(time.elapsed, transform.0);
+                    // Only fire-and-forget effect entities (impact spangs) are
+                    // destroyed when their burst expires; a level-authored
+                    // one-shot group just goes dormant (the object persists,
+                    // like the original engine).
+                    if particle_system.is_done() && v_transient_fx.contains(id) {
+                        finished_particle_entities.push(id);
+                    }
                 }
             },
         );
+        // Transient one-shot effects (impact spangs) expire with their burst -
+        // destroy the entity so spangs don't accumulate forever at every
+        // bullet hole.
+        for id in finished_particle_entities {
+            effects.push(Effect::DestroyEntity { entity_id: id });
+        }
 
         effects
     }
@@ -1120,6 +1173,10 @@ impl MissionCore {
         self.id_to_bitmap.remove(&entity_id);
         self.id_to_model.remove(&entity_id);
         self.id_to_physics.remove(&entity_id);
+        // Also drop the entity's particle system - the render loop iterates
+        // this map directly, so a stale entry would keep emitting at the
+        // entity's last transform forever.
+        self.id_to_particle_system.remove(&entity_id);
         self.physics.remove(entity_id);
 
         self.world.delete_entity(entity_id);

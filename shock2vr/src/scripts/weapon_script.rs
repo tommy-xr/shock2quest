@@ -308,7 +308,7 @@ fn create_projectile(
                 root_transform: Matrix4::from_translation(origin.to_vec()) * rot,
                 options: CreateEntityOptions {
                     force_visible: true,
-                    attach_to: None,
+                    ..CreateEntityOptions::default()
                 },
             };
         }
@@ -354,7 +354,7 @@ fn create_projectile(
         root_transform: transform.0 * rot_matrix * projectile_rotation,
         options: CreateEntityOptions {
             force_visible: true,
-            attach_to: None,
+            ..CreateEntityOptions::default()
         },
     }
 }
