@@ -87,6 +87,22 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Set the psi amp's hold-to-overload meter state
+    /// (`RuntimePropPsiCharge`) on the amp entity - drives the HUD meter and
+    /// debug introspection while a charge is in progress or flashing its
+    /// result.
+    SetPsiCharge {
+        entity_id: EntityId,
+        fraction: f32,
+        phase: crate::runtime_props::PsiChargePhase,
+    },
+
+    /// Remove the psi amp's charge meter state (charge resolved and the
+    /// result flash expired).
+    ClearPsiCharge {
+        entity_id: EntityId,
+    },
+
     /// Reload the player's wielded weapon: refill its clip (`PropGunState.ammo`)
     /// to the magazine capacity (`PropBaseGunDesc.clip`). No-op when no weapon is
     /// wielded or it has no gun state / clip. (Reserve ammo is unlimited for now -

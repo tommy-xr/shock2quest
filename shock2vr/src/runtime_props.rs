@@ -132,6 +132,28 @@ impl RuntimePropReloading {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropSelectedAmmo(pub usize);
 
+/// Which phase the psi amp's hold-to-overload meter is in. `Charging` fills
+/// the bar; `Overloaded`/`Burnout` are brief result flashes after release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PsiChargePhase {
+    Charging,
+    Overloaded,
+    Burnout,
+}
+
+// RuntimePropPsiCharge - the psi amp's hold-to-overload meter state, set on the
+// wielded amp while the trigger is held on an overloadable power (and briefly
+// after release, to flash the result). One source of truth for the HUD meter
+// and debug introspection; the cast decision itself lives in `PsiAmpScript`.
+// Like all runtime props this is not serialized - a save taken mid-charge
+// loads with the charge dropped (no cast, no points spent), which is benign.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropPsiCharge {
+    /// Charge progress 0..1 (the bar fill). Overcharging past 1.0 burns out.
+    pub fraction: f32,
+    pub phase: PsiChargePhase,
+}
+
 // RuntimePropFlatAim - the flatscreen camera/crosshair fire ray (world space),
 // set each frame on the player's wielded weapon. When present, weapon firing
 // spawns projectiles from `origin` along `forward` (camera-origin aim) instead

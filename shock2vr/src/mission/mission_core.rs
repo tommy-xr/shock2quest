@@ -313,13 +313,31 @@ impl MissionCore {
         // Create player
         let player_entity = world.add_entity((PropLocalPlayer {}, RuntimePropDoNotSerialize {}));
 
-        // Seed the player's psi pool from `The Player` template, where the
-        // gamesys authors the starting/maximum psi points (P$PsiState).
-        if let Some(psi_state) = crate::scripts::script_util::hydrate_template_component::<
-            dark::properties::PropPsiState,
-        >(THE_PLAYER_TEMPLATE_ID, &entity_info_rc)
+        // Seed the player's psi pool and hit points from `The Player`
+        // template, where the gamesys authors the starting/maximum values
+        // (P$PsiState, P$HitPoints/P$MAX_HP). The HP pool is what psi
+        // burnout (and later, real damage handling) drains; nothing yet
+        // reacts to it reaching zero.
         {
-            world.add_component(player_entity, psi_state);
+            use crate::scripts::script_util::hydrate_template_component;
+            if let Some(psi_state) = hydrate_template_component::<dark::properties::PropPsiState>(
+                THE_PLAYER_TEMPLATE_ID,
+                &entity_info_rc,
+            ) {
+                world.add_component(player_entity, psi_state);
+            }
+            if let Some(hp) = hydrate_template_component::<dark::properties::PropHitPoints>(
+                THE_PLAYER_TEMPLATE_ID,
+                &entity_info_rc,
+            ) {
+                world.add_component(player_entity, hp);
+            }
+            if let Some(max_hp) = hydrate_template_component::<dark::properties::PropMaxHitPoints>(
+                THE_PLAYER_TEMPLATE_ID,
+                &entity_info_rc,
+            ) {
+                world.add_component(player_entity, max_hp);
+            }
         }
 
         // Create a map of template name (ie 'HE Explosion' to the template id).
@@ -1586,6 +1604,25 @@ impl MissionCore {
                             power.power.psi_cost
                         );
                     }
+                }
+
+                Effect::SetPsiCharge {
+                    entity_id,
+                    fraction,
+                    phase,
+                } => {
+                    self.world.add_component(
+                        entity_id,
+                        crate::runtime_props::RuntimePropPsiCharge { fraction, phase },
+                    );
+                }
+
+                Effect::ClearPsiCharge { entity_id } => {
+                    let mut v_charge = self
+                        .world
+                        .borrow::<ViewMut<crate::runtime_props::RuntimePropPsiCharge>>()
+                        .unwrap();
+                    v_charge.remove(entity_id);
                 }
 
                 Effect::SpendPsiPoints { amount } => {

@@ -21,6 +21,62 @@ const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
 /// it (`MetaProperty → Psi Powers → Level 1..5 → power`).
 const PSI_POWERS_ROOT_TEMPLATE_ID: i32 = -962;
 
+/// The powers that support hold-to-overload (per the published gameplay
+/// tables), by template id. Comments give the gamesys name and the
+/// discipline name players know it by.
+const OVERLOADABLE_TEMPLATE_IDS: &[i32] = &[
+    // Tier 1
+    -1022, // PsiPull (Kinetic Redirection)
+    -1143, // Cryokinesis (Projected Cryokinesis)
+    -3154, // Codebreaker (Remote Electron Tampering)
+    // Tier 2
+    -1017, // PsiHeal (Cerebro-Stimulated Regeneration)
+    // Tier 3
+    -3149, // Fabricate (Molecular Duplication)
+    -3151, // ElectroPsi (Electron Cascade)
+    -1144, // Pyrokinesis (Projected Pyrokinesis)
+    -3156, // Terror (Psionic Hypnogenesis)
+    // Tier 4
+    -1020, // Electro Dampen (Electron Suppression)
+    -1147, // Alchemy (Molecular Transmutation)
+    -3159, // CyberHack (Remote Circuitry Manipulation)
+    // Tier 5
+    -1139, // Major Heal (Advanced Cerebro-Stimulated Regeneration)
+    -3160, // SomaDrain (Soma Transference)
+    -3161, // PsiCharm (Imposed Neural Restructuring)
+    -3162, // ForceWall (Metacreative Barrier)
+];
+
+// --- Hold-to-overload tuning -----------------------------------------------
+//
+// Observed behavior: holding fire fills a bar (faster for higher tiers);
+// releasing in the yellow end-zone casts at +2 effective PSI (to a max of
+// 10); over-holding past full is a psi burnout - the cast fails and the
+// player takes ~3 damage per tier (PSI/Endurance mitigation comes later,
+// with player stats). The exact bar speeds are not documented, so the
+// durations are tuned approximations.
+
+/// The overload ("yellow") zone: releasing at `fraction >= this` overloads.
+/// Fixed for now; the original grows the zone with the PSI stat.
+pub const OVERLOAD_ZONE_START: f32 = 0.85;
+
+/// Effective-PSI bonus for a successful overload, and its cap.
+pub const OVERLOAD_PSI_BONUS: i32 = 2;
+pub const OVERLOAD_MAX_EFFECTIVE_PSI: i32 = 10;
+
+/// Burnout damage: 3 per tier of the burned power.
+pub const BURNOUT_DAMAGE_PER_TIER: i32 = 3;
+
+/// How long the meter's result (overload / burnout flash) stays on screen
+/// after the charge resolves, in seconds.
+pub const CHARGE_RESULT_FLASH_SECS: f32 = 0.6;
+
+/// Seconds of hold for the bar to fill completely: higher tiers charge
+/// faster (harder to time). Tier 1 = 2.0s down to tier 5 = 1.0s.
+pub fn charge_duration_secs(tier: i32) -> f32 {
+    2.0 - 0.25 * (tier.clamp(1, 5) - 1) as f32
+}
+
 /// One usable psi power, hydrated from its gamesys meta-prop template.
 #[derive(Debug, Clone)]
 pub struct PsiPowerInfo {
@@ -31,6 +87,8 @@ pub struct PsiPowerInfo {
     /// The power's `Projectile` links, sorted by `order` (the required PSI
     /// stat level, 1..8). Empty for non-projectile powers.
     pub projectiles: Vec<(i32, ProjectileOptions)>,
+    /// Whether the power supports hold-to-overload.
+    pub overloadable: bool,
 }
 
 impl PsiPowerInfo {
@@ -92,6 +150,7 @@ pub fn build_psi_power_registry(
             name,
             power,
             projectiles,
+            overloadable: OVERLOADABLE_TEMPLATE_IDS.contains(template_id),
         });
     }
 

@@ -211,12 +211,20 @@ pub struct PlayerStateSnapshot {
     /// links (melee). Reported whenever there is a projectile link, even if there
     /// is only one (it just cannot be cycled).
     pub wielded_ammo_type: Option<String>,
+    /// The player's hit points (current, max), or `None` when the player has
+    /// no health pool. Seeded from `The Player` template; drained by psi
+    /// burnout (real damage handling is still TODO).
+    pub hit_points: Option<(i32, i32)>,
     /// The player's psi pool (current, max), or `None` when the player has no
     /// psi state (e.g. gamesys not loaded).
     pub psi_points: Option<(i32, i32)>,
     /// The gamesys name of the currently selected psi power (what the psi amp
     /// casts), e.g. "Cryokinesis".
     pub selected_psi_power: Option<String>,
+    /// The psi amp's hold-to-overload meter: `(fraction 0..1, phase)` where
+    /// phase is "charging" / "overloaded" / "burnout". `None` when no charge
+    /// is in progress.
+    pub psi_charge: Option<(f32, &'static str)>,
 }
 
 impl Game {
@@ -252,6 +260,15 @@ impl Game {
             reload_pitch_deg: reload.map(|(p, _)| p).unwrap_or(0.0),
             reload_progress: reload.map(|(_, p)| p).unwrap_or(0.0),
             wielded_ammo_type: crate::hud::get_wielded_ammo_type(world),
+            hit_points: (|| {
+                use dark::properties::{PropHitPoints, PropMaxHitPoints};
+                let v_hp = world.borrow::<shipyard::View<PropHitPoints>>().ok()?;
+                let v_max = world.borrow::<shipyard::View<PropMaxHitPoints>>().ok()?;
+                use shipyard::Get;
+                let hp = v_hp.get(info.entity_id).ok()?.hit_points;
+                let max = v_max.get(info.entity_id).ok()?.hit_points;
+                Some((hp, max as i32))
+            })(),
             psi_points: world
                 .borrow::<shipyard::View<dark::properties::PropPsiState>>()
                 .ok()
@@ -270,6 +287,21 @@ impl Game {
                     .ok()?;
                 powers.0.get(selection.index).map(|p| p.name.clone())
             })(),
+            psi_charge: info.left_hand_entity_id.and_then(|weapon| {
+                use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
+                let v = world
+                    .borrow::<shipyard::View<RuntimePropPsiCharge>>()
+                    .ok()?;
+                use shipyard::Get;
+                v.get(weapon).ok().map(|c| {
+                    let phase = match c.phase {
+                        PsiChargePhase::Charging => "charging",
+                        PsiChargePhase::Overloaded => "overloaded",
+                        PsiChargePhase::Burnout => "burnout",
+                    };
+                    (c.fraction, phase)
+                })
+            }),
         })
     }
 

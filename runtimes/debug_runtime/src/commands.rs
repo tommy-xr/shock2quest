@@ -406,6 +406,10 @@ pub struct PlayerInfo {
     /// The wielded weapon's selected ammo type (e.g. "std" / "he" / "ap"), or
     /// `null` when unarmed / melee. See `shock2vr::PlayerStateSnapshot`.
     pub wielded_ammo_type: Option<String>,
+    /// The player's current / maximum hit points, or `null` when the player
+    /// has no health pool. See `shock2vr::PlayerStateSnapshot`.
+    pub hit_points: Option<i32>,
+    pub max_hit_points: Option<i32>,
     /// The player's current / maximum psi points, or `null` when the player has
     /// no psi pool. See `shock2vr::PlayerStateSnapshot`.
     pub psi_points: Option<i32>,
@@ -413,6 +417,11 @@ pub struct PlayerInfo {
     /// The gamesys name of the selected psi power (what the psi amp casts),
     /// e.g. "Cryokinesis". Cycle with the `CyclePsiPower` input action.
     pub selected_psi_power: Option<String>,
+    /// The psi amp's hold-to-overload meter fill (0..1) and phase
+    /// ("charging" / "overloaded" / "burnout"), or `null` when no charge is
+    /// in progress. See `shock2vr::PlayerStateSnapshot`.
+    pub psi_charge: Option<f32>,
+    pub psi_charge_phase: Option<String>,
 }
 
 /// Input state snapshot

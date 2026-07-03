@@ -148,6 +148,19 @@ pub(crate) fn get_psi_percentage(world: &World) -> f32 {
     0.0 // No psi pool - empty bar
 }
 
+/// The wielded psi amp's hold-to-overload meter state, or `None` when no
+/// charge is in progress (or nothing is wielded).
+pub(crate) fn get_wielded_psi_charge(
+    world: &World,
+) -> Option<crate::runtime_props::RuntimePropPsiCharge> {
+    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    let weapon = player_info.left_hand_entity_id?;
+    let v_charge = world
+        .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
+        .ok()?;
+    v_charge.get(weapon).ok().copied()
+}
+
 /// Current clip ammo of the wielded weapon, or `None` when unarmed or the held
 /// item has no `PropGunState` (melee / unlimited debug weapons). In flatscreen
 /// mode the wielded weapon is the player's left-hand slot (see
