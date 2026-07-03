@@ -332,17 +332,19 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    pub fn render(&self) -> Vec<SceneObject> {
-        let mut scene_objects = Vec::new();
-
-        // Show hand object
-        let hand_material = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0));
-        let transform = Matrix4::from_translation(self.position)
-            * Matrix4::from(self.rotation)
-            * Matrix4::from_scale(0.05);
-        let mut hand_obj = SceneObject::new(hand_material, Box::new(engine::scene::cube::create()));
-        hand_obj.set_transform(transform);
-        scene_objects.push(hand_obj);
+    pub fn render(
+        &self,
+        asset_cache: &mut engine::assets::asset_cache::AssetCache,
+    ) -> Vec<SceneObject> {
+        // The hand itself: the glove model, posed from the analog inputs
+        let mut scene_objects = crate::hand_glove::render_glove_hand(
+            asset_cache,
+            self.position,
+            self.rotation,
+            self.handedness,
+            self.trigger_value,
+            self.squeeze_value,
+        );
 
         let hit_color = self.color_from_state();
 

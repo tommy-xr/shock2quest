@@ -166,8 +166,8 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
-        let mut objs = self.left_hand.render();
-        objs.append(&mut self.right_hand.render());
+        let mut objs = self.left_hand.render(asset_cache);
+        objs.append(&mut self.right_hand.render(asset_cache));
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,

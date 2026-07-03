@@ -16,12 +16,10 @@ use tracing::info;
 use crate::{
     GameOptions,
     game_scene::GameScene,
+    hand_pose::{self, HandPoseRetarget, Pose},
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
-    scenes::{
-        debug_common::{
-            DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
-        },
-        hand_pose::{self, HandPoseRetarget, Pose},
+    scenes::debug_common::{
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
 };
 

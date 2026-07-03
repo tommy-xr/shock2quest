@@ -1241,7 +1241,9 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 fn input_channels_help() -> &'static str {
     "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
-     {left,right}_hand.thumbstick [x,y]"
+     {left,right}_hand.thumbstick [x,y], \
+     {left,right}_hand.position [x,y,z] (pawn-local), \
+     {left,right}_hand.rotation [x,y,z,w]"
 }
 
 fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> Result<(), String> {
@@ -1297,6 +1299,16 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
             "thumbstick" => {
                 let a = arr(channel, value, 2)?;
                 hand.thumbstick = Vector2::new(a[0], a[1]);
+                Ok(())
+            }
+            "position" => {
+                let p = arr(channel, value, 3)?;
+                hand.position = cgmath::vec3(p[0], p[1], p[2]);
+                Ok(())
+            }
+            "rotation" => {
+                let q = arr(channel, value, 4)?;
+                hand.rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
                 Ok(())
             }
             _ => Err(format!(

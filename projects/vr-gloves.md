@@ -83,10 +83,26 @@ curl -X POST http://127.0.0.1:8080/v1/step -d '{"frames": 30}'
 curl -X POST http://127.0.0.1:8080/v1/screenshot -d '{"filename": "gloves.png"}'
 ```
 
+## VR hands (`shock2vr/src/hand_glove.rs`)
+
+In VR mode, `VirtualHand::render` draws the posed glove at each hand's
+transform instead of the old green debug cube. The pose is driven per frame
+from the controller's analog inputs via `Pose::blend_per_finger`: the index
+finger follows the trigger, the other fingers (and thumb) follow the squeeze.
+The left hand mirrors the right-hand model with a negative-X scale (the same
+`flip_x` trick held weapons use). The glove model space already matches the
+hand frame (fingers along +Z, the direction weapon barrels face; palm inward,
+thumb up), so `grip_rotation()` is an identity hook for on-headset tuning.
+
+Test headlessly with `cargo dbgr --vr`: the debug runtime's
+`POST /v1/control/input` accepts `{left,right}_hand.position [x,y,z]`
+(pawn-local), `.rotation [x,y,z,w]`, `.trigger`, and `.squeeze` channels, so
+hand placement and finger state are fully scriptable for screenshots.
+
 ## Follow-ups
 
-- Left hand: mirror the right-hand pose data (the plugin assets also carry a
-  `leftHand` section) and confirm which GLB asset the left glove uses.
-- Drive poses from `InputContext` (trigger/grip values) on the VR hands via
-  `Pose::blend`, replacing/augmenting the static glove rendering.
+- On-headset tuning of `grip_rotation()` / wrist offset once tested in a real
+  HMD (alignment was tuned visually through the flat debug capture path).
+- Hide or relax the glove pose when a weapon is wielded, if the fist-around-
+  weapon look needs it.
 - More poses if needed (`fallback_relaxed`, pinch) — transcribe like the fist.

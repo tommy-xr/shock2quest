@@ -1,4 +1,5 @@
 pub mod game_scene;
+pub mod hand_pose;
 pub mod input;
 pub mod input_context;
 pub mod inventory;
@@ -11,6 +12,7 @@ pub mod time;
 mod creature;
 mod flat_player_controller;
 mod gui;
+mod hand_glove;
 mod hud;
 mod interaction;
 mod mission;
