@@ -90,7 +90,10 @@ pub fn draw_item_outline(
         return vec![];
     }
 
-    let options = TextureOptions { wrap: false };
+    let options = TextureOptions {
+        wrap: false,
+        ..Default::default()
+    };
 
     let aabb = maybe_bbox.unwrap();
     let top_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK0.PCX", &options);

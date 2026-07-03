@@ -77,7 +77,10 @@ impl ToolScene for VideoPlayerScene {
                 let texture_data = self.video_player.get_current_frame();
                 Rc::new(init_from_memory2(
                     texture_data,
-                    &TextureOptions { wrap: false },
+                    &TextureOptions {
+                        wrap: false,
+                        ..Default::default()
+                    },
                 ))
             }
             #[cfg(not(feature = "ffmpeg"))]
@@ -92,7 +95,10 @@ impl ToolScene for VideoPlayerScene {
                 };
                 Rc::new(init_from_memory2(
                     texture_data,
-                    &TextureOptions { wrap: false },
+                    &TextureOptions {
+                        wrap: false,
+                        ..Default::default()
+                    },
                 ))
             }
         };

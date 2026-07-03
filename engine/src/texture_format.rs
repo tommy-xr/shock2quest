@@ -69,8 +69,10 @@ pub fn read_pcx_dimensions(buffer: &[u8]) -> Option<(u32, u32)> {
 
 pub struct PcxFormat {}
 
-impl TextureFormat for PcxFormat {
-    fn load(&self, buffer: &[u8]) -> RawTextureData {
+impl PcxFormat {
+    /// Decode with optional palette-index-0 transparency (Dark bitmap sprites
+    /// are keyed on index 0; most PCX art is fully opaque).
+    pub fn load_indexed(&self, buffer: &[u8], transparent_index_0: bool) -> RawTextureData {
         let mut pcx = pcx::Reader::new(buffer).unwrap();
         let width = pcx.width() as u32;
         let height = pcx.height() as u32;
@@ -108,7 +110,11 @@ impl TextureFormat for PcxFormat {
                 data[idx] = pcx_r;
                 data[idx + 1] = pcx_g;
                 data[idx + 2] = pcx_b;
-                data[idx + 3] = 255;
+                data[idx + 3] = if transparent_index_0 && i == 0 {
+                    0
+                } else {
+                    255
+                };
             }
         }
 
@@ -120,6 +126,12 @@ impl TextureFormat for PcxFormat {
             height,
             format: PixelFormat::RGBA,
         }
+    }
+}
+
+impl TextureFormat for PcxFormat {
+    fn load(&self, buffer: &[u8]) -> RawTextureData {
+        self.load_indexed(buffer, false)
     }
 }
 

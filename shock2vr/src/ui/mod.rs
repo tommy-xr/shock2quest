@@ -223,7 +223,10 @@ impl UiCanvas {
         mode: ScaleMode,
     ) -> Vec<SceneObject> {
         let (scale, offset) = fit(self.size, screen_size, mode);
-        let texture_options = TextureOptions { wrap: false };
+        let texture_options = TextureOptions {
+            wrap: false,
+            ..Default::default()
+        };
         let mut objs = Vec::with_capacity(self.elements.len());
 
         for element in &self.elements {

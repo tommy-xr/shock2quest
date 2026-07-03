@@ -1,10 +1,13 @@
-//! Debug scene for inspecting particle-group colors.
+//! Debug scene for inspecting particle rendering.
 //!
-//! Builds a row of particle emitters with authored test params, each using a
-//! different **master-palette color index**, so the palette -> RGB -> `inColor`
-//! color path can be eyeballed. (Bare gamesys *templates* carry zeroed runtime
-//! state, so we set the params directly rather than spawning a template; placed
-//! `.mis` instances do carry authored params and render in real missions.)
+//! Two rows:
+//! - a row of hand-authored emitters, each using a different **master-palette
+//!   color index**, so the palette -> RGB -> `inColor` color path can be
+//!   eyeballed;
+//! - a row of **real gamesys templates** with bitmap particle groups
+//!   (PRT_SCALED_BITMAP), so the sprite path (water drops, stars, stasis,
+//!   viral) can be eyeballed. Spawning templates directly works now that both
+//!   `P$ParticleG` layouts parse correctly.
 
 use cgmath::{Matrix4, Point3, Vector3, point3, vec3};
 use dark::{
@@ -23,6 +26,17 @@ use crate::{
         DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
     },
 };
+
+/// Bitmap-particle templates spawned from the gamesys: `(label, template id)`.
+/// All carry PRT_SCALED_BITMAP particle groups with authored sprites.
+const BITMAP_SHOWCASE: &[(&str, i32)] = &[
+    ("dripping water (drop)", -3417),
+    ("water fountain (drop)", -2218),
+    ("stars (star2)", -4119),
+    ("stasis tail (blood)", -2921),
+    ("viral ball (viral)", -1528),
+    ("new blood spang (bspang; one-shot, bursts once)", -1971),
+];
 
 /// Showcased emitters: `(label, master-palette color index)`. Indices chosen as
 /// vivid, visually distinct colors in SHOCKPAL.PCX.
@@ -130,11 +144,19 @@ impl ParticleHooks {
             .map(|(i, (label, idx))| format!("  [{i}] {label} (palette index {idx})"))
             .collect::<Vec<_>>()
             .join("\n");
-        println!("[debug_particles] palette-colored emitters, left-to-right:\n{layout}");
+        let bitmaps = BITMAP_SHOWCASE
+            .iter()
+            .enumerate()
+            .map(|(i, (label, id))| format!("  [{i}] {label} (template {id})"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        println!(
+            "[debug_particles] palette-colored emitters, left-to-right:\n{layout}\nbitmap templates (back row):\n{bitmaps}"
+        );
         Self { spawned: false }
     }
 
-    fn spawn_emitters(&mut self, core: &mut MissionCore) {
+    fn spawn_emitters(&mut self, core: &mut MissionCore, asset_cache: &mut AssetCache) {
         if self.spawned {
             return;
         }
@@ -147,6 +169,21 @@ impl ParticleHooks {
                 make_launch_info(),
             ));
         }
+        // Second row (further back, higher): real gamesys bitmap-particle
+        // templates. Spawned as display pieces - any physics the template
+        // brings is stripped so projectiles don't fly off.
+        for (i, (_, template_id)) in BITMAP_SHOWCASE.iter().enumerate() {
+            let position = showcase_position(i, BITMAP_SHOWCASE.len());
+            let info = core.create_entity_with_position(
+                asset_cache,
+                *template_id,
+                point3(position.x - 3.0, position.y + 1.5, position.z),
+                cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Matrix4::from_scale(1.0),
+                crate::mission::entity_creator::CreateEntityOptions::default(),
+            );
+            core.make_un_physical(info.entity_id);
+        }
         self.spawned = true;
     }
 }
@@ -157,9 +194,9 @@ impl DebugSceneHooks for ParticleHooks {
         core: &mut MissionCore,
         _time: &crate::time::Time,
         _input_context: &crate::input_context::InputContext,
-        _asset_cache: &mut AssetCache,
+        asset_cache: &mut AssetCache,
         _game_options: &GameOptions,
     ) {
-        self.spawn_emitters(core);
+        self.spawn_emitters(core, asset_cache);
     }
 }
