@@ -124,11 +124,12 @@ impl DebugSceneHooks for PsiHooks {
         if self.equipped {
             return;
         }
-        // In flat presentation SpawnInFrontOfPlayer auto-wields a weapon when
-        // the player is unarmed - so this both spawns and equips the amp.
+        // In flat presentation this both spawns and equips the amp (the
+        // player starts unarmed).
         let spawn = Effect::SpawnInFrontOfPlayer {
             template_id: PSI_AMP_TEMPLATE_ID,
             head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            auto_wield: true,
         };
         core.handle_effects(
             vec![spawn],
