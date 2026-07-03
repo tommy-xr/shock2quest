@@ -181,6 +181,10 @@ For debugging visual/rendering changes without a full interactive session:
    # viewmodel, screen-space HUD, right-hand trigger fires. Pass `--vr` for the
    # VR forearm/two-hand path. (Flat is what most weapon/aim testing needs; in VR
    # mode the flat weapon-wield / fire path is inactive.)
+   #
+   # The window is HIDDEN by default (offscreen render) so the runtime never
+   # steals focus or pops to the foreground - `/v1/screenshot` still works.
+   # Pass `--visible` to watch the game in a real window.
    cargo dbgr --mission medsci1.mis --port 8080
 
    # Control via HTTP
