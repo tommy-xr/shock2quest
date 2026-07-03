@@ -42,12 +42,14 @@ impl ActionDispatcher {
             effects.push(Effect::SpawnInFrontOfPlayer {
                 template_id: DEBUG_SPAWN_TEMPLATE_ID,
                 head_rotation: input_context.head.rotation,
+                auto_wield: true,
             });
         }
         if state.just_triggered(InputAction::SpawnDebugMonster) {
             effects.push(Effect::SpawnInFrontOfPlayer {
                 template_id: DEBUG_MONSTER_TEMPLATE_ID,
                 head_rotation: input_context.head.rotation,
+                auto_wield: false,
             });
         }
         if state.just_triggered(InputAction::MoveInventory) {

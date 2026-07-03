@@ -2112,6 +2112,7 @@ impl MissionCore {
                 Effect::SpawnInFrontOfPlayer {
                     template_id,
                     head_rotation,
+                    auto_wield,
                 } => {
                     let (pos, rot) = {
                         let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -2130,7 +2131,8 @@ impl MissionCore {
                     // first-person viewmodel for debug testing, but only when not
                     // already armed - extra spawns fall to the ground as world
                     // pickups (world model + physics) to be picked up.
-                    if game_options.presentation_mode == crate::PresentationMode::Flat
+                    if auto_wield
+                        && game_options.presentation_mode == crate::PresentationMode::Flat
                         && !self.interaction.is_wielding()
                     {
                         let msgs = self.interaction.wield(info.entity_id);
