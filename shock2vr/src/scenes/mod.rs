@@ -28,6 +28,7 @@ pub mod debug_joint_constraint;
 pub mod debug_map;
 pub mod debug_minimal;
 pub mod debug_particles;
+pub mod debug_psi;
 pub mod debug_ragdoll;
 pub mod debug_teleport;
 pub mod debug_turret;
@@ -45,6 +46,7 @@ pub use debug_joint_constraint::DebugJointConstraintScene;
 pub use debug_map::DebugMapScene;
 pub use debug_minimal::DebugMinimalScene;
 pub use debug_particles::DebugParticlesScene;
+pub use debug_psi::create_debug_psi_scene;
 pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
@@ -120,6 +122,13 @@ pub fn create_initial_scene(
                 asset_cache,
                 audio_context,
             )),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_psi") {
+        return SceneInitResult {
+            scene: create_debug_psi_scene(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }

@@ -19,6 +19,7 @@ use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
 use crate::mission::pathfinding_debug;
 use crate::pathfinding::{PathfindingService, path_visualization::PathVisualizationSystem};
+use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
@@ -99,6 +100,10 @@ use crate::{
 
 use crate::mission::entity_creator::{CreateEntityOptions, EntityCreationInfo};
 pub use crate::resource_path;
+
+/// `The Player` gamesys template - carries the player archetype data
+/// (starting hit points, psi pool, base stats, vulnerabilities, ...).
+pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
@@ -303,6 +308,16 @@ impl MissionCore {
         // Create player
         let player_entity = world.add_entity((PropLocalPlayer {}, RuntimePropDoNotSerialize {}));
 
+        // Seed the player's psi pool from `The Player` template, where the
+        // gamesys authors the starting/maximum psi points (P$PsiState).
+        if let Some(psi_state) =
+            crate::scripts::script_util::hydrate_template_component::<
+                dark::properties::PropPsiState,
+            >(THE_PLAYER_TEMPLATE_ID, &entity_info_rc)
+        {
+            world.add_component(player_entity, psi_state);
+        }
+
         // Create a map of template name (ie 'HE Explosion' to the template id).
         // This is important for creating entities based on template name
         let template_name_to_template_id = create_template_name_map(game_entity_info);
@@ -325,6 +340,9 @@ impl MissionCore {
         world.add_unique(GlobalTemplateHierarchy(
             ss2_entity_info::get_hierarchy(&entity_info_rc).clone(),
         ));
+        let (psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
+        world.add_unique(psi_powers);
+        world.add_unique(psi_selection);
 
         // ** Entity creation
 
@@ -1540,6 +1558,39 @@ impl MissionCore {
 
                     if let Some(weapon) = wielded {
                         self.cycle_ammo(weapon);
+                    }
+                }
+
+                Effect::CyclePsiPower => {
+                    let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                    let mut selection = self
+                        .world
+                        .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                        .unwrap();
+                    if !powers.0.is_empty() {
+                        selection.index = (selection.index + 1) % powers.0.len();
+                        let power = &powers.0[selection.index];
+                        game_log!(
+                            INFO,
+                            "Selected psi power: {} (tier {})",
+                            power.name,
+                            power.power.psi_cost
+                        );
+                    }
+                }
+
+                Effect::SpendPsiPoints { amount } => {
+                    let player_entity = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .unwrap()
+                        .entity_id;
+                    let mut v_psi = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropPsiState>>()
+                        .unwrap();
+                    if let Ok(psi) = (&mut v_psi).get(player_entity) {
+                        psi.psi_points = (psi.psi_points - amount).max(0);
                     }
                 }
 

@@ -1,7 +1,7 @@
 use cgmath::{Deg, Euler, Matrix4, Quaternion, Rotation, Vector3, vec3};
 use dark::{
     importers::TEXTURE_IMPORTER,
-    properties::{PropHitPoints, PropMaxHitPoints},
+    properties::{PropHitPoints, PropMaxHitPoints, PropPsiState},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{Get, UniqueView, View, World};
@@ -136,9 +136,16 @@ pub(crate) fn get_health_percentage(world: &World) -> f32 {
 }
 
 /// Get player psi percentage (0.0 to 1.0)
-/// TODO: Implement actual psi property access when available
-pub(crate) fn get_psi_percentage(_world: &World) -> f32 {
-    0.75 // Placeholder - 75% psi for testing
+pub(crate) fn get_psi_percentage(world: &World) -> f32 {
+    let player_info = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let v_psi = world.borrow::<View<PropPsiState>>().unwrap();
+
+    if let Ok(psi) = v_psi.get(player_info.entity_id) {
+        if psi.max_psi_points > 0 {
+            return (psi.psi_points as f32 / psi.max_psi_points as f32).clamp(0.0, 1.0);
+        }
+    }
+    0.0 // No psi pool - empty bar
 }
 
 /// Current clip ammo of the wielded weapon, or `None` when unarmed or the held

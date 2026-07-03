@@ -270,6 +270,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_map`              | Test map/automap rendering                   |
    | `debug_minimal`          | Bare minimum scene for basic testing         |
    | `debug_weapons`          | Flat weapon viewmodel + aim (wall ahead; cycle weapons with `CycleWeapon`) |
+   | `debug_psi`              | Psi amp casting (auto-equips the amp; select powers with `CyclePsiPower`) |
 
    ```bash
    # Use with debug runtime for programmatic control
