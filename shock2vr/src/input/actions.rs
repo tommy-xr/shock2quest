@@ -46,9 +46,13 @@ pub enum InputAction {
     /// including the experimental loading screen.
     DebugReloadLevel,
 
-    /// Force every AI to Moderate alertness (chase) - debug "make them angry"
+    /// Force every monster to Moderate alertness (chase) - debug "make them
+    /// angry". A forced level is a behavior reset: it also cancels scripted
+    /// sequences (which won't restart). Dead AIs are unaffected; cameras and
+    /// turrets manage their own alertness and ignore this.
     DebugAlertAll,
-    /// Force every AI back to Lowest alertness (idle)
+    /// Force every monster back to Lowest alertness (idle). Same caveats as
+    /// DebugAlertAll.
     DebugCalmAll,
 }
 

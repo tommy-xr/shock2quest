@@ -37,6 +37,15 @@ struct MonsterConfig {
     timings: AlertnessTimings,
 }
 
+/// Alert cap for monsters without a PropAIAlertCap property
+fn default_alert_cap() -> PropAIAlertCap {
+    PropAIAlertCap {
+        max_level: AIAlertLevel::High,
+        min_level: AIAlertLevel::Lowest,
+        min_relax: AIAlertLevel::Low,
+    }
+}
+
 pub struct AnimatedMonsterAI {
     last_hit_sensor: Option<EntityId>,
     current_behavior: Box<RefCell<dyn Behavior>>,
@@ -98,11 +107,7 @@ impl AnimatedMonsterAI {
             .get(entity_id)
             .ok()
             .cloned()
-            .unwrap_or(PropAIAlertCap {
-                max_level: AIAlertLevel::High,
-                min_level: AIAlertLevel::Lowest,
-                min_relax: AIAlertLevel::Low,
-            });
+            .unwrap_or_else(default_alert_cap);
 
         // Build default aware delay for monsters (faster than cameras/turrets)
         let default_aware_delay = PropAIAwareDelay {
@@ -403,8 +408,10 @@ impl Script for AnimatedMonsterAI {
             &FovDebugConfig::monster(),
         );
 
-        // Publish the current behavior name for debug introspection (covers
-        // every behavior-change site, since update runs each frame)
+        // Publish the current behavior name for debug introspection. Update
+        // runs each frame, so this covers every behavior-change site with at
+        // most one frame of lag (e.g. handle_message changes, or the
+        // AIWatchObj early-return above, publish on the next update)
         let behavior_name = self.current_behavior.borrow().name();
         let behavior_publish_effect = if self.published_behavior != Some(behavior_name) {
             self.published_behavior = Some(behavior_name);
@@ -494,23 +501,25 @@ impl Script for AnimatedMonsterAI {
                 }
             }
             MessagePayload::SetAlertness { level } => {
-                let cap =
-                    self.config
-                        .as_ref()
-                        .map(|c| c.alert_cap.clone())
-                        .unwrap_or(PropAIAlertCap {
-                            max_level: AIAlertLevel::High,
-                            min_level: AIAlertLevel::Lowest,
-                            min_relax: AIAlertLevel::Low,
-                        });
-                if !alertness::set_level(&mut self.alertness, *level, &cap) {
+                // Dead AIs stay dead - a corpse keeps a live script, and the
+                // broadcast (DebugAlertAll) reaches every creature
+                if self.is_dead || is_killed(entity_id, world) {
                     return Effect::NoEffect;
                 }
+                let cap = self
+                    .config
+                    .as_ref()
+                    .map(|c| c.alert_cap.clone())
+                    .unwrap_or_else(default_alert_cap);
+                alertness::set_level(&mut self.alertness, *level, &cap);
                 // Forced level starts fresh: no accumulated visibility time
                 // pushing an immediate escalation or decay
                 self.alertness.visible_time = 0.0;
                 self.alertness.hidden_time = 0.0;
 
+                // Always reset the behavior to the canonical one for this
+                // level, even when the level didn't change - forcing is a
+                // debug reset, so it also cancels scripted sequences
                 self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
                 let is_locomotion = self.current_behavior.borrow().is_locomotion();
                 let selection_strategy = self.next_selection(is_locomotion);

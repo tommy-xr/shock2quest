@@ -53,7 +53,8 @@ export interface PathfindingTestStatus {
 export type DebugEntityMessage =
   | { type: "Damage"; amount: number }
   | { type: "Frob" }
-  | { type: "Signal"; name: string };
+  | { type: "Signal"; name: string }
+  | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" };
 
 export interface EntitySummary {
   id: number;
