@@ -332,19 +332,25 @@ impl VirtualHand {
         (hand, effs)
     }
 
+    /// Render the glove for this hand, plus the raycast-hit debug cube. The
+    /// glove renderer is owned by the caller (`VrInteraction`) so its cached
+    /// state is shared between both hands.
     pub fn render(
         &self,
-        asset_cache: &mut engine::assets::asset_cache::AssetCache,
+        glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
     ) -> Vec<SceneObject> {
         // The hand itself: the glove model, posed from the analog inputs
-        let mut scene_objects = crate::hand_glove::render_glove_hand(
-            asset_cache,
-            self.position,
-            self.rotation,
-            self.handedness,
-            self.trigger_value,
-            self.squeeze_value,
-        );
+        let mut scene_objects = glove_renderer
+            .map(|renderer| {
+                renderer.render_hand(
+                    self.position,
+                    self.rotation,
+                    self.handedness,
+                    self.trigger_value,
+                    self.squeeze_value,
+                )
+            })
+            .unwrap_or_default();
 
         let hit_color = self.color_from_state();
 

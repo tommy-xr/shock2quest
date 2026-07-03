@@ -1308,7 +1308,8 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
             }
             "rotation" => {
                 let q = arr(channel, value, 4)?;
-                hand.rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
+                hand.rotation =
+                    cgmath::InnerSpace::normalize(Quaternion::new(q[3], q[0], q[1], q[2]));
                 Ok(())
             }
             _ => Err(format!(

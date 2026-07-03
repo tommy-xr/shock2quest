@@ -8,6 +8,8 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
+use std::cell::RefCell;
+
 use cgmath::{InnerSpace, Point3, Quaternion, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -19,6 +21,7 @@ use shipyard::{EntityId, World};
 use crate::{
     GameOptions,
     flat_player_controller::FlatPlayerController,
+    hand_glove::GloveRenderer,
     hud::create_arm_hud_panels,
     input_context::InputContext,
     physics::PhysicsWorld,
@@ -105,6 +108,10 @@ pub trait PlayerInteraction {
 pub struct VrInteraction {
     left_hand: VirtualHand,
     right_hand: VirtualHand,
+    /// Lazily initialized on first render (needs the asset cache). The outer
+    /// `Option` is "have we tried yet" - a glove that failed to load stays
+    /// `Some(None)` so we don't hit the asset cache's miss path every frame.
+    glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
 }
 
 impl VrInteraction {
@@ -112,6 +119,7 @@ impl VrInteraction {
         Self {
             left_hand: VirtualHand::new(Handedness::Left),
             right_hand: VirtualHand::new(Handedness::Right),
+            glove_renderer: RefCell::new(None),
         }
     }
 }
@@ -166,8 +174,22 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
-        let mut objs = self.left_hand.render(asset_cache);
-        objs.append(&mut self.right_hand.render(asset_cache));
+        let mut glove_slot = self.glove_renderer.borrow_mut();
+        let glove_renderer = glove_slot
+            .get_or_insert_with(|| GloveRenderer::new(asset_cache))
+            .as_mut();
+
+        let mut objs = Vec::new();
+        match glove_renderer {
+            Some(renderer) => {
+                objs.append(&mut self.left_hand.render(Some(renderer)));
+                objs.append(&mut self.right_hand.render(Some(renderer)));
+            }
+            None => {
+                objs.append(&mut self.left_hand.render(None));
+                objs.append(&mut self.right_hand.render(None));
+            }
+        }
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,
