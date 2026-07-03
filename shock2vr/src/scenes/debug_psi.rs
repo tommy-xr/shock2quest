@@ -19,12 +19,11 @@ use shipyard::EntityId;
 use crate::{
     GameOptions,
     game_scene::GameScene,
-    mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
-    scripts::Effect,
+    mission::{GlobalContext, SpawnLocation},
 };
 
 use super::debug_common::{
-    DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
+    AutoEquipHooks, DebugSceneBuildOptions, DebugSceneBuilder, HookedDebugScene,
 };
 
 /// The Psi Amp player weapon.
@@ -93,51 +92,13 @@ pub fn create_debug_psi_scene(
         asset_cache,
         audio_context,
     });
-    Box::new(HookedDebugScene::new(core, PsiHooks::new()))
-}
-
-struct PsiHooks {
-    equipped: bool,
-}
-
-impl PsiHooks {
-    fn new() -> Self {
-        println!(
-            "[debug_psi] Player is equipped with the Psi Amp.\n\
-             Select a power with the `CyclePsiPower` input action (`Y` on desktop),\n\
-             then fire to cast it. Projectile powers land on the wall ahead."
-        );
-        Self { equipped: false }
-    }
-}
-
-impl DebugSceneHooks for PsiHooks {
-    fn before_handle_effects(
-        &mut self,
-        core: &mut MissionCore,
-        _effects: &mut Vec<Effect>,
-        global_context: &GlobalContext,
-        game_options: &GameOptions,
-        asset_cache: &mut AssetCache,
-        audio_context: &mut AudioContext<EntityId, String>,
-    ) {
-        if self.equipped {
-            return;
-        }
-        // In flat presentation this both spawns and equips the amp (the
-        // player starts unarmed).
-        let spawn = Effect::SpawnInFrontOfPlayer {
-            template_id: PSI_AMP_TEMPLATE_ID,
-            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            auto_wield: true,
-        };
-        core.handle_effects(
-            vec![spawn],
-            global_context,
-            game_options,
-            asset_cache,
-            audio_context,
-        );
-        self.equipped = true;
-    }
+    println!(
+        "[debug_psi] Player is equipped with the Psi Amp.\n\
+         Select a power with the `CyclePsiPower` input action (`Y` on desktop),\n\
+         then fire to cast it. Projectile powers land on the wall ahead."
+    );
+    Box::new(HookedDebugScene::new(
+        core,
+        AutoEquipHooks::new(PSI_AMP_TEMPLATE_ID),
+    ))
 }

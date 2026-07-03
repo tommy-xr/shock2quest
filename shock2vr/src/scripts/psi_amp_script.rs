@@ -325,6 +325,12 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
         return Effect::NoEffect;
     }
 
+    // Sustained (timed) powers activate a player status for a data-driven
+    // duration instead of firing a projectile.
+    if power.power.activation_type == psi::ACTIVATION_TYPE_SUSTAINED {
+        return cast_sustained_power(world, amp_entity, &power, effective_psi);
+    }
+
     let Some(projectile_template) = power.projectile_for_psi_stat(effective_psi) else {
         game_log!(
             INFO,
@@ -334,13 +340,6 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
         );
         return Effect::NoEffect;
     };
-
-    // The amp's GunFlash links supply the cast visual (Spinning Psi Ring).
-    let flashes =
-        super::script_util::get_all_links_with_template(world, amp_entity, |link| match link {
-            dark::properties::Link::GunFlash(data) => Some(*data),
-            _ => None,
-        });
 
     let mut effects = vec![
         play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
@@ -359,9 +358,7 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
             },
         ),
     ];
-    effects.extend(flashes.into_iter().map(|(template_id, options)| {
-        create_muzzle_flash(world, amp_entity, template_id, &options)
-    }));
+    effects.extend(amp_cast_flashes(world, amp_entity));
 
     game_log!(
         INFO,
@@ -371,4 +368,59 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
         effective_psi
     );
     Effect::Multiple(effects)
+}
+
+/// Cast a sustained (activation type 1) power: spend the tier, activate the
+/// player status for `duration_base + duration_per_psi × PSI` seconds (from
+/// the power's `P$PsiShield` data), and play the amp's cast flash/sound like
+/// a projectile cast. Re-casting an active power spends again and refreshes
+/// the duration.
+fn cast_sustained_power(
+    world: &World,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> Effect {
+    let Some(duration) = &power.duration else {
+        game_log!(
+            INFO,
+            "Sustained psi power {} has no duration data (P$PsiShield) - not implemented yet",
+            power.name
+        );
+        return Effect::NoEffect;
+    };
+    let duration_secs = (duration.duration_base + duration.duration_per_psi * effective_psi) as f32;
+
+    let mut effects = vec![
+        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        Effect::SpendPsiPoints {
+            amount: power.power.psi_cost,
+        },
+        Effect::ActivatePsiPower {
+            template_id: power.template_id,
+            name: power.name.clone(),
+            duration_secs,
+        },
+    ];
+    effects.extend(amp_cast_flashes(world, amp_entity));
+
+    game_log!(
+        INFO,
+        "Cast psi power: {} (tier {}, sustained {}s)",
+        power.name,
+        power.power.psi_cost,
+        duration_secs
+    );
+    Effect::Multiple(effects)
+}
+
+/// The amp's `GunFlash` links supply the cast visual (Spinning Psi Ring).
+fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
+    super::script_util::get_all_links_with_template(world, amp_entity, |link| match link {
+        dark::properties::Link::GunFlash(data) => Some(*data),
+        _ => None,
+    })
+    .into_iter()
+    .map(|(template_id, options)| create_muzzle_flash(world, amp_entity, template_id, &options))
+    .collect()
 }

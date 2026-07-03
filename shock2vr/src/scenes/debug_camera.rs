@@ -8,11 +8,17 @@ use crate::{
     GameOptions,
     game_scene::GameScene,
     mission::{GlobalContext, entity_creator::CreateEntityOptions},
-    scenes::debug_common::{DebugSceneBuildOptions, DebugSceneBuilder},
+    scenes::debug_common::{
+        AutoEquipHooks, DebugSceneBuildOptions, DebugSceneBuilder, HookedDebugScene,
+    },
 };
 
 const CAMERA_START_POS: Point3<f32> = point3(0.0, 4.0 / SCALE_FACTOR, 5.0 / SCALE_FACTOR);
 const CAMERA_TEMPLATE_ID: i32 = -367;
+
+/// The Psi Amp player weapon - equipped so psi powers that affect AI
+/// perception (e.g. Photonic Redirection) can be cast against the camera.
+const PSI_AMP_TEMPLATE_ID: i32 = -247;
 
 /// Namespace for constructing debug camera scenes.
 pub struct DebugCameraScene;
@@ -33,10 +39,9 @@ impl DebugCameraScene {
             audio_context,
         };
 
-        let mut scene = builder.build(build_options);
+        let mut core = builder.build_core(build_options);
 
-        let camera_entity = scene
-            .core_mut()
+        let camera_entity = core
             .create_entity_with_position(
                 asset_cache,
                 CAMERA_TEMPLATE_ID,
@@ -49,6 +54,12 @@ impl DebugCameraScene {
 
         info!("Spawned debug camera entity {camera_entity:?}");
 
-        Box::new(scene)
+        // Equip the player with the psi amp on the first update (same
+        // pattern as `debug_psi`), so camera-perception powers are castable
+        // in this scene.
+        Box::new(HookedDebugScene::new(
+            core,
+            AutoEquipHooks::new(PSI_AMP_TEMPLATE_ID),
+        ))
     }
 }

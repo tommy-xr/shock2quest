@@ -345,11 +345,25 @@ pub fn play_positional_sound(
     }
 }
 
+/// Whether the player is psi-invisible: Photonic Redirection (`Inviso`) is
+/// among the active sustained psi powers. An invisible player fails every
+/// AI/camera/turret visibility check.
+fn is_player_psi_invisible(world: &World) -> bool {
+    world
+        .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+        .map(|active| active.is_active(crate::psi::INVISO_TEMPLATE_ID))
+        .unwrap_or(false)
+}
+
 /// Check if the player is visible from an entity (raycast only, no FOV check)
 ///
 /// This is a basic visibility check that only verifies line-of-sight.
 /// For FOV-aware visibility, use `is_player_visible_in_fov`.
 pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+    if is_player_psi_invisible(world) {
+        return false;
+    }
+
     let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
@@ -412,6 +426,10 @@ pub fn is_player_visible_in_fov(
     heading: Deg<f32>,
     fov_half_angle: f32,
 ) -> bool {
+    if is_player_psi_invisible(world) {
+        return false;
+    }
+
     let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 

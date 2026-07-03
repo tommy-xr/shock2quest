@@ -305,6 +305,54 @@ pub trait DebugSceneHooks {
     }
 }
 
+/// Hooks that spawn-and-equip an item on the player on the first update. In
+/// flat presentation `SpawnInFrontOfPlayer { auto_wield: true }` both spawns
+/// and equips (the player starts unarmed). Used by scenes that need the
+/// player armed from frame one (e.g. the psi amp in `debug_psi` and
+/// `debug_camera`).
+pub struct AutoEquipHooks {
+    template_id: i32,
+    equipped: bool,
+}
+
+impl AutoEquipHooks {
+    pub fn new(template_id: i32) -> Self {
+        Self {
+            template_id,
+            equipped: false,
+        }
+    }
+}
+
+impl DebugSceneHooks for AutoEquipHooks {
+    fn before_handle_effects(
+        &mut self,
+        core: &mut MissionCore,
+        _effects: &mut Vec<Effect>,
+        global_context: &GlobalContext,
+        game_options: &GameOptions,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) {
+        if self.equipped {
+            return;
+        }
+        let spawn = Effect::SpawnInFrontOfPlayer {
+            template_id: self.template_id,
+            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            auto_wield: true,
+        };
+        core.handle_effects(
+            vec![spawn],
+            global_context,
+            game_options,
+            asset_cache,
+            audio_context,
+        );
+        self.equipped = true;
+    }
+}
+
 pub struct HookedDebugScene<H> {
     core: MissionCore,
     hooks: H,

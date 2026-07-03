@@ -153,6 +153,9 @@ export interface PlayerSnapshot {
    * ("charging" / "overloaded" / "burnout"), or null when idle. */
   psi_charge: number | null;
   psi_charge_phase: string | null;
+  /** The gamesys names of the active sustained psi powers (e.g. "Inviso"),
+   * in activation order; empty when none. */
+  active_psi_powers: string[];
 }
 
 export interface FrameSnapshot {

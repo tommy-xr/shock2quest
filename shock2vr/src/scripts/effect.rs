@@ -99,6 +99,16 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Activate (or refresh) a sustained psi power on the player for
+    /// `duration_secs` (`ActivePsiPowers` unique). Emitted by the psi amp
+    /// when a sustained (activation type 1) power is cast; a per-frame tick
+    /// in `MissionCore::update` counts the duration down and expires it.
+    ActivatePsiPower {
+        template_id: i32,
+        name: String,
+        duration_secs: f32,
+    },
+
     /// Set the psi amp's hold-to-overload meter state
     /// (`RuntimePropPsiCharge`) on the amp entity - drives the HUD meter and
     /// debug introspection while a charge is in progress or flashing its

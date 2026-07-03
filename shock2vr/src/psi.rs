@@ -10,7 +10,8 @@
 use std::collections::HashSet;
 
 use dark::properties::{
-    Link, ProjectileOptions, PropPsiPower, PropPsiPowerLearned, PropPsiPowerLearned2, PropSymName,
+    Link, ProjectileOptions, PropPsiPower, PropPsiPowerLearned, PropPsiPowerLearned2,
+    PropPsiShield, PropSymName,
 };
 use dark::ss2_entity_info::{self, SystemShock2EntityInfo};
 use shipyard::Unique;
@@ -24,6 +25,15 @@ const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
 /// The `Psi Powers` meta-prop root - every psi power template descends from
 /// it (`MetaProperty → Psi Powers → Level 1..5 → power`).
 const PSI_POWERS_ROOT_TEMPLATE_ID: i32 = -962;
+
+/// `Inviso` - Photonic Redirection (tier 4 sustained power): while active,
+/// the player is invisible to AI and security devices.
+pub const INVISO_TEMPLATE_ID: i32 = -3157;
+
+/// `PropPsiPower::activation_type` for sustained/timed self effects - the
+/// power activates for a duration given by its `P$PsiShield` data
+/// (`duration_base + duration_per_psi × PSI` seconds).
+pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
@@ -97,6 +107,10 @@ pub struct PsiPowerInfo {
     pub projectiles: Vec<(i32, ProjectileOptions)>,
     /// Whether the power supports hold-to-overload.
     pub overloadable: bool,
+    /// The sustained-power duration formula (`P$PsiShield`:
+    /// `duration_base + duration_per_psi × PSI` seconds). `None` for powers
+    /// without timed data.
+    pub duration: Option<PropPsiShield>,
 }
 
 impl PsiPowerInfo {
@@ -185,6 +199,28 @@ fn learned_bit_set(dword1: u32, dword2: u32, power_id: i32) -> bool {
     }
 }
 
+/// One currently-active sustained psi power on the player.
+#[derive(Clone, Debug)]
+pub struct ActivePsiPower {
+    pub template_id: i32,
+    /// The gamesys symbolic name (e.g. "Inviso").
+    pub name: String,
+    pub remaining_secs: f32,
+}
+
+/// The player's active sustained psi powers, ticked down each frame by
+/// `MissionCore::update` and removed on expiry. Re-casting an active power
+/// refreshes its duration. (Not yet persisted across save/load or level
+/// transitions - like the psi pool and selection.)
+#[derive(Unique, Clone, Default)]
+pub struct ActivePsiPowers(pub Vec<ActivePsiPower>);
+
+impl ActivePsiPowers {
+    pub fn is_active(&self, template_id: i32) -> bool {
+        self.0.iter().any(|p| p.template_id == template_id)
+    }
+}
+
 /// Hydrate every psi power template (those carrying `P$PsiPower`) into a
 /// registry, plus the default selection (Projected Cryokinesis).
 pub fn build_psi_power_registry(
@@ -221,6 +257,7 @@ pub fn build_psi_power_registry(
             power,
             projectiles,
             overloadable: OVERLOADABLE_TEMPLATE_IDS.contains(template_id),
+            duration: hydrate_template_component::<PropPsiShield>(*template_id, entity_info),
         });
     }
 
