@@ -211,6 +211,11 @@ pub struct MissionCore {
     pub world: World,
     pub player_handle: PlayerHandle,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
+    /// Host template -> the particle-group archetypes authored to ride it
+    /// (reverse of the archetype `ParticleAttachement` links). Runtime entity
+    /// creation instantiates these attached (projectile trails, psi bolt
+    /// visuals).
+    template_to_particle_riders: HashMap<i32, Vec<(i32, dark::properties::ParticleAttachOptions)>>,
     interaction: Box<dyn PlayerInteraction>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
@@ -469,10 +474,75 @@ impl MissionCore {
             TeleportSystem::new(teleport_config)
         };
 
+        // Mission-placed particle entities follow the object their concrete
+        // ParticleAttachement link names (steam rides its machinery): bolt
+        // them with RuntimePropAttachment, preserving the authored relative
+        // pose.
+        {
+            let mut attachments: Vec<(EntityId, EntityId, Matrix4<f32>)> = Vec::new();
+            {
+                let v_links = world.borrow::<View<Links>>().unwrap();
+                let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+                for (id, links) in v_links.iter().with_id() {
+                    for link in &links.to_links {
+                        if !matches!(link.link, dark::properties::Link::ParticleAttachement(_)) {
+                            continue;
+                        }
+                        let Some(parent) = link.to_entity_id else {
+                            continue;
+                        };
+                        let (Ok(child_xform), Ok(parent_xform)) =
+                            (v_transform.get(id), v_transform.get(parent.0))
+                        else {
+                            continue;
+                        };
+                        if let Some(inv_parent) = parent_xform.0.invert() {
+                            attachments.push((id, parent.0, inv_parent * child_xform.0));
+                        }
+                    }
+                }
+            }
+            for (child, parent, local_transform) in attachments {
+                world.add_component(
+                    child,
+                    crate::runtime_props::RuntimePropAttachment {
+                        parent,
+                        local_transform,
+                    },
+                );
+            }
+        }
+
+        // Reverse map of the archetype ParticleAttachement links: host template
+        // -> the particle-group archetypes that ride it. Concrete (mission-
+        // placed) links are excluded - those particle entities already exist
+        // in the level and just follow their host (see the attachment pass
+        // below).
+        let mut template_to_particle_riders: HashMap<
+            i32,
+            Vec<(i32, dark::properties::ParticleAttachOptions)>,
+        > = HashMap::new();
+        for (src_template, links) in &entity_info_rc.template_to_links {
+            if *src_template >= 0 {
+                continue;
+            }
+            for link in &links.to_links {
+                if let dark::properties::Link::ParticleAttachement(opts) = &link.link {
+                    if link.to_template_id < 0 {
+                        template_to_particle_riders
+                            .entry(link.to_template_id)
+                            .or_default()
+                            .push((*src_template, *opts));
+                    }
+                }
+            }
+        }
+
         MissionCore {
             interaction,
             level_name: mission,
             entity_info: entity_info_rc.clone(),
+            template_to_particle_riders,
             script_world,
             id_to_model,
             id_to_animation_player,
@@ -753,6 +823,18 @@ impl MissionCore {
                         .iter()
                         .with_id()
                 {
+                    // Dormant groups (authored inactive) do not emit. There is
+                    // no runtime activation toggle yet; when one exists this
+                    // should flip the system on rather than skip it. A
+                    // transient (fire-and-forget) entity that is dormant would
+                    // never finish a burst, so reap it immediately instead of
+                    // leaking an invisible entity.
+                    if !pg.is_active {
+                        if v_transient_fx.contains(id) {
+                            finished_particle_entities.push(id);
+                        }
+                        continue;
+                    }
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
                             ParticleSystem::new()
@@ -1074,6 +1156,29 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
+        self.create_entity_with_position_and_rider_depth(
+            asset_cache,
+            template_id,
+            position,
+            orientation,
+            root_transform,
+            additional_options,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_entity_with_position_and_rider_depth(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_id: i32,
+        position: Point3<f32>,
+        orientation: Quaternion<f32>,
+        root_transform: Matrix4<f32>,
+        additional_options: CreateEntityOptions,
+        rider_depth: u32,
+    ) -> EntityCreationInfo {
+        let transient_fx = additional_options.transient_fx;
         let created_entity = {
             entity_creator::create_entity_with_position(
                 template_id,
@@ -1091,7 +1196,7 @@ impl MissionCore {
             )
         };
 
-        Self::finish_instantiating_entity(
+        let info = Self::finish_instantiating_entity(
             &mut self.id_to_model,
             &mut self.id_to_bitmap,
             &mut self.id_to_physics,
@@ -1101,7 +1206,63 @@ impl MissionCore {
             &mut self.script_world,
             created_entity,
             root_transform,
-        )
+        );
+
+        // Instantiate the particle groups authored to ride this archetype
+        // (`ParticleAttachement` links from particle archetypes to this
+        // template or an ancestor) - projectile trails, psi bolt visuals.
+        // Mission-placed hosts already have their particle entities placed in
+        // the level, so this only runs for runtime creations; the recursion
+        // also instantiates nested attachments (a spang's own rider). The
+        // depth cap bounds authored cycles (shipped data nests 2 deep).
+        const MAX_RIDER_DEPTH: u32 = 3;
+        if rider_depth >= MAX_RIDER_DEPTH {
+            return info;
+        }
+        let riders: Vec<(i32, dark::properties::ParticleAttachOptions)> = {
+            let hierarchy = ss2_entity_info::get_hierarchy(&self.entity_info);
+            let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
+            ancestors.push(template_id);
+            ancestors
+                .into_iter()
+                .flat_map(|t| {
+                    self.template_to_particle_riders
+                        .get(&t)
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        for (particle_template, _attach_options) in riders {
+            // vhot/joint offsets are not applied yet - the particle rides the
+            // host origin (attach type "object" covers the shipped projectile
+            // trails).
+            let rider = self.create_entity_with_position_and_rider_depth(
+                asset_cache,
+                particle_template,
+                position,
+                orientation,
+                root_transform,
+                CreateEntityOptions {
+                    attach_to: Some(info.entity_id),
+                    transient_fx,
+                    ..CreateEntityOptions::default()
+                },
+                rider_depth + 1,
+            );
+            // Riders are pure visuals: strip any physics the template brought
+            // (some riders are full projectile archetypes - e.g. the droid
+            // fusion shot rides the player Fusion Shot for its looks - and
+            // must not fly off / collide / slay as a second live projectile),
+            // and keep them out of saves (they are recreated with their host
+            // and would otherwise load back orphaned, since attachments are
+            // runtime-only).
+            self.make_un_physical(rider.entity_id);
+            self.world
+                .add_component(rider.entity_id, RuntimePropDoNotSerialize {});
+        }
+
+        info
     }
 
     fn finish_instantiating_entity(
@@ -1158,6 +1319,40 @@ impl MissionCore {
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId) {
+        // Entities riding this one (attached particle trails/FX) die with it -
+        // otherwise a projectile's trail would linger at its last transform
+        // forever after the projectile is destroyed. The transitive closure is
+        // collected iteratively with a visited set so mission-authored
+        // attachment cycles can't recurse forever.
+        let mut to_remove: Vec<EntityId> = vec![entity_id];
+        let mut visited: HashSet<EntityId> = HashSet::from([entity_id]);
+        let mut frontier = vec![entity_id];
+        while let Some(parent) = frontier.pop() {
+            let children: Vec<EntityId> = match self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropAttachment>>()
+            {
+                Ok(v_attach) => v_attach
+                    .iter()
+                    .with_id()
+                    .filter(|(id, a)| a.parent == parent && !visited.contains(id))
+                    .map(|(id, _)| id)
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            for child in children {
+                visited.insert(child);
+                to_remove.push(child);
+                frontier.push(child);
+            }
+        }
+        // Children first, host last (reverse discovery order).
+        for id in to_remove.into_iter().rev() {
+            self.remove_entity_single(id);
+        }
+    }
+
+    fn remove_entity_single(&mut self, entity_id: EntityId) {
         // TODO: gui - remove entity
         self.hit_boxes.remove_entity(
             entity_id,
