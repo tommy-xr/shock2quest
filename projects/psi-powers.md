@@ -25,11 +25,21 @@ Landed (phase 1 - all powers selectable, projectile powers castable):
   `selected_psi_power`.
 - **Testing**: `debug_psi` scene (auto-equips the amp, wall ahead) +
   `tools/shock2-sdk/test/psi.e2e.test.ts`.
+- **Hold-to-overload** (phase 2): the 15 overloadable powers cast on trigger
+  *release*. Holding fills a center-screen meter (original LOADBACK/LOADMETR
+  art; bar speed scales with tier - `psi::charge_duration_secs`); releasing
+  in the end zone (last 15%) casts at +2 effective PSI (cap 10, same psi
+  cost); over-holding past full is a psi burnout - the cast fails, the
+  points are spent, and the player takes 3 damage x tier (LOADBURN flash).
+  Meter state is `RuntimePropPsiCharge` on the amp, driven by
+  `PsiAmpScript`, exposed via `/v1/info` (`psi_charge`/`psi_charge_phase`)
+  and covered by `psi-overload.e2e.test.ts`.
 
 Not yet implemented: trained-power gating (the player template's unparsed
-`P$PsiPower2`/`P$PsiPowerD` look like the learned-power bits), the hold-to-
-overload charge meter (+2 PSI in the yellow zone, psi burnout past it),
-sustained/shield/cursor power behaviors, PSI stat from `P$BaseStats`, psi
+`P$PsiPower2`/`P$PsiPowerD` look like the learned-power bits),
+sustained/shield/cursor power behaviors, PSI stat from `P$BaseStats` (the
+overload zone size should also grow with PSI), burnout damage mitigation
+(PSI 8 = safe, Endurance reduces it), the VR meter (flat HUD only), psi
 point/selection persistence across save/load and level transitions (both
 reset - the pool to the authored 40, the selection to Cryokinesis), and psi
 hypos/trainers.

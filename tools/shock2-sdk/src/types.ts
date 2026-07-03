@@ -138,6 +138,10 @@ export interface PlayerSnapshot {
   /** The wielded weapon's selected ammo type (e.g. "std"/"he"/"ap"), or null
    * when unarmed / melee (no projectile links). */
   wielded_ammo_type: string | null;
+  /** The player's current / maximum hit points, or null when the player has
+   * no health pool. Drained by psi burnout. */
+  hit_points: number | null;
+  max_hit_points: number | null;
   /** The player's current / maximum psi points, or null when the player has
    * no psi pool. */
   psi_points: number | null;
@@ -145,6 +149,10 @@ export interface PlayerSnapshot {
   /** The gamesys name of the selected psi power (what the psi amp casts),
    * e.g. "Cryokinesis". Cycle with the CyclePsiPower input action. */
   selected_psi_power: string | null;
+  /** The psi amp's hold-to-overload meter fill (0..1) and phase
+   * ("charging" / "overloaded" / "burnout"), or null when idle. */
+  psi_charge: number | null;
+  psi_charge_phase: string | null;
 }
 
 export interface FrameSnapshot {

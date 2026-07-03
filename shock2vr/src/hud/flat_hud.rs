@@ -12,8 +12,9 @@ use shipyard::World;
 
 use super::{
     get_health_percentage, get_psi_percentage, get_wielded_ammo, get_wielded_ammo_icon,
-    get_wielded_ammo_type,
+    get_wielded_ammo_type, get_wielded_psi_charge,
 };
+use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
 
 /// The original SS2 HUD is authored against a 640x480 display.
@@ -68,12 +69,27 @@ const AMMO_ICON: Rect = Rect::new(AMMO_X - 40.0, AMMO_Y + 16.0, 32.0, 32.0);
 const AMMO_TYPE_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 44.0, AMMO_W, 16.0);
 const AMMO_TYPE_TEXT_SIZE: f32 = 12.0;
 
+// Psi overload meter - drawn center-screen below the crosshair while the psi
+// amp's trigger is held on an overloadable power (and briefly after release,
+// flashing the result). Uses the original meter art (res/iface, 64x16):
+// LOADBACK = track with the end-zone baked at the right, LOADMETR = fill,
+// LOADGOOD = overload success, LOADBURN = burnout. Drawn at 2x art size.
+const OVERLOAD_W: f32 = 128.0;
+const OVERLOAD_H: f32 = 32.0;
+const OVERLOAD_METER: Rect = Rect::new(
+    VIRTUAL_W / 2.0 - OVERLOAD_W / 2.0,
+    VIRTUAL_H / 2.0 + CROSSHAIR_SIZE,
+    OVERLOAD_W,
+    OVERLOAD_H,
+);
+
 /// Build the flat HUD as a resolution-independent canvas for the given player
 /// stat fractions and (optional) wielded-weapon ammo. Pure (no asset/GL
 /// access), so it is unit-testable.
 pub(crate) fn build_flat_hud_canvas(
     health_fraction: f32,
     psi_fraction: f32,
+    psi_charge: Option<RuntimePropPsiCharge>,
     ammo: Option<i32>,
     ammo_icon: Option<String>,
     ammo_type: Option<String>,
@@ -106,6 +122,25 @@ pub(crate) fn build_flat_hud_canvas(
             HAlign::Left,
             VAlign::Middle,
         );
+
+    // Psi overload meter (only while the amp is charging / flashing a result).
+    if let Some(charge) = psi_charge {
+        match charge.phase {
+            PsiChargePhase::Charging => {
+                canvas.image(OVERLOAD_METER, "LOADBACK.PCX").bar(
+                    OVERLOAD_METER,
+                    "LOADMETR.PCX",
+                    charge.fraction,
+                );
+            }
+            PsiChargePhase::Overloaded => {
+                canvas.image(OVERLOAD_METER, "LOADGOOD.PCX");
+            }
+            PsiChargePhase::Burnout => {
+                canvas.image(OVERLOAD_METER, "LOADBURN.PCX");
+            }
+        }
+    }
 
     // Ammo gauge (only when a weapon with a clip is wielded).
     if let Some(rounds) = ammo {
@@ -146,6 +181,7 @@ pub(crate) fn create_flat_hud(
     let canvas = build_flat_hud_canvas(
         get_health_percentage(world),
         get_psi_percentage(world),
+        get_wielded_psi_charge(world),
         get_wielded_ammo(world),
         get_wielded_ammo_icon(world),
         get_wielded_ammo_type(world),
@@ -161,14 +197,14 @@ mod tests {
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, None);
+        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, None, None);
         assert_eq!(canvas.element_count(), 6);
     }
 
     #[test]
     fn wielding_a_weapon_adds_the_ammo_gauge() {
         // ...plus the ammo backdrop + count when a clip is present.
-        let canvas = build_flat_hud_canvas(1.0, 0.75, Some(12), None, None);
+        let canvas = build_flat_hud_canvas(1.0, 0.75, None, Some(12), None, None);
         assert_eq!(canvas.element_count(), 8);
     }
 
@@ -178,6 +214,7 @@ mod tests {
         let canvas = build_flat_hud_canvas(
             1.0,
             0.75,
+            None,
             Some(12),
             Some("STD_I.PCX".to_string()),
             Some("std".to_string()),
@@ -199,6 +236,6 @@ mod tests {
     #[test]
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
-        let _ = build_flat_hud_canvas(2.0, -1.0, None, None, None);
+        let _ = build_flat_hud_canvas(2.0, -1.0, None, None, None, None);
     }
 }

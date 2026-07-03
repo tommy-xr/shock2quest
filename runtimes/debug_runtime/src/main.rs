@@ -1415,6 +1415,12 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                 reload_pitch_deg: state.as_ref().map(|s| s.reload_pitch_deg).unwrap_or(0.0),
                 reload_progress: state.as_ref().map(|s| s.reload_progress).unwrap_or(0.0),
                 wielded_ammo_type: state.as_ref().and_then(|s| s.wielded_ammo_type.clone()),
+                hit_points: state
+                    .as_ref()
+                    .and_then(|s| s.hit_points.map(|(cur, _)| cur)),
+                max_hit_points: state
+                    .as_ref()
+                    .and_then(|s| s.hit_points.map(|(_, max)| max)),
                 psi_points: state
                     .as_ref()
                     .and_then(|s| s.psi_points.map(|(cur, _)| cur)),
@@ -1422,6 +1428,10 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                     .as_ref()
                     .and_then(|s| s.psi_points.map(|(_, max)| max)),
                 selected_psi_power: state.as_ref().and_then(|s| s.selected_psi_power.clone()),
+                psi_charge: state.as_ref().and_then(|s| s.psi_charge.map(|(f, _)| f)),
+                psi_charge_phase: state
+                    .as_ref()
+                    .and_then(|s| s.psi_charge.map(|(_, p)| p.to_string())),
             }
         },
         entity_count,
