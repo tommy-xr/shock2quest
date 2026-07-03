@@ -1,9 +1,12 @@
-use cgmath::{Matrix4, Vector3};
+use cgmath::{Matrix4, SquareMatrix, Vector3};
 use collision::Aabb3;
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
 use once_cell::sync::Lazy;
 
-use crate::{glb_model::GlbModel, glb_skeleton::GlbSkeleton};
+use crate::{
+    glb_model::GlbModel,
+    glb_skeleton::{GlbAnimationState, GlbSkeleton},
+};
 use engine::scene::{
     SceneObject, SkinnedMaterial, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal,
 };
@@ -113,13 +116,53 @@ fn load_glb(
         }
     }
 
+    // Extract skeleton if present
+    let skeleton = extract_glb_skeleton(&document, &buffers);
+
+    // Bound skinned meshes with the bind pose skinning matrices - the same
+    // transforms that place their vertices at render time.
+    let bind_skinning = skeleton
+        .as_ref()
+        .map(|skeleton| GlbAnimationState::new(skeleton.clone()).get_skinning_matrices());
+    for mesh in &meshes {
+        if let GlbVertexData::Skinned(vertices) = &mesh.vertex_data {
+            for vertex in vertices {
+                let pos = cgmath::Vector4::new(
+                    vertex.position.x,
+                    vertex.position.y,
+                    vertex.position.z,
+                    1.0,
+                );
+                let skinned = match &bind_skinning {
+                    Some(skinning) => {
+                        let mut skinned = cgmath::Vector4::new(0.0, 0.0, 0.0, 0.0);
+                        for (index, weight) in
+                            vertex.bone_indices.iter().zip(vertex.bone_weights.iter())
+                        {
+                            let matrix = skinning
+                                .get(*index as usize)
+                                .copied()
+                                .unwrap_or_else(Matrix4::identity);
+                            skinned += matrix * pos * *weight;
+                        }
+                        skinned
+                    }
+                    None => pos,
+                };
+                min_bounds.x = min_bounds.x.min(skinned.x);
+                min_bounds.y = min_bounds.y.min(skinned.y);
+                min_bounds.z = min_bounds.z.min(skinned.z);
+                max_bounds.x = max_bounds.x.max(skinned.x);
+                max_bounds.y = max_bounds.y.max(skinned.y);
+                max_bounds.z = max_bounds.z.max(skinned.z);
+            }
+        }
+    }
+
     let bounding_box = Aabb3::new(
         cgmath::Point3::new(min_bounds.x, min_bounds.y, min_bounds.z),
         cgmath::Point3::new(max_bounds.x, max_bounds.y, max_bounds.z),
     );
-
-    // Extract skeleton if present
-    let skeleton = extract_glb_skeleton(&document, &buffers);
 
     LoadedGlbData {
         meshes,
@@ -127,6 +170,26 @@ fn load_glb(
         skeleton,
         images,
     }
+}
+
+/// Build just the skeleton from raw GLB bytes - no GPU resources or asset
+/// cache required, so it works in headless tests and tools.
+pub fn skeleton_from_glb_bytes(bytes: &[u8]) -> Option<GlbSkeleton> {
+    let gltf = gltf::Gltf::from_slice(bytes).ok()?;
+    let document = gltf.document;
+    let blob = gltf.blob;
+
+    let mut buffers = Vec::new();
+    for buffer_obj in document.buffers() {
+        let data = match buffer_obj.source() {
+            gltf::buffer::Source::Bin => blob.as_ref()?.clone(),
+            // External buffers can't be resolved from raw bytes
+            gltf::buffer::Source::Uri(_) => return None,
+        };
+        buffers.push(gltf::buffer::Data(data));
+    }
+
+    extract_glb_skeleton(&document, &buffers)
 }
 
 /// Extract GLB skeleton from document
@@ -236,17 +299,11 @@ fn process_node(
                             max_bounds.z = max_bounds.z.max(pos.z);
                         }
                     }
-                    GlbVertexData::Skinned(vertices) => {
-                        for vertex in vertices {
-                            let pos = &vertex.position;
-                            min_bounds.x = min_bounds.x.min(pos.x);
-                            min_bounds.y = min_bounds.y.min(pos.y);
-                            min_bounds.z = min_bounds.z.min(pos.z);
-                            max_bounds.x = max_bounds.x.max(pos.x);
-                            max_bounds.y = max_bounds.y.max(pos.y);
-                            max_bounds.z = max_bounds.z.max(pos.z);
-                        }
-                    }
+                    // Skinned vertices stay in mesh space (see
+                    // process_primitive) and are placed by the skinning
+                    // matrices, not the node transform - they're bounded
+                    // after the skeleton is extracted (see load_glb).
+                    GlbVertexData::Skinned(_) => {}
                 }
                 meshes.push(glb_mesh);
             }
@@ -375,24 +432,16 @@ fn process_primitive(
                 [1.0, 0.0, 0.0, 0.0]
             };
 
-            // Apply transform
-            let transformed_pos = transform * cgmath::Vector4::new(pos[0], pos[1], pos[2], 1.0);
-            let transformed_norm = transform * cgmath::Vector4::new(norm[0], norm[1], norm[2], 0.0);
-
+            // Per the glTF spec, the mesh node's transform is ignored for
+            // skinned meshes - the joint matrices (which include any scale on
+            // the skeleton root, e.g. an FBX unit conversion) place vertices.
+            // Baking it here would apply that scale twice.
             skinned_vertices.push(VertexPositionTextureSkinnedNormal {
-                position: cgmath::Vector3::new(
-                    transformed_pos.x,
-                    transformed_pos.y,
-                    transformed_pos.z,
-                ),
+                position: cgmath::Vector3::new(pos[0], pos[1], pos[2]),
                 uv: cgmath::Vector2::new(tex[0], tex[1]),
                 bone_indices,
                 bone_weights: normalized_weights,
-                normal: cgmath::Vector3::new(
-                    transformed_norm.x,
-                    transformed_norm.y,
-                    transformed_norm.z,
-                ),
+                normal: cgmath::Vector3::new(norm[0], norm[1], norm[2]),
             });
         }
 
