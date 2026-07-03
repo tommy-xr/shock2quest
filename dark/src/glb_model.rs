@@ -18,11 +18,19 @@ pub struct GlbModel {
 impl GlbModel {
     /// Create a new GLB model with skeleton
     pub fn new(
-        scene_objects: Vec<SceneObject>,
+        mut scene_objects: Vec<SceneObject>,
         bounding_box: Aabb3<f32>,
         skeleton: GlbSkeleton,
     ) -> Self {
-        let animation_state = GlbAnimationState::new(skeleton);
+        let mut animation_state = GlbAnimationState::new(skeleton);
+
+        // Skinned vertices are stored in mesh space and need the joint
+        // matrices to reach model space, so bake the bind pose skinning in -
+        // consumers that never pose the model still render it correctly.
+        let bind_skinning = animation_state.get_skinning_matrices();
+        for scene_object in scene_objects.iter_mut() {
+            scene_object.set_skinning_data(bind_skinning);
+        }
 
         Self {
             scene_objects,
@@ -99,18 +107,6 @@ impl GlbModel {
         self.skeleton().joint_count() > 0
     }
 
-    /// Apply hand pose transforms (convenience method for VR gloves)
-    pub fn apply_hand_pose(
-        &mut self,
-        joint_transforms: &std::collections::HashMap<u32, Matrix4<f32>>,
-    ) {
-        for (joint_id, transform) in joint_transforms {
-            // Convert joint ID to node index if needed
-            let node_index = *joint_id as usize; // Assuming direct mapping for now
-            self.set_node_transform(node_index, *transform);
-        }
-    }
-
     /// Get global transform for a node (useful for debugging)
     pub fn get_global_transform(&mut self, node_index: usize) -> Option<Matrix4<f32>> {
         self.animation_state.get_global_transform(node_index)
@@ -120,6 +116,12 @@ impl GlbModel {
     pub fn set_joint_transform(&mut self, joint_index: usize, transform: Matrix4<f32>) {
         self.animation_state
             .set_joint_transform(joint_index, transform);
+    }
+
+    /// Replace only the rotation of a joint's local transform, preserving the
+    /// bind pose translation and scale (see `GlbAnimationState::set_joint_rotation`)
+    pub fn set_joint_rotation(&mut self, joint_index: usize, rotation: cgmath::Quaternion<f32>) {
+        self.animation_state.set_joint_rotation(joint_index, rotation);
     }
 
     /// Get the current local transform for a joint (uses joint index)
