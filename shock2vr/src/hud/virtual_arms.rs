@@ -271,7 +271,10 @@ fn create_bar_overlay(
     z_offset: f32,
 ) -> Option<SceneObject> {
     // Load bar texture
-    let texture_options = TextureOptions { wrap: false };
+    let texture_options = TextureOptions {
+        wrap: false,
+        ..Default::default()
+    };
     let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture_name, &texture_options);
 
     // Create clipped screen material
@@ -310,7 +313,10 @@ fn create_forearm_hud_panel(
     let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
 
     // Load appropriate texture based on handedness
-    let texture_options = TextureOptions { wrap: false };
+    let texture_options = TextureOptions {
+        wrap: false,
+        ..Default::default()
+    };
     let texture = match handedness {
         Handedness::Left => asset_cache.get_ext(&TEXTURE_IMPORTER, "BIOFULL.PCX", &texture_options),
         Handedness::Right => {

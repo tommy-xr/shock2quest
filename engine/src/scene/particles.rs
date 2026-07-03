@@ -268,10 +268,13 @@ impl ParticleSystem {
                 // glow is tinted by `color` in the shader, so it stays the
                 // palette color rather than washing to white.
                 let mat = match &self.sprite_texture {
+                    // Sprites render unlit at their authored texel colors -
+                    // adding emissive on top would double the brightness and
+                    // clip the sprite's gradients to white.
                     Some(sprite) => BillboardMaterial::create(
                         sprite.clone(),
                         self.color,
-                        1.0,
+                        0.0,
                         1.0 - (self.particle_alpha * alpha),
                         p.scale,
                     ),

@@ -879,7 +879,13 @@ impl MissionCore {
                                 if let Some(texture) = asset_cache.get_ext_opt(
                                     &TEXTURE_IMPORTER,
                                     &bitmap_name,
-                                    &engine::texture::TextureOptions { wrap: false },
+                                    &engine::texture::TextureOptions {
+                                        wrap: false,
+                                        // Dark sprites key transparency on
+                                        // palette index 0 (the magenta color
+                                        // key only covers some of them).
+                                        transparent_index_0: true,
+                                    },
                                 ) {
                                     system = system
                                         .with_sprite_texture(texture)
@@ -1281,6 +1287,9 @@ impl MissionCore {
             // and would otherwise load back orphaned, since attachments are
             // runtime-only).
             self.make_un_physical(rider.entity_id);
+            // ...and any gameplay scripts (a projectile-archetype rider must
+            // not raycast/damage as a live projectile).
+            self.script_world.remove_entity(rider.entity_id);
             self.world
                 .add_component(rider.entity_id, RuntimePropDoNotSerialize {});
         }

@@ -384,7 +384,7 @@ impl VisibilityEngine for PortalVisibilityEngine {
         //         let mut debug_objs = vec![debug];
 
         //         if portal_debug_info.to_cell == 82 && portal_debug_info.from_cell == 84 {
-        //             let options = TextureOptions { wrap: false };
+        //             let options = TextureOptions { wrap: false, ..Default::default() };
         //             let highlight = asset_cache.get_ext(&TEXTURE_IMPORTER, "TURQ.GIF", &options);
 
         //             let position = vec2(aabb.min.x, aabb.min.y);

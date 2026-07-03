@@ -35,7 +35,7 @@ const BITMAP_SHOWCASE: &[(&str, i32)] = &[
     ("stars (star2)", -4119),
     ("stasis tail (blood)", -2921),
     ("viral ball (viral)", -1528),
-    ("new blood spang (bspang)", -1971),
+    ("new blood spang (bspang; one-shot, bursts once)", -1971),
 ];
 
 /// Showcased emitters: `(label, master-palette color index)`. Indices chosen as

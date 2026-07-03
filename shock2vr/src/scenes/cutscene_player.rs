@@ -176,7 +176,10 @@ impl CutscenePlayerScene {
             (
                 Rc::new(init_from_memory2(
                     texture_data,
-                    &TextureOptions { wrap: false },
+                    &TextureOptions {
+                        wrap: false,
+                        ..Default::default()
+                    },
                 )),
                 aspect_ratio,
             )
@@ -195,7 +198,10 @@ impl CutscenePlayerScene {
             (
                 Rc::new(init_from_memory2(
                     texture_data,
-                    &TextureOptions { wrap: false },
+                    &TextureOptions {
+                        wrap: false,
+                        ..Default::default()
+                    },
                 )),
                 aspect_ratio,
             )
