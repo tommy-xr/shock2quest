@@ -93,11 +93,12 @@ impl Script for InternalFastProjectileScript {
             //   class the victim descends from (blood for hybrids/midwives,
             //   sparks for robots/turrets, ...);
             // - a world hit spawns the `MissSpang` (terrain spang).
-            // No matching link (e.g. a victim class the projectile has no
-            // spang for) spawns nothing.
-            let spang_template = if did_hit_hitbox {
-                choose_hit_spang(world, entity_id, hit_entity_id)
-            } else {
+            // Any entity hit tries the HitSpang match first - not just hitbox
+            // hits, so victims without fitted hitboxes (and catch-all victim
+            // classes like the laser's `Physical`) still spang - and falls
+            // back to the terrain spang when the projectile has no spang
+            // authored for that entity's class.
+            let spang_template = choose_hit_spang(world, entity_id, hit_entity_id).or_else(|| {
                 get_first_link_with_template_and_data(world, entity_id, |link| {
                     if matches!(link, Link::MissSpang) {
                         Some(())
@@ -106,7 +107,7 @@ impl Script for InternalFastProjectileScript {
                     }
                 })
                 .map(|(spang_template, ())| spang_template)
-            };
+            });
 
             if let Some(template_id) = spang_template {
                 effects.push(Effect::CreateEntity {
@@ -146,10 +147,13 @@ impl Script for InternalFastProjectileScript {
 
 /// The spang (impact effect) a projectile spawns on `victim`, from the
 /// projectile's `HitSpang` links: each link targets a victim archetype class
-/// (Hybrids, Robots, ...) and carries the spang template to spawn; the first
-/// link whose class the victim is or descends from wins. `victim` may be a
-/// hitbox proxy (resolved to its parent creature). `None` when the projectile
-/// has no spang authored for this victim's class.
+/// (Hybrids, Robots, ...) and carries the spang template to spawn. Links are
+/// scanned most-derived-projectile-template first (entity links merge
+/// ancestors root-first, so without the reversal a base class's link would
+/// shadow an override authored on a derived projectile); the first link whose
+/// class the victim is or descends from wins. `victim` may be a hitbox proxy
+/// (resolved to its parent creature). `None` when the projectile has no spang
+/// authored for this victim's class.
 fn choose_hit_spang(world: &World, projectile: EntityId, victim: EntityId) -> Option<i32> {
     let victim = resolve_proxy_entity(world, victim);
     let victim_template = world
@@ -165,6 +169,7 @@ fn choose_hit_spang(world: &World, projectile: EntityId, victim: EntityId) -> Op
         }
     })
     .into_iter()
+    .rev()
     .find(|(victim_class, _)| hierarchy.is_or_descends_from(victim_template, *victim_class))
     .map(|(_, spang_template)| spang_template)
 }

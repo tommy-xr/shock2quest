@@ -557,14 +557,15 @@ impl MissionCore {
         // internal dt per call regardless of elapsed time, so stepping it here
         // would keep integrating bodies at wall-clock rate while scripts,
         // animations, and particles are frozen - creatures glide across the
-        // floor and effects stick around. A paused sim must not move.
+        // floor and effects stick around. A paused sim must not move. The
+        // player position is still read from the character body (not stepped)
+        // so a teleport - which writes the body directly - is reflected in
+        // PlayerInfo/introspection even before the next real step.
         let (new_character_pos, collision_events) = if time.elapsed.is_zero() {
-            let current_pos = self
-                .world
-                .borrow::<UniqueView<PlayerInfo>>()
-                .map(|p| p.pos)
-                .unwrap_or_else(|_| vec3(0.0, 0.0, 0.0));
-            (current_pos, Vec::new())
+            (
+                self.physics.get_player_translation(&self.player_handle),
+                Vec::new(),
+            )
         } else {
             profile!(
                 "shock2.update.physics",
@@ -741,6 +742,7 @@ impl MissionCore {
         effects.append(&mut current_effects.flush());
 
         // Update particle systems
+        let mut finished_particle_entities: Vec<EntityId> = Vec::new();
         self.world.run(
             |prop_particle_group: View<PropParticleGroup>,
              prop_particle_launch_info: View<PropParticleLaunchInfo>,
@@ -776,11 +778,25 @@ impl MissionCore {
                                 // resolve it to RGB. cg/cb (pg.g/pg.b) drive the
                                 // lifetime fade and are handled separately.
                                 .with_color(crate::palette::index_to_rgb(pg.r))
+                                // Animation type 0 = launch one shot: the burst
+                                // fires once and the group dies with its last
+                                // particle (impact spangs). Other types keep
+                                // launching (steam vents etc.).
+                                .with_one_shot(pg.animation_type == 0)
                         });
                     particle_system.update(time.elapsed, transform.0);
+                    if particle_system.is_done() {
+                        finished_particle_entities.push(id);
+                    }
                 }
             },
         );
+        // One-shot particle groups (impact spangs) expire with their burst -
+        // destroy the entity so spangs don't accumulate forever at every
+        // bullet hole.
+        for id in finished_particle_entities {
+            effects.push(Effect::DestroyEntity { entity_id: id });
+        }
 
         effects
     }
@@ -1152,6 +1168,10 @@ impl MissionCore {
         self.id_to_bitmap.remove(&entity_id);
         self.id_to_model.remove(&entity_id);
         self.id_to_physics.remove(&entity_id);
+        // Also drop the entity's particle system - the render loop iterates
+        // this map directly, so a stale entry would keep emitting at the
+        // entity's last transform forever.
+        self.id_to_particle_system.remove(&entity_id);
         self.physics.remove(entity_id);
 
         self.world.delete_entity(entity_id);

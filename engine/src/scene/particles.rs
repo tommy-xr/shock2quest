@@ -71,6 +71,11 @@ pub struct ParticleSystem {
     /// Tint applied to the sprite (resolved from the group's palette color
     /// index upstream). Defaults to white = untinted full texture.
     color: Vector3<f32>,
+    /// One-shot burst (impact spangs): all particles launch on the first
+    /// update and are never relaunched; `is_done()` reports when they have all
+    /// expired. `false` = continuous emitter (steam vents etc.).
+    one_shot: bool,
+    has_launched: bool,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -123,11 +128,24 @@ impl ParticleSystem {
             particle_size: (0.08, 0.08),
             root_transform: Matrix4::identity(),
             color: vec3(1.0, 1.0, 1.0),
+            one_shot: false,
+            has_launched: false,
         }
     }
 
     pub fn with_color(self, color: Vector3<f32>) -> ParticleSystem {
         ParticleSystem { color, ..self }
+    }
+
+    pub fn with_one_shot(self, one_shot: bool) -> ParticleSystem {
+        ParticleSystem { one_shot, ..self }
+    }
+
+    /// A one-shot system whose burst has fully expired (never true for
+    /// continuous emitters). The owner can drop the system - and, for impact
+    /// spangs, the entity carrying it.
+    pub fn is_done(&self) -> bool {
+        self.one_shot && self.has_launched && self.particles.is_empty()
     }
 
     pub fn with_lifetime(self, min: f32, max: f32) -> ParticleSystem {
@@ -206,8 +224,17 @@ impl ParticleSystem {
 
         self.launch_time_remaining -= delta_time;
 
-        // Check if we should create a new particle
-        if self.particles.len() < self.max_particles && self.launch_time_remaining < 0.0 {
+        if self.one_shot {
+            // Launch the whole burst once; expired particles are never
+            // replaced (see `is_done`).
+            if !self.has_launched {
+                self.has_launched = true;
+                for _ in 0..self.max_particles {
+                    self.particles.push(create_random_particle(self));
+                }
+            }
+        } else if self.particles.len() < self.max_particles && self.launch_time_remaining < 0.0 {
+            // Continuous emitter: create a new particle per launch interval.
             self.launch_time_remaining = self.launch_time;
             self.particles.push(create_random_particle(self));
         }

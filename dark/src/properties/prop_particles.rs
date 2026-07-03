@@ -84,98 +84,98 @@ pub struct PropParticleGroup {
 
 impl PropParticleGroup {
     pub fn read<T: io::Seek + io::Read>(reader: &mut T, len: u32) -> PropParticleGroup {
-        let _unk1 = read_bytes(reader, 36);
-        let _unk2 = read_u32(reader);
+        // The chunk is the engine's particle-group struct written verbatim,
+        // including runtime-only fields (vtable/list/heap pointers) that are
+        // garbage in the file. Two struct versions ship: mission files write a
+        // 324-byte layout, the gamesys writes a newer 380-byte layout that
+        // inserts 8 extra bytes after `gravity` (and appends a longer tail).
+        // Offsets below name the 324-byte layout; the 380-byte one is +8 from
+        // the color field onward. Verified against the shipped data by
+        // anchors: launch-info heap pointers, attach-object ids at the tail
+        // (e.g. a steam puff attached to its emitter), sane sizes/spins, and
+        // identity rotation matrices.
+        let _particle_class = read_bytes(reader, 36); // per-class fn pointers (runtime)
+        let _obj_id = read_u32(reader);
 
-        // let active = read_u32(reader);
-        let render_type = read_u32(reader);
-        let motion_type = read_u32(reader);
-        let animation_type = read_u32(reader);
+        let render_type = read_u32(reader); // 40
+        let motion_type = read_u32(reader); // 44
+        let animation_type = read_u32(reader); // 48
+        let _placeholder_enums = read_bytes(reader, 8); // 52
+        let num = read_u32(reader); // 60
 
-        let _unk3 = read_u32(reader);
-        let _unk4 = read_u32(reader);
+        let _particle_list = read_bytes(reader, 24); // 64: per-particle arrays (runtime)
 
-        let num = read_u32(reader);
+        let velocity = read_vec3(reader); // 88
+        let gravity = read_vec3(reader); // 100
 
-        let _unk5 = read_bytes(reader, 24);
+        if len >= 380 {
+            // The newer (gamesys) layout only: 8 unknown bytes (zero in the
+            // shipped data).
+            let _unk = read_bytes(reader, 8);
+        }
 
-        let velocity = read_vec3(reader);
-        let gravity = read_vec3(reader);
-
+        // 112: global color. `r` is an index into the game master palette (the
+        // renderer resolves it); `a` is the global alpha.
         let r = read_u8(reader);
         let g = read_u8(reader);
         let b = read_u8(reader);
         let a = read_u8(reader);
 
-        let _always_simulate = read_bool_u8(reader);
-        let _unk = read_bool_u8(reader);
-        let _unk = read_bool_u8(reader);
-        let _unk = read_bool_u8(reader);
+        let _always_simulate = read_bool_u8(reader); // 116
+        let _always_simulate_group = read_bool_u8(reader);
+        let _cell_sort = read_bool_u8(reader);
+        let _zsort = read_bool_u8(reader);
 
-        let _terrain_collide = read_bool_u8(reader);
-        let _unk = read_bool_u8(reader);
+        let _terrain_collide = read_bool_u8(reader); // 120
+        let _accelerate_cell = read_bool_u8(reader);
         let _ignore_attach_refs = read_bool_u8(reader);
-        let _unk = read_bool_u8(reader);
+        let _pad = read_bool_u8(reader);
 
-        let _unk_launch_info = read_u32(reader);
-        let spin = read_vec3(reader);
-        let _pulse_period = read_u32(reader);
-        let _unk = read_u32(reader);
-        let _unk = read_u32(reader);
+        let _launch_info_ptr = read_u32(reader); // 124 (runtime heap pointer)
 
-        let _unk = read_u32(reader);
+        let spin = read_vec3(reader); // 128
+        let _pulse_period_ms = read_u32(reader); // 140
+        let _pulse_percentage = read_single(reader); // 144
+        let _fixed_scale = read_single(reader); // 148
 
-        let _unk = read_bool_u8(reader);
+        let _pre_launch = read_bool_u8(reader); // 152
+        let _spin_group = read_bool_u8(reader);
+        let _tiny_alpha = read_bool_u8(reader);
+        let _tiny_dropout = read_bool_u8(reader);
+
+        let _shared_list = read_bool_u8(reader); // 156
         let is_worldspace = read_bool_u8(reader);
-        let _unk = read_bool_u8(reader);
+        let _launching = read_bool_u8(reader);
         let is_active = read_bool_u8(reader);
 
-        let _ms_offset = read_u32(reader);
-        let size = read_single(reader);
-        let _unk = read_u32(reader);
-        let _unk = read_u32(reader);
+        let _ms_offset = read_u32(reader); // 160
+        let size = read_single(reader); // 164
+        let _reserved = read_bytes(reader, 8); // 168
 
-        let prev_loc = read_vec3(reader);
-        let scale_vel = read_single(reader);
+        let prev_loc = read_vec3(reader); // 176
+        let scale_vel = read_single(reader); // 188
 
-        let _unk = read_u32(reader);
-        let bbox_min = read_vec3(reader);
-        let bbox_max = read_vec3(reader);
-        let radius = read_single(reader);
+        let _render_datum = read_u32(reader); // 192
+        let bbox_min = read_vec3(reader); // 196
+        let bbox_max = read_vec3(reader); // 208
+        let radius = read_single(reader); // 220
+        let _cur_scale = read_single(reader); // 224
+        let _points_ptrs = read_bytes(reader, 8); // 228 (runtime pointers)
+        let _derived_flags = read_bytes(reader, 4); // 236
+        let _list_length = read_u32(reader); // 240
+        let _delete_count = read_u32(reader); // 244
+        let _next_launch = read_fixed(reader); // 248
+        // 252: time between particle launches (fix seconds).
+        let launch_period = read_fixed(reader);
+        let model_name = read_string_with_size(reader, 16); // 256 (bitmap name)
+        let _model_num = read_u32(reader); // 272
+        let fade_time = read_fixed(reader); // 276
 
-        // Runtime metadata?
-        let _unk = read_u32(reader);
-        let _unk = read_u32(reader);
-        let _unk = read_u32(reader);
-
-        // More runtime data?
-        let _unk = read_u8(reader);
-        let _unk = read_u8(reader);
-        let _unk = read_u8(reader);
-        let _unk = read_u8(reader);
-
-        // Even mor eruntime data?
-        let _unk = read_u32(reader);
-        let _unk = read_u32(reader);
-        let maybe_launch_time1 = read_fixed(reader);
-        let maybe_launch_time2 = read_fixed(reader);
-
-        let model_name = read_string_with_size(reader, 16);
-        let _unk = read_u32(reader);
-        let fade_time = read_fixed(reader);
-        // panic!(
-        //     "launch time: {} or {} or {}",
-        //     maybe_launch_time1, maybe_launch_time2, model_name
-        // );
-
-        // let motion = read_u32(reader);
-        // let num_particles = read_u32(reader);
-        // let particle_size = read_single(reader);
-        // let bitmap_name = read_string_with_size(reader, 16);
-
-        let consumed = 64 + 24 + 12 + 12 + 4 + 44 + 32 + 32 + 48 + 8;
-
+        // Remainder: rotation matrix, sim bookkeeping, attach object, and
+        // (380-byte entries only) trailing fields.
+        let consumed = if len >= 380 { 288u32 } else { 280u32 };
         let _rem = read_bytes(reader, (len - consumed) as usize);
+
         PropParticleGroup {
             render_type,
             motion_type,
@@ -196,7 +196,7 @@ impl PropParticleGroup {
             bbox_min,
             bbox_max,
             radius,
-            launch_time: maybe_launch_time2.max(maybe_launch_time1),
+            launch_time: launch_period,
             fade_time,
             model_name,
         }

@@ -29,7 +29,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8096),
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8100),
     });
 
     // Wield the pistol (first CycleWeapon roster entry).
@@ -51,6 +51,8 @@ test(
         .map((e) => e.name)
         .join(", ")})`,
     );
+
+    const bloodBefore = afterTerrain.filter((e) => e.name === "Standard Blood Spang").length;
 
     // Shot 2 - creature. Find the stationary corridor OG-Pipe by name +
     // position anchor (entity ids are not stable across launches).
@@ -103,9 +105,35 @@ test(
 
     const afterBlood = (await game.entities.list({ filter: "Spang", limit: 10 }))
       .entities;
+    const bloodSpangs = afterBlood.filter((e) => e.name === "Standard Blood Spang");
     assert.ok(
-      afterBlood.some((e) => e.name === "Standard Blood Spang"),
-      `a hybrid hit should spawn the authored blood spang (got: ${afterBlood
+      bloodSpangs.length > bloodBefore,
+      `a hybrid hit should spawn a NEW blood spang (got: ${afterBlood
+        .map((e) => e.name)
+        .join(", ")})`,
+    );
+    // ...and it spawned at the victim, not somewhere else.
+    assert.ok(
+      bloodSpangs.some(
+        (e) =>
+          Math.hypot(
+            e.position[0] - target[0],
+            e.position[1] - (target[1] + 0.7),
+            e.position[2] - target[2],
+          ) < 2.0,
+      ),
+      `the blood spang should spawn near the victim (victim at ${JSON.stringify(target)}, spangs at ${JSON.stringify(bloodSpangs.map((e) => e.position))})`,
+    );
+
+    // Spangs are one-shot bursts: they expire with their particles instead of
+    // accumulating forever at every bullet hole.
+    await game.step({ frames: 120 }); // 2s >> the ~0.8s particle lifetime
+    const afterExpiry = (await game.entities.list({ filter: "Spang", limit: 10 }))
+      .entities;
+    assert.equal(
+      afterExpiry.length,
+      0,
+      `spangs should expire after their burst (still present: ${afterExpiry
         .map((e) => e.name)
         .join(", ")})`,
     );
