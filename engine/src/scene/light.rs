@@ -164,24 +164,23 @@ impl Light for SpotLight {
         LightType::Spotlight
     }
 
-    fn affects_position(&self, _world_pos: Vector3<f32>) -> bool {
+    fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
         // Quick range check
-        true
-        // let distance = (world_pos - self.position).magnitude();
-        // if distance > self.range {
-        //     return false;
-        // }
+        let distance = (world_pos - self.position).magnitude();
+        if distance > self.range {
+            return false;
+        }
 
-        // // Cone check - ensure position is within the outer cone
-        // if distance > 0.0 {
-        //     let to_position = (world_pos - self.position).normalize();
-        //     let dot = to_position.dot(self.direction);
-        //     let cos_outer = self.outer_cone_angle.cos();
-        //     dot >= cos_outer
-        // } else {
-        //     // Position is exactly at light source
-        //     true
-        // }
+        // Cone check - ensure position is within the outer cone
+        if distance > 0.0 {
+            let to_position = (world_pos - self.position).normalize();
+            let dot = to_position.dot(self.direction);
+            let cos_outer = self.outer_cone_angle.cos();
+            dot >= cos_outer
+        } else {
+            // Position is exactly at light source
+            true
+        }
     }
 
     fn spotlight_params(&self) -> Option<SpotlightParams> {
