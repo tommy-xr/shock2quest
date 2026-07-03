@@ -25,7 +25,9 @@ use dark::{
     BitmapAnimation, SCALE_FACTOR,
     audio::SongPlayer,
     gamesys::Gamesys,
-    importers::{ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER},
+    importers::{
+        ANIMATION_CLIP_IMPORTER, AUDIO_IMPORTER, MODELS_IMPORTER, SONG_IMPORTER, TEXTURE_IMPORTER,
+    },
     mission::{SongParams, room_database::RoomDatabase},
     model::Model,
     motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
@@ -837,7 +839,7 @@ impl MissionCore {
                     }
                     let particle_system =
                         self.id_to_particle_system.entry(id).or_insert_with(|| {
-                            ParticleSystem::new()
+                            let mut system = ParticleSystem::new()
                                 .with_lifetime(launch_info.min_time, launch_info.max_time)
                                 .with_velocity(
                                     launch_info.vel_min / SCALE_FACTOR,
@@ -865,7 +867,28 @@ impl MissionCore {
                                 // fires once and the group dies with its last
                                 // particle (impact spangs). Other types keep
                                 // launching (steam vents etc.).
-                                .with_one_shot(pg.animation_type == 0)
+                                .with_one_shot(pg.animation_type == 0);
+                            // Render type 5 (scaled bitmap) draws the authored
+                            // sprite (res/bitmap/<name>.PCX) instead of the
+                            // default glow disk; a missing bitmap falls back
+                            // to the disk. The sprite carries its own colors,
+                            // so the palette tint is left white.
+                            const PRT_SCALED_BITMAP: u32 = 5;
+                            if pg.render_type == PRT_SCALED_BITMAP && !pg.model_name.is_empty() {
+                                let bitmap_name = format!("{}.PCX", pg.model_name);
+                                if let Some(texture) = asset_cache.get_ext_opt(
+                                    &TEXTURE_IMPORTER,
+                                    &bitmap_name,
+                                    &engine::texture::TextureOptions { wrap: false },
+                                ) {
+                                    system = system
+                                        .with_sprite_texture(texture)
+                                        .with_color(cgmath::vec3(1.0, 1.0, 1.0));
+                                } else {
+                                    warn!("particle bitmap not found: {bitmap_name}");
+                                }
+                            }
+                            system
                         });
                     particle_system.update(time.elapsed, transform.0);
                     // Only fire-and-forget effect entities (impact spangs) are

@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use cgmath::{Matrix4, SquareMatrix, Vector3, vec3};
 use rand::Rng;
@@ -76,6 +76,9 @@ pub struct ParticleSystem {
     /// expired. `false` = continuous emitter (steam vents etc.).
     one_shot: bool,
     has_launched: bool,
+    /// Sprite for bitmap particles (PRT_SCALED_BITMAP); `None` renders the
+    /// default radial glow disk.
+    sprite_texture: Option<Rc<dyn TextureTrait>>,
 }
 
 fn randf(a: f32, b: f32) -> f32 {
@@ -130,6 +133,7 @@ impl ParticleSystem {
             color: vec3(1.0, 1.0, 1.0),
             one_shot: false,
             has_launched: false,
+            sprite_texture: None,
         }
     }
 
@@ -139,6 +143,13 @@ impl ParticleSystem {
 
     pub fn with_one_shot(self, one_shot: bool) -> ParticleSystem {
         ParticleSystem { one_shot, ..self }
+    }
+
+    pub fn with_sprite_texture(self, texture: Rc<dyn TextureTrait>) -> ParticleSystem {
+        ParticleSystem {
+            sprite_texture: Some(texture),
+            ..self
+        }
     }
 
     /// A one-shot system whose burst has fully expired (never true for
@@ -253,18 +264,25 @@ impl ParticleSystem {
                 if adj_time > 0.0 {
                     alpha = 1.0 - (adj_time / self.particle_fade_time);
                 }
-                // TODO: Switch to billboard material
-                //    let mat = BillboardMaterial::create(some_texture, 1.0, 0.0);
-                let mat = BillboardMaterial::create(
-                    particle_texture.clone(),
-                    self.color,
-                    // Emissive so particles self-glow (visible in dark scenes); the
-                    // glow is tinted by `color` in the shader, so it stays the
-                    // palette color rather than washing to white.
-                    1.0,
-                    1.0 - (self.particle_alpha * alpha),
-                    p.scale,
-                );
+                // Emissive so particles self-glow (visible in dark scenes); the
+                // glow is tinted by `color` in the shader, so it stays the
+                // palette color rather than washing to white.
+                let mat = match &self.sprite_texture {
+                    Some(sprite) => BillboardMaterial::create(
+                        sprite.clone(),
+                        self.color,
+                        1.0,
+                        1.0 - (self.particle_alpha * alpha),
+                        p.scale,
+                    ),
+                    None => BillboardMaterial::create(
+                        particle_texture.clone(),
+                        self.color,
+                        1.0,
+                        1.0 - (self.particle_alpha * alpha),
+                        p.scale,
+                    ),
+                };
                 let mut scene_obj = SceneObject::new(mat, Box::new(quad::create()));
                 scene_obj.set_local_transform(
                     Matrix4::from_translation(p.position) * Matrix4::from_scale(p.scale),
