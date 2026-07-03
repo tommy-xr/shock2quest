@@ -117,7 +117,7 @@ fn run_path_command(command: PathCommand) -> Result<()> {
             let mut reports = Vec::new();
             for mission in resolve_missions(mission, all)? {
                 match load_path_database(&mission) {
-                    Ok(db) => reports.push(run_bench(&mission, db, queries, seed)),
+                    Ok(db) => reports.extend(run_bench(&mission, db, queries, seed)),
                     Err(e) => {
                         if !json {
                             println!("{mission}: {e}");
@@ -229,8 +229,8 @@ fn print_stats(mission: &str, db: PathDatabase) {
         );
     }
 
-    // Audit: links the current A* will traverse but the original engine
-    // would reject (condition-only links and links into blocked cells).
+    // Audit: links that can_use_link gates beyond plain movement-bit
+    // matching (condition-only links and links into blocked cells).
     let mut walk_with_condition = 0;
     let mut into_blocked_cell = 0;
     for link in &db.links {
@@ -251,14 +251,15 @@ fn print_stats(mission: &str, db: PathDatabase) {
         }
     }
     println!(
-        "audit: walk links gated by a condition bit (taken unconditionally today): {walk_with_condition}"
+        "audit: walk links gated by a condition bit (rejected for calm AIs): {walk_with_condition}"
     );
     println!(
-        "audit: walk links into unpathable/blocking-OBB cells (original rejects): {into_blocked_cell}"
+        "audit: walk links into unpathable/blocking-OBB cells (rejected): {into_blocked_cell}"
     );
 
-    // Walk-graph connectivity: how much of the mesh is mutually reachable
-    // for a plain WALK query. The original engine precomputes this as zone
+    // Walk-graph connectivity for a plain WALK query. Links are treated as
+    // undirected here, so this is weak connectivity (an upper bound on
+    // mutual reachability). The original engine precomputes this as zone
     // tables; lots of tiny components are sliver cells (object tops, ledges)
     // reachable only via condition links.
     let components = walk_components(&db);
@@ -405,7 +406,7 @@ fn pathable_cell_ids(db: &PathDatabase) -> Vec<u32> {
         .collect()
 }
 
-fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> BenchReport {
+fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Option<BenchReport> {
     let cells = db.cells.len();
     let links = db.links.len();
     let components = walk_components(&db);
@@ -415,6 +416,10 @@ fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Benc
     // queries are timed separately below: they are the worst case because
     // A* must exhaust the whole component before giving up.
     let candidates = components.first().cloned().unwrap_or_default();
+    if candidates.is_empty() {
+        eprintln!("{mission}: no pathable walk cells; skipping bench");
+        return None;
+    }
     let mut rng = StdRng::seed_from_u64(seed);
 
     let mut found = 0;
@@ -504,7 +509,7 @@ fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Benc
         }
     }
 
-    BenchReport {
+    Some(BenchReport {
         mission: mission.to_string(),
         cells,
         links,
@@ -522,7 +527,7 @@ fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Benc
         p95_inflation,
         mean_turn_deg: mean(&turn_totals),
         mean_waypoints: mean(&waypoint_counts),
-    }
+    })
 }
 
 /// Sum of absolute heading changes along the path in the XZ plane, degrees.
