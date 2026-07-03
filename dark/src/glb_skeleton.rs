@@ -1,7 +1,7 @@
 // glb_skeleton.rs
 // Standalone GLB skeleton system independent of SS2-specific abstractions
 
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{InnerSpace, Matrix4, Quaternion, SquareMatrix};
 use std::collections::HashMap;
 
 /// A single node in a GLB skeleton hierarchy
@@ -256,6 +256,32 @@ impl GlbAnimationState {
             .iter()
             .position(|n| n.index == node_index)?;
         self.global_transforms.get(pos).copied()
+    }
+
+    /// Replace only the rotation of a joint's local transform, preserving the
+    /// bind pose translation (bone length) and scale. This is the safe way to
+    /// pose a skeleton from rotation-only data: bone segments can never
+    /// stretch, and joints carrying an export scale (e.g. an FBX unit
+    /// conversion baked into the root) keep it.
+    pub fn set_joint_rotation(&mut self, joint_index: usize, rotation: Quaternion<f32>) {
+        let Some(node_index) = self.skeleton.node_index_for_joint(joint_index) else {
+            return;
+        };
+        let Some(node) = self.skeleton.get_node(node_index) else {
+            return;
+        };
+
+        let bind = node.local_transform;
+        let translation = bind.w.truncate();
+        let scale = (
+            bind.x.truncate().magnitude(),
+            bind.y.truncate().magnitude(),
+            bind.z.truncate().magnitude(),
+        );
+        let local = Matrix4::from_translation(translation)
+            * Matrix4::from(rotation)
+            * Matrix4::from_nonuniform_scale(scale.0, scale.1, scale.2);
+        self.set_node_transform(node_index, local);
     }
 
     /// Set a transform for a specific joint (uses joint index, not node index)
