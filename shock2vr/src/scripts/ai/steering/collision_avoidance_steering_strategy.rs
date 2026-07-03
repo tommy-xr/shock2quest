@@ -16,9 +16,7 @@ use crate::{
 use super::{Steering, SteeringOutput, SteeringStrategy};
 
 pub struct CollisionAvoidanceSteeringStrategy {
-    #[allow(dead_code)]
     extra_whisker_distance: f32,
-    #[allow(dead_code)]
     main_whisker_distance: f32,
     last_mitigation_direction: Deg<f32>,
 }
@@ -64,8 +62,8 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
         let right_whisker_rotation = Quaternion::from_angle_y(whisker_angle);
         let rotation = get_rotation_from_transform(world, entity_id);
 
-        let extra_whisker_distance = 3.0 / SCALE_FACTOR;
-        let main_whisker_distance = 3.0 / SCALE_FACTOR;
+        let extra_whisker_distance = self.extra_whisker_distance;
+        let main_whisker_distance = self.main_whisker_distance;
 
         let whiskers_to_check = vec![
             (

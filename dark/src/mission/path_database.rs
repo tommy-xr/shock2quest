@@ -17,13 +17,35 @@ bitflags::bitflags! {
 }
 
 bitflags::bitflags! {
-    /// Movement type bits indicating who can traverse a link
+    /// Movement type bits indicating who can traverse a link (aiokbits.h)
+    ///
+    /// The low nibble is the movement medium. The high nibble qualifies the
+    /// link: STRESSED/HIGH_STRIKE links are only usable while the AI is in
+    /// that condition (kConditionMask in the original engine), and APP1/APP2
+    /// are gated by app callbacks at search time.
     pub struct MovementBits: u32 {
         const WALK = 0x01;
         const FLY = 0x02;
         const SWIM = 0x04;
         const SMALL_CREATURE = 0x08;
+        /// Usable only while the AI is stressed (kAIOKCOND_Stressed)
+        const STRESSED = 0x10;
+        /// Cell is within striking distance of a higher cell but not
+        /// pathable normally (kAIOKCOND_HighStrike)
+        const HIGH_STRIKE = 0x20;
+        /// Gated by app callback 1 at search time (kAIOK_App1)
+        const APP1 = 0x40;
+        /// Gated by app callback 2 at search time (kAIOK_App2)
+        const APP2 = 0x80;
     }
+}
+
+impl MovementBits {
+    /// Condition bits that must also be satisfied by the AI's state for a
+    /// link carrying them to be traversable (kConditionMask)
+    pub const CONDITION_MASK: MovementBits = MovementBits::from_bits_truncate(
+        MovementBits::STRESSED.bits | MovementBits::HIGH_STRIKE.bits,
+    );
 }
 
 /// A convex floor polygon for AI navigation
