@@ -65,22 +65,22 @@ jobs:
       # TODO: Fix dark_viewer Windows compatibility and include it everywhere.
       - name: Build all (Unix)
         if: runner.os != 'Windows'
-        run: cargo build --verbose --release -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
+        run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run all tests (Unix)
         if: runner.os != 'Windows'
-        run: cargo test --verbose --release -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
+        run: cargo test --verbose --release -p engine -p desktop_runtime -p dark_viewer -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
 
       - name: Build all (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --verbose --release -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
+        run: cargo build --verbose --release -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
       - name: Run all tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --verbose --release -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
+        run: cargo test --verbose --release -p engine -p desktop_runtime -p dark_query -p debug_runtime -p debug_command
         env:
           RUSTFLAGS: "-D warnings"
