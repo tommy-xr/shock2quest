@@ -19,6 +19,10 @@ use super::{Behavior, ChaseBehavior, NextBehavior};
 pub struct RangedAttackBehavior;
 
 impl Behavior for RangedAttackBehavior {
+    fn name(&self) -> &'static str {
+        "RangedAttack"
+    }
+
     fn animation(self: &RangedAttackBehavior) -> Vec<MotionQueryItem> {
         vec![
             MotionQueryItem::new("rangedcombat").optional(),

@@ -23,6 +23,9 @@ pub enum NextBehavior {
 }
 
 pub trait Behavior {
+    /// Short stable name for debug introspection (e.g. "Chase", "Wander")
+    fn name(&self) -> &'static str;
+
     fn animation(&self) -> Vec<MotionQueryItem> {
         vec![]
     }

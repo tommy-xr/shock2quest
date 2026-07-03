@@ -19,6 +19,11 @@ pub struct RuntimePropGazeAmount(pub f32);
 #[derive(Component)]
 pub struct RuntimePropTransform(pub Matrix4<f32>);
 
+// Name of the behavior an AI script is currently running (published by the
+// script when it changes; read by debug introspection)
+#[derive(Component)]
+pub struct RuntimePropAIBehavior(pub String);
+
 #[derive(Component)]
 pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
 

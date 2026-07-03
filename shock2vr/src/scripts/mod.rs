@@ -133,6 +133,11 @@ pub enum MessagePayload {
         name: String,
     },
 
+    // Debug: force an AI's alertness level (clamped by its alert cap)
+    SetAlertness {
+        level: dark::properties::AIAlertLevel,
+    },
+
     Slay, // kill the entity
 
     // Interaction events

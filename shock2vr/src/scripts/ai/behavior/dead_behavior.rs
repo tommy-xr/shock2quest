@@ -16,6 +16,10 @@ use super::Behavior;
 pub struct DeadBehavior {}
 
 impl Behavior for DeadBehavior {
+    fn name(&self) -> &'static str {
+        "Dead"
+    }
+
     fn turn_speed(&self) -> Deg<f32> {
         Deg(0.0)
     }
