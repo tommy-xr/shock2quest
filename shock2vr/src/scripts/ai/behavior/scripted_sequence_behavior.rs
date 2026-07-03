@@ -48,6 +48,10 @@ impl ScriptedSequenceBehavior {
 }
 
 impl Behavior for ScriptedSequenceBehavior {
+    fn name(&self) -> &'static str {
+        "ScriptedSequence"
+    }
+
     fn animation(&self) -> Vec<MotionQueryItem> {
         self.current_scripted_action.borrow().animation()
     }

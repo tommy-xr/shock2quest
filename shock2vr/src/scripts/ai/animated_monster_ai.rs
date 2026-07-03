@@ -52,6 +52,8 @@ pub struct AnimatedMonsterAI {
     alertness: AlertnessState,
     /// Alertness configuration (loaded from entity properties)
     config: Option<MonsterConfig>,
+    /// Behavior name last published for debug introspection
+    published_behavior: Option<&'static str>,
 }
 
 impl AnimatedMonsterAI {
@@ -67,6 +69,7 @@ impl AnimatedMonsterAI {
             played_ai_watch_obj: HashSet::new(),
             alertness: AlertnessState::default(),
             config: None,
+            published_behavior: None,
         }
     }
 
@@ -83,6 +86,7 @@ impl AnimatedMonsterAI {
             played_ai_watch_obj: HashSet::new(),
             alertness: AlertnessState::default(),
             config: None,
+            published_behavior: None,
         }
     }
 
@@ -399,6 +403,21 @@ impl Script for AnimatedMonsterAI {
             &FovDebugConfig::monster(),
         );
 
+        // Publish the current behavior name for debug introspection (covers
+        // every behavior-change site, since update runs each frame)
+        let behavior_name = self.current_behavior.borrow().name();
+        let behavior_publish_effect = if self.published_behavior != Some(behavior_name) {
+            self.published_behavior = Some(behavior_name);
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::Behavior {
+                    name: behavior_name.to_string(),
+                },
+            }
+        } else {
+            Effect::NoEffect
+        };
+
         Effect::combine(vec![
             alertness_effect,
             behavior_change_effect,
@@ -407,6 +426,7 @@ impl Script for AnimatedMonsterAI {
             sensor_effect,
             alertness_debug_effect,
             fov_debug_effect,
+            behavior_publish_effect,
         ])
     }
 
@@ -472,6 +492,36 @@ impl Script for AnimatedMonsterAI {
                 } else {
                     Effect::NoEffect
                 }
+            }
+            MessagePayload::SetAlertness { level } => {
+                let cap =
+                    self.config
+                        .as_ref()
+                        .map(|c| c.alert_cap.clone())
+                        .unwrap_or(PropAIAlertCap {
+                            max_level: AIAlertLevel::High,
+                            min_level: AIAlertLevel::Lowest,
+                            min_relax: AIAlertLevel::Low,
+                        });
+                if !alertness::set_level(&mut self.alertness, *level, &cap) {
+                    return Effect::NoEffect;
+                }
+                // Forced level starts fresh: no accumulated visibility time
+                // pushing an immediate escalation or decay
+                self.alertness.visible_time = 0.0;
+                self.alertness.hidden_time = 0.0;
+
+                self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
+                let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                let selection_strategy = self.next_selection(is_locomotion);
+                Effect::combine(vec![
+                    alertness::sync_alertness_effect(entity_id, &self.alertness),
+                    Effect::QueueAnimationBySchema {
+                        entity_id,
+                        motion_query_items: self.current_behavior.borrow().animation(),
+                        selection_strategy,
+                    },
+                ])
             }
             MessagePayload::AnimationCompleted => {
                 if self.is_dead {

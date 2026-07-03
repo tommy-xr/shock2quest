@@ -43,6 +43,10 @@ impl ChaseBehavior {
 }
 
 impl Behavior for ChaseBehavior {
+    fn name(&self) -> &'static str {
+        "Chase"
+    }
+
     fn turn_speed(&self) -> Deg<f32> {
         Deg(360.0)
     }

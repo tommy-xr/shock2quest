@@ -45,6 +45,11 @@ pub enum InputAction {
     /// Reload the current level in place (debug). Exercises the level-transition path,
     /// including the experimental loading screen.
     DebugReloadLevel,
+
+    /// Force every AI to Moderate alertness (chase) - debug "make them angry"
+    DebugAlertAll,
+    /// Force every AI back to Lowest alertness (idle)
+    DebugCalmAll,
 }
 
 impl InputAction {
@@ -64,6 +69,8 @@ impl InputAction {
             InputAction::Reload,
             InputAction::CyclePsiPower,
             InputAction::DebugReloadLevel,
+            InputAction::DebugAlertAll,
+            InputAction::DebugCalmAll,
         ]
     }
 
@@ -81,6 +88,8 @@ impl InputAction {
             InputAction::Reload => "Reload",
             InputAction::CyclePsiPower => "CyclePsiPower",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
+            InputAction::DebugAlertAll => "DebugAlertAll",
+            InputAction::DebugCalmAll => "DebugCalmAll",
         }
     }
 }

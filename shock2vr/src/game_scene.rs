@@ -466,6 +466,10 @@ pub enum DebugEntityMessage {
     Frob,
     /// Send a named AI signal.
     Signal { name: String },
+    /// Force an AI's alertness level (clamped by its alert cap).
+    SetAlertness {
+        level: dark::properties::AIAlertLevel,
+    },
 }
 
 /// Status of the interactive pathfinding test system

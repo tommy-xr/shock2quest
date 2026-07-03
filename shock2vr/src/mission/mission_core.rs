@@ -77,9 +77,9 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropAttachment, RuntimePropDoNotSerialize, RuntimePropFlatAim,
-        RuntimePropJointTransforms, RuntimePropReloading, RuntimePropSelectedAmmo,
-        RuntimePropTransform, RuntimePropVhots,
+        RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDoNotSerialize,
+        RuntimePropFlatAim, RuntimePropJointTransforms, RuntimePropReloading,
+        RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -2114,7 +2114,23 @@ impl MissionCore {
                     AIPropertyUpdate::Mode { mode } => {
                         self.world.add_component(entity_id, PropAIMode { mode });
                     }
+                    AIPropertyUpdate::Behavior { name } => {
+                        self.world
+                            .add_component(entity_id, RuntimePropAIBehavior(name));
+                    }
                 },
+                Effect::SetAllAIAlertness { level } => {
+                    let creature_ids: Vec<EntityId> = {
+                        let v_creature = self.world.borrow::<View<PropCreature>>().unwrap();
+                        v_creature.iter().ids().collect()
+                    };
+                    for id in creature_ids {
+                        self.script_world.dispatch(Message {
+                            to: id,
+                            payload: MessagePayload::SetAlertness { level },
+                        });
+                    }
+                }
                 Effect::SetPositionRotation {
                     entity_id,
                     rotation,
@@ -3522,6 +3538,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
              v_sym_name: View<dark::properties::PropSymName>,
              v_scripts: View<dark::properties::PropScripts>,
              v_gun_state: View<dark::properties::PropGunState>,
+             v_alertness: View<PropAIAlertness>,
+             v_ai_behavior: View<RuntimePropAIBehavior>,
              v_links: View<dark::properties::Links>| {
                 let position = v_pos.get(id).ok()?;
                 let rotation_array = [
@@ -3572,6 +3590,21 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "Ammo".to_string(),
                         value: gun_state.ammo.to_string(),
+                    });
+                }
+
+                // AI state (alertness mirrored by the script, behavior name
+                // published for introspection)
+                if let Ok(alertness) = v_alertness.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "AIAlertness".to_string(),
+                        value: format!("{:?}", alertness.level),
+                    });
+                }
+                if let Ok(behavior) = v_ai_behavior.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "AIBehavior".to_string(),
+                        value: behavior.0.clone(),
                     });
                 }
 
@@ -3867,6 +3900,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             DebugEntityMessage::Damage { amount } => MessagePayload::Damage { amount },
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
+            DebugEntityMessage::SetAlertness { level } => MessagePayload::SetAlertness { level },
         };
 
         self.script_world.dispatch(Message { to: id, payload });
