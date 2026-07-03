@@ -73,6 +73,26 @@ impl PathfindingService {
         goal: Vector3<f32>,
         movement_bits: MovementBits,
     ) -> Option<Vec<Vector3<f32>>> {
+        if let Some(path) = self.find_path_with_bits(start, goal, movement_bits) {
+            return Some(path);
+        }
+        // Second pass: a failed pathfind is retried with the stressed
+        // condition added (small creatures excepted), so a calm AI still
+        // reaches goals whose only route crosses stressed-gated links.
+        if !movement_bits.contains(MovementBits::SMALL_CREATURE)
+            && !movement_bits.contains(MovementBits::STRESSED)
+        {
+            return self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED);
+        }
+        None
+    }
+
+    fn find_path_with_bits(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+    ) -> Option<Vec<Vector3<f32>>> {
         // Find start and goal cells
         let start_cell_id = self.cell_from_position(start)?;
         let goal_cell_id = self.cell_from_position(goal)?;
@@ -397,10 +417,44 @@ mod tests {
     #[test]
     fn condition_gated_link_rejected_for_plain_walk() {
         let service = service(three_cell_db(PathCellFlags::empty()));
+        let gated = &service.path_database.links[1];
+        assert!(
+            !service.can_use_link(gated, MovementBits::WALK),
+            "STRESSED-gated link must not be usable by a calm AI"
+        );
+        assert!(
+            service.can_use_link(gated, MovementBits::WALK | MovementBits::STRESSED),
+            "stressed AI can use the gated link"
+        );
+    }
+
+    #[test]
+    fn calm_walk_falls_back_to_stressed_route() {
+        // The only route to cell 2 crosses a STRESSED-gated link. A calm WALK
+        // query should still find it via the stressed second pass.
+        let service = service(three_cell_db(PathCellFlags::empty()));
         let path = service.find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK);
         assert!(
+            path.is_some(),
+            "calm AI should route through stressed links when no calm route exists"
+        );
+    }
+
+    #[test]
+    fn small_creatures_get_no_stressed_fallback() {
+        let mut db = three_cell_db(PathCellFlags::empty());
+        for link in &mut db.links {
+            link.ok_bits |= MovementBits::SMALL_CREATURE;
+        }
+        let service = service(db);
+        let path = service.find_path(
+            vec3(1.0, 0.0, 1.0),
+            vec3(5.0, 0.0, 1.0),
+            MovementBits::WALK | MovementBits::SMALL_CREATURE,
+        );
+        assert!(
             path.is_none(),
-            "STRESSED-gated link must not be traversable by a calm AI"
+            "small creatures must not take the stressed fallback route"
         );
     }
 
