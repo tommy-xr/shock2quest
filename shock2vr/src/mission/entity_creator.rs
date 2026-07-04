@@ -333,13 +333,24 @@ fn initialize_sym_name_from_obj_map(
     obj_map: &HashMap<i32, String>,
     world: &mut World,
 ) {
+    // A mission entity hydrated by the populator already carries its
+    // instance-specific sym name (e.g. "SlowDoorControl"); the obj map only
+    // holds archetype names ("Marker"), so overwriting here would clobber the
+    // designer-given name every by-name script lookup depends on.
+    {
+        let v_name = world.borrow::<View<PropSymName>>().unwrap();
+        if v_name.contains(entity) {
+            return;
+        }
+    }
+
     let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
     let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
     ancestors.push(template_id);
 
     let _template_links = TemplateLinks::empty();
     for parent_id in ancestors {
-        // Add, override name if specified in name map
+        // Add name if specified in the obj map
         if let Some(name) = obj_map.get(&parent_id) {
             world.add_component(entity, PropSymName(name.to_owned()))
         }
@@ -543,6 +554,7 @@ pub fn initialize_entity_with_props(
             world.add_component(entity_id, PropSymName(name.to_owned()))
         }
     }
+
     // Augment any props
 
     let maybe_mod = {
