@@ -130,6 +130,11 @@ pub struct DebugOptions {
     pub debug_ai: bool,
 }
 
+/// The active presentation mode, accessible from scripts via UniqueView -
+/// e.g. the held-entity viewmodel swap is flat-only.
+#[derive(Unique, Clone, Copy)]
+pub struct GlobalPresentationMode(pub crate::PresentationMode);
+
 /// Pathfinding service accessible from scripts (steering strategies) via
 /// UniqueView. None when the mission has no AIPATH data (e.g. debug scenes).
 #[derive(Unique, Clone)]
@@ -350,6 +355,7 @@ impl MissionCore {
         world.add_unique(DebugOptions {
             debug_ai: game_options.debug_ai,
         });
+        world.add_unique(GlobalPresentationMode(game_options.presentation_mode));
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
         // Reuse the obj-icons already hydrated into the template metadata above
@@ -3574,6 +3580,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             |v_pos: View<dark::properties::PropPosition>,
              v_sym_name: View<dark::properties::PropSymName>,
              v_scripts: View<dark::properties::PropScripts>,
+             v_model_name: View<dark::properties::PropModelName>,
              v_gun_state: View<dark::properties::PropGunState>,
              v_alertness: View<PropAIAlertness>,
              v_ai_behavior: View<RuntimePropAIBehavior>,
@@ -3619,6 +3626,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "Scripts".to_string(),
                         value: scripts.scripts.join(", "),
+                    });
+                }
+
+                // Add the current render model (e.g. to assert held-model
+                // behavior: VR keeps world models, flat swaps to _h viewmodels)
+                if let Ok(model_name) = v_model_name.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "Model".to_string(),
+                        value: model_name.0.clone(),
                     });
                 }
 

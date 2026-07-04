@@ -1,7 +1,7 @@
 use dark::properties::{InternalPropOriginalModelName, PropLimbModel, PropPlayerGun};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::{physics::PhysicsWorld, vr_config};
+use crate::{PresentationMode, mission::GlobalPresentationMode, physics::PhysicsWorld, vr_config};
 
 use super::{Effect, MessagePayload, Script};
 
@@ -22,6 +22,18 @@ impl Script for InternalSwitchHeldModelScript {
     ) -> Effect {
         match msg {
             MessagePayload::Hold => {
+                // The swap to the first-person hand model (_h mesh) is
+                // flat-only: those meshes have their never-visible faces
+                // stripped for the fixed flat camera and look broken from
+                // VR's free viewpoints, so VR keeps the world model (#352).
+                let is_vr = world
+                    .borrow::<UniqueView<GlobalPresentationMode>>()
+                    .map(|mode| mode.0 == PresentationMode::Vr)
+                    .unwrap_or(false);
+                if is_vr {
+                    return Effect::NoEffect;
+                }
+
                 if let Some(view_model) = get_view_model(world, entity_id) {
                     Effect::ChangeModel {
                         entity_id,
