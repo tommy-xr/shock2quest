@@ -429,8 +429,12 @@ fn create_model(
                     let transformed_model = Model::transform(posed_model_ref, transform);
                     (transformed_model, None)
                 } else {
+                    // TAG poses (e.g. the CS9 rumblers' "cs 131" walk-in-place)
+                    // aren't statically applied yet; keep such creatures
+                    // animatable so scripts can drive the tagged motion.
                     let transformed_model = Model::transform(model_ref, transform);
-                    (transformed_model, None)
+                    let player = model.is_animated().then(AnimationPlayer::empty);
+                    (transformed_model, player)
                 }
             } else if model.is_animated() {
                 // let animation_clip =
