@@ -247,7 +247,9 @@ impl SceneObject {
         }
 
         if let Some(t) = self.transparency_override {
-            self.material.borrow_mut().set_transparency_override(Some(t));
+            self.material
+                .borrow_mut()
+                .set_transparency_override(Some(t));
         }
         if self.material.borrow().draw_opaque(
             render_context,
@@ -275,7 +277,9 @@ impl SceneObject {
     ) {
         let xform = self.transform * self.local_transform;
         if let Some(t) = self.transparency_override {
-            self.material.borrow_mut().set_transparency_override(Some(t));
+            self.material
+                .borrow_mut()
+                .set_transparency_override(Some(t));
         }
         if self.material.borrow().draw_transparent(
             render_context,
