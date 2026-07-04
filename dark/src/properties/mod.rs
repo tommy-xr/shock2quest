@@ -520,10 +520,10 @@ impl GunFlashOptions {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FlinderizeOptions {
-    count: u32,
-    impulse: f32,
-    scatter: bool,
-    offset: Vector3<f32>,
+    pub count: u32,
+    pub impulse: f32,
+    pub scatter: bool,
+    pub offset: Vector3<f32>,
 }
 
 impl FlinderizeOptions {

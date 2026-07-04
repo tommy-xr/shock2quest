@@ -1144,26 +1144,53 @@ impl MissionCore {
         if let Some(handle) = &self.id_to_physics.get(&entity_id) {
             let position = self.physics.get_position(**handle).unwrap();
             let rotation = self.physics.get_rotation(**handle).unwrap();
+            let aabb = self.physics.get_aabb2(entity_id);
+            let mut rng = thread_rng();
 
-            for (template_id, _flinderize_options) in flinderize_links {
-                // let flinderize_position = flinderize.position;
-                // let flinderize_orientation = flinderize.orientation;
+            for (template_id, flinderize_options) in flinderize_links {
+                // Real gamesys data carries count >= 1 (e.g. Breakable Windows:
+                // 4 links, count 1 each); max(1) guards links with zeroed data
+                // so they still yield one flinder, like the pre-options behavior.
+                for _ in 0..flinderize_options.count.max(1) {
+                    // scatter spawns the flinder at a random point within the
+                    // object's bounds; otherwise at the object-relative offset.
+                    let spawn_position = match (flinderize_options.scatter, &aabb) {
+                        (true, Some(aabb)) => Point3::new(
+                            rng.gen_range(aabb.min.x..=aabb.max.x),
+                            rng.gen_range(aabb.min.y..=aabb.max.y),
+                            rng.gen_range(aabb.min.z..=aabb.max.z),
+                        ),
+                        _ => vec3_to_point3(position + rotation * flinderize_options.offset),
+                    };
 
-                self.create_entity_with_position(
-                    asset_cache,
-                    template_id,
-                    vec3_to_point3(position),
-                    rotation,
-                    Matrix4::identity(),
-                    CreateEntityOptions::default(),
-                );
-                //did_slay = true;
+                    let spawn_rotation = Quaternion::from_angle_y(cgmath::Rad(
+                        rng.gen_range(0.0..std::f32::consts::TAU),
+                    )) * Quaternion::from_angle_x(cgmath::Rad(
+                        rng.gen_range(0.0..std::f32::consts::TAU),
+                    )) * Quaternion::from_angle_z(cgmath::Rad(
+                        rng.gen_range(0.0..std::f32::consts::TAU),
+                    ));
+
+                    let created = self.create_entity_with_position(
+                        asset_cache,
+                        template_id,
+                        spawn_position,
+                        spawn_rotation,
+                        Matrix4::identity(),
+                        CreateEntityOptions::default(),
+                    );
+
+                    if created.rigid_body.is_some() {
+                        let speed = flinderize_options.impulse / SCALE_FACTOR;
+                        self.physics.set_velocity(
+                            created.entity_id,
+                            random_unit_vector(&mut rng) * speed,
+                        );
+                    }
+                }
             }
 
             for (template_id, _corpse_options) in corpse_links {
-                // let flinderize_position = flinderize.position;
-                // let flinderize_orientation = flinderize.orientation;
-
                 self.create_entity_with_position(
                     asset_cache,
                     template_id,
@@ -1172,7 +1199,6 @@ impl MissionCore {
                     Matrix4::identity(),
                     CreateEntityOptions::default(),
                 );
-                //did_slay = true;
             }
         }
 
@@ -3445,6 +3471,20 @@ fn create_room_entities(
             link,
         ));
         entities_to_initialize.insert((_room, room.obj_id));
+    }
+}
+
+fn random_unit_vector(rng: &mut impl Rng) -> Vector3<f32> {
+    loop {
+        let v = vec3(
+            rng.gen_range(-1.0f32..=1.0),
+            rng.gen_range(-1.0f32..=1.0),
+            rng.gen_range(-1.0f32..=1.0),
+        );
+        let mag2 = v.magnitude2();
+        if mag2 > 1e-4 && mag2 <= 1.0 {
+            return v / mag2.sqrt();
+        }
     }
 }
 
