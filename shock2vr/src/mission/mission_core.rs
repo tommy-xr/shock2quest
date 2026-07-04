@@ -2434,40 +2434,54 @@ impl MissionCore {
                     );
                 }
 
-                Effect::SetAIProperty { entity_id, update } => match update {
-                    AIPropertyUpdate::Alertness { level, peak } => {
-                        self.world
-                            .add_component(entity_id, PropAIAlertness { level, peak });
-                    }
-                    AIPropertyUpdate::Mode { mode } => {
-                        self.world.add_component(entity_id, PropAIMode { mode });
-                    }
-                    AIPropertyUpdate::Behavior { name } => {
-                        self.world
-                            .add_component(entity_id, RuntimePropAIBehavior(name));
-                    }
-                    AIPropertyUpdate::TargetAwareness {
-                        last_known_pos,
-                        has_line_of_sight,
-                    } => {
-                        self.world.add_component(
-                            entity_id,
-                            crate::runtime_props::RuntimePropAITargetAwareness {
+                Effect::SetAIProperty { entity_id, update } => {
+                    // The AI may have been destroyed earlier in this same
+                    // effect batch (e.g. a scripted sequence whose final
+                    // action frobs a slay trap, while the AI also published
+                    // a behavior change this frame); adding a component to a
+                    // dead entity panics.
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        match update {
+                            AIPropertyUpdate::Alertness { level, peak } => {
+                                self.world
+                                    .add_component(entity_id, PropAIAlertness { level, peak });
+                            }
+                            AIPropertyUpdate::Mode { mode } => {
+                                self.world.add_component(entity_id, PropAIMode { mode });
+                            }
+                            AIPropertyUpdate::Behavior { name } => {
+                                self.world
+                                    .add_component(entity_id, RuntimePropAIBehavior(name));
+                            }
+                            AIPropertyUpdate::TargetAwareness {
                                 last_known_pos,
                                 has_line_of_sight,
-                            },
-                        );
+                            } => {
+                                self.world.add_component(
+                                    entity_id,
+                                    crate::runtime_props::RuntimePropAITargetAwareness {
+                                        last_known_pos,
+                                        has_line_of_sight,
+                                    },
+                                );
+                            }
+                            AIPropertyUpdate::ClearTargetAwareness => {
+                                self.world.run(
+                                    |mut v_awareness: ViewMut<
+                                        crate::runtime_props::RuntimePropAITargetAwareness,
+                                    >| {
+                                        v_awareness.remove(entity_id);
+                                    },
+                                );
+                            }
+                        }
                     }
-                    AIPropertyUpdate::ClearTargetAwareness => {
-                        self.world.run(
-                            |mut v_awareness: ViewMut<
-                                crate::runtime_props::RuntimePropAITargetAwareness,
-                            >| {
-                                v_awareness.remove(entity_id);
-                            },
-                        );
-                    }
-                },
+                }
                 Effect::SetAllAIAlertness { level } => {
                     let creature_ids: Vec<EntityId> = {
                         let v_creature = self.world.borrow::<View<PropCreature>>().unwrap();
