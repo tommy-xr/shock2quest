@@ -6,7 +6,7 @@ use shipyard::{EntityId, UniqueView, World};
 
 use crate::{
     mission::{GlobalPathfinding, PlayerInfo},
-    pathfinding::PathfindingService,
+    pathfinding::{PathfindingFrameBudget, PathfindingService},
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util},
     time::Time,
@@ -137,34 +137,68 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             (Some(_), None) => false,
         };
 
-        if needs_repath && self.repath_cooldown <= 0.0 {
-            self.repath_cooldown = REPATH_COOLDOWN_SECONDS;
+        // The frame budget bounds how many AIs can re-path in one frame: a
+        // deferred AI keeps steering along its stale path (or falls through
+        // the chain) and tries again next frame, its cooldown untouched.
+        // (The unique is added alongside GlobalPathfinding, whose absence
+        // already bailed above - the fallback is purely defensive.)
+        let budget_available = || {
+            world
+                .borrow::<UniqueView<PathfindingFrameBudget>>()
+                .map(|budget| budget.try_acquire())
+                .unwrap_or(true)
+        };
+
+        // Zero-dt ticks are paused introspection updates (debug runtime) -
+        // no pathfinding work there, so query counts stay deterministic
+        // per stepped frame
+        let advancing = time.elapsed.as_secs_f32() > 0.0;
+
+        if advancing && needs_repath && self.repath_cooldown <= 0.0 {
+            // Pick the goal before touching the budget: a failed (cheap)
+            // wander goal pick must not consume a query slot
             let goal = match self.target {
                 PathTarget::Player => desired_goal,
                 PathTarget::Wander { radius } => {
                     pick_wander_goal(&service, position, radius, &mut rand::thread_rng())
                 }
             };
-            // TODO: derive movement bits from the creature (small creature /
-            // fly / swim) - everything walks for now
-            match goal.and_then(|goal| {
-                service
-                    .find_path(position, goal, MovementBits::WALK)
-                    .map(|path| (goal, path))
-            }) {
-                Some((goal, path)) => {
-                    self.path = path;
-                    self.path_goal = Some(goal);
-                    // waypoint 0 is our own position
-                    self.next_waypoint = 1;
-                    self.reset_stall();
+            match goal {
+                // TODO: derive movement bits from the creature (small
+                // creature / fly / swim) - everything walks for now
+                Some(goal) if budget_available() => {
+                    // Jitter the cooldown so AIs alerted in the same moment
+                    // (e.g. an alarm or DebugAlertAll) don't re-path on the
+                    // same frames forever
+                    self.repath_cooldown =
+                        REPATH_COOLDOWN_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
+                    match service.find_path(position, goal, MovementBits::WALK) {
+                        Some(path) => {
+                            self.path = path;
+                            self.path_goal = Some(goal);
+                            // waypoint 0 is our own position
+                            self.next_waypoint = 1;
+                            self.reset_stall();
+                        }
+                        None => {
+                            self.clear_path();
+                            // Failure exhausted the reachable component
+                            // (twice, with the stressed retry) and won't
+                            // resolve immediately - back off harder than the
+                            // normal cooldown (jittered, as above)
+                            self.repath_cooldown = REPATH_FAILURE_BACKOFF_SECONDS
+                                * rand::thread_rng().gen_range(0.8..1.2);
+                        }
+                    }
                 }
+                // Budget exhausted: defer to a later frame, cooldown untouched
+                Some(_) => {}
                 None => {
                     self.clear_path();
-                    // Failure exhausted the reachable component (twice, with
-                    // the stressed retry) and won't resolve immediately -
-                    // back off harder than the normal cooldown
-                    self.repath_cooldown = REPATH_FAILURE_BACKOFF_SECONDS;
+                    // No goal to path to (e.g. every wander pick missed) -
+                    // back off before sampling again
+                    self.repath_cooldown =
+                        REPATH_FAILURE_BACKOFF_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
                 }
             }
         }

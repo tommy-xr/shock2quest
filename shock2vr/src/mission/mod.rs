@@ -340,6 +340,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.pathfinding_test_status()
     }
 
+    fn pathfinding_stats(&self) -> Option<crate::game_scene::DebugPathfindingStats> {
+        self.mission_core.pathfinding_stats()
+    }
+
     fn send_entity_message(
         &mut self,
         id: EntityId,
