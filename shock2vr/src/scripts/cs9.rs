@@ -25,7 +25,11 @@ use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
     Effect, Message, MessagePayload, Script,
-    script_util::{get_all_links_of_type, get_entities_by_name, get_first_entity_by_name},
+    script_util::{
+        get_all_links_of_type, get_entities_by_name, get_first_entity_by_name,
+        send_to_all_switch_links,
+    },
+    transluce::AlphaFader,
 };
 
 /// The nine SHODAN monologue schemas with their audio lengths in seconds
@@ -209,6 +213,68 @@ impl Script for CS9MasterControl {
         } else {
             Effect::Combined { effects }
         }
+    }
+}
+
+/// Script `CS9_ShodanScreen`: a theatre screen piece. Starts invisible, fades
+/// in/out on TurnOn/TurnOff like a hologram, and - unlike the plain Transluce
+/// script - FORWARDS the message to its SwitchLinked screen copies: the master
+/// addresses only the six named controller screens on the front wall, and each
+/// controller relays to its counterparts on the side walls (the mission wires
+/// this relay as SwitchLinks; the original script uses them the same way).
+pub struct CS9ShodanScreen {
+    fader: AlphaFader,
+    visible_alpha: f32,
+}
+
+impl CS9ShodanScreen {
+    pub fn new() -> CS9ShodanScreen {
+        CS9ShodanScreen {
+            fader: AlphaFader::new(0.0),
+            visible_alpha: 1.0,
+        }
+    }
+}
+
+impl Script for CS9ShodanScreen {
+    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        let v_alpha = world
+            .borrow::<View<dark::properties::PropRenderAlpha>>()
+            .unwrap();
+        self.visible_alpha = v_alpha.get(entity_id).map(|a| a.0).unwrap_or(1.0);
+        self.fader.snap_to(0.0);
+        Effect::SetRenderAlpha {
+            entity_id,
+            alpha: 0.0,
+        }
+    }
+
+    fn handle_message(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _physics: &PhysicsWorld,
+        msg: &MessagePayload,
+    ) -> Effect {
+        match msg {
+            MessagePayload::TurnOn { from: _ } => self.fader.fade_to(self.visible_alpha),
+            MessagePayload::TurnOff { from: _ } => self.fader.fade_to(0.0),
+            _ => return Effect::NoEffect,
+        }
+        // Relay to the SwitchLinked screen copies. Loops are impossible in the
+        // mission data (controllers link one-way to copies), and a re-received
+        // message would only re-set an identical fade target anyway.
+        send_to_all_switch_links(world, entity_id, msg.clone())
+    }
+
+    fn update(
+        &mut self,
+        entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        time: &Time,
+    ) -> Effect {
+        self.fader.update(entity_id, time)
     }
 }
 
