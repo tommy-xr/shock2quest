@@ -278,7 +278,9 @@ impl VirtualHand {
 
                     msgs.push(VirtualHandEffect::SetPositionRotation {
                         entity_id,
-                        position: hand_position + vr_offsets.offset,
+                        // The offset is hand-local (e.g. seating a weapon's
+                        // grip in the palm), so it must rotate with the hand
+                        position: hand_position + hand_rotation.rotate_vector(vr_offsets.offset),
                         rotation: hand_rotation * vr_offsets.rotation,
                         scale: vec3(1.0, 1.0, 1.0), //vr_offsets.scale,
                     });
@@ -348,6 +350,7 @@ impl VirtualHand {
                     self.handedness,
                     self.trigger_value,
                     self.squeeze_value,
+                    self.get_held_entity().is_some(),
                 )
             })
             .unwrap_or_default();
