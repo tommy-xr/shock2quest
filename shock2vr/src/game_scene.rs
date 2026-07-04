@@ -449,6 +449,21 @@ pub trait DebuggableScene {
     /// physical interaction in the world. Returns `true` if the entity is alive
     /// and the message was queued.
     fn send_entity_message(&mut self, id: EntityId, message: DebugEntityMessage) -> bool;
+
+    /// Monotonic pathfinding query counters (None when the scene has no
+    /// pathfinding data). Remote clients diff snapshots across steps to
+    /// measure per-frame query load and verify the frame budget.
+    fn pathfinding_stats(&self) -> Option<DebugPathfindingStats> {
+        None
+    }
+}
+
+/// Snapshot of the pathfinding service's monotonic query counters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugPathfindingStats {
+    pub queries: u64,
+    pub stressed_retries: u64,
+    pub no_route: u64,
 }
 
 /// A script message a debug client can inject into a specific entity.

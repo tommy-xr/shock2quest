@@ -265,6 +265,7 @@ async fn start_http_server(
             "/v1/pathfinding-test",
             axum::routing::post(pathfinding_test).get(pathfinding_test_status),
         )
+        .route("/v1/pathfinding/stats", get(pathfinding_stats))
         .route(
             "/v1/input/action",
             axum::routing::post(trigger_input_action),
@@ -915,6 +916,14 @@ fn process_command(
             };
             if let Err(_) = reply.send(result) {
                 tracing::warn!("Failed to send pathfinding test status - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetPathfindingStats(reply) => {
+            let stats = game
+                .debug_scene()
+                .and_then(|debug_scene| debug_scene.pathfinding_stats());
+            if reply.send(stats).is_err() {
+                tracing::warn!("Failed to send pathfinding stats - receiver dropped");
             }
         }
         RuntimeCommand::ListEntities {
@@ -2252,6 +2261,30 @@ async fn pathfinding_test_status(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive pathfinding test status - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// HTTP endpoint handler: Get the pathfinding service's query counters.
+/// Returns JSON `null` when the scene has no pathfinding data.
+async fn pathfinding_stats(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<Option<shock2vr::game_scene::DebugPathfindingStats>>, StatusCode> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::GetPathfindingStats(reply_tx))
+        .is_err()
+    {
+        tracing::error!("Failed to send GetPathfindingStats - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive pathfinding stats - sender dropped");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

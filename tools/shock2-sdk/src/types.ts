@@ -40,6 +40,13 @@ export interface CommandResult {
   data: unknown;
 }
 
+/** Monotonic pathfinding query counters (diff across steps for rates). */
+export interface PathfindingStats {
+  queries: number;
+  stressed_retries: number;
+  no_route: number;
+}
+
 export interface PathfindingTestStatus {
   state: "WaitingForStart" | "WaitingForGoal" | "ShowingPath" | "Unavailable";
   test_path_waypoints: number;

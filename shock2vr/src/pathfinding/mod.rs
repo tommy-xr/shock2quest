@@ -14,6 +14,7 @@ use dark::{
     },
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Taut crossing points keep this distance (1.5 Dark feet) from shared-edge
 /// endpoints. Endpoints are wall corners: a fully-taut path has zero
@@ -22,6 +23,58 @@ use std::sync::Arc;
 /// creatures for now - it also (harmlessly) insets interior subdivision
 /// edges, not just walls.
 const EDGE_CLEARANCE: f32 = 1.5 / SCALE_FACTOR;
+
+/// Per-frame cap on AI-initiated pathfind queries. At ~0.5ms typical / ~1ms
+/// worst-case per query, two queries bound pathfinding to ~2ms of a frame -
+/// safe even for the Quest's ~13.9ms budget at 72Hz. AIs that miss a slot
+/// keep steering along their stale path and re-path on a later frame.
+pub const PATHFINDING_QUERIES_PER_FRAME: u32 = 2;
+
+/// Shipyard unique holding the remaining AI pathfind-query budget for the
+/// current frame. Reset by the mission update each frame; path-following
+/// steering acquires a slot before re-pathing and defers when exhausted, so
+/// N simultaneously-alerted AIs can't stack N searches into one frame.
+/// Atomic so it works behind a shared (UniqueView) borrow.
+#[derive(shipyard::Unique)]
+pub struct PathfindingFrameBudget(AtomicU32);
+
+impl PathfindingFrameBudget {
+    pub fn new() -> Self {
+        Self(AtomicU32::new(PATHFINDING_QUERIES_PER_FRAME))
+    }
+
+    /// Refill the budget (call once at the start of each frame)
+    pub fn reset(&self) {
+        self.0
+            .store(PATHFINDING_QUERIES_PER_FRAME, Ordering::Relaxed);
+    }
+
+    /// Take one query slot. Returns false when the frame's budget is
+    /// exhausted - the caller should defer to a later frame.
+    pub fn try_acquire(&self) -> bool {
+        self.0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
+            .is_ok()
+    }
+}
+
+impl Default for PathfindingFrameBudget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Monotonic query counters, for load measurement and budget verification.
+/// Callers diff snapshots across frames to get rates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathfindingStats {
+    /// Total find_path calls
+    pub queries: u64,
+    /// Queries that ran the stressed second pass (first pass failed)
+    pub stressed_retries: u64,
+    /// Queries that found no route at all (the most expensive outcome)
+    pub no_route: u64,
+}
 
 /// Pathfinding service for AI navigation
 ///
@@ -32,6 +85,9 @@ pub struct PathfindingService {
     /// Outgoing link indices for each cell, so A* expansion is O(degree)
     /// instead of a scan over every link in the mission.
     links_by_cell: Vec<Vec<u32>>,
+    queries: AtomicU64,
+    stressed_retries: AtomicU64,
+    no_route: AtomicU64,
 }
 
 impl PathfindingService {
@@ -46,6 +102,18 @@ impl PathfindingService {
         Self {
             path_database,
             links_by_cell,
+            queries: AtomicU64::new(0),
+            stressed_retries: AtomicU64::new(0),
+            no_route: AtomicU64::new(0),
+        }
+    }
+
+    /// Snapshot of the monotonic query counters
+    pub fn stats(&self) -> PathfindingStats {
+        PathfindingStats {
+            queries: self.queries.load(Ordering::Relaxed),
+            stressed_retries: self.stressed_retries.load(Ordering::Relaxed),
+            no_route: self.no_route.load(Ordering::Relaxed),
         }
     }
 
@@ -81,6 +149,7 @@ impl PathfindingService {
         goal: Vector3<f32>,
         movement_bits: MovementBits,
     ) -> Option<Vec<Vector3<f32>>> {
+        self.queries.fetch_add(1, Ordering::Relaxed);
         if let Some(path) = self.find_path_with_bits(start, goal, movement_bits) {
             return Some(path);
         }
@@ -90,8 +159,14 @@ impl PathfindingService {
         if !movement_bits.contains(MovementBits::SMALL_CREATURE)
             && !movement_bits.contains(MovementBits::STRESSED)
         {
-            return self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED);
+            self.stressed_retries.fetch_add(1, Ordering::Relaxed);
+            if let Some(path) =
+                self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED)
+            {
+                return Some(path);
+            }
         }
+        self.no_route.fetch_add(1, Ordering::Relaxed);
         None
     }
 
@@ -554,6 +629,65 @@ mod tests {
             "crossing 2 not clamped to the inset endpoint: z = {}",
             path[2].z
         );
+    }
+
+    #[test]
+    fn stats_count_queries_retries_and_no_route() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        assert_eq!(service.stats().queries, 0);
+
+        // Plain success: no retry, no no-route
+        service
+            .find_path(vec3(1.0, 0.0, 1.0), vec3(3.0, 0.0, 1.0), MovementBits::WALK)
+            .unwrap();
+        assert_eq!(
+            service.stats(),
+            PathfindingStats {
+                queries: 1,
+                stressed_retries: 0,
+                no_route: 0
+            }
+        );
+
+        // Only route is stressed-gated: counts a retry, still succeeds
+        service
+            .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+            .unwrap();
+        assert_eq!(
+            service.stats(),
+            PathfindingStats {
+                queries: 2,
+                stressed_retries: 1,
+                no_route: 0
+            }
+        );
+
+        // Goal outside every cell: both passes fail
+        let miss = service.find_path(
+            vec3(1.0, 0.0, 1.0),
+            vec3(50.0, 0.0, 50.0),
+            MovementBits::WALK,
+        );
+        assert!(miss.is_none());
+        assert_eq!(
+            service.stats(),
+            PathfindingStats {
+                queries: 3,
+                stressed_retries: 2,
+                no_route: 1
+            }
+        );
+    }
+
+    #[test]
+    fn frame_budget_acquires_until_exhausted_and_resets() {
+        let budget = PathfindingFrameBudget::new();
+        for _ in 0..PATHFINDING_QUERIES_PER_FRAME {
+            assert!(budget.try_acquire());
+        }
+        assert!(!budget.try_acquire(), "budget must exhaust");
+        budget.reset();
+        assert!(budget.try_acquire(), "reset must refill the budget");
     }
 
     #[test]

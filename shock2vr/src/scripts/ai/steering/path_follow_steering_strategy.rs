@@ -6,7 +6,7 @@ use shipyard::{EntityId, UniqueView, World};
 
 use crate::{
     mission::{GlobalPathfinding, PlayerInfo},
-    pathfinding::PathfindingService,
+    pathfinding::{PathfindingFrameBudget, PathfindingService},
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util},
     time::Time,
@@ -137,8 +137,27 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             (Some(_), None) => false,
         };
 
-        if needs_repath && self.repath_cooldown <= 0.0 {
-            self.repath_cooldown = REPATH_COOLDOWN_SECONDS;
+        // The frame budget bounds how many AIs can re-path in one frame: a
+        // deferred AI keeps steering along its stale path (or falls through
+        // the chain) and tries again next frame, its cooldown untouched.
+        let budget_available = || {
+            world
+                .borrow::<UniqueView<PathfindingFrameBudget>>()
+                .map(|budget| budget.try_acquire())
+                // Scenes without the unique (no mission update loop) are
+                // unbudgeted
+                .unwrap_or(true)
+        };
+
+        // Zero-dt ticks are paused introspection updates (debug runtime) -
+        // no pathfinding work there, so query counts stay deterministic
+        // per stepped frame
+        let advancing = time.elapsed.as_secs_f32() > 0.0;
+
+        if advancing && needs_repath && self.repath_cooldown <= 0.0 && budget_available() {
+            // Jitter the cooldown so AIs alerted in the same moment (e.g. an
+            // alarm or DebugAlertAll) don't re-path on the same frames forever
+            self.repath_cooldown = REPATH_COOLDOWN_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
             let goal = match self.target {
                 PathTarget::Player => desired_goal,
                 PathTarget::Wander { radius } => {
@@ -163,8 +182,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     self.clear_path();
                     // Failure exhausted the reachable component (twice, with
                     // the stressed retry) and won't resolve immediately -
-                    // back off harder than the normal cooldown
-                    self.repath_cooldown = REPATH_FAILURE_BACKOFF_SECONDS;
+                    // back off harder than the normal cooldown (jittered, as
+                    // above)
+                    self.repath_cooldown =
+                        REPATH_FAILURE_BACKOFF_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
                 }
             }
         }

@@ -6,6 +6,7 @@ import type {
   EntityListResult,
   FrameSnapshot,
   InputAction,
+  PathfindingStats,
   PathfindingTestStatus,
   Position,
   RayCastRequest,
@@ -122,6 +123,14 @@ export class PathfindingTestApi {
 
   async status(): Promise<PathfindingTestStatus> {
     return this.client.get<PathfindingTestStatus>("/v1/pathfinding-test");
+  }
+
+  /**
+   * Monotonic pathfinding query counters, or null when the scene has no
+   * pathfinding data. Diff snapshots across steps to measure per-frame load.
+   */
+  async stats(): Promise<PathfindingStats | null> {
+    return this.client.get<PathfindingStats | null>("/v1/pathfinding/stats");
   }
 }
 

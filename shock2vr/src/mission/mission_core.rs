@@ -611,6 +611,8 @@ impl MissionCore {
         // Steering strategies path through this unique; MissionCore keeps its
         // own handle for the interactive pathfinding test.
         world.add_unique(GlobalPathfinding(pathfinding_service.clone()));
+        // Per-frame AI pathfind budget, refilled at the top of each update
+        world.add_unique(crate::pathfinding::PathfindingFrameBudget::new());
 
         MissionCore {
             interaction,
@@ -658,6 +660,17 @@ impl MissionCore {
     ) -> Vec<Effect> {
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
+        // Refill the per-frame AI pathfind budget - only on advancing frames,
+        // so paused zero-dt ticks (debug runtime introspection) can't grant
+        // extra query slots between stepped frames
+        if time.elapsed.as_secs_f32() > 0.0 {
+            if let Ok(budget) = self
+                .world
+                .borrow::<UniqueView<crate::pathfinding::PathfindingFrameBudget>>()
+            {
+                budget.reset();
+            }
+        }
         let mut effects = command_effects;
 
         let player = {
@@ -4028,6 +4041,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             state: state.to_string(),
             test_path_waypoints,
         }
+    }
+
+    fn pathfinding_stats(&self) -> Option<crate::game_scene::DebugPathfindingStats> {
+        self.pathfinding_service.as_ref().map(|service| {
+            let stats = service.stats();
+            crate::game_scene::DebugPathfindingStats {
+                queries: stats.queries,
+                stressed_retries: stats.stressed_retries,
+                no_route: stats.no_route,
+            }
+        })
     }
 
     fn send_entity_message(
