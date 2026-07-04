@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use util::*;
 
 use bitflags::bitflags;
-use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3};
+use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3, vec3};
 use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
@@ -373,6 +373,33 @@ impl PhysicsWorld {
     pub fn apply_impulse(&mut self, handle: RigidBodyHandle, impulse: Vector3<f32>) {
         if let Some(rigid_body) = self.rigid_body_set.get_mut(handle) {
             rigid_body.apply_impulse(vec_to_nvec(impulse), true);
+        }
+    }
+
+    /// Shove every dynamic body within `radius` of `center` directly away
+    /// from it, adding `speed * (1 - d/radius)` to its velocity (explosion
+    /// blasts). Mass-independent, like the game's other impulse-as-speed
+    /// launches (flinderize).
+    pub fn apply_radial_impulse(&mut self, center: Vector3<f32>, radius: f32, speed: f32) {
+        for (_handle, body) in self.rigid_body_set.iter_mut() {
+            if !body.is_dynamic() {
+                continue;
+            }
+            let translation = body.translation();
+            let offset = vec3(translation.x, translation.y, translation.z) - center;
+            let distance = offset.magnitude();
+            if distance >= radius {
+                continue;
+            }
+            // A body at the exact center has no outward direction; toss it up.
+            let direction = if distance > 1e-3 {
+                offset / distance
+            } else {
+                vec3(0.0, 1.0, 0.0)
+            };
+            let delta = direction * speed * (1.0 - distance / radius);
+            let new_velocity = body.linvel() + vec_to_nvec(delta);
+            body.set_linvel(new_velocity, true);
         }
     }
 

@@ -17,6 +17,7 @@ mod energy_station;
 mod frob_qb;
 mod gui;
 mod internal_collision_type;
+mod internal_explosion;
 pub mod internal_fast_projectile;
 mod internal_keycard_script;
 mod internal_simple_health;
@@ -96,6 +97,7 @@ use self::{
     energy_station::EnergyStation,
     frob_qb::FrobQB,
     internal_collision_type::InternalCollisionType,
+    internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
@@ -480,6 +482,7 @@ impl ScriptWorld {
             "internal_collision_type" => Box::new(InternalCollisionType::new()),
             "internal_inventory" => gui_script(Box::new(ContainerGui::inv_container())),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
+            "internal_explosion" => Box::new(InternalExplosion::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
             "internal_room_trigger" => Box::new(RoomTrigger::new()),
             "internal_simple_health" => Box::new(InternalSimpleHealth::new()),
