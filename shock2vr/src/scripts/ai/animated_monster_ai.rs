@@ -303,6 +303,25 @@ impl AnimatedMonsterAI {
             },
         ])
     }
+
+    /// Publish the current behavior name for debug introspection. Update
+    /// runs each frame, so this covers every behavior-change site with at
+    /// most one frame of lag (e.g. handle_message changes, or the
+    /// AIWatchObj early-return, publish on the next update)
+    fn publish_behavior(&mut self, entity_id: EntityId) -> Effect {
+        let behavior_name = self.current_behavior.borrow().name();
+        if self.published_behavior != Some(behavior_name) {
+            self.published_behavior = Some(behavior_name);
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::Behavior {
+                    name: behavior_name.to_string(),
+                },
+            }
+        } else {
+            Effect::NoEffect
+        }
+    }
 }
 
 impl Script for AnimatedMonsterAI {
@@ -338,6 +357,15 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        // Dead AIs are inert - no alertness, scripted sequences, steering, or
+        // sensors. A corpse keeps a live script, and any alertness level
+        // change here (escalation while the player is visible, or decay)
+        // would replace DeadBehavior and resurrect it. Still publish the
+        // behavior so introspection shows "Dead".
+        if self.is_dead || is_killed(entity_id, world) {
+            return self.publish_behavior(entity_id);
+        }
+
         let delta = time.elapsed.as_secs_f32();
 
         // Monster FOV is 60 degrees half-angle (matches FovDebugConfig::monster())
@@ -442,22 +470,7 @@ impl Script for AnimatedMonsterAI {
             &FovDebugConfig::monster(),
         );
 
-        // Publish the current behavior name for debug introspection. Update
-        // runs each frame, so this covers every behavior-change site with at
-        // most one frame of lag (e.g. handle_message changes, or the
-        // AIWatchObj early-return above, publish on the next update)
-        let behavior_name = self.current_behavior.borrow().name();
-        let behavior_publish_effect = if self.published_behavior != Some(behavior_name) {
-            self.published_behavior = Some(behavior_name);
-            Effect::SetAIProperty {
-                entity_id,
-                update: crate::scripts::AIPropertyUpdate::Behavior {
-                    name: behavior_name.to_string(),
-                },
-            }
-        } else {
-            Effect::NoEffect
-        };
+        let behavior_publish_effect = self.publish_behavior(entity_id);
 
         Effect::combine(vec![
             alertness_effect,
@@ -583,6 +596,15 @@ impl Script for AnimatedMonsterAI {
                 if self.is_dead {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
+                    if self.current_behavior.borrow().name() == "Dead" {
+                        // The crumple animation completed - latch the corpse
+                        // as final. The UNK7 motion flag below latches earlier
+                        // when the clip carries it, but not every death clip
+                        // does, and without this the death branch would
+                        // replay the crumple (and death sound) forever.
+                        self.is_dead = true;
+                        return Effect::NoEffect;
+                    }
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
 
                     // Play death sound effect immediately
@@ -703,6 +725,11 @@ impl Script for AnimatedMonsterAI {
             }
             MessagePayload::AnimationFlagTriggered { motion_flags } => {
                 if motion_flags.contains(MotionFlags::FIRE) {
+                    // A killed monster's in-flight attack clip keeps playing
+                    // until the death is processed - don't let it fire
+                    if self.is_dead || is_killed(entity_id, world) {
+                        return Effect::NoEffect;
+                    }
                     fire_ranged_projectile(world, entity_id)
                 // } else if motion_flags.contains(MotionFlags::END) {
                 //     Effect::QueueAnimationBySchema {
