@@ -309,8 +309,8 @@ impl AnimatedMonsterAI {
     /// current pose) and clears the animation queue, so no interrupted clip
     /// resumes under the corpse. Latching `is_dead` up front makes the
     /// AnimationCompleted death branch a no-op afterwards (including the
-    /// synchronous re-dispatch when no crumple motion is found), so the
-    /// crumple and death sound play only once.
+    /// re-dispatch queued when no crumple motion is found), so the crumple
+    /// and death sound play only once.
     fn enter_death(&mut self, world: &World, entity_id: EntityId) -> Effect {
         self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
         self.is_dead = true;
@@ -551,6 +551,13 @@ impl Script for AnimatedMonsterAI {
         }
         match msg {
             MessagePayload::Damage { amount } => {
+                // Corpses don't bleed: no HP churn, aggro, or replayed death
+                // from shooting a dead monster. The world check also covers a
+                // post-load corpse, whose recreated script has is_dead reset
+                // while its hit points are still <= 0
+                if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
                 // TODO: Let behavior handle this?
                 self.took_damage = true;
                 let hit_points_effect = Effect::AdjustHitPoints {
@@ -578,8 +585,7 @@ impl Script for AnimatedMonsterAI {
                 // actually raises the level, so a capped AI isn't reset -
                 // and doesn't restart its animation - on every hit
                 let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
-                let alert_effect = if !self.is_dead
-                    && !lethal
+                let alert_effect = if !lethal
                     && matches!(
                         self.alertness.current_level,
                         AIAlertLevel::Lowest | AIAlertLevel::Low
@@ -593,7 +599,7 @@ impl Script for AnimatedMonsterAI {
                 // A killing blow reacts immediately - the death animation
                 // interrupts the in-flight clip (cross-fading from its
                 // current pose) instead of waiting for it to complete
-                let death_effect = if lethal && !self.is_dead {
+                let death_effect = if lethal {
                     self.enter_death(world, entity_id)
                 } else {
                     Effect::NoEffect
