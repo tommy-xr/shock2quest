@@ -47,9 +47,6 @@ const SCHEMAS: [(&str, f32); 9] = [
 const INITIAL_DELAY: f32 = 2.0;
 const INTER_SCHEMA_GAP: f32 = 0.6;
 
-/// Render alpha for the holographic exhibits (eggs, grubs, rumblers).
-const HOLO_ALPHA: f32 = 0.55;
-
 #[derive(Clone, Copy, Debug)]
 enum Cs9Action {
     /// Send TurnOn to every entity with this sym name.
@@ -199,19 +196,16 @@ fn marker_pose(world: &World, name: &str) -> Option<(Vector3<f32>, cgmath::Quate
     v_pos.get(marker).ok().map(|p| (p.position, p.rotation))
 }
 
-/// Teleport an entity to a named marker and set its holo alpha; used by the
-/// CS9 exhibit scripts. Returns NoEffect when the marker is missing.
-fn teleport_to_marker(world: &World, entity_id: EntityId, marker: &str, alpha: f32) -> Effect {
+/// Teleport an entity to a named marker; used by the CS9 exhibit scripts.
+/// Returns NoEffect when the marker is missing. (The holo look itself comes
+/// from `TransluceInOutHolo`, composed on the same entities, which fades to
+/// the authored alpha on the same TurnOn.)
+fn teleport_to_marker(world: &World, entity_id: EntityId, marker: &str) -> Effect {
     match marker_pose(world, marker) {
-        Some((position, rotation)) => Effect::Combined {
-            effects: vec![
-                Effect::SetPositionRotation {
-                    entity_id,
-                    position,
-                    rotation,
-                },
-                Effect::SetRenderAlpha { entity_id, alpha },
-            ],
+        Some((position, rotation)) => Effect::SetPositionRotation {
+            entity_id,
+            position,
+            rotation,
         },
         None => {
             info!("cs9: marker '{}' not found", marker);
@@ -221,9 +215,10 @@ fn teleport_to_marker(world: &World, entity_id: EntityId, marker: &str, alpha: f
 }
 
 /// Script `CS9_HoloRumbler`: the four rumblers are parked out of sight; on
-/// TurnOn each appears as a translucent hologram at its matching
-/// `RumblerLoc<N>` marker, and on TurnOff is stashed at `SafeTeleportLoc`.
-/// (The original also plays a walk-in-place motion; we keep them idle.)
+/// TurnOn each appears at its matching `RumblerLoc<N>` marker (fading in via
+/// the composed `TransluceInOutHolo`), and on TurnOff is stashed at
+/// `SafeTeleportLoc`. (The original also plays a walk-in-place motion; we keep
+/// them idle.)
 pub struct CS9HoloRumbler {}
 
 impl CS9HoloRumbler {
@@ -252,11 +247,11 @@ impl Script for CS9HoloRumbler {
     ) -> Effect {
         match msg {
             MessagePayload::TurnOn { from: _ } => match Self::loc_marker_name(world, entity_id) {
-                Some(marker) => teleport_to_marker(world, entity_id, &marker, HOLO_ALPHA),
+                Some(marker) => teleport_to_marker(world, entity_id, &marker),
                 None => Effect::NoEffect,
             },
             MessagePayload::TurnOff { from: _ } => {
-                teleport_to_marker(world, entity_id, "SafeTeleportLoc", HOLO_ALPHA)
+                teleport_to_marker(world, entity_id, "SafeTeleportLoc")
             }
             _ => Effect::NoEffect,
         }
@@ -342,7 +337,7 @@ impl Script for CS9EggsAndGrubs {
                     .revealed
                     .drain(..)
                     .chain(self.pending.drain(..))
-                    .map(|e| teleport_to_marker(world, e, "SafeTeleportLoc", HOLO_ALPHA))
+                    .map(|e| teleport_to_marker(world, e, "SafeTeleportLoc"))
                     .collect();
                 Effect::Combined { effects: stash }
             }
@@ -369,6 +364,14 @@ impl Script for CS9EggsAndGrubs {
 
         let egg = self.pending.remove(0);
         self.revealed.push(egg);
+        // TurnOn fades the exhibit in (TransluceInOutHolo) and opens the egg
+        // (GrubEgg tweq), both composed on the egg entity itself.
+        let turn_on = Effect::Send {
+            msg: Message {
+                to: egg,
+                payload: MessagePayload::TurnOn { from: egg },
+            },
+        };
         match Self::display_pose(world, egg) {
             Some((position, rotation)) => Effect::Combined {
                 effects: vec![
@@ -377,18 +380,12 @@ impl Script for CS9EggsAndGrubs {
                         position,
                         rotation,
                     },
-                    Effect::SetRenderAlpha {
-                        entity_id: egg,
-                        alpha: HOLO_ALPHA,
-                    },
+                    turn_on,
                 ],
             },
             // No Teleport link: leave the object where it is (it may already
-            // sit at its display spot and only need the holo look).
-            None => Effect::SetRenderAlpha {
-                entity_id: egg,
-                alpha: HOLO_ALPHA,
-            },
+            // sit at its display spot and only need the fade-in).
+            None => turn_on,
         }
     }
 }
