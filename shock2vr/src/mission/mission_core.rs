@@ -2401,6 +2401,18 @@ impl MissionCore {
                         self.world
                             .add_component(entity_id, RuntimePropAIBehavior(name));
                     }
+                    AIPropertyUpdate::TargetAwareness {
+                        last_known_pos,
+                        has_line_of_sight,
+                    } => {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropAITargetAwareness {
+                                last_known_pos,
+                                has_line_of_sight,
+                            },
+                        );
+                    }
                 },
                 Effect::SetAllAIAlertness { level } => {
                     let creature_ids: Vec<EntityId> = {
@@ -3853,6 +3865,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
              v_gun_state: View<dark::properties::PropGunState>,
              v_alertness: View<PropAIAlertness>,
              v_ai_behavior: View<RuntimePropAIBehavior>,
+             v_awareness: View<crate::runtime_props::RuntimePropAITargetAwareness>,
              v_links: View<dark::properties::Links>| {
                 let position = v_pos.get(id).ok()?;
                 let rotation_array = [
@@ -3927,6 +3940,21 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "AIBehavior".to_string(),
                         value: behavior.0.clone(),
+                    });
+                }
+                if let Ok(awareness) = v_awareness.get(id) {
+                    properties.push(DebugPropertyInfo {
+                        name: "AITargetVisible".to_string(),
+                        value: awareness.has_line_of_sight.to_string(),
+                    });
+                    properties.push(DebugPropertyInfo {
+                        name: "AILastKnown".to_string(),
+                        value: format!(
+                            "[{:.2}, {:.2}, {:.2}]",
+                            awareness.last_known_pos.x,
+                            awareness.last_known_pos.y,
+                            awareness.last_known_pos.z
+                        ),
                     });
                 }
 

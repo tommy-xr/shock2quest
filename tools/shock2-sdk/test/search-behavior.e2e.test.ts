@@ -23,6 +23,26 @@ function distanceXZ(
   return Math.sqrt(dx * dx + dz * dz);
 }
 
+async function teleportVerified(
+  game: Awaited<ReturnType<typeof GameServer.launch>>,
+  target: { x: number; y: number; z: number },
+): Promise<void> {
+  // Teleports have been observed to intermittently no-op (reported success,
+  // position unchanged) - verify and retry so a stranded player doesn't
+  // invalidate the scenario.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await game.player.teleport(target);
+    await game.step({ frames: 5 });
+    const pos = await game.player.position();
+    const dx = pos.x - target.x;
+    const dz = pos.z - target.z;
+    if (Math.sqrt(dx * dx + dz * dz) < 3) {
+      return;
+    }
+  }
+  throw new Error("teleport did not take effect after 3 attempts");
+}
+
 test(
   "a High-origin search survives further alertness decay",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -53,9 +73,8 @@ test(
       level: "High",
     });
     // A verified no-line-of-sight pocket around corners from the start area
-    // (NOT the farthest spawn: the omniscient chase walks toward the player
-    // during decay, and some routes reacquire sight, pinning alertness).
-    await game.player.teleport({ x: -13.61, y: -5.8, z: 30.75 });
+    // (NOT the farthest spawn: routes toward it can reacquire sight).
+    await teleportVerified(game, { x: -13.61, y: -5.8, z: 30.75 });
 
     await game.waitFor(
       async () => {
@@ -69,14 +88,18 @@ test(
       },
     );
 
-    // 4 seconds later the Moderate->Low decay (3s) has fired; the search
-    // must still be running (its own give-up is ~7s+ out).
-    await game.step({ frames: 240 });
+    // 3.2 sim-seconds later the Moderate->Low decay (exactly 3.0s after
+    // Search entry) has fired, while the search's own give-up (6s of
+    // scanning) is still well out - even when the polling loop detected
+    // the entry a step late. With chase-to-last-seen the monster is
+    // already standing on the last-known spot when Search begins, so the
+    // scan clock starts immediately.
+    await game.step({ frames: 192 });
     const detail = await game.entities.detail(monster.id);
     assert.equal(
       aiProp(detail, "AIBehavior"),
       "Search",
-      "the search must survive the next decay step",
+      `the search must survive the next decay step (alertness=${aiProp(detail, "AIAlertness")}, visible=${aiProp(detail, "AITargetVisible")})`,
     );
   },
 );
@@ -127,7 +150,7 @@ test(
       farthest.distance > 30,
       `need a distant teleport target, farthest native is ${farthest.distance.toFixed(1)}`,
     );
-    await game.player.teleport({
+    await teleportVerified(game, {
       x: farthest.position[0],
       y: farthest.position[1] + 0.5,
       z: farthest.position[2],

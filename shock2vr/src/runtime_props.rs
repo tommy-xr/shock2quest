@@ -24,6 +24,18 @@ pub struct RuntimePropTransform(pub Matrix4<f32>);
 #[derive(Component)]
 pub struct RuntimePropAIBehavior(pub String);
 
+// What an AI knows about its target: where it last saw the player and
+// whether it can see them right now. Published by the AI script each frame
+// (the position tracks the player while visible and freezes when sight
+// breaks); chase steering targets THIS, not the player's true position, so
+// breaking line of sight actually works. Like all runtime props it is not
+// serialized - after a load the AI re-learns on its first sighting.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropAITargetAwareness {
+    pub last_known_pos: Vector3<f32>,
+    pub has_line_of_sight: bool,
+}
+
 #[derive(Component)]
 pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
 

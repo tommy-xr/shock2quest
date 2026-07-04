@@ -273,6 +273,24 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     }
 }
 
+/// Where this AI should chase: its last-known target position when it has
+/// published awareness (frozen at the point sight broke), falling back to
+/// the player's true position for entities without awareness (scripts that
+/// don't track it, debug scenes).
+pub fn chase_target(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
+    if let Ok(v_awareness) =
+        world.borrow::<View<crate::runtime_props::RuntimePropAITargetAwareness>>()
+    {
+        if let Ok(awareness) = v_awareness.get(entity_id) {
+            return Some(awareness.last_known_pos);
+        }
+    }
+    world
+        .borrow::<UniqueView<PlayerInfo>>()
+        .ok()
+        .map(|player| player.pos)
+}
+
 /// Distance from the entity to the player, when both positions are known
 pub fn player_distance(world: &World, entity_id: EntityId) -> Option<f32> {
     let u_player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;

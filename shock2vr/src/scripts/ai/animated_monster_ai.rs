@@ -448,6 +448,21 @@ impl Script for AnimatedMonsterAI {
             }
         }
 
+        // Publish what this AI knows about its target: chase steering
+        // pursues the last-known position (frozen when sight breaks), not
+        // the player's true location
+        let awareness_effect = if let Some(pos) = self.last_known_player_pos {
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::TargetAwareness {
+                    last_known_pos: pos,
+                    has_line_of_sight: is_visible,
+                },
+            }
+        } else {
+            Effect::NoEffect
+        };
+
         // Update alertness state
         let (alertness_effect, behavior_change_effect) = if let Some(config) = &self.config {
             if let Some((old_level, new_level)) = alertness::process_alertness_update(
@@ -585,6 +600,7 @@ impl Script for AnimatedMonsterAI {
 
         Effect::combine(vec![
             alertness_effect,
+            awareness_effect,
             behavior_change_effect,
             steering_effects,
             rotation_effect,
