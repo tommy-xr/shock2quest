@@ -5,13 +5,13 @@ use std::{
 };
 
 use shipyard::{EntityId, World};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     Gamesys,
     properties::{
-        LinkDefinition, LinkDefinitionWithData, PropSymName, PropTemplateId, Property,
-        PropertyDefinition, TemplateLinks, ToTemplateLinkInfo,
+        LinkDataFraming, LinkDefinition, LinkDefinitionWithData, PropSymName, PropTemplateId,
+        Property, PropertyDefinition, TemplateLinks, ToTemplateLinkInfo,
     },
     ss2_chunk_file_reader::ChunkFileTableOfContents,
     ss2_common::{read_bytes, read_i32, read_u16, read_u32},
@@ -386,7 +386,13 @@ fn read_all_data_links<R1: io::Read + io::Seek>(
         let data_chunk_name = link.link_data_chunk_name();
 
         let link_infos = read_link(&chunk_name, ref_reader, toc);
-        let link_data = read_link_data(&data_chunk_name, ref_reader, toc, link_infos.len() as u32);
+        let link_data = read_link_data(
+            &data_chunk_name,
+            ref_reader,
+            toc,
+            link_infos.len() as u32,
+            link.link_data_framing(),
+        );
 
         for link_info in link_infos {
             let to_link = ToTemplateLinkInfo {
@@ -414,6 +420,7 @@ pub fn read_link_data<T: io::Read + io::Seek>(
     reader: &mut T,
     toc: &ChunkFileTableOfContents,
     count: u32,
+    framing: LinkDataFraming,
 ) -> HashMap<i32, Vec<u8>> {
     let mut data = HashMap::new();
 
@@ -425,20 +432,32 @@ pub fn read_link_data<T: io::Read + io::Seek>(
             );
             reader.seek(SeekFrom::Start(chunk_pos.offset)).unwrap();
 
-            // Figure out the size for each individual link entry
-            let _link_data_size = (chunk_pos.length / count as u64) - 4;
-
             let end_pos = chunk_pos.offset + chunk_pos.length;
-            let data_len = read_u32(reader) as u64;
-            // trace!("data_len: {} link_data_size: {}", data_len, link_data_size);
-            // assert!(data_len == link_data_size);
+            let data_len = match framing {
+                // Most chunks declare the per-record data size up front.
+                LinkDataFraming::HeaderDeclared => read_u32(reader) as u64,
+                // Act/react chunks put a version there instead; derive the
+                // record size from the chunk length and link count.
+                LinkDataFraming::VersionHeader => {
+                    let _version = read_u32(reader);
+                    let record_size = chunk_pos.length.saturating_sub(4) / count as u64;
+                    // Records are (i32 link id + payload); fail loud on a
+                    // malformed chunk instead of feeding garbage downstream.
+                    if record_size < 4 || (chunk_pos.length - 4) % count as u64 != 0 {
+                        warn!(
+                            "{}: chunk length {} does not hold {} uniform records; skipping",
+                            link_data_chunk_name, chunk_pos.length, count
+                        );
+                        return data;
+                    }
+                    record_size - 4
+                }
+            };
             while reader.stream_position().unwrap() < end_pos {
                 let id = read_i32(reader);
-                // println!("link id: {}", id);
                 let bytes = read_bytes(reader, data_len as usize);
                 data.insert(id, bytes);
             }
-            // panic!("link data size: {}", link_data_size);
         }
     }
 

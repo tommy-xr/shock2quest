@@ -19,11 +19,12 @@ use dark::{
     model::Model,
     motion::AnimationPlayer,
     properties::{
-        FrobFlag, InternalPropOriginalModelName, Links, PhysicsModelType, PoseType,
-        PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo, PropHUDSelect,
-        PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName, PropPhysAttr,
-        PropPhysDimensions, PropPhysState, PropPhysType, PropPosition, PropRenderType, PropScale,
-        PropSymName, PropTemplateId, PropTripFlags, RenderType, TemplateLinks, WrappedEntityId,
+        FrobFlag, InternalPropOriginalModelName, Link, Links, PhysicsModelType, PoseType,
+        PropClassTag, PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo,
+        PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName,
+        PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
+        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTripFlags, RenderType,
+        StimPropagator, StimSourceOptions, TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info,
 };
@@ -305,6 +306,46 @@ pub fn create_entity_core(
     let v_keysrc = world.borrow::<View<PropKeySrc>>().unwrap();
     if v_keysrc.get(entity_id).is_ok() {
         processed_scripts.push("internal_keycard".to_owned());
+    }
+
+    // Explosion SFX templates (class tag "explosiontype", e.g. HE / Incendiary
+    // Explosion) with radius stim sources (arSrcDesc) blast once on spawn.
+    // Radius sources WITHOUT the tag (electrical sparks, Swarm, Rad Burst) are
+    // periodic emitters in the original engine - not one-shot blasts - and are
+    // not handled yet.
+    let is_explosion = {
+        let v_class_tag = world.borrow::<View<PropClassTag>>().unwrap();
+        let v_links = world.borrow::<View<Links>>().unwrap();
+        v_class_tag
+            .get(entity_id)
+            .map(|tag| tag.class_tags().iter().any(|(k, _)| *k == "explosiontype"))
+            .unwrap_or(false)
+            && v_links.get(entity_id).is_ok_and(|links| {
+                links.to_links.iter().any(|l| {
+                    matches!(
+                        l.link,
+                        Link::StimSource(StimSourceOptions {
+                            propagator: StimPropagator::Radius { .. },
+                            ..
+                        })
+                    )
+                })
+            })
+    };
+    // Release the property views before add_component below needs the world
+    // mutably; nothing after this point reads them.
+    drop(v_scripts);
+    drop(v_collision_type);
+    drop(v_creature);
+    drop(v_hp);
+    drop(v_keysrc);
+
+    if is_explosion {
+        processed_scripts.push("internal_explosion".to_owned());
+        // One-shot SFX: never save explosion entities. Script state
+        // (has_fired) is not persisted, so a saved mid-animation explosion
+        // would re-detonate on every load.
+        world.add_component(entity_id, RuntimePropDoNotSerialize);
     }
 
     // ...and remove any duplicates!

@@ -373,6 +373,10 @@ pub enum Link {
     /// Names a destination object for scripted teleports (CS9 eggs/rumblers,
     /// TrapTeleport family, TrapDestroyTeleport's destroy target).
     Teleport,
+    /// Act/react stim source ("arSrcDesc"): the linked-to template is the stim
+    /// archetype this object emits (e.g. HE Explosion -> Standard Impact at
+    /// intensity 10 over a radius of 10).
+    StimSource(StimSourceOptions),
 }
 
 #[derive(
@@ -522,6 +526,51 @@ impl GunFlashOptions {
         let vhot = read_u32(reader);
         let flags = read_u32(reader);
         GunFlashOptions { vhot, flags }
+    }
+}
+
+/// How a stim source spreads from its object (the "Propagator" in DromEd's
+/// act/react sources editor).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum StimPropagator {
+    Null,
+    /// Stimulates objects touching the source (melee weapons, hazards).
+    Contact,
+    /// Stimulates everything within `radius` of the source (explosions).
+    Radius {
+        radius: f32,
+    },
+    Unknown(u32),
+}
+
+/// Act/react stim source (L$arSrcDesc): the source object emits the stim
+/// archetype the link points to, at `intensity`, spread by `propagator`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StimSourceOptions {
+    pub intensity: f32,
+    pub propagator: StimPropagator,
+}
+
+impl StimSourceOptions {
+    pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> StimSourceOptions {
+        // sStimSourceDesc (108 bytes): propagator id, intensity, then
+        // propagator-specific params (a redundant propagator name string sits
+        // at +76). Only the fields the game consumes are parsed.
+        let propagator_id = read_u32(reader);
+        let intensity = read_single(reader);
+        let _unknown = read_u32(reader);
+        let propagator = match propagator_id {
+            0 => StimPropagator::Null,
+            1 => StimPropagator::Contact,
+            2 => StimPropagator::Radius {
+                radius: read_single(reader) / SCALE_FACTOR,
+            },
+            other => StimPropagator::Unknown(other),
+        };
+        StimSourceOptions {
+            intensity,
+            propagator,
+        }
     }
 }
 
@@ -828,6 +877,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "LD$Projecti",
             ProjectileOptions::read,
             Link::Projectile,
+        ),
+        define_link_with_versioned_data(
+            "L$arSrcDesc",
+            "LD$arSrcDes",
+            StimSourceOptions::read,
+            Link::StimSource,
         ),
     ];
 
@@ -1646,9 +1701,21 @@ struct LinkDefinitionStruct {
     converter: Converter<ToTemplateLinkInfo, Link>,
 }
 
+/// How an LD$ chunk frames its per-link records.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LinkDataFraming {
+    /// The chunk's leading u32 is the per-record data size (most chunks).
+    HeaderDeclared,
+    /// The leading u32 is a database version, not a size (the act/react
+    /// chunks LD$arSrcDes/LD$Receptro declare "2"); the record size must be
+    /// derived from the chunk length and the link count.
+    VersionHeader,
+}
+
 pub trait LinkDefinitionWithData: Send + Sync {
     fn link_chunk_name(&self) -> String;
     fn link_data_chunk_name(&self) -> String;
+    fn link_data_framing(&self) -> LinkDataFraming;
 
     fn convert(&self, data: Vec<u8>, prop_len: u32, link: ToTemplateLinkInfo) -> ToTemplateLink;
 }
@@ -1656,6 +1723,7 @@ pub trait LinkDefinitionWithData: Send + Sync {
 struct LinkDefinitionWithDataStruct<TData> {
     link_name: String,
     link_data_name: String,
+    framing: LinkDataFraming,
     converter: Converter<TData, Link>,
     reader: Reader<Box<dyn ReadAndSeek>, TData>,
 }
@@ -1670,6 +1738,10 @@ impl<TData> LinkDefinitionWithData for LinkDefinitionWithDataStruct<TData> {
 
     fn link_data_chunk_name(&self) -> String {
         self.link_data_name.to_owned()
+    }
+
+    fn link_data_framing(&self) -> LinkDataFraming {
+        self.framing
     }
 
     fn convert(
@@ -1803,7 +1875,71 @@ pub fn define_link_with_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
     Box::new(LinkDefinitionWithDataStruct {
         link_name: link_name.to_string(),
         link_data_name: link_data_name.to_string(),
+        framing: LinkDataFraming::HeaderDeclared,
         reader,
         converter,
     })
+}
+
+/// Like `define_link_with_data`, but for the act/react chunks whose LD$ header
+/// is a version number rather than the record size (see `LinkDataFraming`).
+pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync + Clone>(
+    link_name: &str,
+    link_data_name: &str,
+    reader: Reader<Box<dyn ReadAndSeek>, TData>,
+    converter: Converter<TData, Link>,
+) -> Box<dyn LinkDefinitionWithData> {
+    Box::new(LinkDefinitionWithDataStruct {
+        link_name: link_name.to_string(),
+        link_data_name: link_data_name.to_string(),
+        framing: LinkDataFraming::VersionHeader,
+        reader,
+        converter,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a 108-byte sStimSourceDesc payload the way shock2.gam lays it
+    /// out: propagator id, intensity, unknown, then propagator params.
+    fn stim_source_payload(propagator_id: u32, intensity: f32, radius: f32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&propagator_id.to_le_bytes());
+        bytes.extend_from_slice(&intensity.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&radius.to_le_bytes());
+        bytes.resize(108, 0);
+        bytes
+    }
+
+    fn read_stim_source(payload: Vec<u8>) -> StimSourceOptions {
+        let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(payload));
+        StimSourceOptions::read(&mut cursor, 108)
+    }
+
+    #[test]
+    fn stim_source_radius_matches_incendiary_explosion_data() {
+        // Incendiary Explosion -> Incendiary stim in shock2.gam: intensity 15,
+        // radius 10 (dark units).
+        let opts = read_stim_source(stim_source_payload(2, 15.0, 10.0));
+        assert_eq!(opts.intensity, 15.0);
+        assert_eq!(
+            opts.propagator,
+            StimPropagator::Radius {
+                radius: 10.0 / SCALE_FACTOR
+            }
+        );
+    }
+
+    #[test]
+    fn stim_source_contact_and_null_have_no_radius() {
+        let contact = read_stim_source(stim_source_payload(1, 8.0, 0.0));
+        assert_eq!(contact.intensity, 8.0);
+        assert_eq!(contact.propagator, StimPropagator::Contact);
+
+        let null = read_stim_source(stim_source_payload(0, 16.0, 0.0));
+        assert_eq!(null.propagator, StimPropagator::Null);
+    }
 }
