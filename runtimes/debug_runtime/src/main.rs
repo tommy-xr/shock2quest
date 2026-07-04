@@ -199,11 +199,13 @@ fn parse_mission(mission: &str) -> (String, SpawnLocation) {
 }
 
 fn main() -> anyhow::Result<()> {
-    // Initialize tracing with info level by default
+    // Initialize tracing with info level by default. Include shock2vr so
+    // script/trigger activity (tripwires, quest bits, doors) is visible when
+    // driving the game over HTTP - essential for agent-driven debugging.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "debug_runtime=info".into()),
+                .unwrap_or_else(|_| "debug_runtime=info,shock2vr=info".into()),
         )
         .init();
 
@@ -1259,13 +1261,16 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 /// - `{left,right}_hand.a`          : number in [0, 1] (alias `a_value`)
 /// - `{left,right}_hand.thumbstick` : `[x, y]`
 /// One line describing every recognized input channel, used in error messages so
-/// a bad request is self-documenting.
+/// a bad request is self-documenting. Includes the locomotion semantics (which
+/// stick does what) since that is the game's convention, not guessable.
 fn input_channels_help() -> &'static str {
     "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
-     {left,right}_hand.rotation [x,y,z,w]"
+     {left,right}_hand.rotation [x,y,z,w]; \
+     locomotion: right_hand.thumbstick [strafe, forward] moves the player, \
+     left_hand.thumbstick.x turns, left_hand.thumbstick.y flies up/down"
 }
 
 fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> Result<(), String> {
