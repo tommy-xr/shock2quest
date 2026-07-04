@@ -586,6 +586,7 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::ParticleAttachement(_) => "ParticleAttachement".to_string(),
         dark::properties::Link::TPathInit => "TPathInit".to_string(),
         dark::properties::Link::TPath(_) => "TPath".to_string(),
+        dark::properties::Link::Teleport => "Teleport".to_string(),
     }
 }
 
