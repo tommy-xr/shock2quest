@@ -458,7 +458,11 @@ pub trait DebuggableScene {
     }
 }
 
-/// Snapshot of the pathfinding service's monotonic query counters
+/// Snapshot of the pathfinding service's monotonic query counters.
+///
+/// Counts every find_path caller - including unbudgeted ones like the
+/// interactive pathfinding test - so per-frame deltas can exceed the AI
+/// frame budget while those are active.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebugPathfindingStats {
     pub queries: u64,

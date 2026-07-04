@@ -124,10 +124,17 @@ export class PathfindingTestApi {
   async status(): Promise<PathfindingTestStatus> {
     return this.client.get<PathfindingTestStatus>("/v1/pathfinding-test");
   }
+}
+
+/** Pathfinding service telemetry (distinct from the interactive test). */
+export class PathfindingApi {
+  constructor(private readonly client: HttpClient) {}
 
   /**
    * Monotonic pathfinding query counters, or null when the scene has no
    * pathfinding data. Diff snapshots across steps to measure per-frame load.
+   * Counts every find_path caller, including unbudgeted ones (e.g. the
+   * interactive pathfinding test).
    */
   async stats(): Promise<PathfindingStats | null> {
     return this.client.get<PathfindingStats | null>("/v1/pathfinding/stats");
@@ -146,12 +153,14 @@ export class Game {
   readonly entities: EntitiesApi;
   readonly input: InputApi;
   readonly pathfindingTest: PathfindingTestApi;
+  readonly pathfinding: PathfindingApi;
 
   constructor(protected readonly client: HttpClient) {
     this.player = new PlayerApi(client);
     this.entities = new EntitiesApi(client);
     this.input = new InputApi(client);
     this.pathfindingTest = new PathfindingTestApi(client);
+    this.pathfinding = new PathfindingApi(client);
   }
 
   get baseUrl(): string {

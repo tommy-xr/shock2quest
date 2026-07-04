@@ -23,7 +23,7 @@ test(
 
     await game.step({ frames: 10 });
 
-    const initial = await game.pathfindingTest.stats();
+    const initial = await game.pathfinding.stats();
     assert.ok(initial, "medsci1 has pathfinding data, stats must be present");
 
     // Alert every monster at once - the worst-case stampede: dozens of AIs
@@ -32,11 +32,11 @@ test(
     // measure per-frame deltas THROUGH the burst, frame by frame.
     await game.input.trigger("DebugAlertAll");
 
-    let before = (await game.pathfindingTest.stats())!;
+    let before = (await game.pathfinding.stats())!;
     let total = 0;
     for (let i = 0; i < 12; i++) {
       await game.step({ frames: 1 });
-      const after = (await game.pathfindingTest.stats())!;
+      const after = (await game.pathfinding.stats())!;
       const delta = after.queries - before.queries;
       total += delta;
       assert.ok(
