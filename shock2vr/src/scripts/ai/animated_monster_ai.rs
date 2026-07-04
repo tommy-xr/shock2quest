@@ -303,6 +303,25 @@ impl AnimatedMonsterAI {
             },
         ])
     }
+
+    /// Publish the current behavior name for debug introspection. Update
+    /// runs each frame, so this covers every behavior-change site with at
+    /// most one frame of lag (e.g. handle_message changes, or the
+    /// AIWatchObj early-return, publish on the next update)
+    fn publish_behavior(&mut self, entity_id: EntityId) -> Effect {
+        let behavior_name = self.current_behavior.borrow().name();
+        if self.published_behavior != Some(behavior_name) {
+            self.published_behavior = Some(behavior_name);
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::Behavior {
+                    name: behavior_name.to_string(),
+                },
+            }
+        } else {
+            Effect::NoEffect
+        }
+    }
 }
 
 impl Script for AnimatedMonsterAI {
@@ -338,6 +357,28 @@ impl Script for AnimatedMonsterAI {
         physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        // Dead AIs are inert - no alertness, scripted sequences, steering, or
+        // sensors. A corpse keeps a live script, and any alertness level
+        // change here (escalation while the player is visible, or decay)
+        // would replace DeadBehavior and resurrect it. Still publish the
+        // behavior so introspection shows "Dead", and release a sensor the
+        // ray was intersecting at death so its end-intersect isn't stranded.
+        if self.is_dead || is_killed(entity_id, world) {
+            let sensor_release_effect = match self.last_hit_sensor.take() {
+                Some(sensor_id) => Effect::Send {
+                    msg: Message {
+                        to: sensor_id,
+                        payload: MessagePayload::SensorEndIntersect { with: entity_id },
+                    },
+                },
+                None => Effect::NoEffect,
+            };
+            return Effect::combine(vec![
+                sensor_release_effect,
+                self.publish_behavior(entity_id),
+            ]);
+        }
+
         let delta = time.elapsed.as_secs_f32();
 
         // Monster FOV is 60 degrees half-angle (matches FovDebugConfig::monster())
@@ -442,22 +483,7 @@ impl Script for AnimatedMonsterAI {
             &FovDebugConfig::monster(),
         );
 
-        // Publish the current behavior name for debug introspection. Update
-        // runs each frame, so this covers every behavior-change site with at
-        // most one frame of lag (e.g. handle_message changes, or the
-        // AIWatchObj early-return above, publish on the next update)
-        let behavior_name = self.current_behavior.borrow().name();
-        let behavior_publish_effect = if self.published_behavior != Some(behavior_name) {
-            self.published_behavior = Some(behavior_name);
-            Effect::SetAIProperty {
-                entity_id,
-                update: crate::scripts::AIPropertyUpdate::Behavior {
-                    name: behavior_name.to_string(),
-                },
-            }
-        } else {
-            Effect::NoEffect
-        };
+        let behavior_publish_effect = self.publish_behavior(entity_id);
 
         Effect::combine(vec![
             alertness_effect,
@@ -527,6 +553,12 @@ impl Script for AnimatedMonsterAI {
                 Effect::combine(vec![hit_points_effect, alert_effect])
             }
             MessagePayload::TurnOn { from: _ } => {
+                // Dead AIs stay dead - a corpse can still be a SwitchLink
+                // target (e.g. a tripwire), and the scripted sequence would
+                // animate it
+                if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
                 if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
@@ -547,6 +579,10 @@ impl Script for AnimatedMonsterAI {
                 }
             }
             MessagePayload::Signal { name: _ } => {
+                // Dead AIs stay dead - level signals reach corpses too
+                if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
                 // Do we have a response to this signal?
 
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
@@ -584,6 +620,11 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
+                    // Latch immediately: the is_dead branch above then
+                    // swallows every later completion (including the
+                    // synchronous re-dispatch when no crumple motion is
+                    // found), so the crumple and death sound play only once
+                    self.is_dead = true;
 
                     // Play death sound effect immediately
                     let death_sound_effect = if let Some(voice_index) =
@@ -703,6 +744,11 @@ impl Script for AnimatedMonsterAI {
             }
             MessagePayload::AnimationFlagTriggered { motion_flags } => {
                 if motion_flags.contains(MotionFlags::FIRE) {
+                    // A killed monster's in-flight attack clip keeps playing
+                    // until the death is processed - don't let it fire
+                    if self.is_dead || is_killed(entity_id, world) {
+                        return Effect::NoEffect;
+                    }
                     fire_ranged_projectile(world, entity_id)
                 // } else if motion_flags.contains(MotionFlags::END) {
                 //     Effect::QueueAnimationBySchema {
@@ -714,9 +760,6 @@ impl Script for AnimatedMonsterAI {
                 //         //     //"direction".to_owned(),
                 //         // ],
                 //     }
-                } else if motion_flags.contains(MotionFlags::UNK7 /* die? */) {
-                    self.is_dead = true;
-                    Effect::NoEffect
                 } else {
                     Effect::NoEffect
                 }
