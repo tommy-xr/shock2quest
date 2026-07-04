@@ -33,6 +33,7 @@ pub mod script_util;
 mod setup_initial_debrief;
 mod std_door;
 mod tool_consumable;
+mod transluce;
 mod trap_delay;
 mod trap_destroyer;
 mod trap_email;
@@ -105,6 +106,7 @@ use self::{
     room_trigger::RoomTrigger,
     std_door::StdDoor,
     tool_consumable::ToolConsumable,
+    transluce::TransluceInOutHolo,
     trap_delay::TrapDelay,
     trap_destroyer::TrapDestroyer,
     trap_email::TrapEmail,
@@ -439,7 +441,7 @@ impl ScriptWorld {
             "radroom" => Box::new(NoopScript::new()),
             "trapspawn" => Box::new(NoopScript::new()),
             // ops1 cutscene (the "Polito is SHODAN" reveal) - see scripts/cs9.rs
-            "transluceinoutholo" => Box::new(NoopScript::new()),
+            "transluceinoutholo" => Box::new(TransluceInOutHolo::new()),
             "cs9_doorreporter" => Box::new(NoopScript::new()), // master runs on a timeline instead of door events
             "cs9_eggsandgrubs" => Box::new(CS9EggsAndGrubs::new()),
             "cs9_mastercontrol" => Box::new(CS9MasterControl::new()),
