@@ -127,7 +127,9 @@ impl CS9MasterControl {
                     .into_iter()
                     .map(|to| {
                         let payload = match action {
-                            Cs9Action::TurnOnByName(_) => MessagePayload::TurnOn { from: entity_id },
+                            Cs9Action::TurnOnByName(_) => {
+                                MessagePayload::TurnOn { from: entity_id }
+                            }
                             _ => MessagePayload::TurnOff { from: entity_id },
                         };
                         Effect::Send {
@@ -249,12 +251,10 @@ impl Script for CS9HoloRumbler {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::TurnOn { from: _ } => {
-                match Self::loc_marker_name(world, entity_id) {
-                    Some(marker) => teleport_to_marker(world, entity_id, &marker, HOLO_ALPHA),
-                    None => Effect::NoEffect,
-                }
-            }
+            MessagePayload::TurnOn { from: _ } => match Self::loc_marker_name(world, entity_id) {
+                Some(marker) => teleport_to_marker(world, entity_id, &marker, HOLO_ALPHA),
+                None => Effect::NoEffect,
+            },
             MessagePayload::TurnOff { from: _ } => {
                 teleport_to_marker(world, entity_id, "SafeTeleportLoc", HOLO_ALPHA)
             }
