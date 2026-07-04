@@ -101,6 +101,38 @@ impl AnimationPlayer {
         }
     }
 
+    /// Play `animation` immediately, replacing the whole queue (unlike
+    /// `queue_animation`, which pushes on top and lets interrupted clips
+    /// resume later). Cross-fades from the interrupted pose over the clip's
+    /// authored blend length, floored so a zero-blend clip doesn't pop when
+    /// it cuts a clip mid-play.
+    pub fn play_animation(
+        player: &AnimationPlayer,
+        animation: Rc<AnimationClip>,
+    ) -> AnimationPlayer {
+        const MIN_INTERRUPT_BLEND_SECS: f32 = 0.15;
+
+        let blend_state = player.animation.first().map(|(current_clip, _)| BlendState {
+            from_clip: current_clip.clone(),
+            from_frame: player.current_frame as f32,
+            duration: animation
+                .blend_length
+                .as_secs_f32()
+                .max(MIN_INTERRUPT_BLEND_SECS),
+            elapsed: 0.0,
+        });
+
+        AnimationPlayer {
+            additional_joint_transforms: player.additional_joint_transforms.clone(),
+            animation: immutable::List::new().push_front((animation, AnimationFlags::PlayOnce)),
+            last_animation: None,
+            current_frame: 0,
+            remaining_time: 0.0,
+            blend_state,
+            cancel_root_motion: player.cancel_root_motion,
+        }
+    }
+
     /// A copy of `player` that poses with the clip's root motion cancelled
     /// (see `AnimationInfo::cancel_root_motion`).
     pub fn with_root_motion_cancelled(player: &AnimationPlayer) -> AnimationPlayer {
