@@ -69,6 +69,15 @@ pub struct CS9MasterControl {
 
 impl CS9MasterControl {
     pub fn new() -> CS9MasterControl {
+        const SCREENS: [&str; 6] = [
+            "ShodanScreenTL",
+            "ShodanScreenTM",
+            "ShodanScreenTR",
+            "ShodanScreenBL",
+            "ShodanScreenBM",
+            "ShodanScreenBR",
+        ];
+
         let mut schedule: Vec<(f32, Cs9Action)> = vec![
             // Seal the player in and start pulling the theatre apart.
             (0.0, Cs9Action::TurnOnByName("MasterForceField")),
@@ -79,6 +88,16 @@ impl CS9MasterControl {
         for (i, (schema, duration)) in SCHEMAS.iter().enumerate() {
             schedule.push((t, Cs9Action::PlaySchema(schema)));
             match i {
+                // cs0901: SHODAN appears. The screens fade in once the moving
+                // walls have pulled back (~6s into the panel stagger), so the
+                // reveal shows dark screens and the face materializes during
+                // the opening line. (PR-later: gate on CS9_DoorReporter's
+                // MovingWallsOpen instead of a timed offset.)
+                0 => {
+                    for s in SCREENS {
+                        schedule.push((t + 6.0, Cs9Action::TurnOnByName(s)));
+                    }
+                }
                 // cs0903: the "garden grove" section - the exhibits appear.
                 2 => {
                     schedule.push((t, Cs9Action::TurnOnByName("EggsandGrubsControl")));
@@ -97,7 +116,11 @@ impl CS9MasterControl {
             t += duration + INTER_SCHEMA_GAP;
         }
 
-        // Teardown: stash the exhibits, close the walls, release the player.
+        // Teardown: fade the screens, stash the exhibits, close the walls,
+        // release the player.
+        for s in SCREENS {
+            schedule.push((t, Cs9Action::TurnOffByName(s)));
+        }
         schedule.push((t, Cs9Action::TurnOffByName("EggsandGrubsControl")));
         schedule.push((t, Cs9Action::TurnOffByName("SlowDoorControl")));
         schedule.push((t + 2.0, Cs9Action::TurnOffByName("MasterForceField")));

@@ -446,7 +446,9 @@ impl ScriptWorld {
             "cs9_eggsandgrubs" => Box::new(CS9EggsAndGrubs::new()),
             "cs9_mastercontrol" => Box::new(CS9MasterControl::new()),
             "cs9_holorumbler" => Box::new(CS9HoloRumbler::new()),
-            "cs9_shodanscreen" => Box::new(NoopScript::new()), // screens are static in the theatre walls for now
+            // The theatre screens fade in/out like holograms (alpha; the original
+            // uses an extra-light ramp + ScreenSwap model swaps - future polish).
+            "cs9_shodanscreen" => Box::new(TransluceInOutHolo::new()),
             "sitdownrightnowmp" => Box::new(SitDownRightNowMP::new()),
             "trapdestroyteleport" => Box::new(TrapDestroyTeleport::new()),
             "triggerdamage" => Box::new(NoopScript::new()),
