@@ -207,6 +207,9 @@ fn parse_tags(tags: &[String]) -> Result<Vec<MotionQueryItem>> {
             Some(stripped) => (stripped, true),
             None => (tag_content, false),
         };
+        if tag_content.is_empty() {
+            anyhow::bail!("Empty tag name in: {}", tag);
+        }
 
         // Check if it's a tag with value (e.g., "cs:184")
         let item = if let Some(colon_pos) = tag_content.find(':') {
