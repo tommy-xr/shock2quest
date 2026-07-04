@@ -587,6 +587,9 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::TPathInit => "TPathInit".to_string(),
         dark::properties::Link::TPath(_) => "TPath".to_string(),
         dark::properties::Link::Teleport => "Teleport".to_string(),
+        // Include the payload: blast tuning (intensity/radius) is exactly what
+        // one inspects these links for.
+        dark::properties::Link::StimSource(opts) => format!("StimSource({:?})", opts),
     }
 }
 
