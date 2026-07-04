@@ -66,6 +66,10 @@ pub struct AnimatedMonsterAI {
     /// Where the player was last seen; investigated by SearchBehavior when
     /// alertness decays after losing contact
     last_known_player_pos: Option<cgmath::Vector3<f32>>,
+    /// Awareness state last published to the ECS, so the component tracks
+    /// the script's knowledge exactly (including forgetting) without
+    /// per-frame effect churn
+    published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
 }
 
 impl AnimatedMonsterAI {
@@ -83,6 +87,7 @@ impl AnimatedMonsterAI {
             config: None,
             published_behavior: None,
             last_known_player_pos: None,
+            published_awareness: None,
         }
     }
 
@@ -101,6 +106,7 @@ impl AnimatedMonsterAI {
             config: None,
             published_behavior: None,
             last_known_player_pos: None,
+            published_awareness: None,
         }
     }
 
@@ -450,13 +456,23 @@ impl Script for AnimatedMonsterAI {
 
         // Publish what this AI knows about its target: chase steering
         // pursues the last-known position (frozen when sight breaks), not
-        // the player's true location
-        let awareness_effect = if let Some(pos) = self.last_known_player_pos {
-            Effect::SetAIProperty {
-                entity_id,
-                update: crate::scripts::AIPropertyUpdate::TargetAwareness {
-                    last_known_pos: pos,
-                    has_line_of_sight: is_visible,
+        // the player's true location. Published only on change, and CLEARED
+        // when the script forgets (search consumed it / fully calmed) so a
+        // stale component can't hijack the true-position fallback forever.
+        let desired_awareness = self.last_known_player_pos.map(|pos| (pos, is_visible));
+        let awareness_effect = if desired_awareness != self.published_awareness {
+            self.published_awareness = desired_awareness;
+            match desired_awareness {
+                Some((pos, visible)) => Effect::SetAIProperty {
+                    entity_id,
+                    update: crate::scripts::AIPropertyUpdate::TargetAwareness {
+                        last_known_pos: pos,
+                        has_line_of_sight: visible,
+                    },
+                },
+                None => Effect::SetAIProperty {
+                    entity_id,
+                    update: crate::scripts::AIPropertyUpdate::ClearTargetAwareness,
                 },
             }
         } else {
@@ -667,8 +683,19 @@ impl Script for AnimatedMonsterAI {
                 // reveals the attacker even without line of sight (the dead
                 // case already returned above)
                 let searching = self.current_behavior.borrow().name() == "Search";
-                let alert_effect = if !lethal && (escalates || searching) {
-                    self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
+                let alert_effect = if !lethal {
+                    // Any surviving hit reveals the attacker's position -
+                    // refresh the last-known even when already alerted, so
+                    // an AI chasing a stale sighting turns toward where the
+                    // shot actually came from (the dead case returned above)
+                    if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
+                        self.last_known_player_pos = Some(player.pos);
+                    }
+                    if escalates || searching {
+                        self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
+                    } else {
+                        Effect::NoEffect
+                    }
                 } else {
                     Effect::NoEffect
                 };

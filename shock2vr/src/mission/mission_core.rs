@@ -2413,6 +2413,15 @@ impl MissionCore {
                             },
                         );
                     }
+                    AIPropertyUpdate::ClearTargetAwareness => {
+                        self.world.run(
+                            |mut v_awareness: ViewMut<
+                                crate::runtime_props::RuntimePropAITargetAwareness,
+                            >| {
+                                v_awareness.remove(entity_id);
+                            },
+                        );
+                    }
                 },
                 Effect::SetAllAIAlertness { level } => {
                     let creature_ids: Vec<EntityId> = {

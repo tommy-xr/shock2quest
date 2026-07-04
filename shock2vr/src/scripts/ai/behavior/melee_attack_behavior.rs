@@ -1,12 +1,11 @@
 use std::cell::RefCell;
 
-use cgmath::{Deg, InnerSpace};
-use dark::{SCALE_FACTOR, motion::MotionQueryItem, properties::PropPosition};
+use cgmath::Deg;
+use dark::{SCALE_FACTOR, motion::MotionQueryItem};
 
 use shipyard::*;
 
 use crate::{
-    mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{
         Effect,
@@ -49,14 +48,12 @@ impl Behavior for MeleeAttackBehavior {
         _physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
-        let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-        let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-
+        // Gate on the KNOWN target distance (consistent with where the
+        // attack faces), not the player's true position - a player sneaking
+        // behind an attacking AI must not pin it swinging at empty space
         let melee_attack_distance = 8.0 / SCALE_FACTOR;
-
-        if let Ok(prop_pos) = v_current_pos.get(entity_id) {
-            let distance = (prop_pos.position - u_player.pos).magnitude();
-
+        if let Some(distance) = crate::scripts::ai::ai_util::chase_target_distance(world, entity_id)
+        {
             if distance < melee_attack_distance {
                 return NextBehavior::Stay;
             }

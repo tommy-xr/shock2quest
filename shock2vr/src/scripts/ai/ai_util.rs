@@ -291,12 +291,15 @@ pub fn chase_target(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> 
         .map(|player| player.pos)
 }
 
-/// Distance from the entity to the player, when both positions are known
-pub fn player_distance(world: &World, entity_id: EntityId) -> Option<f32> {
-    let u_player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+/// Distance from the entity to its chase target (the last-known position
+/// when awareness is published, the player's true position otherwise).
+/// Combat gates use this so attacks trigger against what the AI KNOWS,
+/// consistent with where chase steering faces.
+pub fn chase_target_distance(world: &World, entity_id: EntityId) -> Option<f32> {
+    let target = chase_target(world, entity_id)?;
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
     let prop_pos = v_current_pos.get(entity_id).ok()?;
-    Some((prop_pos.position - u_player.pos).magnitude())
+    Some((prop_pos.position - target).magnitude())
 }
 
 /// Current hit points, if the entity has a health pool

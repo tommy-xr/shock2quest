@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
+import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end test against a real debug runtime. Requires game assets in
 // Data/ and compiles the runtime on first run, so it is opt-in:
@@ -57,12 +58,7 @@ test(
     // OLD position: awareness freezes, and during the pre-decay window the
     // monster gains no ground on the player's NEW location.
     const oldPos = await game.player.position();
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await game.player.teleport({ x: -13.61, y: -5.8, z: 30.75 });
-      await game.step({ frames: 5 });
-      const pos = await game.player.position();
-      if (Math.hypot(pos.x - -13.61, pos.z - 30.75) < 3) break;
-    }
+    await teleportVerified(game, { x: -13.61, y: -5.8, z: 30.75 });
     await game.step({ frames: 10 });
     detail = await game.entities.detail(monster.id);
     assert.equal(

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
+import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end test against a real debug runtime. Requires game assets in
 // Data/ and compiles the runtime on first run, so it is opt-in:
@@ -21,26 +22,6 @@ function distanceXZ(
   const dx = a[0] - b.x;
   const dz = a[2] - b.z;
   return Math.sqrt(dx * dx + dz * dz);
-}
-
-async function teleportVerified(
-  game: Awaited<ReturnType<typeof GameServer.launch>>,
-  target: { x: number; y: number; z: number },
-): Promise<void> {
-  // Teleports have been observed to intermittently no-op (reported success,
-  // position unchanged) - verify and retry so a stranded player doesn't
-  // invalidate the scenario.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await game.player.teleport(target);
-    await game.step({ frames: 5 });
-    const pos = await game.player.position();
-    const dx = pos.x - target.x;
-    const dz = pos.z - target.z;
-    if (Math.sqrt(dx * dx + dz * dz) < 3) {
-      return;
-    }
-  }
-  throw new Error("teleport did not take effect after 3 attempts");
 }
 
 test(
