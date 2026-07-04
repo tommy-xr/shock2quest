@@ -15,6 +15,7 @@
 //!   script runs a fixed timeline using the measured lengths of the cs090x
 //!   audio files (see SCHEMAS below).
 use cgmath::Vector3;
+use dark::motion::{MotionQueryItem, MotionQuerySelectionStrategy};
 use dark::properties::{Link, PropPosition};
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
@@ -305,14 +306,16 @@ fn teleport_to_marker(world: &World, entity_id: EntityId, marker: &str) -> Effec
 
 /// Script `CS9_HoloRumbler`: the four rumblers are parked out of sight; on
 /// TurnOn each appears at its matching `RumblerLoc<N>` marker (fading in via
-/// the composed `TransluceInOutHolo`), and on TurnOff is stashed at
-/// `SafeTeleportLoc`. (The original also plays a walk-in-place motion; we keep
-/// them idle.)
-pub struct CS9HoloRumbler {}
+/// the composed `TransluceInOutHolo`) and walks in place, like the original's
+/// `WalkInPlace` motion; on TurnOff it stops and is stashed at
+/// `SafeTeleportLoc`.
+pub struct CS9HoloRumbler {
+    walking: bool,
+}
 
 impl CS9HoloRumbler {
     pub fn new() -> CS9HoloRumbler {
-        CS9HoloRumbler {}
+        CS9HoloRumbler { walking: false }
     }
 
     /// "Rumbler3" -> "RumblerLoc3", matched via this entity's own sym name.
@@ -323,6 +326,33 @@ impl CS9HoloRumbler {
         let name = v_name.get(entity_id).ok()?.0.clone();
         let digit = name.chars().rev().find(|c| c.is_ascii_digit())?;
         Some(format!("RumblerLoc{digit}"))
+    }
+
+    /// The hologram's walk cycle: the rumblers are authored with
+    /// `PropCreaturePose { TAG, "cs 131" }` - the cutscene's walk-in-place
+    /// motion (resolves to `rmbplace`). The entity has no AI script, so this
+    /// script owns the animation and re-queues it on completion to loop.
+    fn walk_animation(world: &World, entity_id: EntityId) -> Effect {
+        let v_pose = world
+            .borrow::<View<dark::properties::PropCreaturePose>>()
+            .unwrap();
+        let Ok(pose) = v_pose.get(entity_id) else {
+            return Effect::NoEffect;
+        };
+
+        // "cs 131" -> tag "cs" with value 131; a plain tag has no value.
+        let mut parts = pose.motion_or_tag_name.split_whitespace();
+        let item = match (parts.next(), parts.next().and_then(|v| v.parse().ok())) {
+            (Some(tag), Some(value)) => MotionQueryItem::with_value(tag, value),
+            (Some(tag), None) => MotionQueryItem::new(tag),
+            (None, _) => return Effect::NoEffect,
+        };
+
+        Effect::QueueAnimationBySchema {
+            entity_id,
+            selection_strategy: MotionQuerySelectionStrategy::Random,
+            motion_query_items: vec![item],
+        }
     }
 }
 
@@ -336,11 +366,23 @@ impl Script for CS9HoloRumbler {
     ) -> Effect {
         match msg {
             MessagePayload::TurnOn { from: _ } => match Self::loc_marker_name(world, entity_id) {
-                Some(marker) => teleport_to_marker(world, entity_id, &marker),
+                Some(marker) => {
+                    self.walking = true;
+                    Effect::Combined {
+                        effects: vec![
+                            teleport_to_marker(world, entity_id, &marker),
+                            Self::walk_animation(world, entity_id),
+                        ],
+                    }
+                }
                 None => Effect::NoEffect,
             },
             MessagePayload::TurnOff { from: _ } => {
+                self.walking = false;
                 teleport_to_marker(world, entity_id, "SafeTeleportLoc")
+            }
+            MessagePayload::AnimationCompleted if self.walking => {
+                Self::walk_animation(world, entity_id)
             }
             _ => Effect::NoEffect,
         }
