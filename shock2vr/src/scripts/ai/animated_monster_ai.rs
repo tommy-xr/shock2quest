@@ -573,6 +573,12 @@ impl Script for AnimatedMonsterAI {
                 continue;
             }
 
+            // Don't preempt a performance in progress; the watch obj stays
+            // unplayed and can trigger once the current sequence finishes.
+            if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
+                break;
+            }
+
             if player_is_within_watch_obj(world, ent_id, watch_options.radius) {
                 // Immediately switch to Scripted sequence Behavior
                 self.played_ai_watch_obj.insert(ent_id);
@@ -601,6 +607,25 @@ impl Script for AnimatedMonsterAI {
             ));
 
         let rotation_effect = self.apply_steering_output(steering_output, time, entity_id);
+
+        // A finished scripted sequence (its final queued effects were drained
+        // by the steer above - scripted_state only reports Finished once they
+        // are) hands control back to the alertness-appropriate behavior. This
+        // runs every frame, so it also covers sequences ended by the
+        // watchdog, where no further AnimationCompleted may ever arrive.
+        let handback_effect =
+            if self.current_behavior.borrow().scripted_state() == ScriptedState::Finished {
+                self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
+                let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                let selection_strategy = self.next_selection(is_locomotion);
+                Effect::QueueAnimationBySchema {
+                    entity_id,
+                    motion_queries: vec![self.current_behavior.borrow().animation()],
+                    selection_strategy,
+                }
+            } else {
+                Effect::NoEffect
+            };
 
         let sensor_effect = self.try_tickle_sensor(world, physics, entity_id);
 
@@ -632,6 +657,7 @@ impl Script for AnimatedMonsterAI {
             behavior_change_effect,
             steering_effects,
             rotation_effect,
+            handback_effect,
             sensor_effect,
             alertness_debug_effect,
             fov_debug_effect,
@@ -695,7 +721,12 @@ impl Script for AnimatedMonsterAI {
                 // reveals the attacker even without line of sight (the dead
                 // case already returned above)
                 let searching = self.current_behavior.borrow().name() == "Search";
-                let alert_effect = if !lethal {
+                // A running scripted sequence isn't preempted by nonlethal
+                // damage (force_alertness replaces the behavior); consistent
+                // with the alertness protection in update().
+                let running_sequence =
+                    self.current_behavior.borrow().scripted_state() == ScriptedState::Running;
+                let alert_effect = if !lethal && !running_sequence {
                     // Any surviving hit reveals the attacker's position -
                     // refresh the last-known even when already alerted, so
                     // an AI chasing a stale sighting turns toward where the
@@ -728,6 +759,11 @@ impl Script for AnimatedMonsterAI {
                 if self.is_dead || is_killed(entity_id, world) {
                     return Effect::NoEffect;
                 }
+                // A re-fired trigger must not restart a performance in
+                // progress (the tripwires driving these are rarely ONCE)
+                if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
+                    return Effect::NoEffect;
+                }
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
                 if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
@@ -750,6 +786,10 @@ impl Script for AnimatedMonsterAI {
             MessagePayload::Signal { name: _ } => {
                 // Dead AIs stay dead - level signals reach corpses too
                 if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
+                // A re-fired signal must not restart a performance in progress
+                if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
                     return Effect::NoEffect;
                 }
                 // Do we have a response to this signal?
@@ -814,15 +854,10 @@ impl Script for AnimatedMonsterAI {
                         selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
                     }
                 } else {
-                    // Let the behavior react first (e.g. a scripted Play
-                    // action marks itself complete when its clip finishes).
-                    {
-                        let _ = self
-                            .current_behavior
-                            .borrow_mut()
-                            .handle_message(entity_id, world, physics, msg);
-                    }
-
+                    // (The behavior already saw this message via the
+                    // unconditional forward at the top of handle_message -
+                    // that's what lets a scripted Play action mark itself
+                    // complete, even when the took_damage branch detours.)
                     let next_behavior = {
                         self.current_behavior
                             .borrow_mut()
@@ -837,12 +872,12 @@ impl Script for AnimatedMonsterAI {
                         }
                     };
 
-                    // A finished scripted sequence hands control back to the
-                    // alertness-appropriate behavior (alertness kept updating
-                    // during the performance; apply it now).
+                    // A sequence that just finished is handed back to the
+                    // alertness behavior by update() (whose steer call drains
+                    // the sequence's final effects first); don't re-queue its
+                    // animation here.
                     if self.current_behavior.borrow().scripted_state() == ScriptedState::Finished {
-                        self.current_behavior =
-                            self.behavior_for_alertness(world, physics, entity_id);
+                        return Effect::NoEffect;
                     }
                     //self.current_behavior = Rc::new(IdleBehavior);
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
