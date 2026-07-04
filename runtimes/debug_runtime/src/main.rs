@@ -130,7 +130,16 @@ struct Args {
     /// watch the game interactively.
     #[arg(long)]
     visible: bool,
+
+    /// Opaque instance identifier echoed by /v1/health, so the client that
+    /// launched this process can verify it is talking to its own instance
+    /// and not another agent's runtime that happens to hold the same port.
+    #[arg(long)]
+    instance_id: Option<String>,
 }
+
+/// Instance identifier from --instance-id, echoed by /v1/health
+static INSTANCE_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 /// Default debug-camera head rotation.
 ///
@@ -210,6 +219,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    let _ = INSTANCE_ID.set(args.instance_id.clone());
 
     info!(
         "Starting debug runtime on port {} with mission: {}",
@@ -222,8 +232,16 @@ fn main() -> anyhow::Result<()> {
     // Create command channel for communication between HTTP server and game loop
     let (command_tx, command_rx) = mpsc::unbounded_channel::<RuntimeCommand>();
 
+    // Bind BEFORE starting the game: a taken port (another runtime raced us
+    // to it) must be a fast, loud exit - not a headless game loop that a
+    // client waits on until its launch timeout.
+    let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
+    let listener = rt
+        .block_on(tokio::net::TcpListener::bind(addr))
+        .map_err(|e| anyhow::anyhow!("failed to bind {}: {}", addr, e))?;
+
     // Start the HTTP server in a background task
-    let server_handle = rt.spawn(start_http_server(args.port, command_tx));
+    let server_handle = rt.spawn(start_http_server(listener, command_tx));
 
     // Run the game on the main thread (required for GLFW)
     let game_result = run_game_blocking(args, command_rx);
@@ -236,9 +254,10 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Start the HTTP server
+/// Start the HTTP server on an already-bound listener (binding happens in
+/// main so a taken port fails the process fast)
 async fn start_http_server(
-    port: u16,
+    listener: tokio::net::TcpListener,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> anyhow::Result<()> {
     // Create the router with health endpoint
@@ -276,8 +295,7 @@ async fn start_http_server(
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
-    // Bind to localhost only for security
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = listener.local_addr()?;
     info!("Debug runtime listening on http://{}", addr);
     info!(
         "camera eye height (standing): {} SS2 units = {} world units (above pawn) - shared with desktop via PLAYER_EYE_HEIGHT",
@@ -312,7 +330,6 @@ async fn start_http_server(
     info!("Test with: curl -X POST http://{}/v1/shutdown", addr);
 
     // Start the server with graceful shutdown
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -1510,7 +1527,8 @@ async fn health_check() -> Json<Value> {
         "status": "ok",
         "service": "debug_runtime",
         "version": "0.1.0",
-        "timestamp": chrono::Utc::now().to_rfc3339()
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "instance_id": INSTANCE_ID.get().cloned().flatten(),
     }))
 }
 
