@@ -224,9 +224,16 @@ For debugging visual/rendering changes without a full interactive session:
    curl http://127.0.0.1:8080/v1/input/actions
    curl -X POST http://127.0.0.1:8080/v1/input/action -d '{"action": "PathfindingTestCycle"}'
 
-   # Inject a script message into an entity (damage/frob/AI signal) - drives script
-   # behavior directly without a world interaction. Body is a tagged DebugEntityMessage.
+   # Inject a script message into an entity (damage/frob/AI signal/switch-link
+   # on/off) - drives script behavior directly without a world interaction.
+   # Body is a tagged DebugEntityMessage. TurnOn/TurnOff are what tripwires and
+   # buttons send over SwitchLinks - use them to exercise doors/traps directly.
    curl -X POST http://127.0.0.1:8080/v1/entities/122/message -d '{"type": "Damage", "amount": 5.0}'
+   curl -X POST http://127.0.0.1:8080/v1/entities/40/message -d '{"type": "TurnOn"}'
+
+   # Move the player: right stick = locomotion [strafe, forward], left stick
+   # x = turn, left stick y = fly up/down. Set a channel, then step to advance.
+   curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.thumbstick": [0.0, 1.0]}'
 
    # IMPORTANT: Always shut down when done to avoid interfering with user's session
    curl -X POST http://127.0.0.1:8080/v1/shutdown

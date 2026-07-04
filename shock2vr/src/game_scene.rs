@@ -475,7 +475,7 @@ pub struct DebugPathfindingStats {
 /// This is intentionally a small, serde-friendly subset of the engine's full
 /// `MessagePayload` enum, surfaced so remote clients (HTTP / SDK) can exercise
 /// script behaviors directly without simulating a world interaction. Extend it
-/// as new debug scenarios need more message kinds (e.g. `TurnOn` / `TurnOff`).
+/// as new debug scenarios need more message kinds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DebugEntityMessage {
@@ -489,6 +489,10 @@ pub enum DebugEntityMessage {
     SetAlertness {
         level: dark::properties::AIAlertLevel,
     },
+    /// Switch-link activate (what a tripwire/button sends to its targets).
+    TurnOn,
+    /// Switch-link deactivate.
+    TurnOff,
 }
 
 /// Status of the interactive pathfinding test system
