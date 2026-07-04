@@ -362,7 +362,14 @@ impl MissionCore {
         world.add_unique(GlobalTemplateHierarchy(
             ss2_entity_info::get_hierarchy(&entity_info_rc).clone(),
         ));
-        let (psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
+        let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
+        // Player-facing discipline names come from the psihelp string table;
+        // a data install without it just keeps the gamesys symbolic names.
+        if let Some(psi_strings) =
+            asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "psihelp.str")
+        {
+            crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
+        }
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
 
