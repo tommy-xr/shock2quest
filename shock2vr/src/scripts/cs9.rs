@@ -52,6 +52,17 @@ const SCHEMAS: [(&str, f32); 9] = [
 const INITIAL_DELAY: f32 = 2.0;
 const INTER_SCHEMA_GAP: f32 = 0.6;
 
+/// The six named controller screens on the theatre's front wall (each relays
+/// to its side-wall copies via SwitchLinks).
+const SCREENS: [&str; 6] = [
+    "ShodanScreenTL",
+    "ShodanScreenTM",
+    "ShodanScreenTR",
+    "ShodanScreenBL",
+    "ShodanScreenBM",
+    "ShodanScreenBR",
+];
+
 #[derive(Clone, Copy, Debug)]
 enum Cs9Action {
     /// Send TurnOn to every entity with this sym name.
@@ -60,6 +71,9 @@ enum Cs9Action {
     TurnOffByName(&'static str),
     /// Start a monologue schema.
     PlaySchema(&'static str),
+    /// Fade the theatre screens in, if the MovingWallsOpen report from
+    /// CS9_DoorReporter hasn't already done so.
+    ScreensOnFallback,
 }
 
 /// Master sequencer for the reveal (script `CS9_MasterControl`, on the
@@ -70,19 +84,13 @@ pub struct CS9MasterControl {
     /// (fire time, action), sorted by time; `next` indexes the first unfired.
     schedule: Vec<(f32, Cs9Action)>,
     next: usize,
+    /// Set when the theatre screens have been faded in (by the DoorReporter's
+    /// MovingWallsOpen event, or the timed fallback).
+    screens_faded_in: bool,
 }
 
 impl CS9MasterControl {
     pub fn new() -> CS9MasterControl {
-        const SCREENS: [&str; 6] = [
-            "ShodanScreenTL",
-            "ShodanScreenTM",
-            "ShodanScreenTR",
-            "ShodanScreenBL",
-            "ShodanScreenBM",
-            "ShodanScreenBR",
-        ];
-
         let mut schedule: Vec<(f32, Cs9Action)> = vec![
             // Seal the player in and start pulling the theatre apart.
             (0.0, Cs9Action::TurnOnByName("MasterForceField")),
@@ -93,15 +101,13 @@ impl CS9MasterControl {
         for (i, (schema, duration)) in SCHEMAS.iter().enumerate() {
             schedule.push((t, Cs9Action::PlaySchema(schema)));
             match i {
-                // cs0901: SHODAN appears. The screens fade in once the moving
-                // walls have pulled back (~6s into the panel stagger), so the
-                // reveal shows dark screens and the face materializes during
-                // the opening line. (PR-later: gate on CS9_DoorReporter's
-                // MovingWallsOpen instead of a timed offset.)
+                // cs0901: SHODAN appears. The screens fade in when the
+                // reporter panel signals MovingWallsOpen (dark screens are
+                // revealed, then the face materializes during the opening
+                // line); this scheduled entry is a fallback in case the
+                // report never arrives.
                 0 => {
-                    for s in SCREENS {
-                        schedule.push((t + 6.0, Cs9Action::TurnOnByName(s)));
-                    }
+                    schedule.push((t + 16.0, Cs9Action::ScreensOnFallback));
                 }
                 // cs0903: the "garden grove" section - the exhibits appear.
                 2 => {
@@ -137,56 +143,84 @@ impl CS9MasterControl {
             elapsed: 0.0,
             schedule,
             next: 0,
+            screens_faded_in: false,
         }
     }
 
-    fn run_action(&self, entity_id: EntityId, world: &World, action: Cs9Action) -> Effect {
+    /// Fade the theatre screens in, once.
+    fn fire_screens_on(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        if self.screens_faded_in {
+            return Effect::NoEffect;
+        }
+        self.screens_faded_in = true;
+        info!("cs9: fading theatre screens in");
+        let effects = SCREENS
+            .iter()
+            .map(|name| send_by_name(entity_id, world, name, /* on */ true))
+            .collect();
+        Effect::Combined { effects }
+    }
+
+    fn run_action(&mut self, entity_id: EntityId, world: &World, action: Cs9Action) -> Effect {
         info!("cs9: firing action {:?}", action);
         match action {
-            Cs9Action::TurnOnByName(name) | Cs9Action::TurnOffByName(name) => {
-                let targets = get_entities_by_name(world, name);
-                if targets.is_empty() {
-                    info!("cs9: no entities named '{}'", name);
-                }
-                let effects = targets
-                    .into_iter()
-                    .map(|to| {
-                        let payload = match action {
-                            Cs9Action::TurnOnByName(_) => {
-                                MessagePayload::TurnOn { from: entity_id }
-                            }
-                            _ => MessagePayload::TurnOff { from: entity_id },
-                        };
-                        Effect::Send {
-                            msg: Message { to, payload },
-                        }
-                    })
-                    .collect();
-                Effect::Combined { effects }
-            }
+            Cs9Action::TurnOnByName(name) => send_by_name(entity_id, world, name, true),
+            Cs9Action::TurnOffByName(name) => send_by_name(entity_id, world, name, false),
             Cs9Action::PlaySchema(schema) => Effect::PlaySound {
                 handle: AudioHandle::new(),
                 name: schema.to_string(),
             },
+            Cs9Action::ScreensOnFallback => self.fire_screens_on(entity_id, world),
         }
     }
+}
+
+/// Send TurnOn/TurnOff to every entity with the given sym name.
+fn send_by_name(from: EntityId, world: &World, name: &str, on: bool) -> Effect {
+    let targets = get_entities_by_name(world, name);
+    if targets.is_empty() {
+        info!("cs9: no entities named '{}'", name);
+    }
+    let effects = targets
+        .into_iter()
+        .map(|to| {
+            let payload = if on {
+                MessagePayload::TurnOn { from }
+            } else {
+                MessagePayload::TurnOff { from }
+            };
+            Effect::Send {
+                msg: Message { to, payload },
+            }
+        })
+        .collect();
+    Effect::Combined { effects }
 }
 
 impl Script for CS9MasterControl {
     fn handle_message(
         &mut self,
-        _entity_id: EntityId,
-        _world: &World,
+        entity_id: EntityId,
+        world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        if let MessagePayload::TurnOn { from: _ } = msg {
-            if !self.started {
-                info!("cs9: master control tripped - starting cutscene");
-                self.started = true;
+        match msg {
+            MessagePayload::TurnOn { from: _ } => {
+                if !self.started {
+                    info!("cs9: master control tripped - starting cutscene");
+                    self.started = true;
+                }
+                Effect::NoEffect
             }
+            // CS9_DoorReporter tells us the moving walls finished opening -
+            // reveal SHODAN on the now-exposed screens.
+            MessagePayload::Signal { name } if name == "MovingWallsOpen" && self.started => {
+                info!("cs9: MovingWallsOpen reported");
+                self.fire_screens_on(entity_id, world)
+            }
+            _ => Effect::NoEffect,
         }
-        Effect::NoEffect
     }
 
     fn update(
@@ -517,6 +551,51 @@ impl Script for CS9EggsAndGrubs {
             // No Teleport link: leave the object where it is (it may already
             // sit at its display spot and only need the fade-in).
             None => turn_on,
+        }
+    }
+}
+
+/// Script `CS9_DoorReporter` (on one designated moving-wall panel): forwards
+/// the door's open/close completion to the cutscene master as
+/// MovingWallsOpen/MovingWallsClose, so the show reacts to the walls actually
+/// finishing instead of a guessed time.
+pub struct CS9DoorReporter {}
+
+impl CS9DoorReporter {
+    pub fn new() -> CS9DoorReporter {
+        CS9DoorReporter {}
+    }
+}
+
+impl Script for CS9DoorReporter {
+    fn handle_message(
+        &mut self,
+        _entity_id: EntityId,
+        world: &World,
+        _physics: &PhysicsWorld,
+        msg: &MessagePayload,
+    ) -> Effect {
+        let MessagePayload::Signal { name } = msg else {
+            return Effect::NoEffect;
+        };
+        let report = match name.as_str() {
+            "DoorOpen" => "MovingWallsOpen",
+            "DoorClose" => "MovingWallsClose",
+            _ => return Effect::NoEffect,
+        };
+        match get_first_entity_by_name(world, "CutSceneNine") {
+            Some(master) => Effect::Send {
+                msg: Message {
+                    to: master,
+                    payload: MessagePayload::Signal {
+                        name: report.to_string(),
+                    },
+                },
+            },
+            None => {
+                info!("cs9: door reporter found no CutSceneNine");
+                Effect::NoEffect
+            }
         }
     }
 }
