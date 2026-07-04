@@ -25,7 +25,7 @@ test(
         assert.match(error.message, /debug_runtime failed to start/);
         assert.match(
           error.message,
-          /exited early with code/,
+          /process exited early \(code/,
           "error should report the process exit",
         );
         assert.match(

@@ -198,8 +198,10 @@ export class GameServer extends Game implements AsyncDisposable {
       } catch (error) {
         lastError = error;
         const message = String(error);
+        // "failed to bind" comes from the runtime's own logs (it binds in
+        // main() before the game starts); a crash for any other reason -
+        // bad mission, panic during load - must NOT retry.
         const lostPortRace =
-          message.includes("exited early") ||
           message.includes("different debug_runtime instance") ||
           message.includes("failed to bind");
         if (!lostPortRace) {
