@@ -35,9 +35,13 @@ impl VRHandModelPerHandAdjustments {
     }
 
     pub fn flip_x(self) -> VRHandModelPerHandAdjustments {
+        // NOTE: the scale mirror is currently inert (SetPositionRotation
+        // hardcodes scale 1), so the left hand holds the *unmirrored* model.
+        // The offset must therefore NOT be mirrored - it seats the same
+        // unmirrored geometry at the same hand-local point (verified against
+        // left-hand grip screenshots).
         VRHandModelPerHandAdjustments {
             scale: vec3(-self.scale.x, self.scale.y, self.scale.z),
-            offset: vec3(-self.offset.x, self.offset.y, self.offset.z),
             ..self
         }
     }
@@ -114,6 +118,16 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     // Hand model adjustments for VR
     // Specify overrides for particular models with how they should be oriented
     // relative ot the virtual hand
+    // A weapon whose left-hand placement is the right-hand adjustments
+    // mirrored (flip_x)
+    fn symmetric(right: VRHandModelPerHandAdjustments) -> VRHandModelAdjustments {
+        VRHandModelAdjustments::new(
+            right.clone().flip_x(),
+            right,
+            Quaternion::from_angle_y(Deg(0.0)),
+        )
+    }
+
     let items = vec![
         // Weapons - first-person hand models (_h), used when wielded in flat
         ("atek_h", held_weapon.clone()),
@@ -130,41 +144,26 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // this and show the world models grip fine with the same offsets.
         (
             "atek_w",
-            VRHandModelAdjustments::new(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.02, 0.04, -0.045))
-                    .flip_x(),
+            symmetric(
                 held_weapon_right
                     .clone()
                     .with_offset(vec3(0.02, 0.04, -0.045)),
-                Quaternion::from_angle_y(Deg(0.0)),
             ),
         ),
         (
             "ar15_w",
-            VRHandModelAdjustments::new(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(-0.19, 0.0, -0.045))
-                    .flip_x(),
+            symmetric(
                 held_weapon_right
                     .clone()
                     .with_offset(vec3(-0.19, 0.0, -0.045)),
-                Quaternion::from_angle_y(Deg(0.0)),
             ),
         ),
         (
             "sg_w",
-            VRHandModelAdjustments::new(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(-0.21, 0.0, -0.045))
-                    .flip_x(),
+            symmetric(
                 held_weapon_right
                     .clone()
                     .with_offset(vec3(-0.21, 0.0, -0.045)),
-                Quaternion::from_angle_y(Deg(0.0)),
             ),
         ),
         (
@@ -182,14 +181,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ("al_w", held_weapon.clone()),
         // The wrench's handle runs along the weapon axis, so it takes the
         // held-weapon rotation (handle through the fist, head forward)
-        (
-            "wrench_w",
-            VRHandModelAdjustments::new(
-                wrench_right.clone().flip_x(),
-                wrench_right.clone(),
-                Quaternion::from_angle_y(Deg(0.0)),
-            ),
-        ),
+        ("wrench_w", symmetric(wrench_right.clone())),
         // World items
         ("battery", held_item.clone()),
         ("batteryb", held_item.clone()),
