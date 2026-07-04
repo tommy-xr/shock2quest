@@ -385,6 +385,7 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::ParticleAttachement(_) => "ParticleAttachement".to_string(),
                 Link::TPathInit => "TPathInit".to_string(),
                 Link::TPath(_) => "TPath".to_string(),
+                Link::Teleport => "Teleport".to_string(),
             })
             .collect();
 
