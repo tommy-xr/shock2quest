@@ -83,6 +83,10 @@ pub struct PsiPowerInfo {
     pub template_id: i32,
     /// The gamesys symbolic name (e.g. "Cryokinesis", "Inviso").
     pub name: String,
+    /// The player-facing discipline name (e.g. "Projected Cryokinesis",
+    /// "Photonic Redirection"), from `psihelp.str` (`Psi<power_id>` entries).
+    /// `None` if the strings file lacks the power.
+    pub display_name: Option<String>,
     pub power: PropPsiPower,
     /// The power's `Projectile` links, sorted by `order` (the required PSI
     /// stat level, 1..8). Empty for non-projectile powers.
@@ -148,6 +152,7 @@ pub fn build_psi_power_registry(
         powers.push(PsiPowerInfo {
             template_id: *template_id,
             name,
+            display_name: None,
             power,
             projectiles,
             overloadable: OVERLOADABLE_TEMPLATE_IDS.contains(template_id),
@@ -167,6 +172,24 @@ pub fn build_psi_power_registry(
             index: default_index,
         },
     )
+}
+
+/// Fill in player-facing discipline names from the `psihelp.str` string
+/// table: each power's entry is keyed `Psi<power_id>` and its first line is
+/// the discipline name (the rest is the help text).
+pub fn apply_display_names(
+    powers: &mut GlobalPsiPowers,
+    strings: &std::collections::HashMap<String, String>,
+) {
+    for power in &mut powers.0 {
+        // The strings importer lowercases keys ("Psi6:" -> "psi6").
+        let key = format!("psi{}", power.power.power_id);
+        power.display_name = strings
+            .get(&key)
+            .and_then(|text| text.lines().next())
+            .map(|line| line.trim().to_owned())
+            .filter(|line| !line.is_empty());
+    }
 }
 
 /// A template's `Projectile` links (with data), walking the inheritance

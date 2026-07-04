@@ -12,7 +12,7 @@ use shipyard::World;
 
 use super::{
     get_health_percentage, get_psi_percentage, get_wielded_ammo, get_wielded_ammo_icon,
-    get_wielded_ammo_type, get_wielded_psi_charge,
+    get_wielded_ammo_type, get_wielded_psi_charge, get_wielded_psi_power,
 };
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
@@ -69,6 +69,16 @@ const AMMO_ICON: Rect = Rect::new(AMMO_X - 40.0, AMMO_Y + 16.0, 32.0, 32.0);
 const AMMO_TYPE_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 44.0, AMMO_W, 16.0);
 const AMMO_TYPE_TEXT_SIZE: f32 = 12.0;
 
+// Selected psi power display - drawn in the ammo section while the psi amp
+// is wielded (replacing the meaningless clip readout): the tier badge
+// (AmPsi<tier>1.PCX, 32x19 art), the psi point cost as the count, and the
+// discipline name below.
+const PSI_TIER_BADGE: Rect = Rect::new(AMMO_X - 44.0, AMMO_Y + 22.0, 32.0, 19.0);
+// The discipline names ("Projected Cryokinesis") are long, so the label rect
+// extends left of the gauge and uses a smaller size than the ammo-type label.
+const PSI_POWER_NAME: Rect = Rect::new(AMMO_X - 60.0, AMMO_Y + 44.0, AMMO_W + 60.0, 16.0);
+const PSI_POWER_NAME_SIZE: f32 = 10.0;
+
 // Psi overload meter - drawn center-screen below the crosshair while the psi
 // amp's trigger is held on an overloadable power (and briefly after release,
 // flashing the result). Uses the original meter art (res/iface, 64x16):
@@ -90,6 +100,7 @@ pub(crate) fn build_flat_hud_canvas(
     health_fraction: f32,
     psi_fraction: f32,
     psi_charge: Option<RuntimePropPsiCharge>,
+    psi_power: Option<(String, i32)>,
     ammo: Option<i32>,
     ammo_icon: Option<String>,
     ammo_type: Option<String>,
@@ -142,6 +153,32 @@ pub(crate) fn build_flat_hud_canvas(
         }
     }
 
+    // Selected psi power (psi amp wielded): the ammo section shows the
+    // discipline instead of a clip - tier badge, psi cost as the count, and
+    // the discipline name.
+    if let Some((power_name, tier)) = psi_power {
+        canvas
+            .image(AMMO_GAUGE, "AMMOBACK.PCX")
+            .image(PSI_TIER_BADGE, &format!("AmPsi{}1.PCX", tier.clamp(1, 5)))
+            .text(
+                AMMO_TEXT,
+                &format!("{tier}"),
+                "mainfont.fon",
+                AMMO_TEXT_SIZE,
+                HAlign::Center,
+                VAlign::Middle,
+            )
+            .text(
+                PSI_POWER_NAME,
+                &power_name.to_ascii_uppercase(),
+                "mainfont.fon",
+                PSI_POWER_NAME_SIZE,
+                HAlign::Center,
+                VAlign::Middle,
+            );
+        return canvas;
+    }
+
     // Ammo gauge (only when a weapon with a clip is wielded).
     if let Some(rounds) = ammo {
         canvas.image(AMMO_GAUGE, "AMMOBACK.PCX").text(
@@ -182,6 +219,7 @@ pub(crate) fn create_flat_hud(
         get_health_percentage(world),
         get_psi_percentage(world),
         get_wielded_psi_charge(world),
+        get_wielded_psi_power(world),
         get_wielded_ammo(world),
         get_wielded_ammo_icon(world),
         get_wielded_ammo_type(world),
@@ -197,14 +235,14 @@ mod tests {
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, None, None);
+        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, None, None, None);
         assert_eq!(canvas.element_count(), 6);
     }
 
     #[test]
     fn wielding_a_weapon_adds_the_ammo_gauge() {
         // ...plus the ammo backdrop + count when a clip is present.
-        let canvas = build_flat_hud_canvas(1.0, 0.75, None, Some(12), None, None);
+        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, Some(12), None, None);
         assert_eq!(canvas.element_count(), 8);
     }
 
@@ -215,9 +253,26 @@ mod tests {
             1.0,
             0.75,
             None,
+            None,
             Some(12),
             Some("STD_I.PCX".to_string()),
             Some("std".to_string()),
+        );
+        assert_eq!(canvas.element_count(), 10);
+    }
+
+    #[test]
+    fn psi_amp_shows_discipline_instead_of_clip() {
+        // Base 6 + gauge backdrop + tier badge + tier count + name = 10;
+        // the clip readout is suppressed even though the amp has ammo=0.
+        let canvas = build_flat_hud_canvas(
+            1.0,
+            0.75,
+            None,
+            Some(("Projected Cryokinesis".to_string(), 1)),
+            Some(0),
+            None,
+            None,
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -236,6 +291,6 @@ mod tests {
     #[test]
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
-        let _ = build_flat_hud_canvas(2.0, -1.0, None, None, None, None);
+        let _ = build_flat_hud_canvas(2.0, -1.0, None, None, None, None, None);
     }
 }

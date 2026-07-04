@@ -148,6 +148,42 @@ pub(crate) fn get_psi_percentage(world: &World) -> f32 {
     0.0 // No psi pool - empty bar
 }
 
+/// The selected psi power to display in the HUD's weapon/ammo section:
+/// `(discipline name, tier)`. `Some` only while the wielded weapon is the
+/// psi amp (class tag `weapontype psiamp`).
+pub(crate) fn get_wielded_psi_power(world: &World) -> Option<(String, i32)> {
+    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    let weapon = player_info.left_hand_entity_id?;
+
+    // Is the wielded weapon the psi amp? Resolved via its template's class
+    // tags, the same mechanism as `get_wielded_ammo_type`.
+    let template_id = world
+        .borrow::<View<dark::properties::PropTemplateId>>()
+        .ok()?
+        .get(weapon)
+        .ok()?
+        .template_id;
+    let class_tags = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateClassTags>>()
+        .ok()?;
+    if class_tags.0.get(&template_id)?.get("weapontype")? != "psiamp" {
+        return None;
+    }
+
+    let powers = world
+        .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
+        .ok()?;
+    let selection = world
+        .borrow::<UniqueView<crate::psi::PsiPowerSelection>>()
+        .ok()?;
+    let power = powers.0.get(selection.index)?;
+    let name = power
+        .display_name
+        .clone()
+        .unwrap_or_else(|| power.name.clone());
+    Some((name, power.power.psi_cost))
+}
+
 /// The wielded psi amp's hold-to-overload meter state, or `None` when no
 /// charge is in progress (or nothing is wielded).
 pub(crate) fn get_wielded_psi_charge(
