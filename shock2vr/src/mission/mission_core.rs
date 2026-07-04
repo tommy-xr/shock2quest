@@ -4054,6 +4054,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
             DebugEntityMessage::SetAlertness { level } => MessagePayload::SetAlertness { level },
+            // Debug injections have no real sender; use the target itself.
+            DebugEntityMessage::TurnOn => MessagePayload::TurnOn { from: id },
+            DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },
         };
 
         self.script_world.dispatch(Message { to: id, payload });
