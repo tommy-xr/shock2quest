@@ -195,6 +195,16 @@ pub enum Effect {
         motion_query_items: Vec<MotionQueryItem>,
     },
 
+    /// Like `QueueAnimationBySchema`, but interrupts the playing animation
+    /// immediately (cross-fading from its current pose) and clears the
+    /// queue instead of pushing on top of it. Used for reactions that must
+    /// not wait for the in-flight clip, e.g. death.
+    PlayAnimationBySchema {
+        entity_id: EntityId,
+        selection_strategy: MotionQuerySelectionStrategy,
+        motion_query_items: Vec<MotionQueryItem>,
+    },
+
     ReplaceEntity {
         entity_id: EntityId,
         template_id: i32,

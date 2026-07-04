@@ -304,6 +304,46 @@ impl AnimatedMonsterAI {
         ])
     }
 
+    /// Switch to DeadBehavior and start the death animation and sound. The
+    /// crumple interrupts whatever clip is playing (cross-fading from its
+    /// current pose) and clears the animation queue, so no interrupted clip
+    /// resumes under the corpse. Latching `is_dead` up front makes the
+    /// AnimationCompleted death branch a no-op afterwards (including the
+    /// re-dispatch queued when no crumple motion is found), so the crumple
+    /// and death sound play only once.
+    fn enter_death(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
+        self.is_dead = true;
+
+        let death_sound_effect = if let Some(voice_index) =
+            crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id)
+        {
+            // Randomly choose between loud and soft death sound
+            let concept = if rand::random::<bool>() {
+                "comdieloud".to_string()
+            } else {
+                "comdiesoft".to_string()
+            };
+
+            Effect::PlaySpeech {
+                entity_id,
+                voice_index,
+                concept,
+                tags: vec![],
+            }
+        } else {
+            Effect::NoEffect
+        };
+
+        let death_animation = Effect::PlayAnimationBySchema {
+            entity_id,
+            motion_query_items: vec![MotionQueryItem::new("crumple")],
+            selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+        };
+
+        Effect::combine(vec![death_sound_effect, death_animation])
+    }
+
     /// Publish the current behavior name for debug introspection. Update
     /// runs each frame, so this covers every behavior-change site with at
     /// most one frame of lag (e.g. handle_message changes, or the
@@ -511,6 +551,13 @@ impl Script for AnimatedMonsterAI {
         }
         match msg {
             MessagePayload::Damage { amount } => {
+                // Corpses don't bleed: no HP churn, aggro, or replayed death
+                // from shooting a dead monster. The world check also covers a
+                // post-load corpse, whose recreated script has is_dead reset
+                // while its hit points are still <= 0
+                if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
                 // TODO: Let behavior handle this?
                 self.took_damage = true;
                 let hit_points_effect = Effect::AdjustHitPoints {
@@ -538,8 +585,7 @@ impl Script for AnimatedMonsterAI {
                 // actually raises the level, so a capped AI isn't reset -
                 // and doesn't restart its animation - on every hit
                 let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
-                let alert_effect = if !self.is_dead
-                    && !lethal
+                let alert_effect = if !lethal
                     && matches!(
                         self.alertness.current_level,
                         AIAlertLevel::Lowest | AIAlertLevel::Low
@@ -550,7 +596,15 @@ impl Script for AnimatedMonsterAI {
                 } else {
                     Effect::NoEffect
                 };
-                Effect::combine(vec![hit_points_effect, alert_effect])
+                // A killing blow reacts immediately - the death animation
+                // interrupts the in-flight clip (cross-fading from its
+                // current pose) instead of waiting for it to complete
+                let death_effect = if lethal {
+                    self.enter_death(world, entity_id)
+                } else {
+                    Effect::NoEffect
+                };
+                Effect::combine(vec![hit_points_effect, alert_effect, death_effect])
             }
             MessagePayload::TurnOn { from: _ } => {
                 // Dead AIs stay dead - a corpse can still be a SwitchLink
@@ -619,41 +673,9 @@ impl Script for AnimatedMonsterAI {
                 if self.is_dead {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
-                    self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
-                    // Latch immediately: the is_dead branch above then
-                    // swallows every later completion (including the
-                    // synchronous re-dispatch when no crumple motion is
-                    // found), so the crumple and death sound play only once
-                    self.is_dead = true;
-
-                    // Play death sound effect immediately
-                    let death_sound_effect = if let Some(voice_index) =
-                        crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id)
-                    {
-                        // Randomly choose between loud and soft death sound
-                        let concept = if rand::random::<bool>() {
-                            "comdieloud".to_string()
-                        } else {
-                            "comdiesoft".to_string()
-                        };
-
-                        Effect::PlaySpeech {
-                            entity_id,
-                            voice_index,
-                            concept,
-                            tags: vec![],
-                        }
-                    } else {
-                        Effect::NoEffect
-                    };
-
-                    let death_animation = Effect::QueueAnimationBySchema {
-                        entity_id,
-                        motion_query_items: vec![MotionQueryItem::new("crumple")],
-                        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
-                    };
-
-                    Effect::combine(vec![death_sound_effect, death_animation])
+                    // Fallback for kills that didn't arrive as a Damage
+                    // message (the lethal-damage path enters death eagerly)
+                    self.enter_death(world, entity_id)
                 } else if self.took_damage {
                     self.took_damage = false;
                     Effect::QueueAnimationBySchema {

@@ -31,7 +31,10 @@ use dark::{
     },
     mission::{SongParams, room_database::RoomDatabase},
     model::Model,
-    motion::{AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem},
+    motion::{
+        AnimationClip, AnimationEvent, AnimationPlayer, MotionDB, MotionQuery, MotionQueryItem,
+        MotionQuerySelectionStrategy,
+    },
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
@@ -1068,6 +1071,73 @@ impl MissionCore {
         self.world.run(run_attachment_update);
     }
 
+    /// Resolve a tag-based motion query for `entity_id` and hand the clip to
+    /// `apply` (`AnimationPlayer::queue_animation` to push on the queue,
+    /// `AnimationPlayer::play_animation` to interrupt and replace it). When
+    /// no motion matches, dispatches `AnimationCompleted` so the requesting
+    /// script isn't left waiting on a clip that never started.
+    fn apply_animation_by_schema(
+        &mut self,
+        global_context: &GlobalContext,
+        asset_cache: &mut AssetCache,
+        entity_id: EntityId,
+        motion_query_items: Vec<MotionQueryItem>,
+        selection_strategy: MotionQuerySelectionStrategy,
+        apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
+    ) {
+        let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
+        if let Some(player) = maybe_player {
+            let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
+
+            let v_motion_actor_tag = self.world.borrow::<View<PropMotionActorTags>>().unwrap();
+
+            if let (Ok(creature_type), Ok(motion_actor_tag)) = (
+                v_creature_type.get(entity_id),
+                v_motion_actor_tag.get(entity_id),
+            ) {
+                let mut actor_tags = motion_actor_tag
+                    .tags
+                    .iter()
+                    .map(|tag| MotionQueryItem::new(tag).optional())
+                    .collect::<Vec<MotionQueryItem>>();
+
+                let mut query_items = motion_query_items.clone();
+
+                query_items.append(&mut actor_tags);
+
+                let creature_definition = get_creature_definition(creature_type.0).unwrap();
+
+                let actor_type = creature_definition.actor_type.to_u32().unwrap();
+
+                let query = MotionQuery::new(actor_type, query_items)
+                    .with_selection_strategy(selection_strategy);
+
+                let maybe_next_animation = global_context.motiondb.query(query.clone());
+                if let Some(next_animation) = maybe_next_animation {
+                    let maybe_clip = asset_cache
+                        .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
+
+                    if let Some(clip) = maybe_clip {
+                        *player = apply(player, clip);
+                    } else {
+                        game_log!(
+                            WARN,
+                            "Unable to load animation clip: {:?}_.mc",
+                            next_animation
+                        );
+                    }
+                } else {
+                    game_log!(WARN, "Unable to find animation for query: {:?}", &query);
+                    // If we couldn't find an animation... just stop the current one
+                    self.script_world.dispatch(Message {
+                        payload: MessagePayload::AnimationCompleted,
+                        to: entity_id,
+                    });
+                }
+            }
+        }
+    }
+
     fn update_animations(&mut self, time: &Time) {
         for (id, player) in self.id_to_animation_player.iter_mut() {
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
@@ -1910,61 +1980,29 @@ impl MissionCore {
                     motion_query_items,
                     selection_strategy,
                 } => {
-                    let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
-                    if let Some(player) = maybe_player {
-                        let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
+                    self.apply_animation_by_schema(
+                        global_context,
+                        asset_cache,
+                        entity_id,
+                        motion_query_items,
+                        selection_strategy,
+                        AnimationPlayer::queue_animation,
+                    );
+                }
 
-                        let v_motion_actor_tag =
-                            self.world.borrow::<View<PropMotionActorTags>>().unwrap();
-
-                        if let (Ok(creature_type), Ok(motion_actor_tag)) = (
-                            v_creature_type.get(entity_id),
-                            v_motion_actor_tag.get(entity_id),
-                        ) {
-                            let mut actor_tags = motion_actor_tag
-                                .tags
-                                .iter()
-                                .map(|tag| MotionQueryItem::new(tag).optional())
-                                .collect::<Vec<MotionQueryItem>>();
-
-                            let mut query_items = motion_query_items.clone();
-
-                            query_items.append(&mut actor_tags);
-
-                            let creature_definition =
-                                get_creature_definition(creature_type.0).unwrap();
-
-                            let actor_type = creature_definition.actor_type.to_u32().unwrap();
-
-                            let query = MotionQuery::new(actor_type, query_items)
-                                .with_selection_strategy(selection_strategy);
-
-                            let maybe_next_animation = global_context.motiondb.query(query.clone());
-                            if let Some(next_animation) = maybe_next_animation {
-                                let maybe_clip = asset_cache.get_opt(
-                                    &ANIMATION_CLIP_IMPORTER,
-                                    &format!("{}_.mc", next_animation),
-                                );
-
-                                if let Some(clip) = maybe_clip {
-                                    *player = AnimationPlayer::queue_animation(player, clip);
-                                } else {
-                                    game_log!(
-                                        WARN,
-                                        "Unable to load animation clip: {:?}_.mc",
-                                        next_animation
-                                    );
-                                }
-                            } else {
-                                game_log!(WARN, "Unable to find animation for query: {:?}", &query);
-                                // If we couldn't find an animation... just stop the current one
-                                self.script_world.dispatch(Message {
-                                    payload: MessagePayload::AnimationCompleted,
-                                    to: entity_id,
-                                });
-                            }
-                        }
-                    }
+                Effect::PlayAnimationBySchema {
+                    entity_id,
+                    motion_query_items,
+                    selection_strategy,
+                } => {
+                    self.apply_animation_by_schema(
+                        global_context,
+                        asset_cache,
+                        entity_id,
+                        motion_query_items,
+                        selection_strategy,
+                        AnimationPlayer::play_animation,
+                    );
                 }
 
                 Effect::DebugCycleHitboxPose => {

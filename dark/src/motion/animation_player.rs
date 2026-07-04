@@ -22,6 +22,9 @@ pub enum AnimationEvent {
 struct BlendState {
     from_clip: Rc<AnimationClip>,
     from_frame: f32,
+    /// Whether the interrupted clip loops - a fade that outlives the clip
+    /// wraps a looping from-pose but holds a one-shot on its last frame
+    from_looping: bool,
     duration: f32,
     elapsed: f32,
 }
@@ -74,12 +77,13 @@ impl AnimationPlayer {
             .animation
             .push_front((animation.clone(), AnimationFlags::PlayOnce));
 
-        let blend_state = if let Some((current_clip, _)) = player.animation.first() {
+        let blend_state = if let Some((current_clip, flags)) = player.animation.first() {
             let duration = animation.blend_length.as_secs_f32();
             if duration > 0.0 {
                 Some(BlendState {
                     from_clip: current_clip.clone(),
                     from_frame: player.current_frame as f32,
+                    from_looping: matches!(flags, AnimationFlags::Loop),
                     duration,
                     elapsed: 0.0,
                 })
@@ -93,6 +97,63 @@ impl AnimationPlayer {
         AnimationPlayer {
             additional_joint_transforms: player.additional_joint_transforms.clone(),
             animation: new_animation,
+            last_animation: None,
+            current_frame: 0,
+            remaining_time: 0.0,
+            blend_state,
+            cancel_root_motion: player.cancel_root_motion,
+        }
+    }
+
+    /// Play `animation` immediately, replacing the whole queue (unlike
+    /// `queue_animation`, which pushes on top and lets interrupted clips
+    /// resume later). Cross-fades from the interrupted pose over the clip's
+    /// authored blend length, floored so a zero-blend clip doesn't pop when
+    /// it cuts a clip mid-play.
+    pub fn play_animation(
+        player: &AnimationPlayer,
+        animation: Rc<AnimationClip>,
+    ) -> AnimationPlayer {
+        const MIN_INTERRUPT_BLEND_SECS: f32 = 0.15;
+
+        // Fade from the playing clip's current pose, or from the frozen
+        // last-frame pose when the queue already drained. Known limit: an
+        // interrupt landing mid-blend fades from the head clip's pure pose,
+        // not the blended one on screen - a small pop proportional to how
+        // fresh the interrupted blend was.
+        let blend_from = player
+            .animation
+            .first()
+            .map(|(clip, flags)| {
+                (
+                    clip.clone(),
+                    player.current_frame as f32,
+                    matches!(flags, AnimationFlags::Loop),
+                )
+            })
+            .or_else(|| {
+                player.last_animation.as_ref().map(|clip| {
+                    (
+                        clip.clone(),
+                        clip.num_frames.saturating_sub(1) as f32,
+                        false,
+                    )
+                })
+            });
+        let blend_state = blend_from.map(|(from_clip, from_frame, from_looping)| BlendState {
+            from_clip,
+            from_frame,
+            from_looping,
+            duration: animation
+                .blend_length
+                .as_secs_f32()
+                .max(MIN_INTERRUPT_BLEND_SECS),
+            elapsed: 0.0,
+        });
+
+        AnimationPlayer {
+            additional_joint_transforms: player.additional_joint_transforms.clone(),
+            animation: immutable::List::new().push_front((animation, AnimationFlags::PlayOnce)),
             last_animation: None,
             current_frame: 0,
             remaining_time: 0.0,
@@ -150,7 +211,11 @@ impl AnimationPlayer {
                 let mut frame = blend.from_frame + frames_advance;
                 let frame_count = blend.from_clip.num_frames as f32;
                 if frame >= frame_count && frame_count > 0.0 {
-                    frame = frame % frame_count;
+                    frame = if blend.from_looping {
+                        frame % frame_count
+                    } else {
+                        frame_count - 1.0
+                    };
                 }
                 blend.from_frame = frame;
             }
