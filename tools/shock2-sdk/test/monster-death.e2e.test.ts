@@ -44,26 +44,27 @@ test(
     // fire (escalation while the player is visible, decay afterwards) - the
     // regression this guards against is any alertness level change replacing
     // DeadBehavior.
+    // Only step a few frames past the alert: forcing alertness queues a
+    // fresh chase clip, so the kill below lands near the clip's start and
+    // the eager-death assertion actually discriminates (waiting for the
+    // clip to complete would blow the half-second window).
     await game.input.trigger("DebugAlertAll");
-    await game.step({ frames: 30 });
+    await game.step({ frames: 10 });
     let detail = await game.entities.detail(monster.id);
     assert.equal(aiProp(detail, "AIBehavior"), "Chase");
 
-    // Lethal damage. Death is animation-driven, so give it a few seconds to
-    // finish the in-flight clip and play the crumple.
+    // Lethal damage reacts eagerly: the death animation interrupts the
+    // in-flight chase clip instead of waiting for it to complete, so the
+    // behavior must read Dead within half a second of the killing blow.
     await game.entities.sendMessage(monster.id, {
       type: "Damage",
       amount: 1000,
     });
-    await game.waitFor(
-      async () => {
-        await game.step({ frames: 30 });
-        return (
-          aiProp(await game.entities.detail(monster.id), "AIBehavior") ===
-          "Dead"
-        );
-      },
-      { description: "monster entering Dead behavior", timeoutMs: 60_000 },
+    await game.step({ frames: 30 });
+    assert.equal(
+      aiProp(await game.entities.detail(monster.id), "AIBehavior"),
+      "Dead",
+      "killing blow should interrupt the playing clip immediately",
     );
 
     // Let the crumple (and any interrupted clip still in the animation
