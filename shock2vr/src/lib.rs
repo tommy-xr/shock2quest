@@ -227,6 +227,9 @@ pub struct PlayerStateSnapshot {
     /// phase is "charging" / "overloaded" / "burnout". `None` when no charge
     /// is in progress.
     pub psi_charge: Option<(f32, &'static str)>,
+    /// The gamesys names of the currently active sustained psi powers (e.g.
+    /// "Inviso"), in activation order. Empty when none are active.
+    pub active_psi_powers: Vec<String>,
 }
 
 impl Game {
@@ -304,6 +307,10 @@ impl Game {
                     (c.fraction, phase)
                 })
             }),
+            active_psi_powers: world
+                .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+                .map(|active| active.0.iter().map(|p| p.name.clone()).collect())
+                .unwrap_or_default(),
         })
     }
 

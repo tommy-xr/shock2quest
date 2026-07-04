@@ -34,6 +34,21 @@ Landed (phase 1 - all powers selectable, projectile powers castable):
   Meter state is `RuntimePropPsiCharge` on the amp, driven by
   `PsiAmpScript`, exposed via `/v1/info` (`psi_charge`/`psi_charge_phase`)
   and covered by `psi-overload.e2e.test.ts`.
+- **Sustained powers** (phase 3): powers with activation type 1 activate a
+  timed player status instead of firing a projectile. Casting spends the
+  tier and activates for `duration_base + duration_per_psi × PSI` seconds
+  (from the power's `P$PsiShield` data); re-casting spends again and
+  refreshes the duration. Active powers live in the `ActivePsiPowers`
+  unique (`shock2vr/src/psi.rs`), ticked down/expired per frame by
+  `MissionCore::update`, and are exposed via `/v1/info`
+  (`active_psi_powers`) and the SDK. **Photonic Redirection** (`Inviso`,
+  tier 4, 30 s at PSI 5) is the first wired behavior: while active the
+  player fails every AI/camera/turret visibility check
+  (`scripts/ai/ai_util.rs`). The `debug_camera` scene auto-equips the amp
+  so this is testable end-to-end (`psi-sustained.e2e.test.ts`: cost,
+  refresh, expiry, and camera-does-not-spot-the-invisible-player).
+  Sustained powers without `P$PsiShield` data, and the other sustained
+  powers' actual effects (Berserk, Shield, ...), still log and no-op.
 
 - **Trained-power gating** (phase 3): the player only selects/casts powers
   they know. `dark` parses the learned-power dwords `P$PsiPowerD`/`P$PsiPower2`
@@ -57,7 +72,9 @@ Not yet implemented: applying a mission start marker's authored loadout
 (`earth.mis` `Starting_Location` carries `P$PsiPowerD` and
 `P$BaseStats`-style starting props that nothing reads yet), anything that
 emits `Effect::GrantPsiPower` (character creation, trainers, psi modules),
-sustained/shield/cursor power behaviors, PSI stat from `P$BaseStats` (the
+shield/cursor power behaviors and the remaining sustained-power effects,
+invisibility dropping when the player attacks, active-power persistence
+across save/load and level transitions, PSI stat from `P$BaseStats` (the
 overload zone size should also grow with PSI), burnout damage mitigation
 (PSI 8 = safe, Endurance reduces it), the VR meter (flat HUD only), psi
 point/selection/trained-power persistence across save/load and level
