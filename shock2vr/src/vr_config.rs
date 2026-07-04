@@ -101,7 +101,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     // Specify overrides for particular models with how they should be oriented
     // relative ot the virtual hand
     let items = vec![
-        // Weapons
+        // Weapons - first-person hand models (_h), used when wielded in flat
         ("atek_h", held_weapon.clone()),
         ("amp_h", held_weapon.clone()),
         (
@@ -110,9 +110,27 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
                 .clone()
                 .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
         ),
-        ("empgun", held_weapon.clone()),
         ("wrench_h", default.clone()),
+        // Weapons - world models, kept when held in VR (#352): the _h meshes
+        // have faces stripped for the fixed flat camera. sg_w/empgun predate
+        // this and show the world models grip fine with the same offsets.
+        ("atek_w", held_weapon.clone()),
+        ("ar15_w", held_weapon.clone()),
         ("sg_w", held_weapon.clone()),
+        (
+            "laser",
+            held_weapon
+                .clone()
+                .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
+        ),
+        ("empgun", held_weapon.clone()),
+        ("gren_w", held_weapon.clone()),
+        ("fsn_w", held_weapon.clone()),
+        ("sfg_w", held_weapon.clone()),
+        ("amp_w", held_weapon.clone()),
+        ("viro_w", held_weapon.clone()),
+        ("al_w", held_weapon.clone()),
+        ("wrench_w", default.clone()),
         // World items
         ("battery", held_item.clone()),
         ("batteryb", held_item.clone()),
