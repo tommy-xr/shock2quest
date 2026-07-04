@@ -105,6 +105,19 @@ Test headlessly with `cargo dbgr --vr`: the debug runtime's
 (pawn-local), `.rotation [x,y,z,w]`, `.trigger`, and `.squeeze` channels, so
 hand placement and finger state are fully scriptable for screenshots.
 
+## Weapon grip (#352 follow-up)
+
+While a hand is holding an entity (`HandState::Grabbing`), the glove switches
+from input-driven blending to a grip pose: fingers wrapped on the handle,
+thumb locked, and the index resting on the trigger, curling with
+`trigger_value` (constants in `hand_glove.rs`, tuned visually). Held-model
+placement offsets are hand-local (`VRHandModelPerHandAdjustments::with_offset`,
+mirrored by `flip_x`) and were tuned per weapon against screenshots: pistol,
+assault rifle, shotgun, and wrench have fitted grips; the remaining weapons
+use the generic held-weapon placement. Note the model long axes differ per
+weapon (pistol/AR along model Y, wrench along model X), so offset axes are
+per-model — probe with exaggerated single-axis offsets when tuning a new one.
+
 ## Follow-ups
 
 - On-headset tuning of `grip_rotation()` / wrist offset once tested in a real

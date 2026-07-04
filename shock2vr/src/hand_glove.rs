@@ -85,15 +85,31 @@ impl GloveRenderer {
         handedness: Handedness,
         trigger_value: f32,
         squeeze_value: f32,
+        holding: bool,
     ) -> Vec<SceneObject> {
-        // Index follows the trigger; the other fingers follow the squeeze. A
-        // full squeeze also curls the index so a gripped fist looks like a fist.
-        let amounts = FingerAmounts {
-            thumb: squeeze_value,
-            index: trigger_value.max(squeeze_value),
-            middle: squeeze_value,
-            ring: squeeze_value,
-            pinky: squeeze_value,
+        let amounts = if holding {
+            // Gripping a held item: fingers wrapped on the handle, thumb
+            // locked, index resting on the trigger and curling with the pull
+            // (the squeeze is what holds the item, so it doesn't drive the
+            // pose here). Constants tuned visually against the held pistol.
+            FingerAmounts {
+                thumb: 0.85,
+                index: 0.5 + 0.5 * trigger_value,
+                middle: 0.9,
+                ring: 0.9,
+                pinky: 0.9,
+            }
+        } else {
+            // Empty hand: index follows the trigger; the other fingers follow
+            // the squeeze. A full squeeze also curls the index so a squeezed
+            // fist looks like a fist.
+            FingerAmounts {
+                thumb: squeeze_value,
+                index: trigger_value.max(squeeze_value),
+                middle: squeeze_value,
+                ring: squeeze_value,
+                pinky: squeeze_value,
+            }
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
         self.retarget.apply(&pose, &mut self.model);
