@@ -273,6 +273,12 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     }
 }
 
+/// Current hit points, if the entity has a health pool
+pub fn hit_points(entity_id: EntityId, world: &World) -> Option<i32> {
+    let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
+    v_prop_hit_points.get(entity_id).ok().map(|p| p.hit_points)
+}
+
 pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
 

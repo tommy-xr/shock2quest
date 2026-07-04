@@ -269,6 +269,40 @@ impl AnimatedMonsterAI {
             dark::motion::MotionQuerySelectionStrategy::Sequential(seq)
         }
     }
+
+    /// Force alertness to `level` (clamped by the alert cap), reset the
+    /// visibility timers, and swap in the canonical behavior for the
+    /// resulting level. Callers must check the AI is alive first.
+    fn force_alertness(
+        &mut self,
+        level: AIAlertLevel,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Effect {
+        let cap = self
+            .config
+            .as_ref()
+            .map(|c| c.alert_cap.clone())
+            .unwrap_or_else(default_alert_cap);
+        alertness::set_level(&mut self.alertness, level, &cap);
+        // Forced level starts fresh: no accumulated visibility time pushing
+        // an immediate escalation or decay
+        self.alertness.visible_time = 0.0;
+        self.alertness.hidden_time = 0.0;
+
+        self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
+        let is_locomotion = self.current_behavior.borrow().is_locomotion();
+        let selection_strategy = self.next_selection(is_locomotion);
+        Effect::combine(vec![
+            alertness::sync_alertness_effect(entity_id, &self.alertness),
+            Effect::QueueAnimationBySchema {
+                entity_id,
+                motion_query_items: self.current_behavior.borrow().animation(),
+                selection_strategy,
+            },
+        ])
+    }
 }
 
 impl Script for AnimatedMonsterAI {
@@ -453,10 +487,44 @@ impl Script for AnimatedMonsterAI {
             MessagePayload::Damage { amount } => {
                 // TODO: Let behavior handle this?
                 self.took_damage = true;
-                Effect::AdjustHitPoints {
+                let hit_points_effect = Effect::AdjustHitPoints {
                     entity_id,
                     delta: -(amount.round() as i32),
-                }
+                };
+                // Taking damage alerts the AI: escalate toward Moderate
+                // (chase) so a shot AI aggros even when it never saw the
+                // player. Escalation only - an already-alerted AI stays put.
+                // The hit-point adjustment applies after this handler
+                // returns, so lethality is checked against the incoming
+                // amount - a killing blow must not stand the AI up to chase
+                // for a frame. Note: the damage source isn't attributed, so
+                // any damage aggros toward the player (chase is
+                // player-centric like the other behaviors).
+                let lethal = hit_points(entity_id, world)
+                    .map(|hp| hp - amount.round() as i32 <= 0)
+                    .unwrap_or(false);
+                let cap = self
+                    .config
+                    .as_ref()
+                    .map(|c| c.alert_cap.clone())
+                    .unwrap_or_else(default_alert_cap);
+                // Respect alert caps: only force when the (clamped) target
+                // actually raises the level, so a capped AI isn't reset -
+                // and doesn't restart its animation - on every hit
+                let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
+                let alert_effect = if !self.is_dead
+                    && !lethal
+                    && matches!(
+                        self.alertness.current_level,
+                        AIAlertLevel::Lowest | AIAlertLevel::Low
+                    )
+                    && target != self.alertness.current_level
+                {
+                    self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
+                } else {
+                    Effect::NoEffect
+                };
+                Effect::combine(vec![hit_points_effect, alert_effect])
             }
             MessagePayload::TurnOn { from: _ } => {
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
@@ -506,31 +574,10 @@ impl Script for AnimatedMonsterAI {
                 if self.is_dead || is_killed(entity_id, world) {
                     return Effect::NoEffect;
                 }
-                let cap = self
-                    .config
-                    .as_ref()
-                    .map(|c| c.alert_cap.clone())
-                    .unwrap_or_else(default_alert_cap);
-                alertness::set_level(&mut self.alertness, *level, &cap);
-                // Forced level starts fresh: no accumulated visibility time
-                // pushing an immediate escalation or decay
-                self.alertness.visible_time = 0.0;
-                self.alertness.hidden_time = 0.0;
-
-                // Always reset the behavior to the canonical one for this
-                // level, even when the level didn't change - forcing is a
-                // debug reset, so it also cancels scripted sequences
-                self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
-                let is_locomotion = self.current_behavior.borrow().is_locomotion();
-                let selection_strategy = self.next_selection(is_locomotion);
-                Effect::combine(vec![
-                    alertness::sync_alertness_effect(entity_id, &self.alertness),
-                    Effect::QueueAnimationBySchema {
-                        entity_id,
-                        motion_query_items: self.current_behavior.borrow().animation(),
-                        selection_strategy,
-                    },
-                ])
+                // The behavior reset is unconditional, even when the level
+                // didn't change - forcing is a debug reset, so it also
+                // cancels scripted sequences
+                self.force_alertness(*level, world, physics, entity_id)
             }
             MessagePayload::AnimationCompleted => {
                 if self.is_dead {
