@@ -332,17 +332,25 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    pub fn render(&self) -> Vec<SceneObject> {
-        let mut scene_objects = Vec::new();
-
-        // Show hand object
-        let hand_material = engine::scene::color_material::create(vec3(0.0, 1.0, 0.0));
-        let transform = Matrix4::from_translation(self.position)
-            * Matrix4::from(self.rotation)
-            * Matrix4::from_scale(0.05);
-        let mut hand_obj = SceneObject::new(hand_material, Box::new(engine::scene::cube::create()));
-        hand_obj.set_transform(transform);
-        scene_objects.push(hand_obj);
+    /// Render the glove for this hand, plus the raycast-hit debug cube. The
+    /// glove renderer is owned by the caller (`VrInteraction`) so its cached
+    /// state is shared between both hands.
+    pub fn render(
+        &self,
+        glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
+    ) -> Vec<SceneObject> {
+        // The hand itself: the glove model, posed from the analog inputs
+        let mut scene_objects = glove_renderer
+            .map(|renderer| {
+                renderer.render_hand(
+                    self.position,
+                    self.rotation,
+                    self.handedness,
+                    self.trigger_value,
+                    self.squeeze_value,
+                )
+            })
+            .unwrap_or_default();
 
         let hit_color = self.color_from_state();
 

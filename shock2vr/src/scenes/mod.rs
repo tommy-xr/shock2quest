@@ -33,7 +33,6 @@ pub mod debug_ragdoll;
 pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
-pub mod hand_pose;
 pub mod loading;
 pub mod main_menu;
 
