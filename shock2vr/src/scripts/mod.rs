@@ -88,8 +88,8 @@ use self::{
     core_room::*,
     create_sound::*,
     cs9::{
-        CS9EggsAndGrubs, CS9HoloRumbler, CS9MasterControl, CS9ShodanScreen, SitDownRightNowMP,
-        TrapDestroyTeleport,
+        CS9DoorReporter, CS9EggsAndGrubs, CS9HoloRumbler, CS9MasterControl, CS9ShodanScreen,
+        SitDownRightNowMP, TrapDestroyTeleport,
     },
     dead_power_cell::DeadPowerCell,
     destroy_all_by_name::DestroyAllByName,
@@ -443,7 +443,7 @@ impl ScriptWorld {
             "trapspawn" => Box::new(NoopScript::new()),
             // ops1 cutscene (the "Polito is SHODAN" reveal) - see scripts/cs9.rs
             "transluceinoutholo" => Box::new(TransluceInOutHolo::new()),
-            "cs9_doorreporter" => Box::new(NoopScript::new()), // master runs on a timeline instead of door events
+            "cs9_doorreporter" => Box::new(CS9DoorReporter::new()),
             "cs9_eggsandgrubs" => Box::new(CS9EggsAndGrubs::new()),
             "cs9_mastercontrol" => Box::new(CS9MasterControl::new()),
             "cs9_holorumbler" => Box::new(CS9HoloRumbler::new()),
