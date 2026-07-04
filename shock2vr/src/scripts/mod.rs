@@ -11,6 +11,7 @@ mod choose_service;
 mod core_room;
 mod create_sound;
 mod dead_power_cell;
+mod cs9;
 mod destroy_all_by_name;
 mod energy_station;
 mod frob_qb;
@@ -81,7 +82,9 @@ use self::psi_amp_script::PsiAmpScript;
 use self::trap_signal::TrapSignal;
 use self::{
     base_button::BaseButton, base_elevator::BaseElevator, base_monster::BaseMonster, core_room::*,
-    create_sound::*, dead_power_cell::DeadPowerCell, destroy_all_by_name::DestroyAllByName,
+    create_sound::*,
+    cs9::{CS9EggsAndGrubs, CS9HoloRumbler, CS9MasterControl, SitDownRightNowMP, TrapDestroyTeleport},
+    dead_power_cell::DeadPowerCell, destroy_all_by_name::DestroyAllByName,
     energy_station::EnergyStation, frob_qb::FrobQB, internal_collision_type::InternalCollisionType,
     internal_keycard_script::KeyCardScript, internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton, logdiscscript::LogDiscScript,
@@ -405,15 +408,15 @@ impl ScriptWorld {
             "engineremoverad" => Box::new(NoopScript::new()),
             "radroom" => Box::new(NoopScript::new()),
             "trapspawn" => Box::new(NoopScript::new()),
-            // ops1 cutscene
+            // ops1 cutscene (the "Polito is SHODAN" reveal) - see scripts/cs9.rs
             "transluceinoutholo" => Box::new(NoopScript::new()),
-            "cs9_doorreporter" => Box::new(NoopScript::new()),
-            "cs9_eggsandgrubs" => Box::new(NoopScript::new()),
-            "cs9_mastercontrol" => Box::new(NoopScript::new()),
-            "cs9_holorumbler" => Box::new(NoopScript::new()),
-            "cs9_shodanscreen" => Box::new(NoopScript::new()),
-            "sitdownrightnowmp" => Box::new(NoopScript::new()),
-            "trapdestroyteleport" => Box::new(NoopScript::new()),
+            "cs9_doorreporter" => Box::new(NoopScript::new()), // master runs on a timeline instead of door events
+            "cs9_eggsandgrubs" => Box::new(CS9EggsAndGrubs::new()),
+            "cs9_mastercontrol" => Box::new(CS9MasterControl::new()),
+            "cs9_holorumbler" => Box::new(CS9HoloRumbler::new()),
+            "cs9_shodanscreen" => Box::new(NoopScript::new()), // screens are static in the theatre walls for now
+            "sitdownrightnowmp" => Box::new(SitDownRightNowMP::new()),
+            "trapdestroyteleport" => Box::new(TrapDestroyTeleport::new()),
             "triggerdamage" => Box::new(NoopScript::new()),
             // many.micontain
             "brain" => Box::new(NoopScript::new()),
