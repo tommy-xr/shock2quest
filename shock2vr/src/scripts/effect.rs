@@ -192,7 +192,10 @@ pub enum Effect {
         // ActorType, MotActorTags get inferred from the entity id
         entity_id: EntityId,
         selection_strategy: MotionQuerySelectionStrategy,
-        motion_query_items: Vec<MotionQueryItem>,
+        /// Queries tried in order; the first one that matches a motion wins.
+        /// Lets a caller prefer a creature's directly-keyed clips and fall
+        /// back to a context-tagged variant only when there are none.
+        motion_queries: Vec<Vec<MotionQueryItem>>,
     },
 
     /// Like `QueueAnimationBySchema`, but interrupts the playing animation
@@ -202,7 +205,8 @@ pub enum Effect {
     PlayAnimationBySchema {
         entity_id: EntityId,
         selection_strategy: MotionQuerySelectionStrategy,
-        motion_query_items: Vec<MotionQueryItem>,
+        /// Queries tried in order; the first one that matches a motion wins.
+        motion_queries: Vec<Vec<MotionQueryItem>>,
     },
 
     ReplaceEntity {

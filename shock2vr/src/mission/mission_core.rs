@@ -1071,17 +1071,18 @@ impl MissionCore {
         self.world.run(run_attachment_update);
     }
 
-    /// Resolve a tag-based motion query for `entity_id` and hand the clip to
-    /// `apply` (`AnimationPlayer::queue_animation` to push on the queue,
+    /// Resolve tag-based motion queries for `entity_id` (tried in order,
+    /// first match wins) and hand the clip to `apply`
+    /// (`AnimationPlayer::queue_animation` to push on the queue,
     /// `AnimationPlayer::play_animation` to interrupt and replace it). When
-    /// no motion matches, dispatches `AnimationCompleted` so the requesting
+    /// no query matches, dispatches `AnimationCompleted` so the requesting
     /// script isn't left waiting on a clip that never started.
     fn apply_animation_by_schema(
         &mut self,
         global_context: &GlobalContext,
         asset_cache: &mut AssetCache,
         entity_id: EntityId,
-        motion_query_items: Vec<MotionQueryItem>,
+        motion_queries: Vec<Vec<MotionQueryItem>>,
         selection_strategy: MotionQuerySelectionStrategy,
         apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
     ) {
@@ -1095,24 +1096,27 @@ impl MissionCore {
                 v_creature_type.get(entity_id),
                 v_motion_actor_tag.get(entity_id),
             ) {
-                let mut actor_tags = motion_actor_tag
+                let actor_tags = motion_actor_tag
                     .tags
                     .iter()
                     .map(|tag| MotionQueryItem::new(tag).optional())
                     .collect::<Vec<MotionQueryItem>>();
 
-                let mut query_items = motion_query_items.clone();
-
-                query_items.append(&mut actor_tags);
-
                 let creature_definition = get_creature_definition(creature_type.0).unwrap();
 
                 let actor_type = creature_definition.actor_type.to_u32().unwrap();
 
-                let query = MotionQuery::new(actor_type, query_items)
-                    .with_selection_strategy(selection_strategy);
+                let mut tried_queries = Vec::new();
+                let maybe_next_animation = motion_queries.into_iter().find_map(|items| {
+                    let mut query_items = items;
+                    query_items.extend(actor_tags.iter().cloned());
+                    let query = MotionQuery::new(actor_type, query_items)
+                        .with_selection_strategy(selection_strategy.clone());
+                    let result = global_context.motiondb.query(query.clone());
+                    tried_queries.push(query);
+                    result
+                });
 
-                let maybe_next_animation = global_context.motiondb.query(query.clone());
                 if let Some(next_animation) = maybe_next_animation {
                     let maybe_clip = asset_cache
                         .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
@@ -1127,7 +1131,11 @@ impl MissionCore {
                         );
                     }
                 } else {
-                    game_log!(WARN, "Unable to find animation for query: {:?}", &query);
+                    game_log!(
+                        WARN,
+                        "Unable to find animation for queries: {:?}",
+                        &tried_queries
+                    );
                     // If we couldn't find an animation... just stop the current one
                     self.script_world.dispatch(Message {
                         payload: MessagePayload::AnimationCompleted,
@@ -1977,14 +1985,14 @@ impl MissionCore {
 
                 Effect::QueueAnimationBySchema {
                     entity_id,
-                    motion_query_items,
+                    motion_queries,
                     selection_strategy,
                 } => {
                     self.apply_animation_by_schema(
                         global_context,
                         asset_cache,
                         entity_id,
-                        motion_query_items,
+                        motion_queries,
                         selection_strategy,
                         AnimationPlayer::queue_animation,
                     );
@@ -1992,14 +2000,14 @@ impl MissionCore {
 
                 Effect::PlayAnimationBySchema {
                     entity_id,
-                    motion_query_items,
+                    motion_queries,
                     selection_strategy,
                 } => {
                     self.apply_animation_by_schema(
                         global_context,
                         asset_cache,
                         entity_id,
-                        motion_query_items,
+                        motion_queries,
                         selection_strategy,
                         AnimationPlayer::play_animation,
                     );

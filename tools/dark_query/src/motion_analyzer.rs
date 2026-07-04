@@ -201,20 +201,31 @@ fn parse_tags(tags: &[String]) -> Result<Vec<MotionQueryItem>> {
 
         let tag_content = &tag[1..]; // Remove the '+'
 
+        // A trailing '?' marks the tag optional (e.g. "+meleecombat?"),
+        // matching the optional query items AI scripts use in-game
+        let (tag_content, optional) = match tag_content.strip_suffix('?') {
+            Some(stripped) => (stripped, true),
+            None => (tag_content, false),
+        };
+        if tag_content.is_empty() {
+            anyhow::bail!("Empty tag name in: {}", tag);
+        }
+
         // Check if it's a tag with value (e.g., "cs:184")
-        if let Some(colon_pos) = tag_content.find(':') {
+        let item = if let Some(colon_pos) = tag_content.find(':') {
             let tag_name = &tag_content[..colon_pos];
             let value_str = &tag_content[colon_pos + 1..];
 
             if let Ok(value) = value_str.parse::<i32>() {
-                motion_query_items.push(MotionQueryItem::with_value(tag_name, value));
+                MotionQueryItem::with_value(tag_name, value)
             } else {
                 anyhow::bail!("Invalid tag value: {}. Expected integer after ':'", tag);
             }
         } else {
             // Simple tag without value
-            motion_query_items.push(MotionQueryItem::new(tag_content));
-        }
+            MotionQueryItem::new(tag_content)
+        };
+        motion_query_items.push(if optional { item.optional() } else { item });
     }
 
     Ok(motion_query_items)
