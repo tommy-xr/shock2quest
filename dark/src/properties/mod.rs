@@ -107,6 +107,10 @@ pub struct PropPosition {
 }
 
 #[derive(Debug, Component, Serialize, Deserialize)]
+/// Marks an entity as having just teleported (VR teleport locomotion, teleport
+/// traps, debug teleport). Currently has no readers - tripwires deliberately
+/// fire on teleport-entry like the original engine - but the marker is kept
+/// (and serialized in saves) for scripts that may need teleport-awareness.
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'
 }

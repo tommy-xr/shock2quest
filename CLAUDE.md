@@ -233,6 +233,7 @@ For debugging visual/rendering changes without a full interactive session:
 
    # Move the player: right stick = locomotion [strafe, forward], left stick
    # x = turn, left stick y = fly up/down. Set a channel, then step to advance.
+   # (Teleporting into a trigger volume fires it, same as walking in.)
    curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.thumbstick": [0.0, 1.0]}'
 
    # IMPORTANT: Always shut down when done to avoid interfering with user's session
