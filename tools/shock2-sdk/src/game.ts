@@ -8,6 +8,7 @@ import type {
   InputAction,
   PathfindingStats,
   PathfindingTestStatus,
+  PhysicsBodyListResult,
   Position,
   RayCastRequest,
   RayCastResult,
@@ -108,6 +109,27 @@ export class InputApi {
   }
 }
 
+/** Physics rigid-body inspection (positions, velocities). */
+export class PhysicsApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /**
+   * List rigid bodies, optionally scoped to one entity id (a single entity
+   * can own several bodies, e.g. ragdoll limbs).
+   */
+  async bodies(options?: {
+    entityId?: number;
+    limit?: number;
+  }): Promise<PhysicsBodyListResult> {
+    const params = new URLSearchParams();
+    if (options?.entityId !== undefined)
+      params.set("entity_id", String(options.entityId));
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.size > 0 ? `?${params}` : "";
+    return this.client.get<PhysicsBodyListResult>(`/v1/physics/bodies${query}`);
+  }
+}
+
 /** Interactive pathfinding test (visual A* debugging). */
 export class PathfindingTestApi {
   constructor(private readonly client: HttpClient) {}
@@ -154,6 +176,7 @@ export class Game {
   readonly input: InputApi;
   readonly pathfindingTest: PathfindingTestApi;
   readonly pathfinding: PathfindingApi;
+  readonly physics: PhysicsApi;
 
   constructor(protected readonly client: HttpClient) {
     this.player = new PlayerApi(client);
@@ -161,6 +184,7 @@ export class Game {
     this.input = new InputApi(client);
     this.pathfindingTest = new PathfindingTestApi(client);
     this.pathfinding = new PathfindingApi(client);
+    this.physics = new PhysicsApi(client);
   }
 
   get baseUrl(): string {
