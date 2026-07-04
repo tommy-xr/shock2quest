@@ -370,6 +370,9 @@ pub enum Link {
     ParticleAttachement(ParticleAttachOptions),
     TPathInit,
     TPath(TPathData),
+    /// Names a destination object for scripted teleports (CS9 eggs/rumblers,
+    /// TrapTeleport family, TrapDestroyTeleport's destroy target).
+    Teleport,
 }
 
 #[derive(
@@ -767,6 +770,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
         define_link("L$SwitchLin", |_| Link::SwitchLink),
+        define_link("L$Teleport", |_| Link::Teleport),
         define_link("L$TPathInit", |_| Link::TPathInit),
         define_link("L$Miss Span", |_| Link::MissSpang),
         //define_link("L$TPath", |_| Link::TPath),
