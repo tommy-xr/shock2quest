@@ -43,6 +43,11 @@ pub struct SceneObject {
     /// depth-testing normally within itself. Used to draw the flatscreen
     /// first-person weapon viewmodel without clipping into geometry.
     pub clear_depth: bool,
+    /// Per-object transparency override (0.0 = opaque, 1.0 = invisible).
+    /// Materials are shared (`Rc`) across every object using the same model, so
+    /// a lasting material-level override would bleed between entities; instead
+    /// this is applied to the material only around this object's own draw.
+    pub transparency_override: Option<f32>,
 }
 
 impl SceneObject {
@@ -214,6 +219,7 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); 40],
             depth_write: true,
             clear_depth: false,
+            transparency_override: None,
         }
     }
 
@@ -240,6 +246,9 @@ impl SceneObject {
             unsafe { gl::DepthMask(gl::FALSE) };
         }
 
+        if let Some(t) = self.transparency_override {
+            self.material.borrow_mut().set_transparency_override(Some(t));
+        }
         if self.material.borrow().draw_opaque(
             render_context,
             view,
@@ -248,6 +257,9 @@ impl SceneObject {
             lights,
         ) {
             self.geometry.draw();
+        }
+        if self.transparency_override.is_some() {
+            self.material.borrow_mut().set_transparency_override(None);
         }
 
         if !self.depth_write {
@@ -262,6 +274,9 @@ impl SceneObject {
         lights: &crate::scene::light::LightArray,
     ) {
         let xform = self.transform * self.local_transform;
+        if let Some(t) = self.transparency_override {
+            self.material.borrow_mut().set_transparency_override(Some(t));
+        }
         if self.material.borrow().draw_transparent(
             render_context,
             view,
@@ -270,6 +285,9 @@ impl SceneObject {
             lights,
         ) {
             self.geometry.draw();
+        }
+        if self.transparency_override.is_some() {
+            self.material.borrow_mut().set_transparency_override(None);
         }
     }
 
@@ -307,6 +325,7 @@ impl SceneObject {
             skinning_data: [Matrix4::identity(); 40],
             depth_write: true,
             clear_depth: false,
+            transparency_override: None,
         }
     }
 
@@ -319,6 +338,7 @@ impl SceneObject {
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
             clear_depth: self.clear_depth,
+            transparency_override: self.transparency_override,
         }
     }
 
@@ -342,5 +362,12 @@ impl SceneObject {
                 None => material.reset_transparency(),
             }
         }
+    }
+
+    /// Override transparency (0.0 = opaque, 1.0 = invisible) for this object
+    /// only, or reset with `None`. Applied around this object's draw so other
+    /// objects sharing the same material are unaffected.
+    pub fn set_transparency(&mut self, transparency: Option<f32>) {
+        self.transparency_override = transparency;
     }
 }

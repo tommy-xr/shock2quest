@@ -703,6 +703,12 @@ impl Links {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPickBias(pub f32);
 
+/// Renderer\Transparency (alpha): 0.0 = invisible, 1.0 = opaque. Authored on
+/// holo/ghost entities (e.g. the CS9 cutscene exhibits) and animated by the
+/// Transluce script family.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRenderAlpha(pub f32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTranslatingDoor {
     pub door_type: i32,
@@ -1186,6 +1192,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$PickBias",
             |reader, _len| read_single(reader),
             PropPickBias,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RenderAlp",
+            |reader, _len| read_single(reader),
+            PropRenderAlpha,
             accumulator::latest,
         ),
         define_prop(
