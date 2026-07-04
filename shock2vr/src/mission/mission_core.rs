@@ -127,6 +127,11 @@ const MELEE_IDLE_CLIP: &str = "ph212203";
 /// always uses the medium-left swing.
 const MELEE_SWING_CLIP: &str = "leftswing";
 
+/// Velocity (world units/s) a radius blast adds per point of stim intensity to
+/// a dynamic body at its center (falling off linearly to zero at the radius).
+/// Tuned so a barrel blast (intensity 15) gives nearby props a solid toss.
+const BLAST_PUSH_SPEED_PER_INTENSITY: f32 = 0.5;
+
 /// Debug options accessible from scripts via UniqueView
 #[derive(Unique, Clone, Default)]
 pub struct DebugOptions {
@@ -1273,6 +1278,44 @@ impl MissionCore {
         did_slay
     }
 
+    /// Apply a radius stim blast (Effect::RadiusBlast): falloff-scaled damage
+    /// to every entity with hit points in range, and an outward shove to every
+    /// dynamic body. Falloff is linear from full at the center to zero at the
+    /// blast radius.
+    fn radius_blast(&mut self, center: Vector3<f32>, radius: f32, intensity: f32) {
+        let mut damage_targets = Vec::new();
+        {
+            let v_hit_points = self
+                .world
+                .borrow::<View<dark::properties::PropHitPoints>>()
+                .unwrap();
+            let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+            for (entity_id, (_hit_points, transform)) in
+                (&v_hit_points, &v_transform).iter().with_id()
+            {
+                let position = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+                let distance = (crate::util::point3_to_vec3(position) - center).magnitude();
+                if distance < radius {
+                    let falloff = 1.0 - distance / radius;
+                    damage_targets.push((entity_id, intensity * falloff));
+                }
+            }
+        }
+
+        for (entity_id, amount) in damage_targets {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload: MessagePayload::Damage { amount },
+            });
+        }
+
+        self.physics.apply_radial_impulse(
+            center,
+            radius,
+            intensity * BLAST_PUSH_SPEED_PER_INTENSITY,
+        );
+    }
+
     pub fn create_entity_by_template_name(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -1708,6 +1751,14 @@ impl MissionCore {
                     if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
                         gun_state.ammo = (gun_state.ammo + delta).max(0);
                     }
+                }
+
+                Effect::RadiusBlast {
+                    center,
+                    radius,
+                    intensity,
+                } => {
+                    self.radius_blast(center, radius, intensity);
                 }
 
                 Effect::ReloadWeapon => {

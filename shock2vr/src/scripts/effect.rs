@@ -136,6 +136,16 @@ pub enum Effect {
         force: Vector3<f32>,
     },
 
+    /// A radius stim blast (explosions): every entity with hit points within
+    /// `radius` of `center` takes `intensity`-scaled damage with linear
+    /// distance falloff, and every dynamic body in range is shoved outward.
+    /// Emitted once by `internal_explosion` from the entity's arSrcDesc data.
+    RadiusBlast {
+        center: Vector3<f32>,
+        radius: f32,
+        intensity: f32,
+    },
+
     ChangeModel {
         entity_id: EntityId,
         model_name: String,
