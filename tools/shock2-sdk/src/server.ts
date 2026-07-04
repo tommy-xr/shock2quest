@@ -52,6 +52,35 @@ export function findRepoRoot(startDir: string): string | undefined {
 
 const MAX_LOG_LINES = 2000;
 
+/**
+ * Ports handed out by findFreePort that are still in use by this process.
+ * The OS probe alone can't see a sibling launch that probed the same port
+ * but whose child hasn't bound yet (cargo may compile for minutes first).
+ */
+const reservedPorts = new Set<number>();
+
+/** Children that must not outlive this process (see hookSignalCleanup). */
+const liveServers = new Set<GameServer>();
+let signalCleanupHooked = false;
+
+/**
+ * Detached children receive no terminal signals, so a Ctrl-C of the test
+ * runner would orphan every runtime it spawned - kill their process groups
+ * before dying, then re-raise the signal for the default behavior.
+ */
+function hookSignalCleanup(): void {
+  if (signalCleanupHooked) return;
+  signalCleanupHooked = true;
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      for (const server of liveServers) {
+        server.killProcessTreeForSignalCleanup();
+      }
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
 /** Max lines included in a launch-failure error message. */
 const MAX_ERROR_LOG_LINES = 120;
 
@@ -76,7 +105,8 @@ function portIsFree(port: number): Promise<boolean> {
  */
 export async function findFreePort(start: number): Promise<number> {
   for (let port = start; port < start + MAX_PORT_ATTEMPTS; port++) {
-    if (await portIsFree(port)) {
+    if (!reservedPorts.has(port) && (await portIsFree(port))) {
+      reservedPorts.add(port);
       return port;
     }
   }
@@ -116,8 +146,24 @@ export class GameServer extends Game implements AsyncDisposable {
     private readonly child: ChildProcess | undefined,
     private readonly logLines: string[],
     private readonly instanceId: string | undefined,
+    private readonly port: number | undefined,
   ) {
     super(client);
+  }
+
+  /** The spawned child has exited (normally or by signal). */
+  private childIsDead(): boolean {
+    return (
+      this.child !== undefined &&
+      (this.child.exitCode !== null || this.child.signalCode !== null)
+    );
+  }
+
+  private releaseResources(): void {
+    if (this.port !== undefined) {
+      reservedPorts.delete(this.port);
+    }
+    liveServers.delete(this);
   }
 
   /** Recent stdout/stderr from the spawned runtime (ring buffer). */
@@ -125,16 +171,50 @@ export class GameServer extends Game implements AsyncDisposable {
     return [...this.logLines];
   }
 
+  /** @internal Used by the module-level signal cleanup hook. */
+  killProcessTreeForSignalCleanup(): void {
+    this.killProcessTree();
+  }
+
   /** Connect to an already-running debug runtime. shutdown() will stop it; dispose will not spawn-kill anything. */
   static async connect(baseUrl = "http://127.0.0.1:8080"): Promise<GameServer> {
-    const server = new GameServer(new HttpClient(baseUrl), undefined, [], undefined);
+    const server = new GameServer(new HttpClient(baseUrl), undefined, [], undefined, undefined);
     await server.health();
     return server;
   }
 
-  /** Spawn a debug runtime via `cargo run -p debug_runtime` and wait for it to be ready. */
+  /**
+   * Spawn a debug runtime via `cargo run -p debug_runtime` and wait for it
+   * to be ready. Retries on the next free port when another process wins a
+   * port race (bind failure / foreign instance id) between our probe and
+   * the child's bind.
+   */
   static async launch(options: LaunchOptions): Promise<GameServer> {
-    const port = await findFreePort(options.port ?? 8080);
+    const hint = options.port ?? 8080;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await GameServer.launchOnce(options, hint + attempt);
+      } catch (error) {
+        lastError = error;
+        const message = String(error);
+        const lostPortRace =
+          message.includes("exited early") ||
+          message.includes("different debug_runtime instance") ||
+          message.includes("failed to bind");
+        if (!lostPortRace) {
+          throw error;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private static async launchOnce(
+    options: LaunchOptions,
+    portHint: number,
+  ): Promise<GameServer> {
+    const port = await findFreePort(portHint);
     const repoRoot = options.repoRoot ?? findRepoRoot(process.cwd());
     if (repoRoot === undefined) {
       throw new Error(
@@ -199,12 +279,16 @@ export class GameServer extends Game implements AsyncDisposable {
       child,
       logLines,
       instanceId,
+      port,
     );
+    liveServers.add(server);
+    hookSignalCleanup();
 
     try {
       await server.waitUntilReady(options.launchTimeoutMs ?? 300_000);
     } catch (error) {
       server.killProcessTree();
+      server.releaseResources();
       throw new Error(
         `debug_runtime failed to start: ${error}\nRecent output:\n${formatCrashOutput(logLines)}`,
       );
@@ -227,19 +311,19 @@ export class GameServer extends Game implements AsyncDisposable {
       // Negative pid = the process group created by detached: true
       process.kill(-pid, "SIGKILL");
     } catch {
-      try {
-        this.child?.kill("SIGKILL");
-      } catch {
-        // Already gone.
-      }
+      // ESRCH: the group is already gone. Deliberately NO fallback to a
+      // positive-pid kill - the pid may have been reused by an unrelated
+      // process by now.
     }
   }
 
   private async waitUntilReady(timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      if (this.child && this.child.exitCode !== null) {
-        throw new Error(`process exited early with code ${this.child.exitCode}`);
+      if (this.childIsDead()) {
+        throw new Error(
+          `process exited early (code ${this.child?.exitCode}, signal ${this.child?.signalCode})`,
+        );
       }
       try {
         // Verify we're talking to OUR instance before trusting the port. A
@@ -275,13 +359,19 @@ export class GameServer extends Game implements AsyncDisposable {
 
   /** Gracefully stop the runtime; escalates to a process-group SIGKILL if it doesn't exit. */
   override async shutdown(): Promise<void> {
-    try {
-      await super.shutdown();
-    } catch {
-      // Server may already be down; fall through to process cleanup.
+    // If our child already exited, the port is no longer ours - another
+    // agent's runtime may have rebound it, and an HTTP shutdown would stop
+    // THEIR instance. Only speak to the port while our child owns it.
+    if (!this.childIsDead()) {
+      try {
+        await super.shutdown();
+      } catch {
+        // Server may already be down; fall through to process cleanup.
+      }
     }
     const child = this.child;
-    if (child === undefined || child.exitCode !== null) {
+    if (child === undefined || this.childIsDead()) {
+      this.releaseResources();
       return;
     }
     await new Promise<void>((resolve) => {
@@ -293,6 +383,7 @@ export class GameServer extends Game implements AsyncDisposable {
         resolve();
       });
     });
+    this.releaseResources();
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
