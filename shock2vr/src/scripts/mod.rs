@@ -88,7 +88,8 @@ use self::{
     core_room::*,
     create_sound::*,
     cs9::{
-        CS9EggsAndGrubs, CS9HoloRumbler, CS9MasterControl, SitDownRightNowMP, TrapDestroyTeleport,
+        CS9EggsAndGrubs, CS9HoloRumbler, CS9MasterControl, CS9ShodanScreen, SitDownRightNowMP,
+        TrapDestroyTeleport,
     },
     dead_power_cell::DeadPowerCell,
     destroy_all_by_name::DestroyAllByName,
@@ -446,7 +447,9 @@ impl ScriptWorld {
             "cs9_eggsandgrubs" => Box::new(CS9EggsAndGrubs::new()),
             "cs9_mastercontrol" => Box::new(CS9MasterControl::new()),
             "cs9_holorumbler" => Box::new(CS9HoloRumbler::new()),
-            "cs9_shodanscreen" => Box::new(NoopScript::new()), // screens are static in the theatre walls for now
+            // Screens fade in/out (alpha; the original uses an extra-light ramp +
+            // ScreenSwap model swaps - future polish) and relay to their copies.
+            "cs9_shodanscreen" => Box::new(CS9ShodanScreen::new()),
             "sitdownrightnowmp" => Box::new(SitDownRightNowMP::new()),
             "trapdestroyteleport" => Box::new(TrapDestroyTeleport::new()),
             "triggerdamage" => Box::new(NoopScript::new()),
