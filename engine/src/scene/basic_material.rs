@@ -152,6 +152,7 @@ where
     diffuse_texture: T,
     emissivity: f32,
     transparency: f32,
+    base_transparency: f32,
 }
 
 impl<T> BasicMaterial<T>
@@ -241,6 +242,13 @@ where
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+
+    fn set_transparency_override(&mut self, transparency: Option<f32>) {
+        self.transparency = match transparency {
+            Some(value) => value.clamp(0.0, 1.0),
+            None => self.base_transparency,
+        };
     }
 
     fn has_initialized(&self) -> bool {
@@ -456,5 +464,6 @@ where
         has_initialized: false,
         emissivity,
         transparency,
+        base_transparency: transparency,
     })
 }

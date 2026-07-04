@@ -107,6 +107,10 @@ pub struct PropPosition {
 }
 
 #[derive(Debug, Component, Serialize, Deserialize)]
+/// Marks an entity as having just teleported (VR teleport locomotion, teleport
+/// traps, debug teleport). Currently has no readers - tripwires deliberately
+/// fire on teleport-entry like the original engine - but the marker is kept
+/// (and serialized in saves) for scripts that may need teleport-awareness.
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'
 }
@@ -699,6 +703,12 @@ impl Links {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPickBias(pub f32);
 
+/// Renderer\Transparency (alpha): 0.0 = invisible, 1.0 = opaque. Authored on
+/// holo/ghost entities (e.g. the CS9 cutscene exhibits) and animated by the
+/// Transluce script family.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRenderAlpha(pub f32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTranslatingDoor {
     pub door_type: i32,
@@ -706,9 +716,27 @@ pub struct PropTranslatingDoor {
     pub open: f32,
     pub speed: f32,
     pub axis: i32,
+    /// Authored door state (Dark's DOOR_STATE): 0=closed, 1=open, 2=closing,
+    /// 3=opening, 4=halted. Doors must initialize to this pose - snapping
+    /// everything to closed shuts doors that were authored open.
+    pub state: i32,
     pub base_closed_location: Vector3<f32>,
     pub base_open_location: Vector3<f32>,
     pub base_location: Vector3<f32>,
+}
+
+impl PropTranslatingDoor {
+    /// The world position this door should occupy at load time, per its
+    /// authored state. In-motion/halted states resume from the authored
+    /// location.
+    pub fn initial_location(&self) -> Vector3<f32> {
+        match self.state {
+            0 => self.base_closed_location,
+            1 => self.base_open_location,
+            // closing / opening / halted / unknown: as authored
+            _ => self.base_location,
+        }
+    }
 }
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -1167,6 +1195,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$RenderAlp",
+            |reader, _len| read_single(reader),
+            PropRenderAlpha,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$Position",
             read_prop_position,
             identity,
@@ -1422,7 +1456,7 @@ fn read_prop_translating_door<T: io::Read + io::Seek>(
     let open = read_single(reader);
     let speed = read_single(reader) / SCALE_FACTOR;
     let axis = read_i32(reader);
-    let _state = read_i32(reader);
+    let state = read_i32(reader);
     let _hard_limits = read_bool(reader);
     let _sound_blocking = read_single(reader);
     let _vision_blocking = read_single(reader);
@@ -1444,6 +1478,7 @@ fn read_prop_translating_door<T: io::Read + io::Seek>(
         door_type,
         closed,
         open,
+        state,
         base_closed_location,
         base_open_location,
         base_location,
