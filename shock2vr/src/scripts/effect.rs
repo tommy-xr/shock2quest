@@ -81,9 +81,17 @@ pub enum Effect {
     /// two projectile links.
     CycleAmmo,
 
-    /// Select the player's next psi power (advances `PsiPowerSelection`
-    /// through the `GlobalPsiPowers` registry, wrapping).
+    /// Select the player's next *trained* psi power (advances
+    /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
+    /// skipping powers not in `PlayerPsiKnownPowers`).
     CyclePsiPower,
+
+    /// Train the player in a psi power (insert its template id into
+    /// `PlayerPsiKnownPowers`), making it selectable and castable - for
+    /// trainers and debug tooling. No-op if already trained.
+    GrantPsiPower {
+        template_id: i32,
+    },
 
     /// Deduct psi points from the player's pool (`PropPsiState`), clamped at
     /// zero. Emitted by the psi amp when a power is cast.

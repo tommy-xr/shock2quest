@@ -76,6 +76,14 @@ impl Script for PsiAmpScript {
                 let Some(power) = selected_power(world) else {
                     return Effect::NoEffect;
                 };
+                // Untrained powers can't be cast (selection gating should
+                // make this unreachable, but don't start a charge - which
+                // can burn out into damage - for a power the player doesn't
+                // know).
+                if !power_is_known(world, power.template_id) {
+                    game_log!(INFO, "Psi power {} is not trained", power.name);
+                    return Effect::NoEffect;
+                }
                 // Hold-to-overload runs only in flat presentation (the meter
                 // renders on the flat HUD; a flat-aimed amp carries
                 // RuntimePropFlatAim). In VR the amp keeps cast-on-pull until
@@ -280,10 +288,26 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
     ])
 }
 
+/// Whether the player has been trained in the power. Selection gating
+/// (`Effect::CyclePsiPower`) means an untrained power should never be
+/// selected; this is the belt-and-braces check on the cast paths. Fails
+/// closed: the unique is seeded unconditionally at mission load, so a
+/// missing one is a setup bug - don't let it disable the gate.
+fn power_is_known(world: &World, template_id: i32) -> bool {
+    world
+        .borrow::<UniqueView<crate::psi::PlayerPsiKnownPowers>>()
+        .map(|known| known.0.contains(&template_id))
+        .unwrap_or(false)
+}
+
 fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) -> Effect {
     let Some(power) = selected_power(world) else {
         return Effect::NoEffect;
     };
+    if !power_is_known(world, power.template_id) {
+        game_log!(INFO, "Psi power {} is not trained", power.name);
+        return Effect::NoEffect;
+    }
 
     // Gate on the player's psi pool: a cast costs the power's tier in points.
     // (The check here and the deduction - Effect::SpendPsiPoints - are split

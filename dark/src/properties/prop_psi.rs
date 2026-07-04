@@ -2,7 +2,7 @@ use std::io;
 
 use shipyard::Component;
 
-use crate::ss2_common::{read_i32, read_single};
+use crate::ss2_common::{read_i32, read_single, read_u32};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +51,51 @@ impl PropPsiPower {
             activation_type,
             psi_cost,
             data,
+        }
+    }
+}
+
+/// `P$PsiPowerD` - the first learned-psi-powers dword (4 bytes): a bitmask
+/// of psi disciplines by power id, **bit index = power id** (ids 0..=31).
+/// `The Player` template (-384) authors it `0x00000000` in the retail
+/// `shock2.gam` (the original grants powers at runtime - character creation
+/// and trainers); the one non-zero authored value in the shipped data is
+/// `earth.mis` entity 243 (`Starting_Location`, alongside `P$BaseStats`
+/// starting-loadout props): `0x49` = bits {0, 3, 6}.
+///
+/// The bit-index-equals-power-id layout is corroborated by `psihelp.str`,
+/// which keys every discipline's description as `Psi<power_id>` and shows
+/// the gaps at ids 0/8/16/24/32 are the five "Tier N Neural Capacity"
+/// pseudo-disciplines - so `0x49` reads as {First Tier Neural Capacity,
+/// Kinetic Redirection, Projected Cryokinesis}, a coherent psi starting
+/// loadout. See `shock2vr::psi` for where the bits are interpreted.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPsiPowerLearned {
+    pub bits: u32,
+}
+
+impl PropPsiPowerLearned {
+    pub fn read<T: io::Read>(reader: &mut T, _len: u32) -> PropPsiPowerLearned {
+        PropPsiPowerLearned {
+            bits: read_u32(reader),
+        }
+    }
+}
+
+/// `P$PsiPower2` - the second learned-psi-powers dword (4 bytes), the
+/// companion to [`PropPsiPowerLearned`] for power ids 32..=63 as bit
+/// `power_id - 32` (ids run up to 39, so a single dword can't hold them
+/// all). Authored `0x00000000` everywhere in the shipped data (only `The
+/// Player` -384 carries it, in the gamesys).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropPsiPowerLearned2 {
+    pub bits: u32,
+}
+
+impl PropPsiPowerLearned2 {
+    pub fn read<T: io::Read>(reader: &mut T, _len: u32) -> PropPsiPowerLearned2 {
+        PropPsiPowerLearned2 {
+            bits: read_u32(reader),
         }
     }
 }

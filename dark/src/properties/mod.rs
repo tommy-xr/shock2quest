@@ -1113,6 +1113,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$PsiPowerD",
+            PropPsiPowerLearned::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$PsiPower2",
+            PropPsiPowerLearned2::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$PsiShield",
             PropPsiShield::read,
             identity,
