@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use dark::properties::{
-    PropLocalPlayer, PropTeleported, PropTranslatingDoor, PropTripFlags, TripFlags,
-};
+use dark::properties::{PropLocalPlayer, PropTranslatingDoor, PropTripFlags, TripFlags};
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
 
@@ -19,15 +17,9 @@ pub fn is_player(world: &World, entity_id: EntityId) -> bool {
     v_prop_player.get(entity_id).is_ok()
 }
 
-fn did_entity_just_teleport(world: &World, entity_id: EntityId) -> bool {
-    let teleported = world.borrow::<View<PropTeleported>>().unwrap();
-    teleported.contains(entity_id)
-}
-
 pub struct TrapNewTripwire {
     has_activated: bool,
     entity_in_trap: HashSet<EntityId>,
-    teleported_entities_to_ignore: HashSet<EntityId>,
     trip_flags: TripFlags,
 }
 impl TrapNewTripwire {
@@ -36,8 +28,6 @@ impl TrapNewTripwire {
             trip_flags: TripFlags::DEFAULT,
             has_activated: false,
             entity_in_trap: HashSet::new(),
-            //entity_to_time: HashMap::new(),
-            teleported_entities_to_ignore: HashSet::new(),
         }
     }
 
@@ -112,6 +102,11 @@ impl Script for TrapNewTripwire {
         let default_flags = PropTripFlags::default();
         let trip_flags = v_trip_flags.get(entity_id).unwrap_or(&default_flags);
 
+        // NOTE: intersections count no matter how the entity got here - walking,
+        // VR teleport locomotion, a teleport trap, or a debug teleport. The Dark
+        // engine fires PhysEnter/PhysExit for teleports too, and suppressing
+        // them made teleported-in players silently skip triggers (e.g. the ops1
+        // cutscene tripwire).
         match msg {
             MessagePayload::SensorBeginIntersect { with } => {
                 if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
@@ -119,17 +114,9 @@ impl Script for TrapNewTripwire {
                     self.has_activated = true;
                     let was_empty = self.entity_in_trap.is_empty();
 
-                    let did_entity_just_teleport = did_entity_just_teleport(world, *with);
                     self.entity_in_trap.insert(*with);
 
-                    if did_entity_just_teleport {
-                        self.teleported_entities_to_ignore.insert(*with);
-                    }
-
-                    if was_empty
-                        && self.trip_flags.contains(TripFlags::ENTER)
-                        && !did_entity_just_teleport
-                    {
+                    if was_empty && self.trip_flags.contains(TripFlags::ENTER) {
                         send_to_all_switch_links(
                             world,
                             entity_id,
@@ -145,25 +132,16 @@ impl Script for TrapNewTripwire {
             MessagePayload::SensorEndIntersect { with } => {
                 let had_keys_before = !self.entity_in_trap.is_empty();
 
-                // If the entity teleported, we should disregard
-                let did_teleport = did_entity_just_teleport(world, *with)
-                    || self.teleported_entities_to_ignore.contains(with);
-
-                self.teleported_entities_to_ignore.remove(with);
                 self.entity_in_trap.remove(with);
 
                 let has_keys_now = !self.entity_in_trap.is_empty();
 
                 info!(
-                    "sensor end intersect for {:?} - did_teleport: {} has_keys_now: {} had_keys_before: {} trip_flags: {:?}",
-                    with, did_teleport, has_keys_now, had_keys_before, trip_flags
+                    "sensor end intersect for {:?} - has_keys_now: {} had_keys_before: {} trip_flags: {:?}",
+                    with, has_keys_now, had_keys_before, trip_flags
                 );
 
-                if !did_teleport
-                    && !has_keys_now
-                    && had_keys_before
-                    && self.trip_flags.contains(TripFlags::EXIT)
-                {
+                if !has_keys_now && had_keys_before && self.trip_flags.contains(TripFlags::EXIT) {
                     send_to_all_switch_links(
                         world,
                         entity_id,
