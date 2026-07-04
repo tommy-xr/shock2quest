@@ -2247,6 +2247,12 @@ impl MissionCore {
                             .add_component(player_entity, PropTeleported::new())
                     }
                 }
+                Effect::SetRenderAlpha { entity_id, alpha } => {
+                    self.world.add_component(
+                        entity_id,
+                        dark::properties::PropRenderAlpha(alpha.clamp(0.0, 1.0)),
+                    );
+                }
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
@@ -2909,6 +2915,10 @@ impl MissionCore {
         let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
         let v_frame_state = self.world.borrow::<View<PropFrameAnimState>>().unwrap();
         let v_render_type = self.world.borrow::<View<PropRenderType>>().unwrap();
+        let v_render_alpha = self
+            .world
+            .borrow::<View<dark::properties::PropRenderAlpha>>()
+            .unwrap();
         let v_joint_transforms = self
             .world
             .borrow::<View<RuntimePropJointTransforms>>()
@@ -2980,6 +2990,14 @@ impl MissionCore {
             };
             let is_animated_model = objs.is_animated();
 
+            // Authored/scripted per-entity alpha (Renderer\Transparency (alpha):
+            // 1.0 = opaque, 0.0 = invisible), e.g. the CS9 holo exhibits.
+            let render_alpha = v_render_alpha
+                .get(*entity_id)
+                .ok()
+                .map(|a| a.0.clamp(0.0, 1.0))
+                .filter(|a| *a < 1.0);
+
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
@@ -2987,6 +3005,9 @@ impl MissionCore {
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));
+                    } else if let Some(alpha) = render_alpha {
+                        xformed_obj.set_depth_write(false);
+                        xformed_obj.set_transparency(Some(1.0 - alpha));
                     } else {
                         xformed_obj.set_depth_write(true);
                         xformed_obj.set_skinned_transparency(None);
