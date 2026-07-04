@@ -422,6 +422,9 @@ pub struct PlayerInfo {
     /// in progress. See `shock2vr::PlayerStateSnapshot`.
     pub psi_charge: Option<f32>,
     pub psi_charge_phase: Option<String>,
+    /// The gamesys names of the active sustained psi powers (e.g. "Inviso"),
+    /// in activation order; empty when none. See `shock2vr::PlayerStateSnapshot`.
+    pub active_psi_powers: Vec<String>,
 }
 
 /// Input state snapshot

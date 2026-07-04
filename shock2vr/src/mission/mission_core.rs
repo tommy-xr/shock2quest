@@ -382,6 +382,7 @@ impl MissionCore {
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
         world.add_unique(known_powers);
+        world.add_unique(crate::psi::ActivePsiPowers::default());
 
         // ** Entity creation
 
@@ -780,6 +781,21 @@ impl MissionCore {
                 }
             },
         );
+
+        // Tick the player's sustained psi powers down and expire them.
+        self.world
+            .run(|mut active: UniqueViewMut<crate::psi::ActivePsiPowers>| {
+                let dt = time.elapsed.as_secs_f32();
+                active.0.retain_mut(|power| {
+                    power.remaining_secs -= dt;
+                    if power.remaining_secs <= 0.0 {
+                        game_log!(INFO, "Psi power expired: {}", power.name);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            });
 
         let (player_pos, player_rot) = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -1685,6 +1701,30 @@ impl MissionCore {
                         .unwrap();
                     if let Ok(psi) = (&mut v_psi).get(player_entity) {
                         psi.psi_points = (psi.psi_points - amount).max(0);
+                    }
+                }
+
+                Effect::ActivatePsiPower {
+                    template_id,
+                    name,
+                    duration_secs,
+                } => {
+                    let mut active = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+                        .unwrap();
+                    if let Some(existing) =
+                        active.0.iter_mut().find(|p| p.template_id == template_id)
+                    {
+                        existing.remaining_secs = duration_secs;
+                        game_log!(INFO, "Psi power refreshed: {} ({}s)", name, duration_secs);
+                    } else {
+                        active.0.push(crate::psi::ActivePsiPower {
+                            template_id,
+                            name: name.clone(),
+                            remaining_secs: duration_secs,
+                        });
+                        game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
                     }
                 }
 

@@ -1458,6 +1458,10 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                 psi_charge_phase: state
                     .as_ref()
                     .and_then(|s| s.psi_charge.map(|(_, p)| p.to_string())),
+                active_psi_powers: state
+                    .as_ref()
+                    .map(|s| s.active_psi_powers.clone())
+                    .unwrap_or_default(),
             }
         },
         entity_count,
