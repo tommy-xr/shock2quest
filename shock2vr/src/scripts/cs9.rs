@@ -385,7 +385,7 @@ impl CS9HoloRumbler {
         Effect::QueueAnimationBySchema {
             entity_id,
             selection_strategy: MotionQuerySelectionStrategy::Random,
-            motion_query_items: vec![item],
+            motion_queries: vec![vec![item]],
         }
     }
 }

@@ -298,7 +298,7 @@ impl AnimatedMonsterAI {
             alertness::sync_alertness_effect(entity_id, &self.alertness),
             Effect::QueueAnimationBySchema {
                 entity_id,
-                motion_query_items: self.current_behavior.borrow().animation(),
+                motion_queries: vec![self.current_behavior.borrow().animation()],
                 selection_strategy,
             },
         ])
@@ -335,9 +335,17 @@ impl AnimatedMonsterAI {
             Effect::NoEffect
         };
 
+        // Death clips are keyed differently per creature: hybrid-style
+        // deaths hang directly under the crumple key, but human deaths sit
+        // one level deeper, under crumple -> die. Prefer the creature's
+        // directly-keyed clips; only when there are none, retry through the
+        // die level (verified across creature types with `cargo dq motion`).
         let death_animation = Effect::PlayAnimationBySchema {
             entity_id,
-            motion_query_items: vec![MotionQueryItem::new("crumple")],
+            motion_queries: vec![
+                vec![MotionQueryItem::new("crumple")],
+                vec![MotionQueryItem::new("crumple"), MotionQueryItem::new("die")],
+            ],
             selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         };
 
@@ -384,7 +392,7 @@ impl Script for AnimatedMonsterAI {
         let selection_strategy = self.next_selection(is_locomotion);
         let animation_effect = Effect::QueueAnimationBySchema {
             entity_id,
-            motion_query_items: self.current_behavior.borrow().animation(),
+            motion_queries: vec![self.current_behavior.borrow().animation()],
             selection_strategy,
         };
 
@@ -448,7 +456,7 @@ impl Script for AnimatedMonsterAI {
                 let selection_strategy = self.next_selection(is_locomotion);
                 let animation_effect = Effect::QueueAnimationBySchema {
                     entity_id,
-                    motion_query_items: self.current_behavior.borrow().animation(),
+                    motion_queries: vec![self.current_behavior.borrow().animation()],
                     selection_strategy,
                 };
 
@@ -483,7 +491,7 @@ impl Script for AnimatedMonsterAI {
                 let selection_strategy = self.next_selection(is_locomotion);
                 return Effect::QueueAnimationBySchema {
                     entity_id,
-                    motion_query_items: self.current_behavior.borrow().animation(),
+                    motion_queries: vec![self.current_behavior.borrow().animation()],
                     selection_strategy,
                 };
             }
@@ -625,7 +633,7 @@ impl Script for AnimatedMonsterAI {
                     let selection_strategy = self.next_selection(is_locomotion);
                     Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_query_items: self.current_behavior.borrow().animation(),
+                        motion_queries: vec![self.current_behavior.borrow().animation()],
                         selection_strategy,
                     }
                 } else {
@@ -651,7 +659,7 @@ impl Script for AnimatedMonsterAI {
                     let selection_strategy = self.next_selection(is_locomotion);
                     Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_query_items: self.current_behavior.borrow().animation(),
+                        motion_queries: vec![self.current_behavior.borrow().animation()],
                         selection_strategy,
                     }
                 } else {
@@ -678,9 +686,24 @@ impl Script for AnimatedMonsterAI {
                     self.enter_death(world, entity_id)
                 } else if self.took_damage {
                     self.took_damage = false;
+                    // Hybrid wound clips are keyed under a combat-context
+                    // level (receivewound -> meleecombat -> grunt -> ...),
+                    // not directly under the creature tags, so a bare
+                    // receivewound query matches nothing for them. Prefer
+                    // the creature's directly-keyed clips (droids, humans
+                    // keep their full sets, including damage-type variants);
+                    // only when there are none, retry through the
+                    // combat-context level (verified across creature types
+                    // with `cargo dq motion`).
                     Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_query_items: vec![MotionQueryItem::new("receivewound")],
+                        motion_queries: vec![
+                            vec![MotionQueryItem::new("receivewound")],
+                            vec![
+                                MotionQueryItem::new("receivewound"),
+                                MotionQueryItem::new("meleecombat"),
+                            ],
+                        ],
                         selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
                     }
                 } else {
@@ -724,7 +747,7 @@ impl Script for AnimatedMonsterAI {
 
                     let queue_animation_effect = Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_query_items,
+                        motion_queries: vec![motion_query_items],
                         selection_strategy,
                         //tag: "idlegesture".to_owned(),
                         // motion_query_items: vec![
