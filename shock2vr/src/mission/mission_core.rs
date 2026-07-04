@@ -1122,6 +1122,16 @@ impl MissionCore {
                     result
                 });
 
+                // Animation failures are otherwise invisible (the scoped
+                // game_log is off by default) and have repeatedly hidden
+                // broken sequences - keep a tracing breadcrumb of every
+                // resolution.
+                tracing::debug!(
+                    "animation queries for {:?}: {:?} -> {:?}",
+                    entity_id,
+                    tried_queries.iter().map(|q| &q.items).collect::<Vec<_>>(),
+                    maybe_next_animation
+                );
                 if let Some(next_animation) = maybe_next_animation {
                     let maybe_clip = asset_cache
                         .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
@@ -1134,6 +1144,13 @@ impl MissionCore {
                             "Unable to load animation clip: {:?}_.mc",
                             next_animation
                         );
+                        // Report completion just like the query-miss branch
+                        // below, so anything waiting on this animation
+                        // (scripted Play actions) is never left hanging.
+                        self.script_world.dispatch(Message {
+                            payload: MessagePayload::AnimationCompleted,
+                            to: entity_id,
+                        });
                     }
                 } else {
                     game_log!(
