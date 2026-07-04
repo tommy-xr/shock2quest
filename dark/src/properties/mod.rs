@@ -706,9 +706,27 @@ pub struct PropTranslatingDoor {
     pub open: f32,
     pub speed: f32,
     pub axis: i32,
+    /// Authored door state (Dark's DOOR_STATE): 0=closed, 1=open, 2=closing,
+    /// 3=opening, 4=halted. Doors must initialize to this pose - snapping
+    /// everything to closed shuts doors that were authored open.
+    pub state: i32,
     pub base_closed_location: Vector3<f32>,
     pub base_open_location: Vector3<f32>,
     pub base_location: Vector3<f32>,
+}
+
+impl PropTranslatingDoor {
+    /// The world position this door should occupy at load time, per its
+    /// authored state. In-motion/halted states resume from the authored
+    /// location.
+    pub fn initial_location(&self) -> Vector3<f32> {
+        match self.state {
+            0 => self.base_closed_location,
+            1 => self.base_open_location,
+            // closing / opening / halted / unknown: as authored
+            _ => self.base_location,
+        }
+    }
 }
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -1422,7 +1440,7 @@ fn read_prop_translating_door<T: io::Read + io::Seek>(
     let open = read_single(reader);
     let speed = read_single(reader) / SCALE_FACTOR;
     let axis = read_i32(reader);
-    let _state = read_i32(reader);
+    let state = read_i32(reader);
     let _hard_limits = read_bool(reader);
     let _sound_blocking = read_single(reader);
     let _vision_blocking = read_single(reader);
@@ -1444,6 +1462,7 @@ fn read_prop_translating_door<T: io::Read + io::Seek>(
         door_type,
         closed,
         open,
+        state,
         base_closed_location,
         base_open_location,
         base_location,

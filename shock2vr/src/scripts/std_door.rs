@@ -29,12 +29,16 @@ impl Script for StdDoor {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         let v_trans_door = world.borrow::<View<PropTranslatingDoor>>().unwrap();
         if let Ok(trans_door) = v_trans_door.get(entity_id) {
-            self.desired_position = trans_door.base_closed_location;
-            self.current_position = trans_door.base_closed_location;
+            // Respect the authored door state - a door saved open must start
+            // open. Snapping everything to base_closed_location shut doors the
+            // level designer left open.
+            let initial = trans_door.initial_location();
+            self.desired_position = initial;
+            self.current_position = initial;
 
             Effect::SetPosition {
                 entity_id,
-                position: trans_door.base_closed_location,
+                position: initial,
             }
         } else {
             Effect::NoEffect
