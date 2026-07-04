@@ -364,7 +364,11 @@ export class GameServer extends Game implements AsyncDisposable {
     // THEIR instance. Only speak to the port while our child owns it.
     if (!this.childIsDead()) {
       try {
-        await super.shutdown();
+        // The runtime rejects shutdowns without its instance id, so a stale
+        // client on another checkout can't kill it - include ours.
+        await this.client.post("/v1/shutdown", {
+          instance_id: this.instanceId,
+        });
       } catch {
         // Server may already be down; fall through to process cleanup.
       }

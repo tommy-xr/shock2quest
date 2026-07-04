@@ -1592,7 +1592,30 @@ async fn step_frame(
 /// Shutdown the debug runtime gracefully
 async fn shutdown_server(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    body: Option<Json<Value>>,
 ) -> Json<Value> {
+    // When launched with --instance-id (SDK-owned), only the owner may shut
+    // us down: a client on another checkout whose own runtime failed to bind
+    // this port still POSTs /v1/shutdown here during its cleanup, and
+    // without this check it kills OUR game mid-test.
+    if let Some(Some(expected)) = INSTANCE_ID.get() {
+        let provided = body
+            .as_ref()
+            .and_then(|json| json.0.get("instance_id"))
+            .and_then(|v| v.as_str());
+        if provided != Some(expected.as_str()) {
+            tracing::warn!(
+                "Rejected shutdown request with missing/mismatched instance_id (expected {})",
+                expected
+            );
+            return Json(json!({
+                "status": "rejected",
+                "message": "This runtime is owned by another client; shutdown requires its instance_id",
+                "timestamp": chrono::Utc::now().to_rfc3339()
+            }));
+        }
+    }
+
     tracing::info!("Shutdown request received via HTTP API");
 
     // Send shutdown command to game loop
