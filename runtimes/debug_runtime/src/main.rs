@@ -25,7 +25,7 @@ use commands::*;
 // Game engine imports
 extern crate glfw;
 use self::glfw::{Context, WindowEvent};
-use cgmath::{Quaternion, vec2, vec3};
+use cgmath::{Quaternion, Rotation3, vec2, vec3};
 use dark::SCALE_FACTOR;
 use engine::{
     EngineRenderContext, profile, scene::Scene, util::compute_view_matrix_from_render_context,
@@ -435,6 +435,19 @@ fn run_game_blocking(
     // what is rendered.
     let mut current_input = InputContext::default();
     current_input.head.rotation = default_camera_head_rotation();
+    // In VR mode, give the simulated hands a natural first-person rest pose
+    // (pawn-local; forward is -X, matching the desktop camera convention) so
+    // `--vr` shows the glove hands at the bottom of the view without any
+    // /v1/control/input setup. The yaw-90 rotation aims each hand's -Z
+    // (raycast/fingers) at pawn-forward, like desktop_runtime's default hand
+    // yaw. HTTP patches override these as usual.
+    if args.vr {
+        let aim_forward = Quaternion::from_angle_y(cgmath::Deg(90.0));
+        current_input.right_hand.position = vec3(-0.55, 1.4, -0.2);
+        current_input.right_hand.rotation = aim_forward;
+        current_input.left_hand.position = vec3(-0.55, 1.4, 0.2);
+        current_input.left_hand.rotation = aim_forward;
+    }
 
     // Deferred replies so HTTP commands observe a complete, post-render frame:
     // - `Step` replies only after all requested frames have actually run, so
