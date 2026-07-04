@@ -6,7 +6,7 @@ use tracing::trace;
 
 use crate::{physics::PhysicsWorld, time::Time};
 
-use super::{Effect, MessagePayload, Script, script_util::play_environmental_sound};
+use super::{Effect, Message, MessagePayload, Script, script_util::play_environmental_sound};
 
 pub struct StdDoor {
     audio_handle: AudioHandle,
@@ -57,22 +57,42 @@ impl Script for StdDoor {
         let v_trans_door = world.borrow::<View<PropTranslatingDoor>>().unwrap();
         if let Ok(trans_door) = v_trans_door.get(entity_id) {
             let dir = self.desired_position - self.current_position;
-            if dir.magnitude2() > 0.001 {
+            let step = time.elapsed.as_secs_f32() * trans_door.speed;
+            // Complete once within one frame-step of the target - stepping by
+            // a fixed amount can otherwise overshoot and oscillate around a
+            // small distance threshold forever, so the door never finishes.
+            if dir.magnitude() > step.max(0.001) {
                 let normalized = dir.normalize();
-                //dir *= trans_door.speed;
 
                 trace!(
                     "desired: {:?} current: {:?} dir: {:?}",
                     self.desired_position, self.current_position, normalized
                 );
 
-                self.current_position += normalized * time.elapsed.as_secs_f32() * trans_door.speed;
+                self.current_position += normalized * step;
                 Effect::SetPosition {
                     entity_id,
                     position: self.current_position,
                 }
             } else if self.is_moving {
                 self.is_moving = false;
+                // Announce which endpoint we reached to this entity's other
+                // scripts (the Dark engine's DoorOpen/DoorClose messages);
+                // e.g. CS9_DoorReporter forwards these to the cutscene master.
+                let reached_open =
+                    (self.desired_position - trans_door.base_open_location).magnitude2() < 0.001;
+                let state_signal = Effect::Send {
+                    msg: Message {
+                        to: entity_id,
+                        payload: MessagePayload::Signal {
+                            name: if reached_open {
+                                "DoorOpen".to_string()
+                            } else {
+                                "DoorClose".to_string()
+                            },
+                        },
+                    },
+                };
                 Effect::Combined {
                     effects: vec![
                         Effect::SetPosition {
@@ -86,6 +106,7 @@ impl Script for StdDoor {
                             vec![("openstate", "closed"), ("oldopenstate", "closing")],
                             self.audio_handle.clone(),
                         ),
+                        state_signal,
                     ],
                 }
             } else {
