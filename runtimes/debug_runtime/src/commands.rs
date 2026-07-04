@@ -49,6 +49,10 @@ pub enum RuntimeCommand {
     /// Get the current pathfinding test status
     GetPathfindingTestStatus(oneshot::Sender<PathfindingTestStatusResult>),
 
+    /// Get the pathfinding service's monotonic query counters (None when the
+    /// scene has no pathfinding data)
+    GetPathfindingStats(oneshot::Sender<Option<shock2vr::game_scene::DebugPathfindingStats>>),
+
     /// List entities near the player
     ListEntities {
         limit: Option<usize>,
