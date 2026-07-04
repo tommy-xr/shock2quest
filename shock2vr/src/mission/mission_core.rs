@@ -1182,10 +1182,8 @@ impl MissionCore {
 
                     if created.rigid_body.is_some() {
                         let speed = flinderize_options.impulse / SCALE_FACTOR;
-                        self.physics.set_velocity(
-                            created.entity_id,
-                            random_unit_vector(&mut rng) * speed,
-                        );
+                        self.physics
+                            .set_velocity(created.entity_id, random_unit_vector(&mut rng) * speed);
                     }
                 }
             }
