@@ -147,26 +147,11 @@ impl AnimatedMonsterAI {
             AIAlertLevel::Moderate => Box::new(RefCell::new(ChaseBehavior::new())),
             AIAlertLevel::High => {
                 // Attack only when in range; otherwise chase to close the
-                // distance (ChaseBehavior::next_behavior escalates back to an
-                // attack on arrival, using these same thresholds). Without
+                // distance (ChaseBehavior::next_behavior escalates back to
+                // an attack on arrival via the same shared helper). Without
                 // the range check, a far-away High AI stood still swinging.
-                let distance = player_distance(world, entity_id);
-                let melee_attack_distance = 8.0 / SCALE_FACTOR;
-                let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
-                let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
-                match distance {
-                    Some(d)
-                        if d > ranged_min_attack_distance
-                            && d < ranged_max_attack_distance
-                            && has_ranged_weapon(world, entity_id) =>
-                    {
-                        Box::new(RefCell::new(RangedAttackBehavior))
-                    }
-                    Some(d) if d < melee_attack_distance => {
-                        Box::new(RefCell::new(MeleeAttackBehavior))
-                    }
-                    _ => Box::new(RefCell::new(ChaseBehavior::new())),
-                }
+                attack_behavior_for_distance(world, entity_id)
+                    .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
         }
     }
@@ -482,7 +467,19 @@ impl Script for AnimatedMonsterAI {
                 // drop straight to wandering: investigate the last-known
                 // position first. Further decay during an active search
                 // leaves it running - it hands off to Wander itself.
-                let new_behavior: Option<Box<RefCell<dyn Behavior>>> = if decayed
+                let searching = self.current_behavior.borrow().name() == "Search";
+                let new_behavior: Option<Box<RefCell<dyn Behavior>>> = if decayed && searching {
+                    // An active search keeps running across further decay
+                    // (it hands off on its own) - unless a fresher sighting
+                    // was recorded mid-search, which re-targets it. This
+                    // must be checked BEFORE the decay-from-tracking branch,
+                    // or a High-origin search is stomped one decay later.
+                    self.last_known_player_pos
+                        .take()
+                        .map(|goal| -> Box<RefCell<dyn Behavior>> {
+                            Box::new(RefCell::new(SearchBehavior::new(goal)))
+                        })
+                } else if decayed
                     && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
                 {
                     match self.last_known_player_pos.take() {
@@ -491,11 +488,14 @@ impl Script for AnimatedMonsterAI {
                         // damage from behind) - nothing to investigate
                         None => Some(self.behavior_for_alertness(world, physics, entity_id)),
                     }
-                } else if decayed && self.current_behavior.borrow().name() == "Search" {
-                    None
                 } else {
                     Some(self.behavior_for_alertness(world, physics, entity_id))
                 };
+                // Fully calmed: a sighting from this engagement must not
+                // trigger a cross-map search minutes later
+                if new_level == AIAlertLevel::Lowest {
+                    self.last_known_player_pos = None;
+                }
 
                 let animation_effect = if let Some(behavior) = new_behavior {
                     self.current_behavior = behavior;
@@ -643,13 +643,15 @@ impl Script for AnimatedMonsterAI {
                 // actually raises the level, so a capped AI isn't reset -
                 // and doesn't restart its animation - on every hit
                 let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
-                let alert_effect = if !lethal
-                    && matches!(
-                        self.alertness.current_level,
-                        AIAlertLevel::Lowest | AIAlertLevel::Low
-                    )
-                    && target != self.alertness.current_level
-                {
+                let escalates = matches!(
+                    self.alertness.current_level,
+                    AIAlertLevel::Lowest | AIAlertLevel::Low
+                ) && target != self.alertness.current_level;
+                // A searching AI that takes a hit re-aggros too: the shot
+                // reveals the attacker even without line of sight (the dead
+                // case already returned above)
+                let searching = self.current_behavior.borrow().name() == "Search";
+                let alert_effect = if !lethal && (escalates || searching) {
                     self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
                 } else {
                     Effect::NoEffect

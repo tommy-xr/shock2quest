@@ -3,7 +3,8 @@ use std::cell::RefCell;
 use cgmath::{Deg, Vector3};
 use dark::SCALE_FACTOR;
 use dark::motion::MotionQueryItem;
-use shipyard::{EntityId, World};
+use dark::properties::{AIAlertLevel, PropAIAlertness};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::PhysicsWorld,
@@ -18,10 +19,15 @@ use crate::{
     time::Time,
 };
 
-use super::{Behavior, NextBehavior, WanderBehavior};
+use super::{Behavior, IdleBehavior, NextBehavior, WanderBehavior};
 
 /// Close enough to the last-known position to stop and look around
 const SEARCH_ARRIVE_DISTANCE: f32 = 4.0 / SCALE_FACTOR;
+/// ...and within this height difference (6 Dark feet - the recorded player
+/// position sits eye-height above the floor). Standing under a walkway the
+/// player was seen on is not arrival; the 20s total timeout covers goals
+/// the AI can never reach.
+const SEARCH_ARRIVE_HEIGHT: f32 = 6.0 / SCALE_FACTOR;
 /// How long to scan around the last-known position before giving up
 const SEARCH_SCAN_SECONDS: f32 = 6.0;
 /// Give up entirely after this long, arrived or not (unreachable positions,
@@ -82,7 +88,9 @@ impl Behavior for SearchBehavior {
             let (position, _) = ai_util::get_position_and_forward(world, entity_id);
             let dx = position.x - self.goal.x;
             let dz = position.z - self.goal.z;
-            if (dx * dx + dz * dz).sqrt() < SEARCH_ARRIVE_DISTANCE {
+            if (dx * dx + dz * dz).sqrt() < SEARCH_ARRIVE_DISTANCE
+                && (position.y - self.goal.y).abs() < SEARCH_ARRIVE_HEIGHT
+            {
                 self.arrived = true;
             }
         }
@@ -118,14 +126,25 @@ impl Behavior for SearchBehavior {
 
     fn next_behavior(
         &mut self,
-        _world: &World,
+        world: &World,
         _physics: &PhysicsWorld,
-        _entity_id: EntityId,
+        entity_id: EntityId,
     ) -> NextBehavior {
-        if self.give_up() {
-            NextBehavior::Next(Box::new(RefCell::new(WanderBehavior::new())))
+        if !self.give_up() {
+            return NextBehavior::Stay;
+        }
+        // Alertness kept decaying while we searched (and produces no more
+        // level-change events at Lowest), so pick the handoff from the
+        // synced level: fully calm goes back to Idle, anything else
+        // wanders the area
+        let level = world
+            .borrow::<View<PropAIAlertness>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|a| a.level));
+        if matches!(level, Some(AIAlertLevel::Lowest)) {
+            NextBehavior::Next(Box::new(RefCell::new(IdleBehavior)))
         } else {
-            NextBehavior::Stay
+            NextBehavior::Next(Box::new(RefCell::new(WanderBehavior::new())))
         }
     }
 }

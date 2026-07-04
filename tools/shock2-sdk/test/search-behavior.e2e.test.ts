@@ -24,6 +24,64 @@ function distanceXZ(
 }
 
 test(
+  "a High-origin search survives further alertness decay",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8108),
+    });
+
+    await game.step({ frames: 10 });
+
+    const preSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
+    const known = new Set(preSpawn.entities.map((e) => e.id));
+    await game.input.trigger("SpawnDebugMonster");
+    // Let it see the player while idle so a last-known position is recorded.
+    await game.step({ frames: 60 });
+    const postSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
+    const monster = postSpawn.entities.find(
+      (e) => e.name === "OG-Pipe" && !known.has(e.id),
+    );
+    assert.ok(monster, "expected a newly spawned OG-Pipe");
+
+    // Force full combat alert, then vanish: decay runs High -> Moderate
+    // (search starts) -> Low (the search must keep running - it hands off
+    // on its own schedule, not on the next decay tick).
+    await game.entities.sendMessage(monster.id, {
+      type: "SetAlertness",
+      level: "High",
+    });
+    // A verified no-line-of-sight pocket around corners from the start area
+    // (NOT the farthest spawn: the omniscient chase walks toward the player
+    // during decay, and some routes reacquire sight, pinning alertness).
+    await game.player.teleport({ x: -13.61, y: -5.8, z: 30.75 });
+
+    await game.waitFor(
+      async () => {
+        await game.step({ frames: 30 });
+        const d = await game.entities.detail(monster.id);
+        return aiProp(d, "AIBehavior") === "Search" ? d : undefined;
+      },
+      {
+        timeoutMs: 120_000,
+        description: "High-origin decay to enter Search",
+      },
+    );
+
+    // 4 seconds later the Moderate->Low decay (3s) has fired; the search
+    // must still be running (its own give-up is ~7s+ out).
+    await game.step({ frames: 240 });
+    const detail = await game.entities.detail(monster.id);
+    assert.equal(
+      aiProp(detail, "AIBehavior"),
+      "Search",
+      "the search must survive the next decay step",
+    );
+  },
+);
+
+test(
   "losing sight of the player triggers a search of the last-known position",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
