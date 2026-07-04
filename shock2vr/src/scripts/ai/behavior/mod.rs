@@ -16,4 +16,5 @@ pub use idle_behavior::*;
 pub use melee_attack_behavior::*;
 pub use ranged_attack_behavior::*;
 pub use scripted_sequence_behavior::*;
+pub use search_behavior::*;
 pub use wander_behavior::*;

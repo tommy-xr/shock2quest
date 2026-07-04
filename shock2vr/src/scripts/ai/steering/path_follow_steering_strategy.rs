@@ -21,6 +21,9 @@ pub enum PathTarget {
     Player,
     /// Roam to random reachable points within a radius of the AI
     Wander { radius: f32 },
+    /// Path to a fixed point (e.g. a last-known position). The owning
+    /// behavior decides when "arrived" - this just keeps routing there.
+    Point(Vector3<f32>),
 }
 
 /// A waypoint counts as reached within this XZ distance (2 Dark feet)
@@ -69,6 +72,10 @@ impl PathFollowSteeringStrategy {
 
     pub fn wander(radius: f32) -> PathFollowSteeringStrategy {
         PathFollowSteeringStrategy::new(PathTarget::Wander { radius })
+    }
+
+    pub fn to_point(goal: Vector3<f32>) -> PathFollowSteeringStrategy {
+        PathFollowSteeringStrategy::new(PathTarget::Point(goal))
     }
 
     fn new(target: PathTarget) -> PathFollowSteeringStrategy {
@@ -127,8 +134,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
 
         let desired_goal = match self.target {
             PathTarget::Player => Some(world.borrow::<UniqueView<PlayerInfo>>().ok()?.pos),
-            // Wander keeps its current destination until the path completes
-            PathTarget::Wander { .. } => None,
+            // Wander and Point keep their destination until the path completes
+            PathTarget::Wander { .. } | PathTarget::Point(_) => None,
         };
 
         let needs_repath = match (self.path_goal, desired_goal) {
@@ -162,6 +169,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 PathTarget::Wander { radius } => {
                     pick_wander_goal(&service, position, radius, &mut rand::thread_rng())
                 }
+                PathTarget::Point(point) => Some(point),
             };
             match goal {
                 // TODO: derive movement bits from the creature (small

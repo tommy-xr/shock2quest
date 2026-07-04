@@ -273,6 +273,14 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     }
 }
 
+/// Distance from the entity to the player, when both positions are known
+pub fn player_distance(world: &World, entity_id: EntityId) -> Option<f32> {
+    let u_player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+    let prop_pos = v_current_pos.get(entity_id).ok()?;
+    Some((prop_pos.position - u_player.pos).magnitude())
+}
+
 /// Current hit points, if the entity has a health pool
 pub fn hit_points(entity_id: EntityId, world: &World) -> Option<i32> {
     let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();

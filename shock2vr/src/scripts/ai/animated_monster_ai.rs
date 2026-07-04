@@ -63,6 +63,9 @@ pub struct AnimatedMonsterAI {
     config: Option<MonsterConfig>,
     /// Behavior name last published for debug introspection
     published_behavior: Option<&'static str>,
+    /// Where the player was last seen; investigated by SearchBehavior when
+    /// alertness decays after losing contact
+    last_known_player_pos: Option<cgmath::Vector3<f32>>,
 }
 
 impl AnimatedMonsterAI {
@@ -79,6 +82,7 @@ impl AnimatedMonsterAI {
             alertness: AlertnessState::default(),
             config: None,
             published_behavior: None,
+            last_known_player_pos: None,
         }
     }
 
@@ -96,6 +100,7 @@ impl AnimatedMonsterAI {
             alertness: AlertnessState::default(),
             config: None,
             published_behavior: None,
+            last_known_player_pos: None,
         }
     }
 
@@ -141,11 +146,26 @@ impl AnimatedMonsterAI {
             AIAlertLevel::Low => Box::new(RefCell::new(WanderBehavior::new())),
             AIAlertLevel::Moderate => Box::new(RefCell::new(ChaseBehavior::new())),
             AIAlertLevel::High => {
-                // Choose attack type based on whether monster has ranged weapon
-                if has_ranged_weapon(world, entity_id) {
-                    Box::new(RefCell::new(RangedAttackBehavior))
-                } else {
-                    Box::new(RefCell::new(MeleeAttackBehavior))
+                // Attack only when in range; otherwise chase to close the
+                // distance (ChaseBehavior::next_behavior escalates back to an
+                // attack on arrival, using these same thresholds). Without
+                // the range check, a far-away High AI stood still swinging.
+                let distance = player_distance(world, entity_id);
+                let melee_attack_distance = 8.0 / SCALE_FACTOR;
+                let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
+                let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
+                match distance {
+                    Some(d)
+                        if d > ranged_min_attack_distance
+                            && d < ranged_max_attack_distance
+                            && has_ranged_weapon(world, entity_id) =>
+                    {
+                        Box::new(RefCell::new(RangedAttackBehavior))
+                    }
+                    Some(d) if d < melee_attack_distance => {
+                        Box::new(RefCell::new(MeleeAttackBehavior))
+                    }
+                    _ => Box::new(RefCell::new(ChaseBehavior::new())),
                 }
             }
         }
@@ -436,9 +456,16 @@ impl Script for AnimatedMonsterAI {
         let is_visible =
             is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE);
 
+        // Remember where the player was last seen, for SearchBehavior
+        if is_visible {
+            if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
+                self.last_known_player_pos = Some(player.pos);
+            }
+        }
+
         // Update alertness state
         let (alertness_effect, behavior_change_effect) = if let Some(config) = &self.config {
-            if let Some((_old_level, _new_level)) = alertness::process_alertness_update(
+            if let Some((old_level, new_level)) = alertness::process_alertness_update(
                 &mut self.alertness,
                 is_visible,
                 delta,
@@ -448,16 +475,39 @@ impl Script for AnimatedMonsterAI {
                 // Level changed - sync to ECS and potentially change behavior
                 let sync_effect = alertness::sync_alertness_effect(entity_id, &self.alertness);
 
-                // When alertness changes, update behavior to match new level
-                let new_behavior = self.behavior_for_alertness(world, physics, entity_id);
-                self.current_behavior = new_behavior;
+                // AIAlertLevel is repr(u32) in escalation order
+                let decayed = (new_level as u32) < (old_level as u32);
 
-                let is_locomotion = self.current_behavior.borrow().is_locomotion();
-                let selection_strategy = self.next_selection(is_locomotion);
-                let animation_effect = Effect::QueueAnimationBySchema {
-                    entity_id,
-                    motion_queries: vec![self.current_behavior.borrow().animation()],
-                    selection_strategy,
+                // Losing contact after actively tracking the player doesn't
+                // drop straight to wandering: investigate the last-known
+                // position first. Further decay during an active search
+                // leaves it running - it hands off to Wander itself.
+                let new_behavior: Option<Box<RefCell<dyn Behavior>>> = if decayed
+                    && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
+                {
+                    match self.last_known_player_pos.take() {
+                        Some(goal) => Some(Box::new(RefCell::new(SearchBehavior::new(goal)))),
+                        // Never actually saw the player (e.g. aggroed by
+                        // damage from behind) - nothing to investigate
+                        None => Some(self.behavior_for_alertness(world, physics, entity_id)),
+                    }
+                } else if decayed && self.current_behavior.borrow().name() == "Search" {
+                    None
+                } else {
+                    Some(self.behavior_for_alertness(world, physics, entity_id))
+                };
+
+                let animation_effect = if let Some(behavior) = new_behavior {
+                    self.current_behavior = behavior;
+                    let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                    let selection_strategy = self.next_selection(is_locomotion);
+                    Effect::QueueAnimationBySchema {
+                        entity_id,
+                        motion_queries: vec![self.current_behavior.borrow().animation()],
+                        selection_strategy,
+                    }
+                } else {
+                    Effect::NoEffect
                 };
 
                 (sync_effect, animation_effect)
