@@ -15,6 +15,14 @@ use dark::{
 };
 use std::sync::Arc;
 
+/// Taut crossing points keep this distance (1.5 Dark feet) from shared-edge
+/// endpoints. Endpoints are wall corners: a fully-taut path has zero
+/// clearance there, dragging the AI's body through the corner and leaving
+/// whisker avoidance to fight the path every frame. One fixed radius for all
+/// creatures for now - it also (harmlessly) insets interior subdivision
+/// edges, not just walls.
+const EDGE_CLEARANCE: f32 = 1.5 / SCALE_FACTOR;
+
 /// Pathfinding service for AI navigation
 ///
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
@@ -135,7 +143,7 @@ impl PathfindingService {
                         .path_database
                         .vertices
                         .get(link.edge_vertex_b as usize)?;
-                    Some((a, b))
+                    Some(inset_edge(a, b))
                 });
             edges.push(edge.unwrap_or_else(|| {
                 // No usable edge data; fall back to the destination cell center
@@ -331,6 +339,22 @@ impl PathfindingService {
     }
 }
 
+/// Shrink an edge toward its center by EDGE_CLEARANCE on each end, so taut
+/// crossing points can't land on the endpoints (wall corners). Edges shorter
+/// than twice the clearance collapse to their midpoint - the doorway is
+/// narrower than the clearance, so the middle is the best available.
+fn inset_edge(a: Vector3<f32>, b: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+    let ab = b - a;
+    let len = ab.magnitude();
+    if len <= 2.0 * EDGE_CLEARANCE {
+        let mid = a + ab * 0.5;
+        (mid, mid)
+    } else {
+        let dir = ab / len;
+        (a + dir * EDGE_CLEARANCE, b - dir * EDGE_CLEARANCE)
+    }
+}
+
 /// Closest point to `target` on the segment from `a` to `b`
 fn closest_point_on_segment(
     a: Vector3<f32>,
@@ -503,6 +527,33 @@ mod tests {
         // Straight corridor: the taut path stays on the straight line z = 1
         assert!((path[1].z - 1.0).abs() < 1e-5);
         assert!((path[2].z - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn taut_waypoints_keep_clearance_from_edge_endpoints() {
+        // A goal hugging the corridor wall (z near 0) pulls the taut points
+        // toward the edge endpoints - wall corners. The crossing points must
+        // keep EDGE_CLEARANCE distance from the endpoints so the AI's body
+        // doesn't drag through the corner.
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 0.05);
+        let path = service
+            .find_path(start, goal, MovementBits::WALK | MovementBits::STRESSED)
+            .unwrap();
+        assert_eq!(path.len(), 4, "start + 2 edge crossings + goal");
+        // Edges span z in [0, 2]; the goal at z=0.05 pulls both crossings to
+        // the inset endpoint, exactly EDGE_CLEARANCE from the z=0 corner
+        assert!(
+            (path[1].z - EDGE_CLEARANCE).abs() < 1e-5,
+            "crossing 1 not clamped to the inset endpoint: z = {}",
+            path[1].z
+        );
+        assert!(
+            (path[2].z - EDGE_CLEARANCE).abs() < 1e-5,
+            "crossing 2 not clamped to the inset endpoint: z = {}",
+            path[2].z
+        );
     }
 
     #[test]
