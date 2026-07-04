@@ -19,7 +19,7 @@ use crate::mission::CullingInfo;
 use crate::mission::VisibilityEngine;
 use crate::mission::pathfinding_debug;
 use crate::pathfinding::{PathfindingService, path_visualization::PathVisualizationSystem};
-use crate::psi::{GlobalPsiPowers, PsiPowerSelection};
+use crate::psi::{GlobalPsiPowers, PlayerPsiKnownPowers, PsiPowerSelection};
 use crate::{mission::entity_creator, scripts::AIPropertyUpdate};
 
 use dark::{
@@ -370,8 +370,18 @@ impl MissionCore {
         {
             crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
         }
+        // Debug scenes unlock every power (debug_psi exercises the whole
+        // registry); real missions start with the player template's learned
+        // bits plus the default OSA loadout (Cryokinesis).
+        let known_powers = crate::psi::build_known_powers(
+            &entity_info_rc,
+            &psi_powers,
+            THE_PLAYER_TEMPLATE_ID,
+            mission.starts_with("debug_"),
+        );
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
+        world.add_unique(known_powers);
 
         // ** Entity creation
 
@@ -1597,12 +1607,26 @@ impl MissionCore {
 
                 Effect::CyclePsiPower => {
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                    let known = self
+                        .world
+                        .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                        .unwrap();
                     let mut selection = self
                         .world
                         .borrow::<UniqueViewMut<PsiPowerSelection>>()
                         .unwrap();
                     if !powers.0.is_empty() {
-                        selection.index = (selection.index + 1) % powers.0.len();
+                        // Advance to the next *trained* power, wrapping (at
+                        // most one lap - with a single trained power the lap
+                        // lands back on it, so the selection never moves onto
+                        // an untrained power).
+                        for step in 1..=powers.0.len() {
+                            let index = (selection.index + step) % powers.0.len();
+                            if known.0.contains(&powers.0[index].template_id) {
+                                selection.index = index;
+                                break;
+                            }
+                        }
                         let power = &powers.0[selection.index];
                         game_log!(
                             INFO,
@@ -1610,6 +1634,23 @@ impl MissionCore {
                             power.name,
                             power.power.psi_cost
                         );
+                    }
+                }
+
+                Effect::GrantPsiPower { template_id } => {
+                    let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                    let mut known = self
+                        .world
+                        .borrow::<UniqueViewMut<PlayerPsiKnownPowers>>()
+                        .unwrap();
+                    if known.0.insert(template_id) {
+                        let name = powers
+                            .0
+                            .iter()
+                            .find(|p| p.template_id == template_id)
+                            .map(|p| p.name.as_str())
+                            .unwrap_or("<unknown power>");
+                        game_log!(INFO, "Psi power trained: {} ({})", name, template_id);
                     }
                 }
 

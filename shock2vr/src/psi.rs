@@ -7,7 +7,11 @@
 //! mission load; the psi amp script casts whichever power the selection
 //! unique points at.
 
-use dark::properties::{Link, ProjectileOptions, PropPsiPower, PropSymName};
+use std::collections::HashSet;
+
+use dark::properties::{
+    Link, ProjectileOptions, PropPsiPower, PropPsiPowerLearned, PropPsiPowerLearned2, PropSymName,
+};
 use dark::ss2_entity_info::{self, SystemShock2EntityInfo};
 use shipyard::Unique;
 
@@ -120,6 +124,67 @@ pub struct PsiPowerSelection {
     pub index: usize,
 }
 
+/// The psi powers the player has been trained in, by power template id -
+/// the only powers selectable (`Effect::CyclePsiPower`) and castable
+/// (`PsiAmpScript`). Grown at runtime via `Effect::GrantPsiPower`.
+#[derive(Unique, Clone)]
+pub struct PlayerPsiKnownPowers(pub HashSet<i32>);
+
+/// Seed the trained-power set at mission load.
+///
+/// - Debug scenes (`all_known`) unlock every power in the registry so the
+///   `debug_psi` scene keeps exercising everything.
+/// - Real missions read the learned-power bits from the player template's
+///   `P$PsiPowerD`/`P$PsiPower2` dwords (authored `0x00000000` in the retail
+///   gamesys - the original grants powers at runtime), then union the
+///   default OSA loadout: Projected Cryokinesis, which every trained OSA
+///   agent starts with.
+pub fn build_known_powers(
+    entity_info: &SystemShock2EntityInfo,
+    powers: &GlobalPsiPowers,
+    player_template_id: i32,
+    all_known: bool,
+) -> PlayerPsiKnownPowers {
+    if all_known {
+        return PlayerPsiKnownPowers(powers.0.iter().map(|p| p.template_id).collect());
+    }
+
+    let dword1 = hydrate_template_component::<PropPsiPowerLearned>(player_template_id, entity_info)
+        .map(|p| p.bits)
+        .unwrap_or(0);
+    let dword2 =
+        hydrate_template_component::<PropPsiPowerLearned2>(player_template_id, entity_info)
+            .map(|p| p.bits)
+            .unwrap_or(0);
+
+    let mut known: HashSet<i32> = powers
+        .0
+        .iter()
+        .filter(|p| learned_bit_set(dword1, dword2, p.power.power_id))
+        .map(|p| p.template_id)
+        .collect();
+    known.insert(CRYOKINESIS_TEMPLATE_ID);
+    PlayerPsiKnownPowers(known)
+}
+
+/// Whether a power id's learned bit is set across the two learned-power
+/// dwords. Layout: **bit index = power id** - dword 1 (`P$PsiPowerD`)
+/// covers ids 0..=31, dword 2 (`P$PsiPower2`) covers ids 32..=63 as bit
+/// `power_id - 32`. Verified against the shipped data: `earth.mis` entity
+/// 243 (`Starting_Location`) authors `P$PsiPowerD = 0x49` = bits {0, 3, 6}
+/// = {First Tier Neural Capacity, Kinetic Redirection, Projected
+/// Cryokinesis} under this layout - a coherent psi starting loadout
+/// (id-keyed discipline names from `psihelp.str`, whose `Psi<id>` keys also
+/// place the five tier-capacity pseudo-disciplines at the power-id gaps
+/// 0/8/16/24/32).
+fn learned_bit_set(dword1: u32, dword2: u32, power_id: i32) -> bool {
+    match power_id {
+        0..=31 => dword1 & (1u32 << power_id) != 0,
+        32..=63 => dword2 & (1u32 << (power_id - 32)) != 0,
+        _ => false,
+    }
+}
+
 /// Hydrate every psi power template (those carrying `P$PsiPower`) into a
 /// registry, plus the default selection (Projected Cryokinesis).
 pub fn build_psi_power_registry(
@@ -189,6 +254,29 @@ pub fn apply_display_names(
             .and_then(|text| text.lines().next())
             .map(|line| line.trim().to_owned())
             .filter(|line| !line.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn learned_bits_split_across_dwords_by_power_id() {
+        // Dword 1 covers power ids 0..=31 as bit `power_id`. The reference
+        // value from the shipped data: earth.mis Starting_Location authors
+        // 0x49 = {tier-1 capacity (0), Kinetic Redirection (3), Projected
+        // Cryokinesis (6)}.
+        assert!(learned_bit_set(0x49, 0, 0));
+        assert!(learned_bit_set(0x49, 0, 3));
+        assert!(learned_bit_set(0x49, 0, 6));
+        assert!(!learned_bit_set(0x49, 0, 1));
+        assert!(learned_bit_set(1 << 31, 0, 31));
+        assert!(!learned_bit_set(0, 1 << 6, 6));
+        // Dword 2 covers power ids 32..=63 as bit `power_id - 32`.
+        assert!(learned_bit_set(0, 0b10, 33));
+        assert!(learned_bit_set(0, 1 << 7, 39));
+        assert!(!learned_bit_set(0, 0, 39));
     }
 }
 

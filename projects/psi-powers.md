@@ -35,13 +35,34 @@ Landed (phase 1 - all powers selectable, projectile powers castable):
   `PsiAmpScript`, exposed via `/v1/info` (`psi_charge`/`psi_charge_phase`)
   and covered by `psi-overload.e2e.test.ts`.
 
-Not yet implemented: trained-power gating (the player template's unparsed
-`P$PsiPower2`/`P$PsiPowerD` look like the learned-power bits),
+- **Trained-power gating** (phase 3): the player only selects/casts powers
+  they know. `dark` parses the learned-power dwords `P$PsiPowerD`/`P$PsiPower2`
+  (`PropPsiPowerLearned`/`PropPsiPowerLearned2`): a bitmask with **bit index =
+  power id** (dword 1 ids 0..=31, dword 2 ids 32..=63 as `power_id - 32`).
+  `The Player` (-384) authors both `0` in the retail gamesys (the original
+  grants powers at runtime), but `earth.mis` entity 243 (`Starting_Location`)
+  authors `P$PsiPowerD = 0x49` = {First Tier Neural Capacity, Kinetic
+  Redirection, Projected Cryokinesis} - which pins the layout, along with
+  `psihelp.str`'s `Psi<id>` keys placing the five "Tier N Neural Capacity"
+  pseudo-disciplines at the power-id gaps 0/8/16/24/32. At mission load
+  `PlayerPsiKnownPowers` (`shock2vr/src/psi.rs`) seeds from the player
+  template's bits UNION Projected Cryokinesis (the default OSA power);
+  `debug_*` scenes unlock everything so `debug_psi` keeps exercising the
+  whole registry. `Effect::CyclePsiPower` skips untrained powers,
+  `PsiAmpScript` refuses to charge/cast them, and
+  `Effect::GrantPsiPower { template_id }` trains one at runtime (for
+  trainers/debug tooling). Covered by `psi-trained.e2e.test.ts`.
+
+Not yet implemented: applying a mission start marker's authored loadout
+(`earth.mis` `Starting_Location` carries `P$PsiPowerD` and
+`P$BaseStats`-style starting props that nothing reads yet), anything that
+emits `Effect::GrantPsiPower` (character creation, trainers, psi modules),
 sustained/shield/cursor power behaviors, PSI stat from `P$BaseStats` (the
 overload zone size should also grow with PSI), burnout damage mitigation
 (PSI 8 = safe, Endurance reduces it), the VR meter (flat HUD only), psi
-point/selection persistence across save/load and level transitions (both
-reset - the pool to the authored 40, the selection to Cryokinesis), and psi
+point/selection/trained-power persistence across save/load and level
+transitions (all reset - the pool to the authored 40, the selection to
+Cryokinesis, the trained set to the seeded default), and psi
 hypos/trainers.
 
 ## High-Level Context
