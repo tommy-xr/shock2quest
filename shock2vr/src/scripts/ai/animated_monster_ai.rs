@@ -335,9 +335,17 @@ impl AnimatedMonsterAI {
             Effect::NoEffect
         };
 
+        // Death clips are keyed differently per creature: hybrid-style
+        // deaths hang directly under the crumple key, but human deaths sit
+        // one level deeper, under crumple -> die. The optional "die" lets the
+        // query descend that extra level when the creature's clips need it
+        // (verified across creature types with `cargo dq motion`).
         let death_animation = Effect::PlayAnimationBySchema {
             entity_id,
-            motion_query_items: vec![MotionQueryItem::new("crumple")],
+            motion_query_items: vec![
+                MotionQueryItem::new("crumple"),
+                MotionQueryItem::new("die").optional(),
+            ],
             selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
         };
 
@@ -678,9 +686,20 @@ impl Script for AnimatedMonsterAI {
                     self.enter_death(world, entity_id)
                 } else if self.took_damage {
                     self.took_damage = false;
+                    // Hybrid wound clips are keyed under a combat-context
+                    // level (receivewound -> meleecombat -> grunt -> ...),
+                    // not directly under the creature tags, so a bare
+                    // receivewound query matches nothing for them. The
+                    // optional "meleecombat" descends that level when the
+                    // creature's clips need it; creatures with directly-keyed
+                    // clips (droids, humans) still resolve (verified across
+                    // creature types with `cargo dq motion`).
                     Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_query_items: vec![MotionQueryItem::new("receivewound")],
+                        motion_query_items: vec![
+                            MotionQueryItem::new("receivewound"),
+                            MotionQueryItem::new("meleecombat").optional(),
+                        ],
                         selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
                     }
                 } else {
