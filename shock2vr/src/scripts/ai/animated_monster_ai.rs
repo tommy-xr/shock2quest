@@ -491,57 +491,69 @@ impl Script for AnimatedMonsterAI {
                 // Level changed - sync to ECS and potentially change behavior
                 let sync_effect = alertness::sync_alertness_effect(entity_id, &self.alertness);
 
-                // AIAlertLevel is repr(u32) in escalation order
-                let decayed = (new_level as u32) < (old_level as u32);
-
-                // Losing contact after actively tracking the player doesn't
-                // drop straight to wandering: investigate the last-known
-                // position first. Further decay during an active search
-                // leaves it running - it hands off to Wander itself.
-                let searching = self.current_behavior.borrow().name() == "Search";
-                let new_behavior: Option<Box<RefCell<dyn Behavior>>> = if decayed && searching {
-                    // An active search keeps running across further decay
-                    // (it hands off on its own) - unless a fresher sighting
-                    // was recorded mid-search, which re-targets it. This
-                    // must be checked BEFORE the decay-from-tracking branch,
-                    // or a High-origin search is stomped one decay later.
-                    self.last_known_player_pos
-                        .take()
-                        .map(|goal| -> Box<RefCell<dyn Behavior>> {
-                            Box::new(RefCell::new(SearchBehavior::new(goal)))
-                        })
-                } else if decayed
-                    && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
-                {
-                    match self.last_known_player_pos.take() {
-                        Some(goal) => Some(Box::new(RefCell::new(SearchBehavior::new(goal)))),
-                        // Never actually saw the player (e.g. aggroed by
-                        // damage from behind) - nothing to investigate
-                        None => Some(self.behavior_for_alertness(world, physics, entity_id)),
-                    }
+                // A running scripted sequence (e.g. the rec1 Cortez window
+                // scene) must not be preempted - or have its current clip
+                // replaced - by alertness swings; the alertness state still
+                // updates and takes effect once the sequence finishes. (The
+                // original engine gates this via the response priority; we
+                // protect all sequences.)
+                if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
+                    (sync_effect, Effect::NoEffect)
                 } else {
-                    Some(self.behavior_for_alertness(world, physics, entity_id))
-                };
-                // Fully calmed: a sighting from this engagement must not
-                // trigger a cross-map search minutes later
-                if new_level == AIAlertLevel::Lowest {
-                    self.last_known_player_pos = None;
+                    // AIAlertLevel is repr(u32) in escalation order
+                    let decayed = (new_level as u32) < (old_level as u32);
+
+                    // Losing contact after actively tracking the player
+                    // doesn't drop straight to wandering: investigate the
+                    // last-known position first. Further decay during an
+                    // active search leaves it running - it hands off to
+                    // Wander itself.
+                    let searching = self.current_behavior.borrow().name() == "Search";
+                    let new_behavior: Option<Box<RefCell<dyn Behavior>>> = if decayed && searching {
+                        // An active search keeps running across further decay
+                        // (it hands off on its own) - unless a fresher
+                        // sighting was recorded mid-search, which re-targets
+                        // it. This must be checked BEFORE the decay-from-
+                        // tracking branch, or a High-origin search is stomped
+                        // one decay later.
+                        self.last_known_player_pos.take().map(
+                            |goal| -> Box<RefCell<dyn Behavior>> {
+                                Box::new(RefCell::new(SearchBehavior::new(goal)))
+                            },
+                        )
+                    } else if decayed
+                        && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
+                    {
+                        match self.last_known_player_pos.take() {
+                            Some(goal) => Some(Box::new(RefCell::new(SearchBehavior::new(goal)))),
+                            // Never actually saw the player (e.g. aggroed by
+                            // damage from behind) - nothing to investigate
+                            None => Some(self.behavior_for_alertness(world, physics, entity_id)),
+                        }
+                    } else {
+                        Some(self.behavior_for_alertness(world, physics, entity_id))
+                    };
+                    // Fully calmed: a sighting from this engagement must not
+                    // trigger a cross-map search minutes later
+                    if new_level == AIAlertLevel::Lowest {
+                        self.last_known_player_pos = None;
+                    }
+
+                    let animation_effect = if let Some(behavior) = new_behavior {
+                        self.current_behavior = behavior;
+                        let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                        let selection_strategy = self.next_selection(is_locomotion);
+                        Effect::QueueAnimationBySchema {
+                            entity_id,
+                            motion_queries: vec![self.current_behavior.borrow().animation()],
+                            selection_strategy,
+                        }
+                    } else {
+                        Effect::NoEffect
+                    };
+
+                    (sync_effect, animation_effect)
                 }
-
-                let animation_effect = if let Some(behavior) = new_behavior {
-                    self.current_behavior = behavior;
-                    let is_locomotion = self.current_behavior.borrow().is_locomotion();
-                    let selection_strategy = self.next_selection(is_locomotion);
-                    Effect::QueueAnimationBySchema {
-                        entity_id,
-                        motion_queries: vec![self.current_behavior.borrow().animation()],
-                        selection_strategy,
-                    }
-                } else {
-                    Effect::NoEffect
-                };
-
-                (sync_effect, animation_effect)
             } else {
                 (Effect::NoEffect, Effect::NoEffect)
             }
@@ -802,6 +814,15 @@ impl Script for AnimatedMonsterAI {
                         selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
                     }
                 } else {
+                    // Let the behavior react first (e.g. a scripted Play
+                    // action marks itself complete when its clip finishes).
+                    {
+                        let _ = self
+                            .current_behavior
+                            .borrow_mut()
+                            .handle_message(entity_id, world, physics, msg);
+                    }
+
                     let next_behavior = {
                         self.current_behavior
                             .borrow_mut()
@@ -815,6 +836,14 @@ impl Script for AnimatedMonsterAI {
                             self.current_behavior = behavior;
                         }
                     };
+
+                    // A finished scripted sequence hands control back to the
+                    // alertness-appropriate behavior (alertness kept updating
+                    // during the performance; apply it now).
+                    if self.current_behavior.borrow().scripted_state() == ScriptedState::Finished {
+                        self.current_behavior =
+                            self.behavior_for_alertness(world, physics, entity_id);
+                    }
                     //self.current_behavior = Rc::new(IdleBehavior);
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
