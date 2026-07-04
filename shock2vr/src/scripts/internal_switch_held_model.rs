@@ -31,7 +31,34 @@ impl Script for InternalSwitchHeldModelScript {
                     .map(|mode| mode.0 == PresentationMode::Vr)
                     .unwrap_or(false);
                 if is_vr {
-                    return Effect::NoEffect;
+                    let mut effects = Vec::new();
+
+                    // Self-heal cross-mode saves: a save made in flat while
+                    // wielding persists the _h viewmodel name; restore the
+                    // original world model (a no-op in the normal VR flow).
+                    if let (Some(original), Some(current)) = (
+                        get_previous_model(world, entity_id),
+                        get_current_model(world, entity_id),
+                    ) {
+                        if original != current {
+                            effects.push(Effect::ChangeModel {
+                                entity_id,
+                                model_name: original,
+                            });
+                        }
+                    }
+
+                    // The world model stays rendered, but its mesh has no
+                    // vhots - take the fire points (muzzle) from the hand
+                    // model so projectiles/flash don't spawn at the grip.
+                    if let Some(view_model) = get_view_model(world, entity_id) {
+                        effects.push(Effect::SetVhotsFromModel {
+                            entity_id,
+                            model_name: view_model,
+                        });
+                    }
+
+                    return Effect::Multiple(effects);
                 }
 
                 if let Some(view_model) = get_view_model(world, entity_id) {
@@ -75,6 +102,16 @@ fn get_view_model(world: &World, entity_id: EntityId) -> Option<String> {
     };
 
     ret.filter(|str| vr_config::is_allowed_hand_model(str))
+}
+
+fn get_current_model(world: &World, entity_id: EntityId) -> Option<String> {
+    let v_model_name = world
+        .borrow::<View<dark::properties::PropModelName>>()
+        .unwrap();
+    v_model_name
+        .get(entity_id)
+        .ok()
+        .map(|model| model.0.clone())
 }
 
 fn get_previous_model(world: &World, entity_id: EntityId) -> Option<String> {

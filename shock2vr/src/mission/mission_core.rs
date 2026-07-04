@@ -1981,6 +1981,18 @@ impl MissionCore {
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
                     }
                 }
+                Effect::SetVhotsFromModel {
+                    entity_id,
+                    model_name,
+                } => {
+                    if let Some(model) = self.id_to_model.get(&entity_id) {
+                        let xform = model.get_transform();
+                        let donor_model =
+                            asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
+                        let vhots = Model::transform(donor_model.as_ref(), xform).vhots();
+                        self.world.add_component(entity_id, RuntimePropVhots(vhots));
+                    }
+                }
                 Effect::PlayEmail { deck, email, force } => {
                     let email_file = get_email_sound_file(deck, email);
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
