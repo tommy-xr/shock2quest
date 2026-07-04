@@ -253,6 +253,14 @@ pub enum Effect {
         is_teleport: bool,
     },
 
+    /// Set an entity's render alpha (Renderer\Transparency (alpha): 1.0 =
+    /// opaque, 0.0 = invisible). Drives holo/ghost fades (Transluce scripts,
+    /// CS9 cutscene exhibits).
+    SetRenderAlpha {
+        entity_id: EntityId,
+        alpha: f32,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },
