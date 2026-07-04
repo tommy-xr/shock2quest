@@ -361,9 +361,22 @@ impl Script for AnimatedMonsterAI {
         // sensors. A corpse keeps a live script, and any alertness level
         // change here (escalation while the player is visible, or decay)
         // would replace DeadBehavior and resurrect it. Still publish the
-        // behavior so introspection shows "Dead".
+        // behavior so introspection shows "Dead", and release a sensor the
+        // ray was intersecting at death so its end-intersect isn't stranded.
         if self.is_dead || is_killed(entity_id, world) {
-            return self.publish_behavior(entity_id);
+            let sensor_release_effect = match self.last_hit_sensor.take() {
+                Some(sensor_id) => Effect::Send {
+                    msg: Message {
+                        to: sensor_id,
+                        payload: MessagePayload::SensorEndIntersect { with: entity_id },
+                    },
+                },
+                None => Effect::NoEffect,
+            };
+            return Effect::combine(vec![
+                sensor_release_effect,
+                self.publish_behavior(entity_id),
+            ]);
         }
 
         let delta = time.elapsed.as_secs_f32();
@@ -540,6 +553,12 @@ impl Script for AnimatedMonsterAI {
                 Effect::combine(vec![hit_points_effect, alert_effect])
             }
             MessagePayload::TurnOn { from: _ } => {
+                // Dead AIs stay dead - a corpse can still be a SwitchLink
+                // target (e.g. a tripwire), and the scripted sequence would
+                // animate it
+                if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
                 if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
@@ -560,6 +579,10 @@ impl Script for AnimatedMonsterAI {
                 }
             }
             MessagePayload::Signal { name: _ } => {
+                // Dead AIs stay dead - level signals reach corpses too
+                if self.is_dead || is_killed(entity_id, world) {
+                    return Effect::NoEffect;
+                }
                 // Do we have a response to this signal?
 
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
@@ -596,16 +619,12 @@ impl Script for AnimatedMonsterAI {
                 if self.is_dead {
                     Effect::NoEffect
                 } else if is_killed(entity_id, world) {
-                    if self.current_behavior.borrow().name() == "Dead" {
-                        // The crumple animation completed - latch the corpse
-                        // as final. The UNK7 motion flag below latches earlier
-                        // when the clip carries it, but not every death clip
-                        // does, and without this the death branch would
-                        // replay the crumple (and death sound) forever.
-                        self.is_dead = true;
-                        return Effect::NoEffect;
-                    }
                     self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
+                    // Latch immediately: the is_dead branch above then
+                    // swallows every later completion (including the
+                    // synchronous re-dispatch when no crumple motion is
+                    // found), so the crumple and death sound play only once
+                    self.is_dead = true;
 
                     // Play death sound effect immediately
                     let death_sound_effect = if let Some(voice_index) =
@@ -741,9 +760,6 @@ impl Script for AnimatedMonsterAI {
                 //         //     //"direction".to_owned(),
                 //         // ],
                 //     }
-                } else if motion_flags.contains(MotionFlags::UNK7 /* die? */) {
-                    self.is_dead = true;
-                    Effect::NoEffect
                 } else {
                     Effect::NoEffect
                 }
