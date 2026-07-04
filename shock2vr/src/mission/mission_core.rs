@@ -1109,8 +1109,8 @@ impl MissionCore {
 
                 let actor_type = creature_definition.actor_type.to_u32().unwrap();
 
-                let query =
-                    MotionQuery::new(actor_type, query_items).with_selection_strategy(selection_strategy);
+                let query = MotionQuery::new(actor_type, query_items)
+                    .with_selection_strategy(selection_strategy);
 
                 let maybe_next_animation = global_context.motiondb.query(query.clone());
                 if let Some(next_animation) = maybe_next_animation {
@@ -1120,7 +1120,11 @@ impl MissionCore {
                     if let Some(clip) = maybe_clip {
                         *player = apply(player, clip);
                     } else {
-                        game_log!(WARN, "Unable to load animation clip: {:?}_.mc", next_animation);
+                        game_log!(
+                            WARN,
+                            "Unable to load animation clip: {:?}_.mc",
+                            next_animation
+                        );
                     }
                 } else {
                     game_log!(WARN, "Unable to find animation for query: {:?}", &query);

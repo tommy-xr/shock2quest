@@ -132,10 +132,13 @@ impl AnimationPlayer {
                 )
             })
             .or_else(|| {
-                player
-                    .last_animation
-                    .as_ref()
-                    .map(|clip| (clip.clone(), clip.num_frames.saturating_sub(1) as f32, false))
+                player.last_animation.as_ref().map(|clip| {
+                    (
+                        clip.clone(),
+                        clip.num_frames.saturating_sub(1) as f32,
+                        false,
+                    )
+                })
             });
         let blend_state = blend_from.map(|(from_clip, from_frame, from_looping)| BlendState {
             from_clip,
