@@ -127,6 +127,28 @@ export interface RayCastResult {
   is_sensor: boolean;
 }
 
+/** Summary of one rigid body, as reported by GET /v1/physics/bodies. */
+export interface PhysicsBodySummary {
+  body_id: number;
+  entity_id: number | null;
+  entity_name: string | null;
+  body_type: "dynamic" | "static" | "kinematic";
+  position: Vec3;
+  rotation: Quat;
+  mass: number | null;
+  velocity: Vec3;
+  angular_velocity: Vec3;
+  collision_groups: string[];
+  is_sensor: boolean;
+  is_enabled: boolean;
+}
+
+export interface PhysicsBodyListResult {
+  bodies: PhysicsBodySummary[];
+  total_count: number;
+  player_position: Vec3;
+}
+
 export interface PlayerSnapshot {
   entity_id: number | null;
   position: Vec3;
