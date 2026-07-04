@@ -130,7 +130,16 @@ struct Args {
     /// watch the game interactively.
     #[arg(long)]
     visible: bool,
+
+    /// Opaque instance identifier echoed by /v1/health, so the client that
+    /// launched this process can verify it is talking to its own instance
+    /// and not another agent's runtime that happens to hold the same port.
+    #[arg(long)]
+    instance_id: Option<String>,
 }
+
+/// Instance identifier from --instance-id, echoed by /v1/health
+static INSTANCE_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 /// Default debug-camera head rotation.
 ///
@@ -208,6 +217,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    let _ = INSTANCE_ID.set(args.instance_id.clone());
 
     info!(
         "Starting debug runtime on port {} with mission: {}",
@@ -1505,7 +1515,8 @@ async fn health_check() -> Json<Value> {
         "status": "ok",
         "service": "debug_runtime",
         "version": "0.1.0",
-        "timestamp": chrono::Utc::now().to_rfc3339()
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "instance_id": INSTANCE_ID.get().cloned().flatten(),
     }))
 }
 

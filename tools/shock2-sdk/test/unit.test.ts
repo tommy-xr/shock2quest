@@ -56,3 +56,23 @@ test("waitFor times out with a descriptive error", async () => {
     /Timed out after 30ms waiting for the impossible/,
   );
 });
+
+test("findFreePort skips ports that are already bound", async () => {
+  const { findFreePort } = await import("../src/server.js");
+  const { createServer } = await import("node:net");
+
+  // Occupy a port, then ask for it: the next one up should come back.
+  const blocker = createServer();
+  await new Promise<void>((resolve) =>
+    blocker.listen({ port: 0, host: "127.0.0.1" }, resolve),
+  );
+  const address = blocker.address();
+  assert.ok(address && typeof address === "object");
+  const taken = address.port;
+  try {
+    const free = await findFreePort(taken);
+    assert.ok(free > taken, `expected a port above ${taken}, got ${free}`);
+  } finally {
+    await new Promise((resolve) => blocker.close(resolve));
+  }
+});
