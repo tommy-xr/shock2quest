@@ -40,6 +40,11 @@ pub struct MotionDB {
 }
 
 impl MotionDB {
+    pub fn has_motion(&self, name: &str) -> bool {
+        self.animation_name_to_index
+            .contains_key(&name.to_ascii_lowercase())
+    }
+
     pub fn get_mps_motions(&self, name: String) -> &MpsMotion {
         let lowercase_name = &name.to_ascii_lowercase();
         let idx = self.animation_name_to_index.get(lowercase_name).unwrap();

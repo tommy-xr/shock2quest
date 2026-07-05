@@ -170,6 +170,68 @@ impl MotionAnalyzer {
         Ok(())
     }
 
+    /// Print per-clip metadata: motion-stuff (flags, blend length, end
+    /// rotation, root translation, duration) and the per-frame motion flags.
+    pub fn print_motion_info(&self, name: &str) -> Result<()> {
+        if !self.motion_db.has_motion(name) {
+            anyhow::bail!("No motion named '{}' in the motion database", name);
+        }
+
+        let stuff = self.motion_db.get_motion_stuff(name.to_string());
+        let mps = self.motion_db.get_mps_motions(name.to_string());
+
+        println!("=== {} ===", name);
+        println!("  flags:        {:#x}", stuff.flags);
+        println!("  blend_length: {} ms", stuff.blend_length);
+        println!("  end_dir:      {:?}", stuff.end_direction);
+        println!(
+            "  translation:  [{:.3}, {:.3}, {:.3}]",
+            stuff.translation.x, stuff.translation.y, stuff.translation.z
+        );
+        println!("  duration:     {:.3}", stuff.duration);
+        println!(
+            "  frames:       {} @ {} fps",
+            mps.frame_count, mps.frame_rate
+        );
+        for frame_flags in &mps.motion_flags {
+            println!(
+                "  frame {:>4}:   {:?}",
+                frame_flags.frame, frame_flags.flags
+            );
+        }
+
+        // The per-frame root-y stream lives in the clip file (res/motions/
+        // <name>_.mc), not the motion database - print its curve when the
+        // unpacked file is available
+        let mc_path = paths::data_root().join(format!("res/motions/{}_.mc", name));
+        if let Ok(file) = File::open(&mc_path) {
+            let mut reader = BufReader::new(file);
+            let clip = dark::motion::MotionClip::read(&mut reader, mps);
+            let ys: Vec<f32> = clip.root_transforms.iter().map(|m| m.w.y).collect();
+            if !ys.is_empty() {
+                let n = ys.len();
+                println!(
+                    "  root y:       start {:.3}  1/4 {:.3}  1/2 {:.3}  3/4 {:.3}  end {:.3}",
+                    ys[0],
+                    ys[n / 4],
+                    ys[n / 2],
+                    ys[3 * n / 4],
+                    ys[n - 1]
+                );
+                let (min, max) = ys
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
+                println!("                min {:.3}  max {:.3}", min, max);
+            }
+        } else {
+            println!(
+                "  root y:       (no unpacked clip at {})",
+                mc_path.display()
+            );
+        }
+        Ok(())
+    }
+
     pub fn parse_creature_type(&self, creature_type_str: &str) -> Result<u32> {
         // Try parsing as number first
         if let Ok(id) = creature_type_str.parse::<u32>() {
