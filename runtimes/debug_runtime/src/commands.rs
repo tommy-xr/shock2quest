@@ -53,6 +53,11 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Result<(), String>>,
     },
 
+    /// Snapshot the player's carried inventory.
+    GetPlayerInventory {
+        reply: oneshot::Sender<PlayerInventoryResult>,
+    },
+
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
@@ -355,6 +360,22 @@ pub struct QuestBitEntry {
 #[derive(Debug, Serialize)]
 pub struct QuestBitsResult {
     pub quests: Vec<QuestBitEntry>,
+    pub count: usize,
+}
+
+/// A single carried item.
+#[derive(Debug, Serialize)]
+pub struct InventoryItemEntry {
+    pub entity_id: i32,
+    pub name: Option<String>,
+    /// "inventory" (backpack), "left_hand", or "right_hand".
+    pub location: String,
+}
+
+/// Snapshot of the player's carried inventory.
+#[derive(Debug, Serialize)]
+pub struct PlayerInventoryResult {
+    pub items: Vec<InventoryItemEntry>,
     pub count: usize,
 }
 
