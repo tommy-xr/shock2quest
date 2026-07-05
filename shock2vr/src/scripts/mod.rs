@@ -167,6 +167,12 @@ pub enum MessagePayload {
         amount: f32,
     }, // damage the entity
 
+    // The entity heard a noise (gunfire, etc.) at this position - an AI
+    // alerts and investigates the source, without the noise being an attack.
+    HeardNoise {
+        origin: Vector3<f32>,
+    },
+
     // AI Signal
     Signal {
         name: String,

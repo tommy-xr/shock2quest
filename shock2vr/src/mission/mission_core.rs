@@ -1368,6 +1368,35 @@ impl MissionCore {
         );
     }
 
+    /// Propagate a noise (Effect::RaiseNoise): every creature within `radius`
+    /// of `origin` hears it and gets a HeardNoise message, so it can alert and
+    /// investigate the source. A plain Euclidean radius - walls don't
+    /// attenuate it yet (a path-distance model is a follow-up).
+    fn raise_noise(&mut self, origin: Vector3<f32>, radius: f32) {
+        let heard: Vec<EntityId> = {
+            let v_creature = self
+                .world
+                .borrow::<View<dark::properties::PropCreature>>()
+                .unwrap();
+            let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+            (&v_creature, &v_transform)
+                .iter()
+                .with_id()
+                .filter_map(|(entity_id, (_creature, transform))| {
+                    let pos = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+                    let distance = (crate::util::point3_to_vec3(pos) - origin).magnitude();
+                    (distance < radius).then_some(entity_id)
+                })
+                .collect()
+        };
+        for entity_id in heard {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload: MessagePayload::HeardNoise { origin },
+            });
+        }
+    }
+
     pub fn create_entity_by_template_name(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -1812,6 +1841,10 @@ impl MissionCore {
                     stim_template_id,
                 } => {
                     self.radius_blast(center, radius, intensity, stim_template_id);
+                }
+
+                Effect::RaiseNoise { origin, radius } => {
+                    self.raise_noise(origin, radius);
                 }
 
                 Effect::ReloadWeapon => {

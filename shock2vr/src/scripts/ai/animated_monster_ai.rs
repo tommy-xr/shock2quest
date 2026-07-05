@@ -326,6 +326,51 @@ impl AnimatedMonsterAI {
     /// Force alertness to `level` (clamped by the alert cap), reset the
     /// visibility timers, and swap in the canonical behavior for the
     /// resulting level. Callers must check the AI is alive first.
+    /// React to a stimulus that locates the player at `origin` - a hit taken,
+    /// or a noise heard. Refreshes the last-known position (so a searching or
+    /// chasing AI turns toward the fresh cue) and escalates toward Moderate
+    /// (chase) when not already alerted. No-op for a dead AI or one mid
+    /// scripted sequence (which `force_alertness` would otherwise preempt).
+    fn alert_to_position(
+        &mut self,
+        origin: cgmath::Vector3<f32>,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Effect {
+        // No config = an AI that doesn't process alertness at all (e.g. an
+        // apparition replay - see build_config); it must never notice the
+        // player, so a hit or a noise leaves it be.
+        let Some(config) = self.config.as_ref() else {
+            return Effect::NoEffect;
+        };
+        if self.is_dead
+            || is_killed(entity_id, world)
+            || self.current_behavior.borrow().scripted_state() == ScriptedState::Running
+        {
+            return Effect::NoEffect;
+        }
+        // Refresh even when already alerted - the cue reveals where the
+        // player is now, redirecting a stale chase or a search.
+        self.last_known_player_pos = Some(origin);
+
+        let cap = config.alert_cap.clone();
+        // Only force when the clamped target actually raises the level (so a
+        // capped AI isn't reset / re-animated), or when a search should
+        // re-aggro toward the fresh cue.
+        let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
+        let escalates = matches!(
+            self.alertness.current_level,
+            AIAlertLevel::Lowest | AIAlertLevel::Low
+        ) && target != self.alertness.current_level;
+        let searching = self.current_behavior.borrow().name() == "Search";
+        if escalates || searching {
+            self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
+        } else {
+            Effect::NoEffect
+        }
+    }
+
     fn force_alertness(
         &mut self,
         level: AIAlertLevel,
@@ -856,41 +901,14 @@ impl Script for AnimatedMonsterAI {
                 let lethal = hit_points(entity_id, world)
                     .map(|hp| hp - amount.round() as i32 <= 0)
                     .unwrap_or(false);
-                let cap = self
-                    .config
-                    .as_ref()
-                    .map(|c| c.alert_cap.clone())
-                    .unwrap_or_else(default_alert_cap);
-                // Respect alert caps: only force when the (clamped) target
-                // actually raises the level, so a capped AI isn't reset -
-                // and doesn't restart its animation - on every hit
-                let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
-                let escalates = matches!(
-                    self.alertness.current_level,
-                    AIAlertLevel::Lowest | AIAlertLevel::Low
-                ) && target != self.alertness.current_level;
-                // A searching AI that takes a hit re-aggros too: the shot
-                // reveals the attacker even without line of sight (the dead
-                // case already returned above)
-                let searching = self.current_behavior.borrow().name() == "Search";
-                // A running scripted sequence isn't preempted by nonlethal
-                // damage (force_alertness replaces the behavior); consistent
-                // with the alertness protection in update().
-                let running_sequence =
-                    self.current_behavior.borrow().scripted_state() == ScriptedState::Running;
-                let alert_effect = if !lethal && !running_sequence {
-                    // Any surviving hit reveals the attacker's position -
-                    // refresh the last-known even when already alerted, so
-                    // an AI chasing a stale sighting turns toward where the
-                    // shot actually came from (the dead case returned above)
-                    if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
-                        self.last_known_player_pos = Some(player.pos);
-                    }
-                    if escalates || searching {
-                        self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
-                    } else {
-                        Effect::NoEffect
-                    }
+                // A surviving hit alerts the AI to the attacker (the player):
+                // a shot reveals the player's position even with no line of
+                // sight. A killing blow doesn't - it goes straight to death.
+                let alert_effect = if lethal {
+                    Effect::NoEffect
+                } else if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
+                    let origin = player.pos;
+                    self.alert_to_position(origin, world, physics, entity_id)
                 } else {
                     Effect::NoEffect
                 };
@@ -903,6 +921,12 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 };
                 Effect::combine(vec![hit_points_effect, alert_effect, death_effect])
+            }
+            MessagePayload::HeardNoise { origin } => {
+                // A gunshot (or other noise) draws the AI to investigate its
+                // source, even with no line of sight - same alert path as
+                // taking a hit, minus the damage.
+                self.alert_to_position(*origin, world, physics, entity_id)
             }
             MessagePayload::TurnOn { from: _ } => {
                 // Dead AIs stay dead - a corpse can still be a SwitchLink

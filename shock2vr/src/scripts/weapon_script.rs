@@ -29,6 +29,17 @@ const MELEE_RANGE: f32 = 1.2;
 /// Damage dealt by a flat melee hit. TODO: derive from the weapon's `Melee Typ`.
 const MELEE_DAMAGE: f32 = 6.0;
 
+/// How far a gunshot carries to alert AIs (50 Dark feet). One value for all
+/// guns for now; per-weapon loudness is a follow-up.
+const GUNSHOT_NOISE_RADIUS: f32 = 50.0 / SCALE_FACTOR;
+
+/// The weapon entity's current world position (from its live transform).
+fn weapon_world_position(world: &World, entity_id: EntityId) -> Option<cgmath::Vector3<f32>> {
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
+    let transform = v_transform.get(entity_id).ok()?;
+    Some(transform.0.transform_point(point3(0.0, 0.0, 0.0)).to_vec())
+}
+
 use super::{
     Effect, Message, MessagePayload, Script,
     script_util::{
@@ -153,6 +164,10 @@ impl Script for WeaponScript {
                     AudioHandle::new(),
                 );
 
+                // Only a real gunshot (a fired projectile) raises noise - a
+                // projectile-less weapon that falls through the melee gate
+                // must not emit a phantom gunshot.
+                let is_gunshot = maybe_projectile.is_some();
                 let projectile_effect = Effect::Multiple(
                     maybe_projectile
                         .into_iter()
@@ -186,6 +201,18 @@ impl Script for WeaponScript {
                         entity_id,
                         delta: -1,
                     });
+                }
+                // A gunshot is loud: nearby AIs hear it and investigate the
+                // shooter, even without line of sight. The noise comes from
+                // the weapon (in the player's hands), so its position stands
+                // in for the shooter's.
+                if is_gunshot {
+                    if let Some(origin) = weapon_world_position(world, entity_id) {
+                        effects.push(Effect::RaiseNoise {
+                            origin,
+                            radius: GUNSHOT_NOISE_RADIUS,
+                        });
+                    }
                 }
                 Effect::Multiple(effects)
             }
