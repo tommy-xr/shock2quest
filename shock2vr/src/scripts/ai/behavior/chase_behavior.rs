@@ -1,13 +1,8 @@
-use std::cell::RefCell;
-
-use cgmath::{Deg, InnerSpace};
-use dark::{SCALE_FACTOR, motion::MotionQueryItem, properties::PropPosition};
-use rand::Rng;
+use cgmath::Deg;
+use dark::motion::MotionQueryItem;
 use shipyard::*;
 
-use crate::scripts::ai::ai_util::has_ranged_weapon;
 use crate::{
-    mission::PlayerInfo,
     physics::PhysicsWorld,
     scripts::{
         Effect,
@@ -19,7 +14,7 @@ use crate::{
     time::Time,
 };
 
-use super::{Behavior, MeleeAttackBehavior, NextBehavior, RangedAttackBehavior};
+use super::{Behavior, NextBehavior};
 
 pub struct ChaseBehavior {
     steering_strategy: Box<dyn SteeringStrategy>,
@@ -81,32 +76,9 @@ impl Behavior for ChaseBehavior {
         _physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
-        let _rand = rand::thread_rng().gen_range(0..100);
-        let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-        let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-        //let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-
-        let melee_attack_distance = 8.0 / SCALE_FACTOR;
-        let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
-        let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
-
-        if let Ok(prop_pos) = v_current_pos.get(entity_id) {
-            let distance = (prop_pos.position - u_player.pos).magnitude();
-
-            // Only ranged-armed AIs stop to shoot; melee AIs must keep
-            // chasing or they stall at mid-range bouncing between chase and
-            // ranged-attack behaviors.
-            if distance > ranged_min_attack_distance
-                && distance < ranged_max_attack_distance
-                && has_ranged_weapon(world, entity_id)
-            {
-                return NextBehavior::Next(Box::new(RefCell::new(RangedAttackBehavior)));
-            }
-            if distance < melee_attack_distance {
-                return NextBehavior::Next(Box::new(RefCell::new(MeleeAttackBehavior)));
-            }
+        match super::attack_behavior_for_distance(world, entity_id) {
+            Some(behavior) => NextBehavior::Next(behavior),
+            None => NextBehavior::Stay,
         }
-
-        NextBehavior::Stay
     }
 }
