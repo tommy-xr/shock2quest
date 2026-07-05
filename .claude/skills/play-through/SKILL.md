@@ -1,114 +1,108 @@
 ---
 name: play-through
 description: >-
-  Harden the game toward fully-playable end-to-end with a PLAYTEST -> FIX ->
-  REPLAY loop. An agent actually PLAYS a mission via the headless debug runtime -
-  it SEES the world (screenshots it reads) and ACTS with the runtime's tools
-  (move, look, frob, pick up, attack, follow triggers) - and reports what it
-  observes and where it gets stuck. Each blocker/bug is classified
-  ([gameplay]/[visual]/[functionality]), filed as a GitHub issue, and delegated
-  to a fix sub-agent (PR linked to the issue); then the agent REPLAYS from the
-  frontier to get a little further and find the next issue. Repeat. A run builds
-  an HTML timeline report from the playtest (each step: screenshot + note +
-  action + any bug). This is a playtest, NOT a scripted checkpoint runner.
-  Invoke with a mission (default medsci1) and optionally a progress goal.
+  Manager loop that hardens the game toward fully-playable end-to-end. It drives
+  the `playtest` primitive in a PLAYTEST -> REVIEW -> FIX -> REPLAY loop: play one
+  session (agent plays a mission via the debug runtime, emits a data.json),
+  adversarially REVIEW that session against a real walkthrough (did it genuinely
+  progress, were the actions sensible, are the findings real - not artifacts of
+  poking the wrong thing), triage the validated blocker/bugs, file + delegate a
+  fix (PR "Fixes #n"), then REPLAY from the advancing frontier - until a mission
+  (then the game) plays through with no new blocker. Aggregates every session into
+  a self-contained HTML timeline report. Invoke with a mission (default medsci1)
+  and a goal (default: reach the level's exit).
 ---
 
-# play-through — playtest → fix → replay loop
+# play-through — the playtest → review → fix → replay loop
 
-Iteratively drive the game toward **playable end-to-end** by *playing* it. An
-agent plays a mission like a QA tester, surfaces the thing that blocks or breaks,
-we fix it, and the agent replays a little further to find the next thing. The
-value is the agent **noticing** problems organically — not a script asserting
-predefined checks.
+Owns the *loop* that hardens the game to end-to-end playable. The atomic unit is
+the **`playtest`** skill (play one session, emit `data.json`); this manager runs
+it repeatedly, **reviews** each session for validity, fixes what blocks progress,
+and replays a little further — tracking a **frontier** so it never re-plays solved
+ground. Delegate the playtest and each fix to sub-agents (keeps the image-heavy
+work out of the main context); the manager holds the loop state and the report.
 
 ## The loop
 
 ```
-launch/resume at the frontier
-   → PLAYTEST (agent plays toward the goal, observing + acting)
-   → it surfaces an issue (a blocker, or a bug it noticed)
-   → classify + file a GitHub issue + delegate a FIX sub-agent (PR "Fixes #n")
-   → re-validate the fix, then REPLAY from the frontier
-   → gets a little further → finds the next issue
-repeat until the mission (then the game) plays through cleanly
+resume at the frontier (warp/teleport/QuickLoad) — or launch fresh at iteration 0
+  1. PLAYTEST   → invoke `playtest` toward the goal → data.json + screenshots + frontier
+  2. REVIEW     → adversarially judge the session (below). Shallow/invalid → re-play with guidance.
+  3. TRIAGE     → keep only REAL findings; identify the progress BLOCKER.
+  4. FIX        → file issue + delegate fix sub-agent (PR "Fixes #n"); re-validate.
+  5. REPLAY     → resume at the (now advanced) frontier; confirm it gets further.
+repeat until the mission plays through with no new blocker, then advance to the next level
 ```
 
-Each iteration should get **further** than the last. Track a **frontier** (the
-furthest level + position reached, plus quest/inventory state) and resume there
-each replay — via `transitionLevel(level, loc)` to the frontier level and a
-teleport/`QuickLoad`, so you don't replay solved sections every time.
+Each iteration must get **further**. Stop a mission when a full session reaches its
+exit with no new blocker; then chain to the next level and continue. "End-to-end
+with confidence" = every mission in sequence plays through clean on a fresh replay.
 
-## The playtest agent (how it plays)
+## 2. REVIEW — the quality gate (do not skip)
 
-Delegate each playtest to a **`general-purpose` sub-agent** (keeps the image-heavy
-observe loop out of the main context; it returns a playtest log + a frontier +
-the issue to fix). Its brief:
+A playtest can *look* busy without actually **playing** (teleport-and-poke,
+frobbing decorative props, "bugs" that are just the agent doing the wrong thing).
+Before acting on a session, review its `data.json` **adversarially** — spawn a
+reviewer sub-agent (it may read the screenshots and consult a real System Shock 2
+walkthrough for the mission):
 
-> You are a QA playtester for a System Shock 2 port. A debug runtime of
-> `<mission>` runs at `<url>`. **Play toward `<goal>`** (default: reach the
-> level's exit / next level). SEE the world and REACT to it — don't run a script.
-> Loop: screenshot → **Read the PNG** → decide → act → step → observe. Explore,
-> interact (frob doors/terminals, pick up items, fight), and follow the level's
-> real exit. **Report where you get stuck and every bug you notice.** Return: a
-> step-by-step log (each: what you saw in which screenshot, what you did), the
-> **frontier** you reached, and the **blocking issue** (if any) + other bugs,
-> each with a screenshot, severity, and classification.
+- **Did it genuinely progress** toward the goal, or just survey? (moved along the
+  intended path, pursued the objective, tried the real exit — vs jumping between
+  random nearby entities).
+- **Were the actions sensible?** (frobbed *doors / keypads / objective items /
+  usable terminals* — not decorative set-dressing; engaged enemies as a player
+  would, not just debug-damaged them). Flag nonsensical actions.
+- **Coverage vs the walkthrough:** did it do what a player *should* here (get the
+  wrench, find the keycard, deal with the objective, reach the elevator)? Note
+  what it skipped.
+- **Are the findings real** or artifacts? (e.g. "console frob does nothing" may be
+  correct-by-design if that console isn't interactive — not a bug). Keep only
+  validated findings; downgrade or drop the rest.
 
-**Senses & hands** (HTTP; SDK `GameServer` for lifecycle):
+Verdict: was this a valid playtest? If **no** (too shallow, wrong actions), re-run
+`playtest` with the review's specific guidance (and the walkthrough context)
+before triaging. Feed the walkthrough into the *next* playtest so it plays with
+intent, not at random.
 
-| Sense the world | Act on it |
-| --- | --- |
-| `POST /v1/screenshot {filename}` → **Read `/tmp/claude/<file>`** | `POST /v1/player/teleport {x,y,z}` (jump to inspect) |
-| `GET /v1/entities?filter=&limit=` (name/id/pos/distance) | `POST /v1/control/input {right_hand.thumbstick:[strafe,fwd]}` + step (walk) |
-| `GET /v1/entities/:id` (props, links) | `left_hand.thumbstick:[turn,0]` + step (look around) |
-| `GET /v1/info` (health, pos, wielded, psi) | `POST /v1/entities/:id/message {type:"Frob"\|"Damage"\|"TurnOn"}` |
-| `GET /v1/player/inventory` · `GET /v1/quests` | `POST /v1/player/give {entity_id}` (pick up) |
-| `GET /v1/transitions` (where exits lead + position) | follow an exit: teleport into a **tripwire** volume; **Frob** a bulkhead **button** |
+## 3-4. Triage & fix
 
-Note: **tripwires** fire on entry (teleport into the volume); **bulkhead buttons**
-fire on **Frob** (teleporting into a button does nothing). `/v1/transitions`
-gives each trigger's destination + position.
+Classify each validated finding: `[gameplay]` (broken interaction/objective) ·
+`[visual]` (rendering) · `[functionality]` (crash / won't load). **Blockers first**
+(they gate progress). File a GitHub issue (classification, mission, repro: exact
+levers + step count, expected vs actual, the screenshot), spawn a fix sub-agent
+(issue # + repro + subsystem pointer; it follows the repo's incremental +
+`/xreview` + negative-first-test discipline, opens a PR `Fixes #n`, re-validates).
+Non-blockers: log them, keep playing past them.
 
-## On an issue (blocker or bug)
+## 5. Replay & frontier
 
-**Classify:** `[gameplay]` (a broken interaction/objective — door won't open,
-frob does nothing, item can't be taken, trigger won't fire) · `[visual]` (missing
-texture, floating/clipping/z-fighting, T-posed creature, HUD glitch) ·
-`[functionality]` (crash, level won't load/step).
+Track the **frontier**: furthest level + position + quest/inventory state reached.
+Replay resumes there (`transitionLevel(level, loc)` + `teleport`/`QuickLoad`) so
+each iteration starts at the edge of the known-good region and pushes further.
 
-**File + fix (parallel).** File a GitHub issue (classification, mission, repro:
-exact levers + step count, expected vs actual, the screenshot). Spawn a
-`general-purpose` fix sub-agent with the issue # + repro + subsystem pointer; it
-follows the repo's incremental + `/xreview` + negative-first-test discipline,
-opens a PR (`Fixes #n`), and re-validates. Blockers first (they gate progress);
-log non-blocking bugs and keep playing past them when possible.
+## Report (aggregate, self-contained)
 
-**Replay.** After the fix merges (or on the fix branch), replay from the frontier
-and confirm the agent gets further. Note if a fix unblocks new territory.
+Each `playtest` emits a `data.json` next to its screenshots. Render a session (or
+the aggregate) to a **self-contained HTML timeline** — images inlined as base64,
+so it's one portable file:
 
-## The report (built from the playtest)
+```
+node .claude/skills/play-through/render-timeline.mjs <run-dir>/data.json
+# -> <run-dir>/report.html   (open file://... ; renders anywhere)
+```
 
-Assemble an **HTML timeline** from the playtest log — one entry per step with the
-screenshot, a note on what the agent saw, the action it took, and any bug — plus
-the issues filed and their fix PRs, and how far the frontier advanced this
-iteration. Render locally (self-contained HTML, images by relative path) so it's
-viewable without hosting. See `render-timeline.mjs` (reusable across runs); keep
-the per-mission game-data notes in `walkthroughs/<mission>.md` as context for the
-playtest agent (spawn point, exits, notable items — NOT a script to follow).
+`data.json` schema is documented in `render-timeline.mjs` (steps: screenshot +
+what the agent saw + what it did + any bug; plus frontier, bugs with issue/fix
+links, verdict). Keep per-mission game-data notes in `walkthroughs/<mission>.md`
+as context for the playtest + review (spawn, exits, notable items — NOT a script).
 
-## Optional fast first pass
-
-Before the agent digs into a level, a quick load+transition smoke can pre-flag
-dead levels (won't load, no forward trigger). That's a coarse net; the agent
-playtest is where real issues surface. Don't let the first-pass script substitute
-for actually playing.
+Optionally record a **video** of a session — capture frames at a cadence during
+play and stitch with the **`video-capture`** skill (60Hz sim / 4 = real-time
+15fps). Local artifact.
 
 ## Notes
-
-- Deterministic: `/v1/step` blocks until frames run; `/v1/screenshot` captures the
-  fully-rendered frame — no sleeps/retries.
-- Always `POST /v1/shutdown` (or SDK `await using`) when done.
-- Navigation today is teleport + short thumbstick drives; richer real-movement
-  playtesting (full navmesh traversal) is a planned upgrade — keep frontier
-  positions as world coordinates so it drops in later.
+- Delegate playtest + review + each fix to sub-agents; the manager keeps the
+  ledger (frontier, issues→fixes, iteration report).
+- Navigation today is teleport + short thumbstick drives; real-movement
+  playtesting (navmesh traversal) is a planned upgrade — keep frontier positions
+  as world coordinates so it drops in.
