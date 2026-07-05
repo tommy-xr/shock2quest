@@ -58,9 +58,14 @@ test(
     await game.entities.sendMessage(window.id, { type: "Damage", amount: 5.0 });
     await game.step({ frames: 1 });
 
+    // Identify shards by name, not just body novelty: body_id is a bare arena
+    // index (reusable), and unrelated dynamic bodies could spawn the same frame.
     const after = await game.physics.bodies();
     const shards = after.bodies.filter(
-      (b) => !knownBodyIds.has(b.body_id) && b.body_type === "dynamic",
+      (b) =>
+        !knownBodyIds.has(b.body_id) &&
+        b.body_type === "dynamic" &&
+        b.entity_name?.startsWith("Glass"),
     );
 
     // The window's 4 Flinderize links each spawn one shard.
