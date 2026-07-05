@@ -23,6 +23,53 @@ pub fn is_message_turnon_or_turnoff(msg: &MessagePayload) -> bool {
     }
 }
 
+/// Whether an entity is currently locked against the player: it carries
+/// `PropLocked(true)` and either has no key destination or a key/quest gate
+/// the player hasn't satisfied. Shared by buttons and (door-opening) AIs.
+pub fn is_entity_locked(world: &World, entity_id: EntityId) -> bool {
+    let v_locked = world
+        .borrow::<View<dark::properties::PropLocked>>()
+        .unwrap();
+    let Ok(locked) = v_locked.get(entity_id) else {
+        return false;
+    };
+    if !locked.0 {
+        return false;
+    }
+    let v_key_dst = world
+        .borrow::<View<dark::properties::PropKeyDst>>()
+        .unwrap();
+    let quest = world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .unwrap();
+    match v_key_dst.get(entity_id) {
+        // Locked, and the player lacks the key/quest state to open it
+        Ok(key_dst) => !quest.can_unlock(&key_dst.0),
+        // Locked with no key destination - nothing can unlock it
+        Err(_) => true,
+    }
+}
+
+/// Whether a translating door is nearer its closed endpoint than its open
+/// one (i.e. worth opening). `None` for entities that aren't translating
+/// doors.
+pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
+    use cgmath::InnerSpace;
+    let v_door = world
+        .borrow::<View<dark::properties::PropTranslatingDoor>>()
+        .unwrap();
+    let door = v_door.get(entity_id).ok()?;
+    // StdDoor drives the live transform via SetPosition each frame.
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let current = v_transform
+        .get(entity_id)
+        .ok()
+        .map(|t| point3_to_vec3(t.0.transform_point(point3(0.0, 0.0, 0.0))))?;
+    let to_closed = (current - door.base_closed_location).magnitude2();
+    let to_open = (current - door.base_open_location).magnitude2();
+    Some(to_closed <= to_open)
+}
+
 pub fn get_all_links_with_template<TData>(
     world: &World,
     producing_entity_id: EntityId,

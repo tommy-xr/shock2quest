@@ -133,16 +133,23 @@ impl Script for StdDoor {
         if let Ok(trans_door) = v_trans_door.get(entity_id) {
             match msg {
                 MessagePayload::TurnOn { from: _ } => {
-                    //self.current_position = trans_door.base_closed_location;
-                    self.desired_position = trans_door.base_open_location;
-                    self.is_moving = true;
-                    play_environmental_sound(
-                        world,
-                        entity_id,
-                        "statechange",
-                        vec![("openstate", "opening"), ("oldopenstate", "closed")],
-                        self.audio_handle.clone(),
-                    )
+                    // Idempotent: if we're already headed open, ignore repeat
+                    // opens (e.g. several AIs converging on the same door) so
+                    // the opening sound isn't replayed each frame.
+                    if (self.desired_position - trans_door.base_open_location).magnitude2() < 0.001
+                    {
+                        Effect::NoEffect
+                    } else {
+                        self.desired_position = trans_door.base_open_location;
+                        self.is_moving = true;
+                        play_environmental_sound(
+                            world,
+                            entity_id,
+                            "statechange",
+                            vec![("openstate", "opening"), ("oldopenstate", "closed")],
+                            self.audio_handle.clone(),
+                        )
+                    }
                 }
                 MessagePayload::TurnOff { from: _ } => {
                     //self.current_position = trans_door.base_closed_location;

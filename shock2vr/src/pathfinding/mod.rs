@@ -85,6 +85,10 @@ pub struct PathfindingService {
     /// Outgoing link indices for each cell, so A* expansion is O(degree)
     /// instead of a scan over every link in the mission.
     links_by_cell: Vec<Vec<u32>>,
+    /// Below-door cell -> the mission object id of the door that gates it
+    /// (from the AIPATH cell-door table). Lets an AI look up which door
+    /// blocks a cell on its route.
+    cell_to_door: std::collections::HashMap<u32, i32>,
     queries: AtomicU64,
     stressed_retries: AtomicU64,
     no_route: AtomicU64,
@@ -99,13 +103,59 @@ impl PathfindingService {
                 links.push(idx as u32);
             }
         }
+        let cell_to_door = path_database
+            .cell_doors
+            .iter()
+            .map(|cd| (cd.cell, cd.door))
+            .collect();
         Self {
             path_database,
             links_by_cell,
+            cell_to_door,
             queries: AtomicU64::new(0),
             stressed_retries: AtomicU64::new(0),
             no_route: AtomicU64::new(0),
         }
+    }
+
+    /// Doors that gate `cell` itself or any cell directly reachable from it -
+    /// i.e. the doors an AI standing in `cell` is about to walk into. Each
+    /// entry is `(door object id, the door cell's center)`; deduplicated by
+    /// door. A short breadth-first reach lets an AI notice (and open) a door
+    /// before it walks its body into the closed leaf and stalls. Empty when
+    /// the mission has no door data.
+    pub fn doors_near_cell(&self, cell: u32) -> Vec<(i32, Vector3<f32>)> {
+        if self.cell_to_door.is_empty() {
+            return Vec::new();
+        }
+        // Breadth-first over the walk graph out to a few hops
+        const DOOR_LOOKAHEAD_HOPS: u32 = 3;
+        let mut out = Vec::new();
+        let mut seen_doors = std::collections::HashSet::new();
+        let mut visited = std::collections::HashSet::from([cell]);
+        let mut frontier = vec![cell];
+        for _ in 0..=DOOR_LOOKAHEAD_HOPS {
+            let mut next = Vec::new();
+            for c in frontier {
+                if let Some(&door) = self.cell_to_door.get(&c) {
+                    if seen_doors.insert(door) {
+                        if let Some(pc) = self.path_database.cells.get(c as usize) {
+                            out.push((door, pc.center));
+                        }
+                    }
+                }
+                if let Some(links) = self.links_by_cell.get(c as usize) {
+                    for &idx in links {
+                        let to = self.path_database.links[idx as usize].to_cell;
+                        if visited.insert(to) {
+                            next.push(to);
+                        }
+                    }
+                }
+            }
+            frontier = next;
+        }
+        out
     }
 
     /// Snapshot of the monotonic query counters
@@ -449,7 +499,7 @@ fn closest_point_on_segment(
 mod tests {
     use super::*;
     use cgmath::vec3;
-    use dark::mission::path_database::{PathCell, PathCellLink};
+    use dark::mission::path_database::{CellDoor, PathCell, PathCellLink};
 
     /// Three unit-square cells in a row along X: 0 -> 1 -> 2.
     /// The 1 -> 2 link is gated by STRESSED; everything else is plain WALK.
@@ -512,6 +562,27 @@ mod tests {
 
     fn service(db: PathDatabase) -> PathfindingService {
         PathfindingService::new(Arc::new(db))
+    }
+
+    #[test]
+    fn doors_near_cell_finds_the_gating_door_within_reach() {
+        // Cells 0 -> 1 -> 2 in a row; cell 2 is a below-door cell gated by
+        // door object 99.
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.cells[2].flags = PathCellFlags::BELOW_DOOR;
+        db.cell_doors.push(CellDoor { cell: 2, door: 99 });
+        let service = service(db);
+
+        // From cell 0 the door is two hops away - within the lookahead
+        assert_eq!(service.doors_near_cell(0), vec![(99, vec3(5.0, 0.0, 1.0))]);
+        // Standing in the door cell itself also reports it
+        assert_eq!(service.doors_near_cell(2), vec![(99, vec3(5.0, 0.0, 1.0))]);
+    }
+
+    #[test]
+    fn doors_near_cell_empty_without_door_data() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        assert!(service.doors_near_cell(0).is_empty());
     }
 
     #[test]
