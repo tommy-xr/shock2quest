@@ -463,10 +463,18 @@ impl PathDatabase {
         // rejection later); moving-terrain data after the door table is not
         // read. Door data is optional: on any inconsistency the database
         // still loads, just without door awareness.
-        let cell_doors = Self::parse_tail(reader, cells.len()).unwrap_or_else(|| {
-            warn!("AIPATH trailing sections malformed; door-aware pathfinding disabled");
+        //
+        // The layout was reverse-engineered and validated only for v2.9
+        // (every shipped mission except shodan). The v3.4 tail may differ, so
+        // only attempt the known layout rather than risk a silent misparse.
+        let cell_doors = if layout == AiPathLayout::PackedIds {
+            Self::parse_tail(reader, &cells).unwrap_or_else(|| {
+                warn!("AIPATH trailing sections malformed; door-aware pathfinding disabled");
+                Vec::new()
+            })
+        } else {
             Vec::new()
-        });
+        };
 
         Some(PathDatabase {
             cells,
@@ -477,8 +485,13 @@ impl PathDatabase {
     }
 
     /// Parse the trailing AIPATH sections up to and including the cell-door
-    /// table. Returns None if the data doesn't match the expected layout.
-    fn parse_tail(reader: &mut io::Cursor<&[u8]>, n_cells: usize) -> Option<Vec<CellDoor>> {
+    /// table. Returns None if the data doesn't match the expected layout -
+    /// which doubles as a misparse detector, since a misaligned read almost
+    /// never lands on a table whose cells are all in range AND flagged
+    /// below-door.
+    fn parse_tail(reader: &mut io::Cursor<&[u8]>, cells: &[PathCell]) -> Option<Vec<CellDoor>> {
+        let n_cells = cells.len();
+
         // Object hints: a cell id per object id (fast lookup) - skip
         let n_obj_hints = read_u32_opt(reader)? as u64;
         reader.set_position(reader.position() + n_obj_hints * 4);
@@ -512,8 +525,11 @@ impl PathDatabase {
         for _ in 0..n_cell_doors {
             let cell = read_u32_opt(reader)?;
             let door = read_u32_opt(reader)? as i32;
-            if cell as usize >= n_cells {
-                return None;
+            // Every gated cell must exist and actually be a below-door cell;
+            // otherwise we've misread the layout and should discard the table
+            match cells.get(cell as usize) {
+                Some(c) if c.flags.contains(PathCellFlags::BELOW_DOOR) => {}
+                _ => return None,
             }
             cell_doors.push(CellDoor { cell, door });
         }

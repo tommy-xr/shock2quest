@@ -13,7 +13,7 @@
 
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dark::mission::PathDatabase;
 use dark::ss2_chunk_file_reader;
@@ -42,15 +42,15 @@ fn data_root() -> Option<PathBuf> {
 
 /// Load a mission's AIPATH pathfinding database, or `None` if the mission has
 /// no usable AIPATH chunk.
-fn load_path_database(data: &PathBuf, mission: &str) -> Option<PathDatabase> {
+fn load_path_database(data: &Path, mission: &str) -> Option<PathDatabase> {
     let file = File::open(data.join(mission)).expect("mission file should open");
     let mut reader = BufReader::new(file);
     let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
     PathDatabase::read(&toc, &mut reader)
 }
 
-/// Every `.mis` file with AIPATH data. Returns None (skip) without assets.
-fn all_missions(data: &PathBuf) -> Vec<String> {
+/// Every `.mis` filename in `data`.
+fn all_missions(data: &Path) -> Vec<String> {
     std::fs::read_dir(data)
         .expect("Data directory should read")
         .filter_map(|e| e.ok())
@@ -131,4 +131,22 @@ fn all_missions_load_with_consistent_aipath() {
         missions_with_doors >= 15,
         "expected most missions to have a parsed cell-door table, got {missions_with_doors}"
     );
+}
+
+#[test]
+fn shodan_v34_aipath_loads_without_door_data() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    // shodan.mis is the only v3.4 (WideIds) AIPATH. Its trailing layout isn't
+    // reverse-engineered, so the tail parse is intentionally not attempted -
+    // the database still loads, just with no cell-door table (never a
+    // silently-misparsed one).
+    if let Some(db) = load_path_database(&data, "shodan.mis") {
+        assert!(
+            db.cell_doors.is_empty(),
+            "v3.4 tail must not be parsed until its layout is verified"
+        );
+    }
 }
