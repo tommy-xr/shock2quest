@@ -8,6 +8,7 @@ pub mod pathfinding_debug;
 pub mod pathfinding_test;
 pub mod spatial_query;
 mod spawn_location;
+pub mod stim_response;
 pub mod visibility_engine;
 
 pub use mission_core::*;

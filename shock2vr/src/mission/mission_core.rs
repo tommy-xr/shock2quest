@@ -1286,12 +1286,19 @@ impl MissionCore {
         did_slay
     }
 
-    /// Apply a radius stim blast (Effect::RadiusBlast): falloff-scaled damage
-    /// to every entity with hit points in range, and an outward shove to every
-    /// dynamic body. Falloff is linear from full at the center to zero at the
-    /// blast radius.
-    fn radius_blast(&mut self, center: Vector3<f32>, radius: f32, intensity: f32) {
-        let mut damage_targets = Vec::new();
+    /// Apply a radius stim blast (Effect::RadiusBlast): every entity with hit
+    /// points in range receives the stim at linear-falloff intensity, and its
+    /// receptrons decide the damage (no receptron for the stim = no response -
+    /// the type-effectiveness mechanism: EMP does nothing to organics).
+    /// Dynamic bodies in range are shoved outward regardless.
+    fn radius_blast(
+        &mut self,
+        center: Vector3<f32>,
+        radius: f32,
+        intensity: f32,
+        stim_template_id: i32,
+    ) {
+        let mut in_range = Vec::new();
         {
             let v_hit_points = self
                 .world
@@ -1305,16 +1312,34 @@ impl MissionCore {
                 let distance = (crate::util::point3_to_vec3(position) - center).magnitude();
                 if distance < radius {
                     let falloff = 1.0 - distance / radius;
-                    damage_targets.push((entity_id, intensity * falloff));
+                    in_range.push((entity_id, intensity * falloff));
                 }
             }
         }
 
-        for (entity_id, amount) in damage_targets {
-            self.script_world.dispatch(Message {
-                to: entity_id,
-                payload: MessagePayload::Damage { amount },
-            });
+        for (entity_id, felt_intensity) in in_range {
+            let receptrons =
+                get_all_links_with_template(&self.world, entity_id, |link| match link {
+                    Link::Receptron(options) => Some(options.clone()),
+                    _ => None,
+                });
+            let maybe_damage = crate::mission::stim_response::resolve_stim_damage(
+                &receptrons,
+                stim_template_id,
+                felt_intensity,
+            );
+            // Explosions only ever deal damage: dispatch a Damage message only
+            // for a positive result. A zero amount (fully shielded) would still
+            // read as "took damage" and aggro AI; a negative one (a heal
+            // receptron) has no meaning through the damage path.
+            if let Some(amount) = maybe_damage {
+                if amount > 0.0 {
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::Damage { amount },
+                    });
+                }
+            }
         }
 
         self.physics.apply_radial_impulse(
@@ -1765,8 +1790,9 @@ impl MissionCore {
                     center,
                     radius,
                     intensity,
+                    stim_template_id,
                 } => {
-                    self.radius_blast(center, radius, intensity);
+                    self.radius_blast(center, radius, intensity, stim_template_id);
                 }
 
                 Effect::ReloadWeapon => {

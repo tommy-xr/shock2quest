@@ -50,9 +50,9 @@ impl Script for InternalExplosion {
         // Explosions carry an impact stim (the blast) plus a ShakeStim (camera
         // shake - unimplemented, and with unrelated numbers: Droid Fusion's
         // shake is 15 @ r0.4 next to its 12 @ r4 damage stim). Skip the shake
-        // and take the strongest remaining source as (intensity, radius) - a
-        // pair from one authored stim, never a mix.
-        let mut blast: Option<(f32, f32)> = None;
+        // and take the strongest remaining source as the blast - one authored
+        // stim, never a mix.
+        let mut blast: Option<(i32, f32, f32)> = None;
         for (
             stim_template_id,
             StimSourceOptions {
@@ -65,12 +65,12 @@ impl Script for InternalExplosion {
                 continue;
             }
             if let StimPropagator::Radius { radius } = propagator {
-                if blast.is_none_or(|(max_intensity, _)| intensity > max_intensity) {
-                    blast = Some((intensity, radius));
+                if blast.is_none_or(|(_, max_intensity, _)| intensity > max_intensity) {
+                    blast = Some((stim_template_id, intensity, radius));
                 }
             }
         }
-        let Some((intensity, radius)) = blast else {
+        let Some((stim_template_id, intensity, radius)) = blast else {
             return Effect::NoEffect;
         };
 
@@ -84,6 +84,7 @@ impl Script for InternalExplosion {
             center,
             radius,
             intensity,
+            stim_template_id,
         }
     }
 }
