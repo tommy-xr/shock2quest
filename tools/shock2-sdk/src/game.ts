@@ -4,6 +4,7 @@ import type {
   DebugEntityMessage,
   EntityDetailResult,
   EntityListResult,
+  EntitySummary,
   FrameSnapshot,
   InputAction,
   PathfindingStats,
@@ -58,6 +59,18 @@ export class PlayerApi {
   async inventory(): Promise<PlayerInventoryResult> {
     return this.client.get<PlayerInventoryResult>("/v1/player/inventory");
   }
+
+  /**
+   * Put an existing world entity into the player's inventory - a headless
+   * "pick up" for tests. `entityId` is a runtime id (see entities.list /
+   * entities.byTemplate). Throws (400) if the entity is not alive. The item
+   * lands in the backpack; wielding is a separate, presentation-specific step.
+   */
+  async give(entityId: number): Promise<CommandResult> {
+    return this.client.post<CommandResult>("/v1/player/give", {
+      entity_id: entityId,
+    });
+  }
 }
 
 /** Entity listing and inspection. */
@@ -74,6 +87,18 @@ export class EntitiesApi {
 
   async detail(id: number): Promise<EntityDetailResult> {
     return this.client.get<EntityDetailResult>(`/v1/entities/${id}`);
+  }
+
+  /**
+   * Runtime entities instantiated from a given template id (the negative ids
+   * from dark_query / gamesys). Maps template -> runtime id, e.g. to find the
+   * wrench in a level before giving it to the player. Lists ALL entities (no
+   * limit, so nothing is truncated by the distance-sorted cap) and filters by
+   * template.
+   */
+  async byTemplate(templateId: number): Promise<EntitySummary[]> {
+    const { entities } = await this.list();
+    return entities.filter((e) => e.template_id === templateId);
   }
 
   /**

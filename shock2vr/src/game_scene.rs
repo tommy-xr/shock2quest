@@ -467,6 +467,14 @@ pub trait DebuggableScene {
         Vec::new()
     }
 
+    /// Put an existing world entity into the player's inventory (a headless
+    /// "pick up" for testing). Models a pickup - the item lands in the backpack;
+    /// wielding is a separate, presentation-specific concern. Default:
+    /// unsupported.
+    fn give_item(&mut self, _entity_id: EntityId) -> Result<(), String> {
+        Err("scene does not support giving items".to_string())
+    }
+
     /// Get current input context state
     ///
     /// Returns the current input state including head rotation, hand positions,

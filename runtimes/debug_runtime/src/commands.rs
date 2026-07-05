@@ -58,6 +58,12 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<PlayerInventoryResult>,
     },
 
+    /// Put an existing world entity into the player's inventory (headless pickup).
+    GiveItem {
+        entity_id: i32,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
