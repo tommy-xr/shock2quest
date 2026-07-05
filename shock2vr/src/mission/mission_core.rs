@@ -1236,7 +1236,9 @@ impl MissionCore {
                 // so they still yield one flinder, like the pre-options behavior.
                 for _ in 0..flinderize_options.count.max(1) {
                     // scatter spawns the flinder at a random point within the
-                    // object's bounds; otherwise at the object-relative offset.
+                    // object's bounds (world AABB - over-covers rotated objects,
+                    // close enough for gibs); otherwise at the object-relative
+                    // offset.
                     let spawn_position = match (flinderize_options.scatter, &aabb) {
                         (true, Some(aabb)) => Point3::new(
                             rng.gen_range(aabb.min.x..=aabb.max.x),
