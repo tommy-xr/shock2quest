@@ -190,7 +190,7 @@ impl AnimatedMonsterAI {
         entity_id: EntityId,
     ) -> Box<RefCell<dyn Behavior>> {
         match self.alertness.current_level {
-            AIAlertLevel::Lowest => Box::new(RefCell::new(IdleBehavior)),
+            AIAlertLevel::Lowest => self.idle_behavior(world, entity_id),
             AIAlertLevel::Low => Box::new(RefCell::new(WanderBehavior::new())),
             AIAlertLevel::Moderate => Box::new(RefCell::new(ChaseBehavior::new())),
             AIAlertLevel::High => {
@@ -202,6 +202,19 @@ impl AnimatedMonsterAI {
                     .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
         }
+    }
+
+    /// The behavior for a fully-calm (Lowest) AI: patrol an authored route if
+    /// it is flagged to and a route exists, otherwise stand idle. Falls back to
+    /// idle when the mission has no patrol network reachable from here.
+    fn idle_behavior(&self, world: &World, entity_id: EntityId) -> Box<RefCell<dyn Behavior>> {
+        if is_patroller(world, entity_id) {
+            let (position, _) = get_position_and_forward(world, entity_id);
+            if let Some((point, goal)) = nearest_patrol_point(world, position.to_vec()) {
+                return Box::new(RefCell::new(PatrolBehavior::new(point, goal)));
+            }
+        }
+        Box::new(RefCell::new(IdleBehavior))
     }
 
     fn apply_steering_output(
