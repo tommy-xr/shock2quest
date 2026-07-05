@@ -590,6 +590,7 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         // Include the payload: blast tuning (intensity/radius) is exactly what
         // one inspects these links for.
         dark::properties::Link::StimSource(opts) => format!("StimSource({:?})", opts),
+        dark::properties::Link::Receptron(opts) => format!("Receptron({:?})", opts),
     }
 }
 
