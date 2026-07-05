@@ -281,6 +281,7 @@ async fn start_http_server(
         .route("/v1/quests", get(get_quest_bits))
         .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
         .route("/v1/player/inventory", get(get_player_inventory))
+        .route("/v1/player/give", axum::routing::post(give_item))
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
@@ -326,6 +327,7 @@ async fn start_http_server(
     info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
+    info!("  POST /v1/player/give      - Put an existing entity in the inventory {{entity_id}}");
     info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
     info!("  GET  /v1/control/input    - Retrieve controller/input state");
     info!("  POST /v1/control/input    - Update controller/input channels");
@@ -952,6 +954,21 @@ fn process_command(
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send player inventory - receiver dropped");
+            }
+        }
+        RuntimeCommand::GiveItem { entity_id, reply } => {
+            // The list/detail endpoints expose `EntityId::inner() as i32`;
+            // `from_inner` is the exact inverse (see SendEntityMessage).
+            let result = match (
+                EntityId::from_inner(entity_id as u64),
+                game.debug_scene_mut(),
+            ) {
+                (Some(eid), Some(scene)) => scene.give_item(eid),
+                (None, _) => Err(format!("invalid entity id {}", entity_id)),
+                (_, None) => Err("no debuggable scene available".to_string()),
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send give-item result - receiver dropped");
             }
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
@@ -2088,6 +2105,44 @@ async fn set_quest_bit(
         Ok(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
         Err(_) => {
             tracing::error!("Failed to receive set-quest-bit result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// Request body for giving an item to the player.
+#[derive(serde::Deserialize)]
+struct GiveItemRequest {
+    /// Runtime entity id of an existing world item (as listed by /v1/entities).
+    entity_id: i32,
+}
+
+/// HTTP handler for putting an existing world entity into the player's
+/// inventory - a headless "pick up" for tests.
+async fn give_item(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<GiveItemRequest>,
+) -> Result<Json<commands::CommandResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::GiveItem {
+            entity_id: request.entity_id,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send GiveItem command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(Ok(())) => Ok(Json(commands::CommandResult {
+            success: true,
+            message: format!("Gave entity {} to the player", request.entity_id),
+            data: None,
+        })),
+        Ok(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
+        Err(_) => {
+            tracing::error!("Failed to receive give-item result - sender dropped");
             Err(game_loop_unavailable())
         }
     }

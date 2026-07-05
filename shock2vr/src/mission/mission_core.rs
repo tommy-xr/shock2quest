@@ -1434,6 +1434,49 @@ impl MissionCore {
         self.id_to_physics.remove(&entity_id);
     }
 
+    /// Move `dropped_entity_id` into `container_entity_id` (e.g. the player's
+    /// inventory): drop any prior `Contains` links to it, add a fresh one from
+    /// the container, mark it referenced, and remove it from the physical world.
+    /// Returns false if the container entity has no `Links` (so nothing was
+    /// added). Shared by the `DropEntityInfo` effect and the debug give lever.
+    pub fn drop_entity_into_container(
+        &mut self,
+        container_entity_id: EntityId,
+        dropped_entity_id: EntityId,
+    ) -> bool {
+        let mut was_able_to_drop = false;
+        {
+            // First, remove any existing contains links for the dropped entity..
+            let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
+
+            for (id, links) in (&mut v_links).iter().with_id() {
+                links.to_links.retain(|link| {
+                    let is_link_to_entity = matches!(link.link, Link::Contains(_))
+                        && link.to_entity_id.is_some()
+                        && link.to_entity_id.unwrap().0 == dropped_entity_id;
+
+                    !is_link_to_entity
+                });
+
+                // If it is the container, we'll add the link!
+                if id == container_entity_id {
+                    links.to_links.push(ToLink {
+                        link: Link::Contains(0),
+                        to_entity_id: Some(dark::properties::WrappedEntityId(dropped_entity_id)),
+                        to_template_id: 0, // todo?
+                    });
+                    was_able_to_drop = true;
+                }
+            }
+        }
+        if was_able_to_drop {
+            self.world
+                .add_component(dropped_entity_id, PropHasRefs(false));
+            self.make_un_physical(dropped_entity_id);
+        }
+        was_able_to_drop
+    }
+
     pub fn make_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_some() {
@@ -2043,38 +2086,7 @@ impl MissionCore {
                     parent_entity_id,
                     dropped_entity_id,
                 } => {
-                    let mut was_able_to_drop = false;
-                    {
-                        // First, remove any existing contains links for the dropped entity..
-                        let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
-
-                        for (id, links) in (&mut v_links).iter().with_id() {
-                            links.to_links.retain(|link| {
-                                let is_link_to_entity = matches!(link.link, Link::Contains(_))
-                                    && link.to_entity_id.is_some()
-                                    && link.to_entity_id.unwrap().0 == dropped_entity_id;
-
-                                !is_link_to_entity
-                            });
-
-                            // If it is the parent, we'll add the link!
-                            if id == parent_entity_id {
-                                links.to_links.push(ToLink {
-                                    link: Link::Contains(0),
-                                    to_entity_id: Some(dark::properties::WrappedEntityId(
-                                        dropped_entity_id,
-                                    )),
-                                    to_template_id: 0, // todo?
-                                });
-                                was_able_to_drop = true;
-                            }
-                        }
-                    }
-                    if was_able_to_drop {
-                        self.world
-                            .add_component(dropped_entity_id, PropHasRefs(false));
-                        self.make_un_physical(dropped_entity_id);
-                    }
+                    self.drop_entity_into_container(parent_entity_id, dropped_entity_id);
                 }
 
                 Effect::GrabEntity {
@@ -4488,6 +4500,36 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 .then(a.entity_id.cmp(&b.entity_id))
         });
         items
+    }
+
+    fn give_item(&mut self, entity_id: shipyard::EntityId) -> Result<(), String> {
+        use shipyard::EntitiesView;
+        let is_alive = self
+            .world
+            .borrow::<EntitiesView>()
+            .map(|entities| entities.is_alive(entity_id))
+            .unwrap_or(false);
+        if !is_alive {
+            return Err(format!("entity {:?} is not alive", entity_id));
+        }
+
+        // Only genuine pickup items may be given - the same eligibility rule the
+        // real grab path uses. This rejects doors, creatures, the player, the
+        // inventory container itself, etc., which reparenting into the inventory
+        // (dropping their links + unphysicalizing them) would corrupt.
+        if !crate::virtual_hand::can_grab_item(&self.world, entity_id) {
+            return Err(format!("entity {:?} is not a pickup item", entity_id));
+        }
+
+        let inventory_entity = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            player.inventory_entity_id
+        };
+        if self.drop_entity_into_container(inventory_entity, entity_id) {
+            Ok(())
+        } else {
+            Err("could not add item to inventory (no inventory container)".to_string())
+        }
     }
 
     fn get_input_state(&self) -> crate::input_context::InputContext {
