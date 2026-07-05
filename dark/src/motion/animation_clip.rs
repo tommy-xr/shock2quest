@@ -17,6 +17,9 @@ pub struct AnimationClip {
     pub translation: Vector3<f32>,
     pub joint_to_frame: HashMap<JointId, Vec<Matrix4<f32>>>,
     pub root_transforms: Vec<Matrix4<f32>>, // root transforms per frame
+    /// Full per-frame root positions (scaled); drives per-frame root-motion
+    /// velocity. Empty for clips without a root stream (e.g. GLB clips).
+    pub root_positions: Vec<Vector3<f32>>,
     pub motion_flags: Vec<FrameFlags>,
     pub name: Option<String>, // Added for GLB animation support
 }
@@ -63,6 +66,7 @@ impl AnimationClip {
             blend_length: Duration::from_millis(motion_stuff.blend_length as u64),
             joint_to_frame,
             root_transforms: motion_clip.root_transforms.clone(),
+            root_positions: motion_clip.root_positions.clone(),
             time_per_frame,
             motion_flags: mps_motion.motion_flags.clone(),
             sliding_velocity,
@@ -70,5 +74,27 @@ impl AnimationClip {
             end_rotation,
             name: Some(mps_motion.name.clone()), // Use motion name for traditional SS2 animations
         }
+    }
+
+    /// Instantaneous root-motion velocity at `frame`: the rate implied by
+    /// the clip's per-frame root delta, so entity movement tracks the
+    /// authored motion instead of the clip-average. `None` when the clip has
+    /// no usable root stream (fall back to `sliding_velocity`).
+    ///
+    /// Samples the segment starting at `frame`; on the final frame (which has
+    /// no forward segment) it uses the trailing segment. That keeps a looping
+    /// walk moving at its stride rate across the wrap instead of stalling for
+    /// a frame, while a one-shot clip that rests at its end still reads ~0
+    /// there (its trailing frames don't move).
+    pub fn root_velocity_at(&self, frame: u32) -> Option<Vector3<f32>> {
+        if self.root_positions.len() < 2 {
+            return None;
+        }
+        let last = self.root_positions.len() - 1;
+        let f0 = (frame as usize).min(last - 1);
+        Some(
+            (self.root_positions[f0 + 1] - self.root_positions[f0])
+                / self.time_per_frame.as_secs_f32(),
+        )
     }
 }
