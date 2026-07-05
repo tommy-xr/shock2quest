@@ -41,6 +41,18 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<TransitionLevelResult>,
     },
 
+    /// Snapshot the quest bits (objective flags) the game has set.
+    GetQuestBits {
+        reply: oneshot::Sender<QuestBitsResult>,
+    },
+
+    /// Set a quest bit (objective flag) - for test setup / skipping ahead.
+    SetQuestBit {
+        name: String,
+        value: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
@@ -327,6 +339,23 @@ pub struct TransitionLevelResult {
     /// screen enabled this may still be the previous level until updates run.
     pub mission: String,
     pub message: String,
+}
+
+/// A single quest bit (objective flag) and its 3-state value.
+#[derive(Debug, Serialize)]
+pub struct QuestBitEntry {
+    pub name: String,
+    /// "unknown", "incomplete", or "complete" (a projection of `bits`).
+    pub value: String,
+    /// The exact raw flag value (scripts compare quest bits by raw value).
+    pub bits: u32,
+}
+
+/// Snapshot of all quest bits the game has set.
+#[derive(Debug, Serialize)]
+pub struct QuestBitsResult {
+    pub quests: Vec<QuestBitEntry>,
+    pub count: usize,
 }
 
 /// Current status of the interactive pathfinding test system

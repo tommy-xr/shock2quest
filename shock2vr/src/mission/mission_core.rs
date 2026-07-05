@@ -4311,6 +4311,56 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .collect()
     }
 
+    fn quest_bits(&self) -> Vec<crate::game_scene::DebugQuestBit> {
+        use dark::properties::QuestBitValue;
+        let quests = self.world.borrow::<UniqueView<QuestInfo>>().unwrap();
+        let mut bits: Vec<_> = quests
+            .quest_bits()
+            .into_iter()
+            .map(|(name, value)| crate::game_scene::DebugQuestBit {
+                name,
+                // COMPLETE wins over INCOMPLETE if both bits are somehow set;
+                // `bits` preserves the exact value for callers that need it.
+                value: if value.contains(QuestBitValue::COMPLETE) {
+                    "complete"
+                } else if value.contains(QuestBitValue::INCOMPLETE) {
+                    "incomplete"
+                } else {
+                    "unknown"
+                }
+                .to_string(),
+                bits: value.bits(),
+            })
+            .collect();
+        // Stable ordering (HashMap iteration is not deterministic).
+        bits.sort_by(|a, b| a.name.cmp(&b.name));
+        bits
+    }
+
+    fn set_quest_bit(&mut self, name: &str, value: &str) -> Result<(), String> {
+        use dark::properties::QuestBitValue;
+        let quest_value = match value.to_ascii_lowercase().as_str() {
+            "unknown" => QuestBitValue::UNKNOWN,
+            "incomplete" => QuestBitValue::INCOMPLETE,
+            "complete" => QuestBitValue::COMPLETE,
+            other => {
+                return Err(format!(
+                    "invalid quest value '{}' (expected unknown/incomplete/complete)",
+                    other
+                ));
+            }
+        };
+        let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+        // Setting "unknown" resets the bit to its pristine (absent) state so it
+        // doesn't linger in quest_bits() as a touched-but-unknown entry.
+        if quest_value == QuestBitValue::UNKNOWN {
+            quests.clear_quest_bit_value(name);
+        } else {
+            quests.set_quest_bit_value(name, quest_value);
+        }
+        Ok(())
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         // MissionCore doesn't store InputContext directly - it's passed to update()
         // For debugging purposes, return a default state

@@ -298,6 +298,18 @@ pub struct DebugPhysicsJoint {
     pub angular_impulse: f32,
 }
 
+/// A single quest bit (objective flag): its name, a friendly 3-state `value`
+/// ("unknown"/"incomplete"/"complete"), and the exact raw `bits`. `value` is a
+/// projection (COMPLETE takes precedence), so a rare combined flag (e.g.
+/// INCOMPLETE|COMPLETE = 3) reads as "complete" - use `bits` when the exact
+/// value matters, since scripts compare quest bits by raw value.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugQuestBit {
+    pub name: String,
+    pub value: String,
+    pub bits: u32,
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -404,6 +416,18 @@ pub trait DebuggableScene {
     /// ragdoll diagnostics. Empty when the scene has no joints.
     fn list_physics_joints(&self) -> Vec<DebugPhysicsJoint> {
         Vec::new()
+    }
+
+    /// Snapshot of quest bits (objective flags) the game has set, for verifying
+    /// mission progress. Empty when the scene has no quest state.
+    fn quest_bits(&self) -> Vec<DebugQuestBit> {
+        Vec::new()
+    }
+
+    /// Set a quest bit (objective flag) - for test setup / skipping ahead.
+    /// `value` is "unknown", "incomplete", or "complete". Default: unsupported.
+    fn set_quest_bit(&mut self, _name: &str, _value: &str) -> Result<(), String> {
+        Err("scene does not support quest bits".to_string())
     }
 
     /// Get current input context state

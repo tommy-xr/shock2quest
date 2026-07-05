@@ -17,6 +17,8 @@ import type {
   StepSpec,
   TeleportResult,
   TransitionLevelResult,
+  QuestBitsResult,
+  QuestBitValue,
   WaitForOptions,
 } from "./types.js";
 
@@ -149,6 +151,31 @@ export class PathfindingTestApi {
   }
 }
 
+/** Quest bits (objective flags): read progress, or set for test setup. */
+export class QuestsApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /** Snapshot every quest bit the game has set. Bits never touched are absent (they read as "unknown"). */
+  async list(): Promise<QuestBitsResult> {
+    return this.client.get<QuestBitsResult>("/v1/quests");
+  }
+
+  /** Value of a single quest bit by name ("unknown" if the game hasn't set it). */
+  async get(name: string): Promise<QuestBitValue> {
+    const { quests } = await this.list();
+    const lower = name.toLowerCase();
+    return quests.find((q) => q.name === lower)?.value ?? "unknown";
+  }
+
+  /** Set a quest bit (test setup / skipping ahead). Throws on an invalid value. */
+  async set(name: string, value: QuestBitValue): Promise<CommandResult> {
+    return this.client.post<CommandResult>(
+      `/v1/quests/${encodeURIComponent(name)}`,
+      { value },
+    );
+  }
+}
+
 /** Pathfinding service telemetry (distinct from the interactive test). */
 export class PathfindingApi {
   constructor(private readonly client: HttpClient) {}
@@ -178,6 +205,7 @@ export class Game {
   readonly pathfindingTest: PathfindingTestApi;
   readonly pathfinding: PathfindingApi;
   readonly physics: PhysicsApi;
+  readonly quests: QuestsApi;
 
   constructor(protected readonly client: HttpClient) {
     this.player = new PlayerApi(client);
@@ -186,6 +214,7 @@ export class Game {
     this.pathfindingTest = new PathfindingTestApi(client);
     this.pathfinding = new PathfindingApi(client);
     this.physics = new PhysicsApi(client);
+    this.quests = new QuestsApi(client);
   }
 
   get baseUrl(): string {
