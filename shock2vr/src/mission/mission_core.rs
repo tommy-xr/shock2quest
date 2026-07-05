@@ -4202,9 +4202,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         self.physics
             .set_player_translation(position, &mut self.player_handle);
 
-        // Get the player entity and add the PropTeleported component
+        // Keep PlayerInfo.pos consistent with the body immediately. It otherwise
+        // only re-syncs from the physics body on the next update(), so a query
+        // right after a teleport - notably the teleport endpoint's own
+        // confirmation read - would report the stale pre-teleport position.
         let player_entity = {
-            let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let mut player_info = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+            player_info.pos = position;
             player_info.entity_id
         };
 
