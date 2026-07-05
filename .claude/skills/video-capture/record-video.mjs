@@ -30,15 +30,24 @@ if (frames.length === 0) {
 }
 
 // -vf scale trunc-to-even keeps libx264/yuv420p happy for odd-sized captures.
-execFileSync(
-  "ffmpeg",
-  [
-    "-y", "-framerate", String(fps),
-    "-pattern_type", "glob", "-i", join(dir, "frame-*.png"),
-    "-c:v", "libx264", "-pix_fmt", "yuv420p",
-    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-    out,
-  ],
-  { stdio: ["ignore", "ignore", "inherit"] },
-);
+try {
+  execFileSync(
+    "ffmpeg",
+    [
+      "-y", "-framerate", String(fps),
+      "-pattern_type", "glob", "-i", join(dir, "frame-*.png"),
+      "-c:v", "libx264", "-pix_fmt", "yuv420p",
+      "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+      out,
+    ],
+    { stdio: ["ignore", "ignore", "inherit"] },
+  );
+} catch (e) {
+  console.error(
+    e.code === "ENOENT"
+      ? "ffmpeg not found on PATH — install ffmpeg (e.g. brew install ffmpeg)."
+      : `ffmpeg failed assembling ${dir}/frame-*.png -> ${out}: ${e.message}`,
+  );
+  process.exit(1);
+}
 console.log(`wrote ${out} (${frames.length} frames @ ${fps}fps)`);

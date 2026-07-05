@@ -77,7 +77,8 @@ Non-blockers: log them, keep playing past them.
 ## 5. Replay & frontier
 
 Track the **frontier**: furthest level + position + quest/inventory state reached.
-Replay resumes there (`transitionLevel(level, loc)` + `teleport`/`QuickLoad`) so
+Replay resumes there (`transitionLevel(level, loc)` + `teleport`; `QuickLoad`
+only within a live session) so
 each iteration starts at the edge of the known-good region and pushes further.
 
 ## Report (aggregate, self-contained)

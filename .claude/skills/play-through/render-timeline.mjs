@@ -54,7 +54,7 @@ const stepHtml = (s) => `
     <div class="dot"></div>
     <div class="card">
       <div class="hd"><span class="ix">${esc(s.index)}</span><h3>${esc(s.title)}</h3></div>
-      ${embed(s.screenshot) ? `<img loading="lazy" src="${embed(s.screenshot)}" alt="${esc(s.title)}">` : ""}
+      ${embed(s.screenshot) ? `<img loading="lazy" src="${embed(s.screenshot)}" alt="${esc(s.title)}">` : s.screenshot ? `<p class="missing">⚠ missing screenshot: ${esc(s.screenshot)}</p>` : ""}
       ${s.observation ? `<p class="obs"><b>Saw:</b> ${esc(s.observation)}</p>` : ""}
       ${s.action ? `<p class="act"><b>Did:</b> ${esc(s.action)}</p>` : ""}
       ${s.bug ? `<p class="bug">${badge(s.bug.severity)} <b>${esc(s.bug.class)}</b> ${esc(s.bug.detail)}</p>` : ""}
@@ -95,6 +95,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
   .obs, .act, .bug { margin:4px 0; font-size:14px; }
   .obs b, .act b { color:#9fa0a8; font-weight:600; }
   .bug { background:#241416; border:1px solid #4a2327; border-radius:7px; padding:7px 9px; }
+  .missing { color:#f5a524; font-size:13px; }
 </style></head><body><div class="wrap">
   <h1>Playtest — ${esc(data.mission)}</h1>
   <p class="sub">goal: <b>${esc(data.goal || "explore & QA")}</b> · frontier: <b>${esc(data.frontier || "-")}</b> · ${esc(data.generated || "")}</p>
@@ -105,7 +106,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
   <tbody>${(data.bugs || []).map(bugRow).join("") || `<tr><td colspan="5" class="muted">none</td></tr>`}</tbody></table>
 
   <h2>Timeline (${(data.steps || []).length} steps)</h2>
-  <div class="timeline">${(data.steps || []).map(stepHtml).join("")}</div>
+  <div class="timeline">${(data.steps || []).map(stepHtml).join("") || `<p class="muted">no steps</p>`}</div>
 </div></body></html>`;
 
 const out = join(dir, "report.html");

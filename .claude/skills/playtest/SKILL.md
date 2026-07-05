@@ -23,8 +23,10 @@ the `play-through` manager triages and delegates fixes.
 - **Fresh:** launch the runtime on the mission (SDK `GameServer.launch`, or
   `cargo dbgr --mission <m>.mis --port <p>`), `step 5` to settle.
 - **Resume at a frontier** (the manager passes one): warp with
-  `POST /v1/control/transition-level {level, loc}` and/or `teleport {x,y,z}` (or
-  `QuickLoad`) to where the last session stalled, so you don't replay solved parts.
+  `POST /v1/control/transition-level {level, loc}` and/or `teleport {x,y,z}` to
+  where the last session stalled, so you don't replay solved parts. (`QuickLoad`
+  — `POST /v1/input/action {"action":"QuickLoad"}` — only restores a `QuickSave`
+  made earlier in the *same* runtime session, so it's not a cross-launch resume.)
 
 ## Senses & hands (HTTP; SDK for lifecycle)
 

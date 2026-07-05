@@ -24,14 +24,15 @@ subdir under `/tmp/claude/` (where the runtime writes shots) and capture
 sequential frames while something is moving:
 
 ```bash
+BASE=http://127.0.0.1:8080   # the runtime's port
 mkdir -p /tmp/claude/rec
 # optional: drive smooth motion (a slow turn-in-place pan)
-curl -s -X POST :PORT/v1/control/input -d '{"left_hand.thumbstick":[0.35,0.0]}'
+curl -s -X POST $BASE/v1/control/input -d '{"left_hand.thumbstick":[0.35,0.0]}'
 for n in $(seq -w 1 60); do
-  curl -s -X POST :PORT/v1/step -d '{"frames":4}'                              # 4 -> 15fps
-  curl -s -X POST :PORT/v1/screenshot -d "{\"filename\":\"rec/frame-${n}.png\"}"
+  curl -s -X POST $BASE/v1/step -d '{"frames":4}'                              # 4 -> 15fps
+  curl -s -X POST $BASE/v1/screenshot -d "{\"filename\":\"rec/frame-${n}.png\"}"
 done
-curl -s -X POST :PORT/v1/control/input -d '{"left_hand.thumbstick":[0.0,0.0]}'  # stop
+curl -s -X POST $BASE/v1/control/input -d '{"left_hand.thumbstick":[0.0,0.0]}'  # stop
 ```
 
 Motion options via `/v1/control/input` (set channel, then step): `left_hand.thumbstick:[turn,0]`
