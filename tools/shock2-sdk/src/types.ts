@@ -210,6 +210,36 @@ export interface TransitionLevelResult {
   message: string;
 }
 
+/** The 3-state value of a quest bit (objective flag). */
+export type QuestBitValue = "unknown" | "incomplete" | "complete";
+
+export interface QuestBitEntry {
+  name: string;
+  /** Friendly 3-state projection of `bits` (COMPLETE takes precedence). */
+  value: QuestBitValue;
+  /** Exact raw flag value; use when the precise value matters (scripts compare by raw value). */
+  bits: number;
+}
+
+export interface QuestBitsResult {
+  quests: QuestBitEntry[];
+  count: number;
+}
+
+/** Where a carried item is held. */
+export type InventoryLocation = "inventory" | "left_hand" | "right_hand";
+
+export interface InventoryItem {
+  entity_id: number;
+  name: string | null;
+  location: InventoryLocation;
+}
+
+export interface PlayerInventoryResult {
+  items: InventoryItem[];
+  count: number;
+}
+
 export interface WaitForOptions {
   /** Total time to wait in milliseconds (default 10_000). */
   timeoutMs?: number;
