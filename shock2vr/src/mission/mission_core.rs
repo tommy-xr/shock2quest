@@ -3907,6 +3907,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
              v_transform: View<crate::runtime_props::RuntimePropTransform>,
              v_sym_name: View<dark::properties::PropSymName>,
              v_scripts: View<dark::properties::PropScripts>,
+             v_template_id: View<dark::properties::PropTemplateId>,
              v_links: View<dark::properties::Links>| {
                 for (entity_id, pos) in v_pos.iter().with_id() {
                     let name = v_sym_name
@@ -3944,8 +3945,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         .map(|links| links.to_links.len())
                         .unwrap_or(0);
 
-                    // Get template ID from entity ID (negative for templates, positive for instances)
-                    let template_id = entity_id.inner() as i32;
+                    // The template this instance was created from (a negative
+                    // gamesys/mission template id). Unlike the runtime entity
+                    // id, this is stable across runs. 0 if the entity has no
+                    // template backlink.
+                    let template_id = v_template_id
+                        .get(entity_id)
+                        .map(|t| t.template_id)
+                        .unwrap_or(0);
 
                     entities.push(DebugEntitySummary {
                         id: entity_id.inner() as i32,
@@ -3988,6 +3995,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
              v_alertness: View<PropAIAlertness>,
              v_ai_behavior: View<RuntimePropAIBehavior>,
              v_awareness: View<crate::runtime_props::RuntimePropAITargetAwareness>,
+             v_template_id: View<dark::properties::PropTemplateId>,
              v_links: View<dark::properties::Links>| {
                 let position = v_pos.get(id).ok()?;
                 let rotation_array = [
@@ -4002,7 +4010,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .map(|s| s.0.clone())
                     .unwrap_or_else(|_| format!("Entity_{}", id.inner()));
 
-                let template_id = id.inner() as i32;
+                // The stable template backlink (negative id), not the per-run
+                // entity id. 0 if the entity has no template.
+                let template_id = v_template_id.get(id).map(|t| t.template_id).unwrap_or(0);
 
                 // Build properties list
                 let mut properties = Vec::new();
