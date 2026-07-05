@@ -297,6 +297,13 @@ pub enum Effect {
         alpha: f32,
     },
 
+    /// Show or hide an entity (PropHasRefs) - e.g. apparitions materializing
+    /// on ApparBegin and vanishing on ApparEnd.
+    SetVisibility {
+        entity_id: EntityId,
+        visible: bool,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },
