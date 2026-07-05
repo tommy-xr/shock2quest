@@ -198,6 +198,38 @@ fn dump_component_at(db: PathDatabase, at: Vector3<f32>) {
     for (desc, count) in &frontier {
         println!("  {count:>5}  {desc}");
     }
+
+    // How many frontier destinations are below-door cells the door table
+    // maps to a door object? Those become passable when the door opens.
+    let door_cells: std::collections::HashMap<u32, i32> =
+        db.cell_doors.iter().map(|cd| (cd.cell, cd.door)).collect();
+    let mut frontier_door_dests: std::collections::BTreeMap<i32, usize> =
+        std::collections::BTreeMap::new();
+    let mut frontier_blocking_non_door = 0usize;
+    for link in &db.links {
+        if !members.contains(&link.from_cell) || members.contains(&link.to_cell) {
+            continue;
+        }
+        if let Some(&door) = door_cells.get(&link.to_cell) {
+            *frontier_door_dests.entry(door).or_default() += 1;
+        } else if db
+            .cells
+            .get(link.to_cell as usize)
+            .map(|c| c.flags.contains(PathCellFlags::BLOCKING_OBB))
+            .unwrap_or(false)
+        {
+            frontier_blocking_non_door += 1;
+        }
+    }
+    println!(
+        "frontier dests gated by a door: {} (across {} doors); blocking-obb non-door dests: {}",
+        frontier_door_dests.values().sum::<usize>(),
+        frontier_door_dests.len(),
+        frontier_blocking_non_door
+    );
+    for (door, count) in frontier_door_dests.iter().take(8) {
+        println!("    door obj {door}: {count} frontier links");
+    }
 }
 
 fn resolve_missions(mission: Option<String>, all: bool) -> Result<Vec<String>> {
@@ -330,6 +362,26 @@ fn print_stats(mission: &str, db: PathDatabase) {
     }
     println!(
         "audit: links into below-door cells: walkable={door_links_walkable} zero-bits={door_links_dead}"
+    );
+
+    // Door table: below-door cells mapped to their gating door object
+    let unique_doors: std::collections::HashSet<i32> =
+        db.cell_doors.iter().map(|cd| cd.door).collect();
+    let door_cells_also_blocking = db
+        .cell_doors
+        .iter()
+        .filter(|cd| {
+            db.cells
+                .get(cd.cell as usize)
+                .map(|c| c.flags.contains(PathCellFlags::BLOCKING_OBB))
+                .unwrap_or(false)
+        })
+        .count();
+    println!(
+        "door table: {} cell-door entries, {} unique doors, {} of those cells also BLOCKING_OBB",
+        db.cell_doors.len(),
+        unique_doors.len(),
+        door_cells_also_blocking
     );
 
     // Walk-graph connectivity for a plain WALK query. Links are treated as

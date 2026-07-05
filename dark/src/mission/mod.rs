@@ -13,7 +13,7 @@ pub mod texture_list;
 pub use bsp_tree::*;
 pub use cell::*;
 pub use cell_portal::*;
-pub use path_database::PathDatabase;
+pub use path_database::{CellDoor, PathDatabase};
 pub use plane::*;
 
 use crate::properties::LinkDefinitionWithData;
