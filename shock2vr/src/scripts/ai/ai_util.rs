@@ -14,7 +14,10 @@ use crate::{
     mission::{PlayerInfo, entity_creator::CreateEntityOptions},
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
-    scripts::{Effect, script_util::get_first_link_with_template_and_data},
+    scripts::{
+        Effect,
+        script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
+    },
 };
 
 ///
@@ -41,6 +44,60 @@ pub fn get_position_and_forward(
     let forward = xform.transform_vector(vec3(0.0, 0.0, 1.0)).normalize();
 
     (position, forward)
+}
+
+/// Whether this AI is flagged to walk a patrol route (P$AI_Patrol = true).
+pub fn is_patroller(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropAIPatrol>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|p| p.0))
+        .unwrap_or(false)
+}
+
+/// The transform origin of an entity, if it has a runtime transform.
+fn entity_origin(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
+    let xform = v_transform.get(entity_id).ok()?.0;
+    Some(xform.transform_point(point3(0.0, 0.0, 0.0)).to_vec())
+}
+
+/// The nearest patrol-point object to `from` - a node with an outgoing
+/// `AIPatrol` link (so the chain can actually be walked from it) - with its
+/// position. None if the mission has no patrol network. Scans all links, so
+/// call it on a behavior change (entering idle), not every frame.
+pub fn nearest_patrol_point(world: &World, from: Vector3<f32>) -> Option<(EntityId, Vector3<f32>)> {
+    let v_links = world.borrow::<View<Links>>().ok()?;
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
+
+    let mut best: Option<(EntityId, Vector3<f32>, f32)> = None;
+    for (id, links) in (&v_links).iter().with_id() {
+        let has_outgoing = links.to_links.iter().any(|l| l.link == Link::AIPatrol);
+        if !has_outgoing {
+            continue;
+        }
+        let Ok(xform) = v_transform.get(id) else {
+            continue;
+        };
+        let pos = xform.0.transform_point(point3(0.0, 0.0, 0.0)).to_vec();
+        let dist_sq = (pos - from).magnitude2();
+        if best
+            .map(|(_, _, best_sq)| dist_sq < best_sq)
+            .unwrap_or(true)
+        {
+            best = Some((id, pos, dist_sq));
+        }
+    }
+    best.map(|(id, pos, _)| (id, pos))
+}
+
+/// The next patrol point after `point`, following its first outgoing `AIPatrol`
+/// link, with position. None at a dead-end. A route is usually a closed loop,
+/// so following the chain repeats forever.
+pub fn next_patrol_point(world: &World, point: EntityId) -> Option<(EntityId, Vector3<f32>)> {
+    let next = get_first_link_of_type(world, point, Link::AIPatrol)?;
+    let pos = entity_origin(world, next)?;
+    Some((next, pos))
 }
 
 pub fn current_yaw(entity_id: shipyard::EntityId, world: &shipyard::World) -> Deg<f32> {
