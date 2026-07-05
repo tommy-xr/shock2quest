@@ -1,5 +1,13 @@
 # Generalized Alertness System for All AI Types
 
+> **Status:** All 5 phases complete (see checkboxes below). Follow-on behavior
+> built on this system (tracked elsewhere): losing sight drives a Search of the
+> last-known position (#379); chase pursues the last-*seen* position (#384);
+> gunfire (#403) and taking damage (#359) escalate alertness; scripted sequences
+> survive alertness changes (#387). Sustained Photonic Redirection makes the
+> player invisible to this awareness path (#355). Alert *propagation* between
+> linked AIs (Phase 5 item 2) remains unimplemented.
+
 ## Overview
 
 This project aims to extract and generalize the alertness system currently implemented in `camera_ai.rs` to make it reusable across all AI types (cameras, turrets, animated monsters). The goal is to provide consistent alertness behavior while allowing each AI type to customize responses to alertness changes.

@@ -1,5 +1,29 @@
 # AI Improvements
 
+> **Status (updated 2026-07-05):** This is the original scoping doc. Most of it
+> has since shipped under dedicated efforts — cross-reference those docs for the
+> current state:
+> - **Pathfinding (Objective 4 / old Phase 3):** A\* pathfinding + interactive
+>   viz landed, and AI now path-follows via `path_follow_steering_strategy.rs`
+>   (chase/wander, #270/#271). Doors on a pursuit route open/give-up (#402), the
+>   AIPATH cell-door table parses (#398), and there's a benchmark CLI + jittered
+>   re-path budget (#366). See `ai-pathfinding.md`.
+> - **Alertness (Objective 5 groundwork):** generalized across cameras, turrets,
+>   and monsters. See `ai-generalize-alertness.md`.
+> - **Behavior fidelity:** losing sight now drives a Search of the last-known
+>   position (#379), chase pursues the last-*seen* position rather than the
+>   player's true location (#384), gunfire (#403) and taking damage (#359) raise
+>   alertness, and scripted sequences survive alertness changes (#387).
+> - **Motion/animation:** wound/death queries reach the right clips (#385,
+>   fixes #381), killing blows crossfade-interrupt the current clip (#375), and
+>   movement is driven by per-frame root velocity (#396).
+> - **Blocker bugs from "Current Findings" below:** collision-avoidance whisker
+>   distances are now honored (conservative vs comprehensive differ). The
+>   `__NULL_ACTION__` tag is a deliberate idle sentinel, not a typo. Scripted-
+>   sequence robustness was reworked in #387 (per-action watchdog).
+> - **Still open:** security-alarm propagation and turret/global-alert
+>   coordination (Objective 5 / old Phase 4) are not implemented.
+
 ## Current Findings
 
 ### Blocker Bugs

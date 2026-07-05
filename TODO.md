@@ -22,7 +22,11 @@ Recent work
 - weapon ammo next slices: per-shot m_ammoUsage + clip size from BaseGunDesc (P$BaseGunDe), reload, ammo-type switching (see projects/flat-weapon-handling.md)
 
 - Fable: finish ragdolls (in progress) - hitbox-fitted colliders + rapier 0.31 compliant joints settle into a heap; on-death ragdoll behind `--experimental ragdoll`; multibody rig still experimental (extremity jitter / hip-sag), see projects/ragdoll-settling-followup.md
-- Fable: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped; broader AI behavior testing ongoing
+- Fable: finish AI pathing & testing (in progress) - A* pathfinding + interactive path viz shipped;
+  AI now path-follows for chase/wander (#270/#271), opens/gives-up at route doors (#402), and the
+  awareness loop is much richer: search last-known position (#379), chase the last-*seen* position
+  (#384), gunfire (#403) + damage (#359) alerts, scripted sequences survive alertness changes (#387).
+  Patrol data parses (#406) but no patrol behavior consumes it yet. See projects/ai-pathfinding.md.
 - Fable: check to see feasibility of loading the 25th anniversary assets
 - [x] Fable: fix flat screen first-person melee weapon orientation (camSynch equivalent: root-motion cancel + authored PlayerMelee arm anchor; projects/flat-weapon-handling.md)
 - [x] Fable: fix flat screen first-person ranged weapon positioning (per-weapon model_offset framing, above)
@@ -33,7 +37,8 @@ SNACKS:
 - [ ] Implement frobbing keycards (collecting when held)
 - [ ] implement tweqallbyname -> eng
 
-- Player 'damage'
+- Player 'damage' (BLOCKED: player entity is created outside entity_creator so it has no scripts -
+  Damage messages to it are dropped; see #389. Enemy/explosion damage plumbing otherwise landed)
 - Player 'death'
 - Ladder handling - for both desktop and vr (climbable flag in phys attr)
 - Melee attacking: player
@@ -54,7 +59,9 @@ TODO:
 - Start cutting APK releases - automate releases
 - Create a website with instructions on how to install
 - Test with new assets
-- Psi powers
+- Psi powers (largely landed: amp is usable and casts powers #345, hold-to-overload charge meter
+  #350, trained-power gating #354, sustained powers - Photonic Redirection invisibility #355,
+  selected discipline shown in the HUD #353. See projects/psi-powers.md)
 
 - Figure out how to get macOS build running by re-pointing binary - DYLD path or LD_LIBRARY_PATH. How to co-locate binaries?
 - Same for Windows
@@ -73,21 +80,22 @@ Can do these in parallel:
   - [ ] Camera fall down animation, static
 - Create a placeholder UI for 'assets not found'
 - Create a floating menu 'mission'
-- AIWatchObj link: Apparitions
-  - Parse ApparStart link
-  - Handle ScriptMessage 'ApparBegin', 'ApparEnd' -> these should just be scripts?
-  - Implement 'Signal'?
-  - Example 'grassi app' in medsci
-  - Quick iteration: spawn near that one
+- [x] AIWatchObj link: Apparitions (#400 - Grassi apparition in medsci1 materializes,
+      performs its authored animation, and vanishes; full replayable lifecycle)
+  - [x] Handle ScriptMessage 'ApparBegin'/'ApparEnd' via the new Apparition script
+  - [x] Implement 'Signal' (new scripted-sequence Signal/ScriptMessage actions; AIWatchObj fires it)
 - Fix slay (in progress)
-  - Make robots blow up, spawn items
+  - [x] Make robots blow up (explosions push + damage their surroundings #388, resolved through
+        receptrons #399; barrel chain reactions work), scatter flinderize gibs on slay (#377),
+        killing blows crossfade-interrupt the current clip (#375)
   - Create corpse and make container available (corpse-on-death handoff step 1 done, #281; container TODO)
   - Maybe there's another way to figure out what to slay?
 - command2.mis:
   - Why is door not transparent?
   - Why is door not moving?
-- rec:
-  - why is the cutscene flaky?
+- [x] rec:
+  - why is the cutscene flaky? (FIXED #387 - alertness changes cancelled a running scripted
+    sequence at a player-dependent moment; running sequences are now protected. rec1 Cortez verified)
 - Android pipeline improvements (CI build is green; release mode + artifact still todo)
   - Build w/ release
   - Add APK as artifact
@@ -296,9 +304,9 @@ Can do these in parallel:
   - [ ] Create system
     - [ ] EmitTweq
   - [ ] Fix rotation tweq when not full rotation
-- [ ] Explosions (ie, re301 in barrel)
-  - [ ] Implement physics to push items away
-  - [ ] Implement damage
+- [x] Explosions (ie, re301 in barrel) (#388/#399)
+  - [x] Implement physics to push items away (radial impulse on dynamic bodies)
+  - [x] Implement damage (radius blast resolved through receptrons - type-aware; barrel chains work)
 - [ ] Skinned model - incorporate weights into animation
 - [ ] Factor playerscript out to use existing link infra
 - [ ] Implement collision sounds
@@ -308,7 +316,9 @@ Can do these in parallel:
 - [ ] Perf: Can we minimize draw calls for materials based on cell?
 - [ ] Create a localized string mapper
   - [ ] Use dictionary in lookup method.
-- [ ] Weapons: Source/Stim Act/React
+- [ ] Weapons: Source/Stim Act/React (partial: act/react stim sources #388 + receptron links #395
+      parse, and radius blasts resolve damage through receptrons #399; per-weapon stim application
+      and periodic emitters still TODO - see #390)
 - [x] Spangs: Particle system not working correctly for blood spatter - SOLVED: P$ParticleG ships in two struct versions (mission 324 bytes, gamesys 380 with 8 extra bytes after gravity); the parser now handles both, and one-shot spang groups expire with their burst.
 - [ ] AI Behavior Improvements
   - Wander: Scan rays up/down to try and capture more of environment?
@@ -468,6 +478,29 @@ Release Checklist
 - Debug runtime ergonomics: defaults to flat (`--vr` to opt in), `/v1/info` reports player + wielded entity, `/v1/control/input` accepts both body shapes and validates (actionable 400s), e2e suite runs serially (#324)
 - Weapon ammo: parse `P$GunState`, consume a round per shot, dry-fire at empty (#326); faithful flat HUD - ammo gauge (AMMOBACK) + corrected health/psi meters + BIOFULL bio-monitor backdrop, all positioned from the original `shkmeter.cpp`/`shkammov.cpp` coords (#327)
 - Dev workflow: pre-push git hook running `cargo fmt --check` (#325)
+- Psi powers usable: cast from the amp (#345), hold-to-overload charge meter (#350), trained-power
+  gating (#354), sustained Photonic Redirection invisibility (#355), selected discipline in HUD (#353)
+- VR gloves: SteamVR hand poses retargeted onto the vr_glove GLB and rendered as the player's hands
+  (#348/#351); grip pose + fitted weapon offsets for held items, world models kept on held weapons (#356/#368)
+- Cutscenes: ops1 SHODAN reveal / CS9 (#364), theatre screens fade in after walls open (#367),
+  animated holo fades (#365), holo rumblers animate via authored pose tag (#372), event-driven wall
+  timing via CS9_DoorReporter (#373), apparitions materialize/perform/vanish (medsci1 Grassi, #400)
+- Act/react (stims): stim-source (#388) + receptron (#395) link parsing; explosions push and damage
+  their surroundings, resolved through receptrons so damage is stim-type-aware (#388/#399)
+- AI awareness/behavior: search last-known position on losing sight (#379), chase the last-*seen*
+  position not the player's true location (#384), gunfire (#403) + taking damage (#359) raise
+  alertness, pursuers open/give-up at route doors (#402), scripted sequences survive alertness
+  changes (#387), killing blows crossfade-interrupt the current clip (#375)
+- Pathfinding: engine-faithful link gating + taut edge waypoints + benchmark CLI (#270), path-following
+  steering for chase/wander (#271), per-frame query budget + jittered re-path (#366), AIPATH cell-door
+  table parsing (#398), AI patrol data parsing (#406)
+- Motion/animation: entity movement driven by per-frame root velocity (#396), wound/death queries
+  reach the clips the data has (#385), `dq motion-info` per-clip metadata (#394)
+- Combat/flat viewmodel: faithful first-person framing for all 15 weapons (#335), data-driven impact
+  spangs (#338), bitmap particles + attached particle riders (#340/#342), viewmodel overlay renders
+  after the world's transparent pass (#337)
+- Fixed: non-impact collisions no longer deal damage (#404); dead monsters stay dead (#371);
+  human death animations / wound clips play (#385, closes #381); SDK launch-retry only on port races (#378)
 
 2026: Things I hope we can do
 
