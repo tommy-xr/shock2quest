@@ -241,7 +241,14 @@ impl AnimationPlayer {
             // Move at the rate the mocap root actually moves this frame -
             // the clip-average (`sliding_velocity`) integrates to the same
             // endpoint but smears non-uniform motion (a death keeps gliding
-            // at constant speed while the body is already down)
+            // at constant speed while the body is already down). The value is
+            // a rate (units/sec) keyed to the clip's own frame time, so it is
+            // independent of the render/physics refresh. Sampled from the
+            // frame at the start of the tick: whenever the tick is shorter
+            // than a clip frame (true at 60/90/120Hz against 30fps clips) it
+            // crosses at most one frame, so multi-frame advance only happens
+            // on a hitch and briefly commanding the first frame's rate isn't
+            // worth averaging over.
             let velocity = current_clip
                 .root_velocity_at(player.current_frame)
                 .unwrap_or(current_clip.sliding_velocity);
@@ -542,6 +549,28 @@ mod tests {
             velocity.x.abs() < 1e-4,
             "expected zero while the root rests, got {:?}",
             velocity
+        );
+    }
+
+    #[test]
+    fn root_velocity_uses_trailing_delta_on_the_final_frame() {
+        // Monotonic stride: each frame advances 1 unit. A looping clip lands
+        // on the final frame once per cycle; using the forward segment there
+        // would read positions[last]-positions[last] = 0 and stall the walk,
+        // so the final frame must fall back to the trailing segment's rate.
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.root_positions = vec![
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 0.0, 0.0),
+            vec3(2.0, 0.0, 0.0),
+        ];
+
+        assert!((clip.root_velocity_at(0).unwrap().x - 10.0).abs() < 1e-4);
+        assert!((clip.root_velocity_at(1).unwrap().x - 10.0).abs() < 1e-4);
+        assert!(
+            (clip.root_velocity_at(2).unwrap().x - 10.0).abs() < 1e-4,
+            "final frame should keep the stride rate, not drop to zero: {:?}",
+            clip.root_velocity_at(2)
         );
     }
 

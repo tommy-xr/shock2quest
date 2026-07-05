@@ -77,18 +77,24 @@ impl AnimationClip {
     }
 
     /// Instantaneous root-motion velocity at `frame`: the rate implied by
-    /// the clip's next per-frame root delta, so entity movement tracks the
+    /// the clip's per-frame root delta, so entity movement tracks the
     /// authored motion instead of the clip-average. `None` when the clip has
     /// no usable root stream (fall back to `sliding_velocity`).
+    ///
+    /// Samples the segment starting at `frame`; on the final frame (which has
+    /// no forward segment) it uses the trailing segment. That keeps a looping
+    /// walk moving at its stride rate across the wrap instead of stalling for
+    /// a frame, while a one-shot clip that rests at its end still reads ~0
+    /// there (its trailing frames don't move).
     pub fn root_velocity_at(&self, frame: u32) -> Option<Vector3<f32>> {
         if self.root_positions.len() < 2 {
             return None;
         }
         let last = self.root_positions.len() - 1;
-        let f0 = (frame as usize).min(last);
-        let f1 = (f0 + 1).min(last);
+        let f0 = (frame as usize).min(last - 1);
         Some(
-            (self.root_positions[f1] - self.root_positions[f0]) / self.time_per_frame.as_secs_f32(),
+            (self.root_positions[f0 + 1] - self.root_positions[f0])
+                / self.time_per_frame.as_secs_f32(),
         )
     }
 }
