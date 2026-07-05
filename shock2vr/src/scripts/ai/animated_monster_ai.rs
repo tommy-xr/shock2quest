@@ -41,10 +41,17 @@ const DOOR_INTERACT_RANGE: f32 = 12.0 / SCALE_FACTOR;
 /// doesn't open ones off to the side while passing.
 const DOOR_FACING_MIN_DOT: f32 = 0.2;
 const DOOR_FACING_RANGE: f32 = 5.0 / SCALE_FACTOR;
-/// Seconds between door interactions per AI, so a closed door isn't spammed
-/// with open requests while it swings (and a locked-door give-up doesn't
-/// re-fire every frame).
+/// How often a pursuing AI polls for a blocking door. The scan (a linear
+/// cell lookup plus a small graph BFS) runs at this rate, not every frame.
+const DOOR_POLL_INTERVAL: f32 = 0.3;
+/// After opening a door, wait this long before interacting again - long
+/// enough that the door has left its closed position, so TurnOn (and its
+/// sound) isn't re-sent while it swings.
 const DOOR_INTERACT_COOLDOWN: f32 = 2.0;
+/// After giving up at a locked door, wait this long before re-frustrating -
+/// bounds the "thwarted" gesture for an AI whose alert cap keeps it in a
+/// pursuing state even after the give-up's alertness drop.
+const DOOR_GIVEUP_COOLDOWN: f32 = 8.0;
 
 /// Configuration for monster alertness behavior
 #[derive(Clone)]
@@ -417,10 +424,16 @@ impl AnimatedMonsterAI {
         if self.door_cooldown > 0.0 {
             return Effect::NoEffect;
         }
-        // Only actively-pursuing behaviors bother with doors
+        // Only actively-pursuing behaviors bother with doors (cheap check
+        // left off the cooldown so a state change is noticed promptly)
         if !matches!(self.current_behavior.borrow().name(), "Chase" | "Search") {
             return Effect::NoEffect;
         }
+        // The scan below (cell_from_position is O(cells) + a graph BFS) runs
+        // at a few Hz, not every frame - arm the poll cooldown up front,
+        // regardless of whether a door is found. The act paths override it
+        // with a longer value.
+        self.door_cooldown = DOOR_POLL_INTERVAL;
 
         let Some(service) = world
             .borrow::<UniqueView<GlobalPathfinding>>()
@@ -468,14 +481,16 @@ impl AnimatedMonsterAI {
                 continue;
             }
 
-            self.door_cooldown = DOOR_INTERACT_COOLDOWN;
             if script_util::is_entity_locked(world, door_ent) {
                 // Can't follow through a locked door: show frustration and
                 // give up the pursuit (drop to a wander), so the player can't
                 // lure the AI into off-limits areas. Forget the last-known
-                // position so it doesn't immediately re-path to the door.
+                // position so it doesn't immediately re-path to the door. The
+                // longer cooldown keeps the "thwarted" gesture from replaying
+                // rapidly for an AI whose alert cap won't let it drop below a
+                // pursuing level.
+                self.door_cooldown = DOOR_GIVEUP_COOLDOWN;
                 self.last_known_player_pos = None;
-                self.alertness.visible_time = 0.0;
                 let downgrade = self.force_alertness(AIAlertLevel::Low, world, physics, entity_id);
                 let thwarted = Effect::QueueAnimationBySchema {
                     entity_id,
@@ -484,7 +499,10 @@ impl AnimatedMonsterAI {
                 };
                 return Effect::combine(vec![downgrade, thwarted]);
             }
-            // Unlocked: open it and keep chasing through
+            // Unlocked: open it and keep chasing through. The longer cooldown
+            // avoids re-sending TurnOn (and replaying the open sound) while
+            // the door is still swinging.
+            self.door_cooldown = DOOR_INTERACT_COOLDOWN;
             return Effect::Send {
                 msg: Message {
                     to: door_ent,
