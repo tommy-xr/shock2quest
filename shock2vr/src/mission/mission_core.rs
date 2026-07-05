@@ -4401,6 +4401,95 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         Ok(())
     }
 
+    fn player_inventory(&self) -> Vec<crate::game_scene::DebugInventoryItem> {
+        // Carried items, matching what the save system persists as "held"
+        // (save_load::get_held_items): each hand-held entity plus everything
+        // nested under it, and the backpack entity's contents - all following
+        // `Contains` links to depth 2. A `seen` set dedups items that appear in
+        // more than one place, with hands taking precedence over the backpack.
+        let (inventory_entity, left_hand, right_hand) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            (
+                player.inventory_entity_id,
+                player.left_hand_entity_id,
+                player.right_hand_entity_id,
+            )
+        };
+
+        // Recursively collect `Contains` descendants of `root`, tagging each
+        // unique entity with the location it is carried through. Nested
+        // immutable `View<Links>` borrows are fine (mirrors get_held_items).
+        fn collect(
+            world: &shipyard::World,
+            entity: shipyard::EntityId,
+            depth: u32,
+            location: &str,
+            seen: &mut std::collections::HashSet<shipyard::EntityId>,
+            out: &mut Vec<(shipyard::EntityId, String)>,
+        ) {
+            if depth == 0 {
+                return;
+            }
+            crate::scripts::script_util::for_each_link(world, entity, &mut |link| {
+                if matches!(link.link, dark::properties::Link::Contains(_)) {
+                    if let Some(to_ent_id) = link.to_entity_id {
+                        let child = to_ent_id.0;
+                        if seen.insert(child) {
+                            out.push((child, location.to_string()));
+                            collect(world, child, depth - 1, location, seen, out);
+                        }
+                    }
+                }
+            });
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut collected: Vec<(shipyard::EntityId, String)> = Vec::new();
+
+        // Hands first (so a held item is attributed to its hand, not the
+        // backpack): the hand entity itself is carried, plus its contents.
+        for (hand, location) in [(left_hand, "left_hand"), (right_hand, "right_hand")] {
+            if let Some(h) = hand {
+                if seen.insert(h) {
+                    collected.push((h, location.to_string()));
+                }
+                collect(&self.world, h, 2, location, &mut seen, &mut collected);
+            }
+        }
+        // Backpack: the inventory entity's contents (the container entity itself
+        // is not an item, so seed `seen` with it and only collect its children).
+        seen.insert(inventory_entity);
+        collect(
+            &self.world,
+            inventory_entity,
+            2,
+            "inventory",
+            &mut seen,
+            &mut collected,
+        );
+
+        let names = self.entity_names_by_inner();
+        let mut items: Vec<_> = collected
+            .into_iter()
+            .map(|(eid, location)| {
+                let id = eid.inner() as i32;
+                crate::game_scene::DebugInventoryItem {
+                    entity_id: id,
+                    name: names.get(&id).cloned(),
+                    location,
+                }
+            })
+            .collect();
+        // Stable ordering for deterministic snapshots.
+        items.sort_by(|a, b| {
+            a.location
+                .cmp(&b.location)
+                .then(a.name.cmp(&b.name))
+                .then(a.entity_id.cmp(&b.entity_id))
+        });
+        items
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         // MissionCore doesn't store InputContext directly - it's passed to update()
         // For debugging purposes, return a default state

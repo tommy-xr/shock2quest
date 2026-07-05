@@ -226,6 +226,20 @@ export interface QuestBitsResult {
   count: number;
 }
 
+/** Where a carried item is held. */
+export type InventoryLocation = "inventory" | "left_hand" | "right_hand";
+
+export interface InventoryItem {
+  entity_id: number;
+  name: string | null;
+  location: InventoryLocation;
+}
+
+export interface PlayerInventoryResult {
+  items: InventoryItem[];
+  count: number;
+}
+
 export interface WaitForOptions {
   /** Total time to wait in milliseconds (default 10_000). */
   timeoutMs?: number;

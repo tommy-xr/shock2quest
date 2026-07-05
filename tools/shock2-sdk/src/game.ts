@@ -19,6 +19,7 @@ import type {
   TransitionLevelResult,
   QuestBitsResult,
   QuestBitValue,
+  PlayerInventoryResult,
   WaitForOptions,
 } from "./types.js";
 
@@ -51,6 +52,11 @@ export class PlayerApi {
 
   async teleport(position: Position): Promise<TeleportResult> {
     return this.client.post<TeleportResult>("/v1/player/teleport", position);
+  }
+
+  /** The items the player is carrying (backpack + hand-held), for verifying pickups. */
+  async inventory(): Promise<PlayerInventoryResult> {
+    return this.client.get<PlayerInventoryResult>("/v1/player/inventory");
   }
 }
 

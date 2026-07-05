@@ -325,6 +325,15 @@ pub struct DebugQuestBit {
     pub bits: u32,
 }
 
+/// A single item the player carries: its entity id, name (if any), and where
+/// it is held - "inventory" (backpack), "left_hand", or "right_hand".
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugInventoryItem {
+    pub entity_id: i32,
+    pub name: Option<String>,
+    pub location: String,
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -450,6 +459,12 @@ pub trait DebuggableScene {
     /// `value` is "unknown", "incomplete", or "complete". Default: unsupported.
     fn set_quest_bit(&mut self, _name: &str, _value: &str) -> Result<(), String> {
         Err("scene does not support quest bits".to_string())
+    }
+
+    /// The items the player is carrying (backpack contents plus the hand-held
+    /// items), for verifying pickups. Empty when the scene has no player.
+    fn player_inventory(&self) -> Vec<DebugInventoryItem> {
+        Vec::new()
     }
 
     /// Get current input context state
