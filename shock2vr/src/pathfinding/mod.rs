@@ -506,6 +506,7 @@ mod tests {
             cells,
             vertices,
             links,
+            cell_doors: Vec::new(),
         }
     }
 
