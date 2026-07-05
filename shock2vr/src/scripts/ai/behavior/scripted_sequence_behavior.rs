@@ -26,11 +26,23 @@ use crate::{
 
 use super::Behavior;
 
+/// Watchdog: running sequences are protected from alertness/signal/damage
+/// preemption, so a stalled action (a Goto with an unreachable target, an
+/// animation whose queue was silently swallowed) must not wedge the AI
+/// forever. Generous enough for the longest authored beats (the rec1 cortez
+/// performance clip runs ~14s).
+const ACTION_TIMEOUT_SECONDS: f32 = 30.0;
+
 pub struct ScriptedSequenceBehavior {
     actions: Vec<AIScriptedAction>,
     queued_effects: Vec<Effect>,
     current_action_idx: i32,
     current_scripted_action: Box<RefCell<dyn ScriptedAction>>,
+    finished: bool,
+    /// Time spent on the current action; drives the watchdog.
+    action_elapsed: f32,
+    /// Set by the watchdog: the current action is force-completed.
+    timed_out: bool,
 }
 
 impl ScriptedSequenceBehavior {
@@ -43,6 +55,9 @@ impl ScriptedSequenceBehavior {
             queued_effects: vec![initial_effect],
             current_action_idx: 0,
             current_scripted_action: current_behavior,
+            finished: false,
+            action_elapsed: 0.0,
+            timed_out: false,
         }
     }
 }
@@ -50,6 +65,29 @@ impl ScriptedSequenceBehavior {
 impl Behavior for ScriptedSequenceBehavior {
     fn name(&self) -> &'static str {
         "ScriptedSequence"
+    }
+
+    fn scripted_state(&self) -> super::ScriptedState {
+        if self.finished {
+            super::ScriptedState::Finished
+        } else {
+            super::ScriptedState::Running
+        }
+    }
+
+    fn handle_message(
+        &mut self,
+        _entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        msg: &crate::scripts::MessagePayload,
+    ) -> Effect {
+        if matches!(msg, crate::scripts::MessagePayload::AnimationCompleted) {
+            self.current_scripted_action
+                .borrow_mut()
+                .on_animation_completed();
+        }
+        Effect::NoEffect
     }
 
     fn animation(&self) -> Vec<MotionQueryItem> {
@@ -68,6 +106,24 @@ impl Behavior for ScriptedSequenceBehavior {
         entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
+        // Watchdog: force-complete a stalled action and nudge the sequence
+        // forward through the normal completion path (advancement is driven
+        // by AnimationCompleted, which a stalled action may never produce).
+        self.action_elapsed += time.elapsed.as_secs_f32();
+        if !self.timed_out && !self.finished && self.action_elapsed > ACTION_TIMEOUT_SECONDS {
+            self.timed_out = true;
+            tracing::warn!(
+                "scripted sequence action {} timed out after {ACTION_TIMEOUT_SECONDS}s; advancing",
+                self.current_action_idx
+            );
+            self.queued_effects.push(Effect::Send {
+                msg: crate::scripts::Message {
+                    to: entity_id,
+                    payload: crate::scripts::MessagePayload::AnimationCompleted,
+                },
+            });
+        }
+
         let queued_effects = Effect::combine(self.queued_effects.clone());
         self.queued_effects = vec![];
 
@@ -92,15 +148,27 @@ impl Behavior for ScriptedSequenceBehavior {
         _physics: &crate::physics::PhysicsWorld,
         entity_id: shipyard::EntityId,
     ) -> super::NextBehavior {
-        if self
-            .current_scripted_action
-            .borrow()
-            .is_complete(entity_id, world)
-        {
+        // Already ended (update() hands us back to a normal behavior; a
+        // repeat completion must not re-emit the final action's effect).
+        if self.finished {
+            return super::NextBehavior::NoOpinion;
+        }
+
+        let action_complete = self.timed_out
+            || self
+                .current_scripted_action
+                .borrow()
+                .is_complete(entity_id, world);
+        if action_complete {
+            let outgoing_effect = self.current_scripted_action.borrow().completion_effect();
+            self.queued_effects.push(outgoing_effect);
+            self.timed_out = false;
+            self.action_elapsed = 0.0;
+
             if self.current_action_idx >= ((self.actions.len() as i32) - 1) {
+                self.finished = true;
                 super::NextBehavior::NoOpinion
             } else {
-                let outgoing_effect = self.current_scripted_action.borrow().completion_effect();
                 self.current_action_idx += 1;
                 let behavior = get_behavior_from_action(
                     world,
@@ -108,10 +176,7 @@ impl Behavior for ScriptedSequenceBehavior {
                 );
                 self.current_scripted_action = behavior;
                 let incoming_effect = self.current_scripted_action.borrow().initial_effect();
-
-                // Queue up effects from the behavior
                 self.queued_effects.push(incoming_effect);
-                self.queued_effects.push(outgoing_effect);
 
                 super::NextBehavior::Stay
             }
@@ -171,6 +236,10 @@ trait ScriptedAction {
         Effect::NoEffect
     }
 
+    /// Called when the entity's current animation clip finishes (also fires
+    /// when a motion query fails, so waiting on this cannot deadlock).
+    fn on_animation_completed(&mut self) {}
+
     fn is_complete(&self, _entity_id: EntityId, _world: &World) -> bool {
         true
     }
@@ -189,17 +258,33 @@ trait ScriptedAction {
 
 pub struct PlayAnimationScriptedAction {
     animation_name: String,
+    /// Play is a timed beat: it holds the sequence until its clip actually
+    /// finishes (or its motion query fails, which also reports completion).
+    /// Without this the next action's animation replaces the clip a frame
+    /// after it starts.
+    completed: bool,
 }
 
 impl PlayAnimationScriptedAction {
     pub fn new(animation_name: String) -> PlayAnimationScriptedAction {
-        PlayAnimationScriptedAction { animation_name }
+        PlayAnimationScriptedAction {
+            animation_name,
+            completed: false,
+        }
     }
 }
 
 impl ScriptedAction for PlayAnimationScriptedAction {
     fn turn_speed(&self) -> Deg<f32> {
         Deg(0.0)
+    }
+
+    fn on_animation_completed(&mut self) {
+        self.completed = true;
+    }
+
+    fn is_complete(&self, _entity_id: EntityId, _world: &World) -> bool {
+        self.completed
     }
     fn animation(self: &PlayAnimationScriptedAction) -> Vec<MotionQueryItem> {
         if self.animation_name.find(",").is_some() {
