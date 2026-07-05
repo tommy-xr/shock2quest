@@ -377,6 +377,10 @@ pub enum Link {
     /// archetype this object emits (e.g. HE Explosion -> Standard Impact at
     /// intensity 10 over a radius of 10).
     StimSource(StimSourceOptions),
+    /// Act/react receptron ("Receptron"): the linked-to template is the stim
+    /// archetype this object responds to (e.g. Human Vulnerability ->
+    /// High Explosive: Damage x4).
+    Receptron(ReceptronOptions),
 }
 
 #[derive(
@@ -571,6 +575,79 @@ impl StimSourceOptions {
             intensity,
             propagator,
         }
+    }
+}
+
+/// What a receptron does when its stim arrives (DromEd act/react "effect").
+/// Only the effects the game consumes are modeled; the rest keep their name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ReceptronEffect {
+    /// Deal `stim intensity * multiplier` damage (negative multipliers heal).
+    /// `use_intensity: false` (rare - one record in shock2.gam) means a flat
+    /// `multiplier` points instead.
+    Damage {
+        multiplier: f32,
+        use_intensity: bool,
+    },
+    /// Scale the incoming stim's intensity by `factor` before other
+    /// receptrons see it (shields, armor, Low Grav).
+    Amplify { factor: f32 },
+    /// Swallow the stim entirely (Invulnerable).
+    Abort,
+    /// An effect the game does not implement yet (EnvSound, add_metaprop,
+    /// radiate, Freeze, Stun, toxin, ...).
+    Unhandled(String),
+}
+
+/// Act/react receptron (L$Receptron): the source template is the receiving
+/// archetype (e.g. Human Vulnerability), the linked-to template is the stim
+/// archetype it responds to (e.g. High Explosive), and the data says how.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReceptronOptions {
+    /// Evaluation order within the receiver's receptron list (lower first);
+    /// matters when an Amplify and a Damage both match the same stim.
+    pub order: i32,
+    pub effect: ReceptronEffect,
+}
+
+impl ReceptronOptions {
+    pub fn read(reader: &mut Box<dyn ReadAndSeek>, len: u32) -> ReceptronOptions {
+        // sReceptron (88 bytes): order, min/max intensity (unused by SS2 data),
+        // flags, a 32-byte effect-name buffer, target/agent object sentinels,
+        // then an effect-specific parameter block.
+        if len < 72 {
+            // A truncated record (corrupt/fan-mission data) would panic the
+            // fixed-offset reads below; degrade to an inert receptron instead.
+            return ReceptronOptions {
+                order: 0,
+                effect: ReceptronEffect::Unhandled("<truncated record>".to_string()),
+            };
+        }
+        let order = read_i32(reader);
+        let _min_intensity = read_i32(reader);
+        let _max_intensity = read_i32(reader);
+        let _flags = read_i32(reader);
+        let name_bytes = read_bytes(reader, 32);
+        let name_end = name_bytes.iter().position(|b| *b == 0).unwrap_or(32);
+        let name = String::from_utf8_lossy(&name_bytes[..name_end]).into_owned();
+        let _target = read_i32(reader);
+        let _agent = read_i32(reader);
+        let param_56 = read_single(reader);
+        let _param_60 = read_i32(reader);
+        let param_64 = read_single(reader);
+        let param_68 = read_i32(reader);
+
+        let effect = match name.as_str() {
+            "damage" => ReceptronEffect::Damage {
+                multiplier: param_64,
+                use_intensity: param_68 != 0,
+            },
+            "Amplify" => ReceptronEffect::Amplify { factor: param_56 },
+            "Abort" => ReceptronEffect::Abort,
+            _ => ReceptronEffect::Unhandled(name),
+        };
+
+        ReceptronOptions { order, effect }
     }
 }
 
@@ -883,6 +960,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "LD$arSrcDes",
             StimSourceOptions::read,
             Link::StimSource,
+        ),
+        define_link_with_versioned_data(
+            "L$Receptron",
+            "LD$Receptro",
+            ReceptronOptions::read,
+            Link::Receptron,
         ),
     ];
 
@@ -1941,5 +2024,62 @@ mod tests {
 
         let null = read_stim_source(stim_source_payload(0, 16.0, 0.0));
         assert_eq!(null.propagator, StimPropagator::Null);
+    }
+
+    /// Build an 88-byte sReceptron payload the way shock2.gam lays it out:
+    /// order, min/max intensity, flags, 32-byte effect name, target/agent,
+    /// then the effect parameter block ([56] f32, [60] i32, [64] f32, [68] i32).
+    fn receptron_payload(order: i32, effect_name: &str, p56: f32, p64: f32, p68: i32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&order.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]); // min/max intensity (unused)
+        bytes.extend_from_slice(&2i32.to_le_bytes()); // flags
+        let mut name = effect_name.as_bytes().to_vec();
+        name.resize(32, 0);
+        bytes.extend_from_slice(&name);
+        bytes.extend_from_slice(&(-2i32).to_le_bytes()); // target sentinel
+        bytes.extend_from_slice(&(-257i32).to_le_bytes()); // agent sentinel
+        bytes.extend_from_slice(&p56.to_le_bytes());
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&p64.to_le_bytes());
+        bytes.extend_from_slice(&p68.to_le_bytes());
+        bytes.resize(88, 0);
+        bytes
+    }
+
+    fn read_receptron(payload: Vec<u8>) -> ReceptronOptions {
+        let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(payload));
+        ReceptronOptions::read(&mut cursor, 88)
+    }
+
+    #[test]
+    fn receptron_damage_matches_human_vs_high_explosive_data() {
+        // Human Vulnerability -> High Explosive in shock2.gam: damage x4,
+        // scaled by stim intensity.
+        let opts = read_receptron(receptron_payload(33, "damage", 0.0, 4.0, 1));
+        assert_eq!(opts.order, 33);
+        assert_eq!(
+            opts.effect,
+            ReceptronEffect::Damage {
+                multiplier: 4.0,
+                use_intensity: true
+            }
+        );
+    }
+
+    #[test]
+    fn receptron_amplify_abort_and_unknown_effects() {
+        // PsiShield's Amplify x0.85 (factor lives at +56, not +64).
+        let amplify = read_receptron(receptron_payload(95, "Amplify", 0.85, 0.0, 0));
+        assert_eq!(amplify.effect, ReceptronEffect::Amplify { factor: 0.85 });
+
+        let abort = read_receptron(receptron_payload(1, "Abort", 0.0, 0.0, 0));
+        assert_eq!(abort.effect, ReceptronEffect::Abort);
+
+        let other = read_receptron(receptron_payload(7, "EnvSound", 0.0, 0.0, 0));
+        assert_eq!(
+            other.effect,
+            ReceptronEffect::Unhandled("EnvSound".to_string())
+        );
     }
 }

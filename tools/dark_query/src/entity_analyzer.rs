@@ -387,6 +387,7 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::TPath(_) => "TPath".to_string(),
                 Link::Teleport => "Teleport".to_string(),
                 Link::StimSource(_) => "StimSource".to_string(),
+                Link::Receptron(_) => "Receptron".to_string(),
             })
             .collect();
 
