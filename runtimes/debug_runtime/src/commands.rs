@@ -34,6 +34,13 @@ pub enum RuntimeCommand {
     /// Move the player to a position
     MovePlayer(Vector3<f32>),
 
+    /// Transition to another level (warp), at an optional spawn-marker id.
+    TransitionLevel {
+        level_file: String,
+        loc: Option<i32>,
+        reply: oneshot::Sender<TransitionLevelResult>,
+    },
+
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
@@ -334,6 +341,16 @@ pub struct CommandResult {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
+}
+
+/// Result of a level transition (warp) request
+#[derive(Debug, Serialize)]
+pub struct TransitionLevelResult {
+    pub success: bool,
+    /// The scene name after the transition (e.g. "eng1.mis"). With the loading
+    /// screen enabled this may still be the previous level until updates run.
+    pub mission: String,
+    pub message: String,
 }
 
 /// Current status of the interactive pathfinding test system
