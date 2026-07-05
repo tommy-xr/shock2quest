@@ -98,6 +98,11 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<PhysicsJointsResult>,
     },
 
+    /// Audit collider AABBs for malformed geometry (NaN/degenerate/extreme)
+    AuditColliders {
+        reply: oneshot::Sender<ColliderAuditResult>,
+    },
+
     /// Shutdown the debug runtime gracefully
     Shutdown,
 }
@@ -217,6 +222,25 @@ pub struct PhysicsJointEntry {
     pub separation: f32,
     pub linear_impulse: f32,
     pub angular_impulse: f32,
+}
+
+/// Result of the collider-health audit: colliders with malformed AABBs.
+/// `total_count` is the number of issues; an empty `issues` list means the
+/// level's collider geometry is clean.
+#[derive(Debug, Serialize)]
+pub struct ColliderAuditResult {
+    pub total_count: usize,
+    pub issues: Vec<ColliderIssueEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ColliderIssueEntry {
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub kind: String,
+    pub aabb_min: [f32; 3],
+    pub aabb_max: [f32; 3],
+    pub is_sensor: bool,
 }
 
 /// Detailed information about a physics body

@@ -278,6 +278,7 @@ async fn start_http_server(
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
+        .route("/v1/physics/colliders/validate", get(audit_colliders))
         .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
@@ -1176,6 +1177,34 @@ fn process_command(
                 tracing::warn!("Failed to send ragdoll metrics - receiver dropped");
             }
         }
+        RuntimeCommand::AuditColliders { reply } => {
+            let issues: Vec<commands::ColliderIssueEntry> = game
+                .debug_scene()
+                .map(|scene| {
+                    scene
+                        .audit_colliders()
+                        .into_iter()
+                        .map(|iss| commands::ColliderIssueEntry {
+                            entity_id: iss.entity_id,
+                            entity_name: iss.entity_name,
+                            kind: iss.kind,
+                            aabb_min: iss.aabb_min,
+                            aabb_max: iss.aabb_max,
+                            is_sensor: iss.is_sensor,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if reply
+                .send(commands::ColliderAuditResult {
+                    total_count: issues.len(),
+                    issues,
+                })
+                .is_err()
+            {
+                tracing::warn!("Failed to send collider audit - receiver dropped");
+            }
+        }
         RuntimeCommand::ListPhysicsJoints { reply } => {
             let joints = game
                 .debug_scene()
@@ -1978,6 +2007,35 @@ async fn list_physics_joints(
         Err(_) => {
             tracing::error!("Failed to receive physics joints - sender dropped");
             Json(commands::PhysicsJointsResult { joints: vec![] })
+        }
+    }
+}
+
+/// HTTP handler for the collider-health audit: reports colliders with
+/// malformed world AABBs (NaN/inf, degenerate, or extreme). An empty `issues`
+/// list means the level's collider geometry is clean.
+async fn audit_colliders(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Json<commands::ColliderAuditResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    let empty = || commands::ColliderAuditResult {
+        total_count: 0,
+        issues: vec![],
+    };
+    if command_tx
+        .send(RuntimeCommand::AuditColliders { reply: reply_tx })
+        .is_err()
+    {
+        tracing::error!("Failed to send AuditColliders command - game loop receiver dropped");
+        return Json(empty());
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive collider audit - sender dropped");
+            Json(empty())
         }
     }
 }

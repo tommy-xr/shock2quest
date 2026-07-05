@@ -4321,6 +4321,32 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .collect()
     }
 
+    fn audit_colliders(&self) -> Vec<crate::game_scene::DebugColliderIssue> {
+        let issues = self.physics.audit_colliders();
+        if issues.is_empty() {
+            return Vec::new();
+        }
+        // Resolve names via the shared `inner() as i32` map so recycled entities
+        // (generation > 0) match the same truncation the physics side used -
+        // reconstructing an EntityId with `from_inner` would drop the generation
+        // and silently miss those.
+        let names = self.entity_names_by_inner();
+        issues
+            .into_iter()
+            .map(|iss| {
+                let entity_name = iss.entity_id.and_then(|id| names.get(&id).cloned());
+                crate::game_scene::DebugColliderIssue {
+                    entity_id: iss.entity_id,
+                    entity_name,
+                    kind: iss.kind.as_str().to_string(),
+                    aabb_min: iss.aabb_min,
+                    aabb_max: iss.aabb_max,
+                    is_sensor: iss.is_sensor,
+                }
+            })
+            .collect()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         // MissionCore doesn't store InputContext directly - it's passed to update()
         // For debugging purposes, return a default state
