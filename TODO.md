@@ -13,11 +13,8 @@ Needs human verification (batch these — no automated test covers "feel"):
   default `0.5`, so dynamic props are slightly slidier. Low magnitude and covered
   by automated tests, but confirm it feels right in the same pass.
 
-Recent work
-- (in progress) flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
-- [x] flat runtime -> fix alpha transparency / z-order break (viewmodel depth-clear wiped world depth before the transparent pass; engine now renders the overlay group after the world's passes)
-- [x] flat runtime -> camera-origin aim along the crosshair (#315); muzzle flash now tracks the weapon via RuntimePropAttachment (#323)
-- [x] flat runtime -> per-weapon viewmodel framing from PropPlayerGun.model_offset (viewmodel-FOV scale + authored offsets + 11.25deg carry pitch; see projects/flat-weapon-handling.md)
+Recent work (in progress / remaining polish; completed slices are in the year summary at the bottom)
+- flatscreen runtime landed: desktop defaults to flat, mouse-driven menu, first-person viewmodel + click-to-fire, crosshair frob/pickup (slices 1-6, #295-#305). Remaining polish:
 - modernize combat: add recoil / accuracy modifier (like counter-strike)
 - weapon ammo next slices: per-shot m_ammoUsage + clip size from BaseGunDesc (P$BaseGunDe), reload, ammo-type switching (see projects/flat-weapon-handling.md)
 
@@ -28,8 +25,6 @@ Recent work
   (#384), gunfire (#403) + damage (#359) alerts, scripted sequences survive alertness changes (#387).
   Patrol data parses (#406) but no patrol behavior consumes it yet. See projects/ai-pathfinding.md.
 - Fable: check to see feasibility of loading the 25th anniversary assets
-- [x] Fable: fix flat screen first-person melee weapon orientation (camSynch equivalent: root-motion cancel + authored PlayerMelee arm anchor; projects/flat-weapon-handling.md)
-- [x] Fable: fix flat screen first-person ranged weapon positioning (per-weapon model_offset framing, above)
 
 
 SNACKS:
@@ -45,7 +40,6 @@ SNACKS:
   - Have a 'script' for simulating a slow swipe (low damage) or fast swipe (high damage)
   - Add raycast test to see what is being hit
 
-- [x] Main menu (flat mouse-driven menu boots by default; #297, #300)
 - Fix ranged attack when monsters only support melee
 - Nanite counting / gui upgrade for replicator
 - Cybernetic module counting / ui for upgrade stations
@@ -73,29 +67,16 @@ Can do these in parallel:
 - Skip cutscene by pressing trigger
 - What are the entry points for a cutscene? How do we know to play a cutscene?
 
-- [x] Combat: Handle Player Health
-  - [x] Should just be a number on player state? (PropHitPoints on player entity)
-  - [x] Render in HUD somehow... (VR forearm + flat HUD health bar; #300)
 - [ ] Combat: Handle Player Death
   - [ ] Camera fall down animation, static
 - Create a placeholder UI for 'assets not found'
 - Create a floating menu 'mission'
-- [x] AIWatchObj link: Apparitions (#400 - Grassi apparition in medsci1 materializes,
-      performs its authored animation, and vanishes; full replayable lifecycle)
-  - [x] Handle ScriptMessage 'ApparBegin'/'ApparEnd' via the new Apparition script
-  - [x] Implement 'Signal' (new scripted-sequence Signal/ScriptMessage actions; AIWatchObj fires it)
-- Fix slay (in progress)
-  - [x] Make robots blow up (explosions push + damage their surroundings #388, resolved through
-        receptrons #399; barrel chain reactions work), scatter flinderize gibs on slay (#377),
-        killing blows crossfade-interrupt the current clip (#375)
-  - Create corpse and make container available (corpse-on-death handoff step 1 done, #281; container TODO)
-  - Maybe there's another way to figure out what to slay?
+- Fix slay (in progress) - robots blow up / gibs / killing-blow interrupt done (year summary);
+  remaining: create corpse and make container available (corpse-on-death handoff step 1 done, #281;
+  container TODO)
 - command2.mis:
   - Why is door not transparent?
   - Why is door not moving?
-- [x] rec:
-  - why is the cutscene flaky? (FIXED #387 - alertness changes cancelled a running scripted
-    sequence at a player-dependent moment; running sequences are now protected. rec1 Cortez verified)
 - Android pipeline improvements (CI build is green; release mode + artifact still todo)
   - Build w/ release
   - Add APK as artifact
@@ -116,8 +97,7 @@ Can do these in parallel:
 - [ ] VR: Is handedness already considered?
   - [ ] Where would the scale be factored in?
 - [ ] VR: Weapon scale
-- [x] Hack for blood spangs - replaced: projectile impacts now spawn the authored spangs (HitSpang links by victim class -> blood/sparks/grub/many; MissSpang -> terrain)
-  - [ ] Add bitmap, tweq destroy
+- [ ] Spang follow-up: tweq-destroy on spang burst
 - [ ] Camera AI - If player still visible after 3 seconds, switch to alarm - SwitchLink ecology ? How does triggering happen?
 - [ ] Security system AI
 - [ ] Add ecology
@@ -304,9 +284,6 @@ Can do these in parallel:
   - [ ] Create system
     - [ ] EmitTweq
   - [ ] Fix rotation tweq when not full rotation
-- [x] Explosions (ie, re301 in barrel) (#388/#399)
-  - [x] Implement physics to push items away (radial impulse on dynamic bodies)
-  - [x] Implement damage (radius blast resolved through receptrons - type-aware; barrel chains work)
 - [ ] Skinned model - incorporate weights into animation
 - [ ] Factor playerscript out to use existing link infra
 - [ ] Implement collision sounds
@@ -319,7 +296,6 @@ Can do these in parallel:
 - [ ] Weapons: Source/Stim Act/React (partial: act/react stim sources #388 + receptron links #395
       parse, and radius blasts resolve damage through receptrons #399; per-weapon stim application
       and periodic emitters still TODO - see #390)
-- [x] Spangs: Particle system not working correctly for blood spatter - SOLVED: P$ParticleG ships in two struct versions (mission 324 bytes, gamesys 380 with 8 extra bytes after gravity); the parser now handles both, and one-shot spang groups expire with their burst.
 - [ ] AI Behavior Improvements
   - Wander: Scan rays up/down to try and capture more of environment?
   - Add 'cliff' detector
@@ -496,9 +472,12 @@ Release Checklist
   table parsing (#398), AI patrol data parsing (#406)
 - Motion/animation: entity movement driven by per-frame root velocity (#396), wound/death queries
   reach the clips the data has (#385), `dq motion-info` per-clip metadata (#394)
-- Combat/flat viewmodel: faithful first-person framing for all 15 weapons (#335), data-driven impact
-  spangs (#338), bitmap particles + attached particle riders (#340/#342), viewmodel overlay renders
-  after the world's transparent pass (#337)
+- Combat / gibs / spangs: faithful first-person framing for all 15 weapons (#335); projectile impacts
+  spawn the authored spangs by victim class (HitSpang blood/sparks/grub, MissSpang terrain, #338),
+  with the P$ParticleG parser handling both struct versions so blood bursts render and expire; bitmap
+  particles + attached particle riders (#340/#342); scatter/launch flinderize gibs on slay (#377);
+  viewmodel overlay renders after the world's transparent pass (#337); flat melee render/idle/swing
+  (#319-#321) and first-person melee/ranged weapon orientation from PropPlayerGun
 - Fixed: non-impact collisions no longer deal damage (#404); dead monsters stay dead (#371);
   human death animations / wound clips play (#385, closes #381); SDK launch-retry only on port races (#378)
 
