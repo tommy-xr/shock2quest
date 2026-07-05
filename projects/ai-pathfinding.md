@@ -4,14 +4,20 @@
 
 This plan implements proper A* pathfinding for monster AI using the AIPATH data stored in mission files. The implementation is broken into 5 phases, each building on the previous.
 
-## Current State
+## Current State (updated 2026-07-05)
 
 - ✅ **AIPATH parsing complete** - Complete pathfinding database extraction from mission files (Phase 1)
 - ✅ **Debug visualization complete** - `--debug-pathfinding` flag renders navigation mesh overlay (Phase 2)
 - ✅ **A* pathfinding complete** - Full interactive pathfinding with P-key testing and HTTP API (Phase 3)
-- **AI uses direct movement** - Monsters chase players in a straight line with whisker-based collision avoidance
-- **Scripted sequences exist** - `ScriptedSequenceBehavior` supports waypoint navigation via `GotoScriptedAction`, but uses direct steering
-- **Ready for Phase 4** - AI integration with pathfinding service
+- ✅ **AI path-following integrated (Phase 4)** - Chase and wander steer along A\* paths via
+  `path_follow_steering_strategy.rs` (#270/#271), with engine-faithful link gating and taut
+  edge waypoints kept clear of wall corners (#360). A per-frame query budget with telemetry and
+  jittered re-path throttles pathfinding cost (#366). A pursuing AI opens the unlocked door
+  gating a cell on its route and gives up at a locked one (#402), using the parsed AIPATH
+  cell-door table (#398). Benchmark CLI (`cargo bn path`) measures latency/quality.
+- 🔶 **Patrol (Phase 5) - data parsed, behavior pending** - `P$AI_Patrol` + `L$AIPatrol`
+  route chains now parse (#406), but no `PatrolBehavior` consumes them yet; flagged patrollers
+  still just wander.
 
 ## Design Decisions
 
@@ -317,9 +323,15 @@ This implementation provides a solid foundation for Phase 4 AI integration, with
 
 ---
 
-## Phase 4: AI Integration
+## Phase 4: AI Integration ✅ **COMPLETED** (#270/#271)
 
 **Goal**: Enhance monster AI to use A* pathfinding when chasing the player.
+
+> Shipped as `PathFollowSteeringStrategy` (`path_follow_steering_strategy.rs`),
+> not the exact `PathfindingSteeringStrategy` sketch below. Chase/wander follow
+> A\* paths with taut waypoints (#360); a query budget + jittered re-path bounds
+> per-frame cost (#366); route doors open/give-up (#402). The design sketch below
+> is retained for historical context.
 
 ### Files to Modify
 
@@ -396,9 +408,15 @@ Create a new `PathfindingSteeringStrategy` that:
 
 ---
 
-## Phase 5: Patrol Path Implementation
+## Phase 5: Patrol Path Implementation 🔶 **IN PROGRESS** (data parsed, behavior pending)
 
 **Goal**: Implement patrol behavior using AIWatchObj/TPath links with A* navigation between waypoints.
+
+> **Update (2026-07-05):** The patrol *data* now parses — `P$AI_Patrol` (the
+> patroller flag) and `L$AIPatrol` route-point chains (#406, verified in eng1:
+> 17 patrollers, 81 route edges). Nothing consumes it yet, so no `PatrolBehavior`
+> exists and flagged AIs still wander. Note the shipped data uses `AIPatrol`
+> links, not the `TPath` links this plan assumed.
 
 ### Background
 
