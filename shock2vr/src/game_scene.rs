@@ -298,6 +298,21 @@ pub struct DebugPhysicsJoint {
     pub angular_impulse: f32,
 }
 
+/// A malformed collider found by the physics audit: an AABB with NaN/inf
+/// bounds, zero/negative extent, or extreme coordinates. Bad AABBs poison
+/// physics queries (garbage raycasts; a debug-build parry3d overflow), so this
+/// is surfaced for any level on demand.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugColliderIssue {
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    /// "non_finite" | "degenerate" | "extreme".
+    pub kind: String,
+    pub aabb_min: [f32; 3],
+    pub aabb_max: [f32; 3],
+    pub is_sensor: bool,
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -403,6 +418,13 @@ pub trait DebuggableScene {
     /// Every impulse joint with its anchor separation + applied impulse, for
     /// ragdoll diagnostics. Empty when the scene has no joints.
     fn list_physics_joints(&self) -> Vec<DebugPhysicsJoint> {
+        Vec::new()
+    }
+
+    /// Colliders whose world AABB is malformed (NaN/inf, degenerate, or
+    /// extreme). Empty means the level's collider geometry is clean. Used to
+    /// diagnose physics-query misbehavior (bad raycasts, parry3d overflow).
+    fn audit_colliders(&self) -> Vec<DebugColliderIssue> {
         Vec::new()
     }
 

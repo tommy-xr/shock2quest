@@ -994,7 +994,33 @@ impl PhysicsWorld {
         entity_to_ignore: Option<EntityId>,
         ignore_sensors: bool,
     ) -> Option<RayCastResult> {
-        let direction = direction.normalize();
+        // Guard against degenerate rays. A zero-length direction normalizes to
+        // NaN, and a NaN/zero ray direction sends parry's `clip_aabb_line` down
+        // its `near_side == 0` path (see parry3d clip_aabb_line.rs): when the
+        // ray origin also lies inside a collider AABB it returns face index 0,
+        // and parry's feature math then computes `0u32 - 1`, which panics with
+        // "attempt to subtract with overflow" in debug builds (issue #405) and
+        // silently returns garbage hits in release. Reject such rays here - the
+        // single choke point every raycast funnels through - rather than let a
+        // bad caller crash the whole runtime.
+        // Reject only truly non-normalizable input: an exactly-zero or
+        // non-finite direction (both normalize to NaN) or a non-finite origin. A
+        // tiny-but-nonzero direction still normalizes cleanly, so - unlike a
+        // `< EPSILON` bound - this never rejects legitimate short rays such as
+        // `ray_cast3`'s `end - start`.
+        let norm_sq = direction.magnitude2();
+        if !(start_point.x.is_finite() && start_point.y.is_finite() && start_point.z.is_finite())
+            || !norm_sq.is_finite()
+            || norm_sq == 0.0
+        {
+            tracing::debug!(
+                "ray_cast2: rejecting degenerate ray (origin={:?}, direction={:?})",
+                start_point,
+                direction
+            );
+            return None;
+        }
+        let direction = direction / norm_sq.sqrt();
         let ray = Ray::new(
             point![start_point.x, start_point.y, start_point.z],
             vector![direction.x, direction.y, direction.z],
@@ -1256,6 +1282,54 @@ impl PhysicsWorld {
         Some((min?, max?))
     }
 
+    /// Scan every collider's world AABB for values that break physics queries:
+    /// NaN/infinite bounds, degenerate (zero/negative) extents, or bounds far
+    /// outside any plausible level. A single bad AABB can make raycasts return
+    /// garbage or (in debug builds) panic inside parry3d, so this is the
+    /// first-line check when a level misbehaves. Cheap enough to call on demand
+    /// or per frame while diagnosing.
+    pub fn audit_colliders(&self) -> Vec<ColliderIssue> {
+        const EXTREME: f32 = 1.0e5;
+        let mut issues = Vec::new();
+        for (_handle, collider) in self.collider_set.iter() {
+            let aabb = collider.compute_aabb();
+            let mn = aabb.mins;
+            let mx = aabb.maxs;
+            let finite = mn.x.is_finite()
+                && mn.y.is_finite()
+                && mn.z.is_finite()
+                && mx.x.is_finite()
+                && mx.y.is_finite()
+                && mx.z.is_finite();
+
+            let kind = if !finite {
+                Some(ColliderIssueKind::NonFinite)
+            } else if mx.x <= mn.x || mx.y <= mn.y || mx.z <= mn.z {
+                Some(ColliderIssueKind::Degenerate)
+            } else if [mn.x, mn.y, mn.z, mx.x, mx.y, mx.z]
+                .iter()
+                .any(|c| c.abs() > EXTREME)
+            {
+                Some(ColliderIssueKind::Extreme)
+            } else {
+                None
+            };
+
+            if let Some(kind) = kind {
+                let entity_id =
+                    EntityId::from_inner(collider.user_data as u64).map(|id| id.inner() as i32);
+                issues.push(ColliderIssue {
+                    entity_id,
+                    kind,
+                    aabb_min: [mn.x, mn.y, mn.z],
+                    aabb_max: [mx.x, mx.y, mx.z],
+                    is_sensor: collider.is_sensor(),
+                });
+            }
+        }
+        issues
+    }
+
     /// Enumerate every rigid body in the simulation for debug tooling.
     ///
     /// This iterates the raw Rapier `RigidBodySet` rather than the
@@ -1382,6 +1456,43 @@ pub struct DebugJointInfo {
     pub linear_impulse: f32,
     /// Magnitude of the angular (limit) constraint impulse this step.
     pub angular_impulse: f32,
+}
+
+/// A malformed collider found by [`PhysicsWorld::audit_colliders`]. Bad
+/// collider AABBs feed garbage into the physics queries (parry3d's ray-AABB
+/// math can even integer-overflow on a degenerate box in debug builds), so
+/// this is a data-hygiene check surfaced for any level on demand.
+#[derive(Debug, Clone)]
+pub struct ColliderIssue {
+    /// Owning entity (from `Collider::user_data`), if any.
+    pub entity_id: Option<i32>,
+    /// What's wrong with the collider's world AABB.
+    pub kind: ColliderIssueKind,
+    /// The offending world-space AABB (min, max) - may contain NaN/inf.
+    pub aabb_min: [f32; 3],
+    pub aabb_max: [f32; 3],
+    pub is_sensor: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColliderIssueKind {
+    /// An AABB bound is NaN or infinite - poisons every query it touches.
+    NonFinite,
+    /// Zero (or negative) extent on some axis - a flat/degenerate box.
+    Degenerate,
+    /// Bounds far outside any plausible level extent (|coord| > 1e5) -
+    /// usually an entity that fell out of the world or a bad transform.
+    Extreme,
+}
+
+impl ColliderIssueKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ColliderIssueKind::NonFinite => "non_finite",
+            ColliderIssueKind::Degenerate => "degenerate",
+            ColliderIssueKind::Extreme => "extreme",
+        }
+    }
 }
 
 /// Rapier-free description of a rigid body, for debug tooling / HTTP introspection.
@@ -1522,6 +1633,67 @@ mod tests {
             high_peak > low_peak + 0.1,
             "high-restitution apex {high_peak} should exceed low-restitution apex {low_peak}"
         );
+    }
+
+    /// A degenerate ray (zero-length or non-finite direction) whose origin sits
+    /// inside a collider AABB must return `None`, not panic. (Negative-first:
+    /// without the guard in `ray_cast2`, parry's `clip_aabb_line` returns face
+    /// index 0 for this case and the feature math computes `0u32 - 1`, panicking
+    /// with "attempt to subtract with overflow" in debug builds - issue #405.)
+    #[test]
+    fn degenerate_ray_does_not_panic() {
+        let (mut world, mut player) = world_with_floor();
+        // A dynamic *cuboid* the query pipeline will actually see (static bodies
+        // don't enter the query BVH until they move). The shape must be a cuboid:
+        // parry's face-index overflow is in the ray-vs-box path; a ball uses a
+        // different ray cast and never hits it. AABB ~ [-1, 1, -1] .. [1, 3, 1].
+        world.add_dynamic(
+            EntityId::from_inner(42).unwrap(),
+            vec3(0.0, 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(1.0, 1.0, 1.0)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        step(&mut world, &mut player, 1);
+
+        // Origin inside the cuboid's AABB - the exact condition that makes
+        // parry's `clip_aabb_line` return face index 0 for a degenerate ray.
+        let origin = point3(0.0, 2.0, 0.0);
+
+        let zero_dir = world.ray_cast2(
+            origin,
+            Vector3::new(0.0, 0.0, 0.0),
+            100.0,
+            InternalCollisionGroups::ALL_COLLIDABLE,
+            None,
+            false,
+        );
+        assert!(zero_dir.is_none(), "zero-direction ray should return None");
+
+        let nan_dir = world.ray_cast2(
+            origin,
+            Vector3::new(f32::NAN, 0.0, 0.0),
+            100.0,
+            InternalCollisionGroups::ALL_COLLIDABLE,
+            None,
+            false,
+        );
+        assert!(nan_dir.is_none(), "NaN-direction ray should return None");
+
+        // Regression guard: a valid ray must still hit (the check must reject
+        // only degenerate rays, not good ones).
+        let valid = world.ray_cast2(
+            point3(0.0, 5.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            100.0,
+            InternalCollisionGroups::ALL_COLLIDABLE,
+            None,
+            false,
+        );
+        assert!(valid.is_some(), "valid downward ray should hit the cuboid");
     }
 
     /// A higher-friction box, given the same initial horizontal velocity on the
