@@ -158,6 +158,15 @@ pub enum Effect {
         stim_template_id: i32,
     },
 
+    /// A noise (gunfire, etc.) at `origin`: every creature within `radius`
+    /// hears it, escalates alertness, and investigates the source - so
+    /// firing a weapon draws nearby AIs even with no line of sight. A plain
+    /// Euclidean radius for now (walls don't attenuate it yet).
+    RaiseNoise {
+        origin: Vector3<f32>,
+        radius: f32,
+    },
+
     ChangeModel {
         entity_id: EntityId,
         model_name: String,
