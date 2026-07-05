@@ -245,13 +245,14 @@ For debugging visual/rendering changes without a full interactive session:
    launch** (these also differ from the mission-file object IDs that `dark_query`
    prints). Only **templates** (negative IDs / `PropTemplateId`) and mission-file
    object IDs are stable identities; concrete runtime entity IDs are not. So any
-   automation must **discover entities by name or property** each run - e.g.
+   automation must **discover entities by name or template** each run - e.g.
    `GET /v1/entities?filter=OG-Pipe` then read `AIBehavior`/`AIAlertness` from
    `/v1/entities/:id` - and must **never hardcode a runtime entity ID** (a
-   hardcoded ID silently points at a different object next run). Caveat: the
-   `template_id` field in `/v1/entities` output is currently a placeholder that
-   just echoes the entity ID (it does not expose the real `PropTemplateId`), so
-   filter by **name** for now.
+   hardcoded ID silently points at a different object next run). The
+   `template_id` field in `/v1/entities` output *is* stable across runs and
+   matches `dark_query`'s id space, so it's a durable handle for identifying an
+   entity (e.g. all three eng1 Blue Monkeys report `template_id` 164/781/809
+   every launch); filtering by **name** also works.
 
    **Stepping & determinism**: stepping uses a **fixed 60 Hz timestep**, so
    `{"frames": N}` advances exactly `N/60` s of simulation time and
