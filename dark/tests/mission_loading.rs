@@ -16,7 +16,9 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use dark::mission::PathDatabase;
+use dark::properties::{self, Link};
 use dark::ss2_chunk_file_reader;
+use dark::ss2_entity_info::{self, SystemShock2EntityInfo};
 
 /// Locate the `Data/` directory, or `None` when assets aren't available.
 ///
@@ -47,6 +49,40 @@ fn load_path_database(data: &Path, mission: &str) -> Option<PathDatabase> {
     let mut reader = BufReader::new(file);
     let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
     PathDatabase::read(&toc, &mut reader)
+}
+
+/// Parse a mission's entity info (properties + links) directly from its own
+/// chunks, without merging the gamesys. Enough to assert on mission-local
+/// properties and links (patrol data lives in the mission file).
+fn load_mission_entity_info(data: &Path, mission: &str) -> SystemShock2EntityInfo {
+    let file = File::open(data.join(mission)).expect("mission file should open");
+    let mut reader = BufReader::new(file);
+    let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+    let (props, links, links_with_data) = properties::get();
+    ss2_entity_info::new(&toc, &links, &links_with_data, &props, &mut reader)
+}
+
+/// Count `Link::AIPatrol` edges across all of a mission's parsed links.
+fn count_aipatrol_links(info: &SystemShock2EntityInfo) -> usize {
+    info.template_to_links
+        .values()
+        .flat_map(|tl| &tl.to_links)
+        .filter(|l| matches!(l.link, Link::AIPatrol))
+        .count()
+}
+
+/// Count entities flagged as patrollers (`PropAIPatrol(true)`). Properties are
+/// trait objects with no downcast, so match on the `Debug` form - the same
+/// rendering `dark_query` shows.
+fn count_patrolling_entities(info: &SystemShock2EntityInfo) -> usize {
+    info.entity_to_properties
+        .values()
+        .filter(|props| {
+            props
+                .iter()
+                .any(|p| format!("{p:?}").contains("PropAIPatrol(true)"))
+        })
+        .count()
 }
 
 /// Every `.mis` filename in `data`.
@@ -149,4 +185,32 @@ fn shodan_v34_aipath_loads_without_door_data() {
             "v3.4 tail must not be parsed until its layout is verified"
         );
     }
+}
+
+#[test]
+fn eng1_patrol_data_parses() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let info = load_mission_entity_info(&data, "eng1.mis");
+
+    // eng1 has a substantial patrol network (a ~1.1KB L$AIPatrol chunk). The
+    // link registration must turn those edges into typed Link::AIPatrol rather
+    // than leaving them in the unparsed bucket.
+    assert!(
+        !info.unparsed_links.contains_key("L$AIPatrol"),
+        "L$AIPatrol should be a registered (parsed) link, not unparsed"
+    );
+    // 81 route edges and 17 flagged patrollers is eng1's known, stable set; a
+    // regression in the link/property parse shifts these counts.
+    let patrol_links = count_aipatrol_links(&info);
+    assert_eq!(
+        patrol_links, 81,
+        "eng1 parsed AIPatrol route-link count changed"
+    );
+
+    // ...and the AIs flagged to walk it (P$AI_Patrol = true).
+    let patrollers = count_patrolling_entities(&info);
+    assert_eq!(patrollers, 17, "eng1 PropAIPatrol(true) AI count changed");
 }
