@@ -1,8 +1,7 @@
-use dark::properties::PropLocked;
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, World};
 
-use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
+use crate::physics::PhysicsWorld;
 
 use super::{
     Effect, MessagePayload, Script,
@@ -18,35 +17,7 @@ impl BaseButton {
     }
 
     pub fn is_locked(&self, entity_id: EntityId, world: &World) -> bool {
-        let v_prop_locked = world.borrow::<shipyard::View<PropLocked>>().unwrap();
-        let v_prop_key_dst = world
-            .borrow::<View<dark::properties::PropKeyDst>>()
-            .unwrap();
-
-        let _v_prop_key_src = world
-            .borrow::<View<dark::properties::PropKeySrc>>()
-            .unwrap();
-
-        let quest_bits = world.borrow::<UniqueView<QuestInfo>>().unwrap();
-
-        let maybe_prop_locked = v_prop_locked.get(entity_id);
-
-        if let Ok(prop_locked) = maybe_prop_locked {
-            // We're locked... check if we have a key that can open it!
-            if prop_locked.0 {
-                let maybe_prop_key_dst = v_prop_key_dst.get(entity_id);
-                if let Ok(key_dst) = maybe_prop_key_dst {
-                    let is_unlocked = quest_bits.can_unlock(&key_dst.0);
-                    !is_unlocked
-                } else {
-                    true
-                }
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        super::script_util::is_entity_locked(world, entity_id)
     }
 }
 impl Script for BaseButton {
