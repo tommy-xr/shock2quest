@@ -80,6 +80,12 @@ enum Commands {
         #[arg(long)]
         limit: Option<usize>,
     },
+
+    /// Show per-clip motion metadata (flags, blend, root translation, frame flags)
+    MotionInfo {
+        /// Animation clip names (e.g. humdie1 ogpdiefw)
+        names: Vec<String>,
+    },
     /// Query map chunk data from interface files
     Maps {
         /// Mission name to load map data for (e.g., "MEDSCI1", "MEDSCI2")
@@ -173,6 +179,9 @@ fn main() -> Result<()> {
             limit,
         } => {
             handle_motion_command(&creature_type, &tags, limit)?;
+        }
+        Commands::MotionInfo { names } => {
+            handle_motion_info_command(&names)?;
         }
         Commands::Maps { mission } => {
             handle_maps_command(&mission)?;
@@ -604,6 +613,17 @@ fn handle_motion_command(creature_type: &str, tags: &[String], limit: Option<usi
         motion_analyzer.list_all_tags_and_animations(creature_id, limit)?;
     } else {
         motion_analyzer.query_with_tags(creature_id, tags, limit)?;
+    }
+
+    Ok(())
+}
+
+fn handle_motion_info_command(names: &[String]) -> Result<()> {
+    info!("Loading motion database...");
+    let motion_analyzer = MotionAnalyzer::new()?;
+
+    for name in names {
+        motion_analyzer.print_motion_info(name)?;
     }
 
     Ok(())
