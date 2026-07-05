@@ -22,9 +22,24 @@ pub enum NextBehavior {
     Stay,
 }
 
+/// Whether a behavior is a data-authored scripted sequence, and if so whether
+/// it is still performing. Alertness changes must not preempt a running
+/// sequence (the original engine gates this via the response's priority
+/// field; we currently treat every sequence as protected).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScriptedState {
+    NotScripted,
+    Running,
+    Finished,
+}
+
 pub trait Behavior {
     /// Short stable name for debug introspection (e.g. "Chase", "Wander")
     fn name(&self) -> &'static str;
+
+    fn scripted_state(&self) -> ScriptedState {
+        ScriptedState::NotScripted
+    }
 
     fn animation(&self) -> Vec<MotionQueryItem> {
         vec![]
