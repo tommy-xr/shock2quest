@@ -509,6 +509,25 @@ impl Game {
         self.active_game_scene.scene_name()
     }
 
+    /// Trigger a level transition programmatically (debug/testing lever).
+    ///
+    /// Mirrors what an in-game `TrapTripLevel` trigger emits when the player
+    /// enters its volume: switch to `level_file` at spawn `loc` (a `PropStartLoc`
+    /// marker id, or the map default when `None`). `level_file` should be the
+    /// mission filename (e.g. "eng1.mis"). This lets an automated tester warp to
+    /// any level in isolation instead of having to physically reach each
+    /// transition trigger. With the `loading_screen` feature enabled the switch
+    /// is deferred (the outgoing scene renders the loading screen first), so
+    /// `scene_name()` only reflects the new level after subsequent updates;
+    /// otherwise it is synchronous and observable immediately.
+    pub fn transition_level(&mut self, level_file: String, loc: Option<i32>) {
+        self.handle_global_effect(GlobalEffect::TransitionLevel {
+            level_file,
+            loc,
+            entities_to_trigger: vec![],
+        });
+    }
+
     /// Get access to the debug scene interface if available
     ///
     /// Returns a reference to the current scene as a DebuggableScene trait object
