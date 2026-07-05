@@ -345,6 +345,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.player_inventory()
     }
 
+    fn give_item(&mut self, entity_id: shipyard::EntityId) -> Result<(), String> {
+        self.mission_core.give_item(entity_id)
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         self.mission_core.get_input_state()
     }
