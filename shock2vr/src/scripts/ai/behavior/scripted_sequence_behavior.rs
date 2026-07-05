@@ -34,6 +34,13 @@ use super::Behavior;
 const ACTION_TIMEOUT_SECONDS: f32 = 30.0;
 
 pub struct ScriptedSequenceBehavior {
+    /// The AI entity performing this sequence.
+    owner: EntityId,
+    /// The signal that started this sequence (None for watch-obj/TurnOn
+    /// sequences). A re-fire of the SAME signal is ignored while running;
+    /// a different signal's response may replace the sequence (this is how
+    /// a watch-obj's Signal action hands off to the real signal response).
+    origin_signal: Option<String>,
     actions: Vec<AIScriptedAction>,
     queued_effects: Vec<Effect>,
     current_action_idx: i32,
@@ -46,11 +53,18 @@ pub struct ScriptedSequenceBehavior {
 }
 
 impl ScriptedSequenceBehavior {
-    pub fn new(world: &World, actions: Vec<AIScriptedAction>) -> ScriptedSequenceBehavior {
-        let current_behavior = get_behavior_from_action(world, &actions[0]);
+    pub fn new(
+        world: &World,
+        owner: EntityId,
+        origin_signal: Option<String>,
+        actions: Vec<AIScriptedAction>,
+    ) -> ScriptedSequenceBehavior {
+        let current_behavior = get_behavior_from_action(world, owner, &actions[0]);
         let initial_effect = current_behavior.borrow().initial_effect();
 
         ScriptedSequenceBehavior {
+            owner,
+            origin_signal,
             actions,
             queued_effects: vec![initial_effect],
             current_action_idx: 0,
@@ -65,6 +79,10 @@ impl ScriptedSequenceBehavior {
 impl Behavior for ScriptedSequenceBehavior {
     fn name(&self) -> &'static str {
         "ScriptedSequence"
+    }
+
+    fn origin_signal(&self) -> Option<&str> {
+        self.origin_signal.as_deref()
     }
 
     fn scripted_state(&self) -> super::ScriptedState {
@@ -172,6 +190,7 @@ impl Behavior for ScriptedSequenceBehavior {
                 self.current_action_idx += 1;
                 let behavior = get_behavior_from_action(
                     world,
+                    self.owner,
                     &self.actions[self.current_action_idx as usize],
                 );
                 self.current_scripted_action = behavior;
@@ -188,9 +207,21 @@ impl Behavior for ScriptedSequenceBehavior {
 
 fn get_behavior_from_action(
     world: &World,
+    owner: EntityId,
     action: &AIScriptedAction,
 ) -> Box<RefCell<dyn ScriptedAction>> {
     let current_behavior: Box<RefCell<dyn ScriptedAction>> = match &action.action_type {
+        AIScriptedActionType::ScriptMessage(message) => Box::new(RefCell::new(
+            ScriptMessageScriptedAction::new(owner, message.clone()),
+        )),
+        AIScriptedActionType::Signal {
+            entity_name,
+            signal,
+        } => Box::new(RefCell::new(SendSignalScriptedAction::new(
+            world,
+            entity_name,
+            signal.clone(),
+        ))),
         AIScriptedActionType::Play(action_name) => Box::new(RefCell::new(
             PlayAnimationScriptedAction::new(action_name.clone()),
         )),
@@ -313,6 +344,75 @@ pub struct IdleScriptedAction;
 impl ScriptedAction for IdleScriptedAction {
     fn animation(self: &IdleScriptedAction) -> Vec<MotionQueryItem> {
         vec![MotionQueryItem::new("idlegesture")]
+    }
+}
+
+/// Sends a named script message (as a Signal) to the performing entity's own
+/// scripts - e.g. the apparition sequences bracket their performance with
+/// ScriptMessage("ApparBegin") / ScriptMessage("ApparEnd"), which the
+/// Apparition script turns into materialize/vanish.
+pub struct ScriptMessageScriptedAction {
+    owner: EntityId,
+    message: String,
+}
+
+impl ScriptMessageScriptedAction {
+    pub fn new(owner: EntityId, message: String) -> ScriptMessageScriptedAction {
+        ScriptMessageScriptedAction { owner, message }
+    }
+}
+
+impl ScriptedAction for ScriptMessageScriptedAction {
+    fn animation(&self) -> Vec<MotionQueryItem> {
+        vec![MotionQueryItem::new("__NULL_ANIMATION__")]
+    }
+
+    fn initial_effect(&self) -> Effect {
+        Effect::Send {
+            msg: Message {
+                to: self.owner,
+                payload: crate::scripts::MessagePayload::Signal {
+                    name: self.message.clone(),
+                },
+            },
+        }
+    }
+}
+
+/// Sends an AI signal to a named entity - the watch-obj pseudo-scripts use
+/// this to kick a signal response (e.g. the ectoplasm watches send
+/// "apparition" to the apparition entity).
+pub struct SendSignalScriptedAction {
+    target: Option<EntityId>,
+    signal: String,
+}
+
+impl SendSignalScriptedAction {
+    pub fn new(world: &World, entity_name: &str, signal: String) -> SendSignalScriptedAction {
+        SendSignalScriptedAction {
+            target: script_util::get_first_entity_by_name(world, entity_name),
+            signal,
+        }
+    }
+}
+
+impl ScriptedAction for SendSignalScriptedAction {
+    fn animation(&self) -> Vec<MotionQueryItem> {
+        vec![MotionQueryItem::new("__NULL_ANIMATION__")]
+    }
+
+    fn initial_effect(&self) -> Effect {
+        match self.target {
+            Some(to) => Effect::Send {
+                msg: Message {
+                    to,
+                    payload: crate::scripts::MessagePayload::Signal {
+                        name: self.signal.clone(),
+                    },
+                },
+            },
+            None => Effect::NoEffect,
+        }
     }
 }
 

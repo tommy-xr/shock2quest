@@ -3,6 +3,7 @@ pub mod effect;
 pub mod speech_registry;
 pub mod speech_util;
 
+mod apparition;
 mod base_button;
 mod base_elevator;
 mod base_monster;
@@ -606,7 +607,10 @@ impl ScriptWorld {
             "liquor" => Box::new(NoopScript::new()),
 
             // Not implemented - new medsci1 ones:
-            "apparition" => Box::new(UnimplementedScript::new(&script_name)),
+            "apparition" => Box::new(CompositeScript::new(vec![
+                Box::new(BaseMonster::new()),
+                Box::new(apparition::Apparition::new()),
+            ])),
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(UnimplementedScript::new(&script_name)),
             "psikitscript" => Box::new(UnimplementedScript::new(&script_name)),

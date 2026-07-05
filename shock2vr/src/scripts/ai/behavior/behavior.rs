@@ -41,6 +41,11 @@ pub trait Behavior {
         ScriptedState::NotScripted
     }
 
+    /// For scripted sequences: the signal that started them, if any.
+    fn origin_signal(&self) -> Option<&str> {
+        None
+    }
+
     fn animation(&self) -> Vec<MotionQueryItem> {
         vec![]
     }

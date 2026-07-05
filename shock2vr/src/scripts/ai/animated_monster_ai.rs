@@ -111,6 +111,21 @@ impl AnimatedMonsterAI {
     }
 
     fn build_config(world: &World, entity_id: EntityId) -> Option<MonsterConfig> {
+        // Apparitions are non-interactive replays: they must never notice the
+        // player (an invisible ghost escalating to chase would wander off its
+        // authored mark). No config = no alertness processing.
+        if let Ok(v_class_tag) = world.borrow::<View<dark::properties::PropClassTag>>() {
+            if let Ok(tag) = v_class_tag.get(entity_id) {
+                if tag
+                    .class_tags()
+                    .iter()
+                    .any(|(k, v)| *k == "creaturetype" && *v == "apparition")
+                {
+                    return None;
+                }
+            }
+        }
+
         let (v_alert_cap, v_aware_delay): (View<PropAIAlertCap>, View<PropAIAwareDelay>) =
             world.borrow().ok()?;
 
@@ -584,6 +599,8 @@ impl Script for AnimatedMonsterAI {
                 self.played_ai_watch_obj.insert(ent_id);
                 self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
                     world,
+                    entity_id,
+                    None,
                     watch_options.scripted_actions.clone(),
                 )));
                 let is_locomotion = self.current_behavior.borrow().is_locomotion();
@@ -770,6 +787,8 @@ impl Script for AnimatedMonsterAI {
                     // Immediately switch to Scripted sequence Behavior
                     self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
                         world,
+                        entity_id,
+                        None,
                         prop_sig_resp.actions.clone(),
                     )));
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
@@ -783,23 +802,45 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 }
             }
-            MessagePayload::Signal { name: _ } => {
+            MessagePayload::Signal { name } => {
                 // Dead AIs stay dead - level signals reach corpses too
                 if self.is_dead || is_killed(entity_id, world) {
                     return Effect::NoEffect;
                 }
-                // A re-fired signal must not restart a performance in progress
+                // A re-fire of the signal that started the current
+                // performance must not restart it. A DIFFERENT signal may
+                // replace the sequence - a watch-obj sequence (origin None)
+                // hands off to the real response this way: its lone action
+                // sends the response's signal to itself. (A signal arriving
+                // during an unrelated TurnOn/watch performance could likewise
+                // interrupt it; no shipped content wires that, and the
+                // engine-faithful fix is response priority - deferred, as in
+                // the sequence-protection work this builds on.)
                 if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
-                    return Effect::NoEffect;
+                    let same_origin = self
+                        .current_behavior
+                        .borrow()
+                        .origin_signal()
+                        .is_some_and(|origin| origin.eq_ignore_ascii_case(name));
+                    if same_origin {
+                        return Effect::NoEffect;
+                    }
                 }
-                // Do we have a response to this signal?
-
+                // Respond only to a signal matching this AI's authored
+                // response signal name (named script messages like ApparBegin
+                // also arrive as signals and must not trigger the response).
                 let v_prop_sig_resp = world.borrow::<View<PropAISignalResponse>>().unwrap();
 
-                if let Ok(prop_sig_resp) = v_prop_sig_resp.get(entity_id) {
+                if let Some(prop_sig_resp) = v_prop_sig_resp
+                    .get(entity_id)
+                    .ok()
+                    .filter(|resp| resp.signal.eq_ignore_ascii_case(name))
+                {
                     // Immediately switch to Scripted sequence Behavior
                     self.current_behavior = Box::new(RefCell::new(ScriptedSequenceBehavior::new(
                         world,
+                        entity_id,
+                        Some(name.clone()),
                         prop_sig_resp.actions.clone(),
                     )));
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
