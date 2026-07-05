@@ -333,6 +333,14 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.audit_colliders()
     }
 
+    fn quest_bits(&self) -> Vec<crate::game_scene::DebugQuestBit> {
+        self.mission_core.quest_bits()
+    }
+
+    fn set_quest_bit(&mut self, name: &str, value: &str) -> Result<(), String> {
+        self.mission_core.set_quest_bit(name, value)
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         self.mission_core.get_input_state()
     }
