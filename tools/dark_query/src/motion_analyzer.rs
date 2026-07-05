@@ -223,6 +223,26 @@ impl MotionAnalyzer {
                     .fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
                 println!("                min {:.3}  max {:.3}", min, max);
             }
+            // Horizontal root motion: net displacement, and how long the
+            // root is still (per-frame delta < 1cm) at the clip's tail
+            let ps = &clip.root_positions;
+            if ps.len() > 1 {
+                let net = ps[ps.len() - 1] - ps[0];
+                let mut still_frames = 0;
+                for i in (1..ps.len()).rev() {
+                    let d = ps[i] - ps[i - 1];
+                    if (d.x * d.x + d.z * d.z).sqrt() < 0.01 {
+                        still_frames += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let still_secs = still_frames as f32 / mps.frame_rate as f32;
+                println!(
+                    "  root xz:      net [{:.3}, {:.3}]  still tail {:.2}s ({} frames)",
+                    net.x, net.z, still_secs, still_frames
+                );
+            }
         } else {
             println!(
                 "  root y:       (no unpacked clip at {})",

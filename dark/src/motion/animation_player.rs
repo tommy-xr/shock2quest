@@ -238,7 +238,13 @@ impl AnimationPlayer {
             (updated_player, motion_flags, vec![], vec3(0.0, 0.0, 0.0))
         } else {
             let (current_clip, flags) = maybe_current_clip.unwrap();
-            let velocity = current_clip.sliding_velocity;
+            // Move at the rate the mocap root actually moves this frame -
+            // the clip-average (`sliding_velocity`) integrates to the same
+            // endpoint but smears non-uniform motion (a death keeps gliding
+            // at constant speed while the body is already down)
+            let velocity = current_clip
+                .root_velocity_at(player.current_frame)
+                .unwrap_or(current_clip.sliding_velocity);
             let mut next_frame = player.current_frame;
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
             while remaining_duration >= time_per_frame {
@@ -483,5 +489,73 @@ impl AnimationPlayer {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    /// 3-frame clip at 10fps whose root moves 1 unit in x during frame 0->1
+    /// and then rests: per-frame velocity is (10,0,0) then zero, while the
+    /// clip-average (`sliding_velocity`) smears it to ~(3.33,0,0).
+    fn clip_with_root_motion() -> Rc<AnimationClip> {
+        let time_per_frame = Duration::from_millis(100);
+        Rc::new(AnimationClip {
+            num_frames: 3,
+            time_per_frame,
+            duration: time_per_frame * 3,
+            blend_length: Duration::ZERO,
+            end_rotation: Deg(0.0),
+            sliding_velocity: vec3(1.0, 0.0, 0.0) / 0.3,
+            translation: vec3(1.0, 0.0, 0.0),
+            joint_to_frame: HashMap::new(),
+            root_transforms: Vec::new(),
+            root_positions: vec![
+                vec3(0.0, 0.0, 0.0),
+                vec3(1.0, 0.0, 0.0),
+                vec3(1.0, 0.0, 0.0),
+            ],
+            motion_flags: Vec::new(),
+            name: None,
+        })
+    }
+
+    #[test]
+    fn update_returns_per_frame_root_velocity_not_clip_average() {
+        let player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
+
+        // Frame 0 -> 1: the root moves a full unit in one 100ms frame
+        let (player, _, _, velocity) = AnimationPlayer::update(&player, Duration::from_millis(100));
+        assert!(
+            (velocity.x - 10.0).abs() < 1e-4,
+            "expected the frame's own rate (10.0), got {:?}",
+            velocity
+        );
+
+        // Frame 1 -> 2: the root rests, so the entity must stop
+        let (_, _, _, velocity) = AnimationPlayer::update(&player, Duration::from_millis(100));
+        assert!(
+            velocity.x.abs() < 1e-4,
+            "expected zero while the root rests, got {:?}",
+            velocity
+        );
+    }
+
+    #[test]
+    fn update_falls_back_to_sliding_velocity_without_root_stream() {
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.root_positions = Vec::new();
+        let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(clip));
+
+        let (_, _, _, velocity) = AnimationPlayer::update(&player, Duration::from_millis(100));
+        assert!(
+            (velocity.x - 1.0 / 0.3).abs() < 1e-4,
+            "expected the clip-average fallback, got {:?}",
+            velocity
+        );
     }
 }
