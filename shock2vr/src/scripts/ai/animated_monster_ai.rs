@@ -63,6 +63,9 @@ pub struct AnimatedMonsterAI {
     config: Option<MonsterConfig>,
     /// Behavior name last published for debug introspection
     published_behavior: Option<&'static str>,
+    /// Where the player was last seen; investigated by SearchBehavior when
+    /// alertness decays after losing contact
+    last_known_player_pos: Option<cgmath::Vector3<f32>>,
 }
 
 impl AnimatedMonsterAI {
@@ -79,6 +82,7 @@ impl AnimatedMonsterAI {
             alertness: AlertnessState::default(),
             config: None,
             published_behavior: None,
+            last_known_player_pos: None,
         }
     }
 
@@ -96,6 +100,7 @@ impl AnimatedMonsterAI {
             alertness: AlertnessState::default(),
             config: None,
             published_behavior: None,
+            last_known_player_pos: None,
         }
     }
 
@@ -141,12 +146,12 @@ impl AnimatedMonsterAI {
             AIAlertLevel::Low => Box::new(RefCell::new(WanderBehavior::new())),
             AIAlertLevel::Moderate => Box::new(RefCell::new(ChaseBehavior::new())),
             AIAlertLevel::High => {
-                // Choose attack type based on whether monster has ranged weapon
-                if has_ranged_weapon(world, entity_id) {
-                    Box::new(RefCell::new(RangedAttackBehavior))
-                } else {
-                    Box::new(RefCell::new(MeleeAttackBehavior))
-                }
+                // Attack only when in range; otherwise chase to close the
+                // distance (ChaseBehavior::next_behavior escalates back to
+                // an attack on arrival via the same shared helper). Without
+                // the range check, a far-away High AI stood still swinging.
+                attack_behavior_for_distance(world, entity_id)
+                    .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
         }
     }
@@ -436,9 +441,16 @@ impl Script for AnimatedMonsterAI {
         let is_visible =
             is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE);
 
+        // Remember where the player was last seen, for SearchBehavior
+        if is_visible {
+            if let Ok(player) = world.borrow::<shipyard::UniqueView<PlayerInfo>>() {
+                self.last_known_player_pos = Some(player.pos);
+            }
+        }
+
         // Update alertness state
         let (alertness_effect, behavior_change_effect) = if let Some(config) = &self.config {
-            if let Some((_old_level, _new_level)) = alertness::process_alertness_update(
+            if let Some((old_level, new_level)) = alertness::process_alertness_update(
                 &mut self.alertness,
                 is_visible,
                 delta,
@@ -448,16 +460,54 @@ impl Script for AnimatedMonsterAI {
                 // Level changed - sync to ECS and potentially change behavior
                 let sync_effect = alertness::sync_alertness_effect(entity_id, &self.alertness);
 
-                // When alertness changes, update behavior to match new level
-                let new_behavior = self.behavior_for_alertness(world, physics, entity_id);
-                self.current_behavior = new_behavior;
+                // AIAlertLevel is repr(u32) in escalation order
+                let decayed = (new_level as u32) < (old_level as u32);
 
-                let is_locomotion = self.current_behavior.borrow().is_locomotion();
-                let selection_strategy = self.next_selection(is_locomotion);
-                let animation_effect = Effect::QueueAnimationBySchema {
-                    entity_id,
-                    motion_queries: vec![self.current_behavior.borrow().animation()],
-                    selection_strategy,
+                // Losing contact after actively tracking the player doesn't
+                // drop straight to wandering: investigate the last-known
+                // position first. Further decay during an active search
+                // leaves it running - it hands off to Wander itself.
+                let searching = self.current_behavior.borrow().name() == "Search";
+                let new_behavior: Option<Box<RefCell<dyn Behavior>>> = if decayed && searching {
+                    // An active search keeps running across further decay
+                    // (it hands off on its own) - unless a fresher sighting
+                    // was recorded mid-search, which re-targets it. This
+                    // must be checked BEFORE the decay-from-tracking branch,
+                    // or a High-origin search is stomped one decay later.
+                    self.last_known_player_pos
+                        .take()
+                        .map(|goal| -> Box<RefCell<dyn Behavior>> {
+                            Box::new(RefCell::new(SearchBehavior::new(goal)))
+                        })
+                } else if decayed
+                    && matches!(old_level, AIAlertLevel::Moderate | AIAlertLevel::High)
+                {
+                    match self.last_known_player_pos.take() {
+                        Some(goal) => Some(Box::new(RefCell::new(SearchBehavior::new(goal)))),
+                        // Never actually saw the player (e.g. aggroed by
+                        // damage from behind) - nothing to investigate
+                        None => Some(self.behavior_for_alertness(world, physics, entity_id)),
+                    }
+                } else {
+                    Some(self.behavior_for_alertness(world, physics, entity_id))
+                };
+                // Fully calmed: a sighting from this engagement must not
+                // trigger a cross-map search minutes later
+                if new_level == AIAlertLevel::Lowest {
+                    self.last_known_player_pos = None;
+                }
+
+                let animation_effect = if let Some(behavior) = new_behavior {
+                    self.current_behavior = behavior;
+                    let is_locomotion = self.current_behavior.borrow().is_locomotion();
+                    let selection_strategy = self.next_selection(is_locomotion);
+                    Effect::QueueAnimationBySchema {
+                        entity_id,
+                        motion_queries: vec![self.current_behavior.borrow().animation()],
+                        selection_strategy,
+                    }
+                } else {
+                    Effect::NoEffect
                 };
 
                 (sync_effect, animation_effect)
@@ -593,13 +643,15 @@ impl Script for AnimatedMonsterAI {
                 // actually raises the level, so a capped AI isn't reset -
                 // and doesn't restart its animation - on every hit
                 let target = alertness::clamp_level(AIAlertLevel::Moderate, &cap);
-                let alert_effect = if !lethal
-                    && matches!(
-                        self.alertness.current_level,
-                        AIAlertLevel::Lowest | AIAlertLevel::Low
-                    )
-                    && target != self.alertness.current_level
-                {
+                let escalates = matches!(
+                    self.alertness.current_level,
+                    AIAlertLevel::Lowest | AIAlertLevel::Low
+                ) && target != self.alertness.current_level;
+                // A searching AI that takes a hit re-aggros too: the shot
+                // reveals the attacker even without line of sight (the dead
+                // case already returned above)
+                let searching = self.current_behavior.borrow().name() == "Search";
+                let alert_effect = if !lethal && (escalates || searching) {
                     self.force_alertness(AIAlertLevel::Moderate, world, physics, entity_id)
                 } else {
                     Effect::NoEffect
