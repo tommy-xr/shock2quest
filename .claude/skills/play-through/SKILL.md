@@ -1,153 +1,114 @@
 ---
 name: play-through
 description: >-
-  Play a mission end-to-end as an automated game tester, following a per-mission
-  checkpoint walkthrough via the headless debug runtime (SDK / HTTP - no window,
-  deterministic fixed-timestep). For each checkpoint it sets up state (warp,
-  teleport, give item, set quest bit), acts, then VERIFIES the outcome
-  (mission name, objective bits, inventory, player health/position) and captures
-  a screenshot. Every failure is a surfaced gap - classified [debug_runtime] /
-  [gameplay] / [functionality] - filed as a GitHub issue AND handed to a fix
-  sub-agent in parallel, with the fix PR linked back to the issue. Use to smoke
-  the critical path of a level, surface technical breakage, and march toward a
-  fully playable end-to-end game. Invoke with a mission name (default: medsci1).
+  Harden the game toward fully-playable end-to-end with a PLAYTEST -> FIX ->
+  REPLAY loop. An agent actually PLAYS a mission via the headless debug runtime -
+  it SEES the world (screenshots it reads) and ACTS with the runtime's tools
+  (move, look, frob, pick up, attack, follow triggers) - and reports what it
+  observes and where it gets stuck. Each blocker/bug is classified
+  ([gameplay]/[visual]/[functionality]), filed as a GitHub issue, and delegated
+  to a fix sub-agent (PR linked to the issue); then the agent REPLAYS from the
+  frontier to get a little further and find the next issue. Repeat. A run builds
+  an HTML timeline report from the playtest (each step: screenshot + note +
+  action + any bug). This is a playtest, NOT a scripted checkpoint runner.
+  Invoke with a mission (default medsci1) and optionally a progress goal.
 ---
 
-# play-through — automated game-tester harness
+# play-through — playtest → fix → replay loop
 
-Drive a mission through a **checkpoint walkthrough** and verify each stage works,
-using the debug runtime headlessly (fixed 60 Hz stepping, no manual clicking).
-The goal is not to "win" the game with AI — it is to **exercise the critical path
-and surface every technical gap**, then drive those gaps to a fix.
-
-## Context discipline (important)
-
-A full run drives many HTTP calls and reads screenshots (image tokens), and each
-gap spawns fix work. Keep the **main context** for the run report and the
-checkpoint verdicts. **Delegate the heavy parts to sub-agents:**
-
-- The per-mission **execution** (launch runtime → step through checkpoints →
-  collect verdicts + screenshots) — one `general-purpose` sub-agent that returns
-  a structured checkpoint result table, not the raw HTTP/image traffic.
-- Each **gap fix** — its own sub-agent (see "On a gap"), run in parallel.
-
-## The toolkit (what the harness drives)
-
-All via the debug runtime — raw `curl` for one-offs, the **TypeScript SDK**
-(`tools/shock2-sdk`, `GameServer.launch`) for multi-step runs (preferred; it
-handles launch/readiness/shutdown). Capabilities the checkpoints rely on:
-
-| Need | Lever |
-| --- | --- |
-| Load / warp levels | `game.transitionLevel(level, loc?)` · `POST /v1/control/transition-level` |
-| Move the player | `game.player.teleport({x,y,z})` (warp) · `POST /v1/control/input` (drive — future) |
-| Give an item (pickup) | `game.player.give(entityId)` → lands in inventory |
-| Find an item's runtime id | `game.entities.byTemplate(id)` · `game.entities.list({filter})` |
-| Verify objective | `game.quests.get(name)` / `.list()` / `.set(name, value)` |
-| Verify inventory | `game.player.inventory()` |
-| Verify player state | `game.info()` → `player.hit_points`, `wielded_entity_id`, position |
-| Trigger a switch/frob | `game.entities.sendMessage(id, {type:"TurnOn"|"Frob"|...})` |
-| Discrete actions | `game.input.trigger("CycleWeapon"|...)` |
-| Capture | `game.screenshot(file)` |
-| Step (deterministic) | `game.step({frames})` — blocks until run; 60 Hz fixed |
-
-## Walkthrough format
-
-Each mission has a checkpoint file at `walkthroughs/<mission>.md` (see
-`walkthroughs/medsci1.md`). A checkpoint is: **setup → act → verify**, each with
-machine-checkable assertions. Checkpoints **derive from game data** (query the
-mission with `cargo dq` for triggers, items, quest bits, positions) and are
-**cross-checked against an external SS2 walkthrough** for the intended path.
-Prefer resolving runtime ids **at run time** (`entities.list` / `byTemplate`)
-over hardcoding — ids are stable per mission but the query is self-documenting.
-
-A checkpoint entry:
-
-```
-### CP<n> — <title>
-- setup:  <warp/teleport/give/step to reach the state under test>
-- act:    <the interaction being tested (frob, give, move, trigger), or none>
-- verify: <assertions — each must be machine-checkable and cite the lever>
-- capture: screenshot cp<n>.png
-- on-fail: <hint for classifying the gap if verify fails>
-```
+Iteratively drive the game toward **playable end-to-end** by *playing* it. An
+agent plays a mission like a QA tester, surfaces the thing that blocks or breaks,
+we fix it, and the agent replays a little further to find the next thing. The
+value is the agent **noticing** problems organically — not a script asserting
+predefined checks.
 
 ## The loop
 
-For each checkpoint, in order:
-
-1. **Setup** — reach the state under test (teleport to the area / warp to the
-   level / give a prerequisite item). Warp+teleport is the current navigation
-   model; driving the player (thumbstick) is a planned upgrade — see below.
-2. **Act** — perform the interaction the checkpoint tests (or nothing, for a
-   pure state check).
-3. **Step** — advance enough frames for the effect to land (transitions are
-   synchronous; scripts/animation need a few frames).
-4. **Verify** — evaluate every assertion. A checkpoint **passes** only if all
-   pass. Record PASS/FAIL + the actual values.
-5. **Capture** — screenshot for the report (and before/after when useful).
-6. On FAIL → **surface the gap** (next section). Then continue to later
-   checkpoints where possible (a failed checkpoint doesn't have to abort the
-   run — note which later checkpoints it blocks).
-
-## On a gap (failure)
-
-Classify, then **both** record and fix — in parallel:
-
-**Classify** the failure:
-- `[debug_runtime]` — the harness can't observe/control something it needs (a
-  missing endpoint/field). *Fix = add the capability to the debug runtime.*
-- `[gameplay]` — a trigger/script/objective behaves wrong (transition doesn't
-  fire, item can't be picked up, objective never completes). *Fix = the
-  script/mission logic.*
-- `[functionality]` — a crash, an asset that won't load, a mission that won't
-  step. *Fix = the underlying bug.*
-
-**Record** — file a GitHub issue (`gh issue create`) with: the classification
-label, the mission + checkpoint, the exact repro (lever + args + step count),
-expected vs actual, and any log excerpt. Keep issues deduplicated (search open
-issues first).
-
-**Fix** — spawn a `general-purpose` sub-agent (run gaps in parallel) to fix the
-root cause. Give it the issue number, the repro, and the relevant subsystem
-pointer (CLAUDE.md "Iterating on Visual Features" + the file map). It should:
-follow the repo's incremental-change + `/xreview` + negative-first-test
-discipline, open a PR, and **link the PR to the issue** (`Fixes #<n>`). When it
-returns, **re-run the failed checkpoint** to confirm green.
-
-Do not silently truncate: if a gap blocks later checkpoints, say so in the report.
-
-## Navigation: warp+teleport now, driving later
-
-The current model **teleports** to each checkpoint area and **warps** between
-levels — fast, deterministic, and focused on verifying that content/objectives/
-items work rather than locomotion. Structure walkthroughs so a later upgrade can
-**drive the player** (thumbstick `POST /v1/control/input` + step) over the same
-routes to additionally exercise navmesh/collision/locomotion: keep each
-checkpoint's target as a world position (drivable) rather than an opaque warp, so
-"drive to CP" can replace "teleport to CP" without rewriting the walkthrough.
-Only pursue driving once warp+teleport runs green end-to-end.
-
-## Report
-
-End with a single **run report**:
-
-- A checkpoint table: `CP | title | PASS/FAIL | actual vs expected`.
-- Screenshots (embed the key ones / the failing ones).
-- The gap list: each with classification, the issue number, and the fix PR (or
-  "fix in progress").
-- A one-line verdict: `<n>/<m> checkpoints green; <k> gaps (<filed>/<fixed>)`.
-
-## Running it
-
-```bash
-cd tools/shock2-sdk && npm run build   # first time / after SDK changes
+```
+launch/resume at the frontier
+   → PLAYTEST (agent plays toward the goal, observing + acting)
+   → it surfaces an issue (a blocker, or a bug it noticed)
+   → classify + file a GitHub issue + delegate a FIX sub-agent (PR "Fixes #n")
+   → re-validate the fix, then REPLAY from the frontier
+   → gets a little further → finds the next issue
+repeat until the mission (then the game) plays through cleanly
 ```
 
-Author the run as an SDK scenario driven by the walkthrough (launch → loop →
-report), or drive `curl` for a quick pass. The debug runtime is deterministic
-(fixed-timestep stepping, `/v1/step` blocks until run, `/v1/screenshot` captures
-the fully-rendered frame), so a plain `step` then `verify` needs no sleeps or
-retries. Always `POST /v1/shutdown` (or let the SDK's `await using` do it) when
-done so the runtime never lingers.
-```
+Each iteration should get **further** than the last. Track a **frontier** (the
+furthest level + position reached, plus quest/inventory state) and resume there
+each replay — via `transitionLevel(level, loc)` to the frontier level and a
+teleport/`QuickLoad`, so you don't replay solved sections every time.
+
+## The playtest agent (how it plays)
+
+Delegate each playtest to a **`general-purpose` sub-agent** (keeps the image-heavy
+observe loop out of the main context; it returns a playtest log + a frontier +
+the issue to fix). Its brief:
+
+> You are a QA playtester for a System Shock 2 port. A debug runtime of
+> `<mission>` runs at `<url>`. **Play toward `<goal>`** (default: reach the
+> level's exit / next level). SEE the world and REACT to it — don't run a script.
+> Loop: screenshot → **Read the PNG** → decide → act → step → observe. Explore,
+> interact (frob doors/terminals, pick up items, fight), and follow the level's
+> real exit. **Report where you get stuck and every bug you notice.** Return: a
+> step-by-step log (each: what you saw in which screenshot, what you did), the
+> **frontier** you reached, and the **blocking issue** (if any) + other bugs,
+> each with a screenshot, severity, and classification.
+
+**Senses & hands** (HTTP; SDK `GameServer` for lifecycle):
+
+| Sense the world | Act on it |
+| --- | --- |
+| `POST /v1/screenshot {filename}` → **Read `/tmp/claude/<file>`** | `POST /v1/player/teleport {x,y,z}` (jump to inspect) |
+| `GET /v1/entities?filter=&limit=` (name/id/pos/distance) | `POST /v1/control/input {right_hand.thumbstick:[strafe,fwd]}` + step (walk) |
+| `GET /v1/entities/:id` (props, links) | `left_hand.thumbstick:[turn,0]` + step (look around) |
+| `GET /v1/info` (health, pos, wielded, psi) | `POST /v1/entities/:id/message {type:"Frob"\|"Damage"\|"TurnOn"}` |
+| `GET /v1/player/inventory` · `GET /v1/quests` | `POST /v1/player/give {entity_id}` (pick up) |
+| `GET /v1/transitions` (where exits lead + position) | follow an exit: teleport into a **tripwire** volume; **Frob** a bulkhead **button** |
+
+Note: **tripwires** fire on entry (teleport into the volume); **bulkhead buttons**
+fire on **Frob** (teleporting into a button does nothing). `/v1/transitions`
+gives each trigger's destination + position.
+
+## On an issue (blocker or bug)
+
+**Classify:** `[gameplay]` (a broken interaction/objective — door won't open,
+frob does nothing, item can't be taken, trigger won't fire) · `[visual]` (missing
+texture, floating/clipping/z-fighting, T-posed creature, HUD glitch) ·
+`[functionality]` (crash, level won't load/step).
+
+**File + fix (parallel).** File a GitHub issue (classification, mission, repro:
+exact levers + step count, expected vs actual, the screenshot). Spawn a
+`general-purpose` fix sub-agent with the issue # + repro + subsystem pointer; it
+follows the repo's incremental + `/xreview` + negative-first-test discipline,
+opens a PR (`Fixes #n`), and re-validates. Blockers first (they gate progress);
+log non-blocking bugs and keep playing past them when possible.
+
+**Replay.** After the fix merges (or on the fix branch), replay from the frontier
+and confirm the agent gets further. Note if a fix unblocks new territory.
+
+## The report (built from the playtest)
+
+Assemble an **HTML timeline** from the playtest log — one entry per step with the
+screenshot, a note on what the agent saw, the action it took, and any bug — plus
+the issues filed and their fix PRs, and how far the frontier advanced this
+iteration. Render locally (self-contained HTML, images by relative path) so it's
+viewable without hosting. See `render-timeline.mjs` (reusable across runs); keep
+the per-mission game-data notes in `walkthroughs/<mission>.md` as context for the
+playtest agent (spawn point, exits, notable items — NOT a script to follow).
+
+## Optional fast first pass
+
+Before the agent digs into a level, a quick load+transition smoke can pre-flag
+dead levels (won't load, no forward trigger). That's a coarse net; the agent
+playtest is where real issues surface. Don't let the first-pass script substitute
+for actually playing.
+
+## Notes
+
+- Deterministic: `/v1/step` blocks until frames run; `/v1/screenshot` captures the
+  fully-rendered frame — no sleeps/retries.
+- Always `POST /v1/shutdown` (or SDK `await using`) when done.
+- Navigation today is teleport + short thumbstick drives; richer real-movement
+  playtesting (full navmesh traversal) is a planned upgrade — keep frontier
+  positions as world coordinates so it drops in later.
