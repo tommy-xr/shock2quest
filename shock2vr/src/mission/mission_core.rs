@@ -2419,6 +2419,16 @@ impl MissionCore {
                         dark::properties::PropRenderAlpha(alpha.clamp(0.0, 1.0)),
                     );
                 }
+                Effect::SetVisibility { entity_id, visible } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world.add_component(entity_id, PropHasRefs(visible));
+                    }
+                }
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
