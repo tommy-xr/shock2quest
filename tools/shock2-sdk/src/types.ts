@@ -203,6 +203,13 @@ export interface TeleportResult {
   new_position: Vec3;
 }
 
+export interface TransitionLevelResult {
+  success: boolean;
+  /** Scene name after the transition, e.g. "eng1.mis". */
+  mission: string;
+  message: string;
+}
+
 export interface WaitForOptions {
   /** Total time to wait in milliseconds (default 10_000). */
   timeoutMs?: number;

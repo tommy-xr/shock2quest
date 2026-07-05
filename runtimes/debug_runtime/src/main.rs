@@ -274,6 +274,10 @@ async fn start_http_server(
         )
         .route("/v1/player/position", get(get_player_position))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
+        .route(
+            "/v1/control/transition-level",
+            axum::routing::post(transition_level),
+        )
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
@@ -314,6 +318,7 @@ async fn start_http_server(
     info!("  POST /v1/entities/{{id}}/message - Inject a script message (damage/frob/signal)");
     info!("  GET  /v1/player/position  - Get current player position");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates");
+    info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
     info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
     info!("  GET  /v1/control/input    - Retrieve controller/input state");
     info!("  POST /v1/control/input    - Update controller/input channels");
@@ -854,6 +859,37 @@ fn process_command(
                 }
             } else {
                 tracing::error!("No debuggable scene available for player movement");
+            }
+        }
+        RuntimeCommand::TransitionLevel {
+            level_file,
+            loc,
+            reply,
+        } => {
+            tracing::info!("Transitioning level to {} (loc {:?})", level_file, loc);
+            game.transition_level(level_file.clone(), loc);
+            // Report the ACTUAL post-switch scene rather than assuming success.
+            // Without the loading_screen feature the switch is synchronous and
+            // scene_name() is already the target; with it the switch is deferred
+            // (scene_name() is still "loading"/the old level), so success stays
+            // false until the caller steps far enough for it to complete.
+            let mission = game.scene_name().to_string();
+            let success = mission == level_file;
+            let message = if success {
+                format!("Transitioned to {}", mission)
+            } else {
+                format!(
+                    "Transition to {} queued (current scene: {})",
+                    level_file, mission
+                )
+            };
+            let result = commands::TransitionLevelResult {
+                success,
+                mission,
+                message,
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send transition result - receiver dropped");
             }
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
@@ -1827,6 +1863,80 @@ async fn teleport_player(
         })),
         Err(_) => {
             tracing::error!("Failed to receive player position after teleport - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// Request structure for a level transition (warp)
+#[derive(serde::Deserialize)]
+struct TransitionLevelRequest {
+    /// Target mission - with or without the ".mis" suffix (e.g. "eng1" or "eng1.mis").
+    level: String,
+    /// Optional spawn-marker id (`PropStartLoc`); omit for the map default spawn.
+    #[serde(default)]
+    loc: Option<i32>,
+}
+
+/// HTTP handler for transitioning to another level (warp). Lets a tester jump
+/// directly to any mission in isolation instead of reaching an in-game trigger.
+async fn transition_level(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<TransitionLevelRequest>,
+) -> Result<Json<commands::TransitionLevelResult>, (StatusCode, String)> {
+    // Normalize to a bare mission filename (e.g. "eng1.mis"), then validate it
+    // BEFORE dispatching. The load path does `File::open(...).unwrap()`, so a
+    // missing/typo'd name would panic the game-loop thread and brick the runtime
+    // for every later command - the opposite of a resilient tester lever. (A
+    // structurally-corrupt but present mission - e.g. the known shodan.mis load
+    // crash, #267 - can still panic during parse; that is a pre-existing engine
+    // limitation, not introduced here.)
+    let level = request.level.trim();
+    if level.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "level must not be empty".to_string(),
+        ));
+    }
+    if level.contains('/') || level.contains('\\') || level.contains("..") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("level must be a bare mission name, got '{}'", level),
+        ));
+    }
+    let level_file = if level.to_ascii_lowercase().ends_with(".mis") {
+        level.to_string()
+    } else {
+        format!("{}.mis", level)
+    };
+    let resolved = shock2vr::resource_path(&level_file);
+    if !std::path::Path::new(&resolved).exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!(
+                "mission '{}' not found (looked at {})",
+                level_file, resolved
+            ),
+        ));
+    }
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::TransitionLevel {
+            level_file,
+            loc: request.loc,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send TransitionLevel command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive transition result - sender dropped");
             Err(game_loop_unavailable())
         }
     }
