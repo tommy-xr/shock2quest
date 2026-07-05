@@ -329,6 +329,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.list_physics_joints()
     }
 
+    fn audit_colliders(&self) -> Vec<crate::game_scene::DebugColliderIssue> {
+        self.mission_core.audit_colliders()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         self.mission_core.get_input_state()
     }
