@@ -278,6 +278,9 @@ async fn start_http_server(
             "/v1/control/transition-level",
             axum::routing::post(transition_level),
         )
+        .route("/v1/quests", get(get_quest_bits))
+        .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
+        .route("/v1/player/inventory", get(get_player_inventory))
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
@@ -320,6 +323,9 @@ async fn start_http_server(
     info!("  GET  /v1/player/position  - Get current player position");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates");
     info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
+    info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
+    info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
+    info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
     info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
     info!("  GET  /v1/control/input    - Retrieve controller/input state");
     info!("  POST /v1/control/input    - Update controller/input channels");
@@ -891,6 +897,61 @@ fn process_command(
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send transition result - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetQuestBits { reply } => {
+            let quests: Vec<commands::QuestBitEntry> = game
+                .debug_scene()
+                .map(|scene| {
+                    scene
+                        .quest_bits()
+                        .into_iter()
+                        .map(|q| commands::QuestBitEntry {
+                            name: q.name,
+                            value: q.value,
+                            bits: q.bits,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let result = commands::QuestBitsResult {
+                count: quests.len(),
+                quests,
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send quest bits - receiver dropped");
+            }
+        }
+        RuntimeCommand::SetQuestBit { name, value, reply } => {
+            let result = match game.debug_scene_mut() {
+                Some(scene) => scene.set_quest_bit(&name, &value),
+                None => Err("no debuggable scene available".to_string()),
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send set-quest-bit result - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetPlayerInventory { reply } => {
+            let items: Vec<commands::InventoryItemEntry> = game
+                .debug_scene()
+                .map(|scene| {
+                    scene
+                        .player_inventory()
+                        .into_iter()
+                        .map(|i| commands::InventoryItemEntry {
+                            entity_id: i.entity_id,
+                            name: i.name,
+                            location: i.location,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let result = commands::PlayerInventoryResult {
+                count: items.len(),
+                items,
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send player inventory - receiver dropped");
             }
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
@@ -1966,6 +2027,89 @@ async fn transition_level(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive transition result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// Request body for setting a quest bit.
+#[derive(serde::Deserialize)]
+struct SetQuestBitRequest {
+    /// "unknown", "incomplete", or "complete".
+    value: String,
+}
+
+/// HTTP handler for snapshotting quest bits (objective flags). An empty list
+/// means the level has set no quest bits yet (all objectives read as unknown).
+async fn get_quest_bits(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<commands::QuestBitsResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::GetQuestBits { reply: reply_tx })
+        .is_err()
+    {
+        tracing::error!("Failed to send GetQuestBits command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive quest bits - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler for setting a quest bit (test setup / skipping ahead).
+async fn set_quest_bit(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Path(name): Path<String>,
+    LenientJson(request): LenientJson<SetQuestBitRequest>,
+) -> Result<Json<commands::CommandResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::SetQuestBit {
+            name: name.clone(),
+            value: request.value.clone(),
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send SetQuestBit command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(Ok(())) => Ok(Json(commands::CommandResult {
+            success: true,
+            message: format!("Set quest bit '{}' to '{}'", name, request.value),
+            data: None,
+        })),
+        Ok(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
+        Err(_) => {
+            tracing::error!("Failed to receive set-quest-bit result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler for snapshotting the player's carried inventory. An empty list
+/// means the player is carrying nothing (or the scene has no player).
+async fn get_player_inventory(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<commands::PlayerInventoryResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::GetPlayerInventory { reply: reply_tx })
+        .is_err()
+    {
+        tracing::error!("Failed to send GetPlayerInventory command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive player inventory - sender dropped");
             Err(game_loop_unavailable())
         }
     }

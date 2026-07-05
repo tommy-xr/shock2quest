@@ -46,6 +46,25 @@ impl QuestInfo {
             .insert(quest_name.to_ascii_lowercase(), quest_value);
     }
 
+    /// Remove a quest bit, resetting it to the pristine `UNKNOWN` state (absent
+    /// from the map, so it no longer appears in `quest_bits()`). Reads still
+    /// return `UNKNOWN`, same as a never-set bit. Used by debug tooling to reset
+    /// an objective; game scripts use `set_quest_bit_value` directly.
+    pub fn clear_quest_bit_value(&mut self, quest_name: &str) {
+        self.quest_bit_values
+            .remove(&quest_name.to_ascii_lowercase());
+    }
+
+    /// All quest bits the game has touched, as `(name, value)` pairs. Bits never
+    /// referenced are absent (they read as `UNKNOWN`). Used by debug tooling to
+    /// snapshot objective progress. Order is unspecified (HashMap iteration).
+    pub fn quest_bits(&self) -> Vec<(String, QuestBitValue)> {
+        self.quest_bit_values
+            .iter()
+            .map(|(name, value)| (name.clone(), *value))
+            .collect()
+    }
+
     pub fn has_played_email(&self, email: &str) -> bool {
         self.played_emails.contains(email)
     }
