@@ -334,6 +334,19 @@ pub struct DebugInventoryItem {
     pub location: String,
 }
 
+/// A level-transition trigger (a `TrapTripLevel` tripwire / bulkhead): where it
+/// leads (`dest_level` + optional spawn `dest_loc`) and its world `position`, so
+/// a tester can teleport into its volume and let the real trigger fire the
+/// transition (rather than warping explicitly).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugTransition {
+    pub entity_id: i32,
+    pub name: Option<String>,
+    pub dest_level: String,
+    pub dest_loc: Option<i32>,
+    pub position: [f32; 3],
+}
+
 /// Debug scene trait for remote debugging capabilities
 ///
 /// This trait provides debugging and inspection capabilities for game scenes,
@@ -473,6 +486,13 @@ pub trait DebuggableScene {
     /// unsupported.
     fn give_item(&mut self, _entity_id: EntityId) -> Result<(), String> {
         Err("scene does not support giving items".to_string())
+    }
+
+    /// Level-transition triggers in this scene (where each leads + its position),
+    /// so a tester can follow the real triggers between levels instead of warping
+    /// explicitly. Empty when the scene has none.
+    fn list_transitions(&self) -> Vec<DebugTransition> {
+        Vec::new()
     }
 
     /// Get current input context state

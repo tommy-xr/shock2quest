@@ -281,6 +281,7 @@ async fn start_http_server(
         .route("/v1/quests", get(get_quest_bits))
         .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
         .route("/v1/player/inventory", get(get_player_inventory))
+        .route("/v1/transitions", get(list_transitions))
         .route("/v1/player/give", axum::routing::post(give_item))
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
@@ -954,6 +955,31 @@ fn process_command(
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send player inventory - receiver dropped");
+            }
+        }
+        RuntimeCommand::ListTransitions { reply } => {
+            let transitions: Vec<commands::TransitionEntry> = game
+                .debug_scene()
+                .map(|scene| {
+                    scene
+                        .list_transitions()
+                        .into_iter()
+                        .map(|t| commands::TransitionEntry {
+                            entity_id: t.entity_id,
+                            name: t.name,
+                            dest_level: t.dest_level,
+                            dest_loc: t.dest_loc,
+                            position: t.position,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let result = commands::TransitionsResult {
+                count: transitions.len(),
+                transitions,
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send transitions - receiver dropped");
             }
         }
         RuntimeCommand::GiveItem { entity_id, reply } => {
@@ -2165,6 +2191,28 @@ async fn get_player_inventory(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive player inventory - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler listing level-transition triggers (dest + position), so a tester
+/// can follow the real triggers between levels instead of warping explicitly.
+async fn list_transitions(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<commands::TransitionsResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::ListTransitions { reply: reply_tx })
+        .is_err()
+    {
+        tracing::error!("Failed to send ListTransitions command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive transitions - sender dropped");
             Err(game_loop_unavailable())
         }
     }
