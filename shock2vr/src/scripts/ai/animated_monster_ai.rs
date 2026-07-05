@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashSet};
 
-use cgmath::{Deg, MetricSpace, Quaternion, Rotation3, vec3, vec4};
+use cgmath::{Deg, EuclideanSpace, MetricSpace, Quaternion, Rotation3, vec3, vec4};
 use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
@@ -9,10 +9,10 @@ use dark::{
     },
 };
 use rand;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::PlayerInfo,
+    mission::{GlobalPathfinding, GlobalTemplateIdMap, PlayerInfo},
     physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::script_util,
     time::Time,
@@ -29,6 +29,29 @@ use super::{
 // Default timing constants for monsters (in seconds)
 const DEFAULT_ESCALATE_SECONDS: f32 = 1.5;
 const DEFAULT_DECAY_SECONDS: f32 = 3.0;
+
+/// How close (XZ) a pursuing AI must be to a door on its route to interact
+/// with it - generous enough to open it while approaching, not so wide it
+/// opens doors it merely passes near (12 Dark feet).
+const DOOR_INTERACT_RANGE: f32 = 12.0 / SCALE_FACTOR;
+/// Minimum cosine between the AI's heading and the direction to the door,
+/// applied only beyond `DOOR_FACING_RANGE` - a door the AI is nearly on top
+/// of gets opened regardless of facing (its center may be behind the AI once
+/// it's in the doorway), but a distant door must be roughly ahead so the AI
+/// doesn't open ones off to the side while passing.
+const DOOR_FACING_MIN_DOT: f32 = 0.2;
+const DOOR_FACING_RANGE: f32 = 5.0 / SCALE_FACTOR;
+/// How often a pursuing AI polls for a blocking door. The scan (a linear
+/// cell lookup plus a small graph BFS) runs at this rate, not every frame.
+const DOOR_POLL_INTERVAL: f32 = 0.3;
+/// After opening a door, wait this long before interacting again - long
+/// enough that the door has left its closed position, so TurnOn (and its
+/// sound) isn't re-sent while it swings.
+const DOOR_INTERACT_COOLDOWN: f32 = 2.0;
+/// After giving up at a locked door, wait this long before re-frustrating -
+/// bounds the "thwarted" gesture for an AI whose alert cap keeps it in a
+/// pursuing state even after the give-up's alertness drop.
+const DOOR_GIVEUP_COOLDOWN: f32 = 8.0;
 
 /// Configuration for monster alertness behavior
 #[derive(Clone)]
@@ -70,6 +93,8 @@ pub struct AnimatedMonsterAI {
     /// the script's knowledge exactly (including forgetting) without
     /// per-frame effect churn
     published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
+    /// Throttle between door interactions (open / locked-door give-up)
+    door_cooldown: f32,
 }
 
 impl AnimatedMonsterAI {
@@ -88,6 +113,7 @@ impl AnimatedMonsterAI {
             published_behavior: None,
             last_known_player_pos: None,
             published_awareness: None,
+            door_cooldown: 0.0,
         }
     }
 
@@ -107,6 +133,7 @@ impl AnimatedMonsterAI {
             published_behavior: None,
             last_known_player_pos: None,
             published_awareness: None,
+            door_cooldown: 0.0,
         }
     }
 
@@ -396,6 +423,110 @@ impl AnimatedMonsterAI {
             Effect::NoEffect
         }
     }
+
+    /// While pursuing, open the (unlocked) door gating the AI's route so it
+    /// can follow the player through, or give up at a locked one. The graph
+    /// treats doors as passable, so the AI paths straight at a closed door
+    /// and its body is blocked - this is what actually gets it through.
+    fn handle_doors(
+        &mut self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+        time: &Time,
+    ) -> Effect {
+        self.door_cooldown = (self.door_cooldown - time.elapsed.as_secs_f32()).max(0.0);
+        if self.door_cooldown > 0.0 {
+            return Effect::NoEffect;
+        }
+        // Only actively-pursuing behaviors bother with doors (cheap check
+        // left off the cooldown so a state change is noticed promptly)
+        if !matches!(self.current_behavior.borrow().name(), "Chase" | "Search") {
+            return Effect::NoEffect;
+        }
+        // The scan below (cell_from_position is O(cells) + a graph BFS) runs
+        // at a few Hz, not every frame - arm the poll cooldown up front,
+        // regardless of whether a door is found. The act paths override it
+        // with a longer value.
+        self.door_cooldown = DOOR_POLL_INTERVAL;
+
+        let Some(service) = world
+            .borrow::<UniqueView<GlobalPathfinding>>()
+            .ok()
+            .and_then(|g| g.0.clone())
+        else {
+            return Effect::NoEffect;
+        };
+        let (position, forward) = get_position_and_forward(world, entity_id);
+        let pos = position.to_vec();
+        let Some(cell) = service.cell_from_position(pos) else {
+            return Effect::NoEffect;
+        };
+        let doors = service.doors_near_cell(cell);
+        if doors.is_empty() {
+            return Effect::NoEffect;
+        }
+        let Ok(id_map) = world.borrow::<UniqueView<GlobalTemplateIdMap>>() else {
+            return Effect::NoEffect;
+        };
+
+        for (door_obj, door_center) in doors {
+            let (dx, dz) = (door_center.x - pos.x, door_center.z - pos.z);
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist > DOOR_INTERACT_RANGE || dist < 1e-3 {
+                continue;
+            }
+            // Beyond arm's reach, only open a door roughly ahead (not one off
+            // to the side we're merely passing); nearer ones we open anyway,
+            // since the doorway centre can be behind us once we're in it.
+            if dist > DOOR_FACING_RANGE {
+                let fwd_len = (forward.x * forward.x + forward.z * forward.z).sqrt();
+                if fwd_len < 1e-3
+                    || (forward.x * dx + forward.z * dz) / (fwd_len * dist) < DOOR_FACING_MIN_DOT
+                {
+                    continue;
+                }
+            }
+            let Some(door_ent) = id_map.0.get(&door_obj).map(|w| w.0) else {
+                continue;
+            };
+            // Only act on a door that's actually closed (skip open / opening
+            // ones, and non-door objects)
+            if script_util::door_is_closed(world, door_ent) != Some(true) {
+                continue;
+            }
+
+            if script_util::is_entity_locked(world, door_ent) {
+                // Can't follow through a locked door: show frustration and
+                // give up the pursuit (drop to a wander), so the player can't
+                // lure the AI into off-limits areas. Forget the last-known
+                // position so it doesn't immediately re-path to the door. The
+                // longer cooldown keeps the "thwarted" gesture from replaying
+                // rapidly for an AI whose alert cap won't let it drop below a
+                // pursuing level.
+                self.door_cooldown = DOOR_GIVEUP_COOLDOWN;
+                self.last_known_player_pos = None;
+                let downgrade = self.force_alertness(AIAlertLevel::Low, world, physics, entity_id);
+                let thwarted = Effect::QueueAnimationBySchema {
+                    entity_id,
+                    motion_queries: vec![vec![MotionQueryItem::new("thwarted")]],
+                    selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+                };
+                return Effect::combine(vec![downgrade, thwarted]);
+            }
+            // Unlocked: open it and keep chasing through. The longer cooldown
+            // avoids re-sending TurnOn (and replaying the open sound) while
+            // the door is still swinging.
+            self.door_cooldown = DOOR_INTERACT_COOLDOWN;
+            return Effect::Send {
+                msg: Message {
+                    to: door_ent,
+                    payload: MessagePayload::TurnOn { from: entity_id },
+                },
+            };
+        }
+        Effect::NoEffect
+    }
 }
 
 impl Script for AnimatedMonsterAI {
@@ -668,6 +799,9 @@ impl Script for AnimatedMonsterAI {
 
         let behavior_publish_effect = self.publish_behavior(entity_id);
 
+        // Open a door blocking the pursuit (or give up at a locked one)
+        let door_effect = self.handle_doors(world, physics, entity_id, time);
+
         Effect::combine(vec![
             alertness_effect,
             awareness_effect,
@@ -679,6 +813,7 @@ impl Script for AnimatedMonsterAI {
             alertness_debug_effect,
             fov_debug_effect,
             behavior_publish_effect,
+            door_effect,
         ])
     }
 
