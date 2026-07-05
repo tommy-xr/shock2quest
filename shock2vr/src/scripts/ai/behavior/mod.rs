@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use dark::SCALE_FACTOR;
 use shipyard::{EntityId, World};
 
-use crate::scripts::ai::ai_util::{has_ranged_weapon, player_distance};
+use crate::scripts::ai::ai_util::{chase_target_distance, has_ranged_weapon};
 
 /// The attack behavior for the current distance to the player, or None when
 /// out of attack range (the caller should chase to close the distance).
@@ -35,7 +35,7 @@ pub fn attack_behavior_for_distance(
     world: &World,
     entity_id: EntityId,
 ) -> Option<Box<RefCell<dyn Behavior>>> {
-    let distance = player_distance(world, entity_id)?;
+    let distance = chase_target_distance(world, entity_id)?;
     let melee_attack_distance = 8.0 / SCALE_FACTOR;
     let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
     let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
