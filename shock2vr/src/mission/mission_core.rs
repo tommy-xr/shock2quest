@@ -4533,6 +4533,36 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         }
     }
 
+    fn list_transitions(&self) -> Vec<crate::game_scene::DebugTransition> {
+        use dark::properties::{PropDestLevel, PropDestLoc, PropPosition, PropSymName};
+        use shipyard::Get;
+        // `PropDestLevel` is a live component on each transition trigger (the
+        // trigger script reads it the same way), so we can list every trigger
+        // with where it leads and its volume position.
+        self.world.run(
+            |v_dest: View<PropDestLevel>,
+             v_loc: View<PropDestLoc>,
+             v_pos: View<PropPosition>,
+             v_sym: View<PropSymName>| {
+                let mut out = Vec::new();
+                for (id, dest) in v_dest.iter().with_id() {
+                    let position = v_pos
+                        .get(id)
+                        .map(|p| [p.position.x, p.position.y, p.position.z])
+                        .unwrap_or([0.0, 0.0, 0.0]);
+                    out.push(crate::game_scene::DebugTransition {
+                        entity_id: id.inner() as i32,
+                        name: v_sym.get(id).ok().map(|s| s.0.clone()),
+                        dest_level: dest.0.clone(),
+                        dest_loc: v_loc.get(id).ok().map(|l| l.0),
+                        position,
+                    });
+                }
+                out
+            },
+        )
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         // MissionCore doesn't store InputContext directly - it's passed to update()
         // For debugging purposes, return a default state

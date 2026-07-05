@@ -349,6 +349,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.give_item(entity_id)
     }
 
+    fn list_transitions(&self) -> Vec<crate::game_scene::DebugTransition> {
+        self.mission_core.list_transitions()
+    }
+
     fn get_input_state(&self) -> crate::input_context::InputContext {
         self.mission_core.get_input_state()
     }

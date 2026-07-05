@@ -240,6 +240,20 @@ export interface PlayerInventoryResult {
   count: number;
 }
 
+export interface TransitionEntry {
+  entity_id: number;
+  name: string | null;
+  /** Destination mission (no ".mis" suffix, e.g. "eng1"). */
+  dest_level: string;
+  dest_loc: number | null;
+  position: Vec3;
+}
+
+export interface TransitionsResult {
+  transitions: TransitionEntry[];
+  count: number;
+}
+
 export interface WaitForOptions {
   /** Total time to wait in milliseconds (default 10_000). */
   timeoutMs?: number;
