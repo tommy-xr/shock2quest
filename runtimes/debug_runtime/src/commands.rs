@@ -58,6 +58,11 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<PlayerInventoryResult>,
     },
 
+    /// List level-transition triggers (dest + position) for trigger-based traversal.
+    ListTransitions {
+        reply: oneshot::Sender<TransitionsResult>,
+    },
+
     /// Put an existing world entity into the player's inventory (headless pickup).
     GiveItem {
         entity_id: i32,
@@ -406,6 +411,24 @@ pub struct InventoryItemEntry {
 #[derive(Debug, Serialize)]
 pub struct PlayerInventoryResult {
     pub items: Vec<InventoryItemEntry>,
+    pub count: usize,
+}
+
+/// A level-transition trigger and where it leads.
+#[derive(Debug, Serialize)]
+pub struct TransitionEntry {
+    pub entity_id: i32,
+    pub name: Option<String>,
+    /// Destination mission (no ".mis" suffix, e.g. "eng1").
+    pub dest_level: String,
+    pub dest_loc: Option<i32>,
+    pub position: [f32; 3],
+}
+
+/// All level-transition triggers in the current scene.
+#[derive(Debug, Serialize)]
+pub struct TransitionsResult {
+    pub transitions: Vec<TransitionEntry>,
     pub count: usize,
 }
 

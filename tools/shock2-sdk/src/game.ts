@@ -21,6 +21,7 @@ import type {
   QuestBitsResult,
   QuestBitValue,
   PlayerInventoryResult,
+  TransitionsResult,
   WaitForOptions,
 } from "./types.js";
 
@@ -271,6 +272,15 @@ export class Game {
 
   async raycast(request: RayCastRequest): Promise<RayCastResult> {
     return this.client.post<RayCastResult>("/v1/physics/raycast", request);
+  }
+
+  /**
+   * Level-transition triggers in the current scene (where each leads + its
+   * position). Teleport into a trigger's position and step to let the real
+   * trigger fire the transition, instead of warping with transitionLevel().
+   */
+  async transitions(): Promise<TransitionsResult> {
+    return this.client.get<TransitionsResult>("/v1/transitions");
   }
 
   /**
