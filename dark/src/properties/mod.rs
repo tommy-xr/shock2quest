@@ -329,6 +329,11 @@ pub struct PropLocalPlayer {}
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHUDSelect(pub bool);
 
+/// "AI_Patrol": when true, the AI patrols a route of patrol-point objects
+/// chained by `Link::AIPatrol`, walking point to point while idle.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropAIPatrol(pub bool);
+
 //  This is a backlink to the template ID from the ss2 map file
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTemplateId {
@@ -370,6 +375,10 @@ pub enum Link {
     ParticleAttachement(ParticleAttachOptions),
     TPathInit,
     TPath(TPathData),
+    /// From a patrol-point object to the next patrol point on its route. An AI
+    /// with `PropAIPatrol(true)` walks this chain of points while idle. The
+    /// link carries no data (a bare "go to the next point" edge).
+    AIPatrol,
     /// Names a destination object for scripted teleports (CS9 eggs/rumblers,
     /// TrapTeleport family, TrapDestroyTeleport's destroy target).
     Teleport,
@@ -898,6 +907,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$SwitchLin", |_| Link::SwitchLink),
         define_link("L$Teleport", |_| Link::Teleport),
         define_link("L$TPathInit", |_| Link::TPathInit),
+        define_link("L$AIPatrol", |_| Link::AIPatrol),
         define_link("L$Miss Span", |_| Link::MissSpang),
         //define_link("L$TPath", |_| Link::TPath),
         //define_link("L$TPathNext", |_| Link::TPath),
@@ -1008,6 +1018,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop("P$AI_Mode", PropAIMode::read, identity, accumulator::latest),
+        define_prop(
+            "P$AI_Patrol",
+            |reader, _len| read_bool(reader),
+            PropAIPatrol,
+            accumulator::latest,
+        ),
         define_prop(
             "P$AI_SigRsp",
             PropAISignalResponse::read,
