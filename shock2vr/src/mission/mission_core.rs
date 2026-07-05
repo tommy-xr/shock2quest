@@ -3961,11 +3961,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         );
 
         // Sort by distance from player
-        entities.sort_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // `total_cmp` is a genuine total order. `partial_cmp(..).unwrap_or(Equal)`
+        // is NOT: when an entity has a NaN distance (some levels, e.g. earth /
+        // rec2, contain an entity at a non-finite position) the comparator
+        // reports Equal inconsistently, which trips Rust's total-order check and
+        // panics the sort - killing the game thread on the next entity list.
+        entities.sort_by(|a, b| a.distance.total_cmp(&b.distance));
 
         // Apply limit if provided
         if let Some(limit) = limit {
