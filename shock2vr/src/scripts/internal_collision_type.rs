@@ -38,17 +38,25 @@ impl Script for InternalCollisionType {
     ) -> Effect {
         match msg {
             MessagePayload::Collided { with } => {
-                let initial_effect = {
-                    if self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT) {
-                        Effect::SlayEntity { entity_id }
-                    } else if self
-                        .collision_flags
-                        .contains(CollisionType::DESTROY_ON_IMPACT)
-                    {
-                        Effect::DestroyEntity { entity_id }
-                    } else {
-                        Effect::NoEffect
-                    }
+                // Only impact-payload entities (projectiles / fragile props
+                // flagged to slay or destroy themselves on contact) deal
+                // collision damage. A plain BOUNCE creature must not: any two
+                // creatures with a collision type would otherwise damage each
+                // other 1/frame on contact, killing low-HP crew during
+                // crowded scripted scenes (e.g. the command2 flee cutscene,
+                // where Suarez died bumping the other fleeing actors).
+                let is_impact = self
+                    .collision_flags
+                    .intersects(CollisionType::SLAY_ON_IMPACT | CollisionType::DESTROY_ON_IMPACT);
+                if !is_impact {
+                    return Effect::NoEffect;
+                }
+
+                let initial_effect = if self.collision_flags.contains(CollisionType::SLAY_ON_IMPACT)
+                {
+                    Effect::SlayEntity { entity_id }
+                } else {
+                    Effect::DestroyEntity { entity_id }
                 };
                 let damage_effect = Effect::Send {
                     msg: Message {

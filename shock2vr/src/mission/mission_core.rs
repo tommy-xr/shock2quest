@@ -96,7 +96,7 @@ use crate::{
     },
     teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
-    util::{get_email_sound_file, has_refs, vec3_to_point3},
+    util::{debug_entity, get_email_sound_file, has_refs, vec3_to_point3},
     virtual_hand::VirtualHandEffect,
     vr_config,
 };
@@ -1791,6 +1791,17 @@ impl MissionCore {
 
                     if let Ok(hit_points) = (&mut v_hit_points).get(entity_id) {
                         hit_points.hit_points += delta;
+                        // Every HP change flows through here (weapon, stim,
+                        // collision damage) - trace it with the resulting
+                        // total so a mysterious death is attributable.
+                        let hp = hit_points.hit_points;
+                        drop(v_hit_points);
+                        tracing::debug!(
+                            "hp: {} {:+} -> {}",
+                            debug_entity(&self.world, entity_id),
+                            delta,
+                            hp
+                        );
                     }
                 }
 
