@@ -54,6 +54,15 @@ pub enum AIPropertyUpdate {
     Behavior {
         name: String,
     },
+    /// What the AI knows about its target (last-known position + current
+    /// line of sight) - drives non-omniscient chase steering
+    TargetAwareness {
+        last_known_pos: Vector3<f32>,
+        has_line_of_sight: bool,
+    },
+    /// The AI forgot its target (fully calmed / position consumed by a
+    /// search) - chase falls back to the true player position again
+    ClearTargetAwareness,
 }
 
 #[derive(Clone, Debug)]

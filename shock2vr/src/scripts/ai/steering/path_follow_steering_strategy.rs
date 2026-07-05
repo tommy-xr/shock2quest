@@ -5,7 +5,7 @@ use rand::Rng;
 use shipyard::{EntityId, UniqueView, World};
 
 use crate::{
-    mission::{GlobalPathfinding, PlayerInfo},
+    mission::GlobalPathfinding,
     pathfinding::{PathfindingFrameBudget, PathfindingService},
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util},
@@ -133,7 +133,9 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         }
 
         let desired_goal = match self.target {
-            PathTarget::Player => Some(world.borrow::<UniqueView<PlayerInfo>>().ok()?.pos),
+            // The last-known target position (frozen when sight breaks),
+            // not the player's true location - breaking line of sight works
+            PathTarget::Player => Some(ai_util::chase_target(world, entity_id)?),
             // Wander and Point keep their destination until the path completes
             PathTarget::Wander { .. } | PathTarget::Point(_) => None,
         };
