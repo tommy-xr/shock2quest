@@ -519,6 +519,7 @@ mod tests {
             translation: Vector3::new(0.0, 0.0, 0.0),
             joint_to_frame,
             root_transforms: vec![Matrix4::from_translation(Vector3::new(0.0, 10.0, 0.0))],
+            root_positions: Vec::new(),
             motion_flags: Vec::new(),
             name: None,
         };
