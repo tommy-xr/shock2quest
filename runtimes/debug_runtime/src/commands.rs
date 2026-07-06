@@ -34,6 +34,13 @@ pub enum RuntimeCommand {
     /// Move the player to a position
     MovePlayer(Vector3<f32>),
 
+    /// Move the player toward a target with a bounded, shape-cast-validated hop
+    /// (won't pass through walls / out of bounds). See `MoveResult`.
+    MovePlayerValidated {
+        target: Vector3<f32>,
+        reply: oneshot::Sender<MoveResult>,
+    },
+
     /// Transition to another level (warp), at an optional spawn-marker id.
     TransitionLevel {
         level_file: String,
@@ -369,6 +376,20 @@ pub struct CommandResult {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
+}
+
+/// Result of a bounded, shape-cast-validated player move (`/v1/player/move`).
+#[derive(Debug, Serialize)]
+pub struct MoveResult {
+    /// Whether the player position actually changed.
+    pub moved: bool,
+    /// Whether the shape cast hit geometry before the full clamped distance.
+    pub blocked: bool,
+    pub new_position: [f32; 3],
+    /// How far the player actually advanced (world units).
+    pub distance_moved: f32,
+    /// The distance the move was allowed to attempt: `min(target distance, 5.0)`.
+    pub requested_distance: f32,
 }
 
 /// Result of a level transition (warp) request

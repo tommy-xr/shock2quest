@@ -16,6 +16,7 @@ import type {
   ScreenshotResult,
   StepResult,
   StepSpec,
+  MoveResult,
   TeleportResult,
   TransitionLevelResult,
   QuestBitsResult,
@@ -54,6 +55,22 @@ export class PlayerApi {
 
   async teleport(position: Position): Promise<TeleportResult> {
     return this.client.post<TeleportResult>("/v1/player/teleport", position);
+  }
+
+  /**
+   * Move the player toward `target` in a single bounded, collision-valid hop.
+   *
+   * The displacement is clamped to at most 5 world units and the player
+   * collider is shape-cast along the way, stopping just short of any geometry
+   * it hits (`blocked: true`). Unlike {@link teleport}, this can never move the
+   * player through a wall or out of bounds - prefer it for exploration. A
+   * closed door blocks the move, so the pattern is: move up to the door (it
+   * trips the tripwire, or Frob it), step until it opens, then move through.
+   *
+   * Named `moveTo` because `move` is awkward as a bare method name.
+   */
+  async moveTo(target: Position): Promise<MoveResult> {
+    return this.client.post<MoveResult>("/v1/player/move", target);
   }
 
   /** The items the player is carrying (backpack + hand-held), for verifying pickups. */

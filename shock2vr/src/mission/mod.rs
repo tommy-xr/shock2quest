@@ -303,6 +303,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.teleport_player(position)
     }
 
+    fn move_player(&mut self, target: Vector3<f32>) -> crate::physics::MoveResult {
+        self.mission_core.move_player(target)
+    }
+
     fn player_position(&self) -> Vector3<f32> {
         self.mission_core.player_position()
     }
