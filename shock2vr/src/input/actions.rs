@@ -54,6 +54,15 @@ pub enum InputAction {
     /// Force every monster back to Lowest alertness (idle). Same caveats as
     /// DebugAlertAll.
     DebugCalmAll,
+
+    /// Enlist in the Marine (combat) service branch at the station recruit
+    /// deck. Registers the career (persisted quest bit) so it applies on the
+    /// next deployment. Mutually exclusive with the other two.
+    SelectCareerMarine,
+    /// Enlist in the Navy (tech) service branch. See `SelectCareerMarine`.
+    SelectCareerNavy,
+    /// Enlist in the OSA (psi) service branch. See `SelectCareerMarine`.
+    SelectCareerOsa,
 }
 
 impl InputAction {
@@ -75,6 +84,9 @@ impl InputAction {
             InputAction::DebugReloadLevel,
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
+            InputAction::SelectCareerMarine,
+            InputAction::SelectCareerNavy,
+            InputAction::SelectCareerOsa,
         ]
     }
 
@@ -94,6 +106,9 @@ impl InputAction {
             InputAction::DebugReloadLevel => "DebugReloadLevel",
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",
+            InputAction::SelectCareerMarine => "SelectCareerMarine",
+            InputAction::SelectCareerNavy => "SelectCareerNavy",
+            InputAction::SelectCareerOsa => "SelectCareerOsa",
         }
     }
 }

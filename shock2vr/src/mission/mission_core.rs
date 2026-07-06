@@ -387,12 +387,46 @@ impl MissionCore {
         // Debug scenes unlock every power (debug_psi exercises the whole
         // registry); real missions start with the player template's learned
         // bits plus the default OSA loadout (Cryokinesis).
-        let known_powers = crate::psi::build_known_powers(
+        let mut known_powers = crate::psi::build_known_powers(
             &entity_info_rc,
             &psi_powers,
             THE_PLAYER_TEMPLATE_ID,
             mission.starts_with("debug_"),
         );
+
+        // Apply the career (Marine/Navy/OSA) chosen at the station recruit deck.
+        // The choice is persisted as a quest bit, so it re-applies on every
+        // deployment; with no career selected the player template defaults
+        // (30 HP, 40/50 psi) stand. Absolute values keep re-application
+        // idempotent across level loads. Setting current = max mirrors the
+        // engine's existing model: the player is `RuntimePropDoNotSerialize` and
+        // its HP/psi are re-seeded from the template on every load (there is no
+        // current-HP persistence yet), so this only changes the values arrived
+        // with, not whether a reset happens.
+        if let Some(career) = crate::career::Career::from_quest_info(&quest_info) {
+            let loadout = career.loadout();
+            world.run(
+                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
+                 mut v_max_hp: ViewMut<dark::properties::PropMaxHitPoints>,
+                 mut v_psi: ViewMut<dark::properties::PropPsiState>| {
+                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
+                        hp.hit_points = loadout.max_hit_points;
+                    }
+                    if let Ok(max_hp) = (&mut v_max_hp).get(player_entity) {
+                        max_hp.hit_points = loadout.max_hit_points as u32;
+                    }
+                    if let Ok(psi) = (&mut v_psi).get(player_entity) {
+                        psi.psi_points = loadout.max_psi_points;
+                        psi.max_psi_points = loadout.max_psi_points;
+                    }
+                },
+            );
+            if let Some(power) = loadout.extra_psi_power {
+                known_powers.0.insert(power);
+            }
+            info!("Applied {:?} career loadout to player", career);
+        }
+
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
         world.add_unique(known_powers);

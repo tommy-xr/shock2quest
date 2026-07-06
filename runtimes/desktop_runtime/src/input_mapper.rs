@@ -73,6 +73,21 @@ impl DesktopInputMapper {
                 modifier: Modifier::Alt,
                 action: InputAction::QuickLoad,
             },
+            Binding {
+                key: Key::F1,
+                modifier: Modifier::None,
+                action: InputAction::SelectCareerMarine,
+            },
+            Binding {
+                key: Key::F2,
+                modifier: Modifier::None,
+                action: InputAction::SelectCareerNavy,
+            },
+            Binding {
+                key: Key::F3,
+                modifier: Modifier::None,
+                action: InputAction::SelectCareerOsa,
+            },
         ];
 
         Self {
