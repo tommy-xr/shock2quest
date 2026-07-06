@@ -497,20 +497,21 @@ impl PhysicsWorld {
         let delta = target - current;
         let dist = delta.magnitude();
 
-        // Distance we are allowed to attempt this call.
-        let requested_distance = dist.min(MAX_PLAYER_MOVE_DISTANCE);
-
-        // Degenerate request (zero or non-finite): nothing to do.
+        // Degenerate request (zero or non-finite): nothing to do. Guard before
+        // computing `requested_distance` so a NaN target doesn't report a
+        // bogus clamp value (`NaN.min(5.0) == 5.0`).
         if !dist.is_finite() || dist == 0.0 {
             return MoveResult {
                 moved: false,
                 blocked: false,
                 new_position: current,
                 distance_moved: 0.0,
-                requested_distance,
+                requested_distance: 0.0,
             };
         }
 
+        // Distance we are allowed to attempt this call.
+        let requested_distance = dist.min(MAX_PLAYER_MOVE_DISTANCE);
         let dir = delta / dist; // normalized direction
 
         // Snapshot the character shape + pose (cheap Arc clone) before building
@@ -544,9 +545,20 @@ impl PhysicsWorld {
         // Shape-cast the character collider along the (normalized) direction.
         // With a unit velocity the time-of-impact is a distance in world units,
         // mirroring how `ray_cast2` treats `max_toi` as a distance.
+        //
+        // `stop_at_penetration: false` so a start that is already touching /
+        // slightly penetrating geometry (e.g. after a raw `/v1/player/teleport`
+        // dropped the player against a wall) doesn't return `toi == 0` and pin
+        // the player as permanently `blocked` - a move *away* from the contact
+        // (separating velocity) is then discarded at t=0 and proceeds normally,
+        // while a move *into* it still blocks.
         let shape_vel = vector![dir.x, dir.y, dir.z];
-        let options =
-            rapier3d::parry::query::ShapeCastOptions::with_max_time_of_impact(requested_distance);
+        let options = rapier3d::parry::query::ShapeCastOptions {
+            max_time_of_impact: requested_distance,
+            target_distance: 0.0,
+            stop_at_penetration: false,
+            compute_impact_geometry_on_penetration: true,
+        };
 
         let allowed_distance = {
             let queries = self.broad_phase.as_query_pipeline(
@@ -574,6 +586,7 @@ impl PhysicsWorld {
             None => (requested_distance, false),
         };
 
+        // When `distance_moved == 0`, `current + dir * 0` is exactly `current`.
         let new_position = current + dir * distance_moved;
 
         if distance_moved > 0.0 {
@@ -583,11 +596,7 @@ impl PhysicsWorld {
         MoveResult {
             moved: distance_moved > 0.0,
             blocked,
-            new_position: if distance_moved > 0.0 {
-                new_position
-            } else {
-                current
-            },
+            new_position,
             distance_moved,
             requested_distance,
         }
