@@ -4265,6 +4265,30 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         Ok(())
     }
 
+    fn move_player(&mut self, target: cgmath::Vector3<f32>) -> crate::physics::MoveResult {
+        // Bounded, shape-cast-validated move: physics clamps the displacement
+        // and stops short of any geometry it hits.
+        let result = self
+            .physics
+            .move_player_validated(target, &mut self.player_handle);
+
+        if result.moved {
+            // Keep PlayerInfo.pos consistent with the body immediately (same
+            // reasoning as `teleport_player`), and mark the player teleported so
+            // the render/camera path picks up the new position this frame.
+            let player_entity = {
+                let mut player_info = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+                player_info.pos = result.new_position;
+                player_info.entity_id
+            };
+
+            self.world
+                .add_component(player_entity, PropTeleported::new());
+        }
+
+        result
+    }
+
     fn player_position(&self) -> cgmath::Vector3<f32> {
         // Get player position from PlayerInfo unique component
         self.world

@@ -24,6 +24,16 @@ use self::debug_render_pipeline::DebugRenderer;
 
 const MOVEMENT_STEP_SIZE: f32 = 20.0;
 
+/// Maximum distance (world units) a single validated player move may advance.
+/// A request for a farther target is clamped to this, so an automated tester
+/// navigates in short, collision-checked hops instead of one long teleport.
+pub const MAX_PLAYER_MOVE_DISTANCE: f32 = 5.0;
+
+/// Skin margin (world units) subtracted from the shape-cast time-of-impact so
+/// the player stops just short of the geometry it hit rather than flush against
+/// (or slightly inside) it.
+const PLAYER_MOVE_SKIN_MARGIN: f32 = 0.1;
+
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
         const WORLD = 1 << 0; // 1
@@ -130,6 +140,24 @@ pub struct RayCastResult {
     pub is_sensor: bool,
     // TODO:
     // entity_id
+}
+
+/// Result of a bounded, shape-cast-validated player move (see
+/// [`PhysicsWorld::move_player_validated`]).
+#[derive(Clone, Debug)]
+pub struct MoveResult {
+    /// Whether the player position actually changed.
+    pub moved: bool,
+    /// Whether the shape cast hit geometry before the full clamped distance,
+    /// stopping the move short of the target.
+    pub blocked: bool,
+    /// The player's new world position after the move.
+    pub new_position: Vector3<f32>,
+    /// How far the player actually advanced (world units).
+    pub distance_moved: f32,
+    /// The distance the move was allowed to attempt this call: `min(target
+    /// distance, MAX_PLAYER_MOVE_DISTANCE)`.
+    pub requested_distance: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -449,6 +477,129 @@ impl PhysicsWorld {
             .get(player_handle.character_handle)
             .unwrap();
         nvec_to_cgmath(*character_body.translation())
+    }
+
+    /// Move the player toward `target`, but bounded and collision-validated.
+    ///
+    /// The displacement `target - current` is clamped to at most
+    /// [`MAX_PLAYER_MOVE_DISTANCE`], then the player's character-controller
+    /// collider is shape-cast along that direction. If it hits geometry before
+    /// the clamped distance, the player stops just short of the contact
+    /// (time-of-impact minus [`PLAYER_MOVE_SKIN_MARGIN`], clamped >= 0) and the
+    /// result is marked `blocked`. Unlike `set_player_translation`, this can
+    /// never move the player through a wall or out of bounds.
+    pub fn move_player_validated(
+        &mut self,
+        target: Vector3<f32>,
+        player_handle: &mut PlayerHandle,
+    ) -> MoveResult {
+        let current = self.get_player_translation(player_handle);
+        let delta = target - current;
+        let dist = delta.magnitude();
+
+        // Degenerate request (zero or non-finite): nothing to do. Guard before
+        // computing `requested_distance` so a NaN target doesn't report a
+        // bogus clamp value (`NaN.min(5.0) == 5.0`).
+        if !dist.is_finite() || dist == 0.0 {
+            return MoveResult {
+                moved: false,
+                blocked: false,
+                new_position: current,
+                distance_moved: 0.0,
+                requested_distance: 0.0,
+            };
+        }
+
+        // Distance we are allowed to attempt this call.
+        let requested_distance = dist.min(MAX_PLAYER_MOVE_DISTANCE);
+        let dir = delta / dist; // normalized direction
+
+        // Snapshot the character shape + pose (cheap Arc clone) before building
+        // the query pipeline, which borrows the body/collider sets. Mirrors the
+        // pattern in `move_player`.
+        //
+        // Cast from the *body* pose, not the collider's cached pose: a kinematic
+        // body's collider position is only re-synced during a physics step, so
+        // after a prior `set_player_translation` (below) with no step in between
+        // - e.g. two `move_player_validated` calls back to back - the collider
+        // pose is stale and would restart the cast from the old spot, letting
+        // the player tunnel through walls. The body's own `position()` updates
+        // immediately. The collider is parented at the body origin (identity
+        // local transform), so the body pose is the collider's true world pose.
+        let character_body = &self.rigid_body_set[player_handle.character_handle];
+        let character_collider = &self.collider_set[character_body.colliders()[0]];
+        let character_shape = character_collider.shared_shape().clone();
+        let character_pos = *character_body.position();
+
+        // Same collision filter the real player movement uses: collide with the
+        // collidable groups, ignore the player's own body and all sensors.
+        let filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                Default::default(),
+            ))
+            .exclude_rigid_body(player_handle.character_handle)
+            .exclude_sensors();
+
+        // Shape-cast the character collider along the (normalized) direction.
+        // With a unit velocity the time-of-impact is a distance in world units,
+        // mirroring how `ray_cast2` treats `max_toi` as a distance.
+        //
+        // `stop_at_penetration: false` so a start that is already touching /
+        // slightly penetrating geometry (e.g. after a raw `/v1/player/teleport`
+        // dropped the player against a wall) doesn't return `toi == 0` and pin
+        // the player as permanently `blocked` - a move *away* from the contact
+        // (separating velocity) is then discarded at t=0 and proceeds normally,
+        // while a move *into* it still blocks.
+        let shape_vel = vector![dir.x, dir.y, dir.z];
+        let options = rapier3d::parry::query::ShapeCastOptions {
+            max_time_of_impact: requested_distance,
+            target_distance: 0.0,
+            stop_at_penetration: false,
+            compute_impact_geometry_on_penetration: true,
+        };
+
+        let allowed_distance = {
+            let queries = self.broad_phase.as_query_pipeline(
+                self.narrow_phase.query_dispatcher(),
+                &self.rigid_body_set,
+                &self.collider_set,
+                filter,
+            );
+
+            match queries.cast_shape(
+                &character_pos,
+                &shape_vel,
+                character_shape.as_ref(),
+                options,
+            ) {
+                Some((_handle, hit)) => Some(
+                    (hit.time_of_impact - PLAYER_MOVE_SKIN_MARGIN).clamp(0.0, requested_distance),
+                ),
+                None => None,
+            }
+        };
+
+        let (distance_moved, blocked) = match allowed_distance {
+            Some(d) => (d, true),
+            None => (requested_distance, false),
+        };
+
+        // When `distance_moved == 0`, `current + dir * 0` is exactly `current`.
+        let new_position = current + dir * distance_moved;
+
+        if distance_moved > 0.0 {
+            self.set_player_translation(new_position, player_handle);
+        }
+
+        MoveResult {
+            moved: distance_moved > 0.0,
+            blocked,
+            new_position,
+            distance_moved,
+            requested_distance,
+        }
     }
 
     pub fn get_aabb2(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
