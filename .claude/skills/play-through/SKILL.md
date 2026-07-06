@@ -130,6 +130,58 @@ Optionally record a **video** of a session — capture frames at a cadence durin
 play and stitch with the **`video-capture`** skill (60Hz sim / 4 = real-time
 15fps). Local artifact.
 
+## Autonomous mode (`--auto`) — drive with `/loop`
+
+Just run `/loop /play-through --auto` (self-paced: each iteration runs, then
+schedules the next). It **auto-creates the campaign ledger on first run** — no
+setup step. State persists in that ledger so it resumes at the frontier and
+marches forward instead of re-treading:
+
+```
+node .claude/skills/play-through/playthrough-state.mjs init      # idempotent; --auto calls it (--force resets)
+node .claude/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
+#   blocker add <level> <bug|feature-gap> <issue#> <desc...>   ·  blocker set <issue#> <status> [pr#]
+#   advance <level> <saveName> <x,y,z> [note...]               (sets frontier, bumps iteration)
+```
+
+The ledger holds: `frontier` (the game **save** to `/v1/load` from), the
+`blockers` ledger (issue → PR → status), and `fix_branch` — the running branch
+that **stacks each fix** so the campaign plays *past* an already-fixed-but-
+unmerged blocker.
+
+**Clear & start a new campaign:** `playthrough-state.mjs init --force` (wipes the
+ledger back to iteration 0). For a *truly* clean slate also recreate the
+`fix_branch` off current `main` and delete stale frontier saves (`<data_root>/
+saves/frontier*.sav`) — otherwise the fresh campaign just launches mission 0 with
+no frontier to load, which is harmless.
+
+**Each `--auto` iteration** (do exactly one; `/loop` repeats):
+1. `playthrough-state.mjs init` (idempotent — creates the ledger on the first
+   iteration, keeps it after), then `show` → read the frontier + NEXT action.
+2. **Resume:** build the runtime from the **`fix_branch`** (so accrued fixes are
+   in), launch it, and `POST /v1/load {file: frontier.save}` — or launch the first
+   mission fresh at iteration 0.
+3. **Playtest** from here toward the goal (the `playtest` primitive) → `data.json`.
+4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.
+5. **Triage** the blocker (bug vs **feature-gap** — §3-4; feature-gaps get a
+   *faithful*, non-shim fix).
+6. **Fix:** spawn a fix sub-agent that commits on **`fix_branch`** (stacked) and
+   opens a PR `Fixes #n`. `blocker add` / `blocker set` in the ledger.
+7. **Re-validate:** rebuild `fix_branch`, reload the frontier save, confirm the
+   playtest now gets **past** the blocker.
+8. **Advance:** `POST /v1/save {file:"frontier"}` at the new furthest point;
+   `playthrough-state.mjs advance <level> frontier <x,y,z>`.
+9. Render the session report (+ optional video).
+
+**Guardrails (don't skip):**
+- **Merge gate is the human.** Fixes open PRs; *you* merge (or CI+`/xreview` gate).
+  The `fix_branch` stack lets the campaign progress while PRs await review — the
+  goal is a reviewable stack, not auto-merge.
+- **Max iterations / budget** — stop after N iterations (default ~10) or the turn's
+  token target, and report.
+- **Recurrence = pause.** If a blocker isn't cleared after its fix (step 7 fails),
+  `blocker set <n> failed` and **stop for a human** — don't loop on a bad fix.
+
 ## Notes
 - Delegate playtest + review + each fix to sub-agents; the manager keeps the
   ledger (frontier, issues→fixes, iteration report).
