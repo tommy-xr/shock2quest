@@ -46,6 +46,16 @@ function embed(filename) {
 }
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// Inline an mp4 session recording (if `data.video` is set) as a base64 data URI.
+function embedVideo(filename) {
+  if (!filename) return "";
+  const p = join(dir, filename);
+  if (!existsSync(p)) return `<p class="missing">⚠ missing video: ${esc(filename)}</p>`;
+  const b64 = readFileSync(p).toString("base64");
+  return `<video controls preload="metadata" src="data:video/mp4;base64,${b64}"></video>`;
+}
+
 const sevColor = { high: "#e5484d", med: "#f5a524", medium: "#f5a524", low: "#8b8d98" };
 const badge = (sev) => `<span class="sev" style="background:${sevColor[String(sev).toLowerCase()] || "#8b8d98"}">${esc(sev)}</span>`;
 
@@ -96,10 +106,12 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
   .obs b, .act b { color:#9fa0a8; font-weight:600; }
   .bug { background:#241416; border:1px solid #4a2327; border-radius:7px; padding:7px 9px; }
   .missing { color:#f5a524; font-size:13px; }
+  video { width:100%; border-radius:10px; border:1px solid #24262c; margin:8px 0 20px; background:#000; }
 </style></head><body><div class="wrap">
   <h1>Playtest — ${esc(data.mission)}</h1>
   <p class="sub">goal: <b>${esc(data.goal || "explore & QA")}</b> · frontier: <b>${esc(data.frontier || "-")}</b> · ${esc(data.generated || "")}</p>
   ${data.verdict ? `<p class="sub">${esc(data.verdict)}</p>` : ""}
+  ${embedVideo(data.video)}
 
   <h2>Issues found (${(data.bugs || []).length})</h2>
   <table><thead><tr><th>Sev</th><th>Class</th><th>Issue</th><th>Shot</th><th>Filed → Fix</th></tr></thead>

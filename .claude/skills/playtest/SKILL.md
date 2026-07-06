@@ -32,20 +32,34 @@ the `play-through` manager triages and delegates fixes.
 
 | See the world | Act on it |
 | --- | --- |
-| `POST /v1/screenshot {filename}` → **Read `/tmp/claude/<file>`** (do this often) | `POST /v1/player/teleport {x,y,z}` (jump to inspect) |
+| `POST /v1/screenshot {filename}` → **Read `/tmp/claude/<file>`** (do this often) | **`POST /v1/player/move {x,y,z}`** — navigate (bounded ≤5u hop, collision-checked) |
 | `GET /v1/entities?filter=&limit=` (name/id/pos/distance) | `POST /v1/control/input {right_hand.thumbstick:[strafe,fwd]}` + step (walk) |
 | `GET /v1/entities/:id` (props, links) | `{left_hand.thumbstick:[turn,0]}` + step (look around) |
 | `GET /v1/info` (health, pos, wielded, psi) | `POST /v1/entities/:id/message {type:"Frob"\|"Damage"\|"TurnOn"}` |
 | `GET /v1/player/inventory` · `GET /v1/quests` | `POST /v1/player/give {entity_id}` (pick up) |
-| `GET /v1/transitions` (exits: dest + position) | follow an exit: teleport into a **tripwire** volume; **Frob** a bulkhead **button** |
+| `GET /v1/transitions` (exits: dest + position) | follow an exit: **move** up to a **tripwire** volume; **Frob** a bulkhead **button** |
 
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 
+**Navigate with `/v1/player/move`, not raw teleport.** It advances the player at
+most ~5 units toward the target and **shapecasts the player collider**, so it
+**cannot tunnel through walls or out of bounds** (returns `blocked:true`,
+`distance_moved < requested` when it hits geometry). So you walk to a place in
+short hops, checking screenshots — this is what makes it a real playtest instead
+of warping to arbitrary (often out-of-level) entity coordinates. Raw
+`/v1/player/teleport` is reserved for manager-driven setup/frontier-resume.
+
+**Doors block the shapecast** — you can't move through a closed one. The pattern:
+move up to the door → it trips the tripwire (or `Frob` it) → `step` and wait for
+it to open (re-screenshot) → then `move` through. That's genuine door-by-door
+traversal.
+
 ## How to play (toward the goal)
 1. Screenshot + **read it**. Describe what you actually see; is it coherent or off?
-2. Explore: look around, list nearby entities, teleport near interesting ones
-   (door, corpse, item, terminal, monster) and screenshot each.
+2. Explore: look around, list nearby entities, **move** (bounded hops) toward
+   interesting ones (door, corpse, item, terminal, monster) and screenshot each.
+   If a `move` reports `blocked`, something's in the way — that's real geometry.
 3. Interact toward progress: pick up items, frob doors/terminals/keypads, fight,
    and follow the level's real exit toward the goal.
 4. Hunt bugs the whole time: missing/black textures, floating/clipping/z-fighting,
@@ -82,6 +96,9 @@ frontier/issues to drive the loop:
 - `steps[].bug` is optional (null when the step was clean).
 - Mark the progress **blocker** (`"blocker": true`) — the manager fixes it first.
 - Set `frontier` to the furthest reachable state so the next session resumes there.
+- Optional **session video**: also capture `frame-NNNN.png` every 4 sim-frames
+  during play, stitch with the `video-capture` skill, and set `"video":
+  "session.mp4"` — `render-timeline.mjs` embeds it as a `<video>` in the report.
 
 Return to the caller: the `data.json` path, the frontier, and the blocker (if any).
 Leave the runtime running only if asked; otherwise `POST /v1/shutdown`.
