@@ -66,20 +66,49 @@ intent, not at random.
 
 ## 3-4. Triage & fix
 
-Classify each validated finding: `[gameplay]` (broken interaction/objective) ·
-`[visual]` (rendering) · `[functionality]` (crash / won't load). **Blockers first**
-(they gate progress). File a GitHub issue (classification, mission, repro: exact
-levers + step count, expected vs actual, the screenshot), spawn a fix sub-agent
-(issue # + repro + subsystem pointer; it follows the repo's incremental +
-`/xreview` + negative-first-test discipline, opens a PR `Fixes #n`, re-validates).
-Non-blockers: log them, keep playing past them.
+Classify each validated finding two ways:
+- **Domain:** `[gameplay]` (broken interaction/objective) · `[visual]` (rendering)
+  · `[functionality]` (crash / won't load).
+- **Kind — this matters as much as the domain, because this is a *partial* port:**
+  - **bug** — broken logic in something that's implemented (an off-by-one, a wrong
+    comparator, a crash). Targeted fix.
+  - **feature gap** — a system that is **stubbed / unimplemented** (a script wired
+    to nothing, a `// TODO: Fully implement`, a `UnimplementedScript`, an
+    unparsed property). **Most blockers here are this kind.** The "fix" is a real
+    feature, and it must be **faithful**, not a shim.
+
+**Blockers first** (they gate progress). File a GitHub issue (domain + kind,
+mission, repro: exact levers + step count, expected vs actual, the screenshot).
+
+**Fixing a feature gap — faithfulness is required:**
+- The fix agent must **investigate the original System Shock 2 behavior AND the
+  engine's existing partial wiring** (the relevant scripts, properties, links,
+  `TODO`s, the actual mission entities via `cargo dq`) *before* implementing.
+- Implement it **through the game's own entities/scripts/flow** — do NOT bolt on
+  a debug-only shim (a new keybinding, a hardcoded shortcut, a fake trigger) as
+  the real mechanism. Debug levers are for *testing* the fix, never the fix.
+- Expect a **larger PR**; that's fine. A faithful partial implementation with a
+  clear "deferred" note beats a shim that looks done.
+- **The review checks faithfulness explicitly:** on the fix PR (via `/xreview`
+  and your own read), ask "does this use the real in-world flow, or does it fake
+  the mechanism?" — reject shims. (This is how #426 was caught: it made careers
+  differ via F-key debug actions instead of wiring the station career choice.)
+
+For a plain **bug**, a targeted fix + negative-first test is enough. Either way the
+fix agent follows the repo's incremental + `/xreview` + negative-first-test
+discipline, opens a PR `Fixes #n`, and re-validates. Non-blockers: log them, keep
+playing past them.
 
 ## 5. Replay & frontier
 
-Track the **frontier**: furthest level + position + quest/inventory state reached.
-Replay resumes there (`transitionLevel(level, loc)` + `teleport`; `QuickLoad`
-only within a live session) so
-each iteration starts at the edge of the known-good region and pushes further.
+Track the **frontier**: the furthest state reached. The robust, faithful way to
+persist and resume it is the game's **own save format** (it stores exactly this:
+active mission, player position/rotation, quest bits, held items) — at the edge
+of known-good, `POST /v1/save {file:"frontier"}`; each replay (a fresh runtime
+launch, since fixes rebuild the binary) resumes with `POST /v1/load
+{file:"frontier"}`. That survives relaunches, which `QuickLoad` (same-session
+only) and manual `transitionLevel`+`teleport` do not. Each iteration starts at
+the frontier and pushes further.
 
 ## Report (aggregate, self-contained)
 
