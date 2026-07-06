@@ -408,6 +408,23 @@ pub trait DebuggableScene {
     /// Ok(()) on success, or error message if teleportation fails
     fn teleport_player(&mut self, position: Vector3<f32>) -> Result<(), String>;
 
+    /// Move the player toward `target` in a single bounded, collision-validated
+    /// hop.
+    ///
+    /// Unlike [`teleport_player`](Self::teleport_player), which warps the player
+    /// unconditionally, this clamps the displacement to a maximum distance and
+    /// shape-casts the player collider along the way, stopping short of any
+    /// geometry it hits. Intended for automated navigation that must stay inside
+    /// the level (a closed door, for instance, blocks the move).
+    ///
+    /// # Arguments
+    /// * `target` - Desired destination in world coordinates
+    ///
+    /// # Returns
+    /// A [`MoveResult`](crate::physics::MoveResult) describing how far the
+    /// player actually moved and whether it was blocked.
+    fn move_player(&mut self, target: Vector3<f32>) -> crate::physics::MoveResult;
+
     /// Get the current player position for distance calculations
     ///
     /// Returns the player's current world position, used for sorting

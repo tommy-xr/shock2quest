@@ -275,6 +275,10 @@ async fn start_http_server(
         .route("/v1/player/position", get(get_player_position))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
         .route(
+            "/v1/player/move",
+            axum::routing::post(move_player_validated),
+        )
+        .route(
             "/v1/control/transition-level",
             axum::routing::post(transition_level),
         )
@@ -323,7 +327,8 @@ async fn start_http_server(
     info!("  GET  /v1/entities/{{id}}    - Get detailed entity information");
     info!("  POST /v1/entities/{{id}}/message - Inject a script message (damage/frob/signal)");
     info!("  GET  /v1/player/position  - Get current player position");
-    info!("  POST /v1/player/teleport  - Teleport player to coordinates");
+    info!("  POST /v1/player/teleport  - Teleport player to coordinates (raw, unbounded)");
+    info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
     info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
     info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
@@ -869,6 +874,33 @@ fn process_command(
                 }
             } else {
                 tracing::error!("No debuggable scene available for player movement");
+            }
+        }
+        RuntimeCommand::MovePlayerValidated { target, reply } => {
+            tracing::info!("Validated player move toward: {:?}", target);
+            let result = if let Some(debug_scene) = game.debug_scene_mut() {
+                let r = debug_scene.move_player(target);
+                MoveResult {
+                    moved: r.moved,
+                    blocked: r.blocked,
+                    new_position: [r.new_position.x, r.new_position.y, r.new_position.z],
+                    distance_moved: r.distance_moved,
+                    requested_distance: r.requested_distance,
+                }
+            } else {
+                tracing::error!("No debuggable scene available for validated player move");
+                // No scene: report a no-op move at the origin so the HTTP layer
+                // still gets a well-formed response.
+                MoveResult {
+                    moved: false,
+                    blocked: false,
+                    new_position: [0.0, 0.0, 0.0],
+                    distance_moved: 0.0,
+                    requested_distance: 0.0,
+                }
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send validated-move result - receiver dropped");
             }
         }
         RuntimeCommand::TransitionLevel {
@@ -1996,6 +2028,42 @@ async fn teleport_player(
         })),
         Err(_) => {
             tracing::error!("Failed to receive player position after teleport - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// Request structure for a bounded, collision-validated player move.
+#[derive(serde::Deserialize)]
+struct MoveRequest {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+/// HTTP handler for a bounded, shape-cast-validated player move. Unlike
+/// `/v1/player/teleport`, this clamps the displacement and stops short of any
+/// geometry it hits, so the player can never be pushed through a wall or out of
+/// bounds.
+async fn move_player_validated(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<MoveRequest>,
+) -> Result<Json<MoveResult>, (StatusCode, String)> {
+    let target = Vector3::new(request.x, request.y, request.z);
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if let Err(_) = command_tx.send(RuntimeCommand::MovePlayerValidated {
+        target,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send MovePlayerValidated command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive validated-move result - sender dropped");
             Err(game_loop_unavailable())
         }
     }

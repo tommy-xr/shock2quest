@@ -206,6 +206,19 @@ export interface TeleportResult {
   new_position: Vec3;
 }
 
+/** Result of a bounded, shape-cast-validated player move (`player.moveTo`). */
+export interface MoveResult {
+  /** Whether the player position actually changed. */
+  moved: boolean;
+  /** Whether the move hit geometry before the full clamped distance. */
+  blocked: boolean;
+  new_position: Vec3;
+  /** How far the player actually advanced (world units). */
+  distance_moved: number;
+  /** The distance the move was allowed to attempt: `min(target distance, 5.0)`. */
+  requested_distance: number;
+}
+
 export interface TransitionLevelResult {
   success: boolean;
   /** Scene name after the transition, e.g. "eng1.mis". */
