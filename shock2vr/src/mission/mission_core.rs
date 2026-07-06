@@ -398,7 +398,11 @@ impl MissionCore {
         // The choice is persisted as a quest bit, so it re-applies on every
         // deployment; with no career selected the player template defaults
         // (30 HP, 40/50 psi) stand. Absolute values keep re-application
-        // idempotent across level loads.
+        // idempotent across level loads. Setting current = max mirrors the
+        // engine's existing model: the player is `RuntimePropDoNotSerialize` and
+        // its HP/psi are re-seeded from the template on every load (there is no
+        // current-HP persistence yet), so this only changes the values arrived
+        // with, not whether a reset happens.
         if let Some(career) = crate::career::Career::from_quest_info(&quest_info) {
             let loadout = career.loadout();
             world.run(

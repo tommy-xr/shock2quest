@@ -588,9 +588,7 @@ impl ScriptWorld {
             "shotgunmodify" => Box::new(NoopScript::new()),
             "energyweapon" => Box::new(NoopScript::new()),
             "grenademodify" => Box::new(NoopScript::new()),
-            "weapontrainer" => Box::new(skill_trainer::SkillTrainerScript::new(
-                skill_trainer::TrainerKind::Weapon,
-            )),
+            "weapontrainer" => Box::new(skill_trainer::SkillTrainerScript::new("weapontrainer")),
             "wrench" => Box::new(CompositeScript::new(vec![
                 Box::new(MeleeWeapon::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
@@ -630,15 +628,9 @@ impl ScriptWorld {
             "triggerdestroy" => Box::new(NoopScript::new()),
 
             // skill point machines
-            "psitrainer" => Box::new(skill_trainer::SkillTrainerScript::new(
-                skill_trainer::TrainerKind::Psi,
-            )),
-            "techtrainer" => Box::new(skill_trainer::SkillTrainerScript::new(
-                skill_trainer::TrainerKind::Tech,
-            )),
-            "statstrainer" => Box::new(skill_trainer::SkillTrainerScript::new(
-                skill_trainer::TrainerKind::Stats,
-            )),
+            "psitrainer" => Box::new(skill_trainer::SkillTrainerScript::new("psitrainer")),
+            "techtrainer" => Box::new(skill_trainer::SkillTrainerScript::new("techtrainer")),
+            "statstrainer" => Box::new(skill_trainer::SkillTrainerScript::new("statstrainer")),
             "traitmachine" => Box::new(NoopScript::new()),
 
             // medsci2
