@@ -9,6 +9,9 @@ export type InputAction =
   | "CycleAmmo"
   | "Reload"
   | "CyclePsiPower"
+  | "SelectCareerMarine"
+  | "SelectCareerNavy"
+  | "SelectCareerOsa"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 

@@ -90,6 +90,15 @@ impl ActionDispatcher {
                 level: AIAlertLevel::Lowest,
             });
         }
+        if state.just_triggered(InputAction::SelectCareerMarine) {
+            effects.extend(crate::career::Career::Marine.select_effects());
+        }
+        if state.just_triggered(InputAction::SelectCareerNavy) {
+            effects.extend(crate::career::Career::Navy.select_effects());
+        }
+        if state.just_triggered(InputAction::SelectCareerOsa) {
+            effects.extend(crate::career::Career::Osa.select_effects());
+        }
 
         effects
     }
