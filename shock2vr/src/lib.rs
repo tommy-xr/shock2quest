@@ -9,6 +9,7 @@ pub mod scenes;
 pub mod teleport;
 pub mod time;
 
+mod career;
 mod creature;
 mod flat_player_controller;
 mod gui;
