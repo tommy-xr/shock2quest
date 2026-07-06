@@ -16,17 +16,19 @@ impl ChooseMissionScript {
     fn get_current_year(world: &World) -> u32 {
         let quest_info = world.borrow::<UniqueView<QuestInfo>>().unwrap();
 
-        // Check for training year quest bits (training_year_1, training_year_2, etc.)
+        // The HIGHEST completed training year (default 1 when none set), so each
+        // trigger advances the counter monotonically. Returning the *lowest*
+        // completed bit made it stick: once training_year_2 and _3 were both set
+        // it always returned 2 -> new_year 3 < 4, re-looping station.mis forever
+        // and never reaching the year-4 deploy-to-medsci1 branch.
+        let mut highest = 1;
         for year in 1..=4 {
             let quest_bit_name = format!("training_year_{}", year);
-            let quest_bit_value = quest_info.read_quest_bit_value(&quest_bit_name);
-            if quest_bit_value == QuestBitValue::COMPLETE {
-                return year;
+            if quest_info.read_quest_bit_value(&quest_bit_name) == QuestBitValue::COMPLETE {
+                highest = year;
             }
         }
-
-        // If no training year quest bits are set, default to year 1
-        1
+        highest
     }
 
     fn set_training_year(year: u32) -> Effect {
