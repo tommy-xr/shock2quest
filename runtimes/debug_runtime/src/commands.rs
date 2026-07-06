@@ -48,6 +48,18 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<TransitionLevelResult>,
     },
 
+    /// Save the current game to a named save file (frontier persistence).
+    SaveGame {
+        file: String,
+        reply: oneshot::Sender<SaveLoadResult>,
+    },
+
+    /// Load a previously-saved game, restoring mission/player/quests/items.
+    LoadGame {
+        file: String,
+        reply: oneshot::Sender<SaveLoadResult>,
+    },
+
     /// Snapshot the quest bits (objective flags) the game has set.
     GetQuestBits {
         reply: oneshot::Sender<QuestBitsResult>,
@@ -390,6 +402,18 @@ pub struct MoveResult {
     pub distance_moved: f32,
     /// The distance the move was allowed to attempt: `min(target distance, 5.0)`.
     pub requested_distance: f32,
+}
+
+/// Result of a save-to-file or load-from-file request.
+#[derive(Debug, Serialize)]
+pub struct SaveLoadResult {
+    pub success: bool,
+    /// The bare save name (no extension) that was saved/loaded.
+    pub file: String,
+    /// The active scene name after the operation (e.g. "medsci1.mis"). After a
+    /// load this is the restored mission; after a save it is the scene saved.
+    pub mission: String,
+    pub message: String,
 }
 
 /// Result of a level transition (warp) request
