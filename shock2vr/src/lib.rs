@@ -90,6 +90,17 @@ pub fn resource_path(str: &str) -> String {
     paths::data_root().join(str).to_string_lossy().into_owned()
 }
 
+/// Resolve a bare save name to its on-disk `.sav` path under `<data_root>/saves`.
+///
+/// `name` is expected to be a bare name (no extension / path separators - the
+/// caller validates that at the edge). Named saves live in a stable directory
+/// keyed off the data root so a save written in one runtime launch can be
+/// reloaded in a later launch (frontier persistence for automated play-through
+/// loops).
+pub fn save_file_path(name: &str) -> std::path::PathBuf {
+    paths::data_root().join("saves").join(format!("{name}.sav"))
+}
+
 /// How the game is presented and controlled.
 ///
 /// `Vr` is the existing head/hands interaction model (forearm HUD panels,
@@ -527,6 +538,37 @@ impl Game {
             loc,
             entities_to_trigger: vec![],
         });
+    }
+
+    /// Save the current game to a named save file under `<data_root>/saves`.
+    ///
+    /// `file` is a bare name (no extension / path separators - validate at the
+    /// edge); it resolves to `<data_root>/saves/<file>.sav`. This is the same
+    /// serialization an in-game quicksave performs (`GlobalEffect::Save`) -
+    /// active mission, player position/rotation, quest bits, and held items.
+    /// Returns the scene name that was saved so the caller can report it.
+    pub fn save_game(&mut self, file: String) -> String {
+        let path = save_file_path(&file);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        self.handle_global_effect(GlobalEffect::Save {
+            file_name: path.to_string_lossy().into_owned(),
+        });
+        self.scene_name().to_string()
+    }
+
+    /// Load a previously-saved game from `<data_root>/saves/<file>.sav`,
+    /// restoring the active mission, player position/rotation, quest bits, and
+    /// held items. The switch is synchronous (no loading-screen deferral), so
+    /// the returned scene name already reflects the restored mission. The caller
+    /// must ensure the file exists - the load path panics on a missing file.
+    pub fn load_game(&mut self, file: String) -> String {
+        let path = save_file_path(&file);
+        self.handle_global_effect(GlobalEffect::Load {
+            file_name: path.to_string_lossy().into_owned(),
+        });
+        self.scene_name().to_string()
     }
 
     /// Get access to the debug scene interface if available

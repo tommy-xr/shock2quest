@@ -19,6 +19,7 @@ import type {
   MoveResult,
   TeleportResult,
   TransitionLevelResult,
+  SaveLoadResult,
   QuestBitsResult,
   QuestBitValue,
   PlayerInventoryResult,
@@ -315,6 +316,26 @@ export class Game {
       "/v1/control/transition-level",
       { level, loc },
     );
+  }
+
+  /**
+   * Save the current game to a named file (a bare name, no extension / path
+   * separators - e.g. "frontier"). Persists the active mission, player
+   * position/rotation, quest bits, and held items. The save survives across
+   * runtime relaunches, so a later `load(file)` in a fresh session resumes it.
+   */
+  async save(file: string): Promise<SaveLoadResult> {
+    return this.client.post<SaveLoadResult>("/v1/save", { file });
+  }
+
+  /**
+   * Load a previously-saved game by name, restoring the active mission, player
+   * position/rotation, quest bits, and held items. The restore is synchronous,
+   * so info() reflects the loaded mission immediately. Rejects (404) if no save
+   * with that name exists.
+   */
+  async load(file: string): Promise<SaveLoadResult> {
+    return this.client.post<SaveLoadResult>("/v1/load", { file });
   }
 
   /**
