@@ -1,17 +1,18 @@
 //! Player career branching for the station recruit deck.
 //!
-//! System Shock 2 opens on the recruitment station, where the player picks one
-//! of three service branches - Marine (combat), Navy (tech), or OSA (psi) - and
-//! deploys to the Von Braun (MedSci 1) with a career-appropriate build. The
-//! branch is chosen via `P$Service` (see `ChooseServiceScript`) or the debug
-//! `SelectCareer*` input actions, registered as a persisted quest bit so it
-//! survives the level transition, then applied to the player on deployment.
+//! System Shock 2 opens on the recruitment intro (`earth.mis`), where the player
+//! picks one of three service branches - Marine (combat), Navy (tech), or OSA
+//! (psi) - by walking through the matching career door, then rides through the
+//! recruit station and deploys to the Von Braun (MedSci 1) with a career-
+//! appropriate build. Choosing a branch fires that door's `ChooseServiceScript`
+//! marker (which carries a `P$Service` value), registering the career as a
+//! persisted quest bit so it survives every level transition, then it is applied
+//! to the player on each mission load.
 //!
 //! The per-career attribute table here is a faithful-in-spirit starting point,
 //! not the exact retail OS-unit numbers: it emphasises each branch (Marines are
 //! tanky, OSA are psionic) so the three careers arrive observably different.
-//! A full skill/stat/cyber-module system - and wiring the in-world station
-//! debrief UI to `ChooseServiceScript` - is deferred (issue #424).
+//! A full skill/stat/cyber-module system is deferred (issue #424).
 
 use dark::properties::QuestBitValue;
 

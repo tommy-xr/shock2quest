@@ -9,9 +9,6 @@ export type InputAction =
   | "CycleAmmo"
   | "Reload"
   | "CyclePsiPower"
-  | "SelectCareerMarine"
-  | "SelectCareerNavy"
-  | "SelectCareerOsa"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
@@ -64,7 +61,10 @@ export type DebugEntityMessage =
   | { type: "Damage"; amount: number }
   | { type: "Frob" }
   | { type: "Signal"; name: string }
-  | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" };
+  | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }
+  // Switch-link activate/deactivate - what a tripwire/button sends to its targets.
+  | { type: "TurnOn" }
+  | { type: "TurnOff" };
 
 export interface EntitySummary {
   id: number;
