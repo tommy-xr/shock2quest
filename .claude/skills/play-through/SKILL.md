@@ -132,12 +132,13 @@ play and stitch with the **`video-capture`** skill (60Hz sim / 4 = real-time
 
 ## Autonomous mode (`--auto`) — drive with `/loop`
 
-Run the loop hands-off with `/loop /play-through --auto` (self-paced: each
-iteration runs, then schedules the next). State persists in a **ledger** so it
-resumes at the frontier and marches forward instead of re-treading:
+Just run `/loop /play-through --auto` (self-paced: each iteration runs, then
+schedules the next). It **auto-creates the campaign ledger on first run** — no
+setup step. State persists in that ledger so it resumes at the frontier and
+marches forward instead of re-treading:
 
 ```
-node .claude/skills/play-through/playthrough-state.mjs init      # once, per campaign
+node .claude/skills/play-through/playthrough-state.mjs init      # idempotent; --auto calls it (--force resets)
 node .claude/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
 #   blocker add <level> <bug|feature-gap> <issue#> <desc...>   ·  blocker set <issue#> <status> [pr#]
 #   advance <level> <saveName> <x,y,z> [note...]               (sets frontier, bumps iteration)
@@ -148,8 +149,15 @@ The ledger holds: `frontier` (the game **save** to `/v1/load` from), the
 that **stacks each fix** so the campaign plays *past* an already-fixed-but-
 unmerged blocker.
 
+**Clear & start a new campaign:** `playthrough-state.mjs init --force` (wipes the
+ledger back to iteration 0). For a *truly* clean slate also recreate the
+`fix_branch` off current `main` and delete stale frontier saves (`<data_root>/
+saves/frontier*.sav`) — otherwise the fresh campaign just launches mission 0 with
+no frontier to load, which is harmless.
+
 **Each `--auto` iteration** (do exactly one; `/loop` repeats):
-1. `playthrough-state.mjs show` → read the frontier + NEXT action. (`init` if absent.)
+1. `playthrough-state.mjs init` (idempotent — creates the ledger on the first
+   iteration, keeps it after), then `show` → read the frontier + NEXT action.
 2. **Resume:** build the runtime from the **`fix_branch`** (so accrued fixes are
    in), launch it, and `POST /v1/load {file: frontier.save}` — or launch the first
    mission fresh at iteration 0.

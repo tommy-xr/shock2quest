@@ -33,6 +33,12 @@ function nextAction(s) {
 
 switch (cmd) {
   case "init": {
+    // Idempotent: safe to call at the start of every --auto iteration. Only
+    // creates the ledger if absent; `--force` resets an existing campaign.
+    if (existsSync(FILE) && !args.includes("--force")) {
+      console.log(`ledger already exists at ${FILE} (iteration ${load().iteration}) — kept. Use --force to reset.`);
+      break;
+    }
     const order = (rest.find((a) => a.startsWith("order="))?.slice(6) || "earth,station,medsci1,medsci2,eng1,eng2,hydro1,hydro2,hydro3,ops1,ops2,ops3,ops4,rec1,rec2,rec3,command1,command2,rick1,rick2,rick3,many,shodan").split(",");
     const fixBranch = rest.find((a) => a.startsWith("fixBranch="))?.slice(10) || "playthrough-fixes";
     save({ iteration: 0, mission_order: order, fix_branch: fixBranch, frontier: null, blockers: [], history: [] });
