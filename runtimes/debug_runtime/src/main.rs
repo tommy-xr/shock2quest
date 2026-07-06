@@ -333,7 +333,9 @@ async fn start_http_server(
     info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
     info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
     info!("  POST /v1/save             - Save the game to a named file {{file}}");
-    info!("  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}");
+    info!(
+        "  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}"
+    );
     info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
@@ -991,7 +993,10 @@ fn process_command(
                     tracing::error!("Load of '{}' panicked (caught to keep runtime alive)", file);
                     commands::SaveLoadResult {
                         success: false,
-                        message: format!("Failed to load '{}' - corrupt or incompatible save", file),
+                        message: format!(
+                            "Failed to load '{}' - corrupt or incompatible save",
+                            file
+                        ),
                         file,
                         mission: String::new(),
                     }
@@ -2225,7 +2230,10 @@ struct SaveLoadRequest {
 fn validate_save_name(file: &str) -> Result<String, (StatusCode, String)> {
     let file = file.trim();
     if file.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "file must not be empty".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "file must not be empty".to_string(),
+        ));
     }
     if file.contains('/') || file.contains('\\') || file.contains("..") {
         return Err((
