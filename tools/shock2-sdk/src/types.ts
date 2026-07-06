@@ -226,6 +226,15 @@ export interface TransitionLevelResult {
   message: string;
 }
 
+export interface SaveLoadResult {
+  success: boolean;
+  /** Bare save name (no extension) that was saved/loaded. */
+  file: string;
+  /** Active scene after the operation, e.g. "medsci1.mis". */
+  mission: string;
+  message: string;
+}
+
 /** The 3-state value of a quest bit (objective flag). */
 export type QuestBitValue = "unknown" | "incomplete" | "complete";
 

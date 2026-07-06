@@ -282,6 +282,8 @@ async fn start_http_server(
             "/v1/control/transition-level",
             axum::routing::post(transition_level),
         )
+        .route("/v1/save", axum::routing::post(save_game))
+        .route("/v1/load", axum::routing::post(load_game))
         .route("/v1/quests", get(get_quest_bits))
         .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
         .route("/v1/player/inventory", get(get_player_inventory))
@@ -330,6 +332,8 @@ async fn start_http_server(
     info!("  POST /v1/player/teleport  - Teleport player to coordinates (raw, unbounded)");
     info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
     info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
+    info!("  POST /v1/save             - Save the game to a named file {{file}}");
+    info!("  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}");
     info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
@@ -932,6 +936,69 @@ fn process_command(
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send transition result - receiver dropped");
+            }
+        }
+        RuntimeCommand::SaveGame { file, reply } => {
+            tracing::info!("Saving game to '{}'", file);
+            // The underlying save path unwraps on I/O errors and on scenes that
+            // lack a player/quest state (e.g. a debug scene). Contain a panic
+            // here so a failed save returns an error instead of unwinding out of
+            // the game-loop thread and bricking the runtime for every later
+            // command. A save is `&self`, so a caught panic leaves state intact.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                game.save_game(file.clone())
+            }));
+            let result = match outcome {
+                Ok(mission) => commands::SaveLoadResult {
+                    success: true,
+                    message: format!("Saved '{}' ({})", file, mission),
+                    file,
+                    mission,
+                },
+                Err(_) => {
+                    tracing::error!("Save of '{}' panicked (caught to keep runtime alive)", file);
+                    commands::SaveLoadResult {
+                        success: false,
+                        message: format!("Failed to save '{}' (see runtime log)", file),
+                        file,
+                        mission: String::new(),
+                    }
+                }
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send save result - receiver dropped");
+            }
+        }
+        RuntimeCommand::LoadGame { file, reply } => {
+            tracing::info!("Loading game from '{}'", file);
+            // Existence is pre-checked in the handler, but a file that exists yet
+            // is truncated / not UTF-8 / an incompatible save schema still panics
+            // inside SaveData::read. Contain it so a corrupt save returns an error
+            // rather than bricking the game-loop thread. load_from_file only swaps
+            // `active_game_scene` as its final step (after all fallible reads), so
+            // a caught panic leaves the previously-active scene intact.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                game.load_game(file.clone())
+            }));
+            let result = match outcome {
+                Ok(mission) => commands::SaveLoadResult {
+                    success: true,
+                    message: format!("Loaded '{}' ({})", file, mission),
+                    file,
+                    mission,
+                },
+                Err(_) => {
+                    tracing::error!("Load of '{}' panicked (caught to keep runtime alive)", file);
+                    commands::SaveLoadResult {
+                        success: false,
+                        message: format!("Failed to load '{}' - corrupt or incompatible save", file),
+                        file,
+                        mission: String::new(),
+                    }
+                }
+            };
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send load result - receiver dropped");
             }
         }
         RuntimeCommand::GetQuestBits { reply } => {
@@ -2138,6 +2205,114 @@ async fn transition_level(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive transition result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// Request body for a save or load request. `file` is a bare save name.
+#[derive(serde::Deserialize)]
+struct SaveLoadRequest {
+    /// Bare save name (no extension / path separators), e.g. "frontier".
+    file: String,
+}
+
+/// Validate a bare save name before it reaches the game loop / filesystem.
+///
+/// The save/load path builds an on-disk path from this name, so a name with a
+/// path separator or `..` could escape the saves directory. Reject those (and
+/// empties) with a 400 up front rather than trusting the caller.
+fn validate_save_name(file: &str) -> Result<String, (StatusCode, String)> {
+    let file = file.trim();
+    if file.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "file must not be empty".to_string()));
+    }
+    if file.contains('/') || file.contains('\\') || file.contains("..") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("file must be a bare save name, got '{}'", file),
+        ));
+    }
+    Ok(file.to_string())
+}
+
+/// HTTP handler for saving the current game to a named file. Persists a
+/// "frontier" save that a later runtime launch can reload to resume - the core
+/// of the automated play-through loop's cross-launch resume.
+async fn save_game(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<SaveLoadRequest>,
+) -> Result<Json<commands::SaveLoadResult>, (StatusCode, String)> {
+    let file = validate_save_name(&request.file)?;
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::SaveGame {
+            file,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send SaveGame command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(result) if result.success => Ok(Json(result)),
+        // The save path unwrapped (I/O error, or a scene without player state);
+        // the game loop caught it and stayed alive, so surface a 500 here.
+        Ok(result) => Err((StatusCode::INTERNAL_SERVER_ERROR, result.message)),
+        Err(_) => {
+            tracing::error!("Failed to receive save result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler for loading a named save, restoring the active mission, player
+/// position/rotation, quest bits, and held items. Works cross-launch (a fresh
+/// runtime started on any mission can load a frontier save and resume).
+async fn load_game(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<SaveLoadRequest>,
+) -> Result<Json<commands::SaveLoadResult>, (StatusCode, String)> {
+    let file = validate_save_name(&request.file)?;
+
+    // The load path does `File::open(...).unwrap()`, so a missing save would
+    // panic the game-loop thread and brick the runtime for every later command.
+    // Reject a nonexistent save up front with 404 instead.
+    let resolved = shock2vr::save_file_path(&file);
+    if !resolved.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!(
+                "save '{}' not found (looked at {})",
+                file,
+                resolved.display()
+            ),
+        ));
+    }
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::LoadGame {
+            file,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send LoadGame command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(result) if result.success => Ok(Json(result)),
+        // The save existed but was corrupt / schema-incompatible: the game loop
+        // caught the panic and kept the previous scene, so surface a 500 rather
+        // than a misleading success.
+        Ok(result) => Err((StatusCode::INTERNAL_SERVER_ERROR, result.message)),
+        Err(_) => {
+            tracing::error!("Failed to receive load result - sender dropped");
             Err(game_loop_unavailable())
         }
     }
