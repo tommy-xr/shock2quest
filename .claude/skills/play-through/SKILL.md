@@ -182,6 +182,13 @@ no frontier to load, which is harmless.
 - **Recurrence = pause.** If a blocker isn't cleared after its fix (step 7 fails),
   `blocker set <n> failed` and **stop for a human** — don't loop on a bad fix.
 
+**Watch mode.** The debug runtime renders to a *hidden* window by default. To
+watch the agent play in a real on-screen window, launch it **`--visible`**
+(`cargo dbgr --mission <m> --visible`, or SDK
+`GameServer.launch({mission, debugFlags:["--visible"]})`). Screenshots + the HTTP
+API work identically — good for supervising the first iterations before going
+fully hands-off.
+
 ## Notes
 - Delegate playtest + review + each fix to sub-agents; the manager keeps the
   ledger (frontier, issues→fixes, iteration report).
