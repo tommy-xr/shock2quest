@@ -118,6 +118,26 @@ pub fn pointer_to_canvas(
     }
 }
 
+/// Map a canvas-pixel rect to normalized screen coordinates (`[0,1]` per
+/// axis, origin top-left) for a `canvas_size` canvas shown on `screen_size`
+/// under `mode` - the rect analogue (and inverse) of [`pointer_to_canvas`].
+/// Lets clients (e.g. the debug runtime's `GET /v1/ui`) aim a normalized
+/// pointer at a canvas rect without re-deriving the letterbox math.
+pub fn canvas_rect_to_screen(
+    rect: Rect,
+    canvas_size: Vector2<f32>,
+    screen_size: Vector2<f32>,
+    mode: ScaleMode,
+) -> Rect {
+    let (scale, offset) = fit(canvas_size, screen_size, mode);
+    Rect::new(
+        (rect.x * scale.x + offset.x) / screen_size.x,
+        (rect.y * scale.y + offset.y) / screen_size.y,
+        rect.w * scale.x / screen_size.x,
+        rect.h * scale.y / screen_size.y,
+    )
+}
+
 enum UiElement {
     Image {
         rect: Rect,
@@ -349,6 +369,29 @@ mod tests {
         // A point inside the left pillarbox bar is outside the canvas.
         let in_bar = pointer_to_canvas(canvas, vec2(0.1, 0.5), screen, ScaleMode::PreserveAspect);
         assert_eq!(in_bar, None);
+    }
+
+    #[test]
+    fn canvas_rect_to_screen_letterboxes_and_roundtrips() {
+        // 640x480 canvas pillarboxed on a 1280x480 screen: scale 1, 320px bars.
+        let canvas = vec2(640.0, 480.0);
+        let screen = vec2(1280.0, 480.0);
+        let r = canvas_rect_to_screen(
+            Rect::new(0.0, 0.0, 640.0, 480.0),
+            canvas,
+            screen,
+            ScaleMode::PreserveAspect,
+        );
+        assert_eq!(r, Rect::new(0.25, 0.0, 0.5, 1.0));
+
+        // Roundtrip: the normalized center of a mapped rect points back at the
+        // canvas rect's center through pointer_to_canvas.
+        let target = Rect::new(17.0, 166.0, 45.0, 60.0);
+        let mapped = canvas_rect_to_screen(target, canvas, screen, ScaleMode::PreserveAspect);
+        let back = pointer_to_canvas(canvas, mapped.center(), screen, ScaleMode::PreserveAspect)
+            .expect("center should land inside the canvas");
+        assert!((back.x - target.center().x).abs() < 1e-3);
+        assert!((back.y - target.center().y).abs() < 1e-3);
     }
 
     #[test]

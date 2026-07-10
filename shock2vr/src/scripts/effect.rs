@@ -97,6 +97,14 @@ pub enum Effect {
     /// See `projects/flat-ui.md`.
     ToggleUseMode,
 
+    /// Open the flat-mode MFD panel bound to `entity` - emitted by `GuiScript`
+    /// when its entity is frobbed, mirroring the original engine where the
+    /// frob script opens the overlay (`cShockGameSrv::Keypad`). Ignored in VR,
+    /// where panels are always-on world quads. See `projects/flat-ui.md` §5.2.
+    OpenPanel {
+        entity: EntityId,
+    },
+
     /// Select the player's next *trained* psi power (advances
     /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
     /// skipping powers not in `PlayerPsiKnownPowers`).

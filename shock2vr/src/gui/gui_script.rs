@@ -96,6 +96,10 @@ where
                 parent_entity_id: entity_id,
                 dropped_entity_id: *entity,
             },
+            // Frobbing a GUI-bearing entity opens its panel as a flat-mode MFD
+            // (the original's frob-script -> overlay flow). VR ignores the
+            // effect - its panels are world quads driven by `Hover` instead.
+            MessagePayload::Frob => Effect::OpenPanel { entity: entity_id },
             MessagePayload::GUIHover {
                 held_entity_id,
                 screen_coordinates,

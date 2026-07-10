@@ -303,6 +303,10 @@ pub fn main() {
     // Tracks whether the OS cursor is currently visible (Normal) vs captured
     // for mouse-look (Disabled). The window starts with the cursor disabled.
     let mut cursor_visible = false;
+    // A mouse button still held when a cursor UI closes (e.g. LMB-closing an
+    // MFD panel) must not fire the weapon on the next frame - swallow the
+    // held press until every button is released.
+    let mut suppress_mouse_until_release = false;
     let mut action_state = InputActionState::new();
 
     let _mode = Mode::Gameplay;
@@ -324,6 +328,22 @@ pub fn main() {
             } else {
                 glfw::CursorMode::Disabled
             });
+            if wants_pointer {
+                // The captured (Disabled) cursor position is a virtual,
+                // unbounded accumulator - garbage as a screen pointer. Start
+                // the visible cursor centered and sync the tracked position
+                // so the first CursorPos event doesn't produce a huge delta.
+                let (cx, cy) = (SCR_WIDTH as f64 / 2.0, SCR_HEIGHT as f64 / 2.0);
+                window.set_cursor_pos(cx, cy);
+                camera_context.mouse_position = Some(MousePosition {
+                    x: cx as f32,
+                    y: cy as f32,
+                });
+            } else {
+                // Re-capturing: forget the pointer position so the next
+                // mouse-look delta starts fresh instead of jumping.
+                camera_context.mouse_position = None;
+            }
             cursor_visible = wants_pointer;
         }
 
@@ -342,18 +362,30 @@ pub fn main() {
         // mouse button - or shift+left-click, which is easier on a trackpad -
         // uses/frobs/picks up. (The flat controller reads the right-hand trigger
         // + squeeze.)
+        // While a 2D cursor UI is up (e.g. an MFD panel), mouse buttons drive
+        // the cursor (`input_context.pointer`), not fire/frob - the original
+        // surrenders the mouse to the metagame the same way. A button still
+        // held when the UI closes stays swallowed until released.
         if !args.vr {
             let pressed = |b| window.get_mouse_button(b) == Action::Press;
-            let shift = window.get_key(Key::LeftShift) == Action::Press
-                || window.get_key(Key::RightShift) == Action::Press;
-            let lmb = pressed(MouseButton::Button1);
-            input_context.right_hand.trigger_value = if lmb && !shift { 1.0 } else { 0.0 };
-            input_context.right_hand.squeeze_value =
-                if pressed(MouseButton::Button2) || (lmb && shift) {
-                    1.0
-                } else {
-                    0.0
-                };
+            let any_mouse = pressed(MouseButton::Button1) || pressed(MouseButton::Button2);
+            if wants_pointer {
+                suppress_mouse_until_release = true;
+            } else if !any_mouse {
+                suppress_mouse_until_release = false;
+            }
+            if !wants_pointer && !suppress_mouse_until_release {
+                let shift = window.get_key(Key::LeftShift) == Action::Press
+                    || window.get_key(Key::RightShift) == Action::Press;
+                let lmb = pressed(MouseButton::Button1);
+                input_context.right_hand.trigger_value = if lmb && !shift { 1.0 } else { 0.0 };
+                input_context.right_hand.squeeze_value =
+                    if pressed(MouseButton::Button2) || (lmb && shift) {
+                        1.0
+                    } else {
+                        0.0
+                    };
+            }
         }
 
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
@@ -529,6 +561,13 @@ fn process_events(
             }
             _ => {}
         }
+    }
+
+    // While a 2D cursor UI is up, mouse motion moves the cursor, not the
+    // camera/hands - the original surrenders mouse-look to the metagame.
+    if wants_pointer {
+        rot_yaw = 0.0;
+        rot_pitch = 0.0;
     }
 
     if window.get_key(Key::E) == Action::Press {

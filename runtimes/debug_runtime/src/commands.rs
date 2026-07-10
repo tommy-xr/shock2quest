@@ -458,12 +458,13 @@ pub struct QuestBitsResult {
     pub count: usize,
 }
 
-/// Flat-mode UI state snapshot (`GET /v1/ui`): "shooter" or "use".
-/// Panel/element introspection is added with the flat UI host
-/// (see projects/flat-ui.md).
+/// Flat-mode UI state snapshot (`GET /v1/ui`): "shooter" or "use", plus the
+/// open MFD panel (entity binding + labeled clickable elements with canvas
+/// and normalized-screen rects). See projects/flat-ui.md.
 #[derive(Debug, Serialize)]
 pub struct UiStateResult {
     pub mode: String,
+    pub active_panel: Option<shock2vr::game_scene::DebugUiPanel>,
 }
 
 /// A single carried item.
