@@ -1,5 +1,5 @@
 // Ledger for the autonomous play-through loop (--auto). Persists the state that
-// makes /loop /play-through resumable and forward-marching across iterations:
+// makes repeated play-through skill invocations resumable across iterations:
 // the frontier (furthest state, as a game save), the blocker->fix ledger, and
 // the stacked-fixes branch. Atomic read-modify-write so a loop agent never
 // corrupts it by hand-editing JSON.

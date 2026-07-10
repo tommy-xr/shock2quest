@@ -2,7 +2,7 @@
 name: play-through
 description: >-
   Manager loop that hardens the game toward fully-playable end-to-end. It drives
-  the `playtest` primitive in a PLAYTEST -> REVIEW -> FIX -> REPLAY loop: play one
+  the `playtest` primitive in a PLAYTEST to REVIEW to FIX to REPLAY loop: play one
   session (agent plays a mission via the debug runtime, emits a data.json),
   adversarially REVIEW that session against a real walkthrough (did it genuinely
   progress, were the actions sensible, are the findings real - not artifacts of
@@ -19,8 +19,9 @@ Owns the *loop* that hardens the game to end-to-end playable. The atomic unit is
 the **`playtest`** skill (play one session, emit `data.json`); this manager runs
 it repeatedly, **reviews** each session for validity, fixes what blocks progress,
 and replays a little further — tracking a **frontier** so it never re-plays solved
-ground. Delegate the playtest and each fix to sub-agents (keeps the image-heavy
-work out of the main context); the manager holds the loop state and the report.
+ground. When the host supports delegation, assign playtest, review, and fix work
+to subagents to keep image-heavy work out of the manager's context. Otherwise,
+run those phases inline. The manager always owns loop state and the report.
 
 ## The loop
 
@@ -42,9 +43,10 @@ with confidence" = every mission in sequence plays through clean on a fresh repl
 
 A playtest can *look* busy without actually **playing** (teleport-and-poke,
 frobbing decorative props, "bugs" that are just the agent doing the wrong thing).
-Before acting on a session, review its `data.json` **adversarially** — spawn a
-reviewer sub-agent (it may read the screenshots and consult a real System Shock 2
-walkthrough for the mission):
+Before acting on a session, review its `data.json` **adversarially**. Use a
+separate reviewer subagent when available, or perform a distinct inline review
+pass. The reviewer may read screenshots and consult a real System Shock 2
+walkthrough for the mission:
 
 - **Did it genuinely progress** toward the goal, or just survey? (moved along the
   intended path, pursued the objective, tried the real exit — vs jumping between
@@ -89,15 +91,15 @@ mission, repro: exact levers + step count, expected vs actual, the screenshot).
   the real mechanism. Debug levers are for *testing* the fix, never the fix.
 - Expect a **larger PR**; that's fine. A faithful partial implementation with a
   clear "deferred" note beats a shim that looks done.
-- **The review checks faithfulness explicitly:** on the fix PR (via `/xreview`
-  and your own read), ask "does this use the real in-world flow, or does it fake
+- **The review checks faithfulness explicitly:** on the fix PR, use the available
+  review workflow and ask "does this use the real in-world flow, or does it fake
   the mechanism?" — reject shims. (This is how #426 was caught: it made careers
   differ via F-key debug actions instead of wiring the station career choice.)
 
 For a plain **bug**, a targeted fix + negative-first test is enough. Either way the
-fix agent follows the repo's incremental + `/xreview` + negative-first-test
-discipline, opens a PR `Fixes #n`, and re-validates. Non-blockers: log them, keep
-playing past them.
+fix agent follows the repo's incremental, review, and negative-first-test
+discipline, opens a PR `Fixes #n`, and re-validates. Non-blockers: log them,
+keep playing past them.
 
 ## 5. Replay & frontier
 
@@ -117,7 +119,7 @@ the aggregate) to a **self-contained HTML timeline** — images inlined as base6
 so it's one portable file:
 
 ```
-node .claude/skills/play-through/render-timeline.mjs <run-dir>/data.json
+node .agents/skills/play-through/render-timeline.mjs <run-dir>/data.json
 # -> <run-dir>/report.html   (open file://... ; renders anywhere)
 ```
 
@@ -130,16 +132,17 @@ Optionally record a **video** of a session — capture frames at a cadence durin
 play and stitch with the **`video-capture`** skill (60Hz sim / 4 = real-time
 15fps). Local artifact.
 
-## Autonomous mode (`--auto`) — drive with `/loop`
+## Autonomous mode (`--auto`)
 
-Just run `/loop /play-through --auto` (self-paced: each iteration runs, then
-schedules the next). It **auto-creates the campaign ledger on first run** — no
-setup step. State persists in that ledger so it resumes at the frontier and
-marches forward instead of re-treading:
+Invoke the `play-through` skill with `--auto` using the host agent's skill syntax.
+Run exactly one iteration per invocation; a host automation or loop facility may
+schedule subsequent invocations. It **auto-creates the campaign ledger on first
+run** — no setup step. State persists in that ledger so it resumes at the
+frontier and marches forward instead of re-treading:
 
 ```
-node .claude/skills/play-through/playthrough-state.mjs init      # idempotent; --auto calls it (--force resets)
-node .claude/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
+node .agents/skills/play-through/playthrough-state.mjs init      # idempotent; --auto calls it (--force resets)
+node .agents/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
 #   blocker add <level> <bug|feature-gap> <issue#> <desc...>   ·  blocker set <issue#> <status> [pr#]
 #   advance <level> <saveName> <x,y,z> [note...]               (sets frontier, bumps iteration)
 ```
@@ -155,7 +158,7 @@ ledger back to iteration 0). For a *truly* clean slate also recreate the
 saves/frontier*.sav`) — otherwise the fresh campaign just launches mission 0 with
 no frontier to load, which is harmless.
 
-**Each `--auto` iteration** (do exactly one; `/loop` repeats):
+**Each `--auto` iteration** (do exactly one; a host loop may repeat it):
 1. `playthrough-state.mjs init` (idempotent — creates the ledger on the first
    iteration, keeps it after), then `show` → read the frontier + NEXT action.
 2. **Resume:** build the runtime from the **`fix_branch`** (so accrued fixes are
@@ -165,8 +168,9 @@ no frontier to load, which is harmless.
 4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.
 5. **Triage** the blocker (bug vs **feature-gap** — §3-4; feature-gaps get a
    *faithful*, non-shim fix).
-6. **Fix:** spawn a fix sub-agent that commits on **`fix_branch`** (stacked) and
-   opens a PR `Fixes #n`. `blocker add` / `blocker set` in the ledger.
+6. **Fix:** assign a fix worker, using a subagent when available, that commits on
+   **`fix_branch`** (stacked) and opens a PR `Fixes #n`. `blocker add` /
+   `blocker set` in the ledger.
 7. **Re-validate:** rebuild `fix_branch`, reload the frontier save, confirm the
    playtest now gets **past** the blocker.
 8. **Advance:** `POST /v1/save {file:"frontier"}` at the new furthest point;
@@ -183,8 +187,9 @@ no frontier to load, which is harmless.
   `blocker set <n> failed` and **stop for a human** — don't loop on a bad fix.
 
 ## Notes
-- Delegate playtest + review + each fix to sub-agents; the manager keeps the
-  ledger (frontier, issues→fixes, iteration report).
+- Delegate playtest, review, and each fix when supported; otherwise keep the
+  phases distinct inline. The manager keeps the ledger (frontier, issues→fixes,
+  iteration report).
 - Navigation today is teleport + short thumbstick drives; real-movement
   playtesting (navmesh traversal) is a planned upgrade — keep frontier positions
   as world coordinates so it drops in.
