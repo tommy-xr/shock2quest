@@ -1,25 +1,18 @@
 use cgmath::{
     Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, vec3, vec4,
 };
-use dark::{
-    SCALE_FACTOR,
-    properties::{Link, PropTemplateId},
-};
+use dark::SCALE_FACTOR;
 
-use shipyard::{EntityId, Get, UniqueView, View, World};
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     creature::RuntimePropHitBox,
-    mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateHierarchy},
+    mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::RuntimePropTransform,
-    scripts::{
-        Message,
-        ai::ai_util::does_entity_have_hitboxes,
-        script_util::{get_all_links_with_template, get_first_link_with_template_and_data},
-    },
+    scripts::{Message, ai::ai_util::does_entity_have_hitboxes, script_util::choose_impact_spang},
     time::Time,
-    util::{get_position_from_transform, get_rotation_from_forward_vector, resolve_proxy_entity},
+    util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
 use super::{Effect, MessagePayload, Script};
@@ -88,28 +81,9 @@ impl Script for InternalFastProjectileScript {
                 Effect::DestroyEntity { entity_id },
             ];
 
-            // Impact effect, from the projectile's authored spang links:
-            // - a creature hit spawns the `HitSpang` whose victim archetype
-            //   class the victim descends from (blood for hybrids/midwives,
-            //   sparks for robots/turrets, ...);
-            // - a world hit spawns the `MissSpang` (terrain spang).
-            // Any entity hit tries the HitSpang match first - not just hitbox
-            // hits, so victims without fitted hitboxes (and catch-all victim
-            // classes like the laser's `Physical`) still spang - and falls
-            // back to the terrain spang when the projectile has no spang
-            // authored for that entity's class.
-            let spang_template = choose_hit_spang(world, entity_id, hit_entity_id).or_else(|| {
-                get_first_link_with_template_and_data(world, entity_id, |link| {
-                    if matches!(link, Link::MissSpang) {
-                        Some(())
-                    } else {
-                        None
-                    }
-                })
-                .map(|(spang_template, ())| spang_template)
-            });
-
-            if let Some(template_id) = spang_template {
+            // Impact effect, from the projectile's authored spang links
+            // (HitSpang matched by victim class, MissSpang fallback).
+            if let Some(template_id) = choose_impact_spang(world, entity_id, hit_entity_id) {
                 effects.push(Effect::CreateEntity {
                     template_id,
                     position: hit_point + hit_normal * SCALE_FACTOR / 25.0,
@@ -146,35 +120,6 @@ impl Script for InternalFastProjectileScript {
     ) -> Effect {
         Effect::NoEffect
     }
-}
-
-/// The spang (impact effect) a projectile spawns on `victim`, from the
-/// projectile's `HitSpang` links: each link targets a victim archetype class
-/// (Hybrids, Robots, ...) and carries the spang template to spawn. Links are
-/// scanned most-derived-projectile-template first (entity links merge
-/// ancestors root-first, so without the reversal a base class's link would
-/// shadow an override authored on a derived projectile); the first link whose
-/// class the victim is or descends from wins. `victim` may be a hitbox proxy
-/// (resolved to its parent creature). `None` when the projectile has no spang
-/// authored for this victim's class.
-fn choose_hit_spang(world: &World, projectile: EntityId, victim: EntityId) -> Option<i32> {
-    let victim = resolve_proxy_entity(world, victim);
-    let victim_template = world
-        .borrow::<View<PropTemplateId>>()
-        .ok()
-        .and_then(|v| v.get(victim).ok().map(|t| t.template_id))?;
-    let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
-    get_all_links_with_template(world, projectile, |link| {
-        if let Link::HitSpang(spang_template) = link {
-            Some(*spang_template)
-        } else {
-            None
-        }
-    })
-    .into_iter()
-    .rev()
-    .find(|(victim_class, _)| hierarchy.is_or_descends_from(victim_template, *victim_class))
-    .map(|(_, spang_template)| spang_template)
 }
 
 fn projectile_ray_cast(
