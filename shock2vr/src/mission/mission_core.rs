@@ -1966,7 +1966,10 @@ impl MissionCore {
                 }
 
                 Effect::ToggleUseMode => {
-                    self.flat_use_mode = !self.flat_use_mode;
+                    // Flat-presentation only: VR has no cursor mode to toggle.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        self.flat_use_mode = !self.flat_use_mode;
+                    }
                 }
 
                 Effect::CyclePsiPower => {

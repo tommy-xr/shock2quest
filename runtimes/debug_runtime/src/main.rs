@@ -1575,7 +1575,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 /// stick does what) since that is the game's convention, not guessable.
 fn input_channels_help() -> &'static str {
     "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
-     pointer.position [x,y] (normalized, origin top-left), pointer.pressed 0|1, \
+     pointer.position [x,y] in [0,1] (origin top-left; null clears), pointer.pressed 0|1, \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
@@ -1673,9 +1673,24 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
         }
         // Flat-mode 2D pointer (cursor). Position is normalized [0,1] per
         // axis, origin top-left; setting either channel materializes the
-        // pointer (it is `None` until first set).
+        // pointer (it is `None` until first set). `pointer.position: null`
+        // clears the pointer back to `None` (scenes branch on Some/None, so
+        // the cleared state must be reachable for testing).
         "pointer.position" => {
+            if value.is_null() {
+                input.pointer = None;
+                return Ok(());
+            }
             let xy = arr(channel, value, 2)?;
+            if !(xy[0].is_finite() && xy[1].is_finite())
+                || !(0.0..=1.0).contains(&xy[0])
+                || !(0.0..=1.0).contains(&xy[1])
+            {
+                return Err(format!(
+                    "channel '{channel}' expects normalized coordinates in [0,1], got [{}, {}]",
+                    xy[0], xy[1]
+                ));
+            }
             let pointer = input
                 .pointer
                 .get_or_insert(shock2vr::input_context::Pointer2D {
@@ -1686,7 +1701,13 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
             Ok(())
         }
         "pointer.pressed" => {
-            let pressed = num(channel, value)? != 0.0;
+            let pressed = match num(channel, value)? {
+                v if v == 0.0 => false,
+                v if v == 1.0 => true,
+                v => {
+                    return Err(format!("channel '{channel}' expects 0 or 1, got {v}"));
+                }
+            };
             let pointer = input
                 .pointer
                 .get_or_insert(shock2vr::input_context::Pointer2D {

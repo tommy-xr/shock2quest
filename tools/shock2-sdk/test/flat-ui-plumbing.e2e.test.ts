@@ -21,7 +21,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8111),
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8115),
     });
     await game.step({ frames: 2 });
 
@@ -62,5 +62,25 @@ test(
       await fetch(`${game.baseUrl}/v1/control/input`)
     ).json()) as { pointer: { pressed: boolean } | null };
     assert.equal(released.pointer?.pressed, false);
+
+    // Invalid values are rejected with a 400 (not silently accepted).
+    for (const [channel, value] of [
+      ["pointer.position", [1.5, 0.5]],
+      ["pointer.position", [Number.NaN, 0.5]],
+      ["pointer.pressed", 0.5],
+    ] as const) {
+      const res = await fetch(`${game.baseUrl}/v1/control/input`, {
+        method: "POST",
+        body: JSON.stringify({ channel, value }),
+      });
+      assert.equal(res.status, 400, `${channel}=${value} should be rejected`);
+    }
+
+    // `pointer.position: null` clears the pointer back to None.
+    await game.input.set("pointer.position", null);
+    const cleared = (await (
+      await fetch(`${game.baseUrl}/v1/control/input`)
+    ).json()) as { pointer: unknown };
+    assert.equal(cleared.pointer, null, "null position should clear the pointer");
   },
 );
