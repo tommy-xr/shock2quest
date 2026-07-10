@@ -1,3 +1,4 @@
+pub mod audio_log;
 pub mod game_scene;
 pub mod hand_pose;
 pub mod input;

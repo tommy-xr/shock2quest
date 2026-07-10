@@ -22,6 +22,7 @@ import type {
   SaveLoadResult,
   QuestBitsResult,
   QuestBitValue,
+  RecentAudioResult,
   UiState,
   PlayerInventoryResult,
   TransitionsResult,
@@ -243,6 +244,21 @@ export class UiApi {
   }
 }
 
+/** Played-sound introspection (there is no other headless way to observe audio). */
+export class AudioApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /**
+   * The most recently played environmental sounds (oldest first): resolved
+   * schema sample, query tags, and world position. Snapshot the last
+   * `sequence` before an action, then filter for higher sequences to find
+   * the sounds that action played.
+   */
+  async recent(): Promise<RecentAudioResult> {
+    return this.client.get<RecentAudioResult>("/v1/audio/recent");
+  }
+}
+
 /** Pathfinding service telemetry (distinct from the interactive test). */
 export class PathfindingApi {
   constructor(private readonly client: HttpClient) {}
@@ -274,6 +290,7 @@ export class Game {
   readonly physics: PhysicsApi;
   readonly quests: QuestsApi;
   readonly ui: UiApi;
+  readonly audio: AudioApi;
 
   constructor(protected readonly client: HttpClient) {
     this.player = new PlayerApi(client);
@@ -284,6 +301,7 @@ export class Game {
     this.physics = new PhysicsApi(client);
     this.quests = new QuestsApi(client);
     this.ui = new UiApi(client);
+    this.audio = new AudioApi(client);
   }
 
   get baseUrl(): string {

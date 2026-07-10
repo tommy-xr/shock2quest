@@ -1,5 +1,6 @@
 use cgmath::{
-    Deg, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, vec3, vec4,
+    Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3,
+    vec3, vec4,
 };
 use dark::SCALE_FACTOR;
 
@@ -10,7 +11,11 @@ use crate::{
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::RuntimePropTransform,
-    scripts::{Message, ai::ai_util::does_entity_have_hitboxes, script_util::choose_impact_spang},
+    scripts::{
+        Message,
+        ai::ai_util::does_entity_have_hitboxes,
+        script_util::{choose_impact_spang, play_impact_sound},
+    },
     time::Time,
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
@@ -79,6 +84,9 @@ impl Script for InternalFastProjectileScript {
                     lines: vec![(start_point, hit_point, color)],
                 },
                 Effect::DestroyEntity { entity_id },
+                // Impact sound: the projectile's collision schema, tagged with
+                // the material of what was hit (flesh thud vs metal clang).
+                play_impact_sound(world, entity_id, hit_entity_id, hit_point.to_vec()),
             ];
 
             // Impact effect, from the projectile's authored spang links
