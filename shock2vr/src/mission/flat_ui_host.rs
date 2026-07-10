@@ -819,7 +819,10 @@ mod tests {
                 pressed: true,
             }),
         );
-        assert!(host.active_panel().is_none(), "bare-view click closes the panel");
+        assert!(
+            host.active_panel().is_none(),
+            "bare-view click closes the panel"
+        );
         assert_eq!(
             host.strip_entity(),
             Some(inventory),
