@@ -1,19 +1,27 @@
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation3, SquareMatrix, vec3};
 use dark::properties::{CollisionType, PropCollisionType};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::physics::PhysicsWorld;
+use crate::{
+    mission::entity_creator::CreateEntityOptions,
+    physics::PhysicsWorld,
+    scripts::script_util::choose_impact_spang,
+    util::{get_position_from_transform, get_rotation_from_forward_vector},
+};
 
 use super::{Effect, Message, MessagePayload, Script};
 
 // Script to handle collision type
 pub struct InternalCollisionType {
     collision_flags: CollisionType,
+    spang_spawned: bool,
 }
 
 impl InternalCollisionType {
     pub fn new() -> InternalCollisionType {
         InternalCollisionType {
             collision_flags: CollisionType::empty(),
+            spang_spawned: false,
         }
     }
 }
@@ -32,8 +40,8 @@ impl Script for InternalCollisionType {
     fn handle_message(
         &mut self,
         entity_id: EntityId,
-        _world: &World,
-        _physics: &PhysicsWorld,
+        world: &World,
+        physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
@@ -61,10 +69,55 @@ impl Script for InternalCollisionType {
                 let damage_effect = Effect::Send {
                     msg: Message {
                         to: *with,
+                        // TODO: Resolve damage from the projectile's authored
+                        // data - shared follow-up with the fast (raycast)
+                        // projectile path's hardcoded 6.0 in
+                        // internal_fast_projectile.rs.
                         payload: MessagePayload::Damage { amount: 1.0 },
                     },
                 };
-                Effect::Multiple(vec![initial_effect, damage_effect])
+                let mut effects = vec![initial_effect, damage_effect];
+
+                // Impact effect, from the projectile's authored spang links
+                // (HitSpang matched by victim class, MissSpang fallback) -
+                // the same selection as the fast (raycast) projectile path.
+                // This is what makes slow projectiles (laser/fusion bolts,
+                // grenades) show their authored impact FX. At most one spang
+                // per projectile: an impact starting contact with several
+                // colliders at once (a corner, a creature capsule + its
+                // hitbox proxy) queues multiple Collided messages before the
+                // slay/destroy effect lands.
+                if !self.spang_spawned
+                    && let Some(template_id) = choose_impact_spang(world, entity_id, *with)
+                {
+                    self.spang_spawned = true;
+                    let position =
+                        get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+                    // The physics collision event carries no contact normal,
+                    // and spang orientation is minor cosmetics, so
+                    // approximate the impact facing with the reversed
+                    // velocity. This is read post-solve, so it may already be
+                    // deflected by the contact; if the solver stopped the
+                    // projectile outright, fall back to straight up.
+                    let facing = physics
+                        .get_velocity(entity_id)
+                        .filter(|v| v.magnitude2() > 1e-6)
+                        .map(|v| -v.normalize())
+                        .unwrap_or(vec3(0.0, 1.0, 0.0));
+                    effects.push(Effect::CreateEntity {
+                        template_id,
+                        position,
+                        orientation: get_rotation_from_forward_vector(facing)
+                            * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
+                        root_transform: Matrix4::identity(),
+                        options: CreateEntityOptions {
+                            transient_fx: true,
+                            ..CreateEntityOptions::default()
+                        },
+                    });
+                }
+
+                Effect::Multiple(effects)
             }
             _ => Effect::NoEffect,
         }
