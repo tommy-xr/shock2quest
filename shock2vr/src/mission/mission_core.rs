@@ -491,6 +491,13 @@ impl MissionCore {
             &mut entities_to_instantiate,
         );
 
+        // Containment at creation: anything a `Contains` link points at (loot
+        // in corpses/containers, items carried by live AIs, backpack
+        // contents) has no world presence until taken or dropped. Runs before
+        // the instantiation loop below so neither models nor physics bodies
+        // are created for contained items.
+        entity_creator::suppress_contained_entity_world_presence(&mut world);
+
         // Get the set of entities with PropPosition to be materialized
         world.run(
             |v_pos: View<dark::properties::PropPosition>,
