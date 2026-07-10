@@ -304,6 +304,12 @@ export interface UiState {
   mode: "shooter" | "use";
   /** The open MFD panel, or null when none is open. */
   active_panel: UiPanel | null;
+  /**
+   * The top-docked inventory strip (Tab metagame mode): the player's carried
+   * items as labeled, clickable elements. Present only in "use" mode; null in
+   * shooter mode.
+   */
+  strip: UiPanel | null;
 }
 
 export interface TransitionEntry {
