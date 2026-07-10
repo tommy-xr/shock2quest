@@ -867,6 +867,18 @@ pub fn create_physics_representation(
                 }
             };
 
+            // Climbable surfaces (ladders: PropPhysAttr.climbable != 0) carry an
+            // extra marker membership so player movement can detect contact.
+            let is_climbable = v_phys_attr
+                .get(entity_id)
+                .map(|pa| pa.climbable != 0)
+                .unwrap_or(false);
+            let group = if is_climbable {
+                CollisionGroup::climbable_entity()
+            } else {
+                CollisionGroup::entity()
+            };
+
             let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
             {
                 physics_log!(DEBUG, "Creating dynamic hitbox entity");
@@ -877,7 +889,7 @@ pub fn create_physics_representation(
                     dimensions.offset0,
                     shape,
                     //size,
-                    CollisionGroup::entity(),
+                    group,
                     is_sensor,
                     dynamics_options,
                 )
@@ -888,7 +900,7 @@ pub fn create_physics_representation(
                     qrotation,
                     dimensions.offset0,
                     size,
-                    CollisionGroup::entity(),
+                    group,
                     is_sensor,
                 )
             };
