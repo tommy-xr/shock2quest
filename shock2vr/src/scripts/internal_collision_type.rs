@@ -1,4 +1,4 @@
-use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation3, SquareMatrix, vec3};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, Matrix4, Quaternion, Rotation3, SquareMatrix, vec3};
 use dark::properties::{CollisionType, PropCollisionType};
 use shipyard::{EntityId, Get, View, World};
 
@@ -9,7 +9,7 @@ use crate::{
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
-use super::{Effect, Message, MessagePayload, Script};
+use super::{Effect, Message, MessagePayload, Script, script_util::play_impact_sound};
 
 // Script to handle collision type
 pub struct InternalCollisionType {
@@ -78,6 +78,8 @@ impl Script for InternalCollisionType {
                 };
                 let mut effects = vec![initial_effect, damage_effect];
 
+                let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+
                 // Impact effect, from the projectile's authored spang links
                 // (HitSpang matched by victim class, MissSpang fallback) -
                 // the same selection as the fast (raycast) projectile path.
@@ -91,8 +93,6 @@ impl Script for InternalCollisionType {
                     && let Some(template_id) = choose_impact_spang(world, entity_id, *with)
                 {
                     self.spang_spawned = true;
-                    let position =
-                        get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
                     // The physics collision event carries no contact normal,
                     // and spang orientation is minor cosmetics, so
                     // approximate the impact facing with the reversed
@@ -115,6 +115,22 @@ impl Script for InternalCollisionType {
                             ..CreateEntityOptions::default()
                         },
                     });
+                }
+
+                // Impact sound (material-tagged collision schema), unless the
+                // collision type opts out. FULL_COLLISION_SOUND needs no
+                // special handling: impact sounds always play at full volume
+                // here (no velocity scaling).
+                if !self
+                    .collision_flags
+                    .contains(CollisionType::NO_COLLISION_SOUND)
+                {
+                    effects.push(play_impact_sound(
+                        world,
+                        entity_id,
+                        *with,
+                        position.to_vec(),
+                    ));
                 }
 
                 Effect::Multiple(effects)

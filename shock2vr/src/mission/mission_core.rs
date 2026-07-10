@@ -4120,6 +4120,13 @@ fn play_environmental_sound(
             "Playing clip: {} handle: {:?} position: {:?}",
             audio_file, &audio_handle, position
         );
+        // Log the resolved play so headless tooling (debug runtime
+        // /v1/audio/recent) can assert a schema actually played.
+        crate::audio_log::record(
+            &audio_file,
+            query.tag_values(),
+            [position.x, position.y, position.z],
+        );
         engine::audio::play_spatial_audio(audio_context, position, audio_handle, None, audio_clip);
     }
 }

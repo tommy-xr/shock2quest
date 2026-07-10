@@ -326,6 +326,21 @@ export interface TransitionsResult {
   count: number;
 }
 
+/** One resolved-and-played environmental sound (GET /v1/audio/recent). */
+export interface PlayedSound {
+  /** Monotonically increasing id - diff against a snapshot to find new plays. */
+  sequence: number;
+  /** Resolved schema sample name without extension (e.g. "bulmet2"). */
+  sample: string;
+  /** The schema query's (tag, value) pairs (e.g. ["event", "collision"]). */
+  tags: [string, string][];
+  position: [number, number, number];
+}
+
+export interface RecentAudioResult {
+  sounds: PlayedSound[];
+}
+
 export interface WaitForOptions {
   /** Total time to wait in milliseconds (default 10_000). */
   timeoutMs?: number;

@@ -1,13 +1,15 @@
 use crate::mission::entity_creator::initialize_entity_with_props;
 use crate::mission::mission_core::GlobalTemplateHierarchy;
-use crate::util::resolve_proxy_entity;
-use crate::{runtime_props::RuntimePropTransform, util::point3_to_vec3};
-use cgmath::{Transform, point3};
+use crate::{
+    runtime_props::RuntimePropTransform,
+    util::{point3_to_vec3, resolve_proxy_entity},
+};
+use cgmath::{Transform, Vector3, point3};
 use dark::{
     EnvSoundQuery,
     properties::{
-        Link, Links, ProjectileOptions, PropClassTag, PropGunState, PropSymName, PropTemplateId,
-        PropTweqModelConfig, ToLink,
+        Link, Links, ProjectileOptions, PropClassTag, PropGunState, PropMaterial, PropSymName,
+        PropTemplateId, PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -347,6 +349,64 @@ pub fn play_environmental_sound(
             audio_handle,
             query,
             position: point3_to_vec3(position),
+        }
+    } else {
+        Effect::NoEffect
+    }
+}
+
+/// Material tag used for impact-schema lookups when the hit surface has no
+/// resolvable material. World geometry has no per-texture material lookup in
+/// the port yet, so terrain hits (and entities without material tags) all
+/// sound like the ship's metal bulkheads.
+const DEFAULT_IMPACT_MATERIAL: &str = "metal";
+
+/// The collision-schema material tag ("fleshtarget", "metal", ...) for
+/// whatever was hit: the victim's inherited `PropMaterial` (a tag string like
+/// "Material FleshTarget", authored via archetypes such as `MatFlesh`),
+/// falling back to the default for world hits / untagged entities. Hitbox
+/// proxies resolve to their parent creature.
+fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
+    let victim = resolve_proxy_entity(world, hit_entity_id);
+    world
+        .borrow::<View<PropMaterial>>()
+        .ok()
+        .and_then(|v_material| {
+            let raw = &v_material.get(victim).ok()?.0;
+            // "Material FleshTarget" -> "fleshtarget"
+            let mut tokens = raw.split_whitespace();
+            while let Some(token) = tokens.next() {
+                if token.eq_ignore_ascii_case("material") {
+                    return tokens.next().map(|value| value.to_ascii_lowercase());
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| DEFAULT_IMPACT_MATERIAL.to_owned())
+}
+
+/// Impact/collision sound for `entity_id` (a projectile or melee weapon)
+/// hitting `hit_entity_id`, played at the impact point. The schema query is
+/// the entity's class tags (ammotype for bullets, weapontype for melee) plus
+/// event=collision and the hit surface's material - e.g. a pistol bullet on a
+/// wall resolves (event=collision, ammotype=std, material=metal) -> `bulmet*`,
+/// on a hybrid (event=collision, ammotype=std, material=fleshtarget) ->
+/// `bulftar*`.
+pub fn play_impact_sound(
+    world: &World,
+    entity_id: EntityId,
+    hit_entity_id: EntityId,
+    position: Vector3<f32>,
+) -> Effect {
+    let material = get_impact_material(world, hit_entity_id);
+    let maybe_query =
+        get_environmental_sound_query(world, entity_id, "collision", vec![("material", &material)]);
+
+    if let Some(query) = maybe_query {
+        Effect::PlayEnvironmentalSound {
+            audio_handle: AudioHandle::new(),
+            query,
+            position,
         }
     } else {
         Effect::NoEffect

@@ -309,6 +309,7 @@ async fn start_http_server(
             axum::routing::post(trigger_input_action),
         )
         .route("/v1/input/actions", get(list_input_actions))
+        .route("/v1/audio/recent", get(get_recent_audio))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
@@ -352,6 +353,7 @@ async fn start_http_server(
         "  POST /v1/input/action     - Trigger a discrete input action (e.g. PathfindingTestCycle)"
     );
     info!("  GET  /v1/input/actions    - List available input actions");
+    info!("  GET  /v1/audio/recent     - Recently played environmental sounds (sample + tags)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
@@ -3143,6 +3145,14 @@ async fn trigger_input_action(
 async fn list_input_actions() -> Json<Value> {
     let actions: Vec<&str> = InputAction::all().iter().map(|a| a.as_str()).collect();
     Json(serde_json::json!({ "actions": actions }))
+}
+
+/// HTTP handler for the recently played environmental sounds (resolved schema
+/// sample + query tags + position). This is the only headless way to observe
+/// audio, e.g. asserting a bullet impact played a material-tagged collision
+/// schema. Reads a process-wide log, so no game-loop round-trip is needed.
+async fn get_recent_audio() -> Json<Value> {
+    Json(serde_json::json!({ "sounds": shock2vr::audio_log::recent() }))
 }
 
 /// Wait for shutdown signal (Ctrl+C)
