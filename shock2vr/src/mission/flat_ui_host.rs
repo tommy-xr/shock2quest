@@ -301,8 +301,10 @@ impl FlatUiHost {
 
     /// Introspection snapshot of the active panel's elements for `GET /v1/ui`:
     /// canvas + normalized-screen rects and semantic labels, so clients click
-    /// widgets by meaning instead of hardcoded pixels.
-    pub fn debug_elements(&self) -> Vec<crate::game_scene::DebugUiElement> {
+    /// widgets by meaning instead of hardcoded pixels. Entity-bound buttons
+    /// (loot-panel items) label as the item's name and carry its entity id;
+    /// other clickables fall back to art-derived labels (keypad digits).
+    pub fn debug_elements(&self, world: &World) -> Vec<crate::game_scene::DebugUiElement> {
         let Some(rect) = self.panel_rect() else {
             return Vec::new();
         };
@@ -321,23 +323,27 @@ impl FlatUiHost {
                 continue;
             }
             let r = component_canvas_rect(component, rect);
-            let (kind, texture, text, label) = match component {
+            let (kind, texture, text, label, entity_id) = match component {
                 GuiComponentRenderInfo::Image {
                     texture,
                     interactive,
+                    entity,
                     ..
                 } => (
                     if *interactive { "button" } else { "image" },
                     Some(texture.clone()),
                     None,
-                    if *interactive {
+                    if let Some(entity) = entity {
+                        entity_label(world, *entity)
+                    } else if *interactive {
                         semantic_label(texture)
                     } else {
                         None
                     },
+                    entity.map(|e| e.inner() as i32),
                 ),
                 GuiComponentRenderInfo::Text { text, .. } => {
-                    ("text", None, Some(text.clone()), None)
+                    ("text", None, Some(text.clone()), None, None)
                 }
             };
             out.push(crate::game_scene::DebugUiElement {
@@ -345,6 +351,7 @@ impl FlatUiHost {
                 texture,
                 text,
                 label,
+                entity_id,
                 rect: [r.x, r.y, r.w, r.h],
                 screen_rect: to_screen(r),
             });
@@ -356,6 +363,7 @@ impl FlatUiHost {
             texture: Some("closeoff.pcx".to_string()),
             text: None,
             label: Some("close".to_string()),
+            entity_id: None,
             rect: [close.x, close.y, close.w, close.h],
             screen_rect: to_screen(close),
         });
@@ -407,6 +415,15 @@ fn close_button_canvas_rect(panel: Rect) -> Rect {
         CLOSE_BUTTON_SIZE.x,
         CLOSE_BUTTON_SIZE.y,
     )
+}
+
+/// Semantic label for an entity-bound element (a loot-panel item): the
+/// entity's symbolic name (the same identity `/v1/entities` reports).
+fn entity_label(world: &World, entity: EntityId) -> Option<String> {
+    world
+        .borrow::<View<dark::properties::PropSymName>>()
+        .ok()
+        .and_then(|v| v.get(entity).ok().map(|name| name.0.clone()))
 }
 
 /// Semantic label for a clickable element, derived from its art name. The
@@ -463,6 +480,7 @@ mod tests {
             texture: "key10.pcx".to_owned(),
             alpha: 0.5,
             interactive: true,
+            entity: None,
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.x - 17.0).abs() < 1e-3);
@@ -504,6 +522,7 @@ mod tests {
             texture: "cursor.pcx".to_owned(),
             alpha: 0.5,
             interactive: false,
+            entity: None,
         };
         assert!(is_gui_cursor(&cursor));
         let backdrop = GuiComponentRenderInfo::Image {
@@ -512,6 +531,7 @@ mod tests {
             texture: "keypad2.pcx".to_owned(),
             alpha: 0.5,
             interactive: false,
+            entity: None,
         };
         assert!(!is_gui_cursor(&backdrop));
     }
@@ -552,6 +572,37 @@ mod tests {
             host.active_panel().is_none(),
             "a fresh click on the bare 3D view should close the panel"
         );
+    }
+
+    #[test]
+    fn entity_bound_elements_label_with_the_item_name_and_id() {
+        // A loot-panel item button carries its entity; /v1/ui must label it
+        // with the item's symbolic name ("Psi Amp") and its entity id so
+        // tests click loot by meaning.
+        let mut world = World::new();
+        let item = world.add_entity(dark::properties::PropSymName("Psi Amp".to_owned()));
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.on_set_ui(
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[GuiComponentRenderInfo::Image {
+                position: vec2(15.0 / 188.0, 160.0 / 296.0),
+                size: vec2(35.0 / 188.0, 32.0 / 296.0),
+                texture: "icn_psi.pcx".to_owned(),
+                alpha: 0.5,
+                interactive: true,
+                entity: Some(item),
+            }],
+        );
+        let elements = host.debug_elements(&world);
+        let el = elements
+            .iter()
+            .find(|e| e.entity_id == Some(item.inner() as i32))
+            .expect("the item element should carry its entity id");
+        assert_eq!(el.kind, "button");
+        assert_eq!(el.label.as_deref(), Some("Psi Amp"));
     }
 
     #[test]

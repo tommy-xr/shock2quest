@@ -21,6 +21,10 @@ pub struct ContainerGui {
     inv_offset_y: f32,
     num_slots_x: usize,
     num_slots_y: usize,
+    /// Loot semantics: clicking an item takes it into the player's backpack
+    /// ("left clicking on the contents picks them up", manual p.7). The
+    /// player's own backpack keeps click = use-the-item (`Frob`) instead.
+    take_on_click: bool,
 }
 
 impl ContainerGui {
@@ -33,6 +37,7 @@ impl ContainerGui {
             inv_offset_y: 160.0,
             num_slots_x: 4,
             num_slots_y: 4,
+            take_on_click: true,
         }
     }
 
@@ -45,6 +50,7 @@ impl ContainerGui {
             inv_offset_y: 18.0,
             num_slots_x: 15,
             num_slots_y: 3,
+            take_on_click: false,
         }
     }
 }
@@ -57,6 +63,8 @@ pub enum ContainerGuiMsg {
     GrabbedWithLeftHand(EntityId),
     GrabbedWithRightHand(EntityId),
     Frob(EntityId),
+    /// Take the item out of this container into the player's backpack.
+    Take(EntityId),
 }
 
 impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
@@ -118,12 +126,18 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 continue;
             }
 
+            let on_click = if self.take_on_click {
+                ContainerGuiMsg::Take(ent)
+            } else {
+                ContainerGuiMsg::Frob(ent)
+            };
             components.push(
                 gui::grabbable(
                     ContainerGuiMsg::GrabbedWithLeftHand(ent),
                     ContainerGuiMsg::GrabbedWithRightHand(ent),
                 )
-                .with_onclick(ContainerGuiMsg::Frob(ent))
+                .with_onclick(on_click)
+                .with_entity(ent)
                 .with_image(&format!("{}.pcx", obj_icon))
                 .with_position(vec2(
                     initial_offset_x + position_x,
@@ -170,7 +184,7 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
     fn handle_msg(
         &self,
         _entity_id: EntityId,
-        _world: &World,
+        world: &World,
         state: &ContainerGuiState,
         msg: &ContainerGuiMsg,
     ) -> (ContainerGuiState, Effect) {
@@ -202,7 +216,137 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     },
                 },
             ),
+            // Transfer the clicked item's `Contains` link to the player's
+            // backpack - the same `DropEntityInfo` path used when a VR hand
+            // feeds an item into a container (drop_entity_into_container).
+            ContainerGuiMsg::Take(ent) => {
+                let inventory_entity = world
+                    .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+                    .map(|player| player.inventory_entity_id)
+                    .ok();
+                match inventory_entity {
+                    Some(inventory_entity) => (
+                        state.clone(),
+                        Effect::DropEntityInfo {
+                            parent_entity_id: inventory_entity,
+                            dropped_entity_id: *ent,
+                        },
+                    ),
+                    None => (state.clone(), Effect::NoEffect),
+                }
+            }
         }
-        //(state.clone(), Effect::NoEffect)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gui::GuiInputInfo;
+    use crate::mission::PlayerInfo;
+    use cgmath::{Quaternion, point2, vec3};
+    use dark::properties::{Links, ToLink, WrappedEntityId};
+
+    /// A world with a loot container holding one iconed item, plus the
+    /// player-info unique the Take path resolves the backpack through.
+    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+        let mut world = World::new();
+        let item = world.add_entity(PropObjIcon("icn_psi".to_owned()));
+        let container = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(item)),
+                link: Link::Contains(0),
+            }],
+        });
+        let player = world.add_entity(());
+        let inventory = world.add_entity(Links::empty());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        (world, container, item, inventory)
+    }
+
+    fn input_at(cursor: cgmath::Point2<f32>, pressed: bool) -> GuiInputInfo {
+        GuiInputInfo {
+            held_entity_id: None,
+            cursor_position: cursor,
+            is_pressed: pressed,
+            is_grabbed: false,
+            hand: crate::vr_config::Handedness::Right,
+        }
+    }
+
+    /// Clicking a loot-panel item yields `Take`, and `Take` transfers the
+    /// item to the player's backpack through the shared `DropEntityInfo`
+    /// path ("left clicking on the contents picks them up", manual p.7).
+    #[test]
+    fn loot_container_click_takes_the_item_into_the_backpack() {
+        let (world, container, item, inventory) = loot_world();
+        let gui = ContainerGui::loot_container();
+        let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
+
+        // The item button carries its entity for /v1/ui introspection.
+        let item_button = components
+            .iter()
+            .find(|c| matches!(c, GuiComponent::Button { entity, .. } if *entity == Some(item)))
+            .expect("loot panel should expose a button bound to the contained item");
+
+        // Simulate a press edge on the item's slot (first slot at the loot
+        // panel's inventory offset).
+        let (position, size) = match item_button {
+            GuiComponent::Button { position, size, .. } => (*position, *size),
+            _ => unreachable!(),
+        };
+        let center = point2(position.x + size.x / 2.0, position.y + size.y / 2.0);
+        let event = item_button
+            .get_event(&input_at(center, false), &input_at(center, true))
+            .expect("a press edge on the item should produce an event");
+        assert!(
+            matches!(event, ContainerGuiMsg::Take(e) if e == item),
+            "clicking a loot item should Take it"
+        );
+
+        let (_state, effect) = gui.handle_msg(container, &world, &ContainerGuiState {}, &event);
+        match effect {
+            Effect::DropEntityInfo {
+                parent_entity_id,
+                dropped_entity_id,
+            } => {
+                assert_eq!(parent_entity_id, inventory);
+                assert_eq!(dropped_entity_id, item);
+            }
+            other => panic!("Take should transfer via DropEntityInfo, got {:?}", other),
+        }
+    }
+
+    /// The player's own backpack keeps the original click semantics (use the
+    /// item), NOT take-into-self.
+    #[test]
+    fn backpack_click_frobs_the_item() {
+        let (world, container, item, _inventory) = loot_world();
+        let gui = ContainerGui::inv_container();
+        let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
+        let item_button = components
+            .iter()
+            .find(|c| matches!(c, GuiComponent::Button { entity, .. } if *entity == Some(item)))
+            .expect("backpack should expose a button bound to the carried item");
+        let (position, size) = match item_button {
+            GuiComponent::Button { position, size, .. } => (*position, *size),
+            _ => unreachable!(),
+        };
+        let center = point2(position.x + size.x / 2.0, position.y + size.y / 2.0);
+        let event = item_button
+            .get_event(&input_at(center, false), &input_at(center, true))
+            .expect("a press edge on the item should produce an event");
+        assert!(
+            matches!(event, ContainerGuiMsg::Frob(e) if e == item),
+            "clicking a backpack item should Frob (use) it"
+        );
     }
 }

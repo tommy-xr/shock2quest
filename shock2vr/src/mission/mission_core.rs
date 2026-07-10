@@ -4507,7 +4507,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 entity_id: entity.inner() as i32,
                 template_id,
                 name,
-                elements: self.flat_ui.debug_elements(),
+                elements: self.flat_ui.debug_elements(&self.world),
             }
         });
         crate::game_scene::DebugUiState {
