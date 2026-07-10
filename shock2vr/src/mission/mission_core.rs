@@ -4046,6 +4046,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         use crate::game_scene::{DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo};
         use shipyard::*;
 
+        // Looked up outside the main run: the closure below is at shipyard's
+        // view-count limit.
+        let hearing_rating = self
+            .world
+            .run(|v_hearing: View<dark::properties::PropAIHearing>| {
+                v_hearing.get(id).ok().map(|h| h.rating)
+            });
+
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
              v_sym_name: View<dark::properties::PropSymName>,
@@ -4132,6 +4140,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "AIBehavior".to_string(),
                         value: behavior.0.clone(),
+                    });
+                }
+                // Hearing acuity when authored (0 = deaf, ignores noises)
+                if let Some(rating) = hearing_rating {
+                    properties.push(DebugPropertyInfo {
+                        name: "AIHearing".to_string(),
+                        value: rating.to_string(),
                     });
                 }
                 if let Ok(awareness) = v_awareness.get(id) {

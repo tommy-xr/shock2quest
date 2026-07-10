@@ -5,7 +5,8 @@ use dark::{
     SCALE_FACTOR,
     motion::{MotionFlags, MotionQueryItem},
     properties::{
-        AIAlertLevel, Link, PropAIAlertCap, PropAIAwareDelay, PropAISignalResponse, PropPosition,
+        AIAlertLevel, Link, PropAIAlertCap, PropAIAwareDelay, PropAIHearing, PropAISignalResponse,
+        PropPosition,
     },
 };
 use rand;
@@ -938,7 +939,17 @@ impl Script for AnimatedMonsterAI {
             MessagePayload::HeardNoise { origin } => {
                 // A gunshot (or other noise) draws the AI to investigate its
                 // source, even with no line of sight - same alert path as
-                // taking a hit, minus the damage.
+                // taking a hit, minus the damage. A deaf AI (hearing rating 0,
+                // e.g. the `Deaf` metaproperty on medsci1's corridor hybrids)
+                // ignores it.
+                let is_deaf = world
+                    .borrow::<View<PropAIHearing>>()
+                    .ok()
+                    .and_then(|v| v.get(entity_id).ok().map(|h| h.is_deaf()))
+                    .unwrap_or(false);
+                if is_deaf {
+                    return Effect::NoEffect;
+                }
                 self.alert_to_position(*origin, world, physics, entity_id)
             }
             MessagePayload::TurnOn { from: _ } => {
