@@ -867,6 +867,24 @@ pub fn create_physics_representation(
                 }
             };
 
+            // Climbable surfaces (ladders: PropPhysAttr.climbable != 0) carry an
+            // extra marker membership so player movement can detect contact.
+            // Simplifications: `climbable` is plausibly a per-face bitmask in
+            // the original engine (27 = the four vertical sides on ladders) -
+            // any non-zero value marks the whole collider climbable here. And
+            // only this (non-frobbable) creation branch checks it: all known
+            // ladders are plain terrain objects; a frobbable climbable would
+            // need the same treatment in the branch above.
+            let is_climbable = v_phys_attr
+                .get(entity_id)
+                .map(|pa| pa.climbable != 0)
+                .unwrap_or(false);
+            let group = if is_climbable {
+                CollisionGroup::climbable_entity()
+            } else {
+                CollisionGroup::entity()
+            };
+
             let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
             {
                 physics_log!(DEBUG, "Creating dynamic hitbox entity");
@@ -877,7 +895,7 @@ pub fn create_physics_representation(
                     dimensions.offset0,
                     shape,
                     //size,
-                    CollisionGroup::entity(),
+                    group,
                     is_sensor,
                     dynamics_options,
                 )
@@ -888,7 +906,7 @@ pub fn create_physics_representation(
                     qrotation,
                     dimensions.offset0,
                     size,
-                    CollisionGroup::entity(),
+                    group,
                     is_sensor,
                 )
             };
