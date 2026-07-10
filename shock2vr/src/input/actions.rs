@@ -54,6 +54,11 @@ pub enum InputAction {
     /// Force every monster back to Lowest alertness (idle). Same caveats as
     /// DebugAlertAll.
     DebugCalmAll,
+
+    /// Toggle the flat-mode "use" (metagame) mode: cursor-driven UI over the
+    /// 3D view, as the original game does on Tab. Shooter mode is restored on
+    /// a second toggle. No-op in VR. See `projects/flat-ui.md`.
+    ToggleUseMode,
 }
 
 impl InputAction {
@@ -75,6 +80,7 @@ impl InputAction {
             InputAction::DebugReloadLevel,
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
+            InputAction::ToggleUseMode,
         ]
     }
 
@@ -94,6 +100,7 @@ impl InputAction {
             InputAction::DebugReloadLevel => "DebugReloadLevel",
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",
+            InputAction::ToggleUseMode => "ToggleUseMode",
         }
     }
 }

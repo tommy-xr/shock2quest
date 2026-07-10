@@ -9,6 +9,7 @@ export type InputAction =
   | "CycleAmmo"
   | "Reload"
   | "CyclePsiPower"
+  | "ToggleUseMode"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
@@ -263,6 +264,11 @@ export interface InventoryItem {
 export interface PlayerInventoryResult {
   items: InventoryItem[];
   count: number;
+}
+
+/** Flat-mode UI snapshot (GET /v1/ui). */
+export interface UiState {
+  mode: "shooter" | "use";
 }
 
 export interface TransitionEntry {
