@@ -337,7 +337,9 @@ async fn start_http_server(
     info!(
         "  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}"
     );
-    info!("  GET  /v1/ui               - Flat-mode UI state (mode: shooter/use)");
+    info!(
+        "  GET  /v1/ui               - Flat-mode UI state (mode: shooter/use, MFD panel, inventory strip)"
+    );
     info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
@@ -1016,11 +1018,13 @@ fn process_command(
                     commands::UiStateResult {
                         mode: ui.mode,
                         active_panel: ui.active_panel,
+                        strip: ui.strip,
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
                     mode: "shooter".to_string(),
                     active_panel: None,
+                    strip: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");

@@ -343,6 +343,9 @@ pub struct DebugInventoryItem {
 pub struct DebugUiState {
     pub mode: String,
     pub active_panel: Option<DebugUiPanel>,
+    /// The top-docked inventory strip (Tab metagame mode): the player's
+    /// carried items as labeled elements. `Some` exactly in "use" mode.
+    pub strip: Option<DebugUiPanel>,
 }
 
 /// The open flat-mode MFD panel: which entity it is bound to and its element
@@ -543,13 +546,15 @@ pub trait DebuggableScene {
         Vec::new()
     }
 
-    /// The flat-mode UI state (`GET /v1/ui`): current mode ("shooter"/"use")
-    /// and the open MFD panel, if any. Default: shooter, no panel (scenes
-    /// without a flat metagame UI).
+    /// The flat-mode UI state (`GET /v1/ui`): current mode ("shooter"/"use"),
+    /// the open MFD panel, and the use-mode inventory strip, if any.
+    /// Default: shooter, no panel, no strip (scenes without a flat metagame
+    /// UI).
     fn ui_state(&self) -> DebugUiState {
         DebugUiState {
             mode: "shooter".to_string(),
             active_panel: None,
+            strip: None,
         }
     }
 

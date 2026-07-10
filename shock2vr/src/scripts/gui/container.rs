@@ -207,15 +207,42 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     current_parent_id: None,
                 },
             ),
-            ContainerGuiMsg::Frob(ent) => (
-                state.clone(),
-                Effect::Send {
-                    msg: Message {
-                        payload: MessagePayload::Frob,
-                        to: *ent,
-                    },
-                },
-            ),
+            // Wield-or-use (backpack click): a carried weapon - gun
+            // (PropPlayerGun) or melee (PropLimbModel) - is wielded through
+            // `GrabEntity` (flat: the first-person viewmodel wield path,
+            // which also restores world refs and clears the Contains link;
+            // VR: a grab into the hand). Anything else gets its own Frob
+            // (use) action, e.g. a hypo consumes.
+            ContainerGuiMsg::Frob(ent) => {
+                let is_weapon = world
+                    .borrow::<View<dark::properties::PropPlayerGun>>()
+                    .map(|v| v.get(*ent).is_ok())
+                    .unwrap_or(false)
+                    || world
+                        .borrow::<View<dark::properties::PropLimbModel>>()
+                        .map(|v| v.get(*ent).is_ok())
+                        .unwrap_or(false);
+                if is_weapon {
+                    (
+                        state.clone(),
+                        Effect::GrabEntity {
+                            entity_id: *ent,
+                            hand: crate::vr_config::Handedness::Right,
+                            current_parent_id: None,
+                        },
+                    )
+                } else {
+                    (
+                        state.clone(),
+                        Effect::Send {
+                            msg: Message {
+                                payload: MessagePayload::Frob,
+                                to: *ent,
+                            },
+                        },
+                    )
+                }
+            }
             // Transfer the clicked item's `Contains` link to the player's
             // backpack - the same `DropEntityInfo` path used when a VR hand
             // feeds an item into a container (drop_entity_into_container).
@@ -356,6 +383,51 @@ mod tests {
             "taking a non-grabbable entity must be a no-op, got {:?}",
             effect
         );
+    }
+
+    /// Clicking a carried WEAPON in the backpack strip wields it: gun
+    /// (PropPlayerGun) and melee (PropLimbModel) items route through
+    /// `Effect::GrabEntity` (the flat grab path wields; it also restores
+    /// world refs and clears the Contains link, so the strip updates live).
+    #[test]
+    fn backpack_click_on_a_weapon_wields_it() {
+        let (mut world, container, _item, _inventory) = loot_world();
+        let gui = ContainerGui::inv_container();
+
+        let wrench = world.add_entity((
+            PropObjIcon("icn_wrench".to_owned()),
+            dark::properties::PropLimbModel("atek_h".to_owned()),
+        ));
+        let pistol = world.add_entity((
+            PropObjIcon("icn_pist".to_owned()),
+            dark::properties::PropPlayerGun {
+                flags: 0,
+                hand_model: "pis_h".to_owned(),
+                icon_file: String::new(),
+                model_offset: vec3(0.0, 0.0, 0.0),
+                fire_offset: vec3(0.0, 0.0, 0.0),
+                heading: 0,
+                reload_pitch: 0,
+                reload_rate: 0,
+                gun_type: 0,
+            },
+        ));
+        for weapon in [wrench, pistol] {
+            let (_state, effect) = gui.handle_msg(
+                container,
+                &world,
+                &ContainerGuiState {},
+                &ContainerGuiMsg::Frob(weapon),
+            );
+            assert!(
+                matches!(
+                    effect,
+                    Effect::GrabEntity { entity_id, .. } if entity_id == weapon
+                ),
+                "clicking a carried weapon should wield it via GrabEntity, got {:?}",
+                effect
+            );
+        }
     }
 
     /// The player's own backpack keeps the original click semantics (use the

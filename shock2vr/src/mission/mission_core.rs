@@ -2087,6 +2087,19 @@ impl MissionCore {
                     // Flat-presentation only: VR has no cursor mode to toggle.
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_use_mode = !self.flat_use_mode;
+                        // Use mode shows the player's backpack as the
+                        // top-docked inventory strip: bind the strip to the
+                        // `internal_inventory` entity (whose GuiScript
+                        // already emits SetUI every frame).
+                        let strip_entity = if self.flat_use_mode {
+                            self.world
+                                .borrow::<UniqueView<PlayerInfo>>()
+                                .ok()
+                                .map(|player| player.inventory_entity_id)
+                        } else {
+                            None
+                        };
+                        self.flat_ui.set_strip(strip_entity);
                     }
                 }
 
@@ -2268,6 +2281,12 @@ impl MissionCore {
                     hand,
                     current_parent_id: _,
                 } => {
+                    // What's held before the grab, so anything the grab
+                    // displaces (the flat wield swaps the viewmodel out) can
+                    // be holstered back into the backpack below. VR grabs
+                    // into an occupied hand no-op, so no displacement there.
+                    let held_before = self.interaction.held_entities();
+
                     let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
                     self.process_virtual_hand_effects(asset_cache, grab_effects);
 
@@ -2293,6 +2312,31 @@ impl MissionCore {
 
                                 !is_link_to_entity
                             })
+                        }
+                    }
+
+                    // Holster anything the grab displaced (a weapon the flat
+                    // wield swapped out) back into the player's backpack -
+                    // the original returns it to the inventory grid, not the
+                    // floor at the viewmodel position.
+                    let held_after = self.interaction.held_entities();
+                    let displaced =
+                        [held_before.0, held_before.1]
+                            .into_iter()
+                            .flatten()
+                            .find(|prev| {
+                                *prev != entity_id
+                                    && held_after.0 != Some(*prev)
+                                    && held_after.1 != Some(*prev)
+                            });
+                    if let Some(prev) = displaced {
+                        let inventory_entity = self
+                            .world
+                            .borrow::<UniqueView<PlayerInfo>>()
+                            .map(|player| player.inventory_entity_id)
+                            .ok();
+                        if let Some(inventory_entity) = inventory_entity {
+                            self.drop_entity_into_container(inventory_entity, prev);
                         }
                     }
                 }
@@ -3271,6 +3315,10 @@ impl MissionCore {
                 asset_cache,
                 &self.world,
                 screen_size,
+                // The crosshair is a shooter-mode overlay; use mode replaces
+                // it with the cursor (the original's ShockOverlayMouseMode
+                // turns kOverlayCrosshair off while the cursor is up).
+                !self.flat_use_mode,
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -4601,7 +4649,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn ui_state(&self) -> crate::game_scene::DebugUiState {
-        let active_panel = self.flat_ui.active_panel().map(|entity| {
+        let panel_identity = |entity: shipyard::EntityId| {
             let name = self
                 .world
                 .borrow::<View<dark::properties::PropSymName>>()
@@ -4613,11 +4661,26 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 .ok()
                 .and_then(|v| v.get(entity).ok().map(|t| t.template_id))
                 .unwrap_or(0);
+            (name, template_id)
+        };
+        let active_panel = self.flat_ui.active_panel().map(|entity| {
+            let (name, template_id) = panel_identity(entity);
             crate::game_scene::DebugUiPanel {
                 entity_id: entity.inner() as i32,
                 template_id,
                 name,
                 elements: self.flat_ui.debug_elements(&self.world),
+            }
+        });
+        // The top-docked inventory strip (Tab metagame mode), same element
+        // contract as the MFD panel.
+        let strip = self.flat_ui.strip_entity().map(|entity| {
+            let (name, template_id) = panel_identity(entity);
+            crate::game_scene::DebugUiPanel {
+                entity_id: entity.inner() as i32,
+                template_id,
+                name,
+                elements: self.flat_ui.strip_debug_elements(&self.world),
             }
         });
         crate::game_scene::DebugUiState {
@@ -4627,6 +4690,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 "shooter".to_string()
             },
             active_panel,
+            strip,
         }
     }
 
