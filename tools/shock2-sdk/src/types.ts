@@ -266,9 +266,41 @@ export interface PlayerInventoryResult {
   count: number;
 }
 
+/**
+ * One drawn element of the active flat-mode MFD panel. `label` gives
+ * clickable elements a semantic identity (keypad digits "0"-"9", "clear",
+ * the host "close" button); `rect` is on the 640x480 virtual canvas and
+ * `screen_rect` is the same rect in normalized [0,1] screen coordinates
+ * (letterbox-corrected) - feed its center straight to the `pointer.position`
+ * input channel.
+ */
+export interface UiElement {
+  /** "button" (clickable), "image", or "text". */
+  kind: "button" | "image" | "text";
+  texture: string | null;
+  text: string | null;
+  label: string | null;
+  /** Canvas-space rect [x, y, w, h] (640x480 virtual canvas). */
+  rect: [number, number, number, number];
+  /** Normalized screen-space rect [x, y, w, h]. */
+  screen_rect: [number, number, number, number];
+}
+
+/** The open flat-mode MFD panel (opened by frobbing a GUI-bearing entity). */
+export interface UiPanel {
+  /** Runtime entity id of the bound object (NOT stable across runs). */
+  entity_id: number;
+  /** Stable template id (mission-file object id for level entities). */
+  template_id: number;
+  name: string | null;
+  elements: UiElement[];
+}
+
 /** Flat-mode UI snapshot (GET /v1/ui). */
 export interface UiState {
   mode: "shooter" | "use";
+  /** The open MFD panel, or null when none is open. */
+  active_panel: UiPanel | null;
 }
 
 export interface TransitionEntry {

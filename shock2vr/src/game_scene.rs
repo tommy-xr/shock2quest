@@ -336,11 +336,45 @@ pub struct DebugInventoryItem {
 
 /// Snapshot of the flat-mode UI state for debug introspection (`GET /v1/ui`).
 /// `mode` is "shooter" (mouse-look, no cursor) or "use" (cursor-driven
-/// metagame UI, the original game's Tab mode). Panel/element introspection
-/// arrives with the flat UI host (see `projects/flat-ui.md`).
+/// metagame UI, the original game's Tab mode). `active_panel` is the
+/// object-bound MFD panel opened by frobbing a GUI-bearing entity (keypad,
+/// container, ...), with its clickable elements - see `projects/flat-ui.md`.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiState {
     pub mode: String,
+    pub active_panel: Option<DebugUiPanel>,
+}
+
+/// The open flat-mode MFD panel: which entity it is bound to and its element
+/// list, so clients can click real widgets instead of hardcoding pixels.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugUiPanel {
+    /// Runtime entity id of the bound object (NOT stable across runs).
+    pub entity_id: i32,
+    /// The bound object's `PropTemplateId` - stable across runs (the
+    /// mission-file object id for level-authored entities). 0 if absent.
+    pub template_id: i32,
+    pub name: Option<String>,
+    pub elements: Vec<DebugUiElement>,
+}
+
+/// One drawn element of the active panel. `label` gives clickable elements a
+/// semantic identity (keypad digits "0"-"9", "clear", the host "close"
+/// button) so tests can click by meaning; `rect` is on the 640x480 virtual
+/// canvas and `screen_rect` is the same rect in normalized `[0,1]` screen
+/// coordinates (letterbox-corrected) - feed its center straight to the
+/// `pointer.position` input channel.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugUiElement {
+    /// "button" (clickable), "image", or "text".
+    pub kind: String,
+    pub texture: Option<String>,
+    pub text: Option<String>,
+    pub label: Option<String>,
+    /// Canvas-space rect `[x, y, w, h]` (640x480 virtual canvas).
+    pub rect: [f32; 4],
+    /// Normalized screen-space rect `[x, y, w, h]`.
+    pub screen_rect: [f32; 4],
 }
 
 /// A level-transition trigger (a `TrapTripLevel` tripwire / bulkhead): where it
@@ -506,11 +540,13 @@ pub trait DebuggableScene {
         Vec::new()
     }
 
-    /// The flat-mode UI state (`GET /v1/ui`): current mode ("shooter"/"use").
-    /// Default: shooter (scenes without a flat metagame UI).
+    /// The flat-mode UI state (`GET /v1/ui`): current mode ("shooter"/"use")
+    /// and the open MFD panel, if any. Default: shooter, no panel (scenes
+    /// without a flat metagame UI).
     fn ui_state(&self) -> DebugUiState {
         DebugUiState {
             mode: "shooter".to_string(),
+            active_panel: None,
         }
     }
 

@@ -1013,10 +1013,14 @@ fn process_command(
                 .debug_scene()
                 .map(|scene| {
                     let ui = scene.ui_state();
-                    commands::UiStateResult { mode: ui.mode }
+                    commands::UiStateResult {
+                        mode: ui.mode,
+                        active_panel: ui.active_panel,
+                    }
                 })
                 .unwrap_or(commands::UiStateResult {
                     mode: "shooter".to_string(),
+                    active_panel: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");
