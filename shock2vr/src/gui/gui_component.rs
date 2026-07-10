@@ -32,6 +32,10 @@ where
         on_grab: Option<(TEvent, TEvent)>,
         hover: ButtonHoverBehavior,
         alpha: f32,
+        /// The world entity this button stands for (e.g. a contained item in
+        /// a loot panel), carried through to the render info so debug
+        /// introspection (`GET /v1/ui`) can label the element semantically.
+        entity: Option<EntityId>,
     },
     Text {
         position: Vector2<f32>,
@@ -70,6 +74,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
                 ..
             } => Self::Button {
                 alpha,
@@ -79,6 +84,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
             },
             Self::Text {
                 alpha,
@@ -117,6 +123,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
                 ..
             } => Self::Button {
                 alpha,
@@ -126,6 +133,7 @@ where
                 on_click,
                 hover,
                 on_grab,
+                entity,
             },
             Self::Text {
                 position,
@@ -152,6 +160,7 @@ where
                 on_grab,
                 hover,
                 alpha,
+                entity,
                 ..
             } => GuiComponent::Button {
                 alpha,
@@ -161,6 +170,7 @@ where
                 on_click: Some(click_event),
                 on_grab,
                 hover,
+                entity,
             },
             Self::Image {
                 alpha,
@@ -212,6 +222,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
                 ..
             } => Self::Button {
                 position,
@@ -221,6 +232,7 @@ where
                 on_grab,
                 hover,
                 alpha,
+                entity,
             },
             Self::Text {
                 position,
@@ -260,6 +272,7 @@ where
                 texture,
                 on_click,
                 on_grab,
+                entity,
                 ..
             } => Self::Button {
                 alpha,
@@ -269,6 +282,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
             },
             Self::Text {
                 position,
@@ -308,6 +322,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
                 ..
             } => Self::Button {
                 alpha,
@@ -317,8 +332,35 @@ where
                 on_click,
                 on_grab,
                 hover,
+                entity,
             },
             Self::Text { .. } => self,
+        }
+    }
+    /// Tag a `Button` with the world entity it stands for (no-op for other
+    /// component kinds) - see `GuiComponent::Button::entity`.
+    pub fn with_entity(self, new_entity: EntityId) -> GuiComponent<TEvent> {
+        match self {
+            Self::Button {
+                alpha,
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                ..
+            } => Self::Button {
+                alpha,
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                entity: Some(new_entity),
+            },
+            other => other,
         }
     }
 }
@@ -341,6 +383,7 @@ pub fn button<TMsg: Clone>(on_click: TMsg) -> GuiComponent<TMsg> {
         on_grab: None,
         hover: ButtonHoverBehavior::None,
         alpha: 0.5,
+        entity: None,
     }
 }
 
@@ -353,6 +396,7 @@ pub fn grabbable<TMsg: Clone>(on_left_grab: TMsg, on_right_grab: TMsg) -> GuiCom
         on_grab: Some((on_left_grab, on_right_grab)),
         hover: ButtonHoverBehavior::None,
         alpha: 0.5,
+        entity: None,
     }
 }
 
@@ -378,6 +422,10 @@ pub enum GuiComponentRenderInfo {
         /// debug UI introspection (`GET /v1/ui`) to distinguish clickable
         /// elements; the VR quad renderer ignores it.
         interactive: bool,
+        /// The world entity the source button stands for (a contained item in
+        /// a loot panel), if any. Purely informational - used by `GET /v1/ui`
+        /// to label the element with the item's name and entity id.
+        entity: Option<EntityId>,
     },
     Text {
         position: Vector2<f32>,
@@ -503,6 +551,7 @@ where
                 texture: texture.clone(),
                 alpha: *alpha,
                 interactive: false,
+                entity: None,
             },
             GuiComponent::Button {
                 position,
@@ -512,6 +561,7 @@ where
                 alpha,
                 on_click,
                 on_grab,
+                entity,
             } => {
                 let is_hovered = is_in_bounds(position, size, screen_space_cursor);
 
@@ -533,6 +583,7 @@ where
                     texture,
                     alpha: *alpha,
                     interactive: on_click.is_some() || on_grab.is_some(),
+                    entity: *entity,
                 }
             }
         }

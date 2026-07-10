@@ -534,6 +534,33 @@ fn create_bitmap(
     }
 }
 
+/// Enforce containment at creation (projects/flat-ui.md §5.2/§6 PR 3): an
+/// entity with an incoming `Contains` link lives inside its container's loot
+/// panel and must have NO world presence - no render, no physics - until
+/// taken (`GrabEntity`/`DropEntityInfo` clear or move the link and restore
+/// `PropHasRefs`) or dropped. Mission data usually authors `P$HasRefs=false`
+/// on contained items already (the Dark editor sets it when parenting an
+/// object into a container); this makes the invariant structural instead of
+/// data-dependent. Must run after links are hydrated and before the
+/// instantiation loop: physics creation (`create_entity_core`) and model
+/// rendering both gate on `has_refs`. `PropHasRefs` is a serialized
+/// property, so the state round-trips through save/load.
+pub fn suppress_contained_entity_world_presence(world: &mut World) {
+    use shipyard::IntoIter;
+    let contained: Vec<EntityId> = {
+        let v_links = world.borrow::<View<Links>>().unwrap();
+        v_links
+            .iter()
+            .flat_map(|links| links.to_links.iter())
+            .filter(|link| matches!(link.link, Link::Contains(_)))
+            .filter_map(|link| link.to_entity_id.map(|id| id.0))
+            .collect()
+    };
+    for entity in contained {
+        world.add_component(entity, PropHasRefs(false));
+    }
+}
+
 pub fn initialize_links_for_entity(
     template_id: i32,
     entity_id: EntityId,
@@ -938,5 +965,74 @@ impl Default for CreateEntityOptions {
             attach_to: None,
             transient_fx: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dark::properties::{Links, ToLink};
+
+    fn contains_link(to: EntityId) -> ToLink {
+        ToLink {
+            to_template_id: 0,
+            to_entity_id: Some(WrappedEntityId(to)),
+            link: Link::Contains(0),
+        }
+    }
+
+    fn has_refs_of(world: &World, entity: EntityId) -> Option<bool> {
+        let v = world.borrow::<View<PropHasRefs>>().unwrap();
+        v.get(entity).ok().map(|p| p.0)
+    }
+
+    #[test]
+    fn contained_entities_lose_world_presence() {
+        let mut world = World::new();
+        let loot = world.add_entity(());
+        let world_placed = world.add_entity(());
+        let container = world.add_entity(Links {
+            to_links: vec![contains_link(loot)],
+        });
+
+        suppress_contained_entity_world_presence(&mut world);
+
+        // The Contains target is suppressed; nothing else is touched.
+        assert_eq!(has_refs_of(&world, loot), Some(false));
+        assert_eq!(has_refs_of(&world, world_placed), None);
+        assert_eq!(has_refs_of(&world, container), None);
+    }
+
+    #[test]
+    fn containment_overrides_an_authored_visible_flag() {
+        // A contained item whose data inconsistently says HasRefs(true) (the
+        // invariant is structural, not data-dependent).
+        let mut world = World::new();
+        let loot = world.add_entity(PropHasRefs(true));
+        let _container = world.add_entity(Links {
+            to_links: vec![contains_link(loot)],
+        });
+
+        suppress_contained_entity_world_presence(&mut world);
+
+        assert_eq!(has_refs_of(&world, loot), Some(false));
+    }
+
+    #[test]
+    fn non_contains_links_do_not_suppress() {
+        // Trap/script references (SwitchLink etc.) must not hide entities.
+        let mut world = World::new();
+        let door = world.add_entity(());
+        let _switch = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(door)),
+                link: Link::SwitchLink,
+            }],
+        });
+
+        suppress_contained_entity_world_presence(&mut world);
+
+        assert_eq!(has_refs_of(&world, door), None);
     }
 }

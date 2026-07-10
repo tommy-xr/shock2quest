@@ -280,6 +280,9 @@ export interface UiElement {
   texture: string | null;
   text: string | null;
   label: string | null;
+  /** For loot-panel item buttons: the contained item's runtime entity id
+   * (NOT stable across runs - resolve identity via label / entity lookup). */
+  entity_id: number | null;
   /** Canvas-space rect [x, y, w, h] (640x480 virtual canvas). */
   rect: [number, number, number, number];
   /** Normalized screen-space rect [x, y, w, h]. */
