@@ -4484,12 +4484,32 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn ui_state(&self) -> crate::game_scene::DebugUiState {
+        let active_panel = self.flat_ui.active_panel().map(|entity| {
+            let name = self
+                .world
+                .borrow::<View<dark::properties::PropSymName>>()
+                .ok()
+                .and_then(|v| v.get(entity).ok().map(|s| s.0.clone()));
+            let template_id = self
+                .world
+                .borrow::<View<dark::properties::PropTemplateId>>()
+                .ok()
+                .and_then(|v| v.get(entity).ok().map(|t| t.template_id))
+                .unwrap_or(0);
+            crate::game_scene::DebugUiPanel {
+                entity_id: entity.inner() as i32,
+                template_id,
+                name,
+                elements: self.flat_ui.debug_elements(),
+            }
+        });
         crate::game_scene::DebugUiState {
             mode: if self.flat_use_mode {
                 "use".to_string()
             } else {
                 "shooter".to_string()
             },
+            active_panel,
         }
     }
 

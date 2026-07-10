@@ -373,6 +373,11 @@ pub enum GuiComponentRenderInfo {
         size: Vector2<f32>,
         texture: String,
         alpha: f32,
+        /// Whether the source component reacts to clicks (a `Button`, as
+        /// opposed to a plain `Image`). Purely informational - used by the
+        /// debug UI introspection (`GET /v1/ui`) to distinguish clickable
+        /// elements; the VR quad renderer ignores it.
+        interactive: bool,
     },
     Text {
         position: Vector2<f32>,
@@ -405,6 +410,7 @@ impl GuiComponentRenderInfo {
                 size,
                 texture,
                 alpha,
+                ..
             } => {
                 let texture: Rc<dyn TextureTrait> =
                     asset_cache.get(&TEXTURE_IMPORTER, texture).clone();
@@ -496,6 +502,7 @@ where
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
                 texture: texture.clone(),
                 alpha: *alpha,
+                interactive: false,
             },
             GuiComponent::Button {
                 position,
@@ -503,7 +510,8 @@ where
                 texture,
                 hover,
                 alpha,
-                ..
+                on_click,
+                on_grab,
             } => {
                 let is_hovered = is_in_bounds(position, size, screen_space_cursor);
 
@@ -524,6 +532,7 @@ where
                     size,
                     texture,
                     alpha: *alpha,
+                    interactive: on_click.is_some() || on_grab.is_some(),
                 }
             }
         }

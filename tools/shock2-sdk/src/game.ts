@@ -231,7 +231,13 @@ export class QuestsApi {
 export class UiApi {
   constructor(private readonly client: HttpClient) {}
 
-  /** Current UI snapshot: mode is "shooter" or "use" (Tab metagame mode). */
+  /**
+   * Current UI snapshot: mode is "shooter" or "use" (Tab metagame mode), and
+   * the open MFD panel (frob a keypad/container to open one) with its
+   * labeled, clickable elements. Click an element by setting the
+   * `pointer.position` channel to the center of its `screen_rect`, then
+   * pulsing `pointer.pressed`.
+   */
   async state(): Promise<UiState> {
     return this.client.get<UiState>("/v1/ui");
   }

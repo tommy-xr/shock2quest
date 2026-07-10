@@ -289,6 +289,69 @@ impl FlatUiHost {
         }
         canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
     }
+
+    /// Introspection snapshot of the active panel's elements for `GET /v1/ui`:
+    /// canvas + normalized-screen rects and semantic labels, so clients click
+    /// widgets by meaning instead of hardcoded pixels.
+    pub fn debug_elements(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        let Some(rect) = self.panel_rect() else {
+            return Vec::new();
+        };
+        let to_screen = |r: Rect| {
+            let s = crate::ui::canvas_rect_to_screen(
+                r,
+                CANVAS_SIZE,
+                self.screen_size,
+                ScaleMode::PreserveAspect,
+            );
+            [s.x, s.y, s.w, s.h]
+        };
+        let mut out = Vec::new();
+        for component in &self.components {
+            if is_gui_cursor(component) {
+                continue;
+            }
+            let r = component_canvas_rect(component, rect);
+            let (kind, texture, text, label) = match component {
+                GuiComponentRenderInfo::Image {
+                    texture,
+                    interactive,
+                    ..
+                } => (
+                    if *interactive { "button" } else { "image" },
+                    Some(texture.clone()),
+                    None,
+                    if *interactive {
+                        semantic_label(texture)
+                    } else {
+                        None
+                    },
+                ),
+                GuiComponentRenderInfo::Text { text, .. } => {
+                    ("text", None, Some(text.clone()), None)
+                }
+            };
+            out.push(crate::game_scene::DebugUiElement {
+                kind: kind.to_string(),
+                texture,
+                text,
+                label,
+                rect: [r.x, r.y, r.w, r.h],
+                screen_rect: to_screen(r),
+            });
+        }
+        // The host-drawn close button is clickable too.
+        let close = close_button_canvas_rect(rect);
+        out.push(crate::game_scene::DebugUiElement {
+            kind: "button".to_string(),
+            texture: Some("closeoff.pcx".to_string()),
+            text: None,
+            label: Some("close".to_string()),
+            rect: [close.x, close.y, close.w, close.h],
+            screen_rect: to_screen(close),
+        });
+        out
+    }
 }
 
 impl Default for FlatUiHost {
@@ -337,6 +400,25 @@ fn close_button_canvas_rect(panel: Rect) -> Rect {
     )
 }
 
+/// Semantic label for a clickable element, derived from its art name. The
+/// keypad's digit buttons use the `key<c><0|1>.pcx` convention (`c` = the
+/// digit, `n` = clear; the trailing 0/1 is the normal/hover art state), so
+/// both art states of a digit label identically.
+fn semantic_label(texture: &str) -> Option<String> {
+    let t = texture.to_ascii_lowercase();
+    let rest = t.strip_prefix("key")?.strip_suffix(".pcx")?;
+    let mut chars = rest.chars();
+    let (c, state) = (chars.next()?, chars.next()?);
+    if chars.next().is_some() || !matches!(state, '0' | '1') {
+        return None;
+    }
+    match c {
+        '0'..='9' => Some(c.to_string()),
+        'n' => Some("clear".to_string()),
+        _ => None,
+    }
+}
+
 /// `GuiScript` appends a panel-local `cursor.pcx` image for the VR quads;
 /// the flat host draws its own screen-space cursor instead.
 fn is_gui_cursor(info: &GuiComponentRenderInfo) -> bool {
@@ -371,6 +453,7 @@ mod tests {
             size: vec2(45.0 / 188.0, 60.0 / 296.0),
             texture: "key10.pcx".to_owned(),
             alpha: 0.5,
+            interactive: true,
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.x - 17.0).abs() < 1e-3);
@@ -411,6 +494,7 @@ mod tests {
             size: vec2(0.05, 0.05),
             texture: "cursor.pcx".to_owned(),
             alpha: 0.5,
+            interactive: false,
         };
         assert!(is_gui_cursor(&cursor));
         let backdrop = GuiComponentRenderInfo::Image {
@@ -418,7 +502,21 @@ mod tests {
             size: vec2(1.0, 1.0),
             texture: "keypad2.pcx".to_owned(),
             alpha: 0.5,
+            interactive: false,
         };
         assert!(!is_gui_cursor(&backdrop));
+    }
+
+    #[test]
+    fn semantic_labels_identify_keypad_digits() {
+        // Both art states of a digit button label as the digit.
+        assert_eq!(semantic_label("key40.pcx"), Some("4".to_string()));
+        assert_eq!(semantic_label("key41.pcx"), Some("4".to_string()));
+        assert_eq!(semantic_label("key00.pcx"), Some("0".to_string()));
+        // The clear key (keyn0/keyn1).
+        assert_eq!(semantic_label("keyn1.pcx"), Some("clear".to_string()));
+        // Non-widget art with a "key" prefix must NOT label.
+        assert_eq!(semantic_label("keypad2.pcx"), None);
+        assert_eq!(semantic_label("crosshai.pcx"), None);
     }
 }
