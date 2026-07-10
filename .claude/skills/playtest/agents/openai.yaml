@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playtest Mission"
+  short_description: "Play one mission session and report QA findings"
+  default_prompt: "Use $playtest to play one mission session and produce a structured QA report."

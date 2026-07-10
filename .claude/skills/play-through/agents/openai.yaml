@@ -1,0 +1,4 @@
+interface:
+  display_name: "Play Through"
+  short_description: "Run the playtest, review, fix, and replay loop"
+  default_prompt: "Use $play-through to play a mission end to end and drive fixes from validated blockers."
