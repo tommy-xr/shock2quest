@@ -341,6 +341,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.quest_bits()
     }
 
+    fn ui_state(&self) -> crate::game_scene::DebugUiState {
+        self.mission_core.ui_state()
+    }
+
     fn set_quest_bit(&mut self, name: &str, value: &str) -> Result<(), String> {
         self.mission_core.set_quest_bit(name, value)
     }

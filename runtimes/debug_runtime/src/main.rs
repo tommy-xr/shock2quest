@@ -284,6 +284,7 @@ async fn start_http_server(
         )
         .route("/v1/save", axum::routing::post(save_game))
         .route("/v1/load", axum::routing::post(load_game))
+        .route("/v1/ui", get(get_ui_state))
         .route("/v1/quests", get(get_quest_bits))
         .route("/v1/quests/:name", axum::routing::post(set_quest_bit))
         .route("/v1/player/inventory", get(get_player_inventory))
@@ -336,6 +337,7 @@ async fn start_http_server(
     info!(
         "  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}"
     );
+    info!("  GET  /v1/ui               - Flat-mode UI state (mode: shooter/use)");
     info!("  GET  /v1/quests           - Snapshot quest bits (objective flags)");
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
@@ -1006,6 +1008,20 @@ fn process_command(
                 tracing::warn!("Failed to send load result - receiver dropped");
             }
         }
+        RuntimeCommand::GetUiState { reply } => {
+            let result = game
+                .debug_scene()
+                .map(|scene| {
+                    let ui = scene.ui_state();
+                    commands::UiStateResult { mode: ui.mode }
+                })
+                .unwrap_or(commands::UiStateResult {
+                    mode: "shooter".to_string(),
+                });
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send ui state - receiver dropped");
+            }
+        }
         RuntimeCommand::GetQuestBits { reply } => {
             let quests: Vec<commands::QuestBitEntry> = game
                 .debug_scene()
@@ -1525,6 +1541,10 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         }
     }
     commands::InputState {
+        pointer: input.pointer.map(|p| commands::InputPointer {
+            position: [p.position.x, p.position.y],
+            pressed: p.pressed,
+        }),
         head: commands::InputHead {
             rotation: [
                 input.head.rotation.v.x,
@@ -1555,6 +1575,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 /// stick does what) since that is the game's convention, not guessable.
 fn input_channels_help() -> &'static str {
     "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
+     pointer.position [x,y] (normalized, origin top-left), pointer.pressed 0|1, \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
@@ -1648,6 +1669,31 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
         "head.look" => {
             let yp = arr(channel, value, 2)?;
             input.head.rotation = head_rotation_from_yaw_pitch(yp[0], yp[1]);
+            Ok(())
+        }
+        // Flat-mode 2D pointer (cursor). Position is normalized [0,1] per
+        // axis, origin top-left; setting either channel materializes the
+        // pointer (it is `None` until first set).
+        "pointer.position" => {
+            let xy = arr(channel, value, 2)?;
+            let pointer = input
+                .pointer
+                .get_or_insert(shock2vr::input_context::Pointer2D {
+                    position: cgmath::vec2(0.0, 0.0),
+                    pressed: false,
+                });
+            pointer.position = cgmath::vec2(xy[0], xy[1]);
+            Ok(())
+        }
+        "pointer.pressed" => {
+            let pressed = num(channel, value)? != 0.0;
+            let pointer = input
+                .pointer
+                .get_or_insert(shock2vr::input_context::Pointer2D {
+                    position: cgmath::vec2(0.0, 0.0),
+                    pressed: false,
+                });
+            pointer.pressed = pressed;
             Ok(())
         }
         _ => Err(format!(
@@ -2335,6 +2381,23 @@ struct SetQuestBitRequest {
 
 /// HTTP handler for snapshotting quest bits (objective flags). An empty list
 /// means the level has set no quest bits yet (all objectives read as unknown).
+async fn get_ui_state(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<commands::UiStateResult>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::GetUiState { reply: reply_tx })
+        .is_err()
+    {
+        tracing::error!("Failed to send GetUiState command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => Err(game_loop_unavailable()),
+    }
+}
+
 async fn get_quest_bits(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
 ) -> Result<Json<commands::QuestBitsResult>, (StatusCode, String)> {

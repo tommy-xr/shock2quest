@@ -90,6 +90,13 @@ pub enum Effect {
     /// two projectile links.
     CycleAmmo,
 
+    /// Toggle the flat-mode "use" (metagame) mode - cursor-driven UI over the
+    /// 3D view, as the original game does on Tab. Currently only tracks the
+    /// mode (introspectable via the debug runtime's `GET /v1/ui`); the cursor
+    /// and panel presentation land with the flat UI host. No-op in VR.
+    /// See `projects/flat-ui.md`.
+    ToggleUseMode,
+
     /// Select the player's next *trained* psi power (advances
     /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
     /// skipping powers not in `PlayerPsiKnownPowers`).

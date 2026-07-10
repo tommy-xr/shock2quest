@@ -73,6 +73,11 @@ impl DesktopInputMapper {
                 modifier: Modifier::Alt,
                 action: InputAction::QuickLoad,
             },
+            Binding {
+                key: Key::Tab,
+                modifier: Modifier::None,
+                action: InputAction::ToggleUseMode,
+            },
         ];
 
         Self {

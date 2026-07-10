@@ -265,6 +265,11 @@ export interface PlayerInventoryResult {
   count: number;
 }
 
+/** Flat-mode UI snapshot (GET /v1/ui). Mode: "shooter" | "use". */
+export interface UiState {
+  mode: string;
+}
+
 export interface TransitionEntry {
   entity_id: number;
   name: string | null;

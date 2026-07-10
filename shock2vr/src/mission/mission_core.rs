@@ -261,6 +261,11 @@ pub struct MissionCore {
     /// entity and its motion player (loops the player-melee idle; a swing is
     /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
     flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
+
+    /// Flat-mode "use" (metagame) mode, toggled by `Effect::ToggleUseMode`
+    /// (Tab). Mode tracking only for now - the cursor + panel presentation
+    /// land with the flat UI host (see `projects/flat-ui.md`). Ignored in VR.
+    pub flat_use_mode: bool,
 }
 
 pub struct GlobalContext {
@@ -689,6 +694,7 @@ impl MissionCore {
             debug_pose_index: 0,
             debug_weapon_index: 0,
             flat_melee_anim: None,
+            flat_use_mode: false,
         }
     }
 
@@ -1957,6 +1963,10 @@ impl MissionCore {
                     if let Some(weapon) = wielded {
                         self.cycle_ammo(weapon);
                     }
+                }
+
+                Effect::ToggleUseMode => {
+                    self.flat_use_mode = !self.flat_use_mode;
                 }
 
                 Effect::CyclePsiPower => {
@@ -4420,6 +4430,16 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 }
             })
             .collect()
+    }
+
+    fn ui_state(&self) -> crate::game_scene::DebugUiState {
+        crate::game_scene::DebugUiState {
+            mode: if self.flat_use_mode {
+                "use".to_string()
+            } else {
+                "shooter".to_string()
+            },
+        }
     }
 
     fn quest_bits(&self) -> Vec<crate::game_scene::DebugQuestBit> {

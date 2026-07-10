@@ -90,6 +90,9 @@ impl ActionDispatcher {
                 level: AIAlertLevel::Lowest,
             });
         }
+        if state.just_triggered(InputAction::ToggleUseMode) {
+            effects.push(Effect::ToggleUseMode);
+        }
         effects
     }
 }
@@ -168,6 +171,15 @@ mod tests {
                 level: AIAlertLevel::Lowest
             }
         ));
+    }
+
+    #[test]
+    fn toggle_use_mode_maps_to_toggle_effect() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::ToggleUseMode);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(effects[0], Effect::ToggleUseMode));
     }
 
     #[test]
