@@ -334,7 +334,10 @@ impl FlatUiHost {
                     Some(texture.clone()),
                     None,
                     if let Some(entity) = entity {
-                        entity_label(world, *entity)
+                        // Fall back to the art-derived label for entity-bound
+                        // items with no symbolic name, so every loot element
+                        // stays clickable by meaning.
+                        entity_label(world, *entity).or_else(|| semantic_label(texture))
                     } else if *interactive {
                         semantic_label(texture)
                     } else {

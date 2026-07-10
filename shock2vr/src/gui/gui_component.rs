@@ -337,12 +337,6 @@ where
             Self::Text { .. } => self,
         }
     }
-}
-
-impl<TEvent> GuiComponent<TEvent>
-where
-    TEvent: Clone,
-{
     /// Tag a `Button` with the world entity it stands for (no-op for other
     /// component kinds) - see `GuiComponent::Button::entity`.
     pub fn with_entity(self, new_entity: EntityId) -> GuiComponent<TEvent> {

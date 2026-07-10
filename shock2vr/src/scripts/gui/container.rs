@@ -219,7 +219,12 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // Transfer the clicked item's `Contains` link to the player's
             // backpack - the same `DropEntityInfo` path used when a VR hand
             // feeds an item into a container (drop_entity_into_container).
+            // Guarded by the same grabbability check as the debug give
+            // lever: reparenting a non-grabbable entity would corrupt it.
             ContainerGuiMsg::Take(ent) => {
+                if !crate::virtual_hand::can_grab_item(world, *ent) {
+                    return (state.clone(), Effect::NoEffect);
+                }
                 let inventory_entity = world
                     .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
                     .map(|player| player.inventory_entity_id)
@@ -245,13 +250,21 @@ mod tests {
     use crate::gui::GuiInputInfo;
     use crate::mission::PlayerInfo;
     use cgmath::{Quaternion, point2, vec3};
-    use dark::properties::{Links, ToLink, WrappedEntityId};
+    use dark::properties::{FrobFlag, Links, PropFrobInfo, ToLink, WrappedEntityId};
 
-    /// A world with a loot container holding one iconed item, plus the
-    /// player-info unique the Take path resolves the backpack through.
+    /// A world with a loot container holding one iconed, grabbable item,
+    /// plus the player-info unique the Take path resolves the backpack
+    /// through.
     fn loot_world() -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
-        let item = world.add_entity(PropObjIcon("icn_psi".to_owned()));
+        let item = world.add_entity((
+            PropObjIcon("icn_psi".to_owned()),
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
         let container = world.add_entity(Links {
             to_links: vec![ToLink {
                 to_template_id: 0,
@@ -323,6 +336,26 @@ mod tests {
             }
             other => panic!("Take should transfer via DropEntityInfo, got {:?}", other),
         }
+    }
+
+    /// A contained entity that is not grabbable (no MOVE/USE_AMMO frob
+    /// action) must not be reparented - same guard as the debug give lever.
+    #[test]
+    fn take_refuses_a_non_grabbable_entity() {
+        let (mut world, container, _item, _inventory) = loot_world();
+        let stuck = world.add_entity(PropObjIcon("icn_junk".to_owned()));
+        let gui = ContainerGui::loot_container();
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(stuck),
+        );
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "taking a non-grabbable entity must be a no-op, got {:?}",
+            effect
+        );
     }
 
     /// The player's own backpack keeps the original click semantics (use the
