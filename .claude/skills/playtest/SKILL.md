@@ -43,6 +43,14 @@ the `play-through` manager triages and delegates fixes.
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 
+**Tab opens the inventory UI in flat mode.** `POST /v1/input/action
+{action:"ToggleUseMode"}` enters the original's metagame "use" mode: `/v1/ui`
+flips to `mode:"use"` and its `strip` lists the carried items as labeled,
+clickable elements (top-docked INVBACK grid). Drive it headlessly like any
+panel: `pointer.position` at an element's `screen_rect` center, `pointer.pressed`
+1→0 (click a carried weapon to wield it). Movement keys still work in use mode;
+trigger the action again to return to shooter mode.
+
 **Container loot lives in containers, not in the world.** Items with an
 incoming `Contains` link (corpse/crate loot) have no world presence — they
 never lie on the floor at their editor coordinates, and `/v1/player/give`
