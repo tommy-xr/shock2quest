@@ -244,14 +244,18 @@ fn medsci1_deaf_metaproperty_delivers_hearing_component() {
     let v_hearing = world
         .borrow::<shipyard::View<properties::PropAIHearing>>()
         .unwrap();
-    let deaf = template_to_entity[&596];
+    let deaf = *template_to_entity
+        .get(&596)
+        .expect("medsci1 obj 596 (deaf OG-Pipe) should instantiate");
     let rating = shipyard::Get::get(&v_hearing, deaf)
         .expect("deaf OG-Pipe (obj 596) should inherit PropAIHearing from the Deaf metaproperty");
     assert_eq!(rating.rating, 0, "Deaf metaproperty should set rating 0");
     assert!(rating.is_deaf());
 
     for id in [163, 1007] {
-        let entity = template_to_entity[&id];
+        let entity = *template_to_entity
+            .get(&id)
+            .expect("medsci1 hearing OG-Pipes (obj 163/1007) should instantiate");
         assert!(
             shipyard::Get::get(&v_hearing, entity).is_err(),
             "OG-Pipe obj {id} should have no authored hearing property"

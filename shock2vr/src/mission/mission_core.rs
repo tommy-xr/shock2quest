@@ -1411,7 +1411,10 @@ impl MissionCore {
     /// Propagate a noise (Effect::RaiseNoise): every creature within `radius`
     /// of `origin` hears it and gets a HeardNoise message, so it can alert and
     /// investigate the source. A plain Euclidean radius - walls don't
-    /// attenuate it yet (a path-distance model is a follow-up).
+    /// attenuate it yet (a path-distance model is a follow-up). Deaf AIs
+    /// (hearing acuity 0, e.g. the `Deaf` metaproperty on medsci1's
+    /// card-slot-watching OG-Pipe, obj 596 - the corridor hybrids hear
+    /// normally) are filtered out here so no listener has to re-check.
     fn raise_noise(&mut self, origin: Vector3<f32>, radius: f32) {
         let heard: Vec<EntityId> = {
             let v_creature = self
@@ -1419,10 +1422,17 @@ impl MissionCore {
                 .borrow::<View<dark::properties::PropCreature>>()
                 .unwrap();
             let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+            let v_hearing = self
+                .world
+                .borrow::<View<dark::properties::PropAIHearing>>()
+                .unwrap();
             (&v_creature, &v_transform)
                 .iter()
                 .with_id()
                 .filter_map(|(entity_id, (_creature, transform))| {
+                    if v_hearing.get(entity_id).is_ok_and(|h| h.is_deaf()) {
+                        return None;
+                    }
                     let pos = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
                     let distance = (crate::util::point3_to_vec3(pos) - origin).magnitude();
                     (distance < radius).then_some(entity_id)
