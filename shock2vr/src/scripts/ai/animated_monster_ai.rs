@@ -938,7 +938,8 @@ impl Script for AnimatedMonsterAI {
             MessagePayload::HeardNoise { origin } => {
                 // A gunshot (or other noise) draws the AI to investigate its
                 // source, even with no line of sight - same alert path as
-                // taking a hit, minus the damage.
+                // taking a hit, minus the damage. (Deaf AIs never receive
+                // this message - raise_noise filters them out.)
                 self.alert_to_position(*origin, world, physics, entity_id)
             }
             MessagePayload::TurnOn { from: _ } => {
