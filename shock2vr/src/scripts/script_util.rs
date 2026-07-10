@@ -1,4 +1,6 @@
 use crate::mission::entity_creator::initialize_entity_with_props;
+use crate::mission::mission_core::GlobalTemplateHierarchy;
+use crate::util::resolve_proxy_entity;
 use crate::{runtime_props::RuntimePropTransform, util::point3_to_vec3};
 use cgmath::{Transform, point3};
 use dark::{
@@ -10,7 +12,7 @@ use dark::{
     ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::audio::AudioHandle;
-use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, View, World};
+use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 use std::collections::HashMap;
 
 use super::{Effect, Message, MessagePayload};
@@ -118,6 +120,61 @@ pub fn get_first_link_with_template_and_data<TData: Clone>(
     all_links
         .get(0)
         .map(|(template_id, data)| (*template_id, data.clone()))
+}
+
+/// The impact effect (spang) a projectile spawns when it hits `victim`, from
+/// the projectile's authored spang links:
+/// - a creature hit spawns the `HitSpang` whose victim archetype class the
+///   victim descends from (blood for hybrids/midwives, sparks for
+///   robots/turrets, ...);
+/// - anything else falls back to the `MissSpang` (terrain spang).
+///
+/// Any victim tries the HitSpang match first - not just hitbox hits, so
+/// victims without fitted hitboxes (and catch-all victim classes like the
+/// laser's `Physical`) still spang - and falls back to the terrain spang when
+/// the projectile has no spang authored for that victim's class. `None` when
+/// the projectile has no spang links at all. Shared by the fast (raycast) and
+/// slow (physics `Collided`) projectile impact paths.
+pub fn choose_impact_spang(world: &World, projectile: EntityId, victim: EntityId) -> Option<i32> {
+    choose_hit_spang(world, projectile, victim).or_else(|| {
+        get_first_link_with_template_and_data(world, projectile, |link| {
+            if matches!(link, Link::MissSpang) {
+                Some(())
+            } else {
+                None
+            }
+        })
+        .map(|(spang_template, ())| spang_template)
+    })
+}
+
+/// The spang (impact effect) a projectile spawns on `victim`, from the
+/// projectile's `HitSpang` links: each link targets a victim archetype class
+/// (Hybrids, Robots, ...) and carries the spang template to spawn. Links are
+/// scanned most-derived-projectile-template first (entity links merge
+/// ancestors root-first, so without the reversal a base class's link would
+/// shadow an override authored on a derived projectile); the first link whose
+/// class the victim is or descends from wins. `victim` may be a hitbox proxy
+/// (resolved to its parent creature). `None` when the projectile has no spang
+/// authored for this victim's class.
+fn choose_hit_spang(world: &World, projectile: EntityId, victim: EntityId) -> Option<i32> {
+    let victim = resolve_proxy_entity(world, victim);
+    let victim_template = world
+        .borrow::<View<PropTemplateId>>()
+        .ok()
+        .and_then(|v| v.get(victim).ok().map(|t| t.template_id))?;
+    let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
+    get_all_links_with_template(world, projectile, |link| {
+        if let Link::HitSpang(spang_template) = link {
+            Some(*spang_template)
+        } else {
+            None
+        }
+    })
+    .into_iter()
+    .rev()
+    .find(|(victim_class, _)| hierarchy.is_or_descends_from(victim_template, *victim_class))
+    .map(|(_, spang_template)| spang_template)
 }
 
 pub fn for_each_link(
