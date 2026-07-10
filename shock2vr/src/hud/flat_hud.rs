@@ -95,8 +95,11 @@ const OVERLOAD_METER: Rect = Rect::new(
 
 /// Build the flat HUD as a resolution-independent canvas for the given player
 /// stat fractions and (optional) wielded-weapon ammo. Pure (no asset/GL
-/// access), so it is unit-testable.
+/// access), so it is unit-testable. `crosshair` is false in use mode - the
+/// original turns the crosshair overlay off while the cursor is up
+/// (`ShockOverlayMouseMode`, projects/flat-ui.md §2.1).
 pub(crate) fn build_flat_hud_canvas(
+    crosshair: bool,
     health_fraction: f32,
     psi_fraction: f32,
     psi_charge: Option<RuntimePropPsiCharge>,
@@ -107,8 +110,10 @@ pub(crate) fn build_flat_hud_canvas(
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
+    if crosshair {
+        canvas.image(CROSSHAIR, "CROSSHAI.PCX");
+    }
     canvas
-        .image(CROSSHAIR, "CROSSHAI.PCX")
         // Bio-monitor backdrop first; the bars + numbers render on top of it.
         .image(METERS_BACKDROP, "BIO.PCX")
         .bar(HEALTH_BAR, "HPBAR.PCX", health_fraction)
@@ -214,8 +219,10 @@ pub(crate) fn create_flat_hud(
     asset_cache: &mut AssetCache,
     world: &World,
     screen_size: cgmath::Vector2<f32>,
+    crosshair: bool,
 ) -> Vec<SceneObject> {
     let canvas = build_flat_hud_canvas(
+        crosshair,
         get_health_percentage(world),
         get_psi_percentage(world),
         get_wielded_psi_charge(world),
@@ -235,14 +242,14 @@ mod tests {
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, None, None, None);
+        let canvas = build_flat_hud_canvas(true, 1.0, 0.75, None, None, None, None, None);
         assert_eq!(canvas.element_count(), 6);
     }
 
     #[test]
     fn wielding_a_weapon_adds_the_ammo_gauge() {
         // ...plus the ammo backdrop + count when a clip is present.
-        let canvas = build_flat_hud_canvas(1.0, 0.75, None, None, Some(12), None, None);
+        let canvas = build_flat_hud_canvas(true, 1.0, 0.75, None, None, Some(12), None, None);
         assert_eq!(canvas.element_count(), 8);
     }
 
@@ -250,6 +257,7 @@ mod tests {
     fn ammo_type_adds_icon_and_label() {
         // ...plus the ammo-type icon + label when a type is selected.
         let canvas = build_flat_hud_canvas(
+            true,
             1.0,
             0.75,
             None,
@@ -266,6 +274,7 @@ mod tests {
         // Base 6 + gauge backdrop + tier badge + tier count + name = 10;
         // the clip readout is suppressed even though the amp has ammo=0.
         let canvas = build_flat_hud_canvas(
+            true,
             1.0,
             0.75,
             None,
@@ -289,8 +298,17 @@ mod tests {
     }
 
     #[test]
+    fn use_mode_hides_the_crosshair() {
+        // The original turns the crosshair overlay off while the cursor is
+        // up (ShockOverlayMouseMode) - one fewer element than shooter mode.
+        let shooter = build_flat_hud_canvas(true, 1.0, 0.75, None, None, None, None, None);
+        let use_mode = build_flat_hud_canvas(false, 1.0, 0.75, None, None, None, None, None);
+        assert_eq!(use_mode.element_count(), shooter.element_count() - 1);
+    }
+
+    #[test]
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
-        let _ = build_flat_hud_canvas(2.0, -1.0, None, None, None, None, None);
+        let _ = build_flat_hud_canvas(true, 2.0, -1.0, None, None, None, None, None);
     }
 }
