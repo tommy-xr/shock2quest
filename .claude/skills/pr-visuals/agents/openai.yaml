@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Visuals"
+  short_description: "Capture and embed visual evidence for a PR"
+  default_prompt: "Use $pr-visuals to capture and embed visual evidence for the current pull request."

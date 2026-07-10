@@ -43,16 +43,17 @@ smooth.
 ## Assemble
 
 ```bash
-node .claude/skills/video-capture/record-video.mjs /tmp/claude/rec        # -> rec/video.mp4 @ 15fps
-node .claude/skills/video-capture/record-video.mjs /tmp/claude/rec out.mp4 15
+node .agents/skills/video-capture/record-video.mjs /tmp/claude/rec        # -> rec/video.mp4 @ 15fps
+node .agents/skills/video-capture/record-video.mjs /tmp/claude/rec out.mp4 15
 ```
 
 `record-video.mjs` globs `frame-*.png` and runs ffmpeg (`libx264`, `yuv420p`,
 even-dimension scale). Requires `ffmpeg` on PATH.
 
 ## Notes
-- Delegate a long capture to a sub-agent (many screenshots — keep the image
-  traffic out of the main context); it returns the mp4 path.
+- Delegate a long capture when the host supports subagents; otherwise run it
+  inline. Keep the image traffic out of the manager context and return the mp4
+  path.
 - Frame count / fps: N frames at F fps = N/F seconds. 60 frames @ 15fps = 4s.
 - Local-only artifact; embed/host separately only if a PR needs it (see
   `pr-visuals` for GIF+gist hosting).

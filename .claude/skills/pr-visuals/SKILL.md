@@ -8,7 +8,7 @@ description: >-
   git, the only token-friendly host for binary images), and embeds them in the PR
   body. Use whenever a change adds or alters something visible (a viewmodel/HUD/
   rendering/material/lighting feature, a debug scene, an animation) and you're
-  opening or updating a PR - see CLAUDE.md "Visual changes".
+  opening or updating a PR - see AGENTS.md "Visual Changes".
 ---
 
 # pr-visuals — capture & embed PR screenshots / GIFs
@@ -20,16 +20,16 @@ clicking) and deterministically (fixed 60 Hz stepping).
 ## Context discipline (important)
 
 Verifying the look means **reading PNGs** (image tokens) and running many capture
-commands — that bloats the main context. So **delegate the whole capture → assemble
-→ upload → embed flow to a subagent** and let it return only the final URLs +
-markdown block. Do this with the `Agent` tool (`general-purpose`):
+commands — that bloats the main context. When the host supports delegation,
+**delegate the whole capture → assemble → upload → embed flow to a subagent** and
+let it return only the final URLs + markdown block. Otherwise run the flow inline
+and keep only the final artifacts and conclusions in the active context.
 
-> Spawn a `general-purpose` subagent. Tell it to **read this file**
-> (`.claude/skills/pr-visuals/SKILL.md`) for the full technique and execute it for
-> the given target, then return the gist raw URLs and the markdown block it
-> embedded. Pass it: the scene/mission (e.g. `debug_weapons`), the exact HTTP
-> sequence that shows the feature (actions/inputs/frames), a one-line caption,
-> and the PR number (or "current branch").
+For a delegated run, tell the subagent to read
+`.agents/skills/pr-visuals/SKILL.md` and execute it for the target. Pass the
+scene/mission (for example `debug_weapons`), the exact HTTP sequence that shows
+the feature, a one-line caption, and the PR number (or "current branch"). Ask it
+to return the gist raw URLs and the markdown block it embedded.
 
 The rest of this file is the technique the subagent (or you, if running inline)
 follows.
@@ -44,7 +44,7 @@ follows.
 
 ## 2. Capture stills
 
-Drive the debug runtime over HTTP (see CLAUDE.md "Iterating on Visual Features"
+Drive the debug runtime over HTTP (see AGENTS.md "Iterating on Visual Features"
 for the full API):
 
 ```bash
@@ -217,17 +217,14 @@ a confirmation that the PR body was updated (verify with
 ## 9. Hand the media to the review (visual verification)
 
 The point of the media isn't just decoration — a reviewer should confirm the
-render **actually exercises the feature and looks correct**. After embedding, run
-`/xreview` and pass the local media paths so **both** image-capable reviewers
-analyze them against the change's claims (e.g. "the GIF should show the wrench
-swinging and returning to the raised idle"):
+render **actually exercises the feature and looks correct**. After embedding,
+use the available review workflow and pass the local media paths to every
+image-capable reviewer. For example, when `/xreview` is installed:
 
 ```
 /xreview --media /tmp/demo.gif,/tmp/shot-t0.png,/tmp/shot-t2.png
 ```
 
 Pass the GIF **plus two stills captured at different sim times** — a single image
-is one frame, so motion must be evidenced by distinct stills. Both engines do the
-visual check (Claude via `Read`, Codex via `-i`), so a visual issue both raise is
-high-confidence. Treat a reviewer that can't see the claimed feature in the media
-as a finding to resolve.
+is one frame, so motion must be evidenced by distinct stills. Treat a reviewer
+that cannot see the claimed feature in the media as a finding to resolve.

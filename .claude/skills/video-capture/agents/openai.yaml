@@ -1,0 +1,4 @@
+interface:
+  display_name: "Video Capture"
+  short_description: "Record a deterministic debug-runtime video"
+  default_prompt: "Use $video-capture to record a deterministic video from the debug runtime."
