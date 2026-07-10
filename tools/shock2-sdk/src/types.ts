@@ -162,6 +162,10 @@ export interface PlayerSnapshot {
   wielded_entity_id: number | null;
   /** The entity held in the right hand (VR); null otherwise. */
   right_hand_entity_id: number | null;
+  /** Flat crosshair target plus the currently-open container and its live items. */
+  highlighted_entity_id: number | null;
+  active_container_entity_id: number | null;
+  active_container_item_ids: number[];
   /** Whether the wielded weapon is mid-reload, plus the current viewmodel tilt
    * (degrees) and reload progress (0..1). false/0/0 when not reloading. */
   reloading: boolean;

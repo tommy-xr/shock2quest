@@ -91,6 +91,15 @@ pub trait GameScene {
         false
     }
 
+    /// Flat interaction state exposed read-only for debug tooling.
+    fn highlighted_entity(&self) -> Option<EntityId> {
+        None
+    }
+
+    fn active_container(&self) -> Option<(EntityId, Vec<EntityId>)> {
+        None
+    }
+
     /// Get lighting information for VR enhancement
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight>;
 

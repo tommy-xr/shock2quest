@@ -211,6 +211,11 @@ pub struct PlayerStateSnapshot {
     pub rotation: [f32; 4],
     pub wielded_entity_id: Option<i32>,
     pub right_hand_entity_id: Option<i32>,
+    /// Flat crosshair target and open container state. These are read-only
+    /// observability for headless player-input tests.
+    pub highlighted_entity_id: Option<i32>,
+    pub active_container_entity_id: Option<i32>,
+    pub active_container_item_ids: Vec<i32>,
     /// Whether the wielded weapon is mid-reload, and (if so) the current
     /// reload RAMP angle in degrees (0 -> authored peak -> 0) and the reload
     /// progress (0..1). When not reloading: `false`, `0.0`, `0.0`. Lets tooling
@@ -251,6 +256,20 @@ impl Game {
     pub fn player_state(&self) -> Option<PlayerStateSnapshot> {
         use crate::mission::mission_core::PlayerInfo;
         use crate::runtime_props::RuntimePropReloading;
+        let highlighted_entity_id = self
+            .active_game_scene
+            .highlighted_entity()
+            .map(|entity| entity.inner() as i32);
+        let (active_container_entity_id, active_container_item_ids) = self
+            .active_game_scene
+            .active_container()
+            .map(|(container, items)| {
+                (
+                    Some(container.inner() as i32),
+                    items.into_iter().map(|item| item.inner() as i32).collect(),
+                )
+            })
+            .unwrap_or((None, Vec::new()));
         let world = self.world();
         let info = world.borrow::<shipyard::UniqueView<PlayerInfo>>().ok()?;
         let reload = info.left_hand_entity_id.and_then(|weapon| {
@@ -273,6 +292,9 @@ impl Game {
             ],
             wielded_entity_id: info.left_hand_entity_id.map(|e| e.inner() as i32),
             right_hand_entity_id: info.right_hand_entity_id.map(|e| e.inner() as i32),
+            highlighted_entity_id,
+            active_container_entity_id,
+            active_container_item_ids,
             reloading: reload.is_some(),
             reload_pitch_deg: reload.map(|(p, _)| p).unwrap_or(0.0),
             reload_progress: reload.map(|(_, p)| p).unwrap_or(0.0),

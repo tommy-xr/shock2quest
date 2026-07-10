@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use cgmath::{InnerSpace, Point3, Quaternion, Vector3, Vector4};
+use cgmath::{InnerSpace, Point3, Quaternion, Vector2, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, light::SpotLight},
@@ -52,6 +52,16 @@ pub trait PlayerInteraction {
     /// Entities under the reticle/hands, for the hover-highlight overlay.
     fn highlighted_entities(&self) -> Vec<EntityId>;
 
+    /// The open flat container and its currently-visible contents. Empty for
+    /// VR and while no container UI is active.
+    fn active_container(&self) -> Option<EntityId> {
+        None
+    }
+
+    fn active_container_items(&self, _world: &World) -> Vec<EntityId> {
+        Vec::new()
+    }
+
     /// The first-person viewmodel entity (drawn on top); `None` for VR.
     fn viewmodel_entity(&self) -> Option<EntityId> {
         None
@@ -61,6 +71,15 @@ pub trait PlayerInteraction {
     /// panels). Flat draws nothing here; its weapon is drawn from
     /// `viewmodel_entity`.
     fn render(&self, _asset_cache: &mut AssetCache, _world: &World) -> Vec<SceneObject> {
+        Vec::new()
+    }
+
+    fn render_flat_ui(
+        &self,
+        _asset_cache: &mut AssetCache,
+        _world: &World,
+        _screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
         Vec::new()
     }
 
@@ -272,7 +291,7 @@ impl Default for FlatInteraction {
 impl PlayerInteraction for FlatInteraction {
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         let (msgs, highlighted) = self.controller.update(
-            &ctx.input.right_hand,
+            ctx.input,
             ctx.player_pos,
             ctx.player_rotation,
             ctx.head_rotation,
@@ -289,6 +308,24 @@ impl PlayerInteraction for FlatInteraction {
 
     fn highlighted_entities(&self) -> Vec<EntityId> {
         self.highlighted.into_iter().collect()
+    }
+
+    fn active_container(&self) -> Option<EntityId> {
+        self.controller.active_container()
+    }
+
+    fn active_container_items(&self, world: &World) -> Vec<EntityId> {
+        self.controller.active_container_items(world)
+    }
+
+    fn render_flat_ui(
+        &self,
+        asset_cache: &mut AssetCache,
+        world: &World,
+        screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
+        self.controller
+            .render_container_ui(asset_cache, world, screen_size)
     }
 
     fn viewmodel_entity(&self) -> Option<EntityId> {

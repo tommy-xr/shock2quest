@@ -3123,6 +3123,10 @@ impl MissionCore {
                 &self.world,
                 screen_size,
             ));
+            ret.extend(
+                self.interaction
+                    .render_flat_ui(asset_cache, &self.world, screen_size),
+            );
         }
 
         ret
@@ -3502,6 +3506,18 @@ impl MissionCore {
         self.interaction.hand_spotlights(options)
     }
 
+    pub fn highlighted_entity(&self) -> Option<EntityId> {
+        self.interaction.highlighted_entities().into_iter().next()
+    }
+
+    pub fn active_container(&self) -> Option<EntityId> {
+        self.interaction.active_container()
+    }
+
+    pub fn active_container_items(&self) -> Vec<EntityId> {
+        self.interaction.active_container_items(&self.world)
+    }
+
     /// Apply the effects produced by an interaction controller (the VR hands or
     /// the flat first-person controller). Shared so both presentations go
     /// through one path.
@@ -3547,6 +3563,17 @@ impl MissionCore {
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
                     self.make_un_physical(entity_id);
+                    // Once an item is held, it no longer belongs to a world
+                    // container. Flat pointer selection reaches this same
+                    // shared path as ordinary direct pickup/wield.
+                    let mut links = self.world.borrow::<ViewMut<Links>>().unwrap();
+                    for entity_links in (&mut links).iter() {
+                        entity_links.to_links.retain(|link| {
+                            !matches!(link.link, Link::Contains(_))
+                                || link.to_entity_id.map(|to| to.0) != Some(entity_id)
+                        });
+                    }
+                    drop(links);
                     self.script_world.dispatch(Message {
                         payload: MessagePayload::Hold,
                         to: entity_id,

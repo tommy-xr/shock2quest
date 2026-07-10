@@ -334,6 +334,13 @@ pub struct InputState {
     pub head: InputHead,
     pub left_hand: InputHand,
     pub right_hand: InputHand,
+    pub pointer: Option<InputPointer>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InputPointer {
+    pub position: [f32; 2],
+    pub pressed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -357,6 +364,7 @@ impl Default for InputState {
             head: InputHead::default(),
             left_hand: InputHand::default(),
             right_hand: InputHand::default(),
+            pointer: None,
         }
     }
 }
@@ -567,6 +575,10 @@ pub struct PlayerInfo {
     pub wielded_entity_id: Option<i32>,
     /// The entity held in the right hand (VR), `None` otherwise.
     pub right_hand_entity_id: Option<i32>,
+    /// Current flat crosshair target and open container UI state.
+    pub highlighted_entity_id: Option<i32>,
+    pub active_container_entity_id: Option<i32>,
+    pub active_container_item_ids: Vec<i32>,
     /// Whether the wielded weapon is mid-reload, plus the current viewmodel tilt
     /// (degrees) and reload progress (0..1). See `shock2vr::PlayerStateSnapshot`.
     pub reloading: bool,

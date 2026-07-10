@@ -1535,6 +1535,10 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         },
         left_hand: hand(&input.left_hand),
         right_hand: hand(&input.right_hand),
+        pointer: input.pointer.map(|pointer| commands::InputPointer {
+            position: [pointer.position.x, pointer.position.y],
+            pressed: pointer.pressed,
+        }),
     }
 }
 
@@ -1550,6 +1554,8 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 /// - `{left,right}_hand.squeeze`    : number in [0, 1] (alias `squeeze_value`)
 /// - `{left,right}_hand.a`          : number in [0, 1] (alias `a_value`)
 /// - `{left,right}_hand.thumbstick` : `[x, y]`
+/// - `pointer.position`             : normalized `[x, y]`
+/// - `pointer.pressed`              : boolean or number (0/1)
 /// One line describing every recognized input channel, used in error messages so
 /// a bad request is self-documenting. Includes the locomotion semantics (which
 /// stick does what) since that is the game's convention, not guessable.
@@ -1559,6 +1565,7 @@ fn input_channels_help() -> &'static str {
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w]; \
+     pointer.position [x,y], pointer.pressed <bool or number>; \
      locomotion: right_hand.thumbstick [strafe, forward] moves the player, \
      left_hand.thumbstick.x turns, left_hand.thumbstick.y flies up/down"
 }
@@ -1586,6 +1593,38 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
         a.iter()
             .map(|e| num(channel, e))
             .collect::<Result<Vec<_>, _>>()
+    }
+
+    if let Some(field) = channel.strip_prefix("pointer.") {
+        let pointer = input
+            .pointer
+            .get_or_insert(shock2vr::input_context::Pointer2D {
+                position: Vector2::new(0.5, 0.5),
+                pressed: false,
+            });
+        return match field {
+            "position" => {
+                let p = arr(channel, value, 2)?;
+                pointer.position = Vector2::new(p[0], p[1]);
+                Ok(())
+            }
+            "pressed" => {
+                pointer.pressed = if let Some(pressed) = value.as_bool() {
+                    pressed
+                } else if let Some(pressed) = value.as_f64() {
+                    pressed > 0.5
+                } else {
+                    return Err(format!(
+                        "channel '{channel}' expects a boolean or number, got {value}"
+                    ));
+                };
+                Ok(())
+            }
+            _ => Err(format!(
+                "unknown input channel '{channel}'; {}",
+                input_channels_help()
+            )),
+        };
     }
 
     // Hand channels: "<left|right>_hand.<field>"
@@ -1741,6 +1780,14 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                 camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
                 wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
                 right_hand_entity_id: state.as_ref().and_then(|s| s.right_hand_entity_id),
+                highlighted_entity_id: state.as_ref().and_then(|s| s.highlighted_entity_id),
+                active_container_entity_id: state
+                    .as_ref()
+                    .and_then(|s| s.active_container_entity_id),
+                active_container_item_ids: state
+                    .as_ref()
+                    .map(|s| s.active_container_item_ids.clone())
+                    .unwrap_or_default(),
                 reloading: state.as_ref().is_some_and(|s| s.reloading),
                 reload_pitch_deg: state.as_ref().map(|s| s.reload_pitch_deg).unwrap_or(0.0),
                 reload_progress: state.as_ref().map(|s| s.reload_progress).unwrap_or(0.0),

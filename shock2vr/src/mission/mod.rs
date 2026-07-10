@@ -236,6 +236,20 @@ impl crate::game_scene::GameScene for Mission {
         )
     }
 
+    fn wants_pointer(&self) -> bool {
+        self.mission_core.active_container().is_some()
+    }
+
+    fn highlighted_entity(&self) -> Option<EntityId> {
+        self.mission_core.highlighted_entity()
+    }
+
+    fn active_container(&self) -> Option<(EntityId, Vec<EntityId>)> {
+        self.mission_core
+            .active_container()
+            .map(|entity_id| (entity_id, self.mission_core.active_container_items()))
+    }
+
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
         self.mission_core.get_hand_spotlights(options)
     }
