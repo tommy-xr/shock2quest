@@ -266,6 +266,11 @@ pub struct MissionCore {
     /// (Tab). Mode tracking only for now - the cursor + panel presentation
     /// land with the flat UI host (see `projects/flat-ui.md`). Ignored in VR.
     pub flat_use_mode: bool,
+
+    /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
+    /// canvas rendering, and the pointer -> GUIHover input mapping. Inert in
+    /// VR (nothing opens a panel there). See `projects/flat-ui.md` §5.2.
+    pub flat_ui: crate::mission::flat_ui_host::FlatUiHost,
 }
 
 pub struct GlobalContext {
@@ -695,6 +700,7 @@ impl MissionCore {
             debug_weapon_index: 0,
             flat_melee_anim: None,
             flat_use_mode: false,
+            flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
         }
     }
 
@@ -925,6 +931,16 @@ impl MissionCore {
         // now-current transform, so they track a moving parent rather than their
         // spawn pose. Runs after physics sync so parents' transforms are current.
         self.update_attached_entities();
+
+        // Flat-mode MFD panel input: map the 2D pointer onto the active panel
+        // and drive it through the same GUIHover contract the VR hand ray
+        // uses. Dispatched before the script update so hovers/clicks are
+        // processed this frame.
+        if game_options.presentation_mode == crate::PresentationMode::Flat {
+            for msg in self.flat_ui.update(&self.world, input_context.pointer) {
+                self.script_world.dispatch(msg);
+            }
+        }
 
         // Update scripts
         let mut script_effects = profile!(
@@ -1972,6 +1988,15 @@ impl MissionCore {
                     }
                 }
 
+                Effect::OpenPanel { entity } => {
+                    // Flat-presentation only: bind the MFD panel to the
+                    // frobbed object (the original's frob-script -> overlay
+                    // flow). VR ignores it - panels are world quads there.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        self.flat_ui.open(entity);
+                    }
+                }
+
                 Effect::CyclePsiPower => {
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let known = self
@@ -2267,6 +2292,15 @@ impl MissionCore {
                     world_size,
                     components,
                 } => {
+                    // Flat presentation: the active panel's components are
+                    // drawn by the FlatUiHost onto the screen-space canvas.
+                    // Deliberately NOT behind `--experimental gui` - the flat
+                    // MFD is the #435 fix; only the VR world-quad path below
+                    // keeps its gating (projects/flat-ui.md §7).
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        self.flat_ui
+                            .on_set_ui(parent_entity, world_size, &components);
+                    }
                     if game_options.experimental_features.contains("gui") {
                         self.gui.update_ui(
                             &mut self.world,
@@ -3136,6 +3170,12 @@ impl MissionCore {
                 &self.world,
                 screen_size,
             ));
+
+            // Flat MFD panel (keypad, container, ...) + cursor, drawn over
+            // the HUD. Also records the render-target size the pointer ->
+            // canvas mapping needs.
+            self.flat_ui.set_screen_size(screen_size);
+            ret.extend(self.flat_ui.render(asset_cache, screen_size));
         }
 
         ret
@@ -3513,6 +3553,14 @@ impl MissionCore {
     /// Returns a vector of SpotLight objects positioned at the player's hands
     pub fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
         self.interaction.hand_spotlights(options)
+    }
+
+    /// Whether the runtime should show a 2D cursor instead of captured
+    /// mouse-look: an MFD panel is open, or Tab "use" mode is active
+    /// (projects/flat-ui.md §5.2). Both are flat-only states, so this is
+    /// inherently false in VR.
+    pub fn wants_pointer(&self) -> bool {
+        self.flat_ui.active_panel().is_some() || self.flat_use_mode
     }
 
     /// Apply the effects produced by an interaction controller (the VR hands or
@@ -4832,5 +4880,9 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.queue_entity_trigger(entity_name);
+    }
+
+    fn wants_pointer(&self) -> bool {
+        self.wants_pointer()
     }
 }

@@ -342,7 +342,10 @@ pub fn main() {
         // mouse button - or shift+left-click, which is easier on a trackpad -
         // uses/frobs/picks up. (The flat controller reads the right-hand trigger
         // + squeeze.)
-        if !args.vr {
+        // While a 2D cursor UI is up (e.g. an MFD panel), mouse buttons drive
+        // the cursor (`input_context.pointer`), not fire/frob - the original
+        // surrenders the mouse to the metagame the same way.
+        if !args.vr && !wants_pointer {
             let pressed = |b| window.get_mouse_button(b) == Action::Press;
             let shift = window.get_key(Key::LeftShift) == Action::Press
                 || window.get_key(Key::RightShift) == Action::Press;

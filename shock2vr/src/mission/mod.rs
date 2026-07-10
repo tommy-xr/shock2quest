@@ -3,6 +3,7 @@ use std::{fs::File, io::BufReader};
 
 use tracing::info;
 pub mod entity_populator;
+pub mod flat_ui_host;
 pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
@@ -238,6 +239,10 @@ impl crate::game_scene::GameScene for Mission {
 
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight> {
         self.mission_core.get_hand_spotlights(options)
+    }
+
+    fn wants_pointer(&self) -> bool {
+        self.mission_core.wants_pointer()
     }
 
     fn world(&self) -> &World {
