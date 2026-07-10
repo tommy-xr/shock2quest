@@ -1427,7 +1427,10 @@ impl MissionCore {
     /// Propagate a noise (Effect::RaiseNoise): every creature within `radius`
     /// of `origin` hears it and gets a HeardNoise message, so it can alert and
     /// investigate the source. A plain Euclidean radius - walls don't
-    /// attenuate it yet (a path-distance model is a follow-up).
+    /// attenuate it yet (a path-distance model is a follow-up). Deaf AIs
+    /// (hearing acuity 0, e.g. the `Deaf` metaproperty on medsci1's
+    /// card-slot-watching OG-Pipe, obj 596 - the corridor hybrids hear
+    /// normally) are filtered out here so no listener has to re-check.
     fn raise_noise(&mut self, origin: Vector3<f32>, radius: f32) {
         let heard: Vec<EntityId> = {
             let v_creature = self
@@ -1435,10 +1438,17 @@ impl MissionCore {
                 .borrow::<View<dark::properties::PropCreature>>()
                 .unwrap();
             let v_transform = self.world.borrow::<View<RuntimePropTransform>>().unwrap();
+            let v_hearing = self
+                .world
+                .borrow::<View<dark::properties::PropAIHearing>>()
+                .unwrap();
             (&v_creature, &v_transform)
                 .iter()
                 .with_id()
                 .filter_map(|(entity_id, (_creature, transform))| {
+                    if v_hearing.get(entity_id).is_ok_and(|h| h.is_deaf()) {
+                        return None;
+                    }
                     let pos = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
                     let distance = (crate::util::point3_to_vec3(pos) - origin).magnitude();
                     (distance < radius).then_some(entity_id)
@@ -4094,6 +4104,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         use crate::game_scene::{DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo};
         use shipyard::*;
 
+        // Looked up outside the main run: the closure below is at shipyard's
+        // view-count limit.
+        let hearing_rating = self
+            .world
+            .run(|v_hearing: View<dark::properties::PropAIHearing>| {
+                v_hearing.get(id).ok().map(|h| h.rating)
+            });
+
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
              v_sym_name: View<dark::properties::PropSymName>,
@@ -4180,6 +4198,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "AIBehavior".to_string(),
                         value: behavior.0.clone(),
+                    });
+                }
+                // Hearing acuity when authored (0 = deaf, ignores noises)
+                if let Some(rating) = hearing_rating {
+                    properties.push(DebugPropertyInfo {
+                        name: "AIHearing".to_string(),
+                        value: rating.to_string(),
                     });
                 }
                 if let Ok(awareness) = v_awareness.get(id) {

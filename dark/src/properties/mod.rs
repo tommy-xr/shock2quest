@@ -5,6 +5,7 @@ mod prop_ai_alertness;
 mod prop_ai_aware_delay;
 mod prop_ai_camera;
 mod prop_ai_device;
+mod prop_ai_hearing;
 mod prop_ai_mode;
 mod prop_ambient_hacked;
 mod prop_anim_tex;
@@ -41,6 +42,7 @@ pub use prop_ai_alertness::*;
 pub use prop_ai_aware_delay::*;
 pub use prop_ai_camera::*;
 pub use prop_ai_device::*;
+pub use prop_ai_hearing::*;
 pub use prop_ai_mode::*;
 pub use prop_ambient_hacked::*;
 pub use prop_anim_tex::*;
@@ -1028,6 +1030,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$AI_AwrDel2",
             PropAIAwareDelay::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$AI_Hearin",
+            PropAIHearing::read,
             identity,
             accumulator::latest,
         ),

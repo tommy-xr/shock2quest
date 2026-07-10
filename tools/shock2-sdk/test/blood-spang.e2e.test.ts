@@ -6,16 +6,25 @@ import { GameServer } from "../src/index.js";
 // End-to-end test for data-driven impact spangs: a projectile spawns the spang
 // its authored links say, not a hardcoded effect.
 //
-// - Terrain hit: the projectile's `MissSpang` link (pistol bullets -> the
-//   "Standard Terr Spang" particle effect).
 // - Creature hit: the `HitSpang` link whose victim archetype class the victim
 //   descends from (pistol bullets + a hybrid -> "Standard Blood Spang").
+// - Terrain hit: the projectile's `MissSpang` link (pistol bullets -> the
+//   "Standard Terr Spang" particle effect).
 //
-// Targets medsci1's stationary corridor OG-Pipe hybrid (near [-21.4, -4.7,
-// 14.9] - found by name + anchor since entity ids shuffle per launch), and
-// aims by computing head.look from the live player/victim positions. Relies
-// on the debug runtime's deterministic stepping (paused = fully frozen, so
-// positions are stable regardless of HTTP timing).
+// Targets medsci1's corridor OG-Pipe hybrid (near [-21.4, -4.7, 14.9] - found
+// by name + anchor since entity ids shuffle per launch), and aims by computing
+// head.look from the live player/victim positions. Relies on the debug
+// runtime's deterministic stepping (paused = fully frozen, so positions are
+// stable regardless of HTTP timing).
+//
+// Shot ORDER matters (#442): the creature shot must come first, while the
+// hybrid is still calm and stationary. Gunfire raises a noise that alerts
+// nearby AIs, and this hybrid hears - a wall shot fired first sends it
+// walking toward the noise, and a position-snapshot aim then grazes over its
+// head (the miss lands on terrain behind it, spawning a second Terr Spang
+// instead of the blood spang). The wall doesn't move, so the terrain shot is
+// safe to take second, from back at spawn where the alerted hybrid can't
+// reach during the test.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
@@ -37,24 +46,10 @@ test(
     await game.input.trigger("CycleWeapon");
     await game.step({ frames: 5 });
 
-    // Shot 1 - terrain: from spawn, the default facing looks at a wall.
-    await game.input.set("right_hand.trigger", 1.0);
-    await game.step({ frames: 2 });
-    await game.input.set("right_hand.trigger", 0.0);
-    await game.step({ frames: 1 });
+    const spawn = (await game.info()).player.position;
 
-    const afterTerrain = (await game.entities.list({ filter: "Spang", limit: 50 }))
-      .entities;
-    assert.ok(
-      afterTerrain.some((e) => e.name === "Standard Terr Spang"),
-      `a wall hit should spawn the authored terrain spang (got: ${afterTerrain
-        .map((e) => e.name)
-        .join(", ")})`,
-    );
-
-    const bloodBefore = afterTerrain.filter((e) => e.name === "Standard Blood Spang").length;
-
-    // Shot 2 - creature. Find the stationary corridor OG-Pipe by name +
+    // Shot 1 - creature, while it is still calm and stationary (no gunfire
+    // noise has been raised yet). Find the corridor OG-Pipe by name +
     // position anchor (entity ids are not stable across launches).
     const anchor = { x: -21.4, y: -4.7, z: 14.9 };
     const ogs = (await game.entities.list({ filter: "OG", limit: 10 })).entities.filter(
@@ -107,8 +102,8 @@ test(
       .entities;
     const bloodSpangs = afterBlood.filter((e) => e.name === "Standard Blood Spang");
     assert.ok(
-      bloodSpangs.length > bloodBefore,
-      `a hybrid hit should spawn a NEW blood spang (got: ${afterBlood
+      bloodSpangs.length > 0,
+      `a hybrid hit should spawn a blood spang (got: ${afterBlood
         .map((e) => e.name)
         .join(", ")})`,
     );
@@ -123,6 +118,26 @@ test(
           ) < 2.0,
       ),
       `the blood spang should spawn near the victim (victim at ${JSON.stringify(target)}, spangs at ${JSON.stringify(bloodSpangs.map((e) => e.position))})`,
+    );
+
+    // Shot 2 - terrain, from back at spawn (the shot hybrid is alerted and
+    // closing in, but a wall can't walk out of the aim): the default facing
+    // (yaw 0) looks at a wall.
+    await game.player.teleport({ x: spawn[0], y: spawn[1], z: spawn[2] });
+    await game.input.set("head.look", [0, 0]);
+    await game.step({ frames: 5 });
+    await game.input.set("right_hand.trigger", 1.0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.trigger", 0.0);
+    await game.step({ frames: 1 });
+
+    const afterTerrain = (await game.entities.list({ filter: "Spang", limit: 50 }))
+      .entities;
+    assert.ok(
+      afterTerrain.some((e) => e.name === "Standard Terr Spang"),
+      `a wall hit should spawn the authored terrain spang (got: ${afterTerrain
+        .map((e) => e.name)
+        .join(", ")})`,
     );
 
     // Spangs are one-shot bursts: they expire with their particles instead of

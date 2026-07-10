@@ -214,3 +214,51 @@ fn eng1_patrol_data_parses() {
     let patrollers = count_patrolling_entities(&info);
     assert_eq!(patrollers, 17, "eng1 PropAIPatrol(true) AI count changed");
 }
+
+#[test]
+fn medsci1_deaf_metaproperty_delivers_hearing_component() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+
+    // Full pipeline: parse gamesys + mission, merge, and instantiate the
+    // world - the same path the game takes - then assert the AI hearing
+    // property lands on the right entities.
+    let (props, links, links_with_data) = properties::get();
+    let gam_file = File::open(data.join("shock2.gam")).expect("gamesys should open");
+    let mut gam_reader = BufReader::new(gam_file);
+    let gamesys = dark::gamesys::read(&mut gam_reader, &links, &links_with_data, &props);
+
+    let mission_info = load_mission_entity_info(&data, "medsci1.mis");
+    let merged = ss2_entity_info::merge_with_gamesys(&mission_info, &gamesys);
+
+    let mut world = shipyard::World::new();
+    let template_to_entity =
+        merged
+            .initialize_world_with_entities(&mut world, std::collections::HashMap::new(), |_| true);
+
+    // Object 596 is an OG-Pipe hybrid with the `Deaf` metaproperty attached
+    // (hearing rating 0); its sibling OG-Pipes 163 and 1007 hear normally
+    // (no hearing property authored anywhere in their inheritance chain).
+    let v_hearing = world
+        .borrow::<shipyard::View<properties::PropAIHearing>>()
+        .unwrap();
+    let deaf = *template_to_entity
+        .get(&596)
+        .expect("medsci1 obj 596 (deaf OG-Pipe) should instantiate");
+    let rating = shipyard::Get::get(&v_hearing, deaf)
+        .expect("deaf OG-Pipe (obj 596) should inherit PropAIHearing from the Deaf metaproperty");
+    assert_eq!(rating.rating, 0, "Deaf metaproperty should set rating 0");
+    assert!(rating.is_deaf());
+
+    for id in [163, 1007] {
+        let entity = *template_to_entity
+            .get(&id)
+            .expect("medsci1 hearing OG-Pipes (obj 163/1007) should instantiate");
+        assert!(
+            shipyard::Get::get(&v_hearing, entity).is_err(),
+            "OG-Pipe obj {id} should have no authored hearing property"
+        );
+    }
+}
