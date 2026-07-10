@@ -37,10 +37,19 @@ the `play-through` manager triages and delegates fixes.
 | `GET /v1/entities/:id` (props, links) | `{left_hand.thumbstick:[turn,0]}` + step (look around) |
 | `GET /v1/info` (health, pos, wielded, psi) | `POST /v1/entities/:id/message {type:"Frob"\|"Damage"\|"TurnOn"}` |
 | `GET /v1/player/inventory` · `GET /v1/quests` | `POST /v1/player/give {entity_id}` (pick up) |
+| `GET /v1/ui` (open MFD panel + labeled, clickable elements) | **loot a corpse/container**: Frob it → `/v1/ui` panel → `pointer.position` center of the item's `screen_rect`, `pointer.pressed` 1→0 |
 | `GET /v1/transitions` (exits: dest + position) | follow an exit: **move** up to a **tripwire** volume; **Frob** a bulkhead **button** |
 
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
+
+**Container loot lives in containers, not in the world.** Items with an
+incoming `Contains` link (corpse/crate loot) have no world presence — they
+never lie on the floor at their editor coordinates, and `/v1/player/give`
+can't honestly reach them. Loot them the way a player does: get close, Frob
+the container, then click the item by its `label` in the `/v1/ui` panel — it
+lands in `/v1/player/inventory` (a living AI's container stays closed until
+it's dead).
 
 **Navigate with `/v1/player/move`, not raw teleport.** It advances the player at
 most ~5 units toward the target and **shapecasts the player collider**, so it

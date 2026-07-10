@@ -36,7 +36,7 @@ The story objective chain: cryo escape → Science sector → **medsci2 round tr
 
 | Item / code | Where | Unlocks |
 | --- | --- | --- |
-| Wrench (tmpl 990) @ (−38.1, −5.9, 29.8) | cryo bay floor near spawn | smash debris blocking the first ladder; melee |
+| Wrench (tmpl 990) | **inside** MS Male Corpse (tmpl 1177) @ (−37.3, −5.5, 31.8), cryo bay near spawn — frob the corpse, click the Wrench in the loot panel (`/v1/ui`) | smash debris blocking the first ladder; melee |
 | **Code 45100** | audio log (Amanpour) on first corpse past the card door | cryo-recovery exit door (keypad tmpl 1681 @ (−26.5, 0.2, −12.7)) |
 | Cryo Card (tmpl 1050) @ (−24.3, 0.0, −1.4) | upper walkway after the first ladder | first card-reader door |
 | Power cell #1: Dead Power Cell tmpl 1767 @ (−13.8, −6.5, −34.3) | near jammed door; charge at Recharging Station tmpl 125 @ (−15.8, −6.0, −27.9) | Aux Power receptor tmpl 1766 @ (−13.1, −5.8, −33.1) → jammed cryo-escape door. (Spare Wrench tmpl 1707 @ (−18.5, −6.7, −29.3) here.) |
@@ -49,7 +49,9 @@ The story objective chain: cryo escape → Science sector → **medsci2 round tr
 
 ### Phase A — Cryo Recovery escape (lower floor, around spawn)
 1. **Wake** at (−35, −4.6, 17.9); Polito radios that the section is breached.
-2. **Take the Wrench** (tmpl 990, (−38.1, −5.9, 29.8)) from the bay floor.
+2. **Loot the Wrench** (tmpl 990) from the MS Male Corpse (tmpl 1177,
+   (−37.3, −5.5, 31.8)): frob the corpse → its loot MFD opens → click the
+   Wrench element. Contained loot is never world-placed on the floor.
 3. **Smash the debris and climb the ladder** behind the fallen Air Duct (tmpl
    402, (−41.6, −3.9, 17.9)); ladder rungs `Rick Ladder` stacked at
    (−41.3, −5.8…−2.0, 16.5) → up to the walkway (y ≈ 0). *(A second required

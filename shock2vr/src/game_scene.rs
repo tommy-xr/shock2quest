@@ -360,10 +360,10 @@ pub struct DebugUiPanel {
 
 /// One drawn element of the active panel. `label` gives clickable elements a
 /// semantic identity (keypad digits "0"-"9", "clear", the host "close"
-/// button) so tests can click by meaning; `rect` is on the 640x480 virtual
-/// canvas and `screen_rect` is the same rect in normalized `[0,1]` screen
-/// coordinates (letterbox-corrected) - feed its center straight to the
-/// `pointer.position` input channel.
+/// button, a loot item's name like "Psi Amp") so tests can click by meaning;
+/// `rect` is on the 640x480 virtual canvas and `screen_rect` is the same rect
+/// in normalized `[0,1]` screen coordinates (letterbox-corrected) - feed its
+/// center straight to the `pointer.position` input channel.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiElement {
     /// "button" (clickable), "image", or "text".
@@ -371,6 +371,9 @@ pub struct DebugUiElement {
     pub texture: Option<String>,
     pub text: Option<String>,
     pub label: Option<String>,
+    /// For entity-bound elements (loot-panel items): the item's runtime
+    /// entity id (NOT stable across runs).
+    pub entity_id: Option<i32>,
     /// Canvas-space rect `[x, y, w, h]` (640x480 virtual canvas).
     pub rect: [f32; 4],
     /// Normalized screen-space rect `[x, y, w, h]`.
