@@ -101,6 +101,11 @@ impl FlatUiHost {
             self.panel_size_px = None;
         }
         self.active_panel = Some(entity);
+        // A button still held at open (e.g. the shift+LMB frob that opened
+        // the panel on desktop) must not read as a fresh press-edge next
+        // frame - it would instantly close the panel as a bare-view click.
+        // Require a release to be observed first.
+        self.last_pointer_pressed = true;
     }
 
     pub fn close(&mut self) {
@@ -182,6 +187,7 @@ impl FlatUiHost {
 
         let Some(pointer) = pointer else {
             self.cursor_canvas = None;
+            self.hover_close = false;
             return Vec::new();
         };
         let canvas_pos = pointer_to_canvas(
@@ -191,6 +197,9 @@ impl FlatUiHost {
             ScaleMode::PreserveAspect,
         );
         self.cursor_canvas = canvas_pos;
+        if canvas_pos.is_none() {
+            self.hover_close = false;
+        }
 
         let Some(canvas_pos) = canvas_pos else {
             // Pointer in the letterbox bars - fully outside the canvas; a
@@ -505,6 +514,44 @@ mod tests {
             interactive: false,
         };
         assert!(!is_gui_cursor(&backdrop));
+    }
+
+    #[test]
+    fn held_button_at_open_does_not_close_the_panel() {
+        // The (shift+)LMB frob that opened the panel is typically still held
+        // on the next frame - it must be swallowed, not treated as a fresh
+        // bare-view click that instantly closes the panel.
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.on_set_ui(
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+        let bare_view_pressed = Pointer2D {
+            position: vec2(0.9, 0.9),
+            pressed: true,
+        };
+        host.update(&world, Some(bare_view_pressed));
+        assert!(
+            host.active_panel().is_some(),
+            "a button held since before open must not close the panel"
+        );
+        // After a release, a fresh bare-view click DOES close it.
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: vec2(0.9, 0.9),
+                pressed: false,
+            }),
+        );
+        host.update(&world, Some(bare_view_pressed));
+        assert!(
+            host.active_panel().is_none(),
+            "a fresh click on the bare 3D view should close the panel"
+        );
     }
 
     #[test]
