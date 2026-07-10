@@ -334,6 +334,15 @@ pub struct DebugInventoryItem {
     pub location: String,
 }
 
+/// Snapshot of the flat-mode UI state for debug introspection (`GET /v1/ui`).
+/// `mode` is "shooter" (mouse-look, no cursor) or "use" (cursor-driven
+/// metagame UI, the original game's Tab mode). Panel/element introspection
+/// arrives with the flat UI host (see `projects/flat-ui.md`).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugUiState {
+    pub mode: String,
+}
+
 /// A level-transition trigger (a `TrapTripLevel` tripwire / bulkhead): where it
 /// leads (`dest_level` + optional spawn `dest_loc`) and its world `position`, so
 /// a tester can teleport into its volume and let the real trigger fire the
@@ -495,6 +504,14 @@ pub trait DebuggableScene {
     /// items), for verifying pickups. Empty when the scene has no player.
     fn player_inventory(&self) -> Vec<DebugInventoryItem> {
         Vec::new()
+    }
+
+    /// The flat-mode UI state (`GET /v1/ui`): current mode ("shooter"/"use").
+    /// Default: shooter (scenes without a flat metagame UI).
+    fn ui_state(&self) -> DebugUiState {
+        DebugUiState {
+            mode: "shooter".to_string(),
+        }
     }
 
     /// Put an existing world entity into the player's inventory (a headless

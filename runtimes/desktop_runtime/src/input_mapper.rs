@@ -2,7 +2,9 @@ use glfw::{Action, Key, Window};
 use shock2vr::input::{InputAction, InputActionState};
 use std::collections::HashSet;
 
-/// Whether a binding requires the Alt modifier to be held.
+/// Modifier requirement for a binding. `None` requires Alt NOT held (so a
+/// plain-key binding doesn't also fire during a system chord like Alt+Tab);
+/// `Alt` requires it held.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Modifier {
     None,
@@ -73,6 +75,11 @@ impl DesktopInputMapper {
                 modifier: Modifier::Alt,
                 action: InputAction::QuickLoad,
             },
+            Binding {
+                key: Key::Tab,
+                modifier: Modifier::None,
+                action: InputAction::ToggleUseMode,
+            },
         ];
 
         Self {
@@ -89,7 +96,7 @@ impl DesktopInputMapper {
 
         for binding in &self.bindings {
             let modifier_satisfied = match binding.modifier {
-                Modifier::None => true,
+                Modifier::None => !is_alt_pressed,
                 Modifier::Alt => is_alt_pressed,
             };
             let is_down = modifier_satisfied && window.get_key(binding.key) == Action::Press;

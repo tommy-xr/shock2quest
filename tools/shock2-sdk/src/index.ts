@@ -6,6 +6,7 @@ export {
   InputApi,
   PathfindingTestApi,
   PlayerApi,
+  UiApi,
 } from "./game.js";
 export { findRepoRoot, GameServer, type LaunchOptions } from "./server.js";
 export type * from "./types.js";

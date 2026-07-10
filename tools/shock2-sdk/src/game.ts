@@ -22,6 +22,7 @@ import type {
   SaveLoadResult,
   QuestBitsResult,
   QuestBitValue,
+  UiState,
   PlayerInventoryResult,
   TransitionsResult,
   WaitForOptions,
@@ -226,6 +227,16 @@ export class QuestsApi {
   }
 }
 
+/** Flat-mode UI state introspection (GET /v1/ui). */
+export class UiApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /** Current UI snapshot: mode is "shooter" or "use" (Tab metagame mode). */
+  async state(): Promise<UiState> {
+    return this.client.get<UiState>("/v1/ui");
+  }
+}
+
 /** Pathfinding service telemetry (distinct from the interactive test). */
 export class PathfindingApi {
   constructor(private readonly client: HttpClient) {}
@@ -256,6 +267,7 @@ export class Game {
   readonly pathfinding: PathfindingApi;
   readonly physics: PhysicsApi;
   readonly quests: QuestsApi;
+  readonly ui: UiApi;
 
   constructor(protected readonly client: HttpClient) {
     this.player = new PlayerApi(client);
@@ -265,6 +277,7 @@ export class Game {
     this.pathfinding = new PathfindingApi(client);
     this.physics = new PhysicsApi(client);
     this.quests = new QuestsApi(client);
+    this.ui = new UiApi(client);
   }
 
   get baseUrl(): string {

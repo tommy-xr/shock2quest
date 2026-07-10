@@ -60,6 +60,11 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<SaveLoadResult>,
     },
 
+    /// Snapshot the flat-mode UI state (mode: shooter/use).
+    GetUiState {
+        reply: oneshot::Sender<UiStateResult>,
+    },
+
     /// Snapshot the quest bits (objective flags) the game has set.
     GetQuestBits {
         reply: oneshot::Sender<QuestBitsResult>,
@@ -334,6 +339,15 @@ pub struct InputState {
     pub head: InputHead,
     pub left_hand: InputHand,
     pub right_hand: InputHand,
+    /// 2D screen pointer (flat-mode cursor); `None` until a pointer channel
+    /// is set. Position is normalized [0,1] per axis, origin top-left.
+    pub pointer: Option<InputPointer>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InputPointer {
+    pub position: [f32; 2],
+    pub pressed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -357,6 +371,7 @@ impl Default for InputState {
             head: InputHead::default(),
             left_hand: InputHand::default(),
             right_hand: InputHand::default(),
+            pointer: None,
         }
     }
 }
@@ -441,6 +456,14 @@ pub struct QuestBitEntry {
 pub struct QuestBitsResult {
     pub quests: Vec<QuestBitEntry>,
     pub count: usize,
+}
+
+/// Flat-mode UI state snapshot (`GET /v1/ui`): "shooter" or "use".
+/// Panel/element introspection is added with the flat UI host
+/// (see projects/flat-ui.md).
+#[derive(Debug, Serialize)]
+pub struct UiStateResult {
+    pub mode: String,
 }
 
 /// A single carried item.
