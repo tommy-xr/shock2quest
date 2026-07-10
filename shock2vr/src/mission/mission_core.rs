@@ -41,8 +41,9 @@ use dark::{
         PropFrameAnimState, PropHasRefs, PropLimbModel, PropLocalPlayer, PropModelName,
         PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions,
         PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPlayerGun, PropPosition,
-        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropertyDefinition, RenderType,
-        ToLink, TripFlags, WrappedEntityId,
+        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropTweqDeleteConfig,
+        PropTweqDeleteState, PropertyDefinition, RenderType, ToLink, TripFlags, TweqAnimationState,
+        WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -241,6 +242,7 @@ pub struct MissionCore {
     /// creation instantiates these attached (projectile trails, psi bolt
     /// visuals).
     template_to_particle_riders: HashMap<i32, Vec<(i32, dark::properties::ParticleAttachOptions)>>,
+    template_to_particle_attachees: HashMap<i32, Vec<i32>>,
     interaction: Box<dyn PlayerInteraction>,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
@@ -640,6 +642,15 @@ impl MissionCore {
             i32,
             Vec<(i32, dark::properties::ParticleAttachOptions)>,
         > = HashMap::new();
+        // Forward map: particle archetype -> the archetypes its own
+        // ParticleAttachement links point AT. Normally the attach target
+        // exists first and the reverse map above spawns the particle riding
+        // it (trails riding projectiles), but a transient impact FX is the
+        // root of its own creation - nothing else ever creates its attach
+        // target. The shipped data has exactly one such pair (the bullet
+        // spang's ParticleAttachement to the "Bullet Hit" decal), and the
+        // decal only appears if the spang's creation brings it along.
+        let mut template_to_particle_attachees: HashMap<i32, Vec<i32>> = HashMap::new();
         for (src_template, links) in &entity_info_rc.template_to_links {
             if *src_template >= 0 {
                 continue;
@@ -651,6 +662,10 @@ impl MissionCore {
                             .entry(link.to_template_id)
                             .or_default()
                             .push((*src_template, *opts));
+                        template_to_particle_attachees
+                            .entry(*src_template)
+                            .or_default()
+                            .push(link.to_template_id);
                     }
                 }
             }
@@ -671,6 +686,7 @@ impl MissionCore {
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             template_to_particle_riders,
+            template_to_particle_attachees,
             script_world,
             id_to_model,
             id_to_animation_player,
@@ -1617,6 +1633,7 @@ impl MissionCore {
             root_transform,
             additional_options,
             0,
+            None,
         )
     }
 
@@ -1630,6 +1647,12 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
         rider_depth: u32,
+        // The template of the entity this creation is attached to, if it was
+        // itself spawned off a ParticleAttachement link. The link that caused
+        // this creation must not be walked again from the other end (a trail
+        // riding a projectile must not re-instantiate the projectile; a decal
+        // brought along by a spang must not host a second spang).
+        exclude_template: Option<i32>,
     ) -> EntityCreationInfo {
         let transient_fx = additional_options.transient_fx;
         let created_entity = {
@@ -1672,21 +1695,44 @@ impl MissionCore {
         if rider_depth >= MAX_RIDER_DEPTH {
             return info;
         }
-        let riders: Vec<(i32, dark::properties::ParticleAttachOptions)> = {
+        let riders: Vec<i32> = {
             let hierarchy = ss2_entity_info::get_hierarchy(&self.entity_info);
             let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
             ancestors.push(template_id);
-            ancestors
-                .into_iter()
+            let mut riders: Vec<i32> = ancestors
+                .iter()
                 .flat_map(|t| {
                     self.template_to_particle_riders
-                        .get(&t)
-                        .cloned()
+                        .get(t)
+                        .map(|riders| {
+                            riders
+                                .iter()
+                                .map(|(rider, _opts)| *rider)
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_default()
                 })
+                .collect();
+            // A transient impact FX is the root of its own creation, so the
+            // archetypes its own ParticleAttachement links point at (the
+            // bullet spang's "Bullet Hit" decal) don't exist yet - bring them
+            // along too. Only for transient FX: a live projectile's outgoing
+            // link is cosmetic authoring for OTHER hosts (the player Fusion
+            // Shot's link to the droid variant) and must not spawn here.
+            if transient_fx {
+                riders.extend(ancestors.iter().flat_map(|t| {
+                    self.template_to_particle_attachees
+                        .get(t)
+                        .cloned()
+                        .unwrap_or_default()
+                }));
+            }
+            riders
+                .into_iter()
+                .filter(|t| Some(*t) != exclude_template)
                 .collect()
         };
-        for (particle_template, _attach_options) in riders {
+        for particle_template in riders {
             // vhot/joint offsets are not applied yet - the particle rides the
             // host origin (attach type "object" covers the shipped projectile
             // trails).
@@ -1702,6 +1748,7 @@ impl MissionCore {
                     ..CreateEntityOptions::default()
                 },
                 rider_depth + 1,
+                Some(template_id),
             );
             // Riders are pure visuals: strip any physics the template brought
             // (some riders are full projectile archetypes - e.g. the droid
@@ -1777,30 +1824,57 @@ impl MissionCore {
     pub fn remove_entity(&mut self, entity_id: EntityId) {
         // Entities riding this one (attached particle trails/FX) die with it -
         // otherwise a projectile's trail would linger at its last transform
-        // forever after the projectile is destroyed. The transitive closure is
-        // collected iteratively with a visited set so mission-authored
-        // attachment cycles can't recurse forever.
+        // forever after the projectile is destroyed. Exception: a rider with
+        // its own running delete tweq manages its own lifetime (e.g. the
+        // "Bullet Hit" decal riding a bullet spang is authored to linger 10s,
+        // long past the spang's ~0.8s burst) - it is detached instead, frozen
+        // at its current transform, and its tweq destroys it at the authored
+        // time. The transitive closure is collected iteratively with a visited
+        // set so mission-authored attachment cycles can't recurse forever.
         let mut to_remove: Vec<EntityId> = vec![entity_id];
+        let mut to_detach: Vec<EntityId> = Vec::new();
         let mut visited: HashSet<EntityId> = HashSet::from([entity_id]);
         let mut frontier = vec![entity_id];
         while let Some(parent) = frontier.pop() {
-            let children: Vec<EntityId> = match self
-                .world
-                .borrow::<View<crate::runtime_props::RuntimePropAttachment>>()
-            {
-                Ok(v_attach) => v_attach
+            let children: Vec<(EntityId, bool)> = match self.world.borrow::<(
+                View<crate::runtime_props::RuntimePropAttachment>,
+                View<PropTweqDeleteConfig>,
+                View<PropTweqDeleteState>,
+            )>() {
+                Ok((v_attach, v_delete_config, v_delete_state)) => v_attach
                     .iter()
                     .with_id()
                     .filter(|(id, a)| a.parent == parent && !visited.contains(id))
-                    .map(|(id, _)| id)
+                    .map(|(id, _)| {
+                        // Only a *running* delete tweq counts - a config whose
+                        // state is off would never fire, and the rider would
+                        // leak forever if spared from the cascade.
+                        let self_expiring = v_delete_config.contains(id)
+                            && (&v_delete_state)
+                                .get(id)
+                                .map(|s| s.animation_state.contains(TweqAnimationState::ON))
+                                .unwrap_or(false);
+                        (id, self_expiring)
+                    })
                     .collect(),
                 Err(_) => Vec::new(),
             };
-            for child in children {
+            for (child, self_expiring) in children {
                 visited.insert(child);
-                to_remove.push(child);
-                frontier.push(child);
+                if self_expiring {
+                    to_detach.push(child);
+                } else {
+                    to_remove.push(child);
+                    frontier.push(child);
+                }
             }
+        }
+        // Cut the attachment on survivors so they stop tracking the (about to
+        // be deleted) host and hold their last transform. Their own riders
+        // stay attached to them and die with them when the tweq fires.
+        for id in to_detach {
+            self.world
+                .remove::<(crate::runtime_props::RuntimePropAttachment,)>(id);
         }
         // Children first, host last (reverse discovery order).
         for id in to_remove.into_iter().rev() {
