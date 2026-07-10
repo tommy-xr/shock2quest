@@ -62,6 +62,10 @@ await game.waitFor(
 // Screenshots and physics
 await game.screenshot("test.png");
 await game.raycast({ start: [0, 0, 0], end: [10, 0, 0] });
+
+// Recently played environmental sounds (resolved schema sample + query tags) -
+// the headless way to assert audio, e.g. weapon impact sounds.
+const { sounds } = await game.audio.recent();
 ```
 
 To attach to a runtime you started yourself (`cargo dbgr -- --mission ... --port 8080`):

@@ -44,6 +44,14 @@ impl EnvSoundQuery {
         }
     }
 
+    /// The (tag, value) pairs of this query, e.g. for logging/introspection.
+    pub fn tag_values(&self) -> Vec<(String, String)> {
+        self.items
+            .iter()
+            .map(|item| (item.tag.clone(), item.value.clone()))
+            .collect()
+    }
+
     /// Convert an environmental sound query to a tag query, given the relevant name maps
     pub(crate) fn to_tag_query(&self, tag_map: &NameMap, value_map: &NameMap) -> TagQuery {
         let mut tag_query_items = Vec::new();
