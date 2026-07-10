@@ -792,7 +792,16 @@ impl Links {
         json: serde_json::Value,
         entity_id_mapper: &HashMap<EntityId, EntityId>,
     ) -> Links {
-        let prev_links: Links = serde_json::from_value(json).unwrap();
+        // Link data carries f32s, so a snapshot can hold values JSON cannot
+        // round-trip (serde_json stores non-finite floats as null, #431).
+        // Degrade to no links rather than panic the game loop.
+        let prev_links: Links = match serde_json::from_value(json.clone()) {
+            Ok(links) => links,
+            Err(err) => {
+                tracing::warn!("skipping links: cannot deserialize {}: {}", json, err);
+                return Links::empty();
+            }
+        };
 
         let new_to_links = prev_links.to_links.iter().map(|link| {
             let new_to_link = link.clone();
@@ -886,6 +895,23 @@ pub struct PropObjectSound {
 pub struct PropScripts {
     pub scripts: Vec<String>,
     pub inherits: bool,
+}
+
+/// Read a P$Scale vector, replacing non-finite components with 1.0. Retail
+/// data contains infinite scales (earth.mis obj 189, rec2.mis obj 474); JSON
+/// stores non-finite floats as null, which broke the save round-trip when
+/// re-entering the level (#431).
+fn read_scale_vec3<T: io::Read>(reader: &mut T) -> Vector3<f32> {
+    let mut scale = read_vec3(reader);
+    if !scale.x.is_finite() || !scale.y.is_finite() || !scale.z.is_finite() {
+        tracing::warn!("P$Scale has a non-finite component, using 1.0: {:?}", scale);
+        for component in [&mut scale.x, &mut scale.y, &mut scale.z] {
+            if !component.is_finite() {
+                *component = 1.0;
+            }
+        }
+    }
+    scale
 }
 
 pub fn get<R: io::Read + io::Seek + 'static>() -> (
@@ -1423,7 +1449,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop(
             "P$Scale",
-            |reader, _len| read_vec3(reader),
+            |reader, _len| read_scale_vec3(reader),
             PropScale,
             accumulator::latest,
         ),
@@ -1930,8 +1956,19 @@ where
         for (old_ent_id, json) in map {
             if let Some(new_ent_id) = entity_id_map.get(&EntityId::from_inner(*old_ent_id).unwrap())
             {
-                let prop: ROutput = serde_json::from_value(json.clone()).unwrap();
-                world.add_component(*new_ent_id, prop);
+                // A snapshot can hold values JSON cannot round-trip (serde_json
+                // stores non-finite floats as null, #431). Drop the component
+                // rather than panic the game loop.
+                match serde_json::from_value::<ROutput>(json.clone()) {
+                    Ok(prop) => world.add_component(*new_ent_id, prop),
+                    Err(err) => tracing::warn!(
+                        "skipping {} for entity {}: cannot deserialize {}: {}",
+                        self.name,
+                        old_ent_id,
+                        json,
+                        err
+                    ),
+                }
             }
         }
     }
@@ -2096,6 +2133,79 @@ mod tests {
         assert_eq!(
             other.effect,
             ReceptronEffect::Unhandled("EnvSound".to_string())
+        );
+    }
+
+    fn scale_definition() -> Box<dyn PropertyDefinition<Box<dyn ReadAndSeek>>> {
+        let (props, _, _) = get::<Box<dyn ReadAndSeek>>();
+        props
+            .into_iter()
+            .find(|p| p.name() == "P$Scale")
+            .expect("P$Scale definition should be registered")
+    }
+
+    #[test]
+    fn scale_parse_replaces_non_finite_components() {
+        // earth.mis obj 189 ("Grate 6x8") ships P$Scale = (1/6, 1/8, +inf) and
+        // rec2.mis obj 474 has a similar infinity. A non-finite component must
+        // not reach the world: JSON stores it as null, which broke the save
+        // round-trip when re-entering the level (#431).
+        let mut bytes = Vec::new();
+        for v in [1.0f32 / 6.0, 0.125, f32::INFINITY] {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(bytes));
+        let prop = scale_definition().read(&mut cursor, 12);
+
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        prop.initialize(&mut world, entity);
+
+        let v_scale = world.borrow::<View<PropScale>>().unwrap();
+        let scale = v_scale.get(entity).unwrap().0;
+        // read_vec3 maps file (x, z, y) -> world (-x, y, z), so the file's
+        // infinite third float lands in world y.
+        assert_eq!(scale.x, -1.0 / 6.0);
+        assert_eq!(scale.y, 1.0, "non-finite component should fall back to 1.0");
+        assert_eq!(scale.z, 0.125);
+    }
+
+    #[test]
+    fn links_deserialize_degrades_to_empty_on_bad_json() {
+        // Same failure class as #431 via the links path: snapshot JSON that
+        // cannot deserialize (e.g. a nulled non-finite float in link data)
+        // must degrade to no links, not panic the game loop.
+        let id_map = HashMap::new();
+        let links = Links::deserialize(serde_json::json!({ "to_links": null }), &id_map);
+        assert!(links.to_links.is_empty());
+    }
+
+    #[test]
+    fn deserialize_skips_values_json_cannot_round_trip() {
+        // A live world can still hold non-finite floats (e.g. physics NaNs);
+        // serde_json::to_value stores those as null. Rebuilding a level from
+        // its snapshot must drop such a component with a warning instead of
+        // panicking the game-loop thread (#431).
+        let scale_def = scale_definition();
+
+        let mut world = World::new();
+        let entity = world.add_entity(PropScale(vec3(1.0, f32::INFINITY, 1.0)));
+        let serialized = scale_def.serialize(&world);
+        assert_eq!(
+            serialized[&entity.inner()]["y"],
+            serde_json::Value::Null,
+            "serde_json should map a non-finite float to null"
+        );
+
+        let mut new_world = World::new();
+        let new_entity = new_world.add_entity(());
+        let id_map = HashMap::from([(entity, new_entity)]);
+        scale_def.deserialize(&serialized, &mut new_world, &id_map);
+
+        let v_scale = new_world.borrow::<View<PropScale>>().unwrap();
+        assert!(
+            v_scale.get(new_entity).is_err(),
+            "component that cannot round-trip should be skipped, not panic"
         );
     }
 }
