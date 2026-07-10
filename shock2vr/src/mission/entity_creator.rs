@@ -869,6 +869,12 @@ pub fn create_physics_representation(
 
             // Climbable surfaces (ladders: PropPhysAttr.climbable != 0) carry an
             // extra marker membership so player movement can detect contact.
+            // Simplifications: `climbable` is plausibly a per-face bitmask in
+            // the original engine (27 = the four vertical sides on ladders) -
+            // any non-zero value marks the whole collider climbable here. And
+            // only this (non-frobbable) creation branch checks it: all known
+            // ladders are plain terrain objects; a frobbable climbable would
+            // need the same treatment in the branch above.
             let is_climbable = v_phys_attr
                 .get(entity_id)
                 .map(|pa| pa.climbable != 0)

@@ -109,9 +109,11 @@ Pure walk + frob does **NOT** finish this level. Each of these is required and
 is a potential feature-gap finding for the play-through loop — test them
 honestly (report a blocker rather than teleporting past):
 
-1. **Ladder climbing** (steps 3, 19) — ladders have `PropPhysAttr.climbable: 27`;
-   as of 2026-07 climbing is **unimplemented** in shock2vr (`projects/climbing.md`
-   is a plan). Expected FIRST blocker of an honest run.
+1. **Ladder climbing** (steps 3, 19) — ladders have `PropPhysAttr.climbable: 27`.
+   Flat (desktop-style) climbing is implemented as of 2026-07: push toward the
+   ladder to ascend, look down + push to descend. Known gaps: entering a
+   descent from the top lip is untested (the grip needs horizontal overlap),
+   and VR grip-climbing is still unimplemented (`projects/climbing.md`).
 2. **Breakable debris** (step 3) — wrench-smash to clear the ladder approach.
 3. **Air-shaft crawl** (step 6) — low-clearance traversal (crouch).
 4. **Power-cell carry + insert** (steps 7, 16) — pick up, recharge, socket into
