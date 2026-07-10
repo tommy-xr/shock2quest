@@ -30,7 +30,7 @@ test(
     });
 
     const bulletHoles = async () =>
-      (await game.entities.list({ filter: "Bullet", limit: 50 })).entities.filter(
+      (await game.entities.list({ filter: "Bullet Hit", limit: 50 })).entities.filter(
         (e) => e.name === "Bullet Hit",
       );
 

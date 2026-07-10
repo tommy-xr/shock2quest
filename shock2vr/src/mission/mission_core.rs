@@ -1727,9 +1727,20 @@ impl MissionCore {
                         .unwrap_or_default()
                 }));
             }
+            // Exclude the host template AND its ancestors: both lookups walk
+            // the whole ancestor chain, so a link authored on an ancestor
+            // would otherwise be walked back from the other end (spawning a
+            // spurious duplicate of the host's ancestor archetype).
+            let excluded: Vec<i32> = exclude_template
+                .map(|t| {
+                    let mut excluded = ss2_entity_info::get_ancestors(hierarchy, &t);
+                    excluded.push(t);
+                    excluded
+                })
+                .unwrap_or_default();
             riders
                 .into_iter()
-                .filter(|t| Some(*t) != exclude_template)
+                .filter(|t| !excluded.contains(t))
                 .collect()
         };
         for particle_template in riders {
