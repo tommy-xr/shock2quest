@@ -70,7 +70,11 @@ intent, not at random.
 
 Classify each validated finding two ways:
 - **Domain:** `[gameplay]` (broken interaction/objective) · `[visual]` (rendering)
-  · `[functionality]` (crash / won't load).
+  · `[functionality]` (crash / won't load) · `[debug_runtime]` (the game has a
+  real player-facing path, but headless testing cannot express or observe it).
+  If the player-facing mechanic itself is absent or broken, keep it
+  `[gameplay]`; do not relabel it as `[debug_runtime]` merely because the tester
+  first noticed it through HTTP.
 - **Kind — this matters as much as the domain, because this is a *partial* port:**
   - **bug** — broken logic in something that's implemented (an off-by-one, a wrong
     comparator, a crash). Targeted fix.
@@ -144,6 +148,7 @@ frontier and marches forward instead of re-treading:
 node .agents/skills/play-through/playthrough-state.mjs init      # idempotent; --auto calls it (--force resets)
 node .agents/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
 #   blocker add <level> <bug|feature-gap> <issue#> <desc...>   ·  blocker set <issue#> <status> [pr#]
+#   checkpoint add <level> <id> <data.json> [note...]          (reviewed evidence, not just state)
 #   advance <level> <saveName> <x,y,z> [note...]               (sets frontier, bumps iteration)
 ```
 
@@ -166,6 +171,10 @@ no frontier to load, which is harmless.
    mission fresh at iteration 0.
 3. **Playtest** from here toward the goal (the `playtest` primitive) → `data.json`.
 4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.
+   For each passed authored checkpoint, record its stable ID and reviewed report:
+   `playthrough-state.mjs checkpoint add <level> <id> <data.json> [note...]`.
+   Frontier/save state alone never proves that gameplay was completed without a
+   diagnostic bypass.
 5. **Triage** the blocker (bug vs **feature-gap** — §3-4; feature-gaps get a
    *faithful*, non-shim fix).
 6. **Fix:** assign a fix worker, using a subagent when available, that commits on
@@ -176,6 +185,11 @@ no frontier to load, which is harmless.
 8. **Advance:** `POST /v1/save {file:"frontier"}` at the new furthest point;
    `playthrough-state.mjs advance <level> frontier <x,y,z>`.
 9. Render the session report (+ optional video).
+
+Before marking a mission complete, run a manager-labeled **final validation
+replay** fresh from the mission start. It may exceed the normal discovery-session
+step/time bound, but it still stops on the first new blocker and never receives
+credit for diagnostic bypasses.
 
 **Guardrails (don't skip):**
 - **Merge gate is the human.** Fixes open PRs; *you* merge (or CI+`/xreview` gate).
@@ -190,6 +204,7 @@ no frontier to load, which is harmless.
 - Delegate playtest, review, and each fix when supported; otherwise keep the
   phases distinct inline. The manager keeps the ledger (frontier, issues→fixes,
   iteration report).
-- Navigation today is teleport + short thumbstick drives; real-movement
-  playtesting (navmesh traversal) is a planned upgrade — keep frontier positions
-  as world coordinates so it drops in.
+- Teleport is only for manager-owned frontier setup/resume. Within a live
+  playtest, use ordinary stepped thumbstick locomotion for traversal; bounded
+  move/teleport calls are diagnostic and cannot make a gameplay checkpoint pass.
+  Keep frontier positions as world coordinates for deterministic resume.

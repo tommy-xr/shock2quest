@@ -19,6 +19,39 @@ make progress toward the goal, and **notice** what's broken. Output a structured
 `data.json` + screenshots. You do NOT fix anything here — you observe and report;
 the `play-through` manager triages and delegates fixes.
 
+## Before the first action
+
+- Read the mission context at
+  `.agents/skills/play-through/walkthroughs/<mission>.md` when it exists. It is
+  an intent/decision guide, not a movement script.
+- State the next authored objective in plain language (for example, "loot the
+  wrench, break the duct, climb out of cryo"). Do not substitute a nearby-looking
+  prop or jump straight to a later transition just because its coordinates are
+  discoverable.
+- If no mission context exists, consult a real walkthrough and `cargo dq`, then
+  leave concise mission notes for the manager to validate before treating a
+  finding as a blocker.
+
+## Session bound and stuck policy
+
+One invocation is one bounded evidence-gathering session, not an endless search.
+
+- Discovery sessions stop after roughly 12 meaningful action/observation steps
+  or 15 minutes, whichever comes first. A manager replay can continue from the
+  frontier. A manager-labeled **final validation replay** is exempt from this
+  total-session limit and runs from a fresh start to the mission exit or the
+  first new blocker; the three-attempt rule below still applies.
+- After three materially different, sensible attempts at the same obstacle, stop
+  retrying. Capture the best repro, identify the missing gameplay mechanism or
+  automation control, emit `data.json`, and return.
+- Repeated screenshots from the same place are not progress. Keep the clearest
+  one and explain what changed between attempts.
+- When the walkthrough reveals that an earlier required action was skipped,
+  first check the manager-provided ledger checkpoint records for prior reviewed
+  evidence (checkpoint ID plus originating `data.json`). A save/frontier alone
+  is not proof. If the checkpoint is not already proven, classify the session as
+  shallow/invalid and retry it before filing a later obstacle as the blocker.
+
 ## Reach the start state
 - **Fresh:** launch the runtime on the mission (SDK `GameServer.launch`, or
   `cargo dbgr --mission <m>.mis --port <p>`), `step 5` to settle.
@@ -32,34 +65,65 @@ the `play-through` manager triages and delegates fixes.
 
 | See the world | Act on it |
 | --- | --- |
-| `POST /v1/screenshot {filename}` → **Read `/tmp/claude/<file>`** (do this often) | **`POST /v1/player/move {x,y,z}`** — navigate (bounded ≤5u hop, collision-checked) |
+| `POST /v1/screenshot {filename}` → **Read `/tmp/claude/<file>`** (do this often) | `POST /v1/player/move {x,y,z}` — diagnostic collision probe (bounded ≤5u) |
 | `GET /v1/entities?filter=&limit=` (name/id/pos/distance) | `POST /v1/control/input {right_hand.thumbstick:[strafe,fwd]}` + step (walk) |
 | `GET /v1/entities/:id` (props, links) | `{left_hand.thumbstick:[turn,0]}` + step (look around) |
-| `GET /v1/info` (health, pos, wielded, psi) | `POST /v1/entities/:id/message {type:"Frob"\|"Damage"\|"TurnOn"}` |
-| `GET /v1/player/inventory` · `GET /v1/quests` | `POST /v1/player/give {entity_id}` (pick up) |
-| `GET /v1/transitions` (exits: dest + position) | follow an exit: **move** up to a **tripwire** volume; **Frob** a bulkhead **button** |
+| `GET /v1/info` (health, pos, wielded, psi) | `head.look` + squeeze press/release (use/pick up) |
+| `GET /v1/player/inventory` · `GET /v1/quests` | `right_hand.trigger` press/release (fire/swing) |
+| `GET /v1/transitions` (exits: dest + position) | walk into a **tripwire** volume; squeeze a bulkhead **button** |
 
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 
-**Navigate with `/v1/player/move`, not raw teleport.** It advances the player at
-most ~5 units toward the target and **shapecasts the player collider**, so it
-**cannot tunnel through walls or out of bounds** (returns `blocked:true`,
-`distance_moved < requested` when it hits geometry). So you walk to a place in
-short hops, checking screenshots — this is what makes it a real playtest instead
-of warping to arbitrary (often out-of-level) entity coordinates. Raw
-`/v1/player/teleport` is reserved for manager-driven setup/frontier-resume.
+Use stepped thumbstick input for **proof of gameplay traversal**. Aim toward the
+next X/Z target with `head.look`, hold `right_hand.thumbstick:[0,1]` for a small
+frame batch, release it, then inspect position and screenshot. `/v1/player/move`
+is a bounded, shape-cast spatial probe (≤5 units) that is useful for route setup
+and collision diagnosis, but it does not enforce ground support and therefore
+cannot prove stairs, drops, ladders, lifts, or open shafts are playable. Raw
+`/v1/player/teleport` is reserved for manager-driven frontier setup/resume.
 
-**Doors block the shapecast** — you can't move through a closed one. The pattern:
-move up to the door → it trips the tripwire (or `Frob` it) → `step` and wait for
-it to open (re-screenshot) → then `move` through. That's genuine door-by-door
-traversal.
+Doors block both ordinary locomotion and the diagnostic shape cast. Walk up to
+the door, use normal squeeze interaction when needed, step until it opens, then
+walk through.
+
+### Route recovery after a blocked move
+
+A blocked straight-line move does not mean the destination is unreachable. The
+mission's authored AIPATH database can provide the turn-by-turn walk route:
+
+```bash
+cargo bn path show medsci1.mis \
+  --from=-34.97,-4.57,17.86 --to=-37.27,-5.51,31.77
+```
+
+Use the player's current position and the target's discovered position. Treat
+each waypoint as an **X/Z heading only**: preserve the live player Y and advance
+with stepped thumbstick locomotion. Never copy AIPATH Y into `/v1/player/move`.
+Screenshots and live collisions still decide what to do at doors, enemies,
+debris, lifts, and ladders; the path is spatial planning, not permission to
+ignore the world.
+
+Do not report "cannot reach target" after merely trying several direct lines.
+First either follow a returned AIPATH route or show that AIPATH reports no route.
+Any waypoint Y change is diagnostic context only. At a ladder, lift, stair,
+drop, or open shaft, stop and exercise the authored mechanism rather than
+translating vertically or horizontally across unsupported space.
+
+`/v1/player/give` and direct entity messages are **diagnostic automation
+levers**, not proof that an in-world pickup/frob works. Reach the authored object
+first and prefer the real flat controls (`head.look`, then a press/release of
+`right_hand.squeeze` for use/pickup; `right_hand.trigger` for the wielded
+weapon). If an unavailable container/GUI control forces a narrow diagnostic
+bypass, record that automation gap and do not mark the bypassed checkpoint as
+passing. Never grant an objective item from across the map.
 
 ## How to play (toward the goal)
 1. Screenshot + **read it**. Describe what you actually see; is it coherent or off?
-2. Explore: look around, list nearby entities, **move** (bounded hops) toward
-   interesting ones (door, corpse, item, terminal, monster) and screenshot each.
-   If a `move` reports `blocked`, something's in the way — that's real geometry.
+2. Explore: look around, list nearby entities, and use stepped thumbstick
+   locomotion toward interesting ones (door, corpse, item, terminal, monster).
+   Screenshot turns and interactions. A blocked diagnostic move identifies
+   collision geometry, not necessarily an unreachable destination.
 3. Interact toward progress: pick up items, frob doors/terminals/keypads, fight,
    and follow the level's real exit toward the goal.
 4. Hunt bugs the whole time: missing/black textures, floating/clipping/z-fighting,
@@ -84,7 +148,7 @@ frontier/issues to drive the loop:
   "steps": [
     { "index": 1, "title": "Wake in cryo bay", "screenshot": "pt-01.png",
       "observation": "what you saw", "action": "what you did",
-      "bug": { "severity": "High|Med|Low", "class": "[gameplay|visual|functionality]", "detail": "..." } }
+      "bug": { "severity": "High|Med|Low", "class": "[gameplay|visual|functionality|debug_runtime]", "detail": "..." } }
   ],
   "bugs": [
     { "title": "short", "severity": "High", "class": "[gameplay]", "screenshot": "pt-07.png",

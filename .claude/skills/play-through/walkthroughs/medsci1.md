@@ -1,139 +1,119 @@
-# Walkthrough — medsci1 (MedSci Deck 1: Cryo Recovery + Science sector)
+# Walkthrough context — medsci1 (MedSci Deck 2)
 
-Context for the `playtest` agent and the `play-through` reviewer. This is the
-**real critical path** (cross-checked against portforward.com, sshock2.com, and
-powerpyx/Steam code guides, then verified against `medsci1.mis` entity data) —
-use it to play with intent and to judge whether a session genuinely progressed.
-It is **not a script**: observe and react; use the anchors to know where the
-path goes and what *should* happen there.
+Use this as **intent and decision context**, not as a coordinate script. The
+playtester must still look at screenshots, move through collision-valid space,
+discover runtime entity IDs on each launch, and interact with the real world.
+Reaching the Engineering trigger by teleporting to it is only a transition smoke
+test; it is not a MedSci playthrough.
 
-**Positions are runtime-space** (same space as `/v1/player/*`, `/v1/entities`)
-verified against a live runtime. **Resolve entities by name/template at run
-time** (`GET /v1/entities?filter=...`) — never hardcode runtime ids. The
-`template_id` in `/v1/entities` output is the stable handle listed below.
+## Mission objective and success condition
 
-## Deck structure
+The critical-path objective is to obtain the maintenance-shaft code from Dr.
+Watts, return to the shaft beside the main elevator, open it with `12451`, and
+descend into `eng1`. Reviewed campaign evidence may accumulate these
+prerequisites across bounded sessions, but each prerequisite needs a ledger
+checkpoint record pointing to its reviewed `data.json`; a frontier save alone
+is not evidence. Before declaring the mission complete, a manager-labeled final
+validation replay must exercise the full world flow below from a fresh start and
+end with the active mission changing to `eng1.mis`.
 
-Two floors: **lower** (y ≈ −4…−8: spawn cryo bay, cryo-recovery block, upgrade
-hub) and **upper** (y ≈ 0…1: most of the Science sector — elevator lobby,
-chemical storeroom, turret area, bulkheads). Vertical traversal is by **ladders
-and small lift platforms**, not stairs.
+External route cross-checks:
 
-Three exits (live `/v1/transitions`):
+- [SShock2 MedSci walkthrough](https://www.sshock2.com/ss2walk/)
+- [GameBanshee MedSci Science walkthrough](https://www.gamebanshee.com/systemshock2/walkthrough/medsciscience.php)
 
-| exit | entity | position | leads to |
-| --- | --- | --- | --- |
-| Medical bulkhead (north) | `Bulk_On_Button` tmpl 1009 | (43.9, 0.0, −76.4) | medsci2 loc 100 |
-| Medical bulkhead (south) | `Bulk_On_Button` tmpl 1103 | (45.5, 0.0, −15.6) | medsci2 loc 300 |
-| **Maintenance conduit (the level exit)** | `Tripwire` tmpl 764 (TrapTripLevel) | (12.7, −5.6, −43.6) | **eng1** loc 21 |
+Mission-data facts were cross-checked with `cargo dq entities medsci1.mis`.
 
-The deck's **main elevator is inoperative** (Master Elevator Button tmpl 1041 at
-(0.4, 0, −40.4), Double Elevator Doors ~(0.8, 0.2, −42)) — it is NOT the exit.
-The story objective chain: cryo escape → Science sector → **medsci2 round trip**
-(Grassi → Watts, who has code 12451) → back → maintenance conduit → Engineering.
+## Critical path and decisions
 
-## Codes & required items
+### 1. Escape the cryo starting area
 
-| Item / code | Where | Unlocks |
-| --- | --- | --- |
-| Wrench (tmpl 990) @ (−38.1, −5.9, 29.8) | cryo bay floor near spawn | smash debris blocking the first ladder; melee |
-| **Code 45100** | audio log (Amanpour) on first corpse past the card door | cryo-recovery exit door (keypad tmpl 1681 @ (−26.5, 0.2, −12.7)) |
-| Cryo Card (tmpl 1050) @ (−24.3, 0.0, −1.4) | upper walkway after the first ladder | first card-reader door |
-| Power cell #1: Dead Power Cell tmpl 1767 @ (−13.8, −6.5, −34.3) | near jammed door; charge at Recharging Station tmpl 125 @ (−15.8, −6.0, −27.9) | Aux Power receptor tmpl 1766 @ (−13.1, −5.8, −33.1) → jammed cryo-escape door. (Spare Wrench tmpl 1707 @ (−18.5, −6.7, −29.3) here.) |
-| Science Card (tmpl 338) @ (−16.6, 1.2, −68.9) | corpse near the "ghost" (upgrade-hub exit) | card door into the Science sector proper |
-| Power cell #2: Dead Power Cell tmpl 1186 @ (29.8, −1.1, −75.7) | reception near the "MED" sign (Polito points it out) | Aux Power receptor tmpl 1128 @ (32.1, 0.9, −76.8) → powers the **north Medical bulkhead** (→ medsci2) |
-| **Code 12451** | Watts' audio log, R&D — **in medsci2** | maintenance conduit keypad tmpl 809 @ (6.3, 0.4, −47.4) → the eng1 exit |
-| Optional: code 00000 (cryo closet, BrawnBoost); code 98383 (sub-armory, medsci2 side) | | |
+1. Search the nearby corpse and take the wrench. Equip it.
+2. Break the fallen air duct obstructing the ladder, then climb the ladder. In
+   flat mode, push toward the ladder to ascend; look down and push to descend.
+3. Use the door button, take the Cryogenics access card from the next room, and
+   use the nearby card slot.
+4. Obtain the audio log from the corpse at the keypad door, enter `45100`, and
+   continue.
+5. Crouch through the narrow vent and drop into the powered-door room.
+6. Take the dead power cell, recharge it at the station in the same room, and
+   insert the charged cell into the door receptor.
+7. Ride the lift to the upper cryo level, find the Science Sector access card in
+   an adjoining room, and use it to leave cryo.
 
-## Critical path (granular)
+Important decision rule: if the agent cannot loot the corpse, swing the wrench,
+climb the first ladder, enter the keypad code, crouch through the vent, operate
+the recharger/receptor, or ride the lift, stop at the **first** failed mechanism.
+Distinguish a gameplay feature gap from a missing automation control. Do not
+silently replace the whole sequence with `give`, remote `Frob`, quest mutation,
+flight, or teleport and then claim it passed.
 
-### Phase A — Cryo Recovery escape (lower floor, around spawn)
-1. **Wake** at (−35, −4.6, 17.9); Polito radios that the section is breached.
-2. **Take the Wrench** (tmpl 990, (−38.1, −5.9, 29.8)) from the bay floor.
-3. **Smash the debris and climb the ladder** behind the fallen Air Duct (tmpl
-   402, (−41.6, −3.9, 17.9)); ladder rungs `Rick Ladder` stacked at
-   (−41.3, −5.8…−2.0, 16.5) → up to the walkway (y ≈ 0). *(A second required
-   ladder stack sits at (−17.5, −6.0…−2.0, 14.5).)*
-4. **Pick up the Cryo Card** (tmpl 1050, (−24.3, 0.0, −1.4)); use it on the
-   card-reader door.
-5. **First corpse: audio log with code 45100**; enter it on **keypad tmpl 1681**
-   (−26.5, 0.2, −12.7) to open the cryo-recovery exit door.
-6. **Air-shaft crawl** section (low-clearance passage), leads down toward the
-   jammed-door area.
-7. **Power cell puzzle #1**: take Dead Power Cell (tmpl 1767), charge it at the
-   Recharging Station (tmpl 125), insert into Aux Power (tmpl 1766) — the
-   jammed door opens.
-8. **Cyber-upgrade hub**: Polito awards modules; 4 upgrade stations. (Optional:
-   cryo closet keypad 00000 nearby.)
-9. **Ride the lift up** out of the lower level (Elevator Path pair tmpl 262/263:
-   (−27.6, −7.9, −54.5) → (−27.6, −1.7, −54.5)).
-10. **Take the Science Card** (tmpl 338, (−16.6, 1.2, −68.9)) from the corpse
-    near the "ghost"; it opens the card door out.
-11. **First combat: 2 hybrids** past that door. Then a second platform ride up
-    to the elevator lobby.
+### 2. Open the Medical bulkhead
 
-### Phase B — Science sector → Medical bulkhead (upper floor)
-12. **Elevator lobby** (~(0.4, 0, −40)): pressing the elevator button triggers
-    Polito's "elevator is inoperative" objective chain. The **maintenance
-    conduit door** (keypad tmpl 809, (6.3, 0.4, −47.4); "To Maintenence Shaft"
-    sign tmpl 1281 at (5.4, −1.6, −49.1)) is here but **locked — code 12451 not
-    known yet**. Security cameras (5 on the deck) start appearing.
-13. **Power cell #2**: scripted explosion near the "MED" sign; take Dead Power
-    Cell (tmpl 1186, (29.8, −1.1, −75.7)) from reception.
-14. Pass the Xerxes computer room / bio-reconstruction room (optional: activate
-    the Quantum Bio-Reconstruction machine; pistol near the info kiosk).
-15. **Turret gauntlet**: catwalk over a room with 2 Slug Turrets (turrets in
-    data: tmpl 610 (3.2, −5.2, −14.0), tmpl 611 (−4.7, −5.3, −6.1), tmpl 1015
-    (18.8, −0.4, 9.5)). Recharge the power cell at a Recharging Station
-    (tmpl 506 (−6.8, −4.0, −13.1) or tmpl 273 (10.5, −2.8, 33.0)).
-16. **Insert the charged cell into Aux Power tmpl 1128** (32.1, 0.9, −76.8) →
-    the north Medical bulkhead powers up; hit `Bulk_On_Button` tmpl 1009 →
-    **level transition to medsci2**.
+1. Use the Science card at the sector door. The main elevator is nearby but is
+   unpowered; the maintenance shaft opposite it is the eventual exit.
+2. Find the dead power cell near the Medical bulkhead.
+3. Follow the science-sector route to the pump station. This requires descending
+   another ladder and dealing with the guarded recharging room.
+4. Recharge the cell, climb back out, return to the receptor, and activate the
+   bulkhead into Medical.
 
-### Phase C — medsci2 excursion (required; separate walkthrough)
-17. Medical sector → Grassi's corpse (Crew access card) → Crew Quarters →
-    Watts' office (R&D card) → **Watts' audio log with code 12451** → return
-    through the bulkhead to medsci1.
+### 3. Obtain Crew and R&D access
 
-### Phase D — Exit to Engineering
-18. Back at the conduit: **enter 12451 on keypad tmpl 809** — door opens (the
-    keypad SwitchLinks the door + an Experience Trap: cyber-module award).
-19. **Climb DOWN the shaft ladder** (`Rick Ladder 16` tmpl 1140 at
-    (12.6, −5.6, −42.7)) — one Blue Monkey may be around the conduit.
-20. At the bottom, the **Tripwire (tmpl 764) fires → eng1.mis** (loc 21, near
-    Engineering Control). medsci1 done.
+1. In Medical, follow the route past the radiation rooms toward the multilevel
+   ladder room.
+2. Descend to the corpse holding the Deck 2 Crew access card, climb back up, and
+   return to the locked Crew door near the Medical bulkhead.
+3. Work through Crew Quarters to Dr. Watts' office and take the Research &
+   Development access card.
+4. Return through the bulkhead to the Science sector.
 
-## Required non-walk mechanics — engine watch-points
+### 4. Find Watts and enter Engineering
 
-Pure walk + frob does **NOT** finish this level. Each of these is required and
-is a potential feature-gap finding for the play-through loop — test them
-honestly (report a blocker rather than teleporting past):
+1. Use the R&D card at the door near the replicator and proceed through R&D.
+2. Descend the lift to Dr. Watts. Let the authored encounter complete and obtain
+   the audio log containing maintenance code `12451`.
+3. Return to the maintenance shaft opposite the main elevator.
+4. Enter `12451`, open the shaft, and descend its ladder. Crossing the transition
+   volume should load `eng1.mis`.
 
-1. **Ladder climbing** (steps 3, 19) — ladders have `PropPhysAttr.climbable: 27`.
-   Flat (desktop-style) climbing is implemented as of 2026-07: push toward the
-   ladder to ascend, look down + push to descend. Known gaps: entering a
-   descent from the top lip is untested (the grip needs horizontal overlap),
-   and VR grip-climbing is still unimplemented (`projects/climbing.md`).
-2. **Breakable debris** (step 3) — wrench-smash to clear the ladder approach.
-3. **Air-shaft crawl** (step 6) — low-clearance traversal (crouch).
-4. **Power-cell carry + insert** (steps 7, 16) — pick up, recharge, socket into
-   an Aux Power receptor.
-5. **Lift platform rides** (steps 9, 11) — moving-terrain elevators
-   (`Elevator Path` pairs; the path DB shows `moving_terrain` cells).
-6. **Keypad code entry** (steps 5, 18) — 45100 / 12451 via the keypad UI.
-7. **Bulkhead round trip to medsci2 and back** (steps 16–17) — cross-mission
-   state (inventory + quest bits must survive both transitions).
+## Authored data landmarks
 
-Also known: the AIPATH walk-graph does NOT connect spawn → exit (verified with
-`cargo bn path show`, even with permissive movement bits) — consistent with the
-ladder/lift/crawl legs above splitting the walk components. Any future
-"navigate by pathfinding" upgrade must handle those seams.
+These stable mission-file facts help review a run; resolve concrete runtime IDs
+by name/template every launch.
 
-## Sources
+- Wrench template: `-928`. The starting wrench is contained by a corpse; it is
+  not merely a loose item to grant from anywhere.
+- Cryo keypad: mission entity `1681`, code `45100`, around
+  `(-26.53, 0.24, -12.66)`.
+- Science card: template `-159`, around `(-16.56, 0.82, -68.94)`.
+- Dead power cells: template `-1862`; MedSci contains two because both powered
+  door sequences are part of the intended route.
+- Ladder objects inherit `PropPhysAttr.climbable != 0`. The final shaft ladder is
+  around `(12.58, -5.62, -42.69)`.
+- Final keypad: mission entity `809`, code `12451`, around
+  `(6.34, 0.43, -47.44)`.
+- MedSci to Engineering transition: `TrapTripLevel`, `PropDestLevel("eng1")`,
+  `PropDestLoc(21)`, around `(12.68, -5.64, -43.59)`.
 
-- portforward.com SS2 walkthrough (Science / Crew-Quarters / Medical pages)
-- sshock2.com full walkthrough (deck split, codes/cards)
-- powerpyx + Steam access-code guides (codes 45100 / 00000 / 12451 / 98383)
-- `cargo dq entities medsci1.mis ...` + live debug-runtime entity dump
-  (2026-07-09) for positions/ids; tripwire + keypad SwitchLinks verified in
-  mission data.
+Coordinates are diagnostic landmarks, never permission to teleport during a
+playtest. They are useful for checking that the agent is pursuing the correct
+object and for reproducing a validated blocker in isolation.
+
+## Review checklist
+
+A reviewer should reject a fresh session—or a resumed session without a reviewed
+ledger checkpoint and source `data.json` for the skipped prerequisite—as shallow
+or invalid when it:
+
+- surveys the spawn room without attempting the wrench/debris interaction;
+- uses vertical debug flight and calls that ladder traversal;
+- grants key items from across the map rather than reaching their authored
+  container/location;
+- directly triggers the Engineering transition without completing the route;
+- reports a decorative object as broken without matching it to a walkthrough
+  step or an authored property/link.
+
+When an automation control is absent, record that gap, preserve a screenshot and
+frontier, and use the narrowest diagnostic bypass only to discover the **next**
+blocker. A bypass does not make the bypassed gameplay checkpoint pass.
