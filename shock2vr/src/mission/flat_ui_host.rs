@@ -42,6 +42,11 @@ const CANVAS_SIZE: Vector2<f32> = Vector2::new(640.0, 480.0);
 /// The right slot `(450, 124)` is reserved for later character panels.
 const LEFT_MFD_ANCHOR: Vector2<f32> = Vector2::new(2.0, 124.0);
 
+/// The top-docked inventory strip anchor (`shkinv.cpp`: `INV_X = 2`,
+/// `INV_Y = 0`, `inv_rect = 636x121` - horizontally centered on the 640
+/// canvas, flush with the top edge).
+const STRIP_ANCHOR: Vector2<f32> = Vector2::new(2.0, 0.0);
+
 /// Walk-away auto-close distance (world units; dark units / SCALE_FACTOR).
 /// ~10 feet - past normal frob range, so a panel opened up close survives
 /// small repositioning but closes when the player leaves the object.
@@ -67,6 +72,10 @@ pub struct FlatUiHost {
     /// Latest `SetUI` components for the active panel (normalized panel
     /// coordinates, as `GuiScript` emits them).
     components: Vec<GuiComponentRenderInfo>,
+    /// Tab metagame ("use") mode: the top-docked inventory strip, bound to
+    /// the player's `internal_inventory` entity. `Some` exactly while flat
+    /// use mode is on (projects/flat-ui.md §5.2, PR 4).
+    strip: Option<StripSlot>,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -76,12 +85,23 @@ pub struct FlatUiHost {
     screen_size: Vector2<f32>,
 }
 
+/// The inventory strip's slot state - the same stash-latest-`SetUI` shape as
+/// the MFD panel slot, docked at [`STRIP_ANCHOR`] instead of the left MFD.
+struct StripSlot {
+    entity: EntityId,
+    /// Strip size in panel-local pixels (from `SetUI.world_size`); `None`
+    /// until the first `SetUI` after entering use mode.
+    size_px: Option<Vector2<f32>>,
+    components: Vec<GuiComponentRenderInfo>,
+}
+
 impl FlatUiHost {
     pub fn new() -> FlatUiHost {
         FlatUiHost {
             active_panel: None,
             panel_size_px: None,
             components: Vec::new(),
+            strip: None,
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -91,6 +111,24 @@ impl FlatUiHost {
 
     pub fn active_panel(&self) -> Option<EntityId> {
         self.active_panel
+    }
+
+    /// The entity whose inventory the top-docked strip shows, while use mode
+    /// is on.
+    pub fn strip_entity(&self) -> Option<EntityId> {
+        self.strip.as_ref().map(|s| s.entity)
+    }
+
+    /// Enter/leave Tab metagame mode: bind (or drop) the top-docked
+    /// inventory strip. `Some(entity)` is the player's `internal_inventory`
+    /// entity, whose `GuiScript` already emits `SetUI` every frame - the
+    /// strip just stashes and re-anchors it.
+    pub fn set_strip(&mut self, entity: Option<EntityId>) {
+        self.strip = entity.map(|entity| StripSlot {
+            entity,
+            size_px: None,
+            components: Vec::new(),
+        });
     }
 
     /// Bind the MFD to `entity` (the original's `gOverlayObj`). Opening a
@@ -116,18 +154,27 @@ impl FlatUiHost {
     }
 
     /// Observe an `Effect::SetUI`: stash the component list if it belongs to
-    /// the active panel (the VR world-quad path is untouched by this).
+    /// the active panel or the inventory strip (the VR world-quad path is
+    /// untouched by this).
     pub fn on_set_ui(
         &mut self,
         parent_entity: EntityId,
         world_size: Vector2<f32>,
         components: &[GuiComponentRenderInfo],
     ) {
+        // `SetUI.world_size` is `screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE`.
+        let size_px = world_size / crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
+        if let Some(strip) = self.strip.as_mut() {
+            if strip.entity == parent_entity {
+                strip.size_px = Some(size_px);
+                strip.components = components.to_vec();
+                return;
+            }
+        }
         if self.active_panel != Some(parent_entity) {
             return;
         }
-        // `SetUI.world_size` is `screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE`.
-        self.panel_size_px = Some(world_size / crate::gui::GUI_PIXEL_TO_WORLD_SIZE);
+        self.panel_size_px = Some(size_px);
         self.components = components.to_vec();
     }
 
@@ -145,43 +192,52 @@ impl FlatUiHost {
         self.panel_size_px.map(panel_canvas_rect)
     }
 
+    /// The inventory strip's top-docked rect on the 640x480 canvas (None
+    /// outside use mode / until its first `SetUI` arrives).
+    fn strip_rect(&self) -> Option<Rect> {
+        self.strip
+            .as_ref()
+            .and_then(|s| s.size_px)
+            .map(strip_canvas_rect)
+    }
+
     /// Per-frame pointer processing while in flat presentation. Maps the
     /// normalized pointer to panel-local coordinates and returns the
-    /// `GUIHover` message to dispatch to the panel entity; handles the close
-    /// gestures (close button, LMB on the bare view, walk-away, entity gone).
+    /// `GUIHover` message to dispatch to the strip or panel entity; handles
+    /// the close gestures (close button, LMB on the bare view, walk-away,
+    /// entity gone). A bare-view click closes the MFD panel but never the
+    /// strip - use mode is left by Tab (projects/flat-ui.md §5.2).
     pub fn update(&mut self, world: &World, pointer: Option<Pointer2D>) -> Vec<Message> {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
 
-        let Some(panel) = self.active_panel else {
-            self.cursor_canvas = None;
-            return Vec::new();
-        };
-
-        // The bound object is gone (destroyed / level state changed).
-        let alive = world
-            .borrow::<EntitiesView>()
-            .map(|entities| entities.is_alive(panel))
-            .unwrap_or(false);
-        if !alive {
-            self.close();
-            return Vec::new();
+        // MFD-slot auto-close: the bound object is gone (destroyed / level
+        // state changed), or the player walked away from it (the original's
+        // per-overlay `distance` check). The strip is bound to the player's
+        // own inventory entity - neither applies.
+        if let Some(panel) = self.active_panel {
+            let alive = world
+                .borrow::<EntitiesView>()
+                .map(|entities| entities.is_alive(panel))
+                .unwrap_or(false);
+            let too_far = alive
+                && (|| {
+                    let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+                    let v_pos = world
+                        .borrow::<View<dark::properties::PropPosition>>()
+                        .ok()?;
+                    let pos = v_pos.get(panel).ok()?;
+                    Some((pos.position - player.pos).magnitude() > PANEL_AUTO_CLOSE_DISTANCE)
+                })()
+                .unwrap_or(false);
+            if !alive || too_far {
+                self.close();
+            }
         }
 
-        // Walk-away auto-close (the original's per-overlay `distance` check
-        // against the bound object).
-        let too_far = (|| {
-            let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-            let v_pos = world
-                .borrow::<View<dark::properties::PropPosition>>()
-                .ok()?;
-            let pos = v_pos.get(panel).ok()?;
-            Some((pos.position - player.pos).magnitude() > PANEL_AUTO_CLOSE_DISTANCE)
-        })()
-        .unwrap_or(false);
-        if too_far {
-            self.close();
+        if self.active_panel.is_none() && self.strip.is_none() {
+            self.cursor_canvas = None;
             return Vec::new();
         }
 
@@ -210,6 +266,22 @@ impl FlatUiHost {
             return Vec::new();
         };
 
+        // The strip's top-docked rect is disjoint from the MFD slot (y 0-121
+        // vs 124+); route the hover to whichever contains the pointer.
+        if let Some(strip) = &self.strip {
+            if let Some(rect) = strip.size_px.map(strip_canvas_rect) {
+                if rect.contains(canvas_pos) {
+                    self.hover_close = false;
+                    return vec![gui_hover(strip.entity, rect, canvas_pos, pointer.pressed)];
+                }
+            }
+        }
+
+        let Some(panel) = self.active_panel else {
+            // Use mode with no MFD open: a bare-view click has nothing to
+            // close (Tab leaves use mode).
+            return Vec::new();
+        };
         let Some(rect) = self.panel_rect() else {
             // Panel opened this frame; no SetUI yet - nothing to hit-test.
             return Vec::new();
@@ -225,24 +297,7 @@ impl FlatUiHost {
         }
 
         if rect.contains(canvas_pos) {
-            // Forward as GUIHover in panel-local normalized coordinates -
-            // the same message the VR hand ray produces, so `GuiScript`'s
-            // hit-test/edge-detection runs unchanged. LMB maps to the
-            // right-hand trigger; flat has no grab gesture yet.
-            let local = point2(
-                (canvas_pos.x - rect.x) / rect.w,
-                (canvas_pos.y - rect.y) / rect.h,
-            );
-            vec![Message {
-                to: panel,
-                payload: MessagePayload::GUIHover {
-                    held_entity_id: None,
-                    screen_coordinates: local,
-                    is_triggered: pointer.pressed,
-                    is_grabbing: false,
-                    hand: Handedness::Right,
-                },
-            }]
+            vec![gui_hover(panel, rect, canvas_pos, pointer.pressed)]
         } else {
             // LMB on the bare 3D view closes the panels (manual p.7).
             if pressed_edge {
@@ -252,44 +307,34 @@ impl FlatUiHost {
         }
     }
 
-    /// Render the active panel + cursor as screen-space overlay objects on
-    /// the shared 640x480 canvas (drawn after the flat HUD).
+    /// Render the inventory strip + active panel + cursor as screen-space
+    /// overlay objects on the shared 640x480 canvas (drawn after the flat
+    /// HUD).
     pub fn render(
         &self,
         asset_cache: &mut AssetCache,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
-        let Some(rect) = self.panel_rect() else {
+        let strip_rect = self.strip_rect();
+        let panel_rect = self.panel_rect();
+        if strip_rect.is_none() && panel_rect.is_none() {
             return Vec::new();
-        };
-        let mut canvas = UiCanvas::new(CANVAS_SIZE);
-        for component in &self.components {
-            if is_gui_cursor(component) {
-                // GuiScript appends its own panel-local cursor image for the
-                // VR quads; the host draws the real screen cursor instead.
-                continue;
-            }
-            let r = component_canvas_rect(component, rect);
-            match component {
-                // The original MFD art is opaque on screen; the render-info
-                // alpha is a VR world-quad translucency, deliberately not
-                // applied here.
-                GuiComponentRenderInfo::Image { texture, .. } => {
-                    canvas.image(r, texture);
-                }
-                GuiComponentRenderInfo::Text { text, font, .. } => {
-                    canvas.text(r, text, font, r.h, HAlign::Left, VAlign::Top);
-                }
-            }
         }
-        canvas.image(
-            close_button_canvas_rect(rect),
-            if self.hover_close {
-                "closeon.pcx"
-            } else {
-                "closeoff.pcx"
-            },
-        );
+        let mut canvas = UiCanvas::new(CANVAS_SIZE);
+        if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
+            draw_components(&mut canvas, &strip.components, rect);
+        }
+        if let Some(rect) = panel_rect {
+            draw_components(&mut canvas, &self.components, rect);
+            canvas.image(
+                close_button_canvas_rect(rect),
+                if self.hover_close {
+                    "closeon.pcx"
+                } else {
+                    "closeoff.pcx"
+                },
+            );
+        }
         if let Some(cursor) = self.cursor_canvas {
             canvas.image(
                 Rect::new(cursor.x, cursor.y, CURSOR_SIZE.x, CURSOR_SIZE.y),
@@ -308,17 +353,50 @@ impl FlatUiHost {
         let Some(rect) = self.panel_rect() else {
             return Vec::new();
         };
-        let to_screen = |r: Rect| {
-            let s = crate::ui::canvas_rect_to_screen(
-                r,
-                CANVAS_SIZE,
-                self.screen_size,
-                ScaleMode::PreserveAspect,
-            );
-            [s.x, s.y, s.w, s.h]
-        };
+        let mut out = self.elements_for(world, &self.components, rect);
+        // The host-drawn close button is clickable too.
+        let close = close_button_canvas_rect(rect);
+        out.push(crate::game_scene::DebugUiElement {
+            kind: "button".to_string(),
+            texture: Some("closeoff.pcx".to_string()),
+            text: None,
+            label: Some("close".to_string()),
+            entity_id: None,
+            rect: [close.x, close.y, close.w, close.h],
+            screen_rect: self.to_screen_rect(close),
+        });
+        out
+    }
+
+    /// Introspection snapshot of the inventory strip's elements for
+    /// `GET /v1/ui` (`strip`) - the same element contract as `debug_elements`
+    /// (carried items label as their name + entity id). Empty outside use
+    /// mode. The strip has no close element: use mode is left by Tab.
+    pub fn strip_debug_elements(&self, world: &World) -> Vec<crate::game_scene::DebugUiElement> {
+        match (self.strip.as_ref(), self.strip_rect()) {
+            (Some(strip), Some(rect)) => self.elements_for(world, &strip.components, rect),
+            _ => Vec::new(),
+        }
+    }
+
+    fn to_screen_rect(&self, r: Rect) -> [f32; 4] {
+        let s = crate::ui::canvas_rect_to_screen(
+            r,
+            CANVAS_SIZE,
+            self.screen_size,
+            ScaleMode::PreserveAspect,
+        );
+        [s.x, s.y, s.w, s.h]
+    }
+
+    fn elements_for(
+        &self,
+        world: &World,
+        components: &[GuiComponentRenderInfo],
+        rect: Rect,
+    ) -> Vec<crate::game_scene::DebugUiElement> {
         let mut out = Vec::new();
-        for component in &self.components {
+        for component in components {
             if is_gui_cursor(component) {
                 continue;
             }
@@ -356,20 +434,9 @@ impl FlatUiHost {
                 label,
                 entity_id,
                 rect: [r.x, r.y, r.w, r.h],
-                screen_rect: to_screen(r),
+                screen_rect: self.to_screen_rect(r),
             });
         }
-        // The host-drawn close button is clickable too.
-        let close = close_button_canvas_rect(rect);
-        out.push(crate::game_scene::DebugUiElement {
-            kind: "button".to_string(),
-            texture: Some("closeoff.pcx".to_string()),
-            text: None,
-            label: Some("close".to_string()),
-            entity_id: None,
-            rect: [close.x, close.y, close.w, close.h],
-            screen_rect: to_screen(close),
-        });
         out
     }
 }
@@ -389,6 +456,61 @@ fn panel_canvas_rect(panel_size_px: Vector2<f32>) -> Rect {
         panel_size_px.x,
         panel_size_px.y,
     )
+}
+
+/// The inventory strip's rect on the canvas: panel-local pixels docked at
+/// the original top-of-screen inventory anchor.
+fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
+    Rect::new(
+        STRIP_ANCHOR.x,
+        STRIP_ANCHOR.y,
+        strip_size_px.x,
+        strip_size_px.y,
+    )
+}
+
+/// A `GUIHover` for `to`, in panel-local normalized coordinates - the same
+/// message the VR hand ray produces, so `GuiScript`'s hit-test/edge-detection
+/// runs unchanged. LMB maps to the right-hand trigger; flat has no grab
+/// gesture yet.
+fn gui_hover(to: EntityId, rect: Rect, canvas_pos: Vector2<f32>, pressed: bool) -> Message {
+    let local = point2(
+        (canvas_pos.x - rect.x) / rect.w,
+        (canvas_pos.y - rect.y) / rect.h,
+    );
+    Message {
+        to,
+        payload: MessagePayload::GUIHover {
+            held_entity_id: None,
+            screen_coordinates: local,
+            is_triggered: pressed,
+            is_grabbing: false,
+            hand: Handedness::Right,
+        },
+    }
+}
+
+/// Draw one slot's `SetUI` components into its canvas rect.
+fn draw_components(canvas: &mut UiCanvas, components: &[GuiComponentRenderInfo], rect: Rect) {
+    for component in components {
+        if is_gui_cursor(component) {
+            // GuiScript appends its own panel-local cursor image for the
+            // VR quads; the host draws the real screen cursor instead.
+            continue;
+        }
+        let r = component_canvas_rect(component, rect);
+        match component {
+            // The original MFD art is opaque on screen; the render-info
+            // alpha is a VR world-quad translucency, deliberately not
+            // applied here.
+            GuiComponentRenderInfo::Image { texture, .. } => {
+                canvas.image(r, texture);
+            }
+            GuiComponentRenderInfo::Text { text, font, .. } => {
+                canvas.text(r, text, font, r.h, HAlign::Left, VAlign::Top);
+            }
+        }
+    }
 }
 
 /// Map one `SetUI` component (normalized panel coordinates) to canvas pixels.
@@ -606,6 +728,173 @@ mod tests {
             .expect("the item element should carry its entity id");
         assert_eq!(el.kind, "button");
         assert_eq!(el.label.as_deref(), Some("Psi Amp"));
+    }
+
+    #[test]
+    fn strip_docks_at_the_top_of_the_canvas() {
+        // The inventory strip: 635x120 (invback) at the original inv_rect
+        // anchor (shkinv.cpp INV_X=2, INV_Y=0) - flush with the canvas top.
+        let rect = strip_canvas_rect(vec2(635.0, 120.0));
+        assert_eq!(rect, Rect::new(2.0, 0.0, 635.0, 120.0));
+        // It fits on the canvas and clears the left-MFD slot below (y 124+).
+        assert!(rect.x + rect.w <= CANVAS_SIZE.x);
+        assert!(rect.y + rect.h < LEFT_MFD_ANCHOR.y);
+    }
+
+    /// Hover routing with both slots live: the strip gets the pointer when
+    /// it is over the top dock, the panel when it is over the MFD slot.
+    #[test]
+    fn hover_routes_to_strip_or_panel_by_position() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.open(panel);
+        host.on_set_ui(
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+        host.on_set_ui(
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+
+        // Canvas (320, 60) - the middle of the strip - is normalized
+        // (0.5, 0.125) at the default 640x480 screen size.
+        let over_strip = Pointer2D {
+            position: vec2(0.5, 0.125),
+            pressed: false,
+        };
+        let msgs = host.update(&world, Some(over_strip));
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].to, inventory, "top dock hover goes to the strip");
+
+        // Canvas (96, 272) - the middle of the left MFD - is (0.15, ~0.567).
+        let over_panel = Pointer2D {
+            position: vec2(96.0 / 640.0, 272.0 / 480.0),
+            pressed: false,
+        };
+        let msgs = host.update(&world, Some(over_panel));
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].to, panel, "MFD slot hover goes to the panel");
+    }
+
+    /// A bare-view click in use mode closes the MFD panel (manual p.7) but
+    /// never the strip - use mode is left by Tab.
+    #[test]
+    fn bare_view_click_closes_the_panel_but_keeps_the_strip() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.open(panel);
+        host.on_set_ui(
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+        host.on_set_ui(
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+        // Release first (open() swallows the held button), then click on the
+        // bare view (bottom-right of the canvas, outside both slots).
+        let bare = vec2(0.9, 0.9);
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: bare,
+                pressed: false,
+            }),
+        );
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: bare,
+                pressed: true,
+            }),
+        );
+        assert!(host.active_panel().is_none(), "bare-view click closes the panel");
+        assert_eq!(
+            host.strip_entity(),
+            Some(inventory),
+            "the strip survives a bare-view click"
+        );
+
+        // With no panel open, another bare-view click is a no-op.
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: bare,
+                pressed: false,
+            }),
+        );
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: bare,
+                pressed: true,
+            }),
+        );
+        assert_eq!(host.strip_entity(), Some(inventory));
+    }
+
+    /// The strip's /v1/ui elements carry the carried items' names + ids -
+    /// the same contract as panel elements - and leaving use mode drops them.
+    #[test]
+    fn strip_elements_label_carried_items() {
+        let mut world = World::new();
+        let wrench = world.add_entity(dark::properties::PropSymName("Wrench".to_owned()));
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[
+                GuiComponentRenderInfo::Image {
+                    position: vec2(0.0, 0.0),
+                    size: vec2(1.0, 1.0),
+                    texture: "invback.pcx".to_owned(),
+                    alpha: 0.5,
+                    interactive: false,
+                    entity: None,
+                },
+                GuiComponentRenderInfo::Image {
+                    position: vec2(4.0 / 635.0, 18.0 / 120.0),
+                    size: vec2(35.0 / 635.0, 32.0 / 120.0),
+                    texture: "icn_wrench.pcx".to_owned(),
+                    alpha: 0.5,
+                    interactive: true,
+                    entity: Some(wrench),
+                },
+            ],
+        );
+        let elements = host.strip_debug_elements(&world);
+        // The backdrop is anchored at the canvas top.
+        let backdrop = elements
+            .iter()
+            .find(|e| e.texture.as_deref() == Some("invback.pcx"))
+            .expect("strip should expose the INVBACK backdrop");
+        assert_eq!(backdrop.rect[1], 0.0, "the strip is top-docked");
+        let item = elements
+            .iter()
+            .find(|e| e.entity_id == Some(wrench.inner() as i32))
+            .expect("the carried item should be a strip element");
+        assert_eq!(item.kind, "button");
+        assert_eq!(item.label.as_deref(), Some("Wrench"));
+        // No close element - the strip is closed by Tab, not a click.
+        assert!(elements.iter().all(|e| e.label.as_deref() != Some("close")));
+
+        // Leaving use mode drops the strip and its elements.
+        host.set_strip(None);
+        assert!(host.strip_entity().is_none());
+        assert!(host.strip_debug_elements(&world).is_empty());
     }
 
     #[test]

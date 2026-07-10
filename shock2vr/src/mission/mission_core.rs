@@ -2087,6 +2087,19 @@ impl MissionCore {
                     // Flat-presentation only: VR has no cursor mode to toggle.
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_use_mode = !self.flat_use_mode;
+                        // Use mode shows the player's backpack as the
+                        // top-docked inventory strip: bind the strip to the
+                        // `internal_inventory` entity (whose GuiScript
+                        // already emits SetUI every frame).
+                        let strip_entity = if self.flat_use_mode {
+                            self.world
+                                .borrow::<UniqueView<PlayerInfo>>()
+                                .ok()
+                                .map(|player| player.inventory_entity_id)
+                        } else {
+                            None
+                        };
+                        self.flat_ui.set_strip(strip_entity);
                     }
                 }
 
@@ -3271,6 +3284,10 @@ impl MissionCore {
                 asset_cache,
                 &self.world,
                 screen_size,
+                // The crosshair is a shooter-mode overlay; use mode replaces
+                // it with the cursor (the original's ShockOverlayMouseMode
+                // turns kOverlayCrosshair off while the cursor is up).
+                !self.flat_use_mode,
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -4601,7 +4618,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn ui_state(&self) -> crate::game_scene::DebugUiState {
-        let active_panel = self.flat_ui.active_panel().map(|entity| {
+        let panel_identity = |entity: shipyard::EntityId| {
             let name = self
                 .world
                 .borrow::<View<dark::properties::PropSymName>>()
@@ -4613,11 +4630,26 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 .ok()
                 .and_then(|v| v.get(entity).ok().map(|t| t.template_id))
                 .unwrap_or(0);
+            (name, template_id)
+        };
+        let active_panel = self.flat_ui.active_panel().map(|entity| {
+            let (name, template_id) = panel_identity(entity);
             crate::game_scene::DebugUiPanel {
                 entity_id: entity.inner() as i32,
                 template_id,
                 name,
                 elements: self.flat_ui.debug_elements(&self.world),
+            }
+        });
+        // The top-docked inventory strip (Tab metagame mode), same element
+        // contract as the MFD panel.
+        let strip = self.flat_ui.strip_entity().map(|entity| {
+            let (name, template_id) = panel_identity(entity);
+            crate::game_scene::DebugUiPanel {
+                entity_id: entity.inner() as i32,
+                template_id,
+                name,
+                elements: self.flat_ui.strip_debug_elements(&self.world),
             }
         });
         crate::game_scene::DebugUiState {
@@ -4627,6 +4659,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 "shooter".to_string()
             },
             active_panel,
+            strip,
         }
     }
 

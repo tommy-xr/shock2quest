@@ -459,12 +459,16 @@ pub struct QuestBitsResult {
 }
 
 /// Flat-mode UI state snapshot (`GET /v1/ui`): "shooter" or "use", plus the
-/// open MFD panel (entity binding + labeled clickable elements with canvas
-/// and normalized-screen rects). See projects/flat-ui.md.
+/// open MFD panel and the use-mode inventory strip (entity binding + labeled
+/// clickable elements with canvas and normalized-screen rects). See
+/// projects/flat-ui.md.
 #[derive(Debug, Serialize)]
 pub struct UiStateResult {
     pub mode: String,
     pub active_panel: Option<shock2vr::game_scene::DebugUiPanel>,
+    /// The top-docked inventory strip (Tab metagame mode); `Some` exactly in
+    /// "use" mode.
+    pub strip: Option<shock2vr::game_scene::DebugUiPanel>,
 }
 
 /// A single carried item.
