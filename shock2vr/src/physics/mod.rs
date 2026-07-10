@@ -24,6 +24,48 @@ use self::debug_render_pipeline::DebugRenderer;
 
 const MOVEMENT_STEP_SIZE: f32 = 20.0;
 
+/// Horizontal reach (world units) for ladder detection: the player grips a
+/// climbable surface when their collider, inflated by this much on x/z,
+/// overlaps it. Standing flush against a ladder leaves a small gap between the
+/// collider and the rungs, so the un-inflated shapes never intersect.
+const CLIMB_REACH: f32 = 1.0 / SCALE_FACTOR;
+
+/// Climb speed as a fraction of walk speed (the into-ladder input component is
+/// redirected to vertical movement at this scale).
+const CLIMB_SPEED_SCALE: f32 = 0.6;
+
+/// Half-Life-style flat ladder movement: convert the into-ladder component of
+/// the desired movement into a vertical climb. `toward_ladder` is the
+/// horizontal unit **face normal** from the player toward the climbable
+/// surface (from the contact query - NOT the collider-center direction, which
+/// gains a lateral component whenever the player is off-center and steers the
+/// player sideways off the ladder). Returns `None` when the player is not
+/// pushing toward the ladder (no grip - normal walking/gravity applies).
+/// Looking down (a downward-pitched desired movement) descends instead of
+/// ascending, so the same input walks down a shaft ladder; the sign flip at
+/// the pitch threshold matches classic ladder feel.
+///
+/// The into-ladder component is removed from the horizontal movement: the
+/// character controller's slope limiting treats a vertical climbable face as
+/// an unclimbable slope and cancels the ascent when the player also pushes
+/// into it (empirically: ascent drops from ~7u to ~0.3u over 240 frames).
+/// Lateral (along-ladder) movement is preserved. The vertical component of
+/// `desired` (head pitch / debug fly channel) is dropped so climb speed
+/// depends only on the into-ladder push.
+fn climb_redirect(desired: Vector<Real>, toward_ladder: Vector<Real>) -> Option<Vector<Real>> {
+    let desired_h = vector![desired.x, 0.0, desired.z];
+    let into = desired_h.dot(&toward_ladder);
+    if into <= 1e-6 {
+        return None;
+    }
+    let vertical = if desired.y < -0.25 * into {
+        -into
+    } else {
+        into
+    };
+    Some(desired_h - toward_ladder * into + Vector::y() * vertical * CLIMB_SPEED_SCALE)
+}
+
 /// Maximum distance (world units) a single validated player move may advance.
 /// A request for a farther target is clamped to this, so an automated tester
 /// navigates in short, collision-checked hops instead of one long teleport.
@@ -43,6 +85,10 @@ bitflags! {
         const UI = 1 << 4;
         const HITBOX = 1 << 5;
         const RAYCAST = 1 << 6;
+        // Marker membership for climbable surfaces (PropPhysAttr.climbable != 0,
+        // e.g. ladders). Nothing filters on it for collision - it exists so the
+        // player movement code can query "am I touching a ladder?" cheaply.
+        const CLIMBABLE = 1 << 7;
         const ALL_COLLIDABLE = Self::WORLD.bits | Self::ENTITY.bits | Self::PLAYER.bits | Self::SELECTABLE.bits;
         const ALL = Self::ALL_COLLIDABLE.bits | Self::UI.bits | Self::HITBOX.bits | Self::RAYCAST.bits;
     }
@@ -94,6 +140,23 @@ impl CollisionGroup {
     pub fn entity() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            filter: (InternalCollisionGroups::WORLD.bits
+                | InternalCollisionGroups::PLAYER.bits
+                | InternalCollisionGroups::SELECTABLE.bits
+                | InternalCollisionGroups::ENTITY.bits)
+                .into(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Same collision behavior as `entity()`, plus the `CLIMBABLE` marker
+    /// membership so player movement can detect ladder contact (see
+    /// `PropPhysAttr.climbable`).
+    pub fn climbable_entity() -> CollisionGroup {
+        CollisionGroup(InteractionGroups {
+            memberships: (InternalCollisionGroups::ENTITY.bits
+                | InternalCollisionGroups::CLIMBABLE.bits)
+                .into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::PLAYER.bits
                 | InternalCollisionGroups::SELECTABLE.bits
@@ -1025,6 +1088,56 @@ impl PhysicsWorld {
             .exclude_sensors();
         let dispatcher = self.narrow_phase.query_dispatcher();
 
+        // Flat climbing: when the player overlaps a climbable surface (ladder)
+        // and pushes toward it, redirect that input to vertical movement and
+        // suppress the gravity pass for this frame (see `climb_redirect`).
+        let climb_movement = {
+            let climb_filter = QueryFilter::new()
+                .groups(InteractionGroups::new(
+                    InternalCollisionGroups::PLAYER.bits.into(),
+                    InternalCollisionGroups::CLIMBABLE.bits.into(),
+                    Default::default(),
+                ))
+                .exclude_rigid_body(player_handle.character_handle)
+                .exclude_sensors();
+            let queries = self.broad_phase.as_query_pipeline(
+                dispatcher,
+                &self.rigid_body_set,
+                &self.collider_set,
+                climb_filter,
+            );
+            character_shape.as_cuboid().and_then(|cuboid| {
+                let inflated =
+                    Cuboid::new(cuboid.half_extents + vector![CLIMB_REACH, 0.0, CLIMB_REACH]);
+                // Grip the closest climbable within reach, by contact distance,
+                // and take the contact's *face normal* as the climb direction.
+                // (The collider-center direction is wrong when the player is
+                // off-center: its lateral component steers the player sideways
+                // off the ladder - a positive-feedback drift.)
+                let mut nearest: Option<(f32, Vector<Real>)> = None;
+                for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
+                    let contact = rapier3d::parry::query::contact(
+                        &character_pos,
+                        character_shape.as_ref(),
+                        collider.position(),
+                        collider.shape(),
+                        CLIMB_REACH,
+                    );
+                    if let Ok(Some(contact)) = contact {
+                        // normal1 points from the player toward the climbable.
+                        let toward_h = vector![contact.normal1.x, 0.0, contact.normal1.z];
+                        let toward_norm = toward_h.norm();
+                        // A mostly-vertical normal means the player is on top of
+                        // (or under) the surface - that's standing, not climbing.
+                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _)| contact.dist < d) {
+                            nearest = Some((contact.dist, toward_h / toward_norm));
+                        }
+                    }
+                }
+                nearest.and_then(|(_, toward)| climb_redirect(desired_movement, toward))
+            })
+        };
+
         //let mut collisions = vec![];
         let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             // HACK: For rapier v0.19.0, our previous strategy of combining the movement + gravity
@@ -1036,12 +1149,21 @@ impl PhysicsWorld {
                 &self.collider_set,
                 movement_filter,
             );
+            // While gripping a ladder the climb vector replaces the walk pass
+            // (no step-up bump needed) and the gravity pass is a no-op.
+            let (first_movement, second_movement) = match climb_movement {
+                Some(climb) => (climb, Vector::zeros()),
+                None => (
+                    movement_with_upward.cast::<Real>(),
+                    gravity_movement.cast::<Real>(),
+                ),
+            };
             (player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &queries,
                 character_shape.as_ref(),
                 &character_pos,
-                movement_with_upward.cast::<Real>(),
+                first_movement,
                 |_c| (),
                 //|c| collisions.push(c),
             ),
@@ -1052,7 +1174,7 @@ impl PhysicsWorld {
                 &queries,
                 character_shape.as_ref(),
                 &character_pos,
-                gravity_movement.cast::<Real>(),
+                second_movement,
                 |_c| (),
                 //|c| collisions.push(c),
             ))
@@ -1683,6 +1805,7 @@ fn collision_group_names(bits: u32) -> Vec<String> {
         (InternalCollisionGroups::UI, "ui"),
         (InternalCollisionGroups::HITBOX, "hitbox"),
         (InternalCollisionGroups::RAYCAST, "raycast"),
+        (InternalCollisionGroups::CLIMBABLE, "climbable"),
     ];
     for (group, name) in candidates {
         if bits & group.bits != 0 {
@@ -1886,6 +2009,110 @@ mod tests {
         assert!(
             slippery_x > grippy_x + 1.0,
             "low-friction box ({slippery_x}) should out-slide high-friction box ({grippy_x})"
+        );
+    }
+
+    // --- Flat ladder climbing (`climb_redirect` + CLIMBABLE detection) ---
+
+    /// Pushing toward the ladder redirects the input to an ascent.
+    #[test]
+    fn climb_redirect_ascends_when_pushing_into_ladder() {
+        let toward = vector![1.0, 0.0, 0.0];
+        let climb = climb_redirect(vector![0.1, 0.0, 0.0], toward).expect("should grip");
+        assert!(climb.y > 0.0, "expected upward redirect, got {climb:?}");
+    }
+
+    /// Pushing away from (or parallel to) the ladder does not grip.
+    #[test]
+    fn climb_redirect_ignores_push_away_or_parallel() {
+        let toward = vector![1.0, 0.0, 0.0];
+        assert!(climb_redirect(vector![-0.1, 0.0, 0.0], toward).is_none());
+        assert!(climb_redirect(vector![0.0, 0.0, 0.1], toward).is_none());
+        assert!(climb_redirect(vector![0.0, 0.0, 0.0], toward).is_none());
+    }
+
+    /// A downward-pitched push (looking down) descends instead of ascending.
+    #[test]
+    fn climb_redirect_descends_when_looking_down() {
+        let toward = vector![1.0, 0.0, 0.0];
+        let climb = climb_redirect(vector![0.1, -0.1, 0.0], toward).expect("should grip");
+        assert!(climb.y < 0.0, "expected downward redirect, got {climb:?}");
+    }
+
+    /// A player standing at the base of a climbable wall who pushes into it
+    /// climbs it; against an identical NON-climbable wall the same input leaves
+    /// the player on the floor. (Negative-first: without the CLIMBABLE
+    /// detection + redirect in `move_player`, both cases stay at floor height
+    /// and the ascent assertion fails.)
+    ///
+    /// Also guards against lateral drift: the player starts OFF-CENTER on the
+    /// wall (z = 0.5 on a 2-wide wall). With a collider-center-based climb
+    /// direction the residual lateral term steers the player sideways along
+    /// the wall while climbing; the contact face normal keeps the climb
+    /// straight (with center-delta the ascent itself also collapses here).
+    #[test]
+    fn player_climbs_climbable_wall_but_not_plain_wall() {
+        let run = |group: CollisionGroup| -> (f32, f32) {
+            let mut world = PhysicsWorld::new();
+            // Floor top at y=0, built the way the game builds level geometry
+            // (a parentless collider): a fixed-BODY floor never enters the
+            // query BVH the character controller moves against, so the player
+            // would fall straight through it.
+            let floor_verts = vec![
+                point![-100.0, 0.0, -100.0],
+                point![100.0, 0.0, -100.0],
+                point![100.0, 0.0, 100.0],
+                point![-100.0, 0.0, 100.0],
+            ];
+            let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+            world.add_collider(
+                EntityId::from_inner(1000).unwrap(),
+                ColliderBuilder::trimesh(floor_verts, floor_tris)
+                    .expect("floor trimesh")
+                    .build(),
+            );
+            // Off-center on the wall's z-extent (see doc comment). The scene
+            // sits at x=-6 so the floor's triangle seam (the x=z diagonal)
+            // stays away from the walk path - crossing the seam produces a
+            // lateral slide artifact unrelated to climbing.
+            let mut player =
+                world.create_player(vec3(-6.0, 1.0, 0.5), EntityId::from_inner(2000).unwrap());
+            // A tall thin "ladder" wall just +x of the player, feet on the floor.
+            world.add_kinematic(
+                EntityId::from_inner(2001).unwrap(),
+                vec3(-5.0, 5.0, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(0.2, 10.0, 2.0),
+                group,
+                false,
+            );
+            // Let the player settle onto the floor, then push into the wall.
+            for _ in 0..30 {
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+            let start = world.get_player_translation(&player);
+            for _ in 0..240 {
+                world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+            }
+            let end = world.get_player_translation(&player);
+            (end.y - start.y, end.z - start.z)
+        };
+
+        let (climbable_ascent, climbable_drift) = run(CollisionGroup::climbable_entity());
+        let (plain_ascent, _) = run(CollisionGroup::entity());
+
+        assert!(
+            climbable_ascent > 2.0,
+            "pushing into a climbable wall should ascend it, rose {climbable_ascent}"
+        );
+        assert!(
+            climbable_drift.abs() < 0.1,
+            "climbing straight up must not drift sideways, drifted {climbable_drift}"
+        );
+        assert!(
+            plain_ascent.abs() < 0.5,
+            "a plain wall must not be climbable, rose {plain_ascent}"
         );
     }
 }
