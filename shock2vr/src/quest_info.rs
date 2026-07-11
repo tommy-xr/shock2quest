@@ -9,11 +9,19 @@ use dark::properties::{KeyCard, QuestBitValue};
 use serde::{Deserialize, Serialize};
 use shipyard::Unique;
 
+use crate::player_stats::PlayerStats;
+
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
 pub struct QuestInfo {
     quest_bit_values: HashMap<String, QuestBitValue>,
     played_emails: HashSet<String>,
     key_cards: Vec<KeyCard>,
+    /// The player's persistent character sheet (primary stats, skills, mastered
+    /// psi disciplines). Lives here so it survives level transitions and
+    /// save/load on the same path as the career/quest bits. `#[serde(default)]`
+    /// keeps older save files (written before this field existed) loadable.
+    #[serde(default)]
+    player_stats: PlayerStats,
 }
 
 impl QuestInfo {
@@ -22,7 +30,19 @@ impl QuestInfo {
             quest_bit_values: HashMap::new(),
             played_emails: HashSet::new(),
             key_cards: Vec::new(),
+            player_stats: PlayerStats::new(),
         }
+    }
+
+    /// The player's persistent character sheet.
+    pub fn player_stats(&self) -> &PlayerStats {
+        &self.player_stats
+    }
+
+    /// Mutable access to the player's character sheet (e.g. to apply a training
+    /// tour reward).
+    pub fn player_stats_mut(&mut self) -> &mut PlayerStats {
+        &mut self.player_stats
     }
 
     pub fn add_key_card(&mut self, key_card: KeyCard) {
