@@ -1910,6 +1910,10 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                     .as_ref()
                     .map(|s| s.collected_logs.clone())
                     .unwrap_or_default(),
+                explored_map_locations: state
+                    .as_ref()
+                    .map(|s| s.explored_map_locations.clone())
+                    .unwrap_or_default(),
             }
         },
         entity_count,

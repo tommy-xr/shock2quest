@@ -91,6 +91,11 @@ impl DesktopInputMapper {
                 modifier: Modifier::Alt,
                 action: InputAction::DebugCalmAll,
             },
+            Binding {
+                key: Key::M,
+                modifier: Modifier::None,
+                action: InputAction::ToggleMap,
+            },
         ];
 
         Self {

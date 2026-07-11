@@ -279,6 +279,9 @@ export interface PlayerSnapshot {
   /** The audio logs the player has collected (frobbed), in pickup order.
    * Persisted in QuestInfo; survives level transitions and save/load. */
   collected_logs: CollectedLog[];
+  /** The automap locations explored in the current mission (ascending).
+   * Persisted per mission in QuestInfo; survives save/load. */
+  explored_map_locations: number[];
 }
 
 /** One audio log the player has collected, keyed by its per-deck identity. */

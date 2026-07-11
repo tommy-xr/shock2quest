@@ -138,6 +138,10 @@ pub struct FlatUiHost {
     /// frame by the mission when use mode has a multi-ammo weapon wielded
     /// (flat UI 5); `None` otherwise. Clicking it emits `CycleAmmo`.
     ammo_cycle_rect: Option<Rect>,
+    /// The active panel was opened unbound (the automap): it has no world
+    /// object, so the walk-away distance auto-close is skipped. Cleared on
+    /// open/close.
+    sticky_panel: bool,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -167,6 +171,7 @@ impl FlatUiHost {
             cursor_item: None,
             last_lift: None,
             ammo_cycle_rect: None,
+            sticky_panel: false,
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -245,6 +250,7 @@ impl FlatUiHost {
             self.panel_size_px = None;
         }
         self.active_panel = Some(entity);
+        self.sticky_panel = false;
         // A button still held at open (e.g. the shift+LMB frob that opened
         // the panel on desktop) must not read as a fresh press-edge next
         // frame - it would instantly close the panel as a bare-view click.
@@ -252,8 +258,19 @@ impl FlatUiHost {
         self.last_pointer_pressed = true;
     }
 
+    /// Bind the MFD to a panel with no world object behind it (the automap's
+    /// synthetic player-owned entity): same as [`open`](Self::open) but the
+    /// walk-away distance auto-close is skipped - the original's map overlay
+    /// has no `distance` and closes only explicitly (close button / bare-view
+    /// click / `ToggleMap` again).
+    pub fn open_unbound(&mut self, entity: EntityId) {
+        self.open(entity);
+        self.sticky_panel = true;
+    }
+
     pub fn close(&mut self) {
         self.active_panel = None;
+        self.sticky_panel = false;
         self.panel_size_px = None;
         self.components.clear();
         self.hover_close = false;
@@ -343,6 +360,7 @@ impl FlatUiHost {
                 .map(|entities| entities.is_alive(panel))
                 .unwrap_or(false);
             let too_far = alive
+                && !self.sticky_panel
                 && (|| {
                     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
                     let v_pos = world
@@ -940,6 +958,68 @@ mod tests {
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.y - (124.0 + 20.0)).abs() < 1e-3);
+    }
+
+    /// The automap panel is the wide one (MAPBACK 636x296, both MFD slots):
+    /// at the left-MFD anchor it must still fit the 640x480 canvas.
+    #[test]
+    fn wide_map_panel_fits_the_canvas() {
+        let rect = panel_canvas_rect(vec2(636.0, 296.0));
+        assert!(rect.x + rect.w <= CANVAS_SIZE.x);
+        assert!(rect.y + rect.h <= CANVAS_SIZE.y);
+    }
+
+    /// An unbound (sticky) panel - the automap - must NOT walk-away close,
+    /// even when its entity has a position far from the player; a regular
+    /// open with the same geometry does.
+    #[test]
+    fn unbound_panel_skips_the_walk_away_close() {
+        let mut world = World::new();
+        let player_entity = world.add_entity(());
+        let inventory = world.add_entity(());
+        // Panel entity parked at the origin; player 100 units away.
+        let panel = world.add_entity(dark::properties::PropPosition {
+            position: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion {
+                v: cgmath::vec3(0.0, 0.0, 0.0),
+                s: 1.0,
+            },
+            cell: 0,
+        });
+        world.add_unique(crate::mission::PlayerInfo {
+            rotation: cgmath::Quaternion {
+                v: cgmath::vec3(0.0, 0.0, 0.0),
+                s: 1.0,
+            },
+            pos: cgmath::vec3(100.0, 0.0, 100.0),
+            entity_id: player_entity,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        // Regular open: the distance check closes it.
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.update(&world, None);
+        assert!(
+            host.active_panel().is_none(),
+            "a bound panel far from the player must auto-close"
+        );
+
+        // Unbound open: it survives.
+        host.open_unbound(panel);
+        host.update(&world, None);
+        assert_eq!(
+            host.active_panel(),
+            Some(panel),
+            "an unbound (map) panel must not walk-away close"
+        );
+
+        // And a later regular open clears the stickiness.
+        host.open(panel);
+        host.update(&world, None);
+        assert!(host.active_panel().is_none());
     }
 
     #[test]

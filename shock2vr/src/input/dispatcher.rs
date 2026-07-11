@@ -103,6 +103,9 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ToggleUseMode) {
             effects.push(Effect::ToggleUseMode);
         }
+        if state.just_triggered(InputAction::ToggleMap) {
+            effects.push(Effect::ToggleMap);
+        }
         effects
     }
 }
@@ -207,6 +210,15 @@ mod tests {
 
         let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
         assert!(matches!(effects[0], Effect::ToggleUseMode));
+    }
+
+    #[test]
+    fn toggle_map_maps_to_toggle_map_effect() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::ToggleMap);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(effects[0], Effect::ToggleMap));
     }
 
     #[test]
