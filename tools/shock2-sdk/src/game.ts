@@ -1,5 +1,6 @@
 import { HttpClient } from "./client.js";
 import type {
+  AnimationState,
   CommandResult,
   DebugEntityMessage,
   EntityDetailResult,
@@ -119,6 +120,19 @@ export class EntitiesApi {
   async byTemplate(templateId: number): Promise<EntitySummary[]> {
     const { entities } = await this.list();
     return entities.filter((e) => e.template_id === templateId);
+  }
+
+  /**
+   * Animation playback state + world-space posed skeleton for an entity:
+   * current clip / frame, queued clips, in-flight blend, and the 40
+   * world-space joint positions. Returns null when the entity has no
+   * animation player. Sample once per stepped frame to quantify pose
+   * smoothness (see src/anim-metrics.ts).
+   */
+  async animation(id: number): Promise<AnimationState | null> {
+    return this.client.get<AnimationState | null>(
+      `/v1/entities/${id}/animation`,
+    );
   }
 
   /**

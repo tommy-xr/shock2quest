@@ -106,6 +106,55 @@ export interface EntityDetailResult {
   incoming_links: LinkInfo[];
 }
 
+/** A clip queued behind the currently-playing head clip. */
+export interface AnimationQueueEntry {
+  name: string | null;
+  num_frames: number;
+  looping: boolean;
+}
+
+/** An in-flight crossfade from a previous clip's pose. */
+export interface AnimationBlend {
+  from_clip: string | null;
+  from_frame: number;
+  /** Total blend duration (seconds). */
+  duration: number;
+  /** Time elapsed into the blend (seconds). */
+  elapsed: number;
+  /** Blend progress 0..1 (0 = fully the old pose). */
+  alpha: number;
+}
+
+/**
+ * Animation playback state + world-space posed skeleton for one entity, as
+ * reported by GET /v1/entities/:id/animation (null when the entity has no
+ * animation player).
+ */
+export interface AnimationState {
+  entity_id: number;
+  /** Currently playing clip (queue head), null when the queue is empty. */
+  clip: string | null;
+  /** Current frame within the head clip. */
+  frame: number;
+  num_frames: number;
+  looping: boolean;
+  /** Sub-frame time carried toward the next frame advance (seconds). */
+  remaining_time: number;
+  /** Clips queued behind the head, in play order. */
+  queue: AnimationQueueEntry[];
+  /** Clip whose final frame poses the skeleton while the queue is empty. */
+  last_clip: string | null;
+  blend: AnimationBlend | null;
+  /** Entity world position / rotation (the pose the joints are composed with). */
+  position: Vec3;
+  rotation: Quat;
+  /**
+   * World-space joint positions (fixed 40-slot skeleton; unused slots track
+   * the entity transform).
+   */
+  joints: Vec3[];
+}
+
 export interface ScreenshotResult {
   filename: string;
   full_path: string;
