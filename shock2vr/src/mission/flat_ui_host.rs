@@ -80,6 +80,10 @@ const CURSOR_ITEM_SIZE: Vector2<f32> = Vector2::new(35.0, 32.0);
 pub enum FlatUiDragAction {
     Throw(EntityId),
     Wield(EntityId),
+    /// Cycle the wielded weapon's ammo type (the AMMOFULL cycle button was
+    /// clicked). Not tied to a cursor item - the caller maps it to
+    /// `Effect::CycleAmmo`, which acts on the wielded weapon.
+    CycleAmmo,
 }
 
 /// Double-click window (frames at 60Hz) and radius (canvas px) for the
@@ -130,6 +134,10 @@ pub struct FlatUiHost {
     /// The most recent lift, for double-click (wield) detection. Counts down
     /// each frame and clears when the window elapses.
     last_lift: Option<LiftMark>,
+    /// The AMMOFULL ammo-cycle button rect on the 640x480 canvas, set each
+    /// frame by the mission when use mode has a multi-ammo weapon wielded
+    /// (flat UI 5); `None` otherwise. Clicking it emits `CycleAmmo`.
+    ammo_cycle_rect: Option<Rect>,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -158,6 +166,7 @@ impl FlatUiHost {
             strip: None,
             cursor_item: None,
             last_lift: None,
+            ammo_cycle_rect: None,
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -182,6 +191,28 @@ impl FlatUiHost {
             .map(|c| crate::game_scene::DebugUiCursor {
                 entity_id: c.entity.inner() as i32,
                 label: c.label.clone(),
+            })
+    }
+
+    /// Set (or clear) the AMMOFULL ammo-cycle button's canvas rect for this
+    /// frame. The mission passes `Some(rect)` only in use mode with a
+    /// multi-ammo weapon wielded, matching what the flat HUD draws.
+    pub fn set_ammo_cycle_button(&mut self, rect: Option<Rect>) {
+        self.ammo_cycle_rect = rect;
+    }
+
+    /// The ammo-cycle button as a `/v1/ui` element (so tests click it by
+    /// meaning), or `None` when it is not shown.
+    pub fn ammo_cycle_debug(&self) -> Option<crate::game_scene::DebugUiElement> {
+        self.ammo_cycle_rect
+            .map(|r| crate::game_scene::DebugUiElement {
+                kind: "button".to_string(),
+                texture: Some("ammoarw0.pcx".to_string()),
+                text: None,
+                label: Some("cycle_ammo".to_string()),
+                entity_id: None,
+                rect: [r.x, r.y, r.w, r.h],
+                screen_rect: self.to_screen_rect(r),
             })
     }
 
@@ -416,6 +447,18 @@ impl FlatUiHost {
             let held = self.cursor_item.take().unwrap();
             self.last_lift = None;
             return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
+        }
+
+        // --- AMMOFULL ammo-cycle button (use mode, multi-ammo weapon): a
+        // click cycles the wielded ammo type. Checked with an empty cursor
+        // only (mid-drag, a bottom-right click is a throw), before strip/panel
+        // routing since the button is disjoint from both. ---
+        if pressed_edge {
+            if let Some(rect) = self.ammo_cycle_rect {
+                if rect.contains(canvas_pos) {
+                    return (Vec::new(), vec![FlatUiDragAction::CycleAmmo]);
+                }
+            }
         }
 
         // --- Empty cursor over the strip: LMB on an item lifts it onto the
@@ -1289,6 +1332,26 @@ mod tests {
         // The Pistol is now hidden and the Wrench visible again.
         assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), Some(wrench));
         assert_eq!(host.strip_item_at(vec2(58.5, 34.0)), None);
+    }
+
+    #[test]
+    fn clicking_the_ammo_cycle_button_emits_cycle_ammo() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        // The AMMOFULL cycle button lives at canvas (564,429,12,41).
+        host.set_ammo_cycle_button(Some(Rect::new(564.0, 429.0, 12.0, 41.0)));
+        // A click on its center (570, 449) cycles the ammo.
+        let actions = press_edge(&mut host, &world, (570.0, 449.0));
+        assert_eq!(actions, vec![FlatUiDragAction::CycleAmmo]);
+        // The /v1/ui element is exposed with a clickable label.
+        let el = host.ammo_cycle_debug().expect("the button is exposed");
+        assert_eq!(el.label.as_deref(), Some("cycle_ammo"));
+        assert_eq!(el.kind, "button");
+        // A click elsewhere in the bare view does not cycle.
+        let actions = press_edge(&mut host, &world, (300.0, 300.0));
+        assert!(actions.is_empty());
+        // Cleared when not shown.
+        host.set_ammo_cycle_button(None);
+        assert!(host.ammo_cycle_debug().is_none());
     }
 
     #[test]

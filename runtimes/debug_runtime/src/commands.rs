@@ -472,6 +472,9 @@ pub struct UiStateResult {
     /// The item held on the cursor mid-drag (cursor-is-the-item); `Some`
     /// between a lift and the place/throw that clears it.
     pub cursor: Option<shock2vr::game_scene::DebugUiCursor>,
+    /// The AMMOFULL ammo-cycle button (use mode + multi-ammo weapon); `Some`
+    /// when shown. Click it to cycle the wielded weapon's ammo type.
+    pub ammo_cycle: Option<shock2vr::game_scene::DebugUiElement>,
 }
 
 /// A single carried item.

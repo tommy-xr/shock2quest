@@ -960,6 +960,16 @@ impl MissionCore {
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
         if game_options.presentation_mode == crate::PresentationMode::Flat {
+            // Expose the AMMOFULL ammo-cycle button for hit-testing exactly when
+            // the flat HUD draws it (use mode + a multi-ammo weapon wielded).
+            let ammo_button =
+                if self.flat_use_mode && crate::hud::can_cycle_wielded_ammo(&self.world) {
+                    Some(crate::hud::AMMO_CYCLE_BUTTON)
+                } else {
+                    None
+                };
+            self.flat_ui.set_ammo_cycle_button(ammo_button);
+
             let (messages, drag_actions) = self.flat_ui.update(&self.world, input_context.pointer);
             for msg in messages {
                 self.script_world.dispatch(msg);
@@ -1607,6 +1617,9 @@ impl MissionCore {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
             }
+            // The AMMOFULL cycle button: advance the wielded weapon's ammo type
+            // via the same effect as the CycleAmmo key/action.
+            FlatUiDragAction::CycleAmmo => vec![Effect::CycleAmmo],
             // Double-click = equip/use, acting on the still-contained item -
             // identical to the ContainerGui backpack click (shared weapon test,
             // shared effects): a weapon (gun or melee) wields via `GrabEntity`
@@ -3449,6 +3462,8 @@ impl MissionCore {
                 // it with the cursor (the original's ShockOverlayMouseMode
                 // turns kOverlayCrosshair off while the cursor is up).
                 !self.flat_use_mode,
+                // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
+                self.flat_use_mode,
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -4829,6 +4844,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             active_panel,
             strip,
             cursor: self.flat_ui.cursor_debug(),
+            ammo_cycle: self.flat_ui.ammo_cycle_debug(),
         }
     }
 
