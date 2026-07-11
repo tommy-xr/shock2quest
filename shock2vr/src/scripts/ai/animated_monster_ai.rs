@@ -384,7 +384,11 @@ impl AnimatedMonsterAI {
         }
     }
 
-    fn force_alertness(
+    /// Set the alertness level and swap to the matching behavior WITHOUT
+    /// starting that behavior's animation - for callers that immediately play
+    /// a different clip over it (the thwarted gesture); the completion
+    /// handler starts the behavior's clip when that clip finishes.
+    fn force_alertness_state(
         &mut self,
         level: AIAlertLevel,
         world: &World,
@@ -403,11 +407,30 @@ impl AnimatedMonsterAI {
         self.alertness.hidden_time = 0.0;
 
         self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
+        alertness::sync_alertness_effect(entity_id, &self.alertness)
+    }
+
+    fn force_alertness(
+        &mut self,
+        level: AIAlertLevel,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Effect {
+        let sync_effect = self.force_alertness_state(level, world, physics, entity_id);
         let is_locomotion = self.current_behavior.borrow().is_locomotion();
         let selection_strategy = self.next_selection(is_locomotion);
+        // Play (replace), never queue, on a behavior change: queueing pushes
+        // the new clip on top and leaves the interrupted clip behind it, and
+        // every later clip completion then exposes that stale entry at frame 0
+        // for one tick (a visible pose flash + zero-velocity hiccup each walk
+        // stride) before the completion handler re-queues. The other
+        // behavior-change sites below Play for the same reason (the wound
+        // reaction runs on an already-empty queue and Plays only for the
+        // smoother minimum crossfade).
         Effect::combine(vec![
-            alertness::sync_alertness_effect(entity_id, &self.alertness),
-            Effect::QueueAnimationBySchema {
+            sync_effect,
+            Effect::PlayAnimationBySchema {
                 entity_id,
                 motion_queries: vec![self.current_behavior.borrow().animation()],
                 selection_strategy,
@@ -564,8 +587,13 @@ impl AnimatedMonsterAI {
                 // pursuing level.
                 self.door_cooldown = DOOR_GIVEUP_COOLDOWN;
                 self.last_known_player_pos = None;
-                let downgrade = self.force_alertness(AIAlertLevel::Low, world, physics, entity_id);
-                let thwarted = Effect::QueueAnimationBySchema {
+                // State-only downgrade: the thwarted gesture replaces the
+                // queue this frame (a second Play here would blend from an
+                // unseen frame-0 pose and waste a clip load); the completion
+                // handler starts the Low behavior's clip after the gesture.
+                let downgrade =
+                    self.force_alertness_state(AIAlertLevel::Low, world, physics, entity_id);
+                let thwarted = Effect::PlayAnimationBySchema {
                     entity_id,
                     motion_queries: vec![vec![MotionQueryItem::new("thwarted")]],
                     selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
@@ -747,7 +775,7 @@ impl Script for AnimatedMonsterAI {
                         self.current_behavior = behavior;
                         let is_locomotion = self.current_behavior.borrow().is_locomotion();
                         let selection_strategy = self.next_selection(is_locomotion);
-                        Effect::QueueAnimationBySchema {
+                        Effect::PlayAnimationBySchema {
                             entity_id,
                             motion_queries: vec![self.current_behavior.borrow().animation()],
                             selection_strategy,
@@ -794,7 +822,7 @@ impl Script for AnimatedMonsterAI {
                 )));
                 let is_locomotion = self.current_behavior.borrow().is_locomotion();
                 let selection_strategy = self.next_selection(is_locomotion);
-                return Effect::QueueAnimationBySchema {
+                return Effect::PlayAnimationBySchema {
                     entity_id,
                     motion_queries: vec![self.current_behavior.borrow().animation()],
                     selection_strategy,
@@ -824,7 +852,7 @@ impl Script for AnimatedMonsterAI {
                 self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
                 let is_locomotion = self.current_behavior.borrow().is_locomotion();
                 let selection_strategy = self.next_selection(is_locomotion);
-                Effect::QueueAnimationBySchema {
+                Effect::PlayAnimationBySchema {
                     entity_id,
                     motion_queries: vec![self.current_behavior.borrow().animation()],
                     selection_strategy,
@@ -966,7 +994,7 @@ impl Script for AnimatedMonsterAI {
                     )));
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
-                    Effect::QueueAnimationBySchema {
+                    Effect::PlayAnimationBySchema {
                         entity_id,
                         motion_queries: vec![self.current_behavior.borrow().animation()],
                         selection_strategy,
@@ -1018,7 +1046,7 @@ impl Script for AnimatedMonsterAI {
                     )));
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
-                    Effect::QueueAnimationBySchema {
+                    Effect::PlayAnimationBySchema {
                         entity_id,
                         motion_queries: vec![self.current_behavior.borrow().animation()],
                         selection_strategy,
@@ -1056,7 +1084,7 @@ impl Script for AnimatedMonsterAI {
                     // only when there are none, retry through the
                     // combat-context level (verified across creature types
                     // with `cargo dq motion`).
-                    Effect::QueueAnimationBySchema {
+                    Effect::PlayAnimationBySchema {
                         entity_id,
                         motion_queries: vec![
                             vec![MotionQueryItem::new("receivewound")],
