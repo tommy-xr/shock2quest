@@ -221,6 +221,11 @@ export interface PlayerStats {
   skills: SkillLevels;
   psi_disciplines: string[];
   granted_years: number[];
+  /** Cyber modules: the game's upgrade currency, awarded by quest/`PropExp`
+   * traps and module pickups, spent at trainer stations. Persists across level
+   * transitions and save/load. Defaults to 0 for saves written before the
+   * currency existed. */
+  cyber_modules: number;
 }
 
 export interface FrameSnapshot {

@@ -2334,7 +2334,14 @@ impl MissionCore {
                 }
 
                 Effect::AwardXP { amount } => {
-                    warn!("!! TODO !!: Award XP {}", amount);
+                    // Cyber modules are the game's upgrade currency (retail's
+                    // "XP"). Persisted on the character sheet inside QuestInfo,
+                    // so the balance survives level transitions + save/load.
+                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let balance = quests.player_stats_mut().award_cyber_modules(amount);
+                    if amount > 0 {
+                        info!("Awarded {} cyber modules (balance now {})", amount, balance);
+                    }
                 }
 
                 Effect::DrawDebugLines { lines } => {
@@ -4389,6 +4396,16 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 v_hearing.get(id).ok().map(|h| h.rating)
             });
 
+        // Cyber-module award sources (EXP traps carry `PropExp`, EXP-cookie
+        // piles carry a stack count), surfaced so automation can read the exact
+        // award before firing it. Looked up outside the main run (view limit).
+        let exp_value = self
+            .world
+            .run(|v: View<dark::properties::PropExp>| v.get(id).ok().map(|e| e.0));
+        let stack_count = self
+            .world
+            .run(|v: View<dark::properties::PropStackCount>| v.get(id).ok().map(|s| s.0));
+
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
              v_sym_name: View<dark::properties::PropSymName>,
@@ -4443,6 +4460,21 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "Scripts".to_string(),
                         value: scripts.scripts.join(", "),
+                    });
+                }
+
+                // Cyber-module award amount (EXP trap `PropExp` / EXP-cookie
+                // stack count), so tests can read the exact award.
+                if let Some(exp) = exp_value {
+                    properties.push(DebugPropertyInfo {
+                        name: "Exp".to_string(),
+                        value: exp.to_string(),
+                    });
+                }
+                if let Some(stack) = stack_count {
+                    properties.push(DebugPropertyInfo {
+                        name: "StackCount".to_string(),
+                        value: stack.to_string(),
                     });
                 }
 
