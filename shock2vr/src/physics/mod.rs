@@ -22,10 +22,24 @@ use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
 
-const MOVEMENT_STEP_SIZE: f32 = 20.0;
+/// Player capsule dimensions (SS2 ft): total height and radius. Kept at the
+/// old cuboid's footprint (4.8 tall, 1.6 wide) - resizing toward the original
+/// engine's 6.0 x 2.4 player is deferred until crouch can shrink the collider.
+const PLAYER_HEIGHT: f32 = 4.8;
+const PLAYER_RADIUS: f32 = 0.8;
+
+/// Gap (SS2 ft) the character controller keeps between the player collider
+/// and world geometry (`KinematicCharacterController::offset`).
+const PLAYER_CONTACT_OFFSET: f32 = 0.1;
+
+/// Maximum ledge height (SS2 ft) the player steps up automatically, and how
+/// far below their feet the ground is snapped to when walking down. 2 ft is
+/// the original engine's step-probe height, so stairs climb and descend
+/// without a jump.
+const PLAYER_STEP_HEIGHT: f32 = 2.0;
 
 /// Horizontal reach (world units) for ladder detection: the player grips a
-/// climbable surface when their collider, inflated by this much on x/z,
+/// climbable surface when their collider, inflated by this much radially,
 /// overlaps it. Standing flush against a ladder leaves a small gap between the
 /// collider and the rungs, so the un-inflated shapes never intersect.
 const CLIMB_REACH: f32 = 1.0 / SCALE_FACTOR;
@@ -64,6 +78,84 @@ fn climb_redirect(desired: Vector<Real>, toward_ladder: Vector<Real>) -> Option<
         into
     };
     Some(desired_h - toward_ladder * into + Vector::y() * vertical * CLIMB_SPEED_SCALE)
+}
+
+/// Step-up probe (the original engine's stair-climbing approach: probe up,
+/// forward, then down from the blocked position). Called when the player's
+/// horizontal movement was mostly blocked; returns the extra translation that
+/// hops the player onto a stair-sized ledge ahead, or `None` when there is no
+/// steppable ledge (a full wall, no headroom, or a too-tall/too-steep step).
+///
+/// This exists because rapier's built-in autostep never fires against a step
+/// with a capsule: the step's top edge contacts the bottom sphere above its
+/// center, which parry classifies as a ceiling-ish hit, not a wall.
+///
+/// `pos` is the collider pose after the blocked move; `desired` the movement
+/// input for the frame; `applied` the translation the move actually achieved.
+/// The probe (all casts collision-checked, so the result is a valid pose):
+/// 1. headroom: the capsule must fit `PLAYER_STEP_HEIGHT` straight up;
+/// 2. clearance: at that height it must fit forward far enough to plant the
+///    capsule axis past the riser face (radius + contact gaps) - otherwise
+///    the overhanging capsule gets pulled back down by snap-to-ground;
+/// 3. tread: dropping back down must land on a walkable (mostly-horizontal)
+///    surface above the starting feet - the landing defines the step height.
+fn try_step_up(
+    queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    applied: Vector<Real>,
+) -> Option<Vector<Real>> {
+    let desired_h = vector![desired.x, 0.0, desired.z];
+    let desired_norm = desired_h.norm();
+    if desired_norm < 1.0e-6 {
+        return None;
+    }
+    let dir = desired_h / desired_norm;
+    // Not blocked: the move achieved most of the desired horizontal distance.
+    if applied.dot(&dir) > 0.5 * desired_norm {
+        return None;
+    }
+
+    let step_height = PLAYER_STEP_HEIGHT / SCALE_FACTOR;
+    let contact_offset = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    // Far enough forward that the capsule axis (its lowest point) stands on
+    // the tread: the gap to the riser (~contact offset), the capsule radius,
+    // and a contact offset of margin on top.
+    let forward = PLAYER_RADIUS / SCALE_FACTOR + 2.0 * contact_offset;
+    let cast = |from: &Isometry<Real>, dir: Vector<Real>, max_dist: f32| {
+        queries.cast_shape(
+            from,
+            &dir,
+            shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: max_dist,
+                target_distance: contact_offset,
+                stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true,
+            },
+        )
+    };
+
+    // 1) Headroom directly above.
+    if cast(pos, Vector::y(), step_height).is_some() {
+        return None;
+    }
+    // 2) Forward clearance at the lifted height.
+    let lifted = Translation::from(Vector::y() * step_height) * pos;
+    if cast(&lifted, dir, forward).is_some() {
+        return None;
+    }
+    // 3) Drop onto the tread.
+    let planted = Translation::from(dir * forward) * lifted;
+    let (_, hit) = cast(&planted, -Vector::y(), step_height)?;
+    let lift = step_height - hit.time_of_impact;
+    // Too small to matter (the rounded capsule bottom slides over it anyway),
+    // or a downward/steep landing normal (not a tread).
+    if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.7 {
+        return None;
+    }
+    Some(Vector::y() * lift + dir * forward)
 }
 
 /// Maximum distance (world units) a single validated player move may advance.
@@ -893,8 +985,13 @@ impl PhysicsWorld {
         let player_entity_user_data = player_entity.inner() as u128;
         rigid_body.user_data = player_entity_user_data;
         let character_handle = self.rigid_body_set.insert(rigid_body);
-        let mut collider =
-            ColliderBuilder::cuboid(0.8 / SCALE_FACTOR, 2.4 / SCALE_FACTOR, 0.8 / SCALE_FACTOR);
+        // A capsule with the same footprint as the old cuboid: 4.8 SS2 ft tall,
+        // 1.6 ft wide (the original engine's player is a stack of spheres - a
+        // rounded shape slides cleanly along corners/seams the box snagged on).
+        let mut collider = ColliderBuilder::capsule_y(
+            (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+            PLAYER_RADIUS / SCALE_FACTOR,
+        );
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
@@ -907,9 +1004,15 @@ impl PhysicsWorld {
 
         let mut controller = KinematicCharacterController::default();
 
-        controller.offset = CharacterLength::Absolute(0.1 / SCALE_FACTOR);
-        controller.snap_to_ground = Some(CharacterLength::Absolute(0.1 / SCALE_FACTOR));
-        controller.normal_nudge_factor = 0.1;
+        controller.offset = CharacterLength::Absolute(PLAYER_CONTACT_OFFSET / SCALE_FACTOR);
+        // Walking down stairs stays grounded (snapped onto the next tread)
+        // instead of chaining micro-falls. Stepping UP is handled by an
+        // explicit probe in `move_player` (see `try_step_up`) - rapier's
+        // built-in autostep needs a wall-classified contact, but a capsule
+        // touching a step edge above its bottom-sphere center reads as a
+        // ceiling and never triggers it.
+        controller.snap_to_ground =
+            Some(CharacterLength::Absolute(PLAYER_STEP_HEIGHT / SCALE_FACTOR));
 
         self.entity_id_to_body
             .insert(player_entity, character_handle);
@@ -1062,19 +1165,8 @@ impl PhysicsWorld {
         let character_shape = character_collider.shared_shape().clone();
         let character_pos = *character_collider.position();
 
-        let step_size = Vector::y() * MOVEMENT_STEP_SIZE * self.integration_parameters.dt;
-
-        // We do our player movement in two passes
-        // First: move the player forward and a bit upwards
-        // Second: Drop the player down for gravity
-        // This wasn't necessary until upgrading to rapier v0.19.0 - when we upgraded to that version,
-        // we started to snag on geometry.
-        let movement_with_upward = desired_movement + step_size;
-
         let mut gravity = -0.5 / SCALE_FACTOR;
         gravity *= self.rigid_body_set[player_handle.character_handle].gravity_scale();
-
-        let gravity_movement = Vector::y() * gravity - step_size;
 
         // Filter shared by both movement passes: only collide with the
         // collidable groups as the player, ignore the player body and sensors.
@@ -1106,9 +1198,12 @@ impl PhysicsWorld {
                 &self.collider_set,
                 climb_filter,
             );
-            character_shape.as_cuboid().and_then(|cuboid| {
-                let inflated =
-                    Cuboid::new(cuboid.half_extents + vector![CLIMB_REACH, 0.0, CLIMB_REACH]);
+            character_shape.as_capsule().and_then(|capsule| {
+                let inflated = Capsule::new(
+                    capsule.segment.a,
+                    capsule.segment.b,
+                    capsule.radius + CLIMB_REACH,
+                );
                 // Grip the closest climbable within reach, by contact distance,
                 // and take the contact's *face normal* as the climb direction.
                 // (The collider-center direction is wrong when the player is
@@ -1138,46 +1233,41 @@ impl PhysicsWorld {
             })
         };
 
-        //let mut collisions = vec![];
-        let (mvt1, mvt2) = profile!(scope: "physics", level: TRACE, "physics.move_player", {
-            // HACK: For rapier v0.19.0, our previous strategy of combining the movement + gravity
-            // caused us to snag on physics geometry. In order to counter this, we'll do the movement in two phases
-            // a forward phase to move and then an application of gravity
+        let mvt = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             let queries = self.broad_phase.as_query_pipeline(
                 dispatcher,
                 &self.rigid_body_set,
                 &self.collider_set,
                 movement_filter,
             );
-            // While gripping a ladder the climb vector replaces the walk pass
-            // (no step-up bump needed) and the gravity pass is a no-op.
-            let (first_movement, second_movement) = match climb_movement {
-                Some(climb) => (climb, Vector::zeros()),
-                None => (
-                    movement_with_upward.cast::<Real>(),
-                    gravity_movement.cast::<Real>(),
-                ),
+            // While gripping a ladder the climb vector replaces walking, and
+            // gravity is suppressed for the frame; otherwise walk + gravity in
+            // one pass.
+            let movement = match climb_movement {
+                Some(climb) => climb,
+                None => desired_movement + Vector::y() * gravity,
             };
-            (player_handle.controller.move_shape(
+            let mut mvt = player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &queries,
                 character_shape.as_ref(),
                 &character_pos,
-                first_movement,
+                movement,
                 |_c| (),
-                //|c| collisions.push(c),
-            ),
-
-            // Second pass: Apply gravity and undo our step size
-            player_handle.controller.move_shape(
-                self.integration_parameters.dt,
-                &queries,
-                character_shape.as_ref(),
-                &character_pos,
-                second_movement,
-                |_c| (),
-                //|c| collisions.push(c),
-            ))
+            );
+            // Stairs: if walking was blocked, probe for a step and hop onto it.
+            if climb_movement.is_none() {
+                if let Some(step) = try_step_up(
+                    &queries,
+                    character_shape.as_ref(),
+                    &(Translation::from(mvt.translation) * character_pos),
+                    desired_movement,
+                    mvt.translation,
+                ) {
+                    mvt.translation += step;
+                }
+            }
+            mvt
         });
 
         let mut collision_events = Vec::new();
@@ -1252,9 +1342,7 @@ impl PhysicsWorld {
         let character_body = &mut self.rigid_body_set[player_handle.character_handle];
         let _original_pos = character_body.position().translation.vector;
         let pos = character_body.position();
-        character_body.set_next_kinematic_translation(
-            pos.translation.vector + mvt1.translation + mvt2.translation,
-        );
+        character_body.set_next_kinematic_translation(pos.translation.vector + mvt.translation);
         (collision_events, character_body)
     }
 
@@ -2113,6 +2201,68 @@ mod tests {
         assert!(
             plain_ascent.abs() < 0.5,
             "a plain wall must not be climbable, rose {plain_ascent}"
+        );
+    }
+
+    /// Walking into a stair-sized ledge steps up onto it; a too-tall ledge
+    /// blocks. The step limit is 2 SS2 ft (0.8 wu), the original engine's
+    /// step-probe height - a 1.5 ft riser climbs, a 3 ft ledge doesn't.
+    /// (Negative-first: the old two-pass up-bump stepped at most
+    /// `MOVEMENT_STEP_SIZE * dt` = 0.33 wu per frame, so the 0.6 wu riser
+    /// failed before native autostep.)
+    #[test]
+    fn player_steps_up_stairs_but_not_tall_ledges() {
+        // Height gained after walking +x into a `step_height`-tall platform.
+        let run = |step_height: f32| -> f32 {
+            let mut world = PhysicsWorld::new();
+            // Floor top at y=0 (parentless trimesh, like level geometry).
+            let floor_verts = vec![
+                point![-100.0, 0.0, -100.0],
+                point![100.0, 0.0, -100.0],
+                point![100.0, 0.0, 100.0],
+                point![-100.0, 0.0, 100.0],
+            ];
+            let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+            world.add_collider(
+                EntityId::from_inner(1000).unwrap(),
+                ColliderBuilder::trimesh(floor_verts, floor_tris)
+                    .expect("floor trimesh")
+                    .build(),
+            );
+            let mut player =
+                world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+            // A platform ahead of the player whose top sits at `step_height`.
+            world.add_kinematic(
+                EntityId::from_inner(2001).unwrap(),
+                vec3(-3.0, step_height / 2.0, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(4.0, step_height, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            // Settle onto the floor, then walk into the step.
+            for _ in 0..30 {
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+            let start = world.get_player_translation(&player);
+            for _ in 0..240 {
+                world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+            }
+            let end = world.get_player_translation(&player);
+            end.y - start.y
+        };
+
+        let riser = run(0.6); // 1.5 SS2 ft - a typical stair riser
+        let ledge = run(1.2); // 3.0 SS2 ft - over the 2 ft step limit
+
+        assert!(
+            riser > 0.5,
+            "a 1.5 ft riser should be stepped up, rose {riser}"
+        );
+        assert!(
+            ledge < 0.1,
+            "a 3 ft ledge must not be auto-stepped, rose {ledge}"
         );
     }
 }
