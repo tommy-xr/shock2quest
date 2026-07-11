@@ -36,7 +36,7 @@ pub struct SceneObject {
     pub geometry: Rc<Box<dyn Geometry>>,
     pub transform: Matrix4<f32>,
     pub local_transform: Matrix4<f32>, //hack...
-    pub skinning_data: [Matrix4<f32>; 40],
+    pub skinning_data: [Matrix4<f32>; 80],
     pub depth_write: bool,
     /// When true, the depth buffer is cleared *before* drawing this object, so it
     /// (and anything drawn after it) renders on top of the world while still
@@ -216,7 +216,7 @@ impl SceneObject {
             geometry,
             transform,
             local_transform: Matrix4::identity(),
-            skinning_data: [Matrix4::identity(); 40],
+            skinning_data: [Matrix4::identity(); 80],
             depth_write: true,
             clear_depth: false,
             transparency_override: None,
@@ -312,8 +312,20 @@ impl SceneObject {
         self.local_transform = transform;
     }
 
+    /// Set the 40 joint matrices; the parent-frame slots (40..80) are
+    /// filled with each joint's own transform, so a stretchy second-bone
+    /// reference degrades to the rigid single-bone result. Callers with real
+    /// parent frames use [`set_skinning_palette`](Self::set_skinning_palette).
     pub fn set_skinning_data(&mut self, skinning_data: [Matrix4<f32>; 40]) {
-        self.skinning_data = skinning_data;
+        self.skinning_data[..40].copy_from_slice(&skinning_data);
+        self.skinning_data[40..].copy_from_slice(&skinning_data);
+    }
+
+    /// Set the full 80-slot palette: joint transforms in 0..40, per-joint
+    /// parent frames (parent orientation about the joint's position) in
+    /// 40..80, blended by stretchy vertices.
+    pub fn set_skinning_palette(&mut self, palette: [Matrix4<f32>; 80]) {
+        self.skinning_data = palette;
     }
 
     pub fn get_transform(&self) -> Matrix4<f32> {
@@ -326,7 +338,7 @@ impl SceneObject {
             geometry: Rc::new(geometry),
             transform: Matrix4::identity(),
             local_transform: Matrix4::identity(),
-            skinning_data: [Matrix4::identity(); 40],
+            skinning_data: [Matrix4::identity(); 80],
             depth_write: true,
             clear_depth: false,
             transparency_override: None,

@@ -76,6 +76,40 @@ impl Skeleton {
         transforms
     }
 
+    /// Expand a posed 40-joint palette to the 80-slot render palette: slot
+    /// `40 + j` holds joint j's "parent frame" - the parent joint's
+    /// orientation anchored at joint j's own position. Stretchy vertices
+    /// blend between joint j (weight `w`) and this frame (weight `1 - w`):
+    /// at `w = 1` they follow the joint exactly, at `w = 0` the parent's
+    /// orientation about the same pivot, so the blend rotates about the
+    /// joint rather than tearing between two pivots. Joints without a
+    /// parent, and empty slots, fall back to the joint's own transform,
+    /// which makes any second-bone reference a no-op.
+    pub fn expand_skinning_palette(
+        pose: &[Matrix4<f32>; 40],
+        skeleton: &Skeleton,
+    ) -> [Matrix4<f32>; 80] {
+        let mut palette = [Matrix4::identity(); 80];
+        palette[..40].copy_from_slice(pose);
+        for j in 0..40 {
+            palette[40 + j] = pose[j];
+        }
+        for bone in skeleton.bones() {
+            let j = bone.joint_id as usize;
+            if j >= 40 {
+                continue;
+            }
+            if let Some(parent) = bone.parent_id {
+                if (parent as usize) < 40 {
+                    let mut frame = pose[parent as usize];
+                    frame.w = pose[j].w;
+                    palette[40 + j] = frame;
+                }
+            }
+        }
+        palette
+    }
+
     pub fn global_transform(&self, joint_id: &JointId) -> Matrix4<f32> {
         let _joint_offset = *joint_id as f32;
 
@@ -524,6 +558,40 @@ mod tests {
             name: None,
         };
         (Skeleton::create_from_bones(bones), clip)
+    }
+
+    #[test]
+    fn expand_skinning_palette_builds_parent_frames() {
+        let (skeleton, _clip) = test_skeleton_and_clip();
+        let mut pose = [Matrix4::identity(); 40];
+        // Root (joint 0): a recognizable rotation + its own translation.
+        pose[0] = Matrix4::from_translation(Vector3::new(5.0, 0.0, 0.0))
+            * Matrix4::from_angle_y(Deg(90.0));
+        // Child (joint 1): identity rotation, distinct translation.
+        pose[1] = Matrix4::from_translation(Vector3::new(6.0, 2.0, 0.0));
+
+        let palette = Skeleton::expand_skinning_palette(&pose, &skeleton);
+
+        // Slots 0..40 are the pose itself.
+        assert_eq!(palette[0], pose[0]);
+        assert_eq!(palette[1], pose[1]);
+
+        // Joint 1's parent frame: the ROOT's orientation anchored at JOINT 1's
+        // position - stretchy weight 0 rotates with the parent about the
+        // child pivot.
+        let frame = palette[41];
+        assert_eq!(
+            translation_from_matrix(&frame),
+            Vector3::new(6.0, 2.0, 0.0),
+            "parent frame must pivot at the child joint"
+        );
+        assert_eq!(frame.x, pose[0].x, "parent frame carries parent basis x");
+        assert_eq!(frame.z, pose[0].z, "parent frame carries parent basis z");
+
+        // Root has no parent; an unused slot has no bone: both fall back to
+        // the joint's own transform so a second-bone reference is a no-op.
+        assert_eq!(palette[40], pose[0]);
+        assert_eq!(palette[45], pose[5]);
     }
 
     #[test]

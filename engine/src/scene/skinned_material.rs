@@ -26,7 +26,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 world;
         uniform mat4 view;
         uniform mat4 projection;
-        uniform mat4 bone_matrices[40];
+        uniform mat4 bone_matrices[80];
 
         out vec2 texCoord;
         out vec3 worldPos;
@@ -163,7 +163,7 @@ struct UnifiedUniforms {
     transparency_loc: i32,
 
     // Bone matrices for skeletal animation
-    bone_matrices_locs: [i32; 40],
+    bone_matrices_locs: [i32; 80],
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -224,7 +224,7 @@ impl SkinnedMaterial {
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
 
             // Set bone matrices for skeletal animation
-            for i in 0..40 {
+            for i in 0..80 {
                 let mat = skinning_data[i];
                 gl::UniformMatrix4fv(uniforms.bone_matrices_locs[i], 1, gl::FALSE, mat.as_ptr());
             }
@@ -312,8 +312,8 @@ impl Material for SkinnedMaterial {
                 let shader = crate::shader_program::link(&vertex_shader, &fragment_shader);
 
                 // Get uniform locations for all shader variables
-                let mut bone_matrices_locs = [0i32; 40];
-                for i in 0..40 {
+                let mut bone_matrices_locs = [0i32; 80];
+                for i in 0..80 {
                     let name = format!("bone_matrices[{i}]");
                     let c_str = CString::new(name).unwrap();
                     bone_matrices_locs[i] = gl::GetUniformLocation(shader.gl_id, c_str.as_ptr());
