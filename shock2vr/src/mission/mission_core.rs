@@ -965,7 +965,8 @@ impl MissionCore {
                 self.script_world.dispatch(msg);
             }
             for action in drag_actions {
-                self.apply_flat_drag_action(action);
+                let drag_effects = self.apply_flat_drag_action(action);
+                effects.extend(drag_effects);
             }
         }
 
@@ -1591,15 +1592,23 @@ impl MissionCore {
     }
 
     /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
-    /// These touch container links and physics, so the host emits them and the
-    /// mission applies them here.
-    fn apply_flat_drag_action(&mut self, action: crate::mission::flat_ui_host::FlatUiDragAction) {
+    /// Lift/Place/Throw touch container links and physics and are applied
+    /// directly; Wield produces the same effect a backpack click does (wield a
+    /// weapon, use anything else) and is returned for the normal effect
+    /// pipeline to process (it needs `asset_cache` for the grab).
+    fn apply_flat_drag_action(
+        &mut self,
+        action: crate::mission::flat_ui_host::FlatUiDragAction,
+    ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
             // Lifting onto the cursor empties the item's slot: drop its
             // container link. It stays alive and non-physical (still in the
             // backpack, just off-grid) until placed or thrown.
-            FlatUiDragAction::Lift(entity_id) => self.detach_from_containers(entity_id),
+            FlatUiDragAction::Lift(entity_id) => {
+                self.detach_from_containers(entity_id);
+                Vec::new()
+            }
             // Placing returns the item to the player's backpack (first free
             // slot) - the same `Contains`-relink path as looting.
             FlatUiDragAction::Place(entity_id) => {
@@ -1611,8 +1620,44 @@ impl MissionCore {
                 if let Some(inventory) = inventory {
                     self.drop_entity_into_container(inventory, entity_id);
                 }
+                Vec::new()
             }
-            FlatUiDragAction::Throw(entity_id) => self.throw_entity_into_world(entity_id),
+            FlatUiDragAction::Throw(entity_id) => {
+                self.throw_entity_into_world(entity_id);
+                Vec::new()
+            }
+            // Double-click = equip/use: a weapon (gun or melee) wields via
+            // `GrabEntity` (which holsters any displaced weapon back to the
+            // grid), anything else gets a `Frob` (use) - identical to the
+            // ContainerGui backpack click, so the wield path is shared, not
+            // duplicated. The item was lifted onto the cursor, so it is
+            // already detached from the backpack.
+            FlatUiDragAction::Wield(entity_id) => {
+                let is_weapon = self
+                    .world
+                    .borrow::<View<dark::properties::PropPlayerGun>>()
+                    .map(|v| v.get(entity_id).is_ok())
+                    .unwrap_or(false)
+                    || self
+                        .world
+                        .borrow::<View<PropLimbModel>>()
+                        .map(|v| v.get(entity_id).is_ok())
+                        .unwrap_or(false);
+                if is_weapon {
+                    vec![Effect::GrabEntity {
+                        entity_id,
+                        hand: crate::vr_config::Handedness::Right,
+                        current_parent_id: None,
+                    }]
+                } else {
+                    vec![Effect::Send {
+                        msg: Message {
+                            payload: MessagePayload::Frob,
+                            to: entity_id,
+                        },
+                    }]
+                }
+            }
         }
     }
 

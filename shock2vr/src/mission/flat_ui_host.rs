@@ -67,15 +67,33 @@ const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 const CURSOR_ITEM_SIZE: Vector2<f32> = Vector2::new(35.0, 32.0);
 
 /// A host-side action produced by the cursor-is-the-item drag (§1.5/§2.4),
-/// applied by `mission_core` because it touches links/physics: **Lift**
-/// removes the item from its container (the strip slot empties), **Place**
-/// returns it to the player's backpack, **Throw** gives it world presence
-/// with an impulse along the view ray.
+/// applied by `mission_core` because it touches links/physics/effects:
+/// **Lift** removes the item from its container (the strip slot empties),
+/// **Place** returns it to the player's backpack, **Throw** gives it world
+/// presence with an impulse along the view ray, **Wield** equips/uses it (a
+/// double-click, routed through the same effect as a backpack click).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
     Lift(EntityId),
     Place(EntityId),
     Throw(EntityId),
+    Wield(EntityId),
+}
+
+/// Double-click window (frames at 60Hz) and radius (canvas px) for the
+/// wield gesture: a second press on the just-lifted item's slot within this
+/// window/radius wields it instead of placing (the original equips from the
+/// inventory; with a single flat pointer button a double-click is the
+/// faithful mapping - projects/flat-ui.md §1.5).
+const DOUBLE_CLICK_WINDOW_FRAMES: u32 = 20;
+const DOUBLE_CLICK_RADIUS: f32 = 24.0;
+
+/// The just-lifted item and where/when it was lifted, so a quick second click
+/// on the same slot reads as a double-click (wield) rather than a place.
+struct LiftMark {
+    entity: EntityId,
+    canvas_pos: Vector2<f32>,
+    frames_left: u32,
 }
 
 /// The item currently riding the cursor (the original's `drag_obj`): the
@@ -107,6 +125,9 @@ pub struct FlatUiHost {
     /// The item lifted onto the cursor (the original's "cursor IS the item"
     /// drag, §2.4). `Some` between a lift and the place/throw that clears it.
     cursor_item: Option<CursorItem>,
+    /// The most recent lift, for double-click (wield) detection. Counts down
+    /// each frame and clears when the window elapses.
+    last_lift: Option<LiftMark>,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -134,6 +155,7 @@ impl FlatUiHost {
             components: Vec::new(),
             strip: None,
             cursor_item: None,
+            last_lift: None,
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -166,6 +188,7 @@ impl FlatUiHost {
     /// the metagame while `drag_obj` is set, so Tab-out re-homes the item
     /// rather than losing it (projects/flat-ui.md §1.5).
     pub fn take_cursor_item(&mut self) -> Option<EntityId> {
+        self.last_lift = None;
         self.cursor_item.take().map(|c| c.entity)
     }
 
@@ -269,6 +292,14 @@ impl FlatUiHost {
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
 
+        // Age out the double-click window since the last lift.
+        if let Some(mark) = self.last_lift.as_mut() {
+            match mark.frames_left.checked_sub(1) {
+                Some(remaining) => mark.frames_left = remaining,
+                None => self.last_lift = None,
+            }
+        }
+
         // MFD-slot auto-close: the bound object is gone (destroyed / level
         // state changed), or the player walked away from it (the original's
         // per-overlay `distance` check). The strip is bound to the player's
@@ -349,12 +380,27 @@ impl FlatUiHost {
                 return (Vec::new(), Vec::new());
             }
             if over_strip {
-                let held = self.cursor_item.take().unwrap();
-                let mut actions = vec![FlatUiDragAction::Place(held.entity)];
+                let held = self.cursor_item.as_ref().unwrap().entity;
+                // Double-click on the just-lifted item's slot wields it (the
+                // second press of a quick same-spot double-click) rather than
+                // placing - the faithful single-button equip gesture.
+                if self.is_double_click(held, canvas_pos) {
+                    self.cursor_item = None;
+                    self.last_lift = None;
+                    return (Vec::new(), vec![FlatUiDragAction::Wield(held)]);
+                }
+                self.cursor_item = None;
+                self.last_lift = None;
+                let mut actions = vec![FlatUiDragAction::Place(held)];
                 // Dropping onto an occupied slot swaps: the occupant lifts.
                 if let Some(target) = self.strip_item_at(canvas_pos) {
-                    if target != held.entity {
+                    if target != held {
                         self.cursor_item = Some(make_cursor_item(world, target));
+                        self.last_lift = Some(LiftMark {
+                            entity: target,
+                            canvas_pos,
+                            frames_left: DOUBLE_CLICK_WINDOW_FRAMES,
+                        });
                         actions.push(FlatUiDragAction::Lift(target));
                     }
                 }
@@ -366,6 +412,7 @@ impl FlatUiHost {
             }
             // Bare 3D view: throw the held item along the view ray.
             let held = self.cursor_item.take().unwrap();
+            self.last_lift = None;
             return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
         }
 
@@ -376,6 +423,11 @@ impl FlatUiHost {
             if pressed_edge {
                 if let Some(item) = self.strip_item_at(canvas_pos) {
                     self.cursor_item = Some(make_cursor_item(world, item));
+                    self.last_lift = Some(LiftMark {
+                        entity: item,
+                        canvas_pos,
+                        frames_left: DOUBLE_CLICK_WINDOW_FRAMES,
+                    });
                     return (Vec::new(), vec![FlatUiDragAction::Lift(item)]);
                 }
                 return (Vec::new(), Vec::new());
@@ -416,6 +468,17 @@ impl FlatUiHost {
             }
             (Vec::new(), Vec::new())
         }
+    }
+
+    /// Whether a press on `held`'s slot at `canvas_pos` is the second click of
+    /// a double-click on the item just lifted (same entity, within the window
+    /// and radius of the lift) - the wield gesture.
+    fn is_double_click(&self, held: EntityId, canvas_pos: Vector2<f32>) -> bool {
+        self.last_lift.as_ref().is_some_and(|mark| {
+            mark.entity == held
+                && mark.frames_left > 0
+                && (mark.canvas_pos - canvas_pos).magnitude() <= DOUBLE_CLICK_RADIUS
+        })
     }
 
     /// The interactive strip item whose canvas rect contains `canvas_pos`
@@ -1171,6 +1234,18 @@ mod tests {
             .cursor_debug()
             .expect("the swapped-in Pistol is on the cursor");
         assert_eq!(cursor.entity_id, pistol.inner() as i32);
+    }
+
+    #[test]
+    fn double_click_on_a_strip_item_wields_it() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        // First click lifts onto the cursor...
+        let first = press_edge(&mut host, &world, (23.5, 34.0));
+        assert_eq!(first, vec![FlatUiDragAction::Lift(wrench)]);
+        // ...a quick second click on the same slot wields it (double-click).
+        let second = press_edge(&mut host, &world, (23.5, 34.0));
+        assert_eq!(second, vec![FlatUiDragAction::Wield(wrench)]);
+        assert!(host.cursor_debug().is_none(), "wielding clears the cursor");
     }
 
     #[test]
