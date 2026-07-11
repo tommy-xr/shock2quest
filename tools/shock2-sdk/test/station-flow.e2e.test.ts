@@ -25,9 +25,9 @@ import type { Vec3 } from "../src/types.js";
 // underlying issue is fixed:
 //   * #453 - training tours grant NO stat changes. We assert hp/psi are
 //     UNCHANGED across the tours; flip to "increases" when #453 lands.
-//   * #454 - post-career station arrival spawns at world origin (0,-0.87,0)
-//     instead of the designed recruit-deck spot (81.78,-3.6,16.54). We assert
-//     the buggy origin; flip to the designed spot when #454 lands.
+//   * #454 (FIXED) - post-career station arrival now spawns at the designed
+//     recruit-deck spot (81.78,-3.6,16.54) rather than the world origin. We
+//     assert the designed spot (within ~3 units, allowing physics settle).
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // Stable mission-data world positions (dark_query). These are the TRIPWIRE
@@ -53,8 +53,11 @@ const CAREER_DOORS = {
 // one real tour tripwire exercises the whole tripwire->marker->bit path.
 const TOUR_TRIP: Vec3 = [-22.6, -5.6, 8.0];
 
-const CAREER_SPAWN_BUG: Vec3 = [0.0, -0.87, 0.0]; // #454
-const near = (a: number, b: number) => Math.abs(a - b) < 0.05;
+// #454: the designed post-career recruit-deck spawn (station.mis marker obj 132,
+// PropStartLoc 2501, whose own PropPosition is used now that it has no
+// LandingPoint link). Allow ~3 units of slack for the physics settle after spawn.
+const CAREER_SPAWN_DESIGNED: Vec3 = [81.78026, -3.6, 16.539234];
+const CAREER_SPAWN_TOLERANCE = 3.0;
 
 async function teleportTo(game: GameServer, [x, y, z]: Vec3): Promise<void> {
   await game.player.teleport({ x, y, z });
@@ -99,17 +102,21 @@ test(
     // Marine loadout applied on the station load.
     assert.equal(info.player.max_hit_points, 45, "Marine deploys with 45 max HP");
     assert.equal(info.player.max_psi_points, 20, "Marine deploys with 20 max psi");
-    // #454: post-career arrival currently spawns at world origin, not the
-    // designed recruit-deck spot (81.78,-3.6,16.54). Flip this to the designed
-    // spot when #454 is fixed.
+    // #454 (fixed): post-career arrival lands at the designed recruit-deck spot
+    // (the StartLoc marker's own position), not the world origin.
     const arrival = info.player.position;
+    const spawnDelta = Math.hypot(
+      arrival[0] - CAREER_SPAWN_DESIGNED[0],
+      arrival[1] - CAREER_SPAWN_DESIGNED[1],
+      arrival[2] - CAREER_SPAWN_DESIGNED[2],
+    );
     assert.ok(
-      near(arrival[0], CAREER_SPAWN_BUG[0]) &&
-        near(arrival[1], CAREER_SPAWN_BUG[1]) &&
-        near(arrival[2], CAREER_SPAWN_BUG[2]),
-      `#454: post-career arrival should be at the buggy origin ${JSON.stringify(
-        CAREER_SPAWN_BUG,
-      )}, got ${JSON.stringify(arrival)}`,
+      spawnDelta < CAREER_SPAWN_TOLERANCE,
+      `#454: post-career arrival should be near the designed spot ${JSON.stringify(
+        CAREER_SPAWN_DESIGNED,
+      )} (within ${CAREER_SPAWN_TOLERANCE}u), got ${JSON.stringify(
+        arrival,
+      )} (delta ${spawnDelta.toFixed(2)}u)`,
     );
 
     // Step 2: tours 1 and 2 each set exactly the next training_year bit and loop
