@@ -622,6 +622,11 @@ pub struct PlayerInfo {
     /// The gamesys names of the active sustained psi powers (e.g. "Inviso"),
     /// in activation order; empty when none. See `shock2vr::PlayerStateSnapshot`.
     pub active_psi_powers: Vec<String>,
+    /// The player's persistent character sheet (primary stats, trained skills,
+    /// mastered psi disciplines), accumulated from career + station training
+    /// tours. `null` when the scene has no player. See
+    /// `shock2vr::player_stats::PlayerStats`.
+    pub stats: Option<shock2vr::player_stats::PlayerStats>,
 }
 
 /// Input state snapshot

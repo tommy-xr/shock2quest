@@ -307,6 +307,14 @@ pub struct PropSignalType(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStartLoc(pub i32);
 
+/// `P$CharGenRo` - the character-generation "row"/tour index (4-byte int) on
+/// the station recruit deck's training-tour markers. `station.mis` objs
+/// 125/126/127 carry 0/1/2, selecting which of a training year's three tours
+/// the player completed; `ChooseMission` uses it (with the current career +
+/// year) to look up the tour reward. See `shock2vr::player_stats`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropCharGenRo(pub i32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHasRefs(pub bool);
 
@@ -1519,6 +1527,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$StartLoc",
             |reader, _len| read_i32(reader),
             PropStartLoc,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$CharGenRo",
+            |reader, _len| read_i32(reader),
+            PropCharGenRo,
             accumulator::latest,
         ),
         define_prop(

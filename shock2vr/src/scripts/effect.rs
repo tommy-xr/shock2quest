@@ -342,6 +342,15 @@ pub enum Effect {
         quest_bit_value: QuestBitValue,
     },
 
+    /// Apply the training-tour reward for `(career, year, tour)` to the player's
+    /// persistent stats (in `QuestInfo`). Applied at most once per training
+    /// year. Emitted by `ChooseMissionScript` on tour completion.
+    GrantTourReward {
+        career: crate::career::Career,
+        year: u32,
+        tour: u32,
+    },
+
     SetAIProperty {
         entity_id: EntityId,
         update: AIPropertyUpdate,

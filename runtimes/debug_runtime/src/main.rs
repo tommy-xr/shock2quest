@@ -1843,6 +1843,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                     .as_ref()
                     .map(|s| s.active_psi_powers.clone())
                     .unwrap_or_default(),
+                stats: state.as_ref().and_then(|s| s.stats.clone()),
             }
         },
         entity_count,
