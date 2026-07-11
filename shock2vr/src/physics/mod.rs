@@ -32,6 +32,21 @@ const PLAYER_RADIUS: f32 = 0.8;
 /// and world geometry (`KinematicCharacterController::offset`).
 const PLAYER_CONTACT_OFFSET: f32 = 0.1;
 
+/// Extra height (SS2 ft) the player is lifted each grounded frame, keeping the
+/// resting gap a hair above `PLAYER_CONTACT_OFFSET`. Load-bearing: movement
+/// casts use `PLAYER_CONTACT_OFFSET` as their target distance, so a capsule
+/// resting at exactly that gap starts every cast already "in contact" with
+/// its own floor. On a yaw-ROTATED support (e.g. the earth.mis tram floor
+/// slab) the rotated top-face normal carries ~1e-6 float error, which makes
+/// even purely tangential walking read as "approaching" - every solver
+/// iteration then re-hits the same contact at toi=0, applies zero
+/// translation, and the player freezes in place. (Axis-aligned floors yield
+/// an exact (0,1,0) normal, where tangential motion reports no hit - which is
+/// why flat test floors work without this.) The next frame's gravity pass
+/// consumes the lift again, so the rest height is stable. Regression-tested
+/// by `player_walks_on_rotated_platform`.
+const PLAYER_REST_LIFT: f32 = 0.01;
+
 /// Maximum ledge height (SS2 ft) the player steps up automatically, and how
 /// far below their feet the ground is snapped to when walking down. 2 ft is
 /// the original engine's step-probe height, so stairs climb and descend
@@ -120,17 +135,21 @@ fn try_step_up(
     let step_height = PLAYER_STEP_HEIGHT / SCALE_FACTOR;
     let contact_offset = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
     // Far enough forward that the capsule axis (its lowest point) stands on
-    // the tread: the gap to the riser (~contact offset), the capsule radius,
-    // and a contact offset of margin on top.
-    let forward = PLAYER_RADIUS / SCALE_FACTOR + 2.0 * contact_offset;
-    let cast = |from: &Isometry<Real>, dir: Vector<Real>, max_dist: f32| {
+    // the tread: the capsule radius, the gap to the riser (which can exceed
+    // the contact offset when the walk stalled early), and margin on top.
+    let forward = PLAYER_RADIUS / SCALE_FACTOR + 4.0 * contact_offset;
+    // `target_distance` counts lateral grazes (e.g. the riser edge the player
+    // is pressed against) as immediate hits, so the clearance casts (up,
+    // forward) use 0; only the landing cast keeps the contact offset so the
+    // player comes to rest at the normal gap above the tread.
+    let cast = |from: &Isometry<Real>, dir: Vector<Real>, max_dist: f32, target: f32| {
         queries.cast_shape(
             from,
             &dir,
             shape,
             rapier3d::parry::query::ShapeCastOptions {
                 max_time_of_impact: max_dist,
-                target_distance: contact_offset,
+                target_distance: target,
                 stop_at_penetration: false,
                 compute_impact_geometry_on_penetration: true,
             },
@@ -138,17 +157,17 @@ fn try_step_up(
     };
 
     // 1) Headroom directly above.
-    if cast(pos, Vector::y(), step_height).is_some() {
+    if cast(pos, Vector::y(), step_height, 0.0).is_some() {
         return None;
     }
     // 2) Forward clearance at the lifted height.
     let lifted = Translation::from(Vector::y() * step_height) * pos;
-    if cast(&lifted, dir, forward).is_some() {
+    if cast(&lifted, dir, forward, 0.0).is_some() {
         return None;
     }
     // 3) Drop onto the tread.
     let planted = Translation::from(dir * forward) * lifted;
-    let (_, hit) = cast(&planted, -Vector::y(), step_height)?;
+    let (_, hit) = cast(&planted, -Vector::y(), step_height, contact_offset)?;
     let lift = step_height - hit.time_of_impact;
     // Too small to matter (the rounded capsule bottom slides over it anyway),
     // or a downward/steep landing normal (not a tread). The threshold sits
@@ -1250,21 +1269,40 @@ impl PhysicsWorld {
                 &self.collider_set,
                 movement_filter,
             );
-            // While gripping a ladder the climb vector replaces walking, and
-            // gravity is suppressed for the frame; otherwise walk + gravity in
-            // one pass.
-            let movement = match climb_movement {
-                Some(climb) => climb,
-                None => desired_movement + Vector::y() * gravity,
+            // Walk and gravity run as separate passes - NOT the old up-bump
+            // hack (there is no artificial upward movement): a combined
+            // walk+gravity cast points into the floor the player rests on,
+            // which degenerates into zero-progress resting contacts (see
+            // `PLAYER_REST_LIFT`). While gripping a ladder the climb vector
+            // replaces both passes.
+            let (walk, apply_gravity) = match climb_movement {
+                Some(climb) => (climb, false),
+                None => (desired_movement, true),
             };
             let mut mvt = player_handle.controller.move_shape(
                 self.integration_parameters.dt,
                 &queries,
                 character_shape.as_ref(),
                 &character_pos,
-                movement,
+                walk,
                 |_c| (),
             );
+            if apply_gravity {
+                let after_walk = Translation::from(mvt.translation) * character_pos;
+                let fall = player_handle.controller.move_shape(
+                    self.integration_parameters.dt,
+                    &queries,
+                    character_shape.as_ref(),
+                    &after_walk,
+                    Vector::y() * gravity,
+                    |_c| (),
+                );
+                mvt.translation += fall.translation;
+                mvt.grounded = fall.grounded;
+                if mvt.grounded {
+                    mvt.translation += Vector::y() * (PLAYER_REST_LIFT / SCALE_FACTOR);
+                }
+            }
             // Stairs: if grounded walking was blocked, probe for a step and
             // hop onto it. (Grounded-only: an airborne player pressed against
             // a wall must not ratchet up ledges.)
@@ -2253,16 +2291,20 @@ mod tests {
                 CollisionGroup::entity(),
                 false,
             );
-            // Settle onto the floor, then walk into the step.
+            // Settle onto the floor, then walk into the step; report the
+            // highest point reached (a successful step-up crosses the platform
+            // and walks off the far side, so the END height is floor level
+            // either way).
             for _ in 0..30 {
                 world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
             }
             let start = world.get_player_translation(&player);
+            let mut max_y = start.y;
             for _ in 0..240 {
                 world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+                max_y = max_y.max(world.get_player_translation(&player).y);
             }
-            let end = world.get_player_translation(&player);
-            end.y - start.y
+            max_y - start.y
         };
 
         let riser = run(0.6); // 1.5 SS2 ft - a typical stair riser
@@ -2275,6 +2317,47 @@ mod tests {
         assert!(
             ledge < 0.1,
             "a 3 ft ledge must not be auto-stepped, rose {ledge}"
+        );
+    }
+
+    /// Walking along the top of a yaw-ROTATED kinematic cuboid (e.g. the
+    /// earth.mis tram floor slab) must make progress. The rotated top-face
+    /// normal carries ~1e-6 float error, so tangential movement casts read as
+    /// "approaching" and re-hit the resting contact at toi=0 every solver
+    /// iteration - without `normal_nudge_factor` the player freezes in place
+    /// after a frame or two. (Negative-first: fails with the nudge at
+    /// rapier's 1e-4 default; an AXIS-ALIGNED slab passes either way because
+    /// its exact (0,1,0) normal reports no hit for tangential motion.)
+    #[test]
+    fn player_walks_on_rotated_platform() {
+        use cgmath::Rotation3;
+        let mut world = PhysicsWorld::new();
+        // A tram-slab-like platform, yawed 90 degrees: authored 4 wide x 10
+        // long, so after rotation its long axis lies along world x.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Deg(90.0)),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 0.4, 10.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(-3.0, 3.0, 0.0), EntityId::from_inner(2000).unwrap());
+        // Settle onto the slab, then walk along it.
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        for _ in 0..120 {
+            world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        let walked = end.x - start.x;
+        assert!(
+            walked > 3.0,
+            "walking on a rotated platform should progress ~6 units, moved {walked}"
         );
     }
 }
