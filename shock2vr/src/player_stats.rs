@@ -129,6 +129,11 @@ pub struct PlayerStats {
     /// before this field existed loadable (they load with 0 modules).
     #[serde(default)]
     pub cyber_modules: i32,
+    /// Highest psi tier unlocked at a psi trainer (0..=5, sequential). Tier
+    /// unlocks gate which psi powers can eventually be learned; per-power
+    /// purchases are deferred (see `scripts::gui::trainer`).
+    #[serde(default)]
+    pub psi_tier: i32,
 }
 
 impl Default for PlayerStats {
@@ -146,6 +151,7 @@ impl Default for PlayerStats {
             psi_disciplines: Vec::new(),
             granted_years: BTreeSet::new(),
             cyber_modules: 0,
+            psi_tier: 0,
         }
     }
 }
@@ -162,6 +168,58 @@ impl PlayerStats {
             self.cyber_modules = self.cyber_modules.saturating_add(amount);
         }
         self.cyber_modules
+    }
+
+    /// Attempt to spend `amount` cyber modules (a trainer purchase). Atomic
+    /// check-and-decrement: spends and returns `true` only if the balance
+    /// covers the cost, otherwise leaves the balance untouched and returns
+    /// `false`. `amount <= 0` is a no-op that succeeds.
+    pub fn spend_cyber_modules(&mut self, amount: i32) -> bool {
+        if amount <= 0 {
+            return true;
+        }
+        if self.cyber_modules >= amount {
+            self.cyber_modules -= amount;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Current level of a primary stat.
+    pub fn stat_level(&self, stat: Stat) -> i32 {
+        match stat {
+            Stat::Strength => self.strength,
+            Stat::Endurance => self.endurance,
+            Stat::Agility => self.agility,
+            Stat::PsionicAbility => self.psionic_ability,
+            Stat::CyberAffinity => self.cyber_affinity,
+        }
+    }
+
+    /// Current level of a trainable skill.
+    pub fn skill_level(&self, skill: Skill) -> i32 {
+        match skill {
+            Skill::StandardWeapons => self.skills.standard_weapons,
+            Skill::EnergyWeapons => self.skills.energy_weapons,
+            Skill::HeavyWeapons => self.skills.heavy_weapons,
+            Skill::ExoticWeapons => self.skills.exotic_weapons,
+            Skill::Hack => self.skills.hack,
+            Skill::Repair => self.skills.repair,
+            Skill::Modify => self.skills.modify,
+            Skill::Maintenance => self.skills.maintenance,
+            Skill::Research => self.skills.research,
+        }
+    }
+
+    /// Raise a primary stat by one level (a trainer purchase).
+    pub fn raise_stat(&mut self, stat: Stat) {
+        *self.stat_mut(stat) += 1;
+    }
+
+    /// Raise a trainable skill by one level (a trainer purchase).
+    pub fn raise_skill(&mut self, skill: Skill) {
+        *self.skills.get_mut(skill) += 1;
     }
 
     fn stat_mut(&mut self, stat: Stat) -> &mut i32 {

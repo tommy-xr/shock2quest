@@ -17,7 +17,7 @@ mod destroy_all_by_name;
 mod energy_station;
 mod exp_cookie;
 mod frob_qb;
-mod gui;
+pub mod gui;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
@@ -33,7 +33,6 @@ mod psi_amp_script;
 mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
-mod skill_trainer;
 mod std_door;
 mod tool_consumable;
 mod transluce;
@@ -84,7 +83,10 @@ use self::choose_service::ChooseServiceScript;
 /// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
 /// read them at draw time.
 pub use self::gui::ElevatorContext;
-use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MediaGui, ReplicatorGui};
+use self::gui::{
+    ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MediaGui, ReplicatorGui, TrainerGui,
+    TrainerMode,
+};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::psi_amp_script::PsiAmpScript;
 use self::trap_signal::TrapSignal;
@@ -613,7 +615,7 @@ impl ScriptWorld {
             "shotgunmodify" => Box::new(NoopScript::new()),
             "energyweapon" => Box::new(NoopScript::new()),
             "grenademodify" => Box::new(NoopScript::new()),
-            "weapontrainer" => Box::new(skill_trainer::SkillTrainerScript::new("weapontrainer")),
+            "weapontrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Weapons))),
             "wrench" => Box::new(CompositeScript::new(vec![
                 Box::new(MeleeWeapon::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
@@ -653,9 +655,9 @@ impl ScriptWorld {
             "triggerdestroy" => Box::new(NoopScript::new()),
 
             // skill point machines
-            "psitrainer" => Box::new(skill_trainer::SkillTrainerScript::new("psitrainer")),
-            "techtrainer" => Box::new(skill_trainer::SkillTrainerScript::new("techtrainer")),
-            "statstrainer" => Box::new(skill_trainer::SkillTrainerScript::new("statstrainer")),
+            "psitrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Psi))),
+            "techtrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Tech))),
+            "statstrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Stats))),
             "traitmachine" => Box::new(NoopScript::new()),
 
             // medsci2

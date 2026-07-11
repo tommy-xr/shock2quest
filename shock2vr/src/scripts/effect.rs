@@ -378,6 +378,15 @@ pub enum Effect {
         tour: u32,
     },
 
+    /// Buy one trainer upgrade: atomically validate (cost table + caps +
+    /// module balance), spend the cyber modules and raise the target stat /
+    /// skill / psi tier in the player's persistent stats. Emitted by
+    /// `TrainerGui`; validation lives in `scripts::gui::trainer::upgrade_quote`
+    /// so the panel's refusal text and the applied purchase can never diverge.
+    TrainerPurchase {
+        target: crate::scripts::gui::TrainerTarget,
+    },
+
     SetAIProperty {
         entity_id: EntityId,
         update: AIPropertyUpdate,
