@@ -1026,6 +1026,7 @@ fn process_command(
                         active_panel: ui.active_panel,
                         strip: ui.strip,
                         cursor: ui.cursor,
+                        ammo_cycle: ui.ammo_cycle,
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
@@ -1033,6 +1034,7 @@ fn process_command(
                     active_panel: None,
                     strip: None,
                     cursor: None,
+                    ammo_cycle: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");
