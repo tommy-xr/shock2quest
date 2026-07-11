@@ -498,6 +498,29 @@ impl MissionCore {
             info!("Applied {:?} career loadout to player", career);
         }
 
+        // O/S trait bonuses re-derive on every load, like the career loadout
+        // (the player entity is rebuilt each mission load; the traits
+        // themselves persist on the character sheet in QuestInfo). Applied
+        // after the career block so Tank adds on top of the career pool.
+        if quest_info
+            .player_stats()
+            .has_os_trait(crate::scripts::gui::TRAIT_TANK)
+        {
+            use crate::scripts::gui::TANK_HP_BONUS;
+            world.run(
+                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
+                 mut v_max_hp: ViewMut<dark::properties::PropMaxHitPoints>| {
+                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
+                        hp.hit_points += TANK_HP_BONUS;
+                    }
+                    if let Ok(max_hp) = (&mut v_max_hp).get(player_entity) {
+                        max_hp.hit_points += TANK_HP_BONUS as u32;
+                    }
+                },
+            );
+            info!("Applied Tank O/S trait: +{} max hit points", TANK_HP_BONUS);
+        }
+
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
         world.add_unique(known_powers);
@@ -682,6 +705,7 @@ impl MissionCore {
         // Preload the elevator floor labels (MISC.STR) + current mission so the
         // AssetCache-less ElevatorGui can label/gate floors at draw time.
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
+        world.add_unique(crate::scripts::gui::TraitsContext::load(asset_cache));
 
         world.add_unique(EffectQueue {
             effects: Vec::new(),
@@ -3403,6 +3427,76 @@ impl MissionCore {
                         }
                     } else {
                         warn!("TrainerPurchase dropped: gamesys has no cost tables");
+                    }
+                }
+
+                Effect::AcquireOsTrait { trait_id, machine } => {
+                    use crate::scripts::gui::{
+                        NATURALLY_ABLE_MODULES, TANK_HP_BONUS, TRAIT_NATURALLY_ABLE, TRAIT_TANK,
+                        live_effect_note, trait_name, used_bit_name,
+                    };
+                    // The machine's stable mission object id keys its used bit.
+                    let machine_template_id = self
+                        .world
+                        .borrow::<View<dark::properties::PropTemplateId>>()
+                        .ok()
+                        .and_then(|v| v.get(machine).ok().map(|t| t.template_id));
+                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    // Without a stable machine id the used state could never
+                    // be recorded - refuse rather than vend repeatably.
+                    let Some(machine_id) = machine_template_id else {
+                        warn!("O/S trait {} refused: machine has no template id", trait_id);
+                        continue;
+                    };
+                    let used = quests
+                        .read_quest_bit_value(&used_bit_name(machine_id))
+                        .bits()
+                        != 0;
+                    if used {
+                        info!("O/S trait {} refused: machine already used", trait_id);
+                    } else if !quests.player_stats_mut().add_os_trait(trait_id) {
+                        info!("O/S trait {} refused: owned or slots full", trait_id);
+                    } else {
+                        quests.set_quest_bit_value(
+                            &used_bit_name(machine_id),
+                            dark::properties::QuestBitValue::COMPLETE,
+                        );
+                        // Live effects for the implemented subset; the rest
+                        // are storage-only (their consumers don't exist yet).
+                        match trait_id {
+                            TRAIT_NATURALLY_ABLE => {
+                                quests
+                                    .player_stats_mut()
+                                    .award_cyber_modules(NATURALLY_ABLE_MODULES);
+                            }
+                            TRAIT_TANK => {
+                                // "+5 MAXIMUM hit points" (Trait8): the live
+                                // grant raises only the ceiling; current HP is
+                                // untouched (loads reset current = max anyway).
+                                drop(quests);
+                                let player_entity = self
+                                    .world
+                                    .borrow::<UniqueView<PlayerInfo>>()
+                                    .unwrap()
+                                    .entity_id;
+                                self.world.run(
+                                    |mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
+                                        if let Ok(max) = (&mut v_max).get(player_entity) {
+                                            max.hit_points += TANK_HP_BONUS as u32;
+                                        }
+                                    },
+                                );
+                            }
+                            _ => {}
+                        }
+                        info!(
+                            "O/S trait acquired: {} ({}){}",
+                            trait_id,
+                            trait_name(trait_id),
+                            live_effect_note(trait_id)
+                                .map(|n| format!(" - {}", n))
+                                .unwrap_or_default()
+                        );
                     }
                 }
 

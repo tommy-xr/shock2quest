@@ -323,6 +323,9 @@ export interface PlayerStats {
   cyber_modules: number;
   /** Highest psi tier unlocked at a psi trainer (0..=5, sequential). */
   psi_tier: number;
+  /** O/S upgrade traits acquired at trait machines, by retail trait id
+   * (1..=16, TRAITS.STR order), in acquisition order; at most 4. */
+  os_traits: number[];
 }
 
 export interface FrameSnapshot {
