@@ -22,14 +22,29 @@ use crate::scripts::{Effect, MessagePayload, script_util::send_to_all_switch_lin
 const PANEL_W: f32 = 188.0;
 const PANEL_H: f32 = 296.0;
 
-/// Transcript layout on the panel (`shkemail.cpp` text rect ~ (15,105,136,175)).
-const BODY_TOP: f32 = 128.0;
+/// Layout per the original reader (`shkemail.cpp`): portrait at (15,13),
+/// deck icon at (83,13) (58x84 / 68x84 native art), header + word-wrapped
+/// transcript in the text rect (15,105,136x175), scroll column at x=159
+/// (pgup y=174, pgdn y=203).
+const PORTRAIT_POS: (f32, f32) = (15.0, 13.0);
+const PORTRAIT_SIZE: (f32, f32) = (58.0, 84.0);
+const ICON_POS: (f32, f32) = (83.0, 13.0);
+const ICON_SIZE: (f32, f32) = (68.0, 84.0);
+const TEXT_X: f32 = 15.0;
+const TEXT_W: f32 = 136.0;
+/// The header (sender/date) draws at the top of the text rect...
+const HEADER_TOP: f32 = 105.0;
+const HEADER_LINES: usize = 2;
 const LINE_H: f32 = 11.0;
-/// Lines visible per page in the ~152px transcript window below the header.
+/// ...and the transcript flows below it: (175 - 2*11) / 11 = 13 lines/page.
+const BODY_TOP: f32 = HEADER_TOP + HEADER_LINES as f32 * LINE_H;
 const PAGE_LINES: usize = 13;
-/// Approx characters per transcript line at the 136px rect width (mainfont is
+const SCROLL_X: f32 = 159.0;
+const PGUP_Y: f32 = 174.0;
+const PGDN_Y: f32 = 203.0;
+/// Approx characters per line at the 136px rect width (mainfont is
 /// variable-width; this is a conservative greedy-wrap budget).
-const BODY_WRAP: usize = 30;
+const BODY_WRAP: usize = 26;
 const NAME_WRAP: usize = 26;
 
 /// `PropLog` bitmask fields decode as `trailing_zeros + 1`, so a zero (unset)
@@ -106,19 +121,23 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             if let Some(portrait) = &data.portrait {
                 components.push(
                     gui::image(&format!("{}.pcx", portrait.to_ascii_lowercase()))
-                        .with_position(vec2(15.0, 13.0))
-                        .with_size(vec2(58.0, 84.0)),
+                        .with_position(vec2(PORTRAIT_POS.0, PORTRAIT_POS.1))
+                        .with_size(vec2(PORTRAIT_SIZE.0, PORTRAIT_SIZE.1)),
                 );
             }
             if let Some(icon) = &data.icon {
                 components.push(
                     gui::image(&format!("{}.pcx", icon.to_ascii_lowercase()))
-                        .with_position(vec2(120.0, 13.0))
-                        .with_size(vec2(40.0, 40.0)),
+                        .with_position(vec2(ICON_POS.0, ICON_POS.1))
+                        .with_size(vec2(ICON_SIZE.0, ICON_SIZE.1)),
                 );
             }
             if let Some(name) = &data.name {
-                for (idx, line) in wrap_text(name, NAME_WRAP).iter().take(2).enumerate() {
+                for (idx, line) in wrap_text(name, NAME_WRAP)
+                    .iter()
+                    .take(HEADER_LINES)
+                    .enumerate()
+                {
                     // Blank lines keep their slot for spacing but must not
                     // become components - an empty string panics the glyph
                     // mesh builder (`SceneObject::screen_space_text`).
@@ -127,8 +146,8 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
                     }
                     components.push(
                         gui::text(line)
-                            .with_position(vec2(15.0, 100.0 + idx as f32 * LINE_H))
-                            .with_size(vec2(158.0, LINE_H)),
+                            .with_position(vec2(TEXT_X, HEADER_TOP + idx as f32 * LINE_H))
+                            .with_size(vec2(TEXT_W, LINE_H)),
                     );
                 }
             }
@@ -141,8 +160,8 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
                     }
                     components.push(
                         gui::text(line)
-                            .with_position(vec2(15.0, BODY_TOP + idx as f32 * LINE_H))
-                            .with_size(vec2(140.0, LINE_H)),
+                            .with_position(vec2(TEXT_X, BODY_TOP + idx as f32 * LINE_H))
+                            .with_size(vec2(TEXT_W, LINE_H)),
                     );
                 }
             }
@@ -152,13 +171,13 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         components.push(
             gui::button(MediaGuiMsg::PageUp)
                 .with_image("pgup0.pcx")
-                .with_position(vec2(159.0, 190.0))
+                .with_position(vec2(SCROLL_X, PGUP_Y))
                 .with_size(vec2(18.0, 26.0)),
         );
         components.push(
             gui::button(MediaGuiMsg::PageDown)
                 .with_image("pgdn0.pcx")
-                .with_position(vec2(159.0, 222.0))
+                .with_position(vec2(SCROLL_X, PGDN_Y))
                 .with_size(vec2(18.0, 26.0)),
         );
 
