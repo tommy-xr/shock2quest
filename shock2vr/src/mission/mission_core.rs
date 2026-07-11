@@ -2727,6 +2727,22 @@ impl MissionCore {
                     );
                 }
 
+                Effect::GrantTourReward { career, year, tour } => {
+                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let applied = quests
+                        .player_stats_mut()
+                        .apply_tour_reward(career, year, tour);
+                    if applied {
+                        info!(
+                            "Applied training-tour reward ({:?} year {} tour {}): {:?}",
+                            career,
+                            year,
+                            tour,
+                            quests.player_stats()
+                        );
+                    }
+                }
+
                 Effect::SetAIProperty { entity_id, update } => {
                     // The AI may have been destroyed earlier in this same
                     // effect batch (e.g. a scripted sequence whose final

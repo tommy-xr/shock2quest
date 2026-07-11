@@ -1,8 +1,8 @@
-use dark::properties::{PropDestLevel, PropDestLoc, QuestBitValue};
+use dark::properties::{PropCharGenRo, PropDestLevel, PropDestLoc, QuestBitValue};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 use tracing::info;
 
-use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
+use crate::{career::Career, physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{Effect, MessagePayload, Script};
 
@@ -38,6 +38,34 @@ impl ChooseMissionScript {
             quest_bit_value: QuestBitValue::COMPLETE,
         }
     }
+
+    /// The reward effect for completing this tour: the current career (from the
+    /// persisted career bit) + the training year being completed (`current_year`,
+    /// 1..=3) + the tour index `P$CharGenRo` carried by the tour marker
+    /// (`entity_id`). `Effect::NoEffect` when no career is set or the marker
+    /// lacks a tour index. The grant is applied at most once per training year
+    /// (see `PlayerStats::apply_tour_reward`).
+    fn grant_reward_effect(world: &World, entity_id: EntityId, current_year: u32) -> Effect {
+        let career = {
+            let quest_info = world.borrow::<UniqueView<QuestInfo>>().unwrap();
+            Career::from_quest_info(&quest_info)
+        };
+        let Some(career) = career else {
+            return Effect::NoEffect;
+        };
+        let tour = world
+            .borrow::<View<PropCharGenRo>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|c| c.0));
+        let Some(tour) = tour else {
+            return Effect::NoEffect;
+        };
+        Effect::GrantTourReward {
+            career,
+            year: current_year,
+            tour: tour.max(0) as u32,
+        }
+    }
 }
 
 impl Script for ChooseMissionScript {
@@ -50,22 +78,34 @@ impl Script for ChooseMissionScript {
     ) -> Effect {
         match msg {
             MessagePayload::TurnOn { from: _ } => {
-                // Get current training year and increment it
+                // Get current training year and increment it. `current_year` is
+                // the year the player just completed (1..=3): the first tour
+                // fires with no `training_year_*` bit set (current 1 -> new 2),
+                // the second with `_2` set (current 2 -> new 3), the third with
+                // `_2`+`_3` (current 3 -> new 4 = deploy). NB: `training_year_1`
+                // is never authored - the counter starts at `_2`.
                 let current_year = Self::get_current_year(world);
                 let new_year = current_year + 1;
 
                 // Create effect to set the new year quest bit
                 let set_year_effect = Self::set_training_year(new_year);
 
+                // Grant this tour's stat/skill reward for (career, completed
+                // year, tour index). Applies at most once per training year.
+                let grant_effect = Self::grant_reward_effect(world, entity_id, current_year);
+
                 if new_year < 4 {
                     info!(
                         "ChooseMission: Handling year {} (< 4), returning to station.mis",
                         new_year
                     );
-                    // For years 1, 2, 3: only teleport to PropDestLoc (stay in current mission)
+                    // For years 1, 2: loop back to station.mis for the next tour.
+                    // The transition uses the level's default spawn (loc: None);
+                    // the marker's PropDestLoc is only used on the final deploy.
 
                     Effect::Multiple(vec![
                         set_year_effect,
+                        grant_effect,
                         Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
                             level_file: "station.mis".to_string(),
                             loc: None,
@@ -85,6 +125,7 @@ impl Script for ChooseMissionScript {
 
                     Effect::Multiple(vec![
                         set_year_effect,
+                        grant_effect,
                         Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
                             level_file,
                             loc: dest_loc,
