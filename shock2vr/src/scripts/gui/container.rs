@@ -214,14 +214,7 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // VR: a grab into the hand). Anything else gets its own Frob
             // (use) action, e.g. a hypo consumes.
             ContainerGuiMsg::Frob(ent) => {
-                let is_weapon = world
-                    .borrow::<View<dark::properties::PropPlayerGun>>()
-                    .map(|v| v.get(*ent).is_ok())
-                    .unwrap_or(false)
-                    || world
-                        .borrow::<View<dark::properties::PropLimbModel>>()
-                        .map(|v| v.get(*ent).is_ok())
-                        .unwrap_or(false);
+                let is_weapon = crate::virtual_hand::is_wieldable_weapon(world, *ent);
                 if is_weapon {
                     (
                         state.clone(),

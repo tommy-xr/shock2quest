@@ -346,6 +346,18 @@ pub struct DebugUiState {
     /// The top-docked inventory strip (Tab metagame mode): the player's
     /// carried items as labeled elements. `Some` exactly in "use" mode.
     pub strip: Option<DebugUiPanel>,
+    /// The item held on the cursor mid-drag (the original's "cursor IS the
+    /// item", §2.4). `Some` between a lift and the place/throw that clears it.
+    pub cursor: Option<DebugUiCursor>,
+}
+
+/// The item currently riding the cursor (a lifted inventory item): its runtime
+/// entity id and symbolic name, so tests can assert lift/place/throw state.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugUiCursor {
+    /// Runtime entity id of the held item (NOT stable across runs).
+    pub entity_id: i32,
+    pub label: Option<String>,
 }
 
 /// The open flat-mode MFD panel: which entity it is bound to and its element
@@ -555,6 +567,7 @@ pub trait DebuggableScene {
             mode: "shooter".to_string(),
             active_panel: None,
             strip: None,
+            cursor: None,
         }
     }
 
