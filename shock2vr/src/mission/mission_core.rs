@@ -961,9 +961,10 @@ impl MissionCore {
         // processed this frame.
         if game_options.presentation_mode == crate::PresentationMode::Flat {
             // Expose the AMMOFULL ammo-cycle button for hit-testing exactly when
-            // the flat HUD draws it (use mode + a multi-ammo weapon wielded).
+            // the flat HUD draws it (the shared visibility predicate, so the
+            // clickable rect never diverges from the rendered button).
             let ammo_button =
-                if self.flat_use_mode && crate::hud::can_cycle_wielded_ammo(&self.world) {
+                if crate::hud::ammo_cycle_button_visible(&self.world, self.flat_use_mode) {
                     Some(crate::hud::AMMO_CYCLE_BUTTON)
                 } else {
                     None

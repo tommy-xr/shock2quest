@@ -281,7 +281,8 @@ pub(crate) fn create_flat_hud(
         get_wielded_ammo(world),
         get_wielded_ammo_icon(world),
         get_wielded_ammo_type(world),
-        can_cycle_wielded_ammo(world),
+        // The same predicate the pointer hit-test uses, so drawn == clickable.
+        ammo_cycle_button_visible(world, use_mode),
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
@@ -300,6 +301,20 @@ pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
         return false;
     };
     crate::scripts::script_util::ordered_projectile_links(world, weapon).len() >= 2
+}
+
+/// The single source of truth for whether the AMMOFULL ammo-cycle button is
+/// shown/active this frame - used for BOTH rendering (via `create_flat_hud`'s
+/// `can_cycle_ammo`) and pointer hit-testing (`mission_core`), so the drawn and
+/// clickable regions never diverge. Requires use mode, a wielded gun with a
+/// clip (`get_wielded_ammo`), 2+ ammo types, and no psi-amp display (which
+/// replaces the ammo section - `build_flat_hud_canvas`'s psi-power early
+/// return).
+pub(crate) fn ammo_cycle_button_visible(world: &World, use_mode: bool) -> bool {
+    use_mode
+        && get_wielded_psi_power(world).is_none()
+        && get_wielded_ammo(world).is_some()
+        && can_cycle_wielded_ammo(world)
 }
 
 #[cfg(test)]

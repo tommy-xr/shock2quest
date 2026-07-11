@@ -403,6 +403,10 @@ impl FlatUiHost {
         let over_panel = panel_rect
             .map(|r| r.contains(canvas_pos) || close_button_canvas_rect(r).contains(canvas_pos))
             .unwrap_or(false);
+        let over_ammo = self
+            .ammo_cycle_rect
+            .map(|r| r.contains(canvas_pos))
+            .unwrap_or(false);
 
         // --- Cursor-is-the-item drag: while an item rides the cursor, LMB
         // places/swaps/throws it and never routes to a GuiScript (protecting
@@ -439,8 +443,10 @@ impl FlatUiHost {
                 }
                 return (Vec::new(), Vec::new());
             }
-            if over_panel {
-                // Escape hatch: a click on an open MFD keeps the held item.
+            if over_panel || over_ammo {
+                // Escape hatch: a click on an open MFD or the AMMOFULL cycle
+                // button keeps the held item (a visible button must not throw
+                // the item you're carrying).
                 return (Vec::new(), Vec::new());
             }
             // Bare 3D view: throw the held item along the view ray.
@@ -1352,6 +1358,20 @@ mod tests {
         // Cleared when not shown.
         host.set_ammo_cycle_button(None);
         assert!(host.ammo_cycle_debug().is_none());
+    }
+
+    #[test]
+    fn clicking_the_ammo_button_while_holding_keeps_the_item() {
+        // A visible button must not throw the item you're carrying: clicking
+        // the ammo-cycle button mid-drag protects the held item (no throw, no
+        // cycle) rather than treating it as a bare-view throw.
+        let (world, mut host, _wrench, _inv) = drag_world();
+        host.set_ammo_cycle_button(Some(Rect::new(564.0, 429.0, 12.0, 41.0)));
+        press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
+        assert!(host.cursor_debug().is_some());
+        let actions = press_edge(&mut host, &world, (570.0, 449.0)); // click the ammo button
+        assert!(actions.is_empty(), "the click neither throws nor cycles");
+        assert!(host.cursor_debug().is_some(), "the held item is protected");
     }
 
     #[test]
