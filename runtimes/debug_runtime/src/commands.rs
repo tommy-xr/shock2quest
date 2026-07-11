@@ -125,6 +125,12 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Option<EntityDetailResult>>,
     },
 
+    /// Get animation playback state + posed skeleton for an entity
+    AnimationState {
+        id: i32,
+        reply: oneshot::Sender<Option<shock2vr::game_scene::DebugAnimationState>>,
+    },
+
     /// Inject a script message into a specific entity (damage, frob, signal)
     SendEntityMessage {
         id: i32,

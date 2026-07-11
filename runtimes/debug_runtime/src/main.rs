@@ -272,6 +272,7 @@ async fn start_http_server(
             "/v1/entities/:id/message",
             axum::routing::post(send_entity_message),
         )
+        .route("/v1/entities/:id/animation", get(get_animation_state))
         .route("/v1/player/position", get(get_player_position))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
         .route(
@@ -329,6 +330,9 @@ async fn start_http_server(
     info!("  GET  /v1/entities         - List entities with optional limit and filter");
     info!("  GET  /v1/entities/{{id}}    - Get detailed entity information");
     info!("  POST /v1/entities/{{id}}/message - Inject a script message (damage/frob/signal)");
+    info!(
+        "  GET  /v1/entities/{{id}}/animation - Animation playback state + posed skeleton (world-space joints)"
+    );
     info!("  GET  /v1/player/position  - Get current player position");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates (raw, unbounded)");
     info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
@@ -1302,6 +1306,17 @@ fn process_command(
                 tracing::warn!("Failed to send entity detail - receiver dropped");
             }
         }
+        RuntimeCommand::AnimationState { id, reply } => {
+            let result = game.debug_scene().and_then(|debug_scene| {
+                // Same id space as /v1/entities (`EntityId::inner() as i32`).
+                EntityId::from_inner(id as u64)
+                    .and_then(|entity_id| debug_scene.animation_state(entity_id))
+            });
+
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send animation state - receiver dropped");
+            }
+        }
         RuntimeCommand::SendEntityMessage { id, message, reply } => {
             // The list/detail endpoints expose `EntityId::inner() as i32`, which
             // for a live entity is `index + 1`. `from_inner` is the exact
@@ -2046,6 +2061,30 @@ async fn get_entity_detail(
         Ok(result) => Json(result),
         Err(_) => {
             tracing::error!("Failed to receive entity detail - sender dropped");
+            Json(None)
+        }
+    }
+}
+
+/// Get animation playback state + world-space posed skeleton for an entity
+async fn get_animation_state(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Path(id): Path<i32>,
+) -> Json<Option<shock2vr::game_scene::DebugAnimationState>> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::AnimationState {
+        id,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send AnimationState command - game loop receiver dropped");
+        return Json(None);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive animation state - sender dropped");
             Json(None)
         }
     }

@@ -29,6 +29,33 @@ struct BlendState {
     elapsed: f32,
 }
 
+/// Read-only snapshot of an `AnimationPlayer`'s playback state, for debug
+/// introspection (the debug runtime's animation endpoint).
+pub struct AnimationPlayerSnapshot {
+    /// Queued clips, head (currently playing) first.
+    pub queue: Vec<AnimationQueueEntry>,
+    /// Clip whose final frame poses the skeleton once the queue drains.
+    pub last_clip: Option<String>,
+    /// Current frame within the head clip.
+    pub current_frame: u32,
+    /// Sub-frame time carried toward the next frame advance (seconds).
+    pub remaining_time: f32,
+    pub blend: Option<AnimationBlendSnapshot>,
+}
+
+pub struct AnimationQueueEntry {
+    pub name: Option<String>,
+    pub num_frames: u32,
+    pub looping: bool,
+}
+
+pub struct AnimationBlendSnapshot {
+    pub from_clip: Option<String>,
+    pub from_frame: f32,
+    pub duration: f32,
+    pub elapsed: f32,
+}
+
 #[derive(Clone)]
 pub struct AnimationPlayer {
     animation: immutable::List<(Rc<AnimationClip>, AnimationFlags)>,
@@ -341,6 +368,35 @@ impl AnimationPlayer {
                     velocity,
                 )
             }
+        }
+    }
+
+    pub fn snapshot(&self) -> AnimationPlayerSnapshot {
+        AnimationPlayerSnapshot {
+            queue: self
+                .animation
+                .iter()
+                .map(|(clip, flags)| AnimationQueueEntry {
+                    name: clip.name.clone(),
+                    num_frames: clip.num_frames,
+                    looping: matches!(flags, AnimationFlags::Loop),
+                })
+                .collect(),
+            last_clip: self
+                .last_animation
+                .as_ref()
+                .and_then(|clip| clip.name.clone()),
+            current_frame: self.current_frame,
+            remaining_time: self.remaining_time,
+            blend: self
+                .blend_state
+                .as_ref()
+                .map(|blend| AnimationBlendSnapshot {
+                    from_clip: blend.from_clip.name.clone(),
+                    from_frame: blend.from_frame,
+                    duration: blend.duration,
+                    elapsed: blend.elapsed,
+                }),
         }
     }
 

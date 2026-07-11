@@ -295,6 +295,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.entity_detail(id)
     }
 
+    fn animation_state(&self, id: EntityId) -> Option<crate::game_scene::DebugAnimationState> {
+        self.mission_core.animation_state(id)
+    }
+
     fn raycast(
         &self,
         start: cgmath::Point3<f32>,

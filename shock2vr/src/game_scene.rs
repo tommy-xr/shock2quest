@@ -383,6 +383,51 @@ pub struct DebugUiElement {
     pub screen_rect: [f32; 4],
 }
 
+/// Animation playback state + posed skeleton for one entity, sampled at the
+/// current frame. Joint positions are world-space, so stepping the simulation
+/// and diffing successive snapshots measures pose continuity directly (a
+/// single-frame spike across many joints = a seam pop).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugAnimationState {
+    pub entity_id: i32,
+    /// Currently playing clip (queue head), `None` when the queue is empty.
+    pub clip: Option<String>,
+    pub frame: u32,
+    pub num_frames: u32,
+    pub looping: bool,
+    /// Sub-frame time carried toward the next frame advance (seconds).
+    pub remaining_time: f32,
+    /// Clips queued behind the head, in play order.
+    pub queue: Vec<DebugAnimationQueueEntry>,
+    /// Clip whose final frame poses the skeleton while the queue is empty.
+    pub last_clip: Option<String>,
+    pub blend: Option<DebugAnimationBlend>,
+    /// Entity world position / rotation (the pose the joints are composed with).
+    pub position: [f32; 3],
+    pub rotation: [f32; 4], // quaternion [x, y, z, w]
+    /// World-space joint positions (fixed 40-slot skeleton; unused slots track
+    /// the entity transform).
+    pub joints: Vec<[f32; 3]>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugAnimationQueueEntry {
+    pub name: Option<String>,
+    pub num_frames: u32,
+    pub looping: bool,
+}
+
+/// An in-flight crossfade from a previous clip's pose.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugAnimationBlend {
+    pub from_clip: Option<String>,
+    pub from_frame: f32,
+    pub duration: f32,
+    pub elapsed: f32,
+    /// Blend progress 0..1 (0 = fully the old pose).
+    pub alpha: f32,
+}
+
 /// A level-transition trigger (a `TrapTripLevel` tripwire / bulkhead): where it
 /// leads (`dest_level` + optional spawn `dest_loc`) and its world `position`, so
 /// a tester can teleport into its volume and let the real trigger fire the
@@ -429,6 +474,12 @@ pub trait DebuggableScene {
     /// # Returns
     /// Detailed entity information, or None if entity doesn't exist
     fn entity_detail(&self, id: EntityId) -> Option<DebugEntityDetail>;
+
+    /// Animation playback state + world-space posed skeleton for an entity
+    ///
+    /// Returns None when the entity has no animation player (non-animated
+    /// entities). See [`DebugAnimationState`].
+    fn animation_state(&self, id: EntityId) -> Option<DebugAnimationState>;
 
     /// Perform a physics raycast for debugging
     ///
