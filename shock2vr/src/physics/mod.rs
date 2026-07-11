@@ -151,8 +151,10 @@ fn try_step_up(
     let (_, hit) = cast(&planted, -Vector::y(), step_height)?;
     let lift = step_height - hit.time_of_impact;
     // Too small to matter (the rounded capsule bottom slides over it anyway),
-    // or a downward/steep landing normal (not a tread).
-    if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.7 {
+    // or a downward/steep landing normal (not a tread). The threshold sits
+    // just above cos(45 deg) so the probe can't hop up slopes the controller's
+    // slope limit (default 45 deg) refuses to walk.
+    if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.72 {
         return None;
     }
     Some(Vector::y() * lift + dir * forward)
@@ -1006,7 +1008,10 @@ impl PhysicsWorld {
 
         controller.offset = CharacterLength::Absolute(PLAYER_CONTACT_OFFSET / SCALE_FACTOR);
         // Walking down stairs stays grounded (snapped onto the next tread)
-        // instead of chaining micro-falls. Stepping UP is handled by an
+        // instead of chaining micro-falls. Deliberate tradeoff: this also
+        // absorbs any intended drop up to the step height (the player glues
+        // to <= 2 ft ledges rather than falling) - revisit when gravity
+        // becomes an integrated velocity. Stepping UP is handled by an
         // explicit probe in `move_player` (see `try_step_up`) - rapier's
         // built-in autostep needs a wall-classified contact, but a capsule
         // touching a step edge above its bottom-sphere center reads as a
@@ -1198,12 +1203,17 @@ impl PhysicsWorld {
                 &self.collider_set,
                 climb_filter,
             );
+            // Broad-phase candidate query: the capsule's bounds inflated by
+            // CLIMB_REACH on x/z only (a cuboid, so the reach stays horizontal
+            // - inflating the capsule radius would also extend the caps
+            // vertically and grip ladders from above/below their ends).
             character_shape.as_capsule().and_then(|capsule| {
-                let inflated = Capsule::new(
-                    capsule.segment.a,
-                    capsule.segment.b,
+                let half_height = capsule.half_height() + capsule.radius;
+                let inflated = Cuboid::new(vector![
                     capsule.radius + CLIMB_REACH,
-                );
+                    half_height,
+                    capsule.radius + CLIMB_REACH
+                ]);
                 // Grip the closest climbable within reach, by contact distance,
                 // and take the contact's *face normal* as the climb direction.
                 // (The collider-center direction is wrong when the player is
@@ -1255,8 +1265,10 @@ impl PhysicsWorld {
                 movement,
                 |_c| (),
             );
-            // Stairs: if walking was blocked, probe for a step and hop onto it.
-            if climb_movement.is_none() {
+            // Stairs: if grounded walking was blocked, probe for a step and
+            // hop onto it. (Grounded-only: an airborne player pressed against
+            // a wall must not ratchet up ledges.)
+            if climb_movement.is_none() && mvt.grounded {
                 if let Some(step) = try_step_up(
                     &queries,
                     character_shape.as_ref(),
