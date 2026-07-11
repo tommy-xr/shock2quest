@@ -10,7 +10,7 @@ pub mod scenes;
 pub mod teleport;
 pub mod time;
 
-mod career;
+pub mod career;
 mod creature;
 mod flat_player_controller;
 mod gui;
@@ -22,6 +22,7 @@ pub mod palette;
 pub mod pathfinding;
 pub mod paths;
 mod physics;
+pub mod player_stats;
 mod psi;
 mod quest_info;
 mod runtime_props;
@@ -243,6 +244,10 @@ pub struct PlayerStateSnapshot {
     /// The gamesys names of the currently active sustained psi powers (e.g.
     /// "Inviso"), in activation order. Empty when none are active.
     pub active_psi_powers: Vec<String>,
+    /// The player's persistent character sheet (primary stats, skills, mastered
+    /// psi disciplines), accumulated from career + training tours. `None` when
+    /// the scene has no `QuestInfo` (e.g. a menu). See `crate::player_stats`.
+    pub stats: Option<crate::player_stats::PlayerStats>,
 }
 
 impl Game {
@@ -324,6 +329,10 @@ impl Game {
                 .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
                 .map(|active| active.0.iter().map(|p| p.name.clone()).collect())
                 .unwrap_or_default(),
+            stats: world
+                .borrow::<UniqueView<QuestInfo>>()
+                .ok()
+                .map(|q| q.player_stats().clone()),
         })
     }
 

@@ -21,13 +21,20 @@ import type { Vec3 } from "../src/types.js";
 // characterization test: it must PASS on `main` and encodes the flow as a
 // permanent regression net.
 //
-// Two assertions deliberately pin CURRENT (buggy) behavior so they FLIP when the
-// underlying issue is fixed:
-//   * #453 - training tours grant NO stat changes. We assert hp/psi are
-//     UNCHANGED across the tours; flip to "increases" when #453 lands.
-//   * #454 (FIXED) - post-career station arrival now spawns at the designed
-//     recruit-deck spot (81.78,-3.6,16.54) rather than the world origin. We
-//     assert the designed spot (within ~3 units, allowing physics settle).
+// #453 (LANDED): training tours now grant stats/skills per the (career, year,
+// tour) reward table mirroring CHARGEN.STR. This test's Marine chain fires tour
+// marker 125 (P$CharGenRo = tour 0) once per year, so it applies the tour-0
+// grant of each Marine year: Y1 Mission1 (+2 STR), Y2 Mission4 (+1 Energy
+// Weapons, +1 Cyber Affinity), Y3 Mission7 (+1 Maintenance). We assert each
+// grant as it lands and the cumulative sheet surviving the deploy to MedSci1
+// (and a save/load round-trip mid-flow). These assertions read
+// `info.player.stats`, which did not exist before #453 - the pre-#453 runtime
+// reports no stats and applies no grants, so they fail on `main` (negative).
+//
+// #454 (FIXED): post-career station arrival spawns at the designed
+// recruit-deck spot (81.78,-3.6,16.54) - the StartLoc marker's own position -
+// rather than the world origin. We assert the designed spot (within ~3 units,
+// allowing physics settle).
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // Stable mission-data world positions (dark_query). These are the TRIPWIRE
@@ -102,6 +109,19 @@ test(
     // Marine loadout applied on the station load.
     assert.equal(info.player.max_hit_points, 45, "Marine deploys with 45 max HP");
     assert.equal(info.player.max_psi_points, 20, "Marine deploys with 20 max psi");
+
+    // #453: the persistent character sheet exists and starts at baseline (no
+    // tours completed yet). On `main` this field is absent, so `base` is
+    // null/undefined and every assertion below fails (the negative).
+    const base = info.player.stats;
+    assert.ok(base, "#453: player.stats should be present at station arrival");
+    assert.deepEqual(
+      base.granted_years,
+      [],
+      "#453: no training-year rewards applied before any tour",
+    );
+    const baseStr = base.strength;
+    const baseCyb = base.cyber_affinity;
     // #454 (fixed): post-career arrival lands at the designed recruit-deck spot
     // (the StartLoc marker's own position), not the world origin.
     const arrival = info.player.position;
@@ -119,32 +139,61 @@ test(
       )} (delta ${spawnDelta.toFixed(2)}u)`,
     );
 
-    // Step 2: tours 1 and 2 each set exactly the next training_year bit and loop
-    // back to station.mis. hp/psi must NOT change (#453).
-    const tours: { expected: string[] }[] = [
-      { expected: ["training_year_2"] },
-      { expected: ["training_year_2", "training_year_3"] },
-    ];
-    for (const [i, tour] of tours.entries()) {
-      await teleportTo(game, TOUR_TRIP);
-      await game.step({ frames: 20 });
-      info = await game.info();
-      assert.equal(
-        info.mission.toLowerCase(),
-        "station.mis",
-        `tour ${i + 1} (year < 4) should loop back to station.mis`,
-      );
-      assert.deepEqual(
-        await completeTrainingYears(game),
-        tour.expected,
-        `tour ${i + 1} should set exactly ${JSON.stringify(tour.expected)}`,
-      );
-      // #453: tours grant no stats today. Flip to an increase when #453 is fixed.
-      assert.equal(info.player.max_hit_points, 45, `#453: tour ${i + 1} must not change max HP`);
-      assert.equal(info.player.max_psi_points, 20, `#453: tour ${i + 1} must not change max psi`);
-    }
+    // Step 2: tours 1 and 2 each set exactly the next training_year bit, loop
+    // back to station.mis, and grant the tour-0 reward for that Marine year
+    // (#453). hp/psi are unchanged by these grants (they touch STR/skills), so
+    // the loadout stays 45/20 - the observable change is now in player.stats.
+    await teleportTo(game, TOUR_TRIP);
+    await game.step({ frames: 20 });
+    info = await game.info();
+    assert.equal(info.mission.toLowerCase(), "station.mis", "tour 1 (year < 4) should loop back to station.mis");
+    assert.deepEqual(
+      await completeTrainingYears(game),
+      ["training_year_2"],
+      "tour 1 should set exactly training_year_2",
+    );
+    // #453 Marine Y1 T0 (Mission1): +2 Strength.
+    assert.ok(info.player.stats, "player.stats present after tour 1");
+    assert.equal(info.player.stats.strength, baseStr + 2, "#453: tour 1 grants +2 Strength (Mission1)");
+    assert.deepEqual(info.player.stats.granted_years, [1], "tour 1 records year 1 granted");
+    assert.equal(info.player.max_hit_points, 45, "tour 1 leaves max HP unchanged (grant is STR)");
+    assert.equal(info.player.max_psi_points, 20, "tour 1 leaves max psi unchanged");
 
-    // Step 3: the third tour advances to year 4 and deploys to MedSci1.
+    await teleportTo(game, TOUR_TRIP);
+    await game.step({ frames: 20 });
+    info = await game.info();
+    assert.equal(info.mission.toLowerCase(), "station.mis", "tour 2 (year < 4) should loop back to station.mis");
+    assert.deepEqual(
+      await completeTrainingYears(game),
+      ["training_year_2", "training_year_3"],
+      "tour 2 should set training_year_2 + training_year_3",
+    );
+    // #453 Marine Y2 T0 (Mission4): +1 Energy Weapons, +1 Cyber Affinity.
+    assert.ok(info.player.stats, "player.stats present after tour 2");
+    assert.equal(info.player.stats.strength, baseStr + 2, "STR from tour 1 carries into tour 2");
+    assert.equal(info.player.stats.skills.energy_weapons, 1, "#453: tour 2 grants +1 Energy Weapons (Mission4)");
+    assert.equal(info.player.stats.cyber_affinity, baseCyb + 1, "#453: tour 2 grants +1 Cyber Affinity (Mission4)");
+    assert.deepEqual(info.player.stats.granted_years, [1, 2], "tour 2 records years 1+2 granted");
+
+    // Save/load leg: persist mid-flow (after year 2) and reload in the same
+    // runtime; the accumulated stats must survive the round-trip byte-for-byte.
+    const statsBeforeSave = info.player.stats;
+    const saveName = `station_flow_453_${Date.now()}`;
+    await game.save(saveName);
+    await game.load(saveName);
+    await game.step({ frames: 5 });
+    info = await game.info();
+    assert.equal(info.mission.toLowerCase(), "station.mis", "load restores station.mis");
+    assert.ok(info.player.stats, "player.stats present after load");
+    assert.deepEqual(
+      info.player.stats,
+      statsBeforeSave,
+      "#453: the character sheet survives save/load unchanged",
+    );
+
+    // Step 3: the third tour advances to year 4, grants the Marine Y3 T0 reward
+    // (Mission7: +1 Maintenance), and deploys to MedSci1 - stats survive the
+    // level transition.
     await teleportTo(game, TOUR_TRIP);
     await game.step({ frames: 20 });
     info = await game.info();
@@ -158,10 +207,17 @@ test(
       ["training_year_2", "training_year_3", "training_year_4"],
       "all three training years should be complete after deploying",
     );
-    // Career and loadout survive the whole chain unchanged (#453 keeps stats flat).
+    // Career and loadout survive the whole chain.
     assert.equal(await game.quests.get("career_marine"), "complete", "Marine career should survive deploy");
     assert.equal(info.player.max_hit_points, 45, "Marine max HP should survive deploy");
     assert.equal(info.player.max_psi_points, 20, "Marine max psi should survive deploy");
+    // #453: the cumulative Marine tour-0 sheet survives the deploy into MedSci1.
+    assert.ok(info.player.stats, "player.stats present at MedSci1");
+    assert.equal(info.player.stats.strength, baseStr + 2, "cumulative +2 STR at MedSci1 (Mission1)");
+    assert.equal(info.player.stats.cyber_affinity, baseCyb + 1, "cumulative +1 Cyber Affinity at MedSci1 (Mission4)");
+    assert.equal(info.player.stats.skills.energy_weapons, 1, "cumulative +1 Energy Weapons at MedSci1 (Mission4)");
+    assert.equal(info.player.stats.skills.maintenance, 1, "#453: tour 3 grants +1 Maintenance (Mission7)");
+    assert.deepEqual(info.player.stats.granted_years, [1, 2, 3], "all three years granted at MedSci1");
     assert.ok(
       info.player.position.every(Number.isFinite),
       `deploy position should be finite, got ${JSON.stringify(info.player.position)}`,

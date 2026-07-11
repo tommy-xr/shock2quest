@@ -12,8 +12,14 @@ use super::{Effect, GlobalEffect, MessagePayload, Script};
 ///
 /// The three career-choice markers in `earth.mis` (`SendToMarines` and its two
 /// unnamed siblings) carry this script plus a `P$Service` value (0 = Marine,
-/// 1 = Navy, 2 = OSA) and a `P$DestLevel`/`P$DestLoc` transition target. A
-/// tripwire `TurnOn`s the marker matching the branch the player walked into; on
+/// 1 = Navy, 2 = OSA) and a `P$DestLevel`/`P$DestLoc` transition target.
+///
+/// NB retail data misnomer: `earth.mis` obj 609 is *named* `SendToMarines` but
+/// carries `P$Service = 1` (= Navy), verified against `MISC.STR` + the banner
+/// geometry. The engine follows `P$Service`, not the name, so this marker
+/// correctly enlists the player in the Navy - do not "fix" the name.
+///
+/// A tripwire `TurnOn`s the marker matching the branch the player walked into; on
 /// that message this script persists the chosen career as a quest bit - so the
 /// career loadout applies to the player on every subsequent mission load (see
 /// `crate::career` + `MissionCore::load`) - and then transitions to the marker's
