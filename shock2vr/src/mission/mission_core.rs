@@ -9,8 +9,8 @@ use std::{
 
 use cgmath::{EuclideanSpace, Zero};
 use cgmath::{
-    InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, SquareMatrix, Transform, Vector2,
-    Vector3, num_traits::ToPrimitive, vec3,
+    InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Rotation, Rotation3, SquareMatrix, Transform,
+    Vector2, Vector3, num_traits::ToPrimitive, vec3,
 };
 
 use crate::SpawnLocation;
@@ -4375,6 +4375,94 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         }
 
         entities
+    }
+
+    fn animation_state(&self, id: EntityId) -> Option<crate::game_scene::DebugAnimationState> {
+        use crate::game_scene::{
+            DebugAnimationBlend, DebugAnimationQueueEntry, DebugAnimationState,
+        };
+        use shipyard::*;
+
+        let snapshot = self.id_to_animation_player.get(&id)?.snapshot();
+
+        let (transform, joint_transforms) = self.world.run(
+            |v_transform: View<crate::runtime_props::RuntimePropTransform>,
+             v_joints: View<crate::runtime_props::RuntimePropJointTransforms>| {
+                (
+                    v_transform.get(id).ok().map(|t| t.0),
+                    v_joints.get(id).ok().map(|j| j.0),
+                )
+            },
+        );
+
+        let transform = transform.unwrap_or_else(Matrix4::identity);
+        let position = [transform.w.x, transform.w.y, transform.w.z];
+        // The transform is translation * rotation * scale (PropScale, possibly
+        // non-uniform), so the basis columns must be normalized before the
+        // quaternion conversion - Quaternion::from assumes an orthonormal
+        // matrix and returns a different rotation for a scaled one.
+        let basis_x = vec3(transform.x.x, transform.x.y, transform.x.z).normalize();
+        let basis_y = vec3(transform.y.x, transform.y.y, transform.y.z).normalize();
+        let basis_z = vec3(transform.z.x, transform.z.y, transform.z.z).normalize();
+        let rotation_mat = Matrix3::from_cols(basis_x, basis_y, basis_z);
+        let rotation_quat = Quaternion::from(rotation_mat).normalize();
+        let rotation = [
+            rotation_quat.v.x,
+            rotation_quat.v.y,
+            rotation_quat.v.z,
+            rotation_quat.s,
+        ];
+
+        let joints = joint_transforms
+            .map(|joint_transforms| {
+                joint_transforms
+                    .iter()
+                    .map(|joint| {
+                        let world = transform * joint;
+                        [world.w.x, world.w.y, world.w.z]
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut queue = snapshot.queue;
+        let head = if queue.is_empty() {
+            None
+        } else {
+            Some(queue.remove(0))
+        };
+
+        Some(DebugAnimationState {
+            entity_id: id.inner() as i32,
+            clip: head.as_ref().and_then(|entry| entry.name.clone()),
+            frame: snapshot.current_frame,
+            num_frames: head.as_ref().map(|entry| entry.num_frames).unwrap_or(0),
+            looping: head.as_ref().map(|entry| entry.looping).unwrap_or(false),
+            remaining_time: snapshot.remaining_time,
+            queue: queue
+                .into_iter()
+                .map(|entry| DebugAnimationQueueEntry {
+                    name: entry.name,
+                    num_frames: entry.num_frames,
+                    looping: entry.looping,
+                })
+                .collect(),
+            last_clip: snapshot.last_clip,
+            blend: snapshot.blend.map(|blend| DebugAnimationBlend {
+                from_clip: blend.from_clip,
+                from_frame: blend.from_frame,
+                duration: blend.duration,
+                elapsed: blend.elapsed,
+                alpha: if blend.duration > f32::EPSILON {
+                    (blend.elapsed / blend.duration).clamp(0.0, 1.0)
+                } else {
+                    1.0
+                },
+            }),
+            position,
+            rotation,
+            joints,
+        })
     }
 
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
