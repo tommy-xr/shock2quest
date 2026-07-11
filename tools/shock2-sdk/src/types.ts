@@ -189,6 +189,38 @@ export interface PlayerSnapshot {
   /** The gamesys names of the active sustained psi powers (e.g. "Inviso"),
    * in activation order; empty when none. */
   active_psi_powers: string[];
+  /** The player's persistent character sheet (primary stats, trained skills,
+   * mastered psi disciplines), accumulated from career + station training
+   * tours; null when the scene has no player. */
+  stats: PlayerStats | null;
+}
+
+/** Trainable skill levels (weapon proficiencies + tech skills). */
+export interface SkillLevels {
+  standard_weapons: number;
+  energy_weapons: number;
+  heavy_weapons: number;
+  exotic_weapons: number;
+  hack: number;
+  repair: number;
+  modify: number;
+  maintenance: number;
+  research: number;
+}
+
+/** The player's persistent character sheet. Primary stats start at a baseline
+ * of 1 and skills at 0; station training tours raise them per the (career,
+ * year, tour) reward table. `psi_disciplines` lists OSA-mastered disciplines by
+ * display name; `granted_years` records which training years were applied. */
+export interface PlayerStats {
+  strength: number;
+  endurance: number;
+  agility: number;
+  psionic_ability: number;
+  cyber_affinity: number;
+  skills: SkillLevels;
+  psi_disciplines: string[];
+  granted_years: number[];
 }
 
 export interface FrameSnapshot {
