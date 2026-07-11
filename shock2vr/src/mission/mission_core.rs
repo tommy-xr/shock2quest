@@ -4260,17 +4260,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         let transform = transform.unwrap_or_else(Matrix4::identity);
         let position = [transform.w.x, transform.w.y, transform.w.z];
-        let rotation_mat = Matrix3::new(
-            transform.x.x,
-            transform.x.y,
-            transform.x.z,
-            transform.y.x,
-            transform.y.y,
-            transform.y.z,
-            transform.z.x,
-            transform.z.y,
-            transform.z.z,
-        );
+        // The transform is translation * rotation * scale (PropScale, possibly
+        // non-uniform), so the basis columns must be normalized before the
+        // quaternion conversion - Quaternion::from assumes an orthonormal
+        // matrix and returns a different rotation for a scaled one.
+        let basis_x = vec3(transform.x.x, transform.x.y, transform.x.z).normalize();
+        let basis_y = vec3(transform.y.x, transform.y.y, transform.y.z).normalize();
+        let basis_z = vec3(transform.z.x, transform.z.y, transform.z.z).normalize();
+        let rotation_mat = Matrix3::from_cols(basis_x, basis_y, basis_z);
         let rotation_quat = Quaternion::from(rotation_mat).normalize();
         let rotation = [
             rotation_quat.v.x,

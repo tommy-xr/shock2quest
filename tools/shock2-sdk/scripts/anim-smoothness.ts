@@ -269,6 +269,22 @@ async function main(): Promise<void> {
   const idleSamples = await captureSamples(game, target.id, CAPTURE_FRAMES, "idle");
   const idle = analyzePhase(idleSamples, { fps: FPS });
 
+  // The "idle" label is only honest if the AI stayed idle - it could have
+  // spotted the player and gone into locomotion/attack clips mid-capture.
+  const nonIdleClips = [
+    ...new Set(
+      idleSamples
+        .map((s) => s.clip)
+        .filter((clip): clip is string => clip !== null && !/idle/i.test(clip)),
+    ),
+  ];
+  const idleConfirmed = nonIdleClips.length === 0;
+  if (!idleConfirmed) {
+    console.error(
+      `WARNING: idle capture contains non-idle clips (${nonIdleClips.join(", ")}) - the AI was not idle; idle metrics are suspect.`,
+    );
+  }
+
   console.error("Forcing alertness and selecting a walker...");
   const walker = await selectWalker(game, candidates);
   console.error(`Walking target: runtime id ${walker.id}`);
@@ -289,7 +305,11 @@ async function main(): Promise<void> {
     captureFrames: CAPTURE_FRAMES,
     fps: FPS,
     phases: {
-      idle,
+      idle: {
+        ...idle,
+        idleConfirmed,
+        nonIdleClips,
+      },
       walking: {
         ...walking,
         locomotion: {

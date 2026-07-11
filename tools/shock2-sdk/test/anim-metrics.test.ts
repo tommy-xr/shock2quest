@@ -152,6 +152,19 @@ test("spikeThreshold is robust to the spikes themselves and floored", () => {
 
   // All-zero series: MAD and std collapse, floor wins.
   assert.equal(spikeThreshold(new Array(50).fill(0), 5, 0.1), 0.1);
+
+  // Seam pops on ~13% of frames (two-frame pop every 15 frames, the pipe
+  // hybrid stride rate) must not inflate the threshold past the pops - this
+  // is where a trimmed-mean threshold failed on the real baseline.
+  const strided: number[] = [];
+  for (let t = 0; t < 600; t++) {
+    strided.push(t % 15 <= 1 ? 2.0 : t % 2 === 0 ? 0 : 0.13);
+  }
+  const stridedThreshold = spikeThreshold(strided, 5, 0.1);
+  assert.ok(
+    stridedThreshold < 2.0,
+    `threshold ${stridedThreshold} must catch pops at 13% frame share`,
+  );
 });
 
 test("analyzePhase summary stats and rates", () => {

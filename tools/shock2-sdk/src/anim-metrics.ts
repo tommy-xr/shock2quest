@@ -13,6 +13,13 @@
  * exceeds a threshold are flagged as spikes and attributed to the clip
  * timeline: `clip-switch` (clip name changed), `loop-seam` (same clip
  * restarted), or `mid-clip`.
+ *
+ * Caveats: joints are the endpoint's fixed 40-slot skeleton, so unused slots
+ * (which track the entity transform, i.e. zero local motion) dilute the MEAN
+ * stats on sparse skeletons - max-based metrics and spike detection are
+ * unaffected. Root-relative space removes translation/rotation but not the
+ * entity's (constant) scale, so cross-entity comparisons of absolute
+ * magnitudes assume similar scales.
  */
 
 import type { AnimationState, Quat, Vec3 } from "./types.js";
@@ -272,9 +279,11 @@ function percentile(sorted: number[], p: number): number {
 
 /**
  * Spike threshold over the root-relative max-joint-displacement series:
- * mean + sigma * std computed over the values at or below p95 (so the seam
- * pops being hunted cannot inflate the threshold past themselves), floored
- * at `minSpike`.
+ * median + sigma * MAD (scaled to sigma-equivalent units), floored at
+ * `minSpike`. Median/MAD stay anchored to the typical frame even when seam
+ * pops occupy a large share of frames (a walk cycle seaming every ~15 frames
+ * with a two-frame pop is ~13% of samples - enough to inflate a trimmed-mean
+ * threshold past the very pops being hunted).
  */
 export function spikeThreshold(
   values: number[],
@@ -283,20 +292,20 @@ export function spikeThreshold(
 ): number {
   if (values.length === 0) return minSpike;
   const sorted = [...values].sort((a, b) => a - b);
-  const p95 = percentile(sorted, 0.95);
-  const trimmed = values.filter((v) => v <= p95);
-  const mean = trimmed.reduce((acc, v) => acc + v, 0) / trimmed.length;
-  const std = Math.sqrt(
-    trimmed.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) /
-      trimmed.length,
-  );
-  return Math.max(minSpike, mean + sigma * std);
+  const median = percentile(sorted, 0.5);
+  const deviations = values.map((v) => Math.abs(v - median)).sort((a, b) => a - b);
+  // 1.4826 scales MAD to the standard deviation of a normal distribution.
+  const mad = 1.4826 * percentile(deviations, 0.5);
+  return Math.max(minSpike, median + sigma * mad);
 }
 
 /**
- * Classify a spike at metric index `i` by the clip timeline. The pose can
- * update one sample after the queue-head bookkeeping changes (60 Hz sampling
- * of 30 fps clips), so the previous metric's transition also counts.
+ * Classify a spike at metric index `i` by the clip timeline. Seam pops span
+ * TWO adjacent frames (observed in baseline data): the pose jumps to a wrong
+ * pose on the transition frame, then jumps back to the new clip's pose on the
+ * next - so a spike one frame after a transition is still seam-caused and the
+ * previous metric's transition also counts. Tradeoff: a genuine mid-clip pop
+ * landing right after an unrelated transition is over-attributed to the seam.
  */
 function classifySpike(metrics: FrameMetric[], i: number): SpikeKind {
   const here = metrics[i];
