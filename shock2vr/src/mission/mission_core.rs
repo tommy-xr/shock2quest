@@ -579,6 +579,10 @@ impl MissionCore {
 
         world.add_unique(quest_info);
 
+        // Preload the elevator floor labels (MISC.STR) + current mission so the
+        // AssetCache-less ElevatorGui can label/gate floors at draw time.
+        world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
+
         world.add_unique(EffectQueue {
             effects: Vec::new(),
         });

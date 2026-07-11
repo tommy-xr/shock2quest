@@ -36,6 +36,12 @@ where
         /// a loot panel), carried through to the render info so debug
         /// introspection (`GET /v1/ui`) can label the element semantically.
         entity: Option<EntityId>,
+        /// An explicit semantic label for this button (e.g. an elevator floor
+        /// name), carried through to the render info so `GET /v1/ui` can report
+        /// what the button *means* - the generic labeling mechanism panels use
+        /// when their art name is not self-describing (unlike the keypad's
+        /// `key<c>.pcx` digits). `None` falls back to entity/art-derived labels.
+        label: Option<String>,
     },
     Text {
         position: Vector2<f32>,
@@ -75,6 +81,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
                 ..
             } => Self::Button {
                 alpha,
@@ -85,6 +92,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
             },
             Self::Text {
                 alpha,
@@ -124,6 +132,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
                 ..
             } => Self::Button {
                 alpha,
@@ -134,6 +143,7 @@ where
                 hover,
                 on_grab,
                 entity,
+                label,
             },
             Self::Text {
                 position,
@@ -161,6 +171,7 @@ where
                 hover,
                 alpha,
                 entity,
+                label,
                 ..
             } => GuiComponent::Button {
                 alpha,
@@ -171,6 +182,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
             },
             Self::Image {
                 alpha,
@@ -223,6 +235,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
                 ..
             } => Self::Button {
                 position,
@@ -233,6 +246,7 @@ where
                 hover,
                 alpha,
                 entity,
+                label,
             },
             Self::Text {
                 position,
@@ -273,6 +287,7 @@ where
                 on_click,
                 on_grab,
                 entity,
+                label,
                 ..
             } => Self::Button {
                 alpha,
@@ -283,6 +298,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
             },
             Self::Text {
                 position,
@@ -323,6 +339,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
                 ..
             } => Self::Button {
                 alpha,
@@ -333,6 +350,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                label,
             },
             Self::Text { .. } => self,
         }
@@ -349,6 +367,7 @@ where
                 on_click,
                 on_grab,
                 hover,
+                label,
                 ..
             } => Self::Button {
                 alpha,
@@ -359,6 +378,38 @@ where
                 on_grab,
                 hover,
                 entity: Some(new_entity),
+                label,
+            },
+            other => other,
+        }
+    }
+
+    /// Give a `Button` an explicit semantic label (no-op for other component
+    /// kinds) - surfaced by `GET /v1/ui` so clients click the button by meaning
+    /// (e.g. an elevator floor name) rather than by art name. See
+    /// `GuiComponent::Button::label`.
+    pub fn with_label(self, new_label: &str) -> GuiComponent<TEvent> {
+        match self {
+            Self::Button {
+                alpha,
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                entity,
+                ..
+            } => Self::Button {
+                alpha,
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                entity,
+                label: Some(new_label.to_owned()),
             },
             other => other,
         }
@@ -384,6 +435,7 @@ pub fn button<TMsg: Clone>(on_click: TMsg) -> GuiComponent<TMsg> {
         hover: ButtonHoverBehavior::None,
         alpha: 0.5,
         entity: None,
+        label: None,
     }
 }
 
@@ -397,6 +449,7 @@ pub fn grabbable<TMsg: Clone>(on_left_grab: TMsg, on_right_grab: TMsg) -> GuiCom
         hover: ButtonHoverBehavior::None,
         alpha: 0.5,
         entity: None,
+        label: None,
     }
 }
 
@@ -426,6 +479,10 @@ pub enum GuiComponentRenderInfo {
         /// a loot panel), if any. Purely informational - used by `GET /v1/ui`
         /// to label the element with the item's name and entity id.
         entity: Option<EntityId>,
+        /// An explicit semantic label from the source `Button` (e.g. an
+        /// elevator floor name), if any. Purely informational - used by
+        /// `GET /v1/ui`; takes precedence over entity/art-derived labels.
+        label: Option<String>,
     },
     Text {
         position: Vector2<f32>,
@@ -552,6 +609,7 @@ where
                 alpha: *alpha,
                 interactive: false,
                 entity: None,
+                label: None,
             },
             GuiComponent::Button {
                 position,
@@ -562,6 +620,7 @@ where
                 on_click,
                 on_grab,
                 entity,
+                label,
             } => {
                 let is_hovered = is_in_bounds(position, size, screen_space_cursor);
 
@@ -584,6 +643,7 @@ where
                     alpha: *alpha,
                     interactive: on_click.is_some() || on_grab.is_some(),
                     entity: *entity,
+                    label: label.clone(),
                 }
             }
         }
