@@ -32,6 +32,10 @@ const PAGE_LINES: usize = 13;
 const BODY_WRAP: usize = 30;
 const NAME_WRAP: usize = 26;
 
+/// `PropLog` bitmask fields decode as `trailing_zeros + 1`, so a zero (unset)
+/// mask reads as 33 - the "no entry" sentinel (research gap #3).
+const LOG_UNSET: u32 = 33;
+
 pub struct MediaGui;
 
 #[derive(Clone, Debug, Default)]
@@ -115,6 +119,12 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             }
             if let Some(name) = &data.name {
                 for (idx, line) in wrap_text(name, NAME_WRAP).iter().take(2).enumerate() {
+                    // Blank lines keep their slot for spacing but must not
+                    // become components - an empty string panics the glyph
+                    // mesh builder (`SceneObject::screen_space_text`).
+                    if line.is_empty() {
+                        continue;
+                    }
                     components.push(
                         gui::text(line)
                             .with_position(vec2(15.0, 100.0 + idx as f32 * LINE_H))
@@ -126,6 +136,9 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
                 let lines = wrap_text(text, BODY_WRAP);
                 let start = state.scroll.min(lines.len());
                 for (idx, line) in lines[start..].iter().take(PAGE_LINES).enumerate() {
+                    if line.is_empty() {
+                        continue;
+                    }
                     components.push(
                         gui::text(line)
                             .with_position(vec2(15.0, BODY_TOP + idx as f32 * LINE_H))
@@ -166,7 +179,9 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         state: &MediaGuiState,
         msg: &MediaGuiMsg,
     ) -> (MediaGuiState, Effect) {
-        let max_scroll = transcript_line_count(world, entity_id).saturating_sub(1);
+        // Clamp to the last full page: a transcript that fits on one page never
+        // scrolls, and PageDown never lands on a near-empty tail page.
+        let max_scroll = transcript_line_count(world, entity_id).saturating_sub(PAGE_LINES);
         let scroll = match msg {
             MediaGuiMsg::PageUp => state.scroll.saturating_sub(PAGE_LINES),
             MediaGuiMsg::PageDown => (state.scroll + PAGE_LINES).min(max_scroll),
@@ -175,12 +190,14 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
     }
 
     fn on_frob(&self, entity_id: EntityId, world: &World) -> Effect {
-        // Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys off
-        // the `log` field (33-in-`email` is a "not set" sentinel, research gap #3).
+        // Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys
+        // off the `log` field; 33 in either field means "not set".
         let (deck, log) = {
             let v_log = world.borrow::<View<PropLog>>().unwrap();
             match v_log.get(entity_id) {
-                Ok(log) if log.deck > 0 && log.log > 0 => (log.deck, log.log),
+                Ok(log) if log.deck > 0 && log.log > 0 && log.log != LOG_UNSET => {
+                    (log.deck, log.log)
+                }
                 _ => return Effect::NoEffect,
             }
         };
@@ -193,8 +210,19 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             deck,
             log,
         };
-        let switchlinks =
-            send_to_all_switch_links(world, entity_id, MessagePayload::TurnOn { from: entity_id });
+        // The original destroyed the disc after its first frob, so its
+        // SwitchLinks fired exactly once. The disc now survives for re-reading -
+        // keep that one-shot contract by firing the links only on the frob that
+        // first collects the log (replaying audio / reopening is fine).
+        let already_collected = world
+            .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+            .map(|q| q.has_collected_log(deck, log))
+            .unwrap_or(false);
+        let switchlinks = if already_collected {
+            Effect::NoEffect
+        } else {
+            send_to_all_switch_links(world, entity_id, MessagePayload::TurnOn { from: entity_id })
+        };
         Effect::combine(vec![collect, audio, switchlinks])
     }
 }
@@ -215,5 +243,57 @@ mod tests {
         for l in &lines {
             assert!(l.split_whitespace().count() <= 1 || l.len() <= 20);
         }
+    }
+
+    /// Scroll clamps to the last full page: a transcript that fits on one page
+    /// never scrolls, and a longer one stops at `lines - PAGE_LINES` instead of
+    /// a near-empty tail page (xreview [AGREED] finding).
+    #[test]
+    fn page_down_clamps_to_the_last_full_page() {
+        let scroll_after = |line_count: usize, presses: usize| {
+            let mut world = World::new();
+            // `line_count` one-word lines (each word fits one wrapped line).
+            let text = vec!["line"; line_count].join("\n");
+            let disc = world.add_entity(RuntimePropLogData {
+                name: None,
+                text: Some(text),
+                portrait: None,
+                icon: None,
+            });
+            let gui = MediaGui;
+            let mut state = MediaGuiState::default();
+            for _ in 0..presses {
+                state = gui
+                    .handle_msg(disc, &world, &state, &MediaGuiMsg::PageDown)
+                    .0;
+            }
+            state.scroll
+        };
+        // Fits on one page (5 < 13): PageDown must not move.
+        assert_eq!(scroll_after(5, 3), 0);
+        // Exactly one page: no scroll either.
+        assert_eq!(scroll_after(PAGE_LINES, 2), 0);
+        // 20 lines: the only other page starts at 20 - 13 = 7, and stays there.
+        assert_eq!(scroll_after(20, 1), 7);
+        assert_eq!(scroll_after(20, 5), 7);
+        // 27 lines: full second page at 13, then clamp at 27 - 13 = 14.
+        assert_eq!(scroll_after(27, 1), 13);
+        assert_eq!(scroll_after(27, 2), 14);
+    }
+
+    /// Discs whose `log` field is the 33 "not set" sentinel (an empty bitmask -
+    /// e.g. an email trap's PropLog) must not collect/play as "log 33".
+    #[test]
+    fn unset_log_sentinel_is_not_a_log() {
+        let mut world = World::new();
+        let disc = world.add_entity(PropLog {
+            deck: 2,
+            email: 1,
+            log: LOG_UNSET,
+            note: 0,
+            video: 0,
+        });
+        let gui = MediaGui;
+        assert!(matches!(gui.on_frob(disc, &world), Effect::NoEffect));
     }
 }

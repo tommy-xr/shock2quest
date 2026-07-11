@@ -2261,7 +2261,14 @@ impl MissionCore {
                     if let Some(strings) =
                         asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
                     {
-                        let get = |prefix: &str| strings.get(&format!("{prefix}{log}")).cloned();
+                        // The .str values carry literal backslash-n escapes
+                        // ("AMANPOUR 07.JUL.14\nre: New code\n"); unescape them
+                        // into real line breaks so the reader never draws "\n".
+                        let get = |prefix: &str| {
+                            strings
+                                .get(&format!("{prefix}{log}"))
+                                .map(|s| s.replace("\\n", "\n"))
+                        };
                         self.world.add_component(
                             entity_id,
                             crate::runtime_props::RuntimePropLogData {

@@ -80,6 +80,11 @@ test(
       transcript.includes("45100"),
       `the reader transcript should contain the code 45100 (got: ${transcript.slice(0, 200)})`,
     );
+    // The .str escapes must be unescaped - no literal backslash-n on screen.
+    assert.ok(
+      !transcript.includes("\\n"),
+      "the transcript must not render literal \\n escape sequences",
+    );
     // Header identifies the sender.
     assert.ok(
       transcript.toUpperCase().includes("AMANPOUR"),
