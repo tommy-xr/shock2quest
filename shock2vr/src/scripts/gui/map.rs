@@ -47,6 +47,13 @@ pub struct MapGuiState {}
 #[derive(Clone)]
 pub enum MapGuiMsg {}
 
+/// KNOWN LIMITATION (xreview, both engines): the rotate-hack detection below is
+/// a heuristic - a level whose page mapping is legitimately non-uniform in
+/// scale (or near-tied between assignments) could get a mirrored/mis-placed
+/// player marker (cosmetic; decals are unaffected). medsci1 is verified from
+/// mission data; verify other decks' markers visually before trusting them
+/// (follow-up tracked on the PR).
+///
 /// World->page mapping solved from the level's two `MapRef` scale markers
 /// (`frame == -1`): each maps a world position to page pixels. Some level maps
 /// are drawn rotated 90 degrees (the original's `m_rotatehack`), which swaps
@@ -206,8 +213,9 @@ impl Gui<MapGuiState, MapGuiMsg> for MapGui {
             world.borrow::<UniqueView<crate::mission::PlayerInfo>>(),
         ) {
             let (px, py) = transform.apply(player.pos.x, player.pos.z);
-            let px = px.clamp(0.0, PAGE_W);
-            let py = py.clamp(0.0, PAGE_H);
+            // Clamp the marker fully inside the page art.
+            let px = px.clamp(MARKER_SIZE / 2.0, PAGE_W - MARKER_SIZE / 2.0);
+            let py = py.clamp(MARKER_SIZE / 2.0, PAGE_H - MARKER_SIZE / 2.0);
             components.push(
                 gui::image("plrpip.pcx")
                     .with_position(vec2(

@@ -532,8 +532,11 @@ impl MissionCore {
         // carries `MapGui` (script `internal_map`) plus the level's page data.
         // No world object opens the map - `Effect::ToggleMap` binds it to the
         // flat host as an unbound (sticky) panel. Never serialized: rebuilt
-        // here on every load.
-        let map_panel_entity = {
+        // here on every load. Flat-only: in VR the panel cannot be opened
+        // (ToggleMap is flat-gated), and under `--experimental gui` its
+        // per-frame SetUI would otherwise materialize an undismissable world
+        // quad at the origin.
+        if game_options.presentation_mode == crate::PresentationMode::Flat {
             let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
             let revealed_rects =
                 dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
@@ -562,9 +565,7 @@ impl MissionCore {
                 },
             ));
             world.add_unique(MapPanelEntity(entity));
-            entity
-        };
-        let _ = map_panel_entity;
+        }
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
@@ -2654,8 +2655,9 @@ impl MissionCore {
 
                 Effect::RevealMapLocation { location } => {
                     let mission = self.level_name.to_ascii_lowercase();
-                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                    quests.reveal_map_location(&mission, location);
+                    if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                        quests.reveal_map_location(&mission, location);
+                    }
                 }
 
                 Effect::CyclePsiPower => {
