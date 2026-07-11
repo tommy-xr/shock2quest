@@ -53,17 +53,21 @@ impl ChooseMissionScript {
         let Some(career) = career else {
             return Effect::NoEffect;
         };
+        // A malformed (negative) tour index is rejected rather than clamped to
+        // tour 0, so bad data grants nothing instead of the wrong reward
+        // (`tour_reward` validates the 0..=2 range on the u32).
         let tour = world
             .borrow::<View<PropCharGenRo>>()
             .ok()
-            .and_then(|v| v.get(entity_id).ok().map(|c| c.0));
+            .and_then(|v| v.get(entity_id).ok().map(|c| c.0))
+            .and_then(|raw| u32::try_from(raw).ok());
         let Some(tour) = tour else {
             return Effect::NoEffect;
         };
         Effect::GrantTourReward {
             career,
             year: current_year,
-            tour: tour.max(0) as u32,
+            tour,
         }
     }
 }

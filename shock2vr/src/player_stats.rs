@@ -259,7 +259,13 @@ static REWARDS: [[[TourReward; 3]; 3]; 3] = [
     ],
     // ===== OSA (career 2) =====
     [
-        // Year 1 - psi disciplines (each also unlocks Tier 2 access in retail)
+        // Year 1 - psi disciplines. Each Mission19-21 string also grants
+        // "Level Two Psi disciplines" (Tier 2 access) on top of the two named
+        // powers. That tier unlock is intentionally NOT stored here: it is a psi
+        // capability gate with no reader until the deferred psi-discipline
+        // gameplay wiring lands (see module docs) - representing it now would be
+        // storage with no consumer. Only the two named mastered powers are
+        // recorded, which is what the character sheet surfaces today.
         [
             reward("Mission19", &[], &[], &["Cryokinesis", "Psychogenic Cyber Affinity"]), // mastered Cryokinesis + Psychogenic Cyber Affinity
             reward("Mission20", &[], &[], &["Cryokinesis", "Kinetic Redirection"]),        // mastered Cryokinesis + Kinetic Redirection
