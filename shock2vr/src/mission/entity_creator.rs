@@ -846,7 +846,6 @@ pub fn create_physics_representation(
             v_phys_type.get(entity_id),
         ) {
             let qrotation = pos.rotation;
-            let _offset_rotation = qrotation.rotate_vector(dimensions.offset0);
 
             let mut is_sensor = false;
             let scale_factor = v_scale

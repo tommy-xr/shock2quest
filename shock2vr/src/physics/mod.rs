@@ -1180,7 +1180,6 @@ impl PhysicsWorld {
         let original_position = *character_body.position();
         let character_user_data = character_body.user_data;
         let character_collider = &self.collider_set[character_body.colliders()[0]];
-        let _character_mass = character_body.mass();
 
         // In rapier 0.31 the `QueryPipeline` is a transient view built from the
         // broad-phase BVH, and it borrows the body/collider sets. Snapshot the
@@ -1376,21 +1375,7 @@ impl PhysicsWorld {
 
         self.player_sensor_intersections = current_sensor_intersections;
 
-        // for collision in &collisions {
-        //     let _collider = &self.collider_set[collision.handle];
-        //     self.controller.solve_character_collision_impulses(
-        //         self.integration_parameters.dt,
-        //         &mut self.rigid_body_set,
-        //         &self.collider_set,
-        //         &self.query_pipeline,
-        //         character_collider.shape(),
-        //         character_mass,
-        //         collision,
-        //         QueryFilter::new().exclude_rigid_body(self.character_handle),
-        //     )
-        // }
         let character_body = &mut self.rigid_body_set[player_handle.character_handle];
-        let _original_pos = character_body.position().translation.vector;
         let pos = character_body.position();
         character_body.set_next_kinematic_translation(pos.translation.vector + mvt.translation);
         (collision_events, character_body)
@@ -2324,10 +2309,10 @@ mod tests {
     /// earth.mis tram floor slab) must make progress. The rotated top-face
     /// normal carries ~1e-6 float error, so tangential movement casts read as
     /// "approaching" and re-hit the resting contact at toi=0 every solver
-    /// iteration - without `normal_nudge_factor` the player freezes in place
-    /// after a frame or two. (Negative-first: fails with the nudge at
-    /// rapier's 1e-4 default; an AXIS-ALIGNED slab passes either way because
-    /// its exact (0,1,0) normal reports no hit for tangential motion.)
+    /// iteration and the player freezes in place after a frame or two.
+    /// (Negative-first: fails without `PLAYER_REST_LIFT`; an AXIS-ALIGNED
+    /// slab passes either way because its exact (0,1,0) normal reports no hit
+    /// for tangential motion.)
     #[test]
     fn player_walks_on_rotated_platform() {
         use cgmath::Rotation3;
