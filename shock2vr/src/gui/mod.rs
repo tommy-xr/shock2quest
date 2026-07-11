@@ -58,4 +58,13 @@ where
         state: &TState,
         msg: &TMsg,
     ) -> (TState, crate::Effect);
+
+    /// Extra effect to run when this panel's entity is frobbed, in addition to
+    /// opening the panel (`GuiScript` combines the two). Default: nothing. The
+    /// audio-log reader (`MediaGui`) overrides it to record the log into the
+    /// collection and play its audio - side effects that must fire on frob, not
+    /// on a panel button.
+    fn on_frob(&self, _entity_id: EntityId, _world: &World) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
 }

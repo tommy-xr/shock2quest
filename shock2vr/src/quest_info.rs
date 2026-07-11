@@ -11,6 +11,17 @@ use shipyard::Unique;
 
 use crate::player_stats::PlayerStats;
 
+/// One audio log the player has collected (frobbed), keyed by its per-deck
+/// identity - the original stored these as `Logs<deck>` bitmasks; we keep the
+/// lightweight `(deck, log)` identity and re-resolve the transcript/portrait
+/// from the string tables when the reader shows it. Persisted in `QuestInfo`
+/// so the collection survives level transitions and save/load.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct CollectedLog {
+    pub deck: u32,
+    pub log: u32,
+}
+
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
 pub struct QuestInfo {
     quest_bit_values: HashMap<String, QuestBitValue>,
@@ -22,6 +33,10 @@ pub struct QuestInfo {
     /// keeps older save files (written before this field existed) loadable.
     #[serde(default)]
     player_stats: PlayerStats,
+    /// Audio logs the player has collected, in pickup order (the original's
+    /// `LOGTIMES` sort). `#[serde(default)]` keeps pre-collection saves loadable.
+    #[serde(default)]
+    collected_logs: Vec<CollectedLog>,
 }
 
 impl QuestInfo {
@@ -31,7 +46,29 @@ impl QuestInfo {
             played_emails: HashSet::new(),
             key_cards: Vec::new(),
             player_stats: PlayerStats::new(),
+            collected_logs: Vec::new(),
         }
+    }
+
+    /// Record an audio log into the collection (no-op if already collected).
+    /// Returns `true` when it was newly added.
+    pub fn collect_log(&mut self, deck: u32, log: u32) -> bool {
+        if self.has_collected_log(deck, log) {
+            return false;
+        }
+        self.collected_logs.push(CollectedLog { deck, log });
+        true
+    }
+
+    pub fn has_collected_log(&self, deck: u32, log: u32) -> bool {
+        self.collected_logs
+            .iter()
+            .any(|c| c.deck == deck && c.log == log)
+    }
+
+    /// The player's collected audio logs, in pickup order.
+    pub fn collected_logs(&self) -> &[CollectedLog] {
+        &self.collected_logs
     }
 
     /// The player's persistent character sheet.

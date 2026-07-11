@@ -105,6 +105,17 @@ pub enum Effect {
         entity: EntityId,
     },
 
+    /// Record an audio log the player just frobbed into the persistent
+    /// collection (`QuestInfo`) and resolve its transcript/portrait strings onto
+    /// the disc entity (`RuntimePropLogData`) for the reader panel. Emitted by
+    /// the log disc's `MediaGui` on frob. `entity_id` is the disc; `deck`/`log`
+    /// key the `level<deck>.str` strings.
+    CollectLog {
+        entity_id: EntityId,
+        deck: u32,
+        log: u32,
+    },
+
     /// Select the player's next *trained* psi power (advances
     /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
     /// skipping powers not in `PlayerPsiKnownPowers`).

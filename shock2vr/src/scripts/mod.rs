@@ -25,7 +25,6 @@ mod internal_keycard_script;
 mod internal_simple_health;
 mod internal_switch_held_model;
 mod level_change_button;
-mod logdiscscript;
 mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
@@ -85,7 +84,7 @@ use self::choose_service::ChooseServiceScript;
 /// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
 /// read them at draw time.
 pub use self::gui::ElevatorContext;
-use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
+use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MediaGui, ReplicatorGui};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::psi_amp_script::PsiAmpScript;
 use self::trap_signal::TrapSignal;
@@ -109,7 +108,6 @@ use self::{
     internal_keycard_script::KeyCardScript,
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
-    logdiscscript::LogDiscScript,
     melee_weapon::MeleeWeapon,
     obj_consume_button::ObjConsumeButton,
     once_room::OnceRoom,
@@ -505,7 +503,7 @@ impl ScriptWorld {
             "baseelevator" => Box::new(BaseElevator::new()),
             "destroyallbyname" => Box::new(DestroyAllByName::new()),
             "levelchangebutton" => Box::new(LevelChangeButton::new()),
-            "logdiscscript" => Box::new(LogDiscScript::new()),
+            "logdiscscript" => gui_script(Box::new(MediaGui)),
             "oncerouter" => Box::new(OnceRouter::new()),
             "stddoor" => Box::new(StdDoor::new()),
             "trapdelay" => Box::new(TrapDelay::new()),

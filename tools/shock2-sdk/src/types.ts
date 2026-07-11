@@ -242,6 +242,15 @@ export interface PlayerSnapshot {
    * mastered psi disciplines), accumulated from career + station training
    * tours; null when the scene has no player. */
   stats: PlayerStats | null;
+  /** The audio logs the player has collected (frobbed), in pickup order.
+   * Persisted in QuestInfo; survives level transitions and save/load. */
+  collected_logs: CollectedLog[];
+}
+
+/** One audio log the player has collected, keyed by its per-deck identity. */
+export interface CollectedLog {
+  deck: number;
+  log: number;
 }
 
 /** Trainable skill levels (weapon proficiencies + tech skills). */
