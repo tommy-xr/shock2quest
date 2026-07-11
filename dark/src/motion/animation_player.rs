@@ -111,33 +111,16 @@ impl AnimationPlayer {
         // fallback a clip's authored blend_length only ever applied to
         // interruptions, so e.g. idle cycling (500ms authored) hard-popped.
         let duration = animation.blend_length.as_secs_f32();
-        let blend_from = player
-            .animation
-            .first()
-            .map(|(clip, flags)| {
-                (
-                    clip.clone(),
-                    player.current_frame as f32,
-                    matches!(flags, AnimationFlags::Loop),
-                )
-            })
-            .or_else(|| {
-                player.last_animation.as_ref().map(|clip| {
-                    (
-                        clip.clone(),
-                        clip.num_frames.saturating_sub(1) as f32,
-                        false,
-                    )
+        let blend_state = if duration > f32::EPSILON {
+            player
+                .blend_from()
+                .map(|(from_clip, from_frame, from_looping)| BlendState {
+                    from_clip,
+                    from_frame,
+                    from_looping,
+                    duration,
+                    elapsed: 0.0,
                 })
-            });
-        let blend_state = if duration > 0.0 {
-            blend_from.map(|(from_clip, from_frame, from_looping)| BlendState {
-                from_clip,
-                from_frame,
-                from_looping,
-                duration,
-                elapsed: 0.0,
-            })
         } else {
             None
         };
@@ -153,6 +136,30 @@ impl AnimationPlayer {
         }
     }
 
+    /// The pose a new clip should cross-fade from: the playing queue head at
+    /// its current frame, or - when the queue already drained - the frozen
+    /// final frame of `last_animation` (what `get_transforms` is showing).
+    fn blend_from(&self) -> Option<(Rc<AnimationClip>, f32, bool)> {
+        self.animation
+            .first()
+            .map(|(clip, flags)| {
+                (
+                    clip.clone(),
+                    self.current_frame as f32,
+                    matches!(flags, AnimationFlags::Loop),
+                )
+            })
+            .or_else(|| {
+                self.last_animation.as_ref().map(|clip| {
+                    (
+                        clip.clone(),
+                        clip.num_frames.saturating_sub(1) as f32,
+                        false,
+                    )
+                })
+            })
+    }
+
     /// Play `animation` immediately, replacing the whole queue (unlike
     /// `queue_animation`, which pushes on top and lets interrupted clips
     /// resume later). Cross-fades from the interrupted pose over the clip's
@@ -164,40 +171,21 @@ impl AnimationPlayer {
     ) -> AnimationPlayer {
         const MIN_INTERRUPT_BLEND_SECS: f32 = 0.15;
 
-        // Fade from the playing clip's current pose, or from the frozen
-        // last-frame pose when the queue already drained. Known limit: an
-        // interrupt landing mid-blend fades from the head clip's pure pose,
-        // not the blended one on screen - a small pop proportional to how
-        // fresh the interrupted blend was.
-        let blend_from = player
-            .animation
-            .first()
-            .map(|(clip, flags)| {
-                (
-                    clip.clone(),
-                    player.current_frame as f32,
-                    matches!(flags, AnimationFlags::Loop),
-                )
-            })
-            .or_else(|| {
-                player.last_animation.as_ref().map(|clip| {
-                    (
-                        clip.clone(),
-                        clip.num_frames.saturating_sub(1) as f32,
-                        false,
-                    )
-                })
+        // Known limit: an interrupt landing mid-blend fades from the head
+        // clip's pure pose, not the blended one on screen - a small pop
+        // proportional to how fresh the interrupted blend was.
+        let blend_state = player
+            .blend_from()
+            .map(|(from_clip, from_frame, from_looping)| BlendState {
+                from_clip,
+                from_frame,
+                from_looping,
+                duration: animation
+                    .blend_length
+                    .as_secs_f32()
+                    .max(MIN_INTERRUPT_BLEND_SECS),
+                elapsed: 0.0,
             });
-        let blend_state = blend_from.map(|(from_clip, from_frame, from_looping)| BlendState {
-            from_clip,
-            from_frame,
-            from_looping,
-            duration: animation
-                .blend_length
-                .as_secs_f32()
-                .max(MIN_INTERRUPT_BLEND_SECS),
-            elapsed: 0.0,
-        });
 
         AnimationPlayer {
             additional_joint_transforms: player.additional_joint_transforms.clone(),
