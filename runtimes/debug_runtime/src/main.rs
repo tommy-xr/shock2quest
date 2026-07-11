@@ -1021,12 +1021,14 @@ fn process_command(
                         mode: ui.mode,
                         active_panel: ui.active_panel,
                         strip: ui.strip,
+                        cursor: ui.cursor,
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
                     mode: "shooter".to_string(),
                     active_panel: None,
                     strip: None,
+                    cursor: None,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");

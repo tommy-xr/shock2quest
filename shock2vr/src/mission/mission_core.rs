@@ -960,8 +960,13 @@ impl MissionCore {
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
         if game_options.presentation_mode == crate::PresentationMode::Flat {
-            for msg in self.flat_ui.update(&self.world, input_context.pointer) {
+            let (messages, drag_actions) = self.flat_ui.update(&self.world, input_context.pointer);
+            for msg in messages {
                 self.script_world.dispatch(msg);
+            }
+            for action in drag_actions {
+                let drag_effects = self.apply_flat_drag_action(action);
+                effects.extend(drag_effects);
             }
         }
 
@@ -1586,6 +1591,106 @@ impl MissionCore {
         }
     }
 
+    /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
+    /// Lift/place/swap never reach here: a lifted item stays in the backpack
+    /// container (the host just hides it from the strip), so only committing
+    /// the drag touches the world. `Throw` detaches + launches; `Wield`
+    /// produces the same effect a backpack click does (returned for the normal
+    /// effect pipeline, which has `asset_cache` for the grab).
+    fn apply_flat_drag_action(
+        &mut self,
+        action: crate::mission::flat_ui_host::FlatUiDragAction,
+    ) -> Vec<Effect> {
+        use crate::mission::flat_ui_host::FlatUiDragAction;
+        match action {
+            FlatUiDragAction::Throw(entity_id) => {
+                self.throw_entity_into_world(entity_id);
+                Vec::new()
+            }
+            // Double-click = equip/use, acting on the still-contained item -
+            // identical to the ContainerGui backpack click (shared weapon test,
+            // shared effects): a weapon (gun or melee) wields via `GrabEntity`
+            // (which also clears its Contains link and holsters any displaced
+            // weapon back to the grid), anything else gets a `Frob` (use).
+            FlatUiDragAction::Wield(entity_id) => {
+                if crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id) {
+                    vec![Effect::GrabEntity {
+                        entity_id,
+                        hand: crate::vr_config::Handedness::Right,
+                        current_parent_id: None,
+                    }]
+                } else {
+                    vec![Effect::Send {
+                        msg: Message {
+                            payload: MessagePayload::Frob,
+                            to: entity_id,
+                        },
+                    }]
+                }
+            }
+        }
+    }
+
+    /// Remove every incoming `Contains` link to `entity_id` (take it out of
+    /// whatever container holds it) without giving it world presence.
+    fn detach_from_containers(&mut self, entity_id: EntityId) {
+        let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
+        for links in (&mut v_links).iter() {
+            links.to_links.retain(|link| {
+                !(matches!(link.link, Link::Contains(_))
+                    && link.to_entity_id.map(|w| w.0) == Some(entity_id))
+            });
+        }
+    }
+
+    /// Throw a cursor-held item into the world: give it physics presence just
+    /// ahead of the camera and shove it along the flat view ray (the original's
+    /// `ShockInterfaceClick` -> `ThrowObj`, §2.4). The item is still in the
+    /// backpack when this runs; it is only detached once a physics body is
+    /// confirmed, so an aborted throw (no view ray, or a modelless item with no
+    /// physics representation) leaves it in the backpack rather than lost or
+    /// frozen mid-air.
+    fn throw_entity_into_world(&mut self, entity_id: EntityId) {
+        /// How far ahead of the camera the item materializes (world units).
+        const THROW_SPAWN_DISTANCE: f32 = 0.5;
+        /// Launch speed along the view ray (world units/sec).
+        const THROW_SPEED: f32 = 6.0;
+
+        // Origin + direction: the flat aim ray (camera + view forward). Only
+        // set in flat presentation; without it, leave the item in the backpack.
+        let Some((origin, forward)) = self.interaction.flat_aim_ray() else {
+            return;
+        };
+
+        self.make_physical(entity_id);
+        if self.id_to_physics.get(&entity_id).is_none() {
+            // No physics representation (e.g. a modelless item): don't strand a
+            // static object in the air - leave it in the backpack (it reappears
+            // in the strip once the cursor cleared).
+            return;
+        }
+
+        self.detach_from_containers(entity_id);
+        let throw_pos = vec3(
+            origin.x + forward.x * THROW_SPAWN_DISTANCE,
+            origin.y + forward.y * THROW_SPAWN_DISTANCE,
+            origin.z + forward.z * THROW_SPAWN_DISTANCE,
+        );
+        self.set_entity_position_rotation(
+            entity_id,
+            throw_pos,
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 1.0),
+        );
+        self.physics.set_velocity(entity_id, forward * THROW_SPEED);
+        // A thrown item is a normal referenced world object again.
+        self.world.add_component(entity_id, PropHasRefs(true));
+        self.script_world.dispatch(Message {
+            payload: MessagePayload::Drop,
+            to: entity_id,
+        });
+    }
+
     pub fn set_entity_position_rotation(
         &mut self,
         entity_id: EntityId,
@@ -2091,6 +2196,15 @@ impl MissionCore {
                         // top-docked inventory strip: bind the strip to the
                         // `internal_inventory` entity (whose GuiScript
                         // already emits SetUI every frame).
+                        // Leaving use mode drops any item on the cursor. It was
+                        // never removed from the backpack (the host only hid it
+                        // from the strip), so clearing the cursor is enough -
+                        // the item is already reachable there (projects/flat-ui.md
+                        // §1.5). This also means a save/transition mid-drag
+                        // serializes it correctly, with no orphan.
+                        if !self.flat_use_mode {
+                            self.flat_ui.take_cursor_item();
+                        }
                         let strip_entity = if self.flat_use_mode {
                             self.world
                                 .borrow::<UniqueView<PlayerInfo>>()
@@ -4714,6 +4828,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
             active_panel,
             strip,
+            cursor: self.flat_ui.cursor_debug(),
         }
     }
 

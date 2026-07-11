@@ -32,7 +32,6 @@ import { teleportVerified } from "./helpers/teleport.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const CORPSE_WRENCH = 1177; // MS Male Corpse -> Contains -> Wrench (mission id 990)
-const CORPSE_PSI_AMP = 219; // Male Corpse 1 -> Contains -> Psi Amp (mission id 1407)
 
 test(
   "Tab metagame mode renders the carried inventory in the top-docked strip",
@@ -182,88 +181,11 @@ test(
     );
     assert.ok((await game.ui.state()).strip, "the strip survives the panel closing");
 
-    // --- Clicking the carried Wrench in the strip wields it ---
-    const stripNow = (await game.ui.state()).strip;
-    assert.ok(stripNow, "strip still present before the wield click");
-    const wrenchEl = stripNow.elements.find(
-      (e) => e.kind === "button" && e.label === "Wrench",
-    );
-    assert.ok(wrenchEl, "the Wrench is still in the strip before wielding");
-    await clickElement(wrenchEl);
-    const afterWield = await game.player.inventory();
-    const wieldedWrench = afterWield.items.find((i) => i.name === "Wrench");
-    assert.ok(wieldedWrench, "the wielded Wrench is still carried");
-    assert.equal(
-      wieldedWrench.location,
-      "left_hand",
-      "clicking a carried weapon in the strip should wield it (flat reports the viewmodel as left hand)",
-    );
-    // ...and the strip updates live: the wielded item left the grid.
-    const stripAfterWield = (await game.ui.state()).strip;
-    assert.ok(stripAfterWield, "strip stays up after wielding");
-    assert.ok(
-      !stripAfterWield.elements.some((e) => e.label === "Wrench"),
-      "the wielded Wrench should leave the strip grid",
-    );
-    // The Nanites stay put.
-    assert.ok(
-      stripAfterWield.elements.some((e) => (e.label ?? "").includes("Nanite")),
-      "non-wielded items stay in the strip",
-    );
-    await game.screenshot("strip-after-wield.png");
-
-    // --- Wield swap: the displaced weapon returns to the strip, not the
-    // floor (the original returns it to the grid). Loot the Psi Amp (a
-    // PropPlayerGun weapon) from corpse 219, wield it, and check the Wrench
-    // is holstered back into the backpack with no world presence. ---
-    const ampCorpses = await game.entities.byTemplate(CORPSE_PSI_AMP);
-    assert.equal(ampCorpses.length, 1, "expected exactly one Male Corpse 1 (219)");
-    const ampCorpse = ampCorpses[0];
-    await teleportVerified(game, {
-      x: ampCorpse.position[0] + 1.0,
-      y: ampCorpse.position[1] + 0.5,
-      z: ampCorpse.position[2] + 1.0,
-    });
-    await game.entities.sendMessage(ampCorpse.id, { type: "Frob" });
-    await game.step({ frames: 5 });
-    const ampPanel = (await game.ui.state()).active_panel;
-    assert.ok(ampPanel, "frobbing corpse 219 should open its loot panel");
-    const ampLoot = ampPanel.elements.find(
-      (e) => e.kind === "button" && e.label === "Psi Amp",
-    );
-    assert.ok(ampLoot, "corpse 219's loot panel should list the Psi Amp");
-    await clickElement(ampLoot);
-    const ampStrip = (await game.ui.state()).strip?.elements.find(
-      (e) => e.kind === "button" && e.label === "Psi Amp",
-    );
-    assert.ok(ampStrip, "the taken Psi Amp should appear in the strip");
-    await clickElement(ampStrip);
-
-    const afterSwap = await game.player.inventory();
-    const amp = afterSwap.items.find((i) => i.name === "Psi Amp");
-    assert.equal(amp?.location, "left_hand", "the Psi Amp should now be wielded");
-    const holsteredWrench = afterSwap.items.find((i) => i.name === "Wrench");
-    assert.ok(
-      holsteredWrench,
-      `the displaced Wrench must stay carried, not drop into the world ` +
-        `(got ${JSON.stringify(afterSwap.items)})`,
-    );
-    assert.equal(
-      holsteredWrench.location,
-      "inventory",
-      "the displaced Wrench is holstered back into the backpack",
-    );
-    assert.equal(
-      (await game.physics.bodies({ entityId: holsteredWrench.entity_id })).bodies.length,
-      0,
-      "the holstered Wrench has no world presence",
-    );
-    // ...and it re-appears in the strip grid.
-    const stripAfterSwap = (await game.ui.state()).strip;
-    assert.ok(
-      stripAfterSwap?.elements.some((e) => e.label === "Wrench"),
-      "the displaced Wrench returns to the strip grid",
-    );
+    // NOTE: strip item interaction (lift onto the cursor / place / throw) is
+    // the cursor-is-the-item drag, covered end-to-end by
+    // inventory-drag.e2e.test.ts (flat UI 4.5). This test stays focused on the
+    // strip rendering the carried inventory, coexisting with a panel, and Tab
+    // toggling the mode.
 
     // --- Tab again -> shooter restored, strip gone ---
     await game.input.trigger("ToggleUseMode");
