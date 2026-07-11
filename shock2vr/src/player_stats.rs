@@ -120,6 +120,15 @@ pub struct PlayerStats {
     pub psi_disciplines: Vec<String>,
     /// Training years (1..=3) whose tour reward has already been applied.
     pub granted_years: BTreeSet<u32>,
+    /// Cyber modules: the game's upgrade currency. The retail engine stores
+    /// these as the stack count of a hidden "fake cookie" inventory object
+    /// (`kEquipFakeCookies`); the pragmatic equivalent here is a persistent
+    /// counter beside the rest of the character sheet. Awarded by
+    /// `Effect::AwardXP` (quest/`PropExp` traps + `expcookie` pickups) and
+    /// spent at trainer stations. `#[serde(default)]` keeps saves written
+    /// before this field existed loadable (they load with 0 modules).
+    #[serde(default)]
+    pub cyber_modules: i32,
 }
 
 impl Default for PlayerStats {
@@ -136,6 +145,7 @@ impl Default for PlayerStats {
             skills: SkillLevels::zero(),
             psi_disciplines: Vec::new(),
             granted_years: BTreeSet::new(),
+            cyber_modules: 0,
         }
     }
 }
@@ -143,6 +153,15 @@ impl Default for PlayerStats {
 impl PlayerStats {
     pub fn new() -> PlayerStats {
         PlayerStats::default()
+    }
+
+    /// Award cyber modules (the upgrade currency). Negative or zero amounts are
+    /// ignored - awards only ever add. Returns the new balance.
+    pub fn award_cyber_modules(&mut self, amount: i32) -> i32 {
+        if amount > 0 {
+            self.cyber_modules = self.cyber_modules.saturating_add(amount);
+        }
+        self.cyber_modules
     }
 
     fn stat_mut(&mut self, stat: Stat) -> &mut i32 {
@@ -411,6 +430,31 @@ mod tests {
         assert!(!stats.apply_tour_reward(Career::Marine, 1, 1));
         assert!(!stats.apply_tour_reward(Career::Marine, 1, 0));
         assert_eq!(stats.strength, 3);
+    }
+
+    #[test]
+    fn cyber_modules_award() {
+        let mut stats = PlayerStats::new();
+        assert_eq!(stats.cyber_modules, 0);
+        assert_eq!(stats.award_cyber_modules(4), 4);
+        assert_eq!(stats.award_cyber_modules(3), 7);
+        // Non-positive awards are ignored.
+        assert_eq!(stats.award_cyber_modules(0), 7);
+        assert_eq!(stats.award_cyber_modules(-5), 7);
+    }
+
+    #[test]
+    fn cyber_modules_survive_serde_and_default_for_old_saves() {
+        let mut stats = PlayerStats::new();
+        stats.award_cyber_modules(12);
+        let json = serde_json::to_string(&stats).unwrap();
+        let back: PlayerStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cyber_modules, 12);
+        // A save written before this field existed (no `cyber_modules` key)
+        // loads with the serde default of 0.
+        let legacy = r#"{"strength":1,"endurance":1,"agility":1,"psionic_ability":1,"cyber_affinity":1,"skills":{"standard_weapons":0,"energy_weapons":0,"heavy_weapons":0,"exotic_weapons":0,"hack":0,"repair":0,"modify":0,"maintenance":0,"research":0},"psi_disciplines":[],"granted_years":[]}"#;
+        let loaded: PlayerStats = serde_json::from_str(legacy).unwrap();
+        assert_eq!(loaded.cyber_modules, 0);
     }
 
     #[test]

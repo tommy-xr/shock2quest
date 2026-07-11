@@ -177,6 +177,12 @@ pub struct PropDestLoc(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropExp(pub i32);
 
+/// The count of a stackable object (e.g. how many cyber modules an EXP-cookie
+/// pile is worth - the retail engine stores an EXP cookie's module value as its
+/// stack count, `P$StackCoun`). A 4-byte signed int.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropStackCount(pub i32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropLimbModel(pub String);
 
@@ -1142,6 +1148,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ExP",
             |reader, _len| read_i32(reader),
             PropExp,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$StackCoun",
+            |reader, _len| read_i32(reader),
+            PropStackCount,
             accumulator::latest,
         ),
         define_prop(

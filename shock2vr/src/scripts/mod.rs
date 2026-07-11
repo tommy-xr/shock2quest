@@ -15,6 +15,7 @@ mod cs9;
 mod dead_power_cell;
 mod destroy_all_by_name;
 mod energy_station;
+mod exp_cookie;
 mod frob_qb;
 mod gui;
 mod internal_collision_type;
@@ -97,6 +98,7 @@ use self::{
     dead_power_cell::DeadPowerCell,
     destroy_all_by_name::DestroyAllByName,
     energy_station::EnergyStation,
+    exp_cookie::ExpCookie,
     frob_qb::FrobQB,
     internal_collision_type::InternalCollisionType,
     internal_explosion::InternalExplosion,
@@ -600,10 +602,10 @@ impl ScriptWorld {
             "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
 
             //goodies:
-            "expcookie" => Box::new(UnimplementedScript::new(&script_name)), // cyber modules
+            "expcookie" => Box::new(ExpCookie::new()), // cyber modules
             "medkitscript" => Box::new(UnimplementedScript::new(&script_name)), // cyber modules
             "speedpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
-            "radpatch" => Box::new(UnimplementedScript::new(&script_name)),  // speed boost
+            "radpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
             "autoinstallsoft" => Box::new(UnimplementedScript::new(&script_name)), // auto install software
             "strboost" => Box::new(UnimplementedScript::new(&script_name)),        // strength boost
             "intboost" => Box::new(UnimplementedScript::new(&script_name)),
