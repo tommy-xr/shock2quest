@@ -81,6 +81,10 @@ use crate::gui::gui_script;
 
 use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
+/// Preloaded elevator floor labels (from MISC.STR) + current mission, added as
+/// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
+/// read them at draw time.
+pub use self::gui::ElevatorContext;
 use self::gui::{ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, ReplicatorGui};
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::psi_amp_script::PsiAmpScript;

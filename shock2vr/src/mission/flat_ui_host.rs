@@ -681,21 +681,27 @@ impl FlatUiHost {
                     texture,
                     interactive,
                     entity,
+                    label,
                     ..
                 } => (
                     if *interactive { "button" } else { "image" },
                     Some(texture.clone()),
                     None,
-                    if let Some(entity) = entity {
-                        // Fall back to the art-derived label for entity-bound
-                        // items with no symbolic name, so every loot element
-                        // stays clickable by meaning.
-                        entity_label(world, *entity).or_else(|| semantic_label(texture))
-                    } else if *interactive {
-                        semantic_label(texture)
-                    } else {
-                        None
-                    },
+                    // Label precedence: an explicit panel-supplied label (e.g.
+                    // an elevator floor name) wins, then the bound entity's
+                    // symbolic name (loot items), then the art-derived fallback
+                    // for clickables (keypad digits). This keeps every
+                    // interactive element addressable by meaning in `/v1/ui`.
+                    label
+                        .clone()
+                        .or_else(|| (*entity).and_then(|e| entity_label(world, e)))
+                        .or_else(|| {
+                            if *interactive {
+                                semantic_label(texture)
+                            } else {
+                                None
+                            }
+                        }),
                     entity.map(|e| e.inner() as i32),
                 ),
                 GuiComponentRenderInfo::Text { text, .. } => {
@@ -911,6 +917,7 @@ mod tests {
             alpha: 0.5,
             interactive: true,
             entity: None,
+            label: None,
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.x - 17.0).abs() < 1e-3);
@@ -953,6 +960,7 @@ mod tests {
             alpha: 0.5,
             interactive: false,
             entity: None,
+            label: None,
         };
         assert!(is_gui_cursor(&cursor));
         let backdrop = GuiComponentRenderInfo::Image {
@@ -962,6 +970,7 @@ mod tests {
             alpha: 0.5,
             interactive: false,
             entity: None,
+            label: None,
         };
         assert!(!is_gui_cursor(&backdrop));
     }
@@ -1024,6 +1033,7 @@ mod tests {
                 alpha: 0.5,
                 interactive: true,
                 entity: Some(item),
+                label: None,
             }],
         );
         let elements = host.debug_elements(&world);
@@ -1172,6 +1182,7 @@ mod tests {
                     alpha: 0.5,
                     interactive: false,
                     entity: None,
+                    label: None,
                 },
                 GuiComponentRenderInfo::Image {
                     position: vec2(4.0 / 635.0, 18.0 / 120.0),
@@ -1180,6 +1191,7 @@ mod tests {
                     alpha: 0.5,
                     interactive: true,
                     entity: Some(wrench),
+                    label: None,
                 },
             ],
         );
@@ -1224,6 +1236,7 @@ mod tests {
             alpha: 0.5,
             interactive: true,
             entity: Some(entity),
+            label: None,
         }
     }
 
