@@ -67,15 +67,17 @@ const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 const CURSOR_ITEM_SIZE: Vector2<f32> = Vector2::new(35.0, 32.0);
 
 /// A host-side action produced by the cursor-is-the-item drag (§1.5/§2.4),
-/// applied by `mission_core` because it touches links/physics/effects:
-/// **Lift** removes the item from its container (the strip slot empties),
-/// **Place** returns it to the player's backpack, **Throw** gives it world
-/// presence with an impulse along the view ray, **Wield** equips/uses it (a
-/// double-click, routed through the same effect as a backpack click).
+/// applied by `mission_core` because it touches physics/effects.
+///
+/// Lift/place/swap are *not* here: a lifted item **stays in the backpack
+/// container** (the host just hides it from the strip while it rides the
+/// cursor), so it is always reachable and serializes correctly on
+/// save/transition. Only committing the drag reaches the world: **Throw**
+/// detaches it and gives it world presence with an impulse along the view ray;
+/// **Wield** equips/uses it (a double-click) via the same effect as a backpack
+/// click, acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
-    Lift(EntityId),
-    Place(EntityId),
     Throw(EntityId),
     Wield(EntityId),
 }
@@ -389,22 +391,22 @@ impl FlatUiHost {
                     self.last_lift = None;
                     return (Vec::new(), vec![FlatUiDragAction::Wield(held)]);
                 }
-                self.cursor_item = None;
+                // Place (or swap): the held item stays in the backpack the
+                // whole time, so placing is just dropping it off the cursor.
+                // Dropping onto another item swaps by lifting that occupant.
                 self.last_lift = None;
-                let mut actions = vec![FlatUiDragAction::Place(held)];
-                // Dropping onto an occupied slot swaps: the occupant lifts.
-                if let Some(target) = self.strip_item_at(canvas_pos) {
-                    if target != held {
+                match self.strip_item_at(canvas_pos) {
+                    Some(target) if target != held => {
                         self.cursor_item = Some(make_cursor_item(world, target));
                         self.last_lift = Some(LiftMark {
                             entity: target,
                             canvas_pos,
                             frames_left: DOUBLE_CLICK_WINDOW_FRAMES,
                         });
-                        actions.push(FlatUiDragAction::Lift(target));
                     }
+                    _ => self.cursor_item = None,
                 }
-                return (Vec::new(), actions);
+                return (Vec::new(), Vec::new());
             }
             if over_panel {
                 // Escape hatch: a click on an open MFD keeps the held item.
@@ -416,8 +418,10 @@ impl FlatUiHost {
             return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
         }
 
-        // --- Empty cursor over the strip: LMB on an item lifts it (host-
-        // handled, no GuiScript routing); hover highlights via GUIHover. ---
+        // --- Empty cursor over the strip: LMB on an item lifts it onto the
+        // cursor (the item stays in the backpack - the host just hides it from
+        // the strip - so nothing reaches the world). Hover highlights via
+        // GUIHover. ---
         if over_strip {
             self.hover_close = false;
             if pressed_edge {
@@ -428,7 +432,7 @@ impl FlatUiHost {
                         canvas_pos,
                         frames_left: DOUBLE_CLICK_WINDOW_FRAMES,
                     });
-                    return (Vec::new(), vec![FlatUiDragAction::Lift(item)]);
+                    return (Vec::new(), Vec::new());
                 }
                 return (Vec::new(), Vec::new());
             }
@@ -481,18 +485,26 @@ impl FlatUiHost {
         })
     }
 
+    /// The entity currently hidden from the strip because it is on the cursor.
+    fn held_entity(&self) -> Option<EntityId> {
+        self.cursor_item.as_ref().map(|c| c.entity)
+    }
+
     /// The interactive strip item whose canvas rect contains `canvas_pos`
     /// (loot/backpack item buttons carry their entity), for lift/swap
-    /// hit-testing.
+    /// hit-testing. The item on the cursor is hidden, so it never hit-tests.
     fn strip_item_at(&self, canvas_pos: Vector2<f32>) -> Option<EntityId> {
         let strip = self.strip.as_ref()?;
         let rect = strip.size_px.map(strip_canvas_rect)?;
+        let held = self.held_entity();
         strip.components.iter().find_map(|c| match c {
             GuiComponentRenderInfo::Image {
                 interactive: true,
                 entity: Some(entity),
                 ..
-            } if component_canvas_rect(c, rect).contains(canvas_pos) => Some(*entity),
+            } if Some(*entity) != held && component_canvas_rect(c, rect).contains(canvas_pos) => {
+                Some(*entity)
+            }
             _ => None,
         })
     }
@@ -512,10 +524,12 @@ impl FlatUiHost {
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
-            draw_components(&mut canvas, &strip.components, rect);
+            // Hide the item riding the cursor from the strip grid (it is drawn
+            // as the cursor instead).
+            draw_components(&mut canvas, &strip.components, rect, self.held_entity());
         }
         if let Some(rect) = panel_rect {
-            draw_components(&mut canvas, &self.components, rect);
+            draw_components(&mut canvas, &self.components, rect, None);
             canvas.image(
                 close_button_canvas_rect(rect),
                 if self.hover_close {
@@ -552,7 +566,7 @@ impl FlatUiHost {
         let Some(rect) = self.panel_rect() else {
             return Vec::new();
         };
-        let mut out = self.elements_for(world, &self.components, rect);
+        let mut out = self.elements_for(world, &self.components, rect, None);
         // The host-drawn close button is clickable too.
         let close = close_button_canvas_rect(rect);
         out.push(crate::game_scene::DebugUiElement {
@@ -573,7 +587,10 @@ impl FlatUiHost {
     /// mode. The strip has no close element: use mode is left by Tab.
     pub fn strip_debug_elements(&self, world: &World) -> Vec<crate::game_scene::DebugUiElement> {
         match (self.strip.as_ref(), self.strip_rect()) {
-            (Some(strip), Some(rect)) => self.elements_for(world, &strip.components, rect),
+            // Hide the item on the cursor: it left the grid for the drag.
+            (Some(strip), Some(rect)) => {
+                self.elements_for(world, &strip.components, rect, self.held_entity())
+            }
             _ => Vec::new(),
         }
     }
@@ -593,11 +610,21 @@ impl FlatUiHost {
         world: &World,
         components: &[GuiComponentRenderInfo],
         rect: Rect,
+        hide: Option<EntityId>,
     ) -> Vec<crate::game_scene::DebugUiElement> {
         let mut out = Vec::new();
         for component in components {
             if is_gui_cursor(component) {
                 continue;
+            }
+            if let GuiComponentRenderInfo::Image {
+                entity: Some(entity),
+                ..
+            } = component
+            {
+                if Some(*entity) == hide {
+                    continue;
+                }
             }
             let r = component_canvas_rect(component, rect);
             let (kind, texture, text, label, entity_id) = match component {
@@ -689,13 +716,29 @@ fn gui_hover(to: EntityId, rect: Rect, canvas_pos: Vector2<f32>, pressed: bool) 
     }
 }
 
-/// Draw one slot's `SetUI` components into its canvas rect.
-fn draw_components(canvas: &mut UiCanvas, components: &[GuiComponentRenderInfo], rect: Rect) {
+/// Draw one slot's `SetUI` components into its canvas rect. `hide` is the
+/// entity riding the cursor (if any) - its component is skipped so it does not
+/// also render in the grid.
+fn draw_components(
+    canvas: &mut UiCanvas,
+    components: &[GuiComponentRenderInfo],
+    rect: Rect,
+    hide: Option<EntityId>,
+) {
     for component in components {
         if is_gui_cursor(component) {
             // GuiScript appends its own panel-local cursor image for the
             // VR quads; the host draws the real screen cursor instead.
             continue;
+        }
+        if let GuiComponentRenderInfo::Image {
+            entity: Some(entity),
+            ..
+        } = component
+        {
+            if Some(*entity) == hide {
+                continue;
+            }
         }
         let r = component_canvas_rect(component, rect);
         match component {
@@ -1181,21 +1224,34 @@ mod tests {
     fn lmb_on_a_strip_item_lifts_it_onto_the_cursor() {
         let (world, mut host, wrench, _inv) = drag_world();
         // Slot 0 center on the canvas: (2 + 4 + 17.5, 18 + 16) = (23.5, 34).
+        // Lifting is host-internal (the item stays in the backpack) - no
+        // world action is emitted.
         let actions = press_edge(&mut host, &world, (23.5, 34.0));
-        assert_eq!(actions, vec![FlatUiDragAction::Lift(wrench)]);
+        assert!(actions.is_empty(), "lifting emits no world action");
         let cursor = host.cursor_debug().expect("the item is on the cursor");
         assert_eq!(cursor.entity_id, wrench.inner() as i32);
         assert_eq!(cursor.label.as_deref(), Some("Wrench"));
+        // The lifted item is hidden from the strip grid and its hit-testing.
+        assert!(
+            host.strip_debug_elements(&world)
+                .iter()
+                .all(|e| e.entity_id != Some(wrench.inner() as i32)),
+            "the lifted item leaves the strip grid",
+        );
+        assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), None);
     }
 
     #[test]
     fn placing_over_the_strip_returns_the_item_and_clears_the_cursor() {
         let (world, mut host, wrench, _inv) = drag_world();
         press_edge(&mut host, &world, (23.5, 34.0)); // lift
-        // An empty strip cell (far from slot 0) places it back.
+        // An empty strip cell (far from slot 0) places it back: cursor clears,
+        // no world action (the item never left the backpack).
         let actions = press_edge(&mut host, &world, (400.0, 60.0));
-        assert_eq!(actions, vec![FlatUiDragAction::Place(wrench)]);
+        assert!(actions.is_empty(), "placing emits no world action");
         assert!(host.cursor_debug().is_none(), "placing clears the cursor");
+        // The item is visible in the strip again.
+        assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), Some(wrench));
     }
 
     #[test]
@@ -1222,26 +1278,26 @@ mod tests {
         );
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
         // Drop onto slot 1 (Pistol): center (2 + 4 + 35 + 17.5, 34) = (58.5, 34).
+        // Swapping is host-internal - the Pistol lifts onto the cursor, the
+        // Wrench returns to the grid; no world action.
         let actions = press_edge(&mut host, &world, (58.5, 34.0));
-        assert_eq!(
-            actions,
-            vec![
-                FlatUiDragAction::Place(wrench),
-                FlatUiDragAction::Lift(pistol),
-            ],
-        );
+        assert!(actions.is_empty(), "swapping emits no world action");
         let cursor = host
             .cursor_debug()
             .expect("the swapped-in Pistol is on the cursor");
         assert_eq!(cursor.entity_id, pistol.inner() as i32);
+        // The Pistol is now hidden and the Wrench visible again.
+        assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), Some(wrench));
+        assert_eq!(host.strip_item_at(vec2(58.5, 34.0)), None);
     }
 
     #[test]
     fn double_click_on_a_strip_item_wields_it() {
         let (world, mut host, wrench, _inv) = drag_world();
-        // First click lifts onto the cursor...
+        // First click lifts onto the cursor (no world action)...
         let first = press_edge(&mut host, &world, (23.5, 34.0));
-        assert_eq!(first, vec![FlatUiDragAction::Lift(wrench)]);
+        assert!(first.is_empty());
+        assert!(host.cursor_debug().is_some());
         // ...a quick second click on the same slot wields it (double-click).
         let second = press_edge(&mut host, &world, (23.5, 34.0));
         assert_eq!(second, vec![FlatUiDragAction::Wield(wrench)]);

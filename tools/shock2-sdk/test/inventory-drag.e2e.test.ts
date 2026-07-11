@@ -208,3 +208,52 @@ test(
     await game.screenshot("drag-thrown.png");
   },
 );
+
+// A lifted item must not be lost if the game is saved/reloaded mid-drag: the
+// cursor-held item stays in the backpack container (the strip just hides it),
+// so it serializes as a normal carried item. Regression for the xreview
+// finding that detaching on lift orphaned the item on any non-Tab exit.
+test(
+  "a lifted item survives a mid-drag save/load",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8158),
+    });
+    await game.step({ frames: 5 });
+
+    // Give the player a carried item (source doesn't matter here).
+    const { entities: nanites } = await game.entities.list({ filter: "*Nanites*", limit: 10 });
+    assert.ok(nanites[0], "expected a Nanites pickup in medsci1");
+    await game.player.give(nanites[0].id);
+
+    // Tab into use mode and lift the item onto the cursor.
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const el = (await game.ui.state()).strip?.elements.find(
+      (e) => e.kind === "button" && (e.label ?? "").includes("Nanite"),
+    );
+    assert.ok(el, "the Nanites should be in the strip");
+    const [x, y, w, h] = el.screen_rect;
+    await game.input.set("pointer.position", [x + w / 2, y + h / 2]);
+    await game.step({ frames: 2 });
+    await game.input.set("pointer.pressed", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("pointer.pressed", 0);
+    await game.step({ frames: 2 });
+    const lifted = await game.ui.state();
+    assert.ok(lifted.cursor, "the item is on the cursor before saving");
+
+    // Save and reload mid-drag; the item must still be carried.
+    const saveName = `flat-ui-drag-save-${Date.now()}`;
+    await game.save(saveName);
+    await game.load(saveName);
+    await game.step({ frames: 5 });
+    const restored = await game.player.inventory();
+    assert.ok(
+      restored.items.some((i) => (i.name ?? "").includes("Nanite")),
+      `the lifted item must survive a save/load mid-drag (got ${JSON.stringify(restored.items)})`,
+    );
+  },
+);

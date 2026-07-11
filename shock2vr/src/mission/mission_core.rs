@@ -1592,58 +1592,28 @@ impl MissionCore {
     }
 
     /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
-    /// Lift/Place/Throw touch container links and physics and are applied
-    /// directly; Wield produces the same effect a backpack click does (wield a
-    /// weapon, use anything else) and is returned for the normal effect
-    /// pipeline to process (it needs `asset_cache` for the grab).
+    /// Lift/place/swap never reach here: a lifted item stays in the backpack
+    /// container (the host just hides it from the strip), so only committing
+    /// the drag touches the world. `Throw` detaches + launches; `Wield`
+    /// produces the same effect a backpack click does (returned for the normal
+    /// effect pipeline, which has `asset_cache` for the grab).
     fn apply_flat_drag_action(
         &mut self,
         action: crate::mission::flat_ui_host::FlatUiDragAction,
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
-            // Lifting onto the cursor empties the item's slot: drop its
-            // container link. It stays alive and non-physical (still in the
-            // backpack, just off-grid) until placed or thrown.
-            FlatUiDragAction::Lift(entity_id) => {
-                self.detach_from_containers(entity_id);
-                Vec::new()
-            }
-            // Placing returns the item to the player's backpack (first free
-            // slot) - the same `Contains`-relink path as looting.
-            FlatUiDragAction::Place(entity_id) => {
-                let inventory = self
-                    .world
-                    .borrow::<UniqueView<PlayerInfo>>()
-                    .ok()
-                    .map(|player| player.inventory_entity_id);
-                if let Some(inventory) = inventory {
-                    self.drop_entity_into_container(inventory, entity_id);
-                }
-                Vec::new()
-            }
             FlatUiDragAction::Throw(entity_id) => {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
             }
-            // Double-click = equip/use: a weapon (gun or melee) wields via
-            // `GrabEntity` (which holsters any displaced weapon back to the
-            // grid), anything else gets a `Frob` (use) - identical to the
-            // ContainerGui backpack click, so the wield path is shared, not
-            // duplicated. The item was lifted onto the cursor, so it is
-            // already detached from the backpack.
+            // Double-click = equip/use, acting on the still-contained item -
+            // identical to the ContainerGui backpack click (shared weapon test,
+            // shared effects): a weapon (gun or melee) wields via `GrabEntity`
+            // (which also clears its Contains link and holsters any displaced
+            // weapon back to the grid), anything else gets a `Frob` (use).
             FlatUiDragAction::Wield(entity_id) => {
-                let is_weapon = self
-                    .world
-                    .borrow::<View<dark::properties::PropPlayerGun>>()
-                    .map(|v| v.get(entity_id).is_ok())
-                    .unwrap_or(false)
-                    || self
-                        .world
-                        .borrow::<View<PropLimbModel>>()
-                        .map(|v| v.get(entity_id).is_ok())
-                        .unwrap_or(false);
-                if is_weapon {
+                if crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id) {
                     vec![Effect::GrabEntity {
                         entity_id,
                         hand: crate::vr_config::Handedness::Right,
@@ -1662,8 +1632,7 @@ impl MissionCore {
     }
 
     /// Remove every incoming `Contains` link to `entity_id` (take it out of
-    /// whatever container holds it) without giving it world presence - the
-    /// "lift onto the cursor" half of the drag.
+    /// whatever container holds it) without giving it world presence.
     fn detach_from_containers(&mut self, entity_id: EntityId) {
         let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
         for links in (&mut v_links).iter() {
@@ -1674,26 +1643,32 @@ impl MissionCore {
         }
     }
 
-    /// Throw a cursor-held item into the world: detach it from any container,
-    /// give it physics presence just ahead of the camera, and shove it along
-    /// the flat view ray (the original's `ShockInterfaceClick` -> `ThrowObj`,
-    /// §2.4).
+    /// Throw a cursor-held item into the world: give it physics presence just
+    /// ahead of the camera and shove it along the flat view ray (the original's
+    /// `ShockInterfaceClick` -> `ThrowObj`, §2.4). The item is still in the
+    /// backpack when this runs; it is only detached once a physics body is
+    /// confirmed, so an aborted throw (no view ray, or a modelless item with no
+    /// physics representation) leaves it in the backpack rather than lost or
+    /// frozen mid-air.
     fn throw_entity_into_world(&mut self, entity_id: EntityId) {
         /// How far ahead of the camera the item materializes (world units).
         const THROW_SPAWN_DISTANCE: f32 = 0.5;
         /// Launch speed along the view ray (world units/sec).
         const THROW_SPEED: f32 = 6.0;
 
-        // Origin + direction: the flat aim ray (camera + view forward), with a
-        // player-facing fallback (flat_aim_ray is None only outside flat mode).
-        let (origin, forward) = self.interaction.flat_aim_ray().unwrap_or_else(|| {
-            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-            let forward = player.rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-            (
-                Point3::new(player.pos.x, player.pos.y, player.pos.z),
-                forward,
-            )
-        });
+        // Origin + direction: the flat aim ray (camera + view forward). Only
+        // set in flat presentation; without it, leave the item in the backpack.
+        let Some((origin, forward)) = self.interaction.flat_aim_ray() else {
+            return;
+        };
+
+        self.make_physical(entity_id);
+        if self.id_to_physics.get(&entity_id).is_none() {
+            // No physics representation (e.g. a modelless item): don't strand a
+            // static object in the air - leave it in the backpack (it reappears
+            // in the strip once the cursor cleared).
+            return;
+        }
 
         self.detach_from_containers(entity_id);
         let throw_pos = vec3(
@@ -1701,7 +1676,6 @@ impl MissionCore {
             origin.y + forward.y * THROW_SPAWN_DISTANCE,
             origin.z + forward.z * THROW_SPAWN_DISTANCE,
         );
-        self.make_physical(entity_id);
         self.set_entity_position_rotation(
             entity_id,
             throw_pos,
@@ -2222,24 +2196,20 @@ impl MissionCore {
                         // top-docked inventory strip: bind the strip to the
                         // `internal_inventory` entity (whose GuiScript
                         // already emits SetUI every frame).
-                        let inventory_entity = self
-                            .world
-                            .borrow::<UniqueView<PlayerInfo>>()
-                            .ok()
-                            .map(|player| player.inventory_entity_id);
-                        // Leaving use mode with an item on the cursor must not
-                        // lose it: return it to the backpack (the original
-                        // refuses to exit the metagame while `drag_obj` is
-                        // set - projects/flat-ui.md §1.5).
+                        // Leaving use mode drops any item on the cursor. It was
+                        // never removed from the backpack (the host only hid it
+                        // from the strip), so clearing the cursor is enough -
+                        // the item is already reachable there (projects/flat-ui.md
+                        // §1.5). This also means a save/transition mid-drag
+                        // serializes it correctly, with no orphan.
                         if !self.flat_use_mode {
-                            if let (Some(item), Some(inventory)) =
-                                (self.flat_ui.take_cursor_item(), inventory_entity)
-                            {
-                                self.drop_entity_into_container(inventory, item);
-                            }
+                            self.flat_ui.take_cursor_item();
                         }
                         let strip_entity = if self.flat_use_mode {
-                            inventory_entity
+                            self.world
+                                .borrow::<UniqueView<PlayerInfo>>()
+                                .ok()
+                                .map(|player| player.inventory_entity_id)
                         } else {
                             None
                         };

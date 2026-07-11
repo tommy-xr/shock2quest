@@ -507,6 +507,21 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     false
 }
 
+/// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
+/// a melee arm (`PropLimbModel`). Clicking one in the backpack/strip wields it
+/// (`Effect::GrabEntity`) instead of using it; shared by `ContainerGui` and the
+/// flat cursor-drag wield so the two can't drift.
+pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropPlayerGun>>()
+        .map(|v| v.get(entity_id).is_ok())
+        .unwrap_or(false)
+        || world
+            .borrow::<View<dark::properties::PropLimbModel>>()
+            .map(|v| v.get(entity_id).is_ok())
+            .unwrap_or(false)
+}
+
 ///
 /// In the case where we hit an entity that is 'proxied' (like, a hitbox that points to a parent),
 /// resolve to the parent entity.
