@@ -405,6 +405,13 @@ export interface UiState {
   strip: UiPanel | null;
   /** The item held on the cursor mid-drag, or null when the cursor is empty. */
   cursor: UiCursor | null;
+  /**
+   * The AMMOFULL ammo-type cycle button, exposed only in use mode when a gun
+   * with 2+ ammo types is wielded (the expanded weapon panel, flat UI 5).
+   * Click its `screen_rect` center to cycle the wielded weapon's ammo type
+   * (Effect::CycleAmmo). null in shooter mode / unarmed / single-ammo weapons.
+   */
+  ammo_cycle: UiElement | null;
 }
 
 export interface TransitionEntry {
