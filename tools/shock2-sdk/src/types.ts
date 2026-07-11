@@ -299,6 +299,18 @@ export interface UiPanel {
   elements: UiElement[];
 }
 
+/**
+ * The item currently held on the cursor (the original's "cursor IS the item"
+ * drag model, §2.4): lifting a strip item puts it here and empties its slot;
+ * placing/throwing clears it. `null` when the cursor is empty.
+ */
+export interface UiCursor {
+  /** Runtime entity id of the held item (NOT stable across runs). */
+  entity_id: number;
+  /** The item's symbolic name (e.g. "Wrench"), if any. */
+  label: string | null;
+}
+
 /** Flat-mode UI snapshot (GET /v1/ui). */
 export interface UiState {
   mode: "shooter" | "use";
@@ -310,6 +322,8 @@ export interface UiState {
    * shooter mode.
    */
   strip: UiPanel | null;
+  /** The item held on the cursor mid-drag, or null when the cursor is empty. */
+  cursor: UiCursor | null;
 }
 
 export interface TransitionEntry {

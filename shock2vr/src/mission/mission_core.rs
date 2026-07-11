@@ -960,8 +960,12 @@ impl MissionCore {
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
         if game_options.presentation_mode == crate::PresentationMode::Flat {
-            for msg in self.flat_ui.update(&self.world, input_context.pointer) {
+            let (messages, drag_actions) = self.flat_ui.update(&self.world, input_context.pointer);
+            for msg in messages {
                 self.script_world.dispatch(msg);
+            }
+            for action in drag_actions {
+                self.apply_flat_drag_action(action);
             }
         }
 
@@ -1586,6 +1590,88 @@ impl MissionCore {
         }
     }
 
+    /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
+    /// These touch container links and physics, so the host emits them and the
+    /// mission applies them here.
+    fn apply_flat_drag_action(&mut self, action: crate::mission::flat_ui_host::FlatUiDragAction) {
+        use crate::mission::flat_ui_host::FlatUiDragAction;
+        match action {
+            // Lifting onto the cursor empties the item's slot: drop its
+            // container link. It stays alive and non-physical (still in the
+            // backpack, just off-grid) until placed or thrown.
+            FlatUiDragAction::Lift(entity_id) => self.detach_from_containers(entity_id),
+            // Placing returns the item to the player's backpack (first free
+            // slot) - the same `Contains`-relink path as looting.
+            FlatUiDragAction::Place(entity_id) => {
+                let inventory = self
+                    .world
+                    .borrow::<UniqueView<PlayerInfo>>()
+                    .ok()
+                    .map(|player| player.inventory_entity_id);
+                if let Some(inventory) = inventory {
+                    self.drop_entity_into_container(inventory, entity_id);
+                }
+            }
+            FlatUiDragAction::Throw(entity_id) => self.throw_entity_into_world(entity_id),
+        }
+    }
+
+    /// Remove every incoming `Contains` link to `entity_id` (take it out of
+    /// whatever container holds it) without giving it world presence - the
+    /// "lift onto the cursor" half of the drag.
+    fn detach_from_containers(&mut self, entity_id: EntityId) {
+        let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
+        for links in (&mut v_links).iter() {
+            links.to_links.retain(|link| {
+                !(matches!(link.link, Link::Contains(_))
+                    && link.to_entity_id.map(|w| w.0) == Some(entity_id))
+            });
+        }
+    }
+
+    /// Throw a cursor-held item into the world: detach it from any container,
+    /// give it physics presence just ahead of the camera, and shove it along
+    /// the flat view ray (the original's `ShockInterfaceClick` -> `ThrowObj`,
+    /// §2.4).
+    fn throw_entity_into_world(&mut self, entity_id: EntityId) {
+        /// How far ahead of the camera the item materializes (world units).
+        const THROW_SPAWN_DISTANCE: f32 = 0.5;
+        /// Launch speed along the view ray (world units/sec).
+        const THROW_SPEED: f32 = 6.0;
+
+        // Origin + direction: the flat aim ray (camera + view forward), with a
+        // player-facing fallback (flat_aim_ray is None only outside flat mode).
+        let (origin, forward) = self.interaction.flat_aim_ray().unwrap_or_else(|| {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let forward = player.rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+            (
+                Point3::new(player.pos.x, player.pos.y, player.pos.z),
+                forward,
+            )
+        });
+
+        self.detach_from_containers(entity_id);
+        let throw_pos = vec3(
+            origin.x + forward.x * THROW_SPAWN_DISTANCE,
+            origin.y + forward.y * THROW_SPAWN_DISTANCE,
+            origin.z + forward.z * THROW_SPAWN_DISTANCE,
+        );
+        self.make_physical(entity_id);
+        self.set_entity_position_rotation(
+            entity_id,
+            throw_pos,
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 1.0),
+        );
+        self.physics.set_velocity(entity_id, forward * THROW_SPEED);
+        // A thrown item is a normal referenced world object again.
+        self.world.add_component(entity_id, PropHasRefs(true));
+        self.script_world.dispatch(Message {
+            payload: MessagePayload::Drop,
+            to: entity_id,
+        });
+    }
+
     pub fn set_entity_position_rotation(
         &mut self,
         entity_id: EntityId,
@@ -2091,11 +2177,24 @@ impl MissionCore {
                         // top-docked inventory strip: bind the strip to the
                         // `internal_inventory` entity (whose GuiScript
                         // already emits SetUI every frame).
+                        let inventory_entity = self
+                            .world
+                            .borrow::<UniqueView<PlayerInfo>>()
+                            .ok()
+                            .map(|player| player.inventory_entity_id);
+                        // Leaving use mode with an item on the cursor must not
+                        // lose it: return it to the backpack (the original
+                        // refuses to exit the metagame while `drag_obj` is
+                        // set - projects/flat-ui.md §1.5).
+                        if !self.flat_use_mode {
+                            if let (Some(item), Some(inventory)) =
+                                (self.flat_ui.take_cursor_item(), inventory_entity)
+                            {
+                                self.drop_entity_into_container(inventory, item);
+                            }
+                        }
                         let strip_entity = if self.flat_use_mode {
-                            self.world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .ok()
-                                .map(|player| player.inventory_entity_id)
+                            inventory_entity
                         } else {
                             None
                         };
@@ -4698,6 +4797,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
             active_panel,
             strip,
+            cursor: self.flat_ui.cursor_debug(),
         }
     }
 
