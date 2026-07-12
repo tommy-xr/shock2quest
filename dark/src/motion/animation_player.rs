@@ -64,6 +64,11 @@ pub struct AnimationPlayer {
     current_frame: u32,
     remaining_time: f32,
     blend_state: Option<BlendState>,
+    /// Playback position (frame units) through which the head clip's
+    /// end_rotation has been emitted - the anchor for the per-tick rotation
+    /// ramp. Reset to 0 whenever a new clip becomes the head, so the ramp
+    /// covers a carried seam remainder from position zero.
+    rotation_pos: f32,
     /// Pose with the clip's root motion cancelled (see
     /// `AnimationInfo::cancel_root_motion`). Set for first-person viewmodels,
     /// whose entity transform is re-anchored to the camera every frame.
@@ -80,6 +85,7 @@ impl AnimationPlayer {
             current_frame: 0,
             remaining_time: 0.0,
             blend_state: None,
+            rotation_pos: 0.0,
             cancel_root_motion: false,
         }
     }
@@ -93,6 +99,7 @@ impl AnimationPlayer {
             current_frame: 0,
             remaining_time: 0.0,
             blend_state: None,
+            rotation_pos: 0.0,
             cancel_root_motion: false,
         }
     }
@@ -136,6 +143,7 @@ impl AnimationPlayer {
             // restarting the frame clock at every seam.
             remaining_time: player.remaining_time,
             blend_state,
+            rotation_pos: 0.0,
             cancel_root_motion: player.cancel_root_motion,
         }
     }
@@ -207,6 +215,7 @@ impl AnimationPlayer {
             current_frame: 0,
             remaining_time: 0.0,
             blend_state,
+            rotation_pos: 0.0,
             cancel_root_motion: player.cancel_root_motion,
         }
     }
@@ -234,6 +243,7 @@ impl AnimationPlayer {
             current_frame: player.current_frame,
             remaining_time: player.remaining_time,
             blend_state: player.blend_state.clone(),
+            rotation_pos: player.rotation_pos,
             cancel_root_motion: player.cancel_root_motion,
         }
     }
@@ -303,10 +313,40 @@ impl AnimationPlayer {
                 .unwrap_or(current_clip.sliding_velocity);
             let mut next_frame = player.current_frame;
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
+            // The ramp anchor: everything up to rotation_pos has already been
+            // emitted. Anchoring on an explicit field (not a position derived
+            // from current_frame) lets a fresh clip's ramp start at zero even
+            // when it inherits a carried seam remainder.
+            let prev_pos = player.rotation_pos;
             while remaining_duration >= time_per_frame {
                 remaining_duration -= time_per_frame;
                 next_frame += 1;
             }
+            // A clip's authored end direction turns the entity ACROSS the
+            // clip, proportionally to the playback traversed each tick, not
+            // as a snap on the final frame (a hard yaw pop on every turn or
+            // gesture clip). The per-tick fractions telescope, so a full
+            // playthrough applies exactly the authored rotation.
+            let direction_delta = |end_pos: f32, events: &mut Vec<AnimationEvent>| {
+                if current_clip.end_rotation != Deg(0.0) && current_clip.num_frames > 0 {
+                    let fraction = (end_pos - prev_pos).max(0.0) / current_clip.num_frames as f32;
+                    if fraction > 0.0 {
+                        events.push(AnimationEvent::DirectionChanged(Deg(current_clip
+                            .end_rotation
+                            .0
+                            * fraction)));
+                    }
+                }
+            };
+            // Raw end-of-tick position, uncapped: past num_frames it covers
+            // the wrapped region of a looping clip (a hitch may cover more
+            // than one full cycle - the fraction then exceeds 1 and emits
+            // the extra cycles' rotation too).
+            let raw_end_pos = if time_per_frame > f32::EPSILON {
+                next_frame as f32 + remaining_duration / time_per_frame
+            } else {
+                next_frame as f32
+            };
 
             let motion_flags = {
                 let mut output = MotionFlags::empty();
@@ -323,26 +363,35 @@ impl AnimationPlayer {
 
                 events.push(AnimationEvent::Completed);
 
-                if current_clip.end_rotation != Deg(0.0) {
-                    events.push(AnimationEvent::DirectionChanged(current_clip.end_rotation));
-                }
-
                 match flags {
-                    AnimationFlags::Loop => (
-                        AnimationPlayer {
-                            additional_joint_transforms: player.additional_joint_transforms.clone(),
-                            last_animation: player.last_animation.clone(),
-                            animation: player.animation.clone(),
-                            current_frame: next_frame - current_clip.num_frames,
-                            remaining_time: remaining_duration,
-                            blend_state,
-                            cancel_root_motion: player.cancel_root_motion,
-                        },
-                        motion_flags,
-                        events,
-                        velocity,
-                    ),
+                    AnimationFlags::Loop => {
+                        // The wrapped region was traversed this tick too -
+                        // emit past the cap so no rotation slice is lost,
+                        // then re-anchor at the post-wrap position.
+                        direction_delta(raw_end_pos, &mut events);
+                        (
+                            AnimationPlayer {
+                                additional_joint_transforms: player
+                                    .additional_joint_transforms
+                                    .clone(),
+                                last_animation: player.last_animation.clone(),
+                                animation: player.animation.clone(),
+                                current_frame: next_frame - current_clip.num_frames,
+                                remaining_time: remaining_duration,
+                                blend_state,
+                                rotation_pos: raw_end_pos - current_clip.num_frames as f32,
+                                cancel_root_motion: player.cancel_root_motion,
+                            },
+                            motion_flags,
+                            events,
+                            velocity,
+                        )
+                    }
                     AnimationFlags::PlayOnce => {
+                        // Final ramp segment: up to the clip's exact end
+                        // (hitch overshoot doesn't over-rotate, matching the
+                        // sub-frame carry below).
+                        direction_delta(current_clip.num_frames as f32, &mut events);
                         let last_animation = player.animation.first().map(|m| m.0.clone());
                         let animation = player.animation.drop_first().unwrap_or_default();
                         // Carry the sub-frame remainder past the final frame
@@ -364,6 +413,10 @@ impl AnimationPlayer {
                                 current_frame: 0,
                                 remaining_time: overshoot,
                                 blend_state,
+                                // Fresh anchor: the next head clip's ramp
+                                // starts at zero, so the carried remainder's
+                                // slice is emitted on its first tick.
+                                rotation_pos: 0.0,
                                 cancel_root_motion: player.cancel_root_motion,
                             },
                             motion_flags,
@@ -373,7 +426,7 @@ impl AnimationPlayer {
                     }
                 }
             } else {
-                let events = if !player.animation.is_empty()
+                let mut events = if !player.animation.is_empty()
                     && player.current_frame == 0
                     && next_frame > 0
                 {
@@ -384,6 +437,7 @@ impl AnimationPlayer {
                 } else {
                     vec![]
                 };
+                direction_delta(raw_end_pos, &mut events);
                 (
                     AnimationPlayer {
                         additional_joint_transforms: player.additional_joint_transforms.clone(),
@@ -392,6 +446,7 @@ impl AnimationPlayer {
                         current_frame: next_frame,
                         remaining_time: remaining_duration,
                         blend_state,
+                        rotation_pos: raw_end_pos,
                         cancel_root_motion: player.cancel_root_motion,
                     },
                     motion_flags,
@@ -676,6 +731,118 @@ mod tests {
             (clip.root_velocity_at(2).unwrap().x - 10.0).abs() < 1e-4,
             "final frame should keep the stride rate, not drop to zero: {:?}",
             clip.root_velocity_at(2)
+        );
+    }
+
+    #[test]
+    fn end_rotation_ramps_across_playback_and_totals_exactly() {
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.end_rotation = Deg(90.0);
+        let mut player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(clip));
+
+        // 3 frames at 100ms, stepped in 60ms ticks: the turn must arrive as
+        // several increments summing to exactly the authored 90 degrees.
+        let mut total = 0.0;
+        let mut rotation_events = 0;
+        for _ in 0..100 {
+            let (next, _, events, _) = AnimationPlayer::update(&player, Duration::from_millis(60));
+            player = next;
+            let mut completed = false;
+            for event in &events {
+                match event {
+                    AnimationEvent::DirectionChanged(d) => {
+                        total += d.0;
+                        rotation_events += 1;
+                    }
+                    AnimationEvent::Completed => completed = true,
+                    _ => {}
+                }
+            }
+            if completed {
+                break;
+            }
+        }
+        assert!(
+            rotation_events > 1,
+            "rotation must ramp across ticks, not snap once (got {rotation_events} events)"
+        );
+        assert!(
+            (total - 90.0).abs() < 1e-3,
+            "increments must total the authored rotation, got {total}"
+        );
+    }
+
+    #[test]
+    fn end_rotation_covers_the_loop_wrap_segment() {
+        // Looping 3-frame clip (100ms/frame), 90 deg per cycle, stepped in
+        // 80ms ticks (never divides 300ms, so every wrap carries a sub-frame
+        // remainder into the next cycle). After exactly 4 cycles' worth of
+        // time (1.2s = 15 ticks), the emitted total must be 4 * 90 with no
+        // slice lost at the wraps.
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.end_rotation = Deg(90.0);
+        let mut player = AnimationPlayer::from_animation(Rc::new(clip));
+        let mut total = 0.0;
+        for _ in 0..15 {
+            let (next, _, events, _) = AnimationPlayer::update(&player, Duration::from_millis(80));
+            player = next;
+            for event in &events {
+                if let AnimationEvent::DirectionChanged(d) = event {
+                    total += d.0;
+                }
+            }
+        }
+        assert!(
+            (total - 360.0).abs() < 1e-2,
+            "4 loop cycles must emit exactly 4x the authored rotation, got {total}"
+        );
+    }
+
+    #[test]
+    fn end_rotation_totals_exactly_across_a_carried_seam() {
+        // Clip 1 completes with a sub-frame carry; clip 2 (also rotating)
+        // inherits it. Each clip's emissions must independently total the
+        // authored rotation - the carried slice belongs to clip 2's ramp.
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.end_rotation = Deg(90.0);
+        let clip = Rc::new(clip);
+        let mut player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip.clone());
+
+        // 350ms tick: clip 1 (300ms) completes with 50ms carried.
+        let (next, _, events, _) = AnimationPlayer::update(&player, Duration::from_millis(350));
+        player = next;
+        let mut clip1_total = 0.0;
+        for event in &events {
+            if let AnimationEvent::DirectionChanged(d) = event {
+                clip1_total += d.0;
+            }
+        }
+        assert!(
+            (clip1_total - 90.0).abs() < 1e-3,
+            "clip 1 must total its authored rotation, got {clip1_total}"
+        );
+
+        // Queue clip 2 (inherits the 50ms carry) and run it to completion.
+        player = AnimationPlayer::queue_animation(&player, clip.clone());
+        let mut clip2_total = 0.0;
+        for _ in 0..100 {
+            let (next, _, events, _) = AnimationPlayer::update(&player, Duration::from_millis(60));
+            player = next;
+            let mut completed = false;
+            for event in &events {
+                match event {
+                    AnimationEvent::DirectionChanged(d) => clip2_total += d.0,
+                    AnimationEvent::Completed => completed = true,
+                    _ => {}
+                }
+            }
+            if completed {
+                break;
+            }
+        }
+        assert!(
+            (clip2_total - 90.0).abs() < 1e-3,
+            "clip 2 must total its authored rotation including the carried slice, got {clip2_total}"
         );
     }
 
