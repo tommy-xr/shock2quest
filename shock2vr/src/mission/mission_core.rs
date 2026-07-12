@@ -226,6 +226,14 @@ pub struct MissionCore {
     pub script_world: ScriptWorld,
     pub scene_objects: Vec<SceneObject>,
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
+    /// Last animation query that failed per entity, to break the
+    /// re-dispatch loop: a failed query reports AnimationCompleted so the
+    /// requester isn't left hanging, but the AI's completion handler
+    /// re-queries - an unresolvable query would otherwise churn every frame
+    /// (observed: a creature with no matching idle clips issuing ~70
+    /// queries/second forever). The same failing query reports completion
+    /// only once; any different query (or a success) resets the guard.
+    failed_animation_queries: HashMap<EntityId, String>,
     pub id_to_model: HashMap<EntityId, Model>,
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
@@ -701,6 +709,7 @@ impl MissionCore {
             script_world,
             id_to_model,
             id_to_animation_player,
+            failed_animation_queries: HashMap::new(),
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
             template_name_to_template_id,
@@ -1236,32 +1245,49 @@ impl MissionCore {
                         .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
 
                     if let Some(clip) = maybe_clip {
+                        self.failed_animation_queries.remove(&entity_id);
                         *player = apply(player, clip);
                     } else {
-                        game_log!(
-                            WARN,
-                            "Unable to load animation clip: {:?}_.mc",
-                            next_animation
-                        );
                         // Report completion just like the query-miss branch
                         // below, so anything waiting on this animation
-                        // (scripted Play actions) is never left hanging.
+                        // (scripted Play actions) is never left hanging -
+                        // but only once per distinct failure, or the
+                        // completion handler's re-query loops every frame.
+                        let failure = format!("clip:{next_animation}");
+                        if self.failed_animation_queries.get(&entity_id) != Some(&failure) {
+                            game_log!(
+                                WARN,
+                                "Unable to load animation clip: {:?}_.mc",
+                                next_animation
+                            );
+                            self.failed_animation_queries.insert(entity_id, failure);
+                            self.script_world.dispatch(Message {
+                                payload: MessagePayload::AnimationCompleted,
+                                to: entity_id,
+                            });
+                        }
+                    }
+                } else {
+                    // Key on the query items only - the selection strategy
+                    // carries a per-request counter that would defeat the
+                    // dedupe (every retry would look like a new query).
+                    let failure = format!(
+                        "query:{:?}",
+                        tried_queries.iter().map(|q| &q.items).collect::<Vec<_>>()
+                    );
+                    if self.failed_animation_queries.get(&entity_id) != Some(&failure) {
+                        game_log!(
+                            WARN,
+                            "Unable to find animation for queries: {:?}",
+                            &tried_queries
+                        );
+                        self.failed_animation_queries.insert(entity_id, failure);
+                        // If we couldn't find an animation... just stop the current one
                         self.script_world.dispatch(Message {
                             payload: MessagePayload::AnimationCompleted,
                             to: entity_id,
                         });
                     }
-                } else {
-                    game_log!(
-                        WARN,
-                        "Unable to find animation for queries: {:?}",
-                        &tried_queries
-                    );
-                    // If we couldn't find an animation... just stop the current one
-                    self.script_world.dispatch(Message {
-                        payload: MessagePayload::AnimationCompleted,
-                        to: entity_id,
-                    });
                 }
             }
         }
@@ -1313,6 +1339,11 @@ impl MissionCore {
                     }),
                     AnimationEvent::DirectionChanged(ang) => {
                         game_log!(DEBUG, "Animation direction changed: {:?}", ang);
+                        // The events now arrive as small per-tick increments
+                        // ramping across the clip (they used to snap once at
+                        // completion); the -0.5 scale predates recorded
+                        // history and is preserved so clips leave entities
+                        // facing exactly where they always have.
                         let maybe_current_rotation = self.physics.get_rotation2(*id);
                         if let Some(current_rotation) = maybe_current_rotation {
                             let new_rotation =

@@ -303,10 +303,33 @@ impl AnimationPlayer {
                 .unwrap_or(current_clip.sliding_velocity);
             let mut next_frame = player.current_frame;
             let time_per_frame = current_clip.time_per_frame.as_secs_f32();
+            // Playback position (in frame units) before this tick, for
+            // distributing end_rotation over the traversal below.
+            let prev_pos = if time_per_frame > f32::EPSILON {
+                player.current_frame as f32 + player.remaining_time / time_per_frame
+            } else {
+                player.current_frame as f32
+            };
             while remaining_duration >= time_per_frame {
                 remaining_duration -= time_per_frame;
                 next_frame += 1;
             }
+            // A clip's authored end direction turns the entity ACROSS the
+            // clip, proportionally to the playback traversed each tick, not
+            // as a snap on the final frame (a hard yaw pop on every turn or
+            // gesture clip). The per-tick fractions telescope, so a full
+            // playthrough applies exactly the authored rotation.
+            let direction_delta = |end_pos: f32, events: &mut Vec<AnimationEvent>| {
+                if current_clip.end_rotation != Deg(0.0) && current_clip.num_frames > 0 {
+                    let fraction = (end_pos - prev_pos).max(0.0) / current_clip.num_frames as f32;
+                    if fraction > 0.0 {
+                        events.push(AnimationEvent::DirectionChanged(Deg(current_clip
+                            .end_rotation
+                            .0
+                            * fraction)));
+                    }
+                }
+            };
 
             let motion_flags = {
                 let mut output = MotionFlags::empty();
@@ -323,9 +346,9 @@ impl AnimationPlayer {
 
                 events.push(AnimationEvent::Completed);
 
-                if current_clip.end_rotation != Deg(0.0) {
-                    events.push(AnimationEvent::DirectionChanged(current_clip.end_rotation));
-                }
+                // Final ramp segment: up to the clip's exact end (hitch
+                // overshoot doesn't over-rotate, matching the carry below).
+                direction_delta(current_clip.num_frames as f32, &mut events);
 
                 match flags {
                     AnimationFlags::Loop => (
@@ -373,7 +396,7 @@ impl AnimationPlayer {
                     }
                 }
             } else {
-                let events = if !player.animation.is_empty()
+                let mut events = if !player.animation.is_empty()
                     && player.current_frame == 0
                     && next_frame > 0
                 {
@@ -384,6 +407,12 @@ impl AnimationPlayer {
                 } else {
                     vec![]
                 };
+                let new_pos = if time_per_frame > f32::EPSILON {
+                    next_frame as f32 + remaining_duration / time_per_frame
+                } else {
+                    next_frame as f32
+                };
+                direction_delta(new_pos, &mut events);
                 (
                     AnimationPlayer {
                         additional_joint_transforms: player.additional_joint_transforms.clone(),
@@ -676,6 +705,44 @@ mod tests {
             (clip.root_velocity_at(2).unwrap().x - 10.0).abs() < 1e-4,
             "final frame should keep the stride rate, not drop to zero: {:?}",
             clip.root_velocity_at(2)
+        );
+    }
+
+    #[test]
+    fn end_rotation_ramps_across_playback_and_totals_exactly() {
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.end_rotation = Deg(90.0);
+        let mut player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(clip));
+
+        // 3 frames at 100ms, stepped in 60ms ticks: the turn must arrive as
+        // several increments summing to exactly the authored 90 degrees.
+        let mut total = 0.0;
+        let mut rotation_events = 0;
+        for _ in 0..100 {
+            let (next, _, events, _) = AnimationPlayer::update(&player, Duration::from_millis(60));
+            player = next;
+            let mut completed = false;
+            for event in &events {
+                match event {
+                    AnimationEvent::DirectionChanged(d) => {
+                        total += d.0;
+                        rotation_events += 1;
+                    }
+                    AnimationEvent::Completed => completed = true,
+                    _ => {}
+                }
+            }
+            if completed {
+                break;
+            }
+        }
+        assert!(
+            rotation_events > 1,
+            "rotation must ramp across ticks, not snap once (got {rotation_events} events)"
+        );
+        assert!(
+            (total - 90.0).abs() < 1e-3,
+            "increments must total the authored rotation, got {total}"
         );
     }
 
