@@ -427,9 +427,12 @@ pub struct AnimationInfo<'a> {
     /// Sub-frame progress toward `frame + 1` (0..1). Poses interpolate
     /// between the two keyframes (per-joint rotation slerp, translation
     /// lerp), so playback above the clip's native frame rate advances
-    /// smoothly instead of snapping to whole 30fps keyframes. The final
-    /// keyframe holds (no wrap) - seams are the queue's business.
+    /// smoothly instead of snapping to whole 30fps keyframes.
     pub fraction: f32,
+    /// Whether the final keyframe interpolates toward frame 0 (looping
+    /// clips). One-shots hold their final keyframe - their seams are the
+    /// queue's business.
+    pub wrap: bool,
     /// Cancel the clip's root motion: both the per-frame clip root transform
     /// and the root joint's animation transform are replaced with identity, so
     /// the posed skeleton stays anchored at the model origin and only the
@@ -453,16 +456,30 @@ pub fn animate(
         animation_clip,
         frame,
         fraction,
+        wrap,
         cancel_root_motion,
     }) = animation_info
     {
         let normalized_frame = (frame % animation_clip.num_frames) as usize;
         let sample = |frames: &Vec<Matrix4<f32>>| -> Matrix4<f32> {
-            let current = frames[normalized_frame.min(frames.len() - 1)];
-            if fraction > f32::EPSILON && normalized_frame + 1 < frames.len() {
-                interpolate_transform(&current, &frames[normalized_frame + 1], fraction)
+            let Some(&current) = frames.get(normalized_frame.min(frames.len().saturating_sub(1)))
+            else {
+                // Empty keyframe track (malformed clip data) - bind pose.
+                return Matrix4::identity();
+            };
+            if fraction <= f32::EPSILON {
+                return current;
+            }
+            let next = if normalized_frame + 1 < frames.len() {
+                Some(normalized_frame + 1)
+            } else if wrap && frames.len() > 1 {
+                Some(0)
             } else {
-                current
+                None
+            };
+            match next {
+                Some(next) => interpolate_transform(&current, &frames[next], fraction),
+                None => current,
             }
         };
         let animations = &animation_clip.joint_to_frame;
@@ -638,6 +655,7 @@ mod tests {
                 animation_clip: &clip,
                 frame: 0,
                 fraction: 0.0,
+                wrap: false,
                 cancel_root_motion: false,
             }),
             &immutable::HashTrieMap::new(),
@@ -679,6 +697,7 @@ mod tests {
                 animation_clip: &clip,
                 frame: 0,
                 fraction: 0.5,
+                wrap: false,
                 cancel_root_motion: false,
             }),
             &immutable::HashTrieMap::new(),
@@ -700,6 +719,50 @@ mod tests {
     }
 
     #[test]
+    fn animate_wraps_interpolation_on_looping_clips() {
+        let (skeleton, mut clip) = test_skeleton_and_clip();
+        // Child joint: (2,0,0) at frame 0, (4,0,0) at frame 1. Sampling the
+        // FINAL frame with fraction 0.5 and wrap on must head back toward
+        // frame 0: lerp((4,0,0), (2,0,0), 0.5) = (3,0,0).
+        clip.num_frames = 2;
+        clip.joint_to_frame
+            .insert(0, vec![Matrix4::identity(), Matrix4::identity()]);
+        clip.joint_to_frame.insert(
+            1,
+            vec![
+                Matrix4::from_translation(Vector3::new(2.0, 0.0, 0.0)),
+                Matrix4::from_translation(Vector3::new(4.0, 0.0, 0.0)),
+            ],
+        );
+        clip.root_transforms = vec![Matrix4::identity(), Matrix4::identity()];
+
+        let sample_child = |wrap: bool| {
+            let posed = animate(
+                &skeleton,
+                Some(AnimationInfo {
+                    animation_clip: &clip,
+                    frame: 1,
+                    fraction: 0.5,
+                    wrap,
+                    cancel_root_motion: false,
+                }),
+                &immutable::HashTrieMap::new(),
+            );
+            translation_from_matrix(&posed.get_transforms()[1])
+        };
+
+        // bone local (1,0,0) + anim translation.
+        assert!(
+            (sample_child(true) - Vector3::new(4.0, 0.0, 0.0)).magnitude() < 1e-5,
+            "looping: final frame interpolates toward frame 0"
+        );
+        assert!(
+            (sample_child(false) - Vector3::new(5.0, 0.0, 0.0)).magnitude() < 1e-5,
+            "one-shot: final frame holds"
+        );
+    }
+
+    #[test]
     fn animate_cancel_root_motion_pins_root_and_strips_joint_translations() {
         let (skeleton, clip) = test_skeleton_and_clip();
         let posed = animate(
@@ -708,6 +771,7 @@ mod tests {
                 animation_clip: &clip,
                 frame: 0,
                 fraction: 0.0,
+                wrap: false,
                 cancel_root_motion: true,
             }),
             &immutable::HashTrieMap::new(),
