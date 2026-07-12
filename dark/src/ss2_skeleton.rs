@@ -8,7 +8,10 @@ use tracing::warn;
 use cgmath::{Deg, Matrix4, Quaternion, SquareMatrix, Vector2, Vector3};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPosition, color_material, cube, lines_mesh},
+    scene::{
+        MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, SceneObject, VertexPosition, color_material,
+        cube, lines_mesh,
+    },
     util,
 };
 
@@ -86,24 +89,22 @@ impl Skeleton {
     /// parent, and empty slots, fall back to the joint's own transform,
     /// which makes any second-bone reference a no-op.
     pub fn expand_skinning_palette(
-        pose: &[Matrix4<f32>; 40],
+        pose: &[Matrix4<f32>; MAX_SKINNED_JOINTS],
         skeleton: &Skeleton,
-    ) -> [Matrix4<f32>; 80] {
-        let mut palette = [Matrix4::identity(); 80];
-        palette[..40].copy_from_slice(pose);
-        for j in 0..40 {
-            palette[40 + j] = pose[j];
-        }
+    ) -> [Matrix4<f32>; SKINNING_PALETTE_SIZE] {
+        let mut palette = [Matrix4::identity(); SKINNING_PALETTE_SIZE];
+        palette[..MAX_SKINNED_JOINTS].copy_from_slice(pose);
+        palette[MAX_SKINNED_JOINTS..].copy_from_slice(pose);
         for bone in skeleton.bones() {
             let j = bone.joint_id as usize;
-            if j >= 40 {
+            if j >= MAX_SKINNED_JOINTS {
                 continue;
             }
             if let Some(parent) = bone.parent_id {
-                if (parent as usize) < 40 {
+                if (parent as usize) < MAX_SKINNED_JOINTS {
                     let mut frame = pose[parent as usize];
                     frame.w = pose[j].w;
-                    palette[40 + j] = frame;
+                    palette[MAX_SKINNED_JOINTS + j] = frame;
                 }
             }
         }

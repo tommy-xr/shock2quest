@@ -1,6 +1,13 @@
 pub mod scene;
 pub use scene::{LegacyScene, Scene};
 
+/// Number of base joint slots in the skinning palette.
+pub const MAX_SKINNED_JOINTS: usize = 40;
+/// Full skinning-palette size: base joints in `0..MAX_SKINNED_JOINTS`, one
+/// auxiliary "parent frame" per joint in the upper half (blended by stretchy
+/// vertices). The shader-side `bone_matrices` array literals mirror this.
+pub const SKINNING_PALETTE_SIZE: usize = 2 * MAX_SKINNED_JOINTS;
+
 pub mod light;
 pub use light::{Light, LightType, SpotLight};
 

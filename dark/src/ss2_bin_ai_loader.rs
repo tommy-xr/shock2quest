@@ -32,7 +32,7 @@ use crate::{
 /// Number of base joint slots in the skinning palette; stretchy frames for
 /// joint `j` live at palette slot `MAX_JOINTS + j` (see
 /// `ss2_skeleton::expand_skinning_palette`).
-pub const MAX_JOINTS: usize = 40;
+pub const MAX_JOINTS: usize = engine::scene::MAX_SKINNED_JOINTS;
 
 #[derive(Clone)]
 pub struct SystemShock2AIMesh {
@@ -543,11 +543,28 @@ pub fn to_vertices(
             continue;
         }
         let joint_id = segment.joint as JointId;
+        // A stretchy run's weights must fully cover its vertices. A malformed
+        // range falls back to rigid binding LOUDLY - silently degrading would
+        // be indistinguishable from intentionally rigid data.
+        let weight_end = joint.weight_index as usize + joint.num_vertices.max(0) as usize;
+        let stretchy = segment.stretchy
+            && {
+                let in_bounds = weight_end <= mesh.weights.len();
+                if !in_bounds {
+                    warn!(
+                        "AI mesh stretchy run (segment {}, joint {}) weight range {}..{} exceeds weight array ({}); binding rigidly",
+                        joint.mapper_id,
+                        joint_id,
+                        joint.weight_index,
+                        weight_end,
+                        mesh.weights.len()
+                    );
+                }
+                in_bounds
+            };
         for (local_idx, i) in (start_vertex..end_vertex).enumerate() {
-            let stretch_weight = if segment.stretchy {
-                mesh.weights
-                    .get(joint.weight_index as usize + local_idx)
-                    .copied()
+            let stretch_weight = if stretchy {
+                Some(mesh.weights[joint.weight_index as usize + local_idx])
             } else {
                 None
             };
