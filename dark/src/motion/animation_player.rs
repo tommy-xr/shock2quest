@@ -130,7 +130,11 @@ impl AnimationPlayer {
             animation: new_animation,
             last_animation: None,
             current_frame: 0,
-            remaining_time: 0.0,
+            // Preserve the sub-frame playback remainder (including the
+            // overshoot carried across the previous clip's completion) so a
+            // queued continuation keeps the clip cadence instead of
+            // restarting the frame clock at every seam.
+            remaining_time: player.remaining_time,
             blend_state,
             cancel_root_motion: player.cancel_root_motion,
         }
@@ -143,9 +147,18 @@ impl AnimationPlayer {
         self.animation
             .first()
             .map(|(clip, flags)| {
+                // Fade from the pose actually on screen - the whole frame
+                // plus the sub-frame remainder - not the integer keyframe
+                // behind it (which would start the fade with a backward pop).
+                let time_per_frame = clip.time_per_frame.as_secs_f32();
+                let fraction = if time_per_frame > f32::EPSILON {
+                    (self.remaining_time / time_per_frame).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
                 (
                     clip.clone(),
-                    self.current_frame as f32,
+                    self.current_frame as f32 + fraction,
                     matches!(flags, AnimationFlags::Loop),
                 )
             })
@@ -332,6 +345,15 @@ impl AnimationPlayer {
                     AnimationFlags::PlayOnce => {
                         let last_animation = player.animation.first().map(|m| m.0.clone());
                         let animation = player.animation.drop_first().unwrap_or_default();
+                        // Carry the sub-frame remainder past the final frame
+                        // into the next clip - zeroing it phase-reset the
+                        // cadence at every seam. Whole overshot frames (a
+                        // large dt hitch landing on a completion) are
+                        // deliberately dropped: carrying more than one frame
+                        // would leave the new clip's logical time ahead of
+                        // its rendered pose. The advance loop already leaves
+                        // remaining_duration < time_per_frame.
+                        let overshoot = remaining_duration;
                         (
                             AnimationPlayer {
                                 additional_joint_transforms: player
@@ -340,7 +362,7 @@ impl AnimationPlayer {
                                 animation,
                                 last_animation,
                                 current_frame: 0,
-                                remaining_time: 0.0,
+                                remaining_time: overshoot,
                                 blend_state,
                                 cancel_root_motion: player.cancel_root_motion,
                             },
@@ -415,8 +437,8 @@ impl AnimationPlayer {
         let maybe_current_clip = self
             .animation
             .first()
-            .map(|m| (m.0.clone(), false))
-            .or_else(|| self.last_animation.clone().map(|m| (m, true)));
+            .map(|m| (m.0.clone(), matches!(m.1, AnimationFlags::Loop), false))
+            .or_else(|| self.last_animation.clone().map(|m| (m, false, true)));
 
         // If there is no animation, we still may need to apply joint transforms (ie, for camera or turret)
         if maybe_current_clip.is_none() {
@@ -425,19 +447,30 @@ impl AnimationPlayer {
             return animated_skeleton.get_transforms();
         }
 
-        let (rc_animation_clip, is_last_anim) = maybe_current_clip.unwrap();
+        let (rc_animation_clip, is_looping, is_last_anim) = maybe_current_clip.unwrap();
         let current_clip = rc_animation_clip.as_ref();
 
+        // Sub-frame position: the whole frame plus the accumulated remainder
+        // toward the next one, so 60Hz+ playback of 30fps clips interpolates
+        // between keyframes instead of holding each for two ticks. A drained
+        // queue holds the final keyframe exactly.
         let current_frame = if is_last_anim {
-            current_clip.num_frames - 1
+            (current_clip.num_frames - 1) as f32
         } else {
-            self.current_frame
+            let time_per_frame = current_clip.time_per_frame.as_secs_f32();
+            let fraction = if time_per_frame > f32::EPSILON {
+                (self.remaining_time / time_per_frame).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            self.current_frame as f32 + fraction
         };
 
         let mut animated_transforms = Self::compute_transforms_for_clip(
             skeleton,
             current_clip,
             current_frame,
+            is_looping,
             &self.additional_joint_transforms,
             self.cancel_root_motion,
         );
@@ -449,16 +482,16 @@ impl AnimationPlayer {
                 // as two small hitches bracketing the fade.
                 let t = (blend.elapsed / blend.duration).clamp(0.0, 1.0);
                 let alpha = (1.0 - (std::f32::consts::PI * t).cos()) / 2.0;
-                let frame = if blend.from_clip.num_frames > 0 {
-                    (blend.from_frame.floor() as u32) % blend.from_clip.num_frames
-                } else {
-                    0
-                };
+                // update() keeps from_frame in range (loops wrap, one-shots
+                // clamp), and the fractional position advances smoothly
+                // during the fade.
+                let frame = blend.from_frame;
 
                 let from_transforms = Self::compute_transforms_for_clip(
                     skeleton,
                     &blend.from_clip,
                     frame,
+                    blend.from_looping,
                     &self.additional_joint_transforms,
                     self.cancel_root_motion,
                 );
@@ -474,7 +507,8 @@ impl AnimationPlayer {
     fn compute_transforms_for_clip(
         skeleton: &Skeleton,
         clip: &AnimationClip,
-        frame: u32,
+        frame: f32,
+        wrap: bool,
         additional_joint_transforms: &immutable::HashTrieMap<u32, Matrix4<f32>>,
         cancel_root_motion: bool,
     ) -> [Matrix4<f32>; 40] {
@@ -482,7 +516,9 @@ impl AnimationPlayer {
             skeleton,
             Some(AnimationInfo {
                 animation_clip: clip,
-                frame,
+                frame: frame as u32,
+                fraction: frame.fract(),
+                wrap,
                 cancel_root_motion,
             }),
             additional_joint_transforms,
@@ -640,6 +676,52 @@ mod tests {
             (clip.root_velocity_at(2).unwrap().x - 10.0).abs() < 1e-4,
             "final frame should keep the stride rate, not drop to zero: {:?}",
             clip.root_velocity_at(2)
+        );
+    }
+
+    #[test]
+    fn completion_carries_overshoot_and_queueing_preserves_it() {
+        // 3-frame clip at 10fps (0.3s). A 0.35s tick completes it with 0.05s
+        // of overshoot past the final frame.
+        let player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
+        let (player, _, events, _) = AnimationPlayer::update(&player, Duration::from_millis(350));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AnimationEvent::Completed))
+        );
+        let carried = player.snapshot().remaining_time;
+        assert!(
+            (carried - 0.05).abs() < 1e-4,
+            "overshoot must carry across completion (got {carried})"
+        );
+
+        // Queueing the continuation keeps the remainder...
+        let player = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
+        assert!((player.snapshot().remaining_time - 0.05).abs() < 1e-4);
+
+        // ...so the frame clock stays on cadence: 0.05 carried + 0.06 tick
+        // crosses the 0.1s frame boundary exactly one frame in.
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(60));
+        assert_eq!(player.snapshot().current_frame, 1);
+    }
+
+    #[test]
+    fn blend_starts_from_the_fractional_displayed_pose() {
+        // Advance half a frame (tpf 100ms, dt 50ms): the screen shows frame
+        // 0.5. A blend must fade from that pose, not integer frame 0.
+        let player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(50));
+        let mut blending_clip = (*clip_with_root_motion()).clone();
+        blending_clip.blend_length = Duration::from_millis(500);
+        let player = AnimationPlayer::queue_animation(&player, Rc::new(blending_clip));
+        let blend = player.snapshot().blend.expect("blend engages");
+        assert!(
+            (blend.from_frame - 0.5).abs() < 1e-4,
+            "from-pose must be the displayed fractional frame, got {}",
+            blend.from_frame
         );
     }
 
