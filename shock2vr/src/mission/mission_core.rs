@@ -215,6 +215,13 @@ impl EffectQueue {
     }
 }
 
+/// See `MissionCore::failed_animation_queries`.
+struct FailedAnimationGuard {
+    key: String,
+    frames_left: u32,
+    completion_owed: bool,
+}
+
 pub struct MissionCore {
     pub level_name: String,
     pub gui: GuiManager,
@@ -226,6 +233,19 @@ pub struct MissionCore {
     pub script_world: ScriptWorld,
     pub scene_objects: Vec<SceneObject>,
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
+    /// Failed-animation suppression state per entity: the failing key, a
+    /// countdown (frames), and whether a suppressed request is owed a
+    /// completion when the window expires. A failed query reports
+    /// AnimationCompleted so the requester isn't left hanging, but the AI's
+    /// completion handler re-queries - an unresolvable query would otherwise
+    /// churn every frame (observed: a creature with no matching idle clips
+    /// issuing ~70 queries/second forever). Repeats of the same failure
+    /// inside the window get ONE deferred completion at expiry instead:
+    /// the loop collapses to ~2 queries/second, while a scripted sequence
+    /// legitimately repeating the same failing request still advances
+    /// within half a second. A different query or a success resets the
+    /// guard.
+    failed_animation_queries: HashMap<EntityId, FailedAnimationGuard>,
     pub id_to_model: HashMap<EntityId, Model>,
     pub id_to_bitmap: HashMap<EntityId, Rc<BitmapAnimation>>,
     pub id_to_physics: HashMap<EntityId, RigidBodyHandle>,
@@ -701,6 +721,7 @@ impl MissionCore {
             script_world,
             id_to_model,
             id_to_animation_player,
+            failed_animation_queries: HashMap::new(),
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
             template_name_to_template_id,
@@ -1236,38 +1257,114 @@ impl MissionCore {
                         .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
 
                     if let Some(clip) = maybe_clip {
+                        self.failed_animation_queries.remove(&entity_id);
                         *player = apply(player, clip);
                     } else {
-                        game_log!(
-                            WARN,
-                            "Unable to load animation clip: {:?}_.mc",
-                            next_animation
-                        );
                         // Report completion just like the query-miss branch
                         // below, so anything waiting on this animation
-                        // (scripted Play actions) is never left hanging.
-                        self.script_world.dispatch(Message {
-                            payload: MessagePayload::AnimationCompleted,
-                            to: entity_id,
-                        });
+                        // (scripted Play actions) is never left hanging -
+                        // but rate-limited per distinct failure, or the
+                        // completion handler's re-query loops every frame.
+                        let failure = format!("clip:{next_animation}");
+                        if Self::report_animation_failure(
+                            &mut self.failed_animation_queries,
+                            &mut self.script_world,
+                            entity_id,
+                            failure,
+                        ) {
+                            game_log!(
+                                WARN,
+                                "Unable to load animation clip: {:?}_.mc",
+                                next_animation
+                            );
+                        }
                     }
                 } else {
-                    game_log!(
-                        WARN,
-                        "Unable to find animation for queries: {:?}",
-                        &tried_queries
+                    // Key on the query items only - the selection strategy
+                    // carries a per-request counter that would defeat the
+                    // dedupe (every retry would look like a new query).
+                    let failure = format!(
+                        "query:{:?}",
+                        tried_queries.iter().map(|q| &q.items).collect::<Vec<_>>()
                     );
-                    // If we couldn't find an animation... just stop the current one
-                    self.script_world.dispatch(Message {
-                        payload: MessagePayload::AnimationCompleted,
-                        to: entity_id,
-                    });
+                    if Self::report_animation_failure(
+                        &mut self.failed_animation_queries,
+                        &mut self.script_world,
+                        entity_id,
+                        failure,
+                    ) {
+                        game_log!(
+                            WARN,
+                            "Unable to find animation for queries: {:?}",
+                            &tried_queries
+                        );
+                    }
                 }
             }
         }
     }
 
+    /// Report a failed animation resolution: dispatches AnimationCompleted
+    /// (so the requester isn't left hanging) unless the SAME failure for
+    /// this entity is still inside its suppression window. Returns whether
+    /// the failure was reported (callers log only then).
+    fn report_animation_failure(
+        failed_animation_queries: &mut HashMap<EntityId, FailedAnimationGuard>,
+        script_world: &mut ScriptWorld,
+        entity_id: EntityId,
+        failure: String,
+    ) -> bool {
+        // ~0.5s at the fixed 60Hz step: long enough to collapse the
+        // per-frame re-query loop, short enough that a deferred completion
+        // (below) arrives well inside a scripted action's timeout.
+        const SUPPRESS_FRAMES: u32 = 30;
+        if let Some(guard) = failed_animation_queries.get_mut(&entity_id) {
+            if guard.key == failure && guard.frames_left > 0 {
+                // Owe the requester its completion at window expiry rather
+                // than dropping it - a repeat can be a genuine new request
+                // (a scripted sequence replaying the same failing action).
+                guard.completion_owed = true;
+                return false;
+            }
+        }
+        failed_animation_queries.insert(
+            entity_id,
+            FailedAnimationGuard {
+                key: failure,
+                frames_left: SUPPRESS_FRAMES,
+                completion_owed: false,
+            },
+        );
+        script_world.dispatch(Message {
+            payload: MessagePayload::AnimationCompleted,
+            to: entity_id,
+        });
+        true
+    }
+
     fn update_animations(&mut self, time: &Time) {
+        // Tick down the failed-query suppression windows; on expiry, pay any
+        // completion owed to a request suppressed inside the window (see
+        // report_animation_failure).
+        let mut owed_completions = Vec::new();
+        self.failed_animation_queries.retain(|entity_id, guard| {
+            guard.frames_left = guard.frames_left.saturating_sub(1);
+            if guard.frames_left == 0 {
+                if guard.completion_owed {
+                    owed_completions.push(*entity_id);
+                }
+                false
+            } else {
+                true
+            }
+        });
+        for entity_id in owed_completions {
+            self.script_world.dispatch(Message {
+                payload: MessagePayload::AnimationCompleted,
+                to: entity_id,
+            });
+        }
+
         for (id, player) in self.id_to_animation_player.iter_mut() {
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
             //     *player = AnimationPlayer::update(player, time.elapsed);
@@ -1313,6 +1410,11 @@ impl MissionCore {
                     }),
                     AnimationEvent::DirectionChanged(ang) => {
                         game_log!(DEBUG, "Animation direction changed: {:?}", ang);
+                        // The events now arrive as small per-tick increments
+                        // ramping across the clip (they used to snap once at
+                        // completion); the -0.5 scale predates recorded
+                        // history and is preserved so clips leave entities
+                        // facing exactly where they always have.
                         let maybe_current_rotation = self.physics.get_rotation2(*id);
                         if let Some(current_rotation) = maybe_current_rotation {
                             let new_rotation =
@@ -2024,6 +2126,10 @@ impl MissionCore {
     }
 
     fn remove_entity_single(&mut self, entity_id: EntityId) {
+        // Shipyard recycles entity ids, so stale per-entity animation state
+        // must not outlive the entity (a recycled id would inherit it).
+        self.id_to_animation_player.remove(&entity_id);
+        self.failed_animation_queries.remove(&entity_id);
         // TODO: gui - remove entity
         self.hit_boxes.remove_entity(
             entity_id,
