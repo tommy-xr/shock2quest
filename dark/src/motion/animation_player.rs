@@ -104,19 +104,23 @@ impl AnimationPlayer {
             .animation
             .push_front((animation.clone(), AnimationFlags::PlayOnce));
 
-        let blend_state = if let Some((current_clip, flags)) = player.animation.first() {
-            let duration = animation.blend_length.as_secs_f32();
-            if duration > 0.0 {
-                Some(BlendState {
-                    from_clip: current_clip.clone(),
-                    from_frame: player.current_frame as f32,
-                    from_looping: matches!(flags, AnimationFlags::Loop),
+        // Fade from the playing clip, or - when the queue already drained (the
+        // normal case for AI clips, whose completion handler queues the next
+        // clip one tick after the previous one finished) - from the frozen
+        // last-frame pose that get_transforms has been showing. Without the
+        // fallback a clip's authored blend_length only ever applied to
+        // interruptions, so e.g. idle cycling (500ms authored) hard-popped.
+        let duration = animation.blend_length.as_secs_f32();
+        let blend_state = if duration > f32::EPSILON {
+            player
+                .blend_from()
+                .map(|(from_clip, from_frame, from_looping)| BlendState {
+                    from_clip,
+                    from_frame,
+                    from_looping,
                     duration,
                     elapsed: 0.0,
                 })
-            } else {
-                None
-            }
         } else {
             None
         };
@@ -132,6 +136,30 @@ impl AnimationPlayer {
         }
     }
 
+    /// The pose a new clip should cross-fade from: the playing queue head at
+    /// its current frame, or - when the queue already drained - the frozen
+    /// final frame of `last_animation` (what `get_transforms` is showing).
+    fn blend_from(&self) -> Option<(Rc<AnimationClip>, f32, bool)> {
+        self.animation
+            .first()
+            .map(|(clip, flags)| {
+                (
+                    clip.clone(),
+                    self.current_frame as f32,
+                    matches!(flags, AnimationFlags::Loop),
+                )
+            })
+            .or_else(|| {
+                self.last_animation.as_ref().map(|clip| {
+                    (
+                        clip.clone(),
+                        clip.num_frames.saturating_sub(1) as f32,
+                        false,
+                    )
+                })
+            })
+    }
+
     /// Play `animation` immediately, replacing the whole queue (unlike
     /// `queue_animation`, which pushes on top and lets interrupted clips
     /// resume later). Cross-fades from the interrupted pose over the clip's
@@ -143,40 +171,21 @@ impl AnimationPlayer {
     ) -> AnimationPlayer {
         const MIN_INTERRUPT_BLEND_SECS: f32 = 0.15;
 
-        // Fade from the playing clip's current pose, or from the frozen
-        // last-frame pose when the queue already drained. Known limit: an
-        // interrupt landing mid-blend fades from the head clip's pure pose,
-        // not the blended one on screen - a small pop proportional to how
-        // fresh the interrupted blend was.
-        let blend_from = player
-            .animation
-            .first()
-            .map(|(clip, flags)| {
-                (
-                    clip.clone(),
-                    player.current_frame as f32,
-                    matches!(flags, AnimationFlags::Loop),
-                )
-            })
-            .or_else(|| {
-                player.last_animation.as_ref().map(|clip| {
-                    (
-                        clip.clone(),
-                        clip.num_frames.saturating_sub(1) as f32,
-                        false,
-                    )
-                })
+        // Known limit: an interrupt landing mid-blend fades from the head
+        // clip's pure pose, not the blended one on screen - a small pop
+        // proportional to how fresh the interrupted blend was.
+        let blend_state = player
+            .blend_from()
+            .map(|(from_clip, from_frame, from_looping)| BlendState {
+                from_clip,
+                from_frame,
+                from_looping,
+                duration: animation
+                    .blend_length
+                    .as_secs_f32()
+                    .max(MIN_INTERRUPT_BLEND_SECS),
+                elapsed: 0.0,
             });
-        let blend_state = blend_from.map(|(from_clip, from_frame, from_looping)| BlendState {
-            from_clip,
-            from_frame,
-            from_looping,
-            duration: animation
-                .blend_length
-                .as_secs_f32()
-                .max(MIN_INTERRUPT_BLEND_SECS),
-            elapsed: 0.0,
-        });
 
         AnimationPlayer {
             additional_joint_transforms: player.additional_joint_transforms.clone(),
@@ -435,7 +444,11 @@ impl AnimationPlayer {
 
         if let Some(blend) = &self.blend_state {
             if blend.duration > f32::EPSILON && blend.elapsed < blend.duration {
-                let alpha = (blend.elapsed / blend.duration).clamp(0.0, 1.0);
+                // Raised-cosine ease-in/ease-out rather than linear - a linear
+                // ramp starts and stops the correction abruptly, which reads
+                // as two small hitches bracketing the fade.
+                let t = (blend.elapsed / blend.duration).clamp(0.0, 1.0);
+                let alpha = (1.0 - (std::f32::consts::PI * t).cos()) / 2.0;
                 let frame = if blend.from_clip.num_frames > 0 {
                     (blend.from_frame.floor() as u32) % blend.from_clip.num_frames
                 } else {
@@ -628,6 +641,41 @@ mod tests {
             "final frame should keep the stride rate, not drop to zero: {:?}",
             clip.root_velocity_at(2)
         );
+    }
+
+    #[test]
+    fn queued_clip_blends_from_drained_queues_last_pose() {
+        // Complete a clip so the queue drains and last_animation holds the
+        // final pose (the normal state when the AI's completion handler
+        // queues the next clip one tick later).
+        let player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(300));
+        assert!(player.snapshot().queue.is_empty());
+        assert!(player.snapshot().last_clip.is_none()); // clip is unnamed
+        assert!(player.last_animation.is_some());
+
+        // A clip with an authored blend must fade from that last pose...
+        let mut blending_clip = (*clip_with_root_motion()).clone();
+        blending_clip.blend_length = Duration::from_millis(500);
+        let player = AnimationPlayer::queue_animation(&player, Rc::new(blending_clip));
+        let blend = player.snapshot().blend.expect(
+            "authored blend_length must engage from the drained queue's last pose, not only on interruptions",
+        );
+        assert!((blend.duration - 0.5).abs() < 1e-6);
+        // ...from the final frame of the completed clip.
+        assert!((blend.from_frame - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zero_blend_clip_still_hard_cuts() {
+        // Stride clips author blend_length 0 (the pose lines up by design);
+        // they must not acquire a synthetic fade.
+        let player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(300));
+        let player = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
+        assert!(player.snapshot().blend.is_none());
     }
 
     #[test]
