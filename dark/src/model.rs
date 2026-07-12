@@ -60,13 +60,14 @@ impl AnimatedModel {
     }
 
     fn to_animated_scene_objects(&self, player: &AnimationPlayer) -> Vec<SceneObject> {
-        let skinning_data = player.get_transforms(&self.skeleton);
+        let pose = player.get_transforms(&self.skeleton);
+        let palette = Skeleton::expand_skinning_palette(&pose, &self.skeleton);
 
         self.scene_objects
             .iter()
             .map(|m| {
                 let mut new_obj = m.clone();
-                new_obj.set_skinning_data(skinning_data);
+                new_obj.set_skinning_palette(palette);
                 new_obj
             })
             .collect::<Vec<SceneObject>>()
@@ -82,14 +83,17 @@ impl AnimatedModel {
             }),
             &rpds::HashTrieMap::new(),
         );
-        let new_data = animated_skeleton.get_transforms();
+        let new_data = Skeleton::expand_skinning_palette(
+            &animated_skeleton.get_transforms(),
+            &animated_skeleton,
+        );
 
         let new_scene_objects = self
             .scene_objects
             .iter()
             .map(|m| {
                 let mut new_obj = m.clone();
-                new_obj.set_skinning_data(new_data);
+                new_obj.set_skinning_palette(new_data);
                 new_obj
             })
             .collect::<Vec<SceneObject>>();

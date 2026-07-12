@@ -150,7 +150,8 @@ const SKINNED_VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 world;
         uniform mat4 view;
         uniform mat4 projection;
-        uniform mat4 bone_matrices[40];
+        // Matches the skinned material's palette (base joints + parent frames).
+        uniform mat4 bone_matrices[80];
 
         out vec3 worldNormal;
 

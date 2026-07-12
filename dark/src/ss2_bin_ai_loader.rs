@@ -14,7 +14,7 @@ use engine::{
     scene::{SceneObject, VertexPositionTextureSkinnedNormal},
     texture::{AnimatedTexture, TextureTrait},
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     SCALE_FACTOR,
@@ -29,6 +29,11 @@ use crate::{
     util::load_multiple_textures_for_model,
 };
 
+/// Number of base joint slots in the skinning palette; stretchy frames for
+/// joint `j` live at palette slot `MAX_JOINTS + j` (see
+/// `ss2_skeleton::expand_skinning_palette`).
+pub const MAX_JOINTS: usize = engine::scene::MAX_SKINNED_JOINTS;
+
 #[derive(Clone)]
 pub struct SystemShock2AIMesh {
     // pub header: BinHeader,
@@ -40,6 +45,10 @@ pub struct SystemShock2AIMesh {
 
     pub joints: Vec<AIJointInfo>,
     pub joint_map: Vec<AIJointMapEntry>,
+    /// One weight per vertex of each stretchy segment (indexed by
+    /// `AIJointInfo::weight_index + local vertex index`); rigid segments
+    /// consume none. 0 = follow the joint's parent frame, 1 = the joint.
+    pub weights: Vec<f32>,
 }
 
 impl SystemShock2AIMesh {
@@ -231,9 +240,16 @@ pub fn read<T: Read + Seek>(
         uvs,
         vertices,
         normals,
+        weights,
     }
 }
 
+/// A segment: a run of mesh geometry bound to one joint. Non-stretchy
+/// segments follow their joint rigidly; a stretchy segment is the blend
+/// region between `joint`'s parent and `joint`, with one per-vertex weight
+/// (see `to_vertices`). Validated field-by-field against creature meshes
+/// (byte-level dump of GRUNT_P.BIN: 29 segments in stretchy/rigid pairs,
+/// stretchy vertex counts exactly matching the header weight count).
 #[derive(Debug, Clone)]
 pub struct AIJointMapEntry {
     pub joint: i8,
@@ -241,29 +257,26 @@ pub struct AIJointMapEntry {
     num_of_material_segments: i8,
     #[allow(dead_code)]
     map_start: i8,
-    // en1: i8, // what is this for?
-    // jother: i8,
-    // en2: i8,
-    // rotation: Vector3<f32>,
+    /// The segment blends between `joint`'s parent and `joint`; its vertices
+    /// carry weights (0 = parent-frame, 1 = joint-frame).
+    pub stretchy: bool,
 }
 
 pub fn read_joint_map_entry<T: Read + Seek>(reader: &mut T) -> AIJointMapEntry {
-    // Not convinced this is a 100% accurate, should revisit?
     let _bbox = read_i32(reader);
     let joint = read_i8(reader);
     let num_of_material_segments = read_i8(reader);
     let map_start = read_i8(reader);
-    let _en2 = read_i8(reader);
-    let _rotation = read_vec3(reader);
+    let flags = read_i8(reader);
+    // The remaining 12 bytes are the segment's own geometry ranges, unused:
+    // vertex/polygon ranges come from the material-segment table below.
+    let _data_chunk = read_vec3(reader);
 
     AIJointMapEntry {
         joint,
         num_of_material_segments,
         map_start,
-        // en1,
-        // jother,
-        // en2,
-        // rotation,
+        stretchy: (flags & 0x1) != 0,
     }
 }
 
@@ -365,7 +378,8 @@ pub struct AIJointInfo {
     start_poly: i16,
     num_vertices: i16,
     start_vertex: i16,
-    #[allow(dead_code)]
+    /// Start of this run's weights in the mesh weight array; only meaningful
+    /// when the owning segment is stretchy (garbage for rigid runs).
     weight_index: u16,
     #[allow(dead_code)]
     flag: i16,
@@ -479,8 +493,8 @@ pub fn to_scene_objects(
         ));
 
         let mut scene_object = engine::scene::scene_object::SceneObject::create(material, geometry);
-        let skinning_data = skeleton.get_transforms();
-        scene_object.set_skinning_data(skinning_data);
+        let skinning_data = Skeleton::expand_skinning_palette(&skeleton.get_transforms(), skeleton);
+        scene_object.set_skinning_palette(skinning_data);
         scene_objects.push(scene_object);
     }
 
@@ -504,19 +518,57 @@ pub fn to_vertices(
     let joints = &mesh.joints;
     let joint_map = &mesh.joint_map;
 
-    // Create a map of vertex index -> joint
-    let mut vertex_to_weights: HashMap<u16, JointId> = HashMap::new();
+    // Map each vertex to its joint binding: rigid vertices follow one joint;
+    // vertices of a stretchy segment blend between the joint's parent frame
+    // and the joint by their authored weight (see the palette layout in
+    // `ss2_skeleton::expand_skinning_palette`: slot `40 + j` is joint j's
+    // parent-oriented frame).
+    let mut vertex_to_weights: HashMap<u16, (JointId, Option<f32>)> = HashMap::new();
 
     for joint in joints {
         let start_vertex = joint.start_vertex as u16;
         let end_vertex = start_vertex + (joint.num_vertices as u16);
 
-        // TODO: Incorporate weights
-        // let weight = weights[joint.weight_index];
-
-        let joint_id = joint_map[joint.mapper_id as usize].joint as JointId;
-        for i in start_vertex..end_vertex {
-            vertex_to_weights.insert(i, joint_id);
+        let segment = &joint_map[joint.mapper_id as usize];
+        if segment.joint < 0 || (segment.joint as usize) >= MAX_JOINTS {
+            // An out-of-range joint would index garbage in the bone palette;
+            // bind rigidly to the root instead so the part stays attached.
+            warn!(
+                "AI mesh segment {} has out-of-range joint {}; binding to root",
+                joint.mapper_id, segment.joint
+            );
+            for i in start_vertex..end_vertex {
+                vertex_to_weights.insert(i, (0, None));
+            }
+            continue;
+        }
+        let joint_id = segment.joint as JointId;
+        // A stretchy run's weights must fully cover its vertices. A malformed
+        // range falls back to rigid binding LOUDLY - silently degrading would
+        // be indistinguishable from intentionally rigid data.
+        let weight_end = joint.weight_index as usize + joint.num_vertices.max(0) as usize;
+        let stretchy = segment.stretchy
+            && {
+                let in_bounds = weight_end <= mesh.weights.len();
+                if !in_bounds {
+                    warn!(
+                        "AI mesh stretchy run (segment {}, joint {}) weight range {}..{} exceeds weight array ({}); binding rigidly",
+                        joint.mapper_id,
+                        joint_id,
+                        joint.weight_index,
+                        weight_end,
+                        mesh.weights.len()
+                    );
+                }
+                in_bounds
+            };
+        for (local_idx, i) in (start_vertex..end_vertex).enumerate() {
+            let stretch_weight = if stretchy {
+                Some(mesh.weights[joint.weight_index as usize + local_idx])
+            } else {
+                None
+            };
+            vertex_to_weights.insert(i, (joint_id, stretch_weight));
         }
     }
 
@@ -532,21 +584,21 @@ pub fn to_vertices(
             let v1 = vertices[tri.vert_index1 as usize];
             let v2 = vertices[tri.vert_index2 as usize];
 
-            let j1 = vertex_to_weights.get(&tri.vert_index0).unwrap();
-            let j2 = vertex_to_weights.get(&tri.vert_index1).unwrap();
-            let j3 = vertex_to_weights.get(&tri.vert_index2).unwrap();
+            let (j1, w1) = *vertex_to_weights.get(&tri.vert_index0).unwrap();
+            let (j2, w2) = *vertex_to_weights.get(&tri.vert_index1).unwrap();
+            let (j3, w3) = *vertex_to_weights.get(&tri.vert_index2).unwrap();
 
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v0);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v1);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j1, v2);
+            add_vertex_to_hitbox(&mut joint_to_hitbox, j1, v0);
+            // add_vertex_to_hitbox(&mut joint_to_hitbox, j1, v1);
+            // add_vertex_to_hitbox(&mut joint_to_hitbox, j1, v2);
 
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v0);
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v1);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j2, v2);
+            // add_vertex_to_hitbox(&mut joint_to_hitbox, j2, v0);
+            add_vertex_to_hitbox(&mut joint_to_hitbox, j2, v1);
+            // add_vertex_to_hitbox(&mut joint_to_hitbox, j2, v2);
 
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v0);
-            // add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v1);
-            add_vertex_to_hitbox(&mut joint_to_hitbox, *j3, v2);
+            // add_vertex_to_hitbox(&mut joint_to_hitbox, j3, v0);
+            // add_vertex_to_hitbox(&mut joint_to_hitbox, j3, v1);
+            add_vertex_to_hitbox(&mut joint_to_hitbox, j3, v2);
 
             // let xform0 = skeleton.global_transform(j1);
             // let xform1 = skeleton.global_transform(j2);
@@ -561,29 +613,9 @@ pub fn to_vertices(
             let normal1 = uvs[tri.vert_index1 as usize].normal;
             let normal2 = uvs[tri.vert_index2 as usize].normal;
 
-            // For now, use simple single-bone weighting (1.0 for primary bone, 0.0 for others)
-            // TODO: Implement proper multi-bone weighting from AI mesh weight data
-            verts.push(build_vertex(
-                v0,
-                uv0,
-                normal0,
-                [*j1, 0, 0, 0],
-                [1.0, 0.0, 0.0, 0.0],
-            ));
-            verts.push(build_vertex(
-                v1,
-                uv1,
-                normal1,
-                [*j2, 0, 0, 0],
-                [1.0, 0.0, 0.0, 0.0],
-            ));
-            verts.push(build_vertex(
-                v2,
-                uv2,
-                normal2,
-                [*j3, 0, 0, 0],
-                [1.0, 0.0, 0.0, 0.0],
-            ));
+            verts.push(build_vertex(v0, uv0, normal0, skin_binding(j1, w1)));
+            verts.push(build_vertex(v1, uv1, normal1, skin_binding(j2, w2)));
+            verts.push(build_vertex(v2, uv2, normal2, skin_binding(j3, w3)));
         }
         material_to_verts.push((name.to_owned(), verts));
     }
@@ -603,12 +635,28 @@ fn add_vertex_to_hitbox(
     *entry = entry.grow(point);
 }
 
+/// Bone palette slots + weights for a vertex. Rigid vertices follow their
+/// joint alone; a stretchy vertex blends the joint (weight `w`) with the
+/// joint's parent-oriented frame at palette slot `40 + joint` (weight
+/// `1 - w`) - see `ss2_skeleton::expand_skinning_palette`.
+fn skin_binding(joint: JointId, stretch_weight: Option<f32>) -> ([u32; 4], [f32; 4]) {
+    match stretch_weight {
+        Some(w) => {
+            let w = w.clamp(0.0, 1.0);
+            (
+                [joint, MAX_JOINTS as u32 + joint, 0, 0],
+                [w, 1.0 - w, 0.0, 0.0],
+            )
+        }
+        None => ([joint, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+    }
+}
+
 fn build_vertex(
     vec: Point3<f32>,
     uv: Vector2<f32>,
     normal: Vector3<f32>,
-    bone_indices: [u32; 4],
-    bone_weights: [f32; 4],
+    (bone_indices, bone_weights): ([u32; 4], [f32; 4]),
 ) -> VertexPositionTextureSkinnedNormal {
     VertexPositionTextureSkinnedNormal {
         position: vec.to_vec(),
@@ -616,5 +664,76 @@ fn build_vertex(
         bone_indices,
         bone_weights,
         normal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rigid_vertices_bind_to_a_single_joint() {
+        let (indices, weights) = skin_binding(7, None);
+        assert_eq!(indices, [7, 0, 0, 0]);
+        assert_eq!(weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn stretchy_vertices_blend_joint_with_its_parent_frame_slot() {
+        let (indices, weights) = skin_binding(7, Some(0.75));
+        assert_eq!(indices, [7, MAX_JOINTS as u32 + 7, 0, 0]);
+        assert_eq!(weights, [0.75, 0.25, 0.0, 0.0]);
+
+        // Degenerate weights from data are clamped, not propagated.
+        let (_, weights) = skin_binding(3, Some(1.5));
+        assert_eq!(weights, [1.0, 0.0, 0.0, 0.0]);
+    }
+
+    /// Structure-level invariants against a real creature mesh, mirroring the
+    /// byte-level validation this work was built on: every stretchy-segment
+    /// vertex has exactly one weight (the header's weight count), weights are
+    /// sane blend factors, and every segment's joint is in palette range.
+    #[test]
+    fn grunt_mesh_weights_cover_exactly_the_stretchy_vertices() {
+        // Same search the engine's data_root uses, minus the shock2vr
+        // dependency (dark can't depend on it).
+        let path = std::env::var("DARK_ASSET_PATH")
+            .map(std::path::PathBuf::from)
+            .into_iter()
+            .chain(["Data", "../Data", "../../Data"].map(std::path::PathBuf::from))
+            .map(|root| root.join("res/mesh/GRUNT_P.BIN"))
+            .find(|p| p.exists());
+        let Some(path) = path else {
+            eprintln!("skipping: GRUNT_P.BIN not found (no game data present)");
+            return;
+        };
+        let mut file = std::fs::File::open(path).unwrap();
+        let common_header = crate::ss2_bin_header::read(&mut file);
+        let mesh = read(&mut file, &common_header);
+
+        assert!(!mesh.weights.is_empty(), "grunt has stretchy segments");
+        assert!(
+            mesh.weights.iter().all(|w| (0.0..=1.0).contains(w)),
+            "weights are blend factors"
+        );
+
+        let stretchy_verts: usize = mesh
+            .joints
+            .iter()
+            .filter(|smatseg| mesh.joint_map[smatseg.mapper_id as usize].stretchy)
+            .map(|smatseg| smatseg.num_vertices as usize)
+            .sum();
+        assert_eq!(
+            stretchy_verts,
+            mesh.weights.len(),
+            "one weight per stretchy vertex, none for rigid"
+        );
+
+        for segment in &mesh.joint_map {
+            assert!(
+                segment.joint >= 0 && (segment.joint as usize) < MAX_JOINTS,
+                "segment joints stay in palette range"
+            );
+        }
     }
 }

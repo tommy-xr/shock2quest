@@ -1,5 +1,4 @@
 extern crate gl;
-use std::ffi::CString;
 use std::rc::Rc;
 
 use crate::engine::EngineRenderContext;
@@ -26,7 +25,11 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         uniform mat4 world;
         uniform mat4 view;
         uniform mat4 projection;
-        uniform mat4 bone_matrices[40];
+        // Affine bones packed as 3 vec4 rows each (the mat3x4's columns hold
+        // the matrix rows), so the 80-slot palette costs 240 uniform vectors
+        // and fits the GLES 3.0 guaranteed vertex budget (256); a mat4 array
+        // would need 320. Apply with `vec4(v) * bone_matrices[i]`.
+        uniform mat3x4 bone_matrices[80];
 
         out vec2 texCoord;
         out vec3 worldPos;
@@ -36,29 +39,34 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
             texCoord = inTex;
 
             // Apply weighted bone transformations to position and normal
-            vec4 skinnedPos = vec4(0.0);
+            vec3 skinnedPos = vec3(0.0);
             vec3 skinnedNormal = vec3(0.0);
+            float totalWeight = 0.0;
 
             // Blend up to 4 bones based on weights
             if (bone_weights.x > 0.0) {
-                skinnedPos += bone_weights.x * (bone_matrices[bone_ids.x] * vec4(inPos, 1.0));
-                skinnedNormal += bone_weights.x * (mat3(bone_matrices[bone_ids.x]) * inNormal);
+                skinnedPos += bone_weights.x * (vec4(inPos, 1.0) * bone_matrices[bone_ids.x]);
+                skinnedNormal += bone_weights.x * (vec4(inNormal, 0.0) * bone_matrices[bone_ids.x]);
+                totalWeight += bone_weights.x;
             }
             if (bone_weights.y > 0.0) {
-                skinnedPos += bone_weights.y * (bone_matrices[bone_ids.y] * vec4(inPos, 1.0));
-                skinnedNormal += bone_weights.y * (mat3(bone_matrices[bone_ids.y]) * inNormal);
+                skinnedPos += bone_weights.y * (vec4(inPos, 1.0) * bone_matrices[bone_ids.y]);
+                skinnedNormal += bone_weights.y * (vec4(inNormal, 0.0) * bone_matrices[bone_ids.y]);
+                totalWeight += bone_weights.y;
             }
             if (bone_weights.z > 0.0) {
-                skinnedPos += bone_weights.z * (bone_matrices[bone_ids.z] * vec4(inPos, 1.0));
-                skinnedNormal += bone_weights.z * (mat3(bone_matrices[bone_ids.z]) * inNormal);
+                skinnedPos += bone_weights.z * (vec4(inPos, 1.0) * bone_matrices[bone_ids.z]);
+                skinnedNormal += bone_weights.z * (vec4(inNormal, 0.0) * bone_matrices[bone_ids.z]);
+                totalWeight += bone_weights.z;
             }
             if (bone_weights.w > 0.0) {
-                skinnedPos += bone_weights.w * (bone_matrices[bone_ids.w] * vec4(inPos, 1.0));
-                skinnedNormal += bone_weights.w * (mat3(bone_matrices[bone_ids.w]) * inNormal);
+                skinnedPos += bone_weights.w * (vec4(inPos, 1.0) * bone_matrices[bone_ids.w]);
+                skinnedNormal += bone_weights.w * (vec4(inNormal, 0.0) * bone_matrices[bone_ids.w]);
+                totalWeight += bone_weights.w;
             }
 
             // Fallback to original position if no valid bones
-            vec4 mod_position = (skinnedPos.w > 0.0) ? skinnedPos : vec4(inPos, 1.0);
+            vec4 mod_position = (totalWeight > 0.0) ? vec4(skinnedPos, 1.0) : vec4(inPos, 1.0);
             vec3 mod_normal = (length(skinnedNormal) > 0.0) ? normalize(skinnedNormal) : inNormal;
 
             // Transform to world space
@@ -163,7 +171,7 @@ struct UnifiedUniforms {
     transparency_loc: i32,
 
     // Bone matrices for skeletal animation
-    bone_matrices_locs: [i32; 40],
+    bone_matrices_loc: i32,
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -223,11 +231,28 @@ impl SkinnedMaterial {
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
 
-            // Set bone matrices for skeletal animation
-            for i in 0..40 {
-                let mat = skinning_data[i];
-                gl::UniformMatrix4fv(uniforms.bone_matrices_locs[i], 1, gl::FALSE, mat.as_ptr());
+            // Pack each affine bone as its 3 matrix rows (the shader-side
+            // mat3x4's columns) and upload the whole palette in one call.
+            let mut packed = [0f32; crate::scene::SKINNING_PALETTE_SIZE * 12];
+            for (bone, mat) in skinning_data
+                .iter()
+                .enumerate()
+                .take(crate::scene::SKINNING_PALETTE_SIZE)
+            {
+                let base = bone * 12;
+                for row in 0..3 {
+                    packed[base + row * 4] = mat.x[row];
+                    packed[base + row * 4 + 1] = mat.y[row];
+                    packed[base + row * 4 + 2] = mat.z[row];
+                    packed[base + row * 4 + 3] = mat.w[row];
+                }
             }
+            gl::UniformMatrix3x4fv(
+                uniforms.bone_matrices_loc,
+                crate::scene::SKINNING_PALETTE_SIZE as i32,
+                gl::FALSE,
+                packed.as_ptr(),
+            );
 
             // Set spotlight array uniforms
             for i in 0..6 {
@@ -312,12 +337,8 @@ impl Material for SkinnedMaterial {
                 let shader = crate::shader_program::link(&vertex_shader, &fragment_shader);
 
                 // Get uniform locations for all shader variables
-                let mut bone_matrices_locs = [0i32; 40];
-                for i in 0..40 {
-                    let name = format!("bone_matrices[{i}]");
-                    let c_str = CString::new(name).unwrap();
-                    bone_matrices_locs[i] = gl::GetUniformLocation(shader.gl_id, c_str.as_ptr());
-                }
+                let bone_matrices_loc =
+                    gl::GetUniformLocation(shader.gl_id, c_str!("bone_matrices[0]").as_ptr());
 
                 let uniforms = UnifiedUniforms {
                     // Basic transformation matrices
@@ -339,7 +360,7 @@ impl Material for SkinnedMaterial {
                     ),
 
                     // Bone matrices
-                    bone_matrices_locs,
+                    bone_matrices_loc,
 
                     // Spotlight array uniforms (6 spotlights)
                     spotlight_pos_loc: [
