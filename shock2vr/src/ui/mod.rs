@@ -213,6 +213,10 @@ impl UiCanvas {
         self
     }
 
+    /// Add a text element sized in **canvas pixels** (`size` = cap-to-baseline
+    /// pixel height at the 640x480 canvas scale). Pass `size <= 0.0` to render
+    /// at the font's *native* pixel height (`base_height`); prefer
+    /// [`text_native`](Self::text_native) for that.
     pub fn text(
         &mut self,
         rect: Rect,
@@ -232,6 +236,23 @@ impl UiCanvas {
             opacity: 1.0,
         });
         self
+    }
+
+    /// Add text rendered at the font's **native pixel height** on the 640x480
+    /// canvas - the way the Dark engine draws its bitmap `.FON` fonts (1:1, no
+    /// scaling). This is the fidelity-correct default for UI text; callers only
+    /// pick an explicit [`text`](Self::text) size when the original art
+    /// deliberately scales a font. Height comes from the loaded font's
+    /// `base_height` at render time (the `size <= 0.0` sentinel).
+    pub fn text_native(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        font: &str,
+        h: HAlign,
+        v: VAlign,
+    ) -> &mut Self {
+        self.text(rect, text, font, 0.0, h, v)
     }
 
     /// Render the canvas as a screen-space overlay on `screen_size`, mapped via
@@ -293,7 +314,15 @@ impl UiCanvas {
                     opacity,
                 } => {
                     let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
-                    let font_size = size * scale.y;
+                    // `size <= 0` renders at the font's native pixel height, so
+                    // Dark `.FON` bitmap fonts draw at their authored size (the
+                    // way the original engine does) instead of an ad-hoc scale.
+                    let canvas_size = if *size > 0.0 {
+                        *size
+                    } else {
+                        font_obj.base_height()
+                    };
+                    let font_size = canvas_size * scale.y;
                     let width = measure_text_width(&**font_obj, text, font_size);
 
                     let rx = rect.x * scale.x + offset.x;

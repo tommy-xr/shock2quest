@@ -37,7 +37,6 @@ const NEW_GAME_MISSION: &str = "earth.mis";
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
 const MENU_FONT: &str = "mainaa.fon"; // anti-aliased menu font (vs the bitmap mainfont)
-const MENU_FONT_SIZE: f32 = 19.0; // canvas pixels (~0.04 * height)
 /// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
@@ -226,11 +225,10 @@ impl GameScene for MainMenuScene {
         for item in MENU_ITEMS {
             let hovered = pointer_canvas.is_some_and(|pp| item.rect.contains(pp));
             canvas
-                .text(
+                .text_native(
                     item.rect,
                     item.label,
                     MENU_FONT,
-                    MENU_FONT_SIZE,
                     HAlign::Center,
                     VAlign::Middle,
                 )

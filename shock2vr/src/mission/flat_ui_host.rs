@@ -822,7 +822,11 @@ fn draw_components(
                 canvas.image(r, texture);
             }
             GuiComponentRenderInfo::Text { text, font, .. } => {
-                canvas.text(r, text, font, r.h, HAlign::Left, VAlign::Top);
+                // Render at the font's native pixel height (the Dark engine
+                // draws its bitmap fonts 1:1), not the component's box height -
+                // the `size` on a GUI text component is its bounding box, not a
+                // font size. Vertically center the native-height text in that box.
+                canvas.text_native(r, text, font, HAlign::Left, VAlign::Middle);
             }
         }
     }

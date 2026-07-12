@@ -50,6 +50,67 @@ pub struct CharInfo {
     pub width: f32,
 }
 
+/// Pure (no-GL) glyph metrics parsed from a Dark `.FON` file: the header plus
+/// the column table. Separated from [`Font::read`] (which additionally builds a
+/// GL texture atlas) so the byte-level parse is unit-testable headlessly.
+#[derive(Debug, PartialEq)]
+pub struct FontMetrics {
+    pub format: u16,
+    pub first_char: i16,
+    pub last_char: i16,
+    /// Glyph height in pixels (font's native size on the 640x480 canvas).
+    pub height: u16,
+    pub row_width: u16,
+    pub bitmap_offset: u32,
+    /// Column x-positions in the bitmap strip; `columns[i+1] - columns[i]` is
+    /// the pixel width of the `first_char + i` glyph. Has `num_chars + 1`
+    /// entries so the last glyph's width is well-defined.
+    pub columns: Vec<u16>,
+}
+
+impl FontMetrics {
+    /// Number of glyphs described (inclusive `first_char..=last_char`).
+    pub fn num_chars(&self) -> usize {
+        (self.last_char - self.first_char + 1) as usize
+    }
+
+    /// Pixel width of the glyph for `code`, or `None` if out of range.
+    pub fn glyph_width(&self, code: i16) -> Option<u16> {
+        if code < self.first_char || code > self.last_char {
+            return None;
+        }
+        let i = (code - self.first_char) as usize;
+        Some(self.columns[i + 1] - self.columns[i])
+    }
+
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> FontMetrics {
+        let header = FontHeader::read(reader);
+        assert!(header.palette == 0);
+
+        let num_chars = (header.last_char - header.first_char + 1) as usize;
+        reader
+            .seek(io::SeekFrom::Start(header.width_offset as u64))
+            .unwrap();
+        // The column table has `num_chars + 1` entries: N glyph starts plus the
+        // end column of the last glyph, so every glyph width is a difference of
+        // adjacent entries.
+        let mut columns = Vec::with_capacity(num_chars + 1);
+        for _ in 0..=num_chars {
+            columns.push(read_u16(reader));
+        }
+
+        FontMetrics {
+            format: header.format,
+            first_char: header.first_char,
+            last_char: header.last_char,
+            height: header.num_rows,
+            row_width: header.row_width,
+            bitmap_offset: header.bitmap_offset,
+            columns,
+        }
+    }
+}
+
 impl FontHeader {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> FontHeader {
         let format = read_u16(reader);
@@ -147,54 +208,42 @@ impl Font {
         // Then rewind and start reading...
         reader.seek(io::SeekFrom::Start(0)).unwrap();
 
-        let header = FontHeader::read(reader);
+        let metrics = FontMetrics::read(reader);
 
-        // Currently, we don't support any palettes
-        assert!(header.palette == 0);
+        info!("Loading font with metrics: {:?}", metrics);
 
-        info!("Loading font with header: {:?}", header);
-
-        let num_chars = header.last_char - header.first_char + 1;
-
-        let mut widths = Vec::new();
-        reader
-            .seek(io::SeekFrom::Start(header.width_offset as u64))
-            .unwrap();
-
-        for _ in 0..num_chars {
-            widths.push(read_u16(reader))
-        }
+        let num_chars = metrics.num_chars();
 
         // Read bitmap data
         reader
-            .seek(io::SeekFrom::Start(header.bitmap_offset as u64))
+            .seek(io::SeekFrom::Start(metrics.bitmap_offset as u64))
             .unwrap();
 
-        let bitmap_size = end_bytes - header.bitmap_offset as u64;
+        let bitmap_size = end_bytes - metrics.bitmap_offset as u64;
         let bitmap = read_bytes(reader, bitmap_size as usize);
 
         let mut char_to_info = HashMap::new();
         let mut texture_packer = TexturePacker::<image::Rgba<u8>>::new_rgba(512, 512);
-        for n in 0..num_chars - 1 {
-            let code = header.first_char + n;
+        for n in 0..num_chars {
+            let code = metrics.first_char + n as i16;
             let ascii = char::from_u32(code as u32).unwrap();
-            let idx = n as usize;
+            let idx = n;
 
-            let column = widths[idx];
-            let width = widths[idx + 1] - widths[idx];
+            let column = metrics.columns[idx];
+            let width = metrics.columns[idx + 1] - metrics.columns[idx];
 
             // Generate the image corresponding to the character:
             let img: ImageBuffer<image::Rgba<u8>, std::vec::Vec<u8>> =
-                image::ImageBuffer::from_fn(width as u32, header.num_rows as u32, |x, y| {
+                image::ImageBuffer::from_fn(width as u32, metrics.height as u32, |x, y| {
                     let adj_x = x + (column as u32);
-                    if header.format == 0 {
+                    if metrics.format == 0 {
                         // This is a little gnarly... what is happening here is that each pixel
                         // is compacted horizontally. Each 'byte' value actually corresponds to 8
                         // pixels - each bit tracking whether the pixel is on or off.
 
                         // First, get the byte-index of the pixel
                         let idx_packed = adj_x / 8;
-                        let byte_index = (y * header.row_width as u32 + idx_packed) as usize;
+                        let byte_index = (y * metrics.row_width as u32 + idx_packed) as usize;
 
                         // This gives us the full byte value
                         let packed_val = bitmap[byte_index];
@@ -211,7 +260,7 @@ impl Font {
                     } else {
                         // If format is not 0, this is easy mode... each byte
                         // just directly corresponds to an alpha value.
-                        let idx = (y * header.row_width as u32 + adj_x) as usize;
+                        let idx = (y * metrics.row_width as u32 + adj_x) as usize;
                         let mut alpha = bitmap[idx];
                         // Not sure why this is necessary... but we get artifacts (random bright pixels) in some fonts w/o this
                         if alpha > 205 {
@@ -243,7 +292,7 @@ impl Font {
         Font {
             texture,
             char_to_info,
-            base_height: header.num_rows as f32,
+            base_height: metrics.height as f32,
         }
     }
 }
@@ -288,6 +337,87 @@ impl engine::Font for Font {
 
 #[cfg(test)]
 mod tests {
+    use super::FontMetrics;
+    use std::io::Cursor;
+
+    /// Build a minimal, valid Dark `.FON` byte buffer for `first..=last` with
+    /// the given `columns` (len == num_chars + 1) and `height`. Mirrors the
+    /// 84-byte header layout `FontHeader::read` expects.
+    fn synth_font(first: i16, last: i16, height: u16, columns: &[u16], format: u16) -> Vec<u8> {
+        let num_chars = (last - first + 1) as usize;
+        assert_eq!(columns.len(), num_chars + 1);
+        let width_offset: u32 = 84;
+        let bitmap_offset: u32 = width_offset + (columns.len() as u32) * 2;
+        let row_width: u16 = *columns.last().unwrap();
+
+        let mut b = vec![0u8; 84];
+        b[0..2].copy_from_slice(&format.to_le_bytes());
+        // b[2] unk, b[3] palette = 0
+        b[0x24..0x26].copy_from_slice(&first.to_le_bytes());
+        b[0x26..0x28].copy_from_slice(&last.to_le_bytes());
+        b[0x48..0x4c].copy_from_slice(&width_offset.to_le_bytes());
+        b[0x4c..0x50].copy_from_slice(&bitmap_offset.to_le_bytes());
+        b[0x50..0x52].copy_from_slice(&row_width.to_le_bytes());
+        b[0x52..0x54].copy_from_slice(&height.to_le_bytes());
+        for c in columns {
+            b.extend_from_slice(&c.to_le_bytes());
+        }
+        b.extend(vec![0u8; (row_width as usize) * (height as usize)]);
+        b
+    }
+
+    #[test]
+    fn font_metrics_parses_glyph_count_widths_and_height() {
+        // Digits '0'..'1' (2 glyphs): '0' spans [0,3)=3px, '1' spans [3,7)=4px.
+        let bytes = synth_font(48, 49, 11, &[0, 3, 7], 0);
+        let m = FontMetrics::read(&mut Cursor::new(bytes));
+
+        assert_eq!(m.num_chars(), 2);
+        assert_eq!(m.height, 11);
+        assert_eq!(m.first_char, 48);
+        assert_eq!(m.last_char, 49);
+        // The column table must carry num_chars + 1 entries so the *last*
+        // glyph's width is defined (the old parser dropped it).
+        assert_eq!(m.columns.len(), 3);
+        assert_eq!(m.glyph_width(48), Some(3));
+        assert_eq!(m.glyph_width(49), Some(4));
+        // Out-of-range codes have no glyph.
+        assert_eq!(m.glyph_width(47), None);
+        assert_eq!(m.glyph_width(50), None);
+    }
+
+    /// Real-font parse guarded by asset availability (game `.FON` files are not
+    /// in the repo, so this no-ops in CI). MAINFONT.FON: char 0..=225, 11px
+    /// tall, mono (format 0).
+    #[test]
+    fn mainfont_metrics_from_real_asset_when_present() {
+        let mut found = None;
+        for root in [
+            std::env::var("DARK_ASSET_PATH").unwrap_or_default(),
+            "../Data".into(),
+            "../../Data".into(),
+        ] {
+            let p = std::path::Path::new(&root).join("res/fonts/MAINFONT.FON");
+            if p.exists() {
+                found = Some(p);
+                break;
+            }
+        }
+        let Some(path) = found else {
+            eprintln!("skipping: MAINFONT.FON asset not found");
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let m = FontMetrics::read(&mut Cursor::new(bytes));
+        assert_eq!(m.format, 0);
+        assert_eq!(m.first_char, 0);
+        assert_eq!(m.last_char, 225);
+        assert_eq!(m.height, 11);
+        assert_eq!(m.num_chars(), 226);
+        assert_eq!(m.columns.len(), 227);
+        let w0 = m.glyph_width(b'0' as i16).unwrap();
+        assert!((1..=20).contains(&w0), "digit width {w0} out of range");
+    }
 
     #[test]
     fn test_half_pixel_calculation_formula() {
