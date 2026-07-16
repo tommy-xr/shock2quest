@@ -43,10 +43,15 @@ const BRIDGE_BUCKET: f32 = 12.0 / SCALE_FACTOR;
 /// prefer clear floor, but allow squeezing past baked furniture
 const BLOCKING_CELL_COST_PENALTY: u32 = 4;
 
-/// Per-frame cap on AI-initiated pathfind queries. At ~0.5ms typical / ~1ms
-/// worst-case per query, two queries bound pathfinding to ~2ms of a frame -
-/// safe even for the Quest's ~13.9ms budget at 72Hz. AIs that miss a slot
-/// keep steering along their stale path and re-path on a later frame.
+/// Per-frame cap on AI-initiated pathfind queries. A slot now covers the
+/// full fallback chain (A* + stressed retry + partial-route Dijkstra when
+/// the goal is unreachable), benched at ~0.5ms p95 / ~3ms worst per slot on
+/// desktop. Quest's CPU is several times slower against a ~13.9ms frame at
+/// 72Hz, so Android gets one slot per frame; AIs that miss a slot keep
+/// steering along their stale path and re-path on a later frame.
+#[cfg(target_os = "android")]
+pub const PATHFINDING_QUERIES_PER_FRAME: u32 = 1;
+#[cfg(not(target_os = "android"))]
 pub const PATHFINDING_QUERIES_PER_FRAME: u32 = 2;
 
 /// Shipyard unique holding the remaining AI pathfind-query budget for the
@@ -216,6 +221,11 @@ impl PathfindingService {
         if let Ok(mut locked) = self.locked_doors.write() {
             *locked = doors;
         }
+    }
+
+    /// Number of synthesized island-bridge links (0 in faithful mode)
+    pub fn bridge_link_count(&self) -> usize {
+        self.bridge_links.len()
     }
 
     /// Drop AI path records whose entity no longer satisfies `keep`
@@ -758,8 +768,15 @@ fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> V
         }
         a
     }
+    let n_cells = db.cells.len() as u32;
     for (idx, link) in db.links.iter().enumerate() {
         if !effective_bits[idx].contains(MovementBits::WALK) {
+            continue;
+        }
+        // Malformed tail links can carry out-of-range cell ids (observed in
+        // shipped data, e.g. hydro1); the query paths reject them via
+        // checked lookups, and the union must skip them too
+        if link.from_cell >= n_cells || link.to_cell >= n_cells {
             continue;
         }
         let (a, b) = (
@@ -1139,6 +1156,37 @@ mod tests {
         assert!(
             service.find_path(start, goal, MovementBits::WALK).is_some(),
             "unlocking must restore the route"
+        );
+    }
+
+    #[test]
+    fn bridging_skips_links_with_out_of_range_cell_ids() {
+        // Shipped data contains malformed tail links whose cell ids point
+        // past the cell array (observed in hydro1) - bridge computation must
+        // skip them instead of panicking
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links.push(PathCellLink {
+            from_cell: 61516,
+            to_cell: 2,
+            edge_vertex_a: 0,
+            edge_vertex_b: 1,
+            ok_bits: MovementBits::WALK,
+            cost: 1,
+        });
+        db.links.push(PathCellLink {
+            from_cell: 0,
+            to_cell: 61516,
+            edge_vertex_a: 0,
+            edge_vertex_b: 1,
+            ok_bits: MovementBits::WALK,
+            cost: 1,
+        });
+        let service = PathfindingService::with_nav_options(Arc::new(db), true);
+        assert!(
+            service
+                .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+                .is_some(),
+            "service must build and route despite malformed links"
         );
     }
 
