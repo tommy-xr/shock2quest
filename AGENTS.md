@@ -456,6 +456,15 @@ The project supports experimental flags for gating in-progress features during d
   action reloads the current level in place to exercise this. See
   `projects/loading-screen.md`. Without it, transitions are synchronous and unchanged.
 
+- **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
+  shipped mission data partitions the walk graph into per-area islands with no links
+  between them (original AI pathfinding was area-local); this flag synthesizes
+  island-crossing links across small gaps (stair strips, thresholds) and makes
+  blocking-OBB cells (furniture baked into the mesh) passable at a cost penalty so
+  A* can route across the whole level. Without it, pathfinding uses only the
+  faithful shipped graph (per-area, plus zone-pair and flat-seam traversal which are
+  always on). Verify AI routing with `GET /v1/ai/paths` on the debug runtime.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:

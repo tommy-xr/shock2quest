@@ -691,6 +691,27 @@ pub trait DebuggableScene {
     fn pathfinding_stats(&self) -> Option<DebugPathfindingStats> {
         None
     }
+
+    /// The latest path each AI computed (empty when the scene has no
+    /// pathfinding data or no AI has pathed yet). Lets remote clients see
+    /// where every AI is trying to go and whether its route succeeded.
+    fn ai_paths(&self) -> Vec<DebugAiPathEntry> {
+        Vec::new()
+    }
+}
+
+/// One AI's most recent path query, for debug introspection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugAiPathEntry {
+    /// EntityId::inner() as i32 - the same id space as the entity endpoints
+    pub entity_id: i32,
+    /// Where the AI was trying to go
+    pub goal: [f32; 3],
+    /// "Full" (route reaches the goal), "Partial" (goal unreachable; routed
+    /// to the closest reachable point), or "Failed" (no route at all)
+    pub outcome: String,
+    /// Waypoints of the computed route (empty for Failed)
+    pub waypoints: Vec<[f32; 3]>,
 }
 
 /// Snapshot of the pathfinding service's monotonic query counters.

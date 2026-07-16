@@ -76,6 +76,10 @@ pub struct CellDoor {
     pub door: i32,
 }
 
+/// Zone id meaning "no zone" (blocked cells and connector cells between
+/// zones carry this)
+pub const NO_ZONE: u16 = 0xffff;
+
 /// Complete path database loaded from AIPATH chunk
 #[derive(Debug, Clone)]
 pub struct PathDatabase {
@@ -85,6 +89,24 @@ pub struct PathDatabase {
     /// Which door object gates each below-door cell (empty when the mission
     /// has no doors or the table couldn't be parsed)
     pub cell_doors: Vec<CellDoor>,
+    /// Build-time zone id per cell (parallel to `cells`; `NO_ZONE` = none).
+    /// Zones are the walk-connected components the builder computed; links
+    /// that cross between two zones carry their traversal permission in
+    /// `zone_pairs`, not in their own `ok_bits` (which is often zero).
+    /// Empty when the trailing sections couldn't be parsed.
+    pub cell_zones: Vec<u16>,
+    /// Reachability bits for zone pairs `(zone_a, zone_b) -> okBits`: a
+    /// cross-zone link is traversable with these bits even when its own
+    /// `ok_bits` byte is empty (observed throughout shipped v2.9 data).
+    pub zone_pairs: Vec<(u16, u16, MovementBits)>,
+}
+
+/// Optional trailing AIPATH data (doors, zones); empty when unparseable
+#[derive(Debug, Default)]
+struct TailData {
+    cell_doors: Vec<CellDoor>,
+    cell_zones: Vec<u16>,
+    zone_pairs: Vec<(u16, u16, MovementBits)>,
 }
 
 /// On-disk layout of the AIPATH chunk, keyed by the chunk version.
@@ -458,29 +480,31 @@ impl PathDatabase {
         //                  { obj_id u32, cell_id u32, prev_prop_state u32, ptr u32 }
         //   cell zones:    (n_cells + 1) x u16, then n_zones(u32), then
         //                  { key u32, ok_bits u8 } pairs terminated by key == 0
+        //                  (key packs the two zone ids: hi u16 / lo u16)
         //   cell doors:    count(u32) + count x { cell u32, door i32 }
-        // The zone tables are skipped for now (candidate for fast no-route
-        // rejection later); moving-terrain data after the door table is not
-        // read. Door data is optional: on any inconsistency the database
-        // still loads, just without door awareness.
+        // Moving-terrain data after the door table is not read. Tail data is
+        // optional: on any inconsistency the database still loads, just
+        // without door awareness / zone reachability.
         //
         // The layout was reverse-engineered and validated only for v2.9
         // (every shipped mission except shodan). The v3.4 tail may differ, so
         // only attempt the known layout rather than risk a silent misparse.
-        let cell_doors = if layout == AiPathLayout::PackedIds {
+        let tail = if layout == AiPathLayout::PackedIds {
             Self::parse_tail(reader, &cells).unwrap_or_else(|| {
-                warn!("AIPATH trailing sections malformed; door-aware pathfinding disabled");
-                Vec::new()
+                warn!("AIPATH trailing sections malformed; door/zone-aware pathfinding disabled");
+                TailData::default()
             })
         } else {
-            Vec::new()
+            TailData::default()
         };
 
         Some(PathDatabase {
             cells,
             vertices,
             links,
-            cell_doors,
+            cell_doors: tail.cell_doors,
+            cell_zones: tail.cell_zones,
+            zone_pairs: tail.zone_pairs,
         })
     }
 
@@ -489,7 +513,7 @@ impl PathDatabase {
     /// which doubles as a misparse detector, since a misaligned read almost
     /// never lands on a table whose cells are all in range AND flagged
     /// below-door.
-    fn parse_tail(reader: &mut io::Cursor<&[u8]>, cells: &[PathCell]) -> Option<Vec<CellDoor>> {
+    fn parse_tail(reader: &mut io::Cursor<&[u8]>, cells: &[PathCell]) -> Option<TailData> {
         let n_cells = cells.len();
 
         // Object hints: a cell id per object id (fast lookup) - skip
@@ -505,15 +529,24 @@ impl PathDatabase {
         reader.set_position(reader.position() + n_cell_obj_maps as u64 * 16);
 
         // Cell zones: one u16 zone per cell (incl. the +1 dummy)
-        reader.set_position(reader.position() + (n_cells as u64) * 2);
+        let mut cell_zones = Vec::with_capacity(n_cells);
+        for _ in 0..n_cells {
+            cell_zones.push(read_u16_opt(reader)?);
+        }
         let _n_zones = read_u32_opt(reader)?;
         // Zone-pair reachability table: { key u32, ok_bits u8 } until key == 0
+        let mut zone_pairs = Vec::new();
         loop {
             let key = read_u32_opt(reader)?;
-            let _ok_bits = read_u8_opt(reader)?;
+            let ok_bits = read_u8_opt(reader)?;
             if key == 0 {
                 break;
             }
+            zone_pairs.push((
+                (key >> 16) as u16,
+                (key & 0xffff) as u16,
+                MovementBits::from_bits_truncate(ok_bits as u32),
+            ));
         }
 
         // Cell-door table: which door object gates each below-door cell
@@ -533,8 +566,16 @@ impl PathDatabase {
             }
             cell_doors.push(CellDoor { cell, door });
         }
-        debug!("AIPATH cell-door table: {} entries", cell_doors.len());
-        Some(cell_doors)
+        debug!(
+            "AIPATH cell-door table: {} entries; {} zone-pair entries",
+            cell_doors.len(),
+            zone_pairs.len()
+        );
+        Some(TailData {
+            cell_doors,
+            cell_zones,
+            zone_pairs,
+        })
     }
 
     /// Calculate the center point of a cell from its vertices

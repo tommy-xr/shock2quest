@@ -6,7 +6,7 @@ use shipyard::{EntityId, UniqueView, World};
 
 use crate::{
     mission::GlobalPathfinding,
-    pathfinding::{PathfindingFrameBudget, PathfindingService},
+    pathfinding::{AiPathOutcome, AiPathRecord, PathfindingFrameBudget, PathfindingService},
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util},
     time::Time,
@@ -182,7 +182,29 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // same frames forever
                     self.repath_cooldown =
                         REPATH_COOLDOWN_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
-                    match service.find_path(position, goal, MovementBits::WALK) {
+                    // Full route, or - when the goal is unreachable (another
+                    // island, off-mesh) - a partial route to the closest
+                    // reachable point, so the AI approaches instead of
+                    // freezing against the nearest wall
+                    let mut outcome = AiPathOutcome::Full;
+                    let path = service
+                        .find_path(position, goal, MovementBits::WALK)
+                        .or_else(|| {
+                            outcome = AiPathOutcome::Partial;
+                            service.find_path_toward(position, goal, MovementBits::WALK)
+                        });
+                    if path.is_none() {
+                        outcome = AiPathOutcome::Failed;
+                    }
+                    service.record_ai_path(
+                        entity_id.inner(),
+                        AiPathRecord {
+                            goal,
+                            waypoints: path.clone().unwrap_or_default(),
+                            outcome,
+                        },
+                    );
+                    match path {
                         Some(path) => {
                             self.path = path;
                             self.path_goal = Some(goal);

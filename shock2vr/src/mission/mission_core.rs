@@ -702,10 +702,13 @@ impl MissionCore {
             }
         }
 
-        let pathfinding_service = abstract_mission
-            .path_database
-            .as_ref()
-            .map(|db| Arc::new(PathfindingService::new(Arc::new(db.clone()))));
+        let nav_bridges = game_options.experimental_features.contains("nav_bridges");
+        let pathfinding_service = abstract_mission.path_database.as_ref().map(|db| {
+            Arc::new(PathfindingService::with_nav_options(
+                Arc::new(db.clone()),
+                nav_bridges,
+            ))
+        });
         // Steering strategies path through this unique; MissionCore keeps its
         // own handle for the interactive pathfinding test.
         world.add_unique(GlobalPathfinding(pathfinding_service.clone()));
@@ -5325,6 +5328,22 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 no_route: stats.no_route,
             }
         })
+    }
+
+    fn ai_paths(&self) -> Vec<crate::game_scene::DebugAiPathEntry> {
+        let Some(service) = self.pathfinding_service.as_ref() else {
+            return Vec::new();
+        };
+        service
+            .ai_paths()
+            .into_iter()
+            .map(|(entity, record)| crate::game_scene::DebugAiPathEntry {
+                entity_id: entity as i32,
+                goal: record.goal.into(),
+                outcome: format!("{:?}", record.outcome),
+                waypoints: record.waypoints.into_iter().map(Into::into).collect(),
+            })
+            .collect()
     }
 
     fn send_entity_message(
