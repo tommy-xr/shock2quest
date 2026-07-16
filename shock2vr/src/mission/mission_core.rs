@@ -777,6 +777,35 @@ impl MissionCore {
             }
         }
 
+        // Sync live door state into the pathfinding service: locked-and-
+        // closed doors make their below-door cells unpathable, so A* routes
+        // around them (or stops at them) instead of through them. Unlocked
+        // closed doors stay pathable - pursuing AIs open those on arrival.
+        if time.elapsed.as_secs_f32() > 0.0 {
+            if let Some(service) = &self.pathfinding_service {
+                if let Ok(id_map) = self
+                    .world
+                    .borrow::<UniqueView<crate::mission::GlobalTemplateIdMap>>()
+                {
+                    let locked: std::collections::HashSet<i32> = service
+                        .path_database
+                        .cell_doors
+                        .iter()
+                        .map(|cd| cd.door)
+                        .filter(|door| {
+                            let Some(ent) = id_map.0.get(door).map(|w| w.0) else {
+                                return false;
+                            };
+                            crate::scripts::script_util::door_is_closed(&self.world, ent)
+                                == Some(true)
+                                && crate::scripts::script_util::is_entity_locked(&self.world, ent)
+                        })
+                        .collect();
+                    service.set_locked_doors(locked);
+                }
+            }
+        }
+
         // Mirror each AI's active route into the path visualization (orange),
         // so debug-draw sessions show what every AI is following - the same
         // data GET /v1/ai/paths reports

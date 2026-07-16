@@ -33,6 +33,12 @@ test(
 
     await game.step({ frames: 10 });
 
+    // The spawn point is the sealed cryo recovery room (AI-unreachable by
+    // design); measure convergence toward a player standing in the open
+    // deck instead.
+    await game.player.teleport({ x: -14.0, y: 0.5, z: -30.0 });
+    await game.step({ frames: 10 });
+
     // Negative control first: an unpinned DebugAlertAll decays back toward
     // idle within a few seconds when the AI can't see the player.
     const hybrids = (await game.entities.list({ filter: "OG-", limit: 20 })).entities.filter(
@@ -53,6 +59,16 @@ test(
       "unpinned alertness should have decayed after 10s without sight",
     );
 
+    // Baseline distances BEFORE pinning - convergence is measured from the
+    // moment the pin lands, before anyone starts moving.
+    const player = await game.player.position();
+    const playerPos: [number, number, number] = [player.x, player.y, player.z];
+    const before = new Map<number, number>();
+    for (const h of hybrids) {
+      const d = await game.entities.detail(h.id);
+      before.set(h.id, dist3(d.position, playerPos));
+    }
+
     // DebugForceChase: pinned - still chasing after the same 10s window.
     await game.input.trigger("DebugForceChase");
     await game.step({ frames: 30 });
@@ -68,17 +84,10 @@ test(
       `pinned alertness must not decay (got ${aiProp(detail, "AIAlertness")})`,
     );
 
-    // Convergence: over a further 20s, hybrids across the deck close on the
-    // player (nav_bridges reconnects the mesh; some are legitimately walled
-    // off - furniture-sealed rooms - so require progress from several, not
-    // all, and none moving meaningfully away while pinned).
-    const player = await game.player.position();
-    const playerPos: [number, number, number] = [player.x, player.y, player.z];
-    const before = new Map<number, number>();
-    for (const h of hybrids) {
-      const d = await game.entities.detail(h.id);
-      before.set(h.id, dist3(d.position, playerPos));
-    }
+    // Convergence: over a further 20s of pinned chase, hybrids across the
+    // deck close on the player (nav_bridges reconnects the mesh; some are
+    // legitimately walled off - furniture-sealed rooms, locked doors - so
+    // require progress from several, not all).
     await game.step({ frames: 1200 });
     let closer = 0;
     for (const h of hybrids) {

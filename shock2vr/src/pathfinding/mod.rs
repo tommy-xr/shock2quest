@@ -144,6 +144,11 @@ pub struct PathfindingService {
     /// Latest path per AI entity (key: EntityId::inner()), recorded by the
     /// path-follow steering so tooling can see what each AI is doing
     ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
+    /// Mission object ids of doors that are currently locked AND closed -
+    /// A* refuses links into their below-door cells (the runtime door gate;
+    /// closed-but-openable doors stay pathable and are opened on arrival).
+    /// Synced from live door state by the mission update.
+    locked_doors: std::sync::RwLock<std::collections::HashSet<i32>>,
     queries: AtomicU64,
     stressed_retries: AtomicU64,
     no_route: AtomicU64,
@@ -198,9 +203,18 @@ impl PathfindingService {
             bridge_links,
             relaxed: bridge_islands,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
+            locked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
             queries: AtomicU64::new(0),
             stressed_retries: AtomicU64::new(0),
             no_route: AtomicU64::new(0),
+        }
+    }
+
+    /// Replace the set of locked-and-closed doors (mission object ids).
+    /// Their below-door cells become unpathable until unlocked/opened.
+    pub fn set_locked_doors(&self, doors: std::collections::HashSet<i32>) {
+        if let Ok(mut locked) = self.locked_doors.write() {
+            *locked = doors;
         }
     }
 
@@ -526,6 +540,23 @@ impl PathfindingService {
         };
         if dest.flags.intersects(blocked) {
             return false;
+        }
+
+        // Door gate: a below-door cell whose door is locked (and closed) is
+        // not traversable - the AI can't follow the player through it.
+        // Closed-but-openable doors stay pathable; the pursuing AI opens
+        // them on arrival.
+        if dest.flags.contains(PathCellFlags::BELOW_DOOR) {
+            if let Some(door) = self.cell_to_door.get(&link.to_cell) {
+                if self
+                    .locked_doors
+                    .read()
+                    .map(|locked| locked.contains(door))
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+            }
         }
 
         // Small creatures may only use small-creature links
@@ -1048,6 +1079,36 @@ mod tests {
             .expect("nav_bridges must synthesize a crossing");
         assert_eq!(path[0], vec3(1.0, 0.0, 1.0));
         assert_eq!(*path.last().unwrap(), vec3(5.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn locked_door_gates_its_below_door_cell() {
+        // Cell 2 is below door 99. While the door is locked, A* must refuse
+        // to enter it; clearing the lock re-opens the route.
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links[1].ok_bits = MovementBits::WALK;
+        db.cells[2].flags = PathCellFlags::BELOW_DOOR;
+        db.cell_doors.push(CellDoor { cell: 2, door: 99 });
+        let service = service(db);
+
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        assert!(
+            service.find_path(start, goal, MovementBits::WALK).is_some(),
+            "unlocked door cell must be pathable"
+        );
+
+        service.set_locked_doors([99].into());
+        assert!(
+            service.find_path(start, goal, MovementBits::WALK).is_none(),
+            "locked door cell must be unpathable"
+        );
+
+        service.set_locked_doors(Default::default());
+        assert!(
+            service.find_path(start, goal, MovementBits::WALK).is_some(),
+            "unlocking must restore the route"
+        );
     }
 
     #[test]
