@@ -259,7 +259,10 @@ For debugging visual/rendering changes without a full interactive session:
    `{"duration":"3s"}` runs exactly `3 * 60` frames - deterministic and
    independent of HTTP request timing (a settling ragdoll falls at a real rate
    regardless of how fast you poll). Only free-running (not stepping) uses real
-   wall-clock dt.
+   wall-clock dt. One caveat: AI path queries run on a dedicated worker
+   thread (`pathfinding::async_queries`), so the exact frame an AI adopts a
+   new route can jitter by a frame or two between runs - assert on coarse AI
+   behavior (distances, alertness) rather than exact positions.
 
    **Reliable control (no headers/retries/sleeps needed)**: `/v1/step` **blocks
    until all requested frames have actually run**, and `/v1/screenshot` captures

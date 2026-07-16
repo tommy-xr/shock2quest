@@ -149,6 +149,15 @@ pub struct GlobalPresentationMode(pub crate::PresentationMode);
 #[derive(Unique, Clone)]
 pub struct GlobalPathfinding(pub Option<Arc<PathfindingService>>);
 
+/// Off-thread path query worker (see pathfinding::async_queries): steering
+/// submits queries here and adopts results on later frames, so A* runs in
+/// parallel with simulation + rendering instead of inside the frame. None
+/// when the mission has no AIPATH data.
+#[derive(Unique, Clone)]
+pub struct GlobalAsyncPathfinding(
+    pub Option<Arc<crate::pathfinding::async_queries::AsyncPathfinding>>,
+);
+
 #[derive(Unique, Clone)]
 pub struct EffectQueue {
     effects: Vec<Effect>,
@@ -712,6 +721,15 @@ impl MissionCore {
         // Steering strategies path through this unique; MissionCore keeps its
         // own handle for the interactive pathfinding test.
         world.add_unique(GlobalPathfinding(pathfinding_service.clone()));
+        // Path queries run on a dedicated worker thread; the worker exits
+        // when this world (and with it the unique) is dropped
+        world.add_unique(GlobalAsyncPathfinding(pathfinding_service.as_ref().map(
+            |service| {
+                Arc::new(crate::pathfinding::async_queries::AsyncPathfinding::spawn(
+                    service.clone(),
+                ))
+            },
+        )));
         // Per-frame AI pathfind budget, refilled at the top of each update
         world.add_unique(crate::pathfinding::PathfindingFrameBudget::new());
 

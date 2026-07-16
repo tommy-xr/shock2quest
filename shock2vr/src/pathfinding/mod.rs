@@ -3,6 +3,7 @@
 /// This module provides A* pathfinding capabilities using the navigation mesh
 /// stored in AIPATH chunks. It maintains separation from the BSP tree system
 /// used for rendering/visibility queries.
+pub mod async_queries;
 pub mod path_visualization;
 
 use cgmath::{InnerSpace, Vector3};
@@ -930,14 +931,14 @@ fn closest_point_on_segment(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cgmath::vec3;
     use dark::mission::path_database::{CellDoor, PathCell, PathCellLink};
 
     /// Three unit-square cells in a row along X: 0 -> 1 -> 2.
     /// The 1 -> 2 link is gated by STRESSED; everything else is plain WALK.
-    fn three_cell_db(last_cell_flags: PathCellFlags) -> PathDatabase {
+    pub(crate) fn three_cell_db(last_cell_flags: PathCellFlags) -> PathDatabase {
         let vertices = vec![
             vec3(0.0, 0.0, 0.0),
             vec3(2.0, 0.0, 0.0),
