@@ -776,6 +776,37 @@ impl MissionCore {
                 budget.reset();
             }
         }
+
+        // Mirror each AI's active route into the path visualization (orange),
+        // so debug-draw sessions show what every AI is following - the same
+        // data GET /v1/ai/paths reports
+        if game_options.debug_draw {
+            if let Some(service) = &self.pathfinding_service {
+                let stale: Vec<String> = self
+                    .path_visualization
+                    .paths
+                    .keys()
+                    .filter(|name| name.starts_with("ai_"))
+                    .cloned()
+                    .collect();
+                for name in stale {
+                    self.path_visualization.remove_path(&name);
+                }
+                for (entity, record) in service.ai_paths() {
+                    if record.waypoints.len() >= 2 {
+                        let name = format!("ai_{entity}");
+                        self.path_visualization.set_path(
+                            name.clone(),
+                            crate::pathfinding::path_visualization::ComputedPath::new(
+                                name,
+                                record.waypoints,
+                                crate::pathfinding::path_visualization::colors::AI_PATH,
+                            ),
+                        );
+                    }
+                }
+            }
+        }
         let mut effects = command_effects;
 
         let player = {
