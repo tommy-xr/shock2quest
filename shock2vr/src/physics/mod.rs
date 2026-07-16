@@ -408,7 +408,11 @@ fn sanitize_collider_size(entity_id: EntityId, context: &str, size: Vector3<f32>
     const MAX_SIZE: f32 = 1.0e4;
     let clamp = |v: f32| -> f32 {
         if v.is_finite() && v > 0.0 {
-            v.min(MAX_SIZE)
+            // Clamp up as well as down: a tiny-but-positive size (e.g. medsci1's
+            // "Lift 1 Walls" wall segment) yields a point-like AABB, and parry's
+            // debug-build ray-AABB test overflows on those (FeatureId::Face(0 - 1))
+            // - any AI vision/ground probe crossing it panics the game thread.
+            v.clamp(MIN_SIZE, MAX_SIZE)
         } else {
             MIN_SIZE
         }
@@ -1444,8 +1448,20 @@ impl PhysicsWorld {
         let binding = |_collider_handle: ColliderHandle, collider: &Collider| {
             let data = collider.user_data;
             let maybe_entity_id = EntityId::from_inner(data as u64);
-
-            maybe_entity_id != entity_to_ignore
+            if maybe_entity_id == entity_to_ignore {
+                return false;
+            }
+            // A degenerate collider (zero-extent / non-finite AABB, e.g.
+            // medsci1's point-sized "Lift 1 Walls") poisons parry's ray-AABB
+            // clip the same way a degenerate ray does: face index 0 ->
+            // `0u32 - 1` overflow panic in debug builds, NaN normals in
+            // release. Skip such colliders - a point can't meaningfully block
+            // a ray, and letting one through crashes AI vision/ground probes.
+            // (`GET /v1/physics/colliders/validate` audits the data root
+            // cause.)
+            let aabb = collider.compute_aabb();
+            aabb.mins.iter().all(|v| v.is_finite())
+                && aabb.extents().iter().all(|e| e.is_finite() && *e > 1.0e-5)
         };
         filter = filter.predicate(&binding);
 
