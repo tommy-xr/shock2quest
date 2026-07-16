@@ -44,14 +44,16 @@ const MIN_VOLUME: f32 = 1e-4;
 /// measured from the bind/rest pose. Keeps the rig from folding/twisting through
 /// itself. Per-bone limit profiles (hinge knees, cone shoulders) are a follow-up.
 const JOINT_CONE_LIMIT: f32 = 1.05;
-/// Sleep thresholds for ragdoll bodies. A settled extremity can hold a
-/// low-grade contact buzz (~0.5-1 rad/s) that sits above rapier's default
-/// angular threshold (0.5), and one awake body keeps the whole jointed island
-/// awake - so the corpse never sleeps and the buzz never stops. Raising the
-/// angular threshold lets the island sleep once bulk motion is done (rapier
-/// needs the entire island below thresholds for ~2s); sleep zeroes the buzz,
-/// and contact or an applied impulse wakes the corpse (it stays pokeable).
-const SLEEP_LINEAR_THRESHOLD: f32 = 0.4; // rapier default
+/// Angular sleep threshold for ragdoll bodies (rad/s). A settled extremity can
+/// hold a low-grade contact buzz (~0.5-1 rad/s) that sits above rapier's
+/// default angular threshold (0.5), and one awake body keeps the whole jointed
+/// island awake - so the corpse never sleeps and the buzz never stops. Raising
+/// it lets the island sleep once bulk motion is done (rapier needs the entire
+/// island below thresholds for ~2s continuously, so a corpse in real motion
+/// won't freeze); sleep zeroes the buzz, and contact or an applied impulse
+/// wakes the corpse (it stays pokeable). Tradeoff: a limb rotating alone at up
+/// to ~1.5 rad/s for 2s could hard-stop - lower toward 1.0 if that's ever
+/// visible.
 const SLEEP_ANGULAR_THRESHOLD: f32 = 1.5;
 
 /// Quality/settle metrics for one ragdoll, for the verification harness.
@@ -296,11 +298,7 @@ impl RagDollManager {
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
             physics.set_body_damping(handle, LINEAR_DAMPING, ANGULAR_DAMPING);
-            physics.set_body_sleep_thresholds(
-                handle,
-                SLEEP_LINEAR_THRESHOLD,
-                SLEEP_ANGULAR_THRESHOLD,
-            );
+            physics.set_body_angular_sleep_threshold(handle, SLEEP_ANGULAR_THRESHOLD);
             spawn_positions.insert(handle, pos_vec);
 
             // Build the collider from the joint's fitted shape. Density is chosen

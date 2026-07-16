@@ -1569,28 +1569,28 @@ impl PhysicsWorld {
         }
     }
 
-    /// Raise a body's sleep thresholds so residual solver noise (e.g. a ragdoll
-    /// extremity buzzing against the floor) still counts as "at rest". One
-    /// awake body keeps its whole jointed island awake, so without this a
+    /// Raise a body's angular sleep threshold so residual solver noise (e.g. a
+    /// ragdoll extremity buzzing against the floor) still counts as "at rest".
+    /// One awake body keeps its whole jointed island awake, so without this a
     /// settled ragdoll never sleeps. Sleeping bodies auto-wake on contact or
-    /// applied force, so the corpse stays interactive.
-    pub fn set_body_sleep_thresholds(
-        &mut self,
-        handle: RigidBodyHandle,
-        normalized_linear: f32,
-        angular: f32,
-    ) {
+    /// applied force, so the corpse stays interactive. (The linear threshold is
+    /// left at rapier's default - the residual buzz is angular.)
+    pub fn set_body_angular_sleep_threshold(&mut self, handle: RigidBodyHandle, angular: f32) {
         if let Some(body) = self.rigid_body_set.get_mut(handle) {
-            let activation = body.activation_mut();
-            activation.normalized_linear_threshold = normalized_linear;
-            activation.angular_threshold = angular;
+            body.activation_mut().angular_threshold = angular;
         }
     }
 
     /// Apply a world-space impulse to a dynamic body by its debug `body_id`
     /// (the rigid body handle index, as reported by [`debug_list_bodies`]),
-    /// waking it. Debug/testing hook - e.g. poke a sleeping ragdoll to verify
-    /// wake-on-impulse. Returns false if no dynamic body matches.
+    /// waking it even for a zero impulse (rapier skips a zero `apply_impulse`
+    /// entirely, so the wake is explicit - `{"impulse":[0,0,0]}` is a pure
+    /// wake). Debug/testing hook - e.g. poke a sleeping ragdoll to verify
+    /// wake-on-impulse. Matches by handle index like the other debug-endpoint
+    /// lookups (the generation isn't exposed over HTTP), so callers must use
+    /// ids from a fresh body listing. For a multibody link this is a plain
+    /// rigid-body impulse, not a full articulated-dynamics response - fine for
+    /// poking, not physically exact. Returns false if no dynamic body matches.
     pub fn apply_body_impulse(&mut self, body_id: u32, impulse: Vector3<f32>) -> bool {
         let handle = self
             .rigid_body_set
@@ -1600,6 +1600,7 @@ impl PhysicsWorld {
         if let Some(handle) = handle {
             if let Some(body) = self.rigid_body_set.get_mut(handle) {
                 if body.body_type() == RigidBodyType::Dynamic {
+                    body.wake_up(true);
                     body.apply_impulse(vec_to_nvec(impulse), true);
                     return true;
                 }

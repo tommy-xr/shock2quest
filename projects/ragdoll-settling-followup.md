@@ -116,6 +116,9 @@ the impulse rig kept as the stable default:
   otherwise it uses the impulse rig (parent-origin anchor, heavy core, soft
   translation). Routing verified: default → 19 impulse joints; multibody flag → 0
   impulse joints, bodies stay connected (~1.6 m extent).
+  **2026-07-16 update: multibody is now the DEFAULT rig** (it settles and sleeps —
+  see the graduation notes below); the flag is retired and replaced by
+  `--experimental ragdoll_impulse`, which falls back to the legacy impulse rig.
 
 **What the multibody fixes:** translation is structurally not a DOF, so limbs
 **cannot separate** — the hip gap is gone, and we can finally anchor at the true
@@ -179,9 +182,11 @@ frames so forward-kinematics reproduces the spawn pose (no snap), parent-before-
 insertion (insert is order-robust given per-child dedup), body-creation dedup, joints
 auto-removed with bodies. `PhysicsWorld::create_multibody_joint` →
 `multibody_joint_set.insert`. **Remaining:** the floor-contact jitter (step 0) — until
-that's solved this stays experimental, and `/v1/physics/joints` + the `--debug-physics`
-anchor viz still iterate only the **impulse** set (extend to the multibody set for
-multibody diagnostics).
+that's solved this stays experimental. *(2026-07-16: both resolved — the jitter no
+longer reproduces, ragdoll bodies get a raised angular sleep threshold so the island
+sleeps, multibody is the default rig, and `/v1/physics/joints` + the `--debug-physics`
+anchor viz now cover the multibody set too, with a `joint_type` field. A new
+`POST /v1/physics/bodies/:id/impulse` debug endpoint pokes/wakes bodies headlessly.)*
 
 ### 2. Fallback if multibody proves too unstable — accept gap + auto-sleep
 Keep the stable soft impulse joints, stop fighting the residual ~9 cm hip gap, and add
