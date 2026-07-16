@@ -834,7 +834,7 @@ impl MissionCore {
 
         // Clear forces
         self.physics.clear_forces();
-        self.rag_doll_manager.update(&self.physics);
+        self.rag_doll_manager.update(&mut self.physics);
 
         let (left_hand_entity_id, right_hand_entity_id) = self.interaction.held_entities();
 

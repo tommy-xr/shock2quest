@@ -13,6 +13,7 @@ use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
     control::{CharacterLength, KinematicCharacterController},
+    na,
     na::UnitQuaternion,
     prelude::*,
 };
@@ -1581,6 +1582,66 @@ impl PhysicsWorld {
         }
     }
 
+    /// Clamp ragdoll body velocities to finite, bounded magnitudes. The spawn
+    /// transient of a ragdoll can (rarely, and nondeterministically across
+    /// processes) enter a runaway feedback loop - a contact spike begets a
+    /// bigger spike next frame until a position goes non-finite and the parry
+    /// BVH broad-phase panics on the NaN AABB. Clamping once per frame breaks
+    /// the cascade while leaving normal collapse dynamics (peaks well below
+    /// the cap) untouched.
+    ///
+    /// Multibody-linked bodies clamp the owning multibody's generalized (DOF)
+    /// velocities - writing a link body's linvel/angvel would be overwritten
+    /// by the reduced-coordinate readback. Each multibody is clamped once no
+    /// matter how many of its links appear in `handles`. Free bodies clamp
+    /// linvel/angvel directly. Returns the number of corrected values.
+    pub fn sanitize_ragdoll_bodies(&mut self, handles: &[RigidBodyHandle], max_speed: f32) -> u32 {
+        let mut corrected = 0u32;
+        let mut seen_multibodies = Vec::new();
+        for handle in handles {
+            if let Some(link) = self.multibody_joint_set.rigid_body_link(*handle) {
+                let index = link.multibody;
+                if seen_multibodies.contains(&index) {
+                    continue;
+                }
+                seen_multibodies.push(index);
+                if let Some(multibody) = self.multibody_joint_set.get_multibody_mut(index) {
+                    for v in multibody.generalized_velocity_mut().iter_mut() {
+                        if !v.is_finite() {
+                            *v = 0.0;
+                            corrected += 1;
+                        } else if v.abs() > max_speed {
+                            *v = v.clamp(-max_speed, max_speed);
+                            corrected += 1;
+                        }
+                    }
+                }
+            } else if let Some(body) = self.rigid_body_set.get_mut(*handle) {
+                let lin = *body.linvel();
+                let ang = *body.angvel();
+                if !lin.iter().all(|v| v.is_finite()) || lin.norm() > max_speed {
+                    let new_lin = if lin.iter().all(|v| v.is_finite()) {
+                        lin * (max_speed / lin.norm())
+                    } else {
+                        na::zero()
+                    };
+                    body.set_linvel(new_lin, false);
+                    corrected += 1;
+                }
+                if !ang.iter().all(|v| v.is_finite()) || ang.norm() > max_speed {
+                    let new_ang = if ang.iter().all(|v| v.is_finite()) {
+                        ang * (max_speed / ang.norm())
+                    } else {
+                        na::zero()
+                    };
+                    body.set_angvel(new_ang, false);
+                    corrected += 1;
+                }
+            }
+        }
+        corrected
+    }
+
     /// Apply a world-space impulse to a dynamic body by its debug `body_id`
     /// (the rigid body handle index, as reported by [`debug_list_bodies`]),
     /// waking it even for a zero impulse (rapier skips a zero `apply_impulse`
@@ -1588,22 +1649,35 @@ impl PhysicsWorld {
     /// wake). Debug/testing hook - e.g. poke a sleeping ragdoll to verify
     /// wake-on-impulse. Matches by handle index like the other debug-endpoint
     /// lookups (the generation isn't exposed over HTTP), so callers must use
-    /// ids from a fresh body listing. For a multibody link this is a plain
-    /// rigid-body impulse, not a full articulated-dynamics response - fine for
-    /// poking, not physically exact. Returns false if no dynamic body matches.
+    /// ids from a fresh body listing. Returns false if no dynamic body matches.
     pub fn apply_body_impulse(&mut self, body_id: u32, impulse: Vector3<f32>) -> bool {
         let handle = self
             .rigid_body_set
             .iter()
             .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
             .map(|(handle, _)| handle);
-        if let Some(handle) = handle {
-            if let Some(body) = self.rigid_body_set.get_mut(handle) {
-                if body.body_type() == RigidBodyType::Dynamic {
-                    body.wake_up(true);
+        let Some(handle) = handle else {
+            return false;
+        };
+        // A multibody link ignores direct velocity writes: the reduced-
+        // coordinate solver recomputes every link body's velocity from the
+        // joint velocities each step (`Multibody` forward kinematics), so
+        // `apply_impulse` is silently overwritten. Its forward *dynamics* does
+        // read the per-body user-force accumulator, so convert the impulse to
+        // a force over one physics step - `clear_forces` (called right after
+        // each step) makes it impulsive.
+        let is_multibody_link = self.multibody_joint_set.rigid_body_link(handle).is_some();
+        let dt = self.integration_parameters.dt;
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            if body.body_type() == RigidBodyType::Dynamic {
+                body.wake_up(true);
+                if is_multibody_link {
+                    body.add_force(vec_to_nvec(impulse) / dt, true);
+                    self.rigid_bodies_with_forces.push(handle);
+                } else {
                     body.apply_impulse(vec_to_nvec(impulse), true);
-                    return true;
                 }
+                return true;
             }
         }
         false

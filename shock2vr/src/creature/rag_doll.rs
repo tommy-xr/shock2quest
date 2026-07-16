@@ -55,6 +55,12 @@ const JOINT_CONE_LIMIT: f32 = 1.05;
 /// to ~1.5 rad/s for 2s could hard-stop - lower toward 1.0 if that's ever
 /// visible.
 const SLEEP_ANGULAR_THRESHOLD: f32 = 1.5;
+/// Hard cap on ragdoll body velocities (per generalized-DOF component for the
+/// multibody rig; linvel/angvel norms for free bodies). Healthy collapse
+/// dynamics peak around 7-20; the cap only engages when a spawn transient
+/// enters runaway feedback (which otherwise ends in a NaN AABB and a parry
+/// BVH panic). Applied once per frame in `RagDoll::update`.
+const MAX_BODY_SPEED: f32 = 30.0;
 
 /// Quality/settle metrics for one ragdoll, for the verification harness.
 #[derive(Clone, Debug)]
@@ -172,7 +178,20 @@ impl RagDoll {
         }
     }
 
-    fn update(&mut self, physics: &PhysicsWorld) {
+    fn update(&mut self, physics: &mut PhysicsWorld) {
+        // Break runaway spawn transients before they cascade to a NaN AABB
+        // (which panics the parry BVH broad-phase). Normal collapse dynamics
+        // peak well below the cap, so this is a no-op except in the rare
+        // diverging run.
+        let corrected = physics.sanitize_ragdoll_bodies(&self.physics_bodies, MAX_BODY_SPEED);
+        if corrected > 0 {
+            // Common during the spawn transient (several frames per death),
+            // so debug rather than warn.
+            tracing::debug!(
+                "ragdoll velocity runaway: clamped {} velocity components",
+                corrected
+            );
+        }
         for (joint_id, handle) in &self.joint_to_body {
             if let Some(isometry) = physics.get_body_transform(*handle) {
                 let world = matrix_from_isometry(isometry);
@@ -512,7 +531,7 @@ impl RagDollManager {
         true
     }
 
-    pub fn update(&mut self, physics: &PhysicsWorld) {
+    pub fn update(&mut self, physics: &mut PhysicsWorld) {
         for ragdoll in self.ragdolls.values_mut() {
             ragdoll.update(physics);
         }
