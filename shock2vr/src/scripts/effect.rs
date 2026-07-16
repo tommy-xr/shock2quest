@@ -357,9 +357,12 @@ pub enum Effect {
     },
 
     /// Debug: force the alertness level of every AI in the mission (broadcast
-    /// as a SetAlertness message to each creature's script)
+    /// as a SetAlertness message to each creature's script). `pin` holds the
+    /// level against decay and keeps target awareness on the player's live
+    /// position until cleared by a non-pinned SetAllAIAlertness.
     SetAllAIAlertness {
         level: AIAlertLevel,
+        pin: bool,
     },
 
     AcquireKeyCard {

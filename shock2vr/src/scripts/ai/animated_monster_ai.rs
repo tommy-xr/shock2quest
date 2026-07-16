@@ -95,12 +95,16 @@ pub struct AnimatedMonsterAI {
     published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
     /// Throttle between door interactions (open / locked-door give-up)
     door_cooldown: f32,
+    /// Pinned alertness (DebugForceChase): treated as permanent sight of the
+    /// player - no decay, live target position - until cleared
+    alertness_pinned: bool,
 }
 
 impl AnimatedMonsterAI {
     pub fn idle() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
+            alertness_pinned: false,
             took_damage: false,
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
@@ -120,6 +124,7 @@ impl AnimatedMonsterAI {
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
+            alertness_pinned: false,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
@@ -676,8 +681,16 @@ impl Script for AnimatedMonsterAI {
         // Monster rotation is set directly via Effect::SetRotation, so pose.rotation
         // already contains the heading. Pass Deg(0.0) to avoid applying it twice.
         const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
-        let is_visible =
-            is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE);
+        // A pinned alertness (DebugForceChase) acts as permanent sight of
+        // the player: no decay, and the last-known position tracks them live
+        let is_visible = self.alertness_pinned
+            || is_player_visible_in_fov(
+                entity_id,
+                world,
+                physics,
+                Deg(0.0),
+                MONSTER_FOV_HALF_ANGLE,
+            );
 
         // Remember where the player was last seen, for SearchBehavior
         if is_visible {
@@ -1055,12 +1068,16 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 }
             }
-            MessagePayload::SetAlertness { level } => {
+            MessagePayload::SetAlertness { level, pin } => {
                 // Dead AIs stay dead - a corpse keeps a live script, and the
                 // broadcast (DebugAlertAll) reaches every creature
                 if self.is_dead || is_killed(entity_id, world) {
                     return Effect::NoEffect;
                 }
+                // Pinned (DebugForceChase): the level never decays and the
+                // AI hunts the player's live position until a non-pinned
+                // SetAlertness (DebugCalmAll) clears it
+                self.alertness_pinned = *pin;
                 // The behavior reset is unconditional, even when the level
                 // didn't change - forcing is a debug reset, so it also
                 // cancels scripted sequences

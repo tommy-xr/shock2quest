@@ -3039,7 +3039,7 @@ impl MissionCore {
                         }
                     }
                 }
-                Effect::SetAllAIAlertness { level } => {
+                Effect::SetAllAIAlertness { level, pin } => {
                     let creature_ids: Vec<EntityId> = {
                         let v_creature = self.world.borrow::<View<PropCreature>>().unwrap();
                         v_creature.iter().ids().collect()
@@ -3047,7 +3047,7 @@ impl MissionCore {
                     for id in creature_ids {
                         self.script_world.dispatch(Message {
                             to: id,
-                            payload: MessagePayload::SetAlertness { level },
+                            payload: MessagePayload::SetAlertness { level, pin },
                         });
                     }
                 }
@@ -5369,7 +5369,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             DebugEntityMessage::Damage { amount } => MessagePayload::Damage { amount },
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
-            DebugEntityMessage::SetAlertness { level } => MessagePayload::SetAlertness { level },
+            DebugEntityMessage::SetAlertness { level } => {
+                MessagePayload::SetAlertness { level, pin: false }
+            }
             // Debug injections have no real sender; use the target itself.
             DebugEntityMessage::TurnOn => MessagePayload::TurnOn { from: id },
             DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },
