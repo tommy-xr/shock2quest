@@ -296,6 +296,11 @@ impl RagDollManager {
         // locked translation - settles but the hip can visibly sag/separate
         // under load).
         use_multibody: bool,
+        // The dying creature's bulk velocity (root-motion carries the crumple
+        // forward), inherited by the rig so the fall's momentum is continuous
+        // across the handoff. Multibody only (the legacy impulse rig isn't
+        // seeded - body-level writes work there but it's a deprecated path).
+        seed_velocity: Vector3<f32>,
         // When false, limbs collide with the world but not with each other
         // (CollisionGroup::ragdoll_no_self). Death-handoff rigs spawn in a
         // crumpled, limb-overlapping pose whose many deep limb-limb contacts
@@ -556,6 +561,19 @@ impl RagDollManager {
                     let handle = physics.create_impulse_joint(parent_handle, child_handle, joint);
                     joint_handles.push(handle);
                     joint_pairs.push((parent_handle, child_handle));
+                }
+            }
+        }
+
+        // Inherit the dying creature's bulk motion so the crumple's momentum
+        // is continuous across the handoff (mid-fall spawns would otherwise
+        // freeze for an instant). Written into the multibody's generalized
+        // root DOF - body-level set_linvel is clobbered by the readback.
+        if use_multibody && seed_velocity.magnitude2() > 1.0e-8 {
+            if let Some(first) = body_handles.first() {
+                if !physics.set_multibody_root_linvel(*first, seed_velocity) {
+                    // Best-effort momentum; note the miss rather than fail.
+                    tracing::debug!("ragdoll velocity seed not applied (non-finite or no body)");
                 }
             }
         }

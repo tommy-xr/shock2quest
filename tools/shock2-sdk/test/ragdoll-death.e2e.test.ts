@@ -55,18 +55,16 @@ test(
       amount: 1000,
     });
 
-    // The death crumple has to actually play out before the handoff fires
-    // (the ragdoll spawns on the crumple's AnimationCompleted, not on the
-    // killing blow). Step in 0.5s batches until the ragdoll exists.
-    let ragdolls = (await game.physics.ragdolls()).ragdolls;
-    for (let i = 0; i < 30 && ragdolls.length === 0; i++) {
-      await game.step({ frames: 30 });
-      ragdolls = (await game.physics.ragdolls()).ragdolls;
-    }
+    // The handoff is near-instant (~0.05s into the crumple, so the killing
+    // blow lands AT the kill): half a second after the killing blow the
+    // ragdoll must already exist. This pins the timing contract - the old
+    // completion-driven handoff (~4s later) would fail here.
+    await game.step({ frames: 30 });
+    const ragdolls = (await game.physics.ragdolls()).ragdolls;
     assert.equal(
       ragdolls.length,
       1,
-      "death crumple should spawn exactly one ragdoll within 15s",
+      "the killing blow should hand off to exactly one ragdoll within 0.5s",
     );
     assert.ok(
       ragdolls[0].body_count >= 15,

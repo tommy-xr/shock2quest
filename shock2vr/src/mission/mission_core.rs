@@ -2244,6 +2244,13 @@ impl MissionCore {
             } else {
                 0.0
             };
+            // The creature's live capsule velocity IS the crumple's root
+            // motion (animation drives the body through physics velocity), so
+            // it seeds the rig's bulk momentum across the handoff.
+            let seed_velocity = self
+                .physics
+                .get_velocity(entity_id)
+                .unwrap_or_else(Vector3::zero);
             let spawned = self.rag_doll_manager.add_ragdoll(
                 ragdoll_id,
                 model,
@@ -2252,6 +2259,7 @@ impl MissionCore {
                 vec3(0.0, lift, 0.0),
                 &joint_limits,
                 use_multibody,
+                seed_velocity,
                 !crumpled_pose,
                 &mut self.physics,
             );
