@@ -234,6 +234,14 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// The death (crumple) animation finished: hand the corpse over to physics
+    /// as a ragdoll. Emitted unconditionally by the AI on death-animation
+    /// completion; the handler is a no-op unless the `ragdoll` experimental
+    /// flag is on (the animated corpse entity stays, exactly as before).
+    SpawnCorpseRagdoll {
+        entity_id: EntityId,
+    },
+
     QueueAnimationBySchema {
         // ActorType, MotActorTags get inferred from the entity id
         entity_id: EntityId,

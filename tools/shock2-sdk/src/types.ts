@@ -202,6 +202,21 @@ export interface PhysicsBodyListResult {
   player_position: Vec3;
 }
 
+/** Settle/quality metrics for one ragdoll (GET /v1/ragdoll/metrics). */
+export interface RagdollMetrics {
+  entity_id: number;
+  body_count: number;
+  max_linear_speed: number;
+  max_angular_speed: number;
+  min_y: number;
+  max_nonadjacent_overlap: number;
+  max_drift: number;
+}
+
+export interface RagdollMetricsResult {
+  ragdolls: RagdollMetrics[];
+}
+
 export interface PlayerSnapshot {
   entity_id: number | null;
   position: Vec3;
