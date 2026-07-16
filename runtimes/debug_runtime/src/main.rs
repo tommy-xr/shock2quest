@@ -295,6 +295,10 @@ async fn start_http_server(
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
+        .route(
+            "/v1/physics/bodies/:id/impulse",
+            axum::routing::post(apply_body_impulse),
+        )
         .route("/v1/physics/colliders/validate", get(audit_colliders))
         .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
         .route("/v1/control/input", get(get_input_state))
@@ -1504,6 +1508,7 @@ fn process_command(
                         .map(|j| commands::PhysicsJointEntry {
                             body1_id: j.body1_id,
                             body2_id: j.body2_id,
+                            joint_type: j.joint_type,
                             bone1: j.bone1,
                             bone2: j.bone2,
                             anchor1: j.anchor1,
@@ -1517,6 +1522,34 @@ fn process_command(
                 .unwrap_or_default();
             if let Err(_) = reply.send(commands::PhysicsJointsResult { joints }) {
                 tracing::warn!("Failed to send physics joints - receiver dropped");
+            }
+        }
+        RuntimeCommand::ApplyBodyImpulse {
+            body_id,
+            impulse,
+            reply,
+        } => {
+            let result = match game.debug_scene_mut() {
+                Some(debug_scene) => {
+                    let applied = debug_scene.apply_body_impulse(body_id, impulse);
+                    CommandResult {
+                        success: applied,
+                        message: if applied {
+                            format!("Impulse applied to body {}", body_id)
+                        } else {
+                            format!("No dynamic body with id {}", body_id)
+                        },
+                        data: None,
+                    }
+                }
+                None => CommandResult {
+                    success: false,
+                    message: "Current scene is not debuggable".to_string(),
+                    data: None,
+                },
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send impulse result - receiver dropped");
             }
         }
         RuntimeCommand::GetInput(reply) => {
@@ -2100,6 +2133,48 @@ async fn get_animation_state(
 /// Inject a script message (damage, frob, signal) into a specific entity.
 ///
 /// Body is a tagged `DebugEntityMessage`, e.g. `{"type":"Damage","amount":1.0}`.
+/// Request body for POST /v1/physics/bodies/:id/impulse.
+#[derive(serde::Deserialize)]
+struct BodyImpulseRequest {
+    /// World-space impulse vector (mass * velocity change).
+    impulse: [f32; 3],
+}
+
+/// HTTP handler: apply a world-space impulse to a dynamic physics body,
+/// waking it if asleep. Lets tests poke a settled/sleeping ragdoll headlessly.
+async fn apply_body_impulse(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Path(id): Path<u32>,
+    LenientJson(request): LenientJson<BodyImpulseRequest>,
+) -> Json<CommandResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if let Err(_) = command_tx.send(RuntimeCommand::ApplyBodyImpulse {
+        body_id: id,
+        impulse: request.impulse,
+        reply: reply_tx,
+    }) {
+        tracing::error!("Failed to send ApplyBodyImpulse command - game loop receiver dropped");
+        return Json(CommandResult {
+            success: false,
+            message: "Game loop unavailable".to_string(),
+            data: None,
+        });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive impulse result - sender dropped");
+            Json(CommandResult {
+                success: false,
+                message: "No response from game loop".to_string(),
+                data: None,
+            })
+        }
+    }
+}
+
 async fn send_entity_message(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     Path(id): Path<i32>,

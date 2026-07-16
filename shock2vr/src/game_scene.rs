@@ -282,18 +282,22 @@ pub struct DebugRagdollMetrics {
     pub max_drift: f32,
 }
 
-/// One impulse joint's state, for ragdoll diagnostics. `separation` and the
-/// impulses staying non-zero at rest mean the constraint can't be satisfied.
+/// One joint's state, for ragdoll diagnostics. `separation` and the impulses
+/// staying non-zero at rest mean the constraint can't be satisfied.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugPhysicsJoint {
     pub body1_id: u32,
     pub body2_id: u32,
+    /// `"impulse"` or `"multibody"` - which joint set this came from.
+    pub joint_type: String,
     /// Skeleton joint id each body represents, if it's a ragdoll body.
     pub bone1: Option<u32>,
     pub bone2: Option<u32>,
     pub anchor1: [f32; 3],
     pub anchor2: [f32; 3],
     pub separation: f32,
+    /// Constraint impulses this step. Rapier does not expose these for
+    /// multibody links, so they read 0 there.
     pub linear_impulse: f32,
     pub angular_impulse: f32,
 }
@@ -581,10 +585,18 @@ pub trait DebuggableScene {
         Vec::new()
     }
 
-    /// Every impulse joint with its anchor separation + applied impulse, for
-    /// ragdoll diagnostics. Empty when the scene has no joints.
+    /// Every impulse + multibody joint with its anchor separation (+ applied
+    /// impulse for impulse joints), for ragdoll diagnostics. Empty when the
+    /// scene has no joints.
     fn list_physics_joints(&self) -> Vec<DebugPhysicsJoint> {
         Vec::new()
+    }
+
+    /// Apply a world-space impulse to a dynamic physics body by `body_id`
+    /// (waking it if asleep). Debug hook for poking ragdolls headlessly - e.g.
+    /// verify a sleeping corpse wakes on impact. False = no such dynamic body.
+    fn apply_body_impulse(&mut self, _body_id: u32, _impulse: [f32; 3]) -> bool {
+        false
     }
 
     /// Colliders whose world AABB is malformed (NaN/inf, degenerate, or

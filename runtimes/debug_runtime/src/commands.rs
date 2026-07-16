@@ -158,9 +158,17 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<RagdollMetricsResult>,
     },
 
-    /// List impulse joints with anchor separation + applied impulse
+    /// List impulse + multibody joints with anchor separation + applied impulse
     ListPhysicsJoints {
         reply: oneshot::Sender<PhysicsJointsResult>,
+    },
+
+    /// Apply a world-space impulse to a dynamic physics body (waking it) -
+    /// e.g. poke a settled ragdoll to verify it wakes and reacts.
+    ApplyBodyImpulse {
+        body_id: u32,
+        impulse: [f32; 3],
+        reply: oneshot::Sender<CommandResult>,
     },
 
     /// Audit collider AABBs for malformed geometry (NaN/degenerate/extreme)
@@ -270,7 +278,7 @@ pub struct RagdollMetricsEntry {
     pub max_drift: f32,
 }
 
-/// Impulse joint diagnostics (ragdoll constraint health).
+/// Joint diagnostics (ragdoll constraint health), impulse + multibody.
 #[derive(Debug, Serialize)]
 pub struct PhysicsJointsResult {
     pub joints: Vec<PhysicsJointEntry>,
@@ -280,6 +288,8 @@ pub struct PhysicsJointsResult {
 pub struct PhysicsJointEntry {
     pub body1_id: u32,
     pub body2_id: u32,
+    /// `"impulse"` or `"multibody"` - which joint set this came from.
+    pub joint_type: String,
     pub bone1: Option<u32>,
     pub bone2: Option<u32>,
     pub anchor1: [f32; 3],

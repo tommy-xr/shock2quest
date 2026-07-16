@@ -342,6 +342,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.list_physics_joints()
     }
 
+    fn apply_body_impulse(&mut self, body_id: u32, impulse: [f32; 3]) -> bool {
+        self.mission_core.apply_body_impulse(body_id, impulse)
+    }
+
     fn audit_colliders(&self) -> Vec<crate::game_scene::DebugColliderIssue> {
         self.mission_core.audit_colliders()
     }
