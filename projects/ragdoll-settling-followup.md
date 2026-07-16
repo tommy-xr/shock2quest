@@ -5,7 +5,8 @@ Hand-off doc for continuing the ragdoll work. Goal: a believable corpse that
 **interactive** (you can poke/push the body — that's part of the fun).
 
 See also `projects/ragdoll.md` (the main ragdoll doc + earlier 2026-06-15/06-18
-investigation logs). This doc is the current frontier as of 2026-06-18.
+investigation logs). Current frontier: the **2026-07-16 re-evaluation** below —
+the multibody rig now settles and is the graduation candidate.
 
 ## Where we are now (done / merged / in PR #301)
 
@@ -155,7 +156,40 @@ energy. This is why multibody stays **experimental / opt-in**, not the default.
 - *Multibody (flag):* **no gap, can't separate**, but **extremities won't settle**
   (contact jitter) and the in-game death path is gated behind `--experimental ragdoll`.
 
-## Recommended next steps (ranked)
+## Re-evaluation — 2026-07-16 (multibody blocker no longer reproduces)
+
+Re-ran both rigs in `debug_ragdoll` headlessly (45–90 s of fixed-60 Hz sim,
+polling `/v1/ragdoll/metrics` once per sim-second, `/v1/physics/joints`,
+screenshots). Physics changes landed since the June frontier — most relevantly
+#333 (collider friction/restitution driven from `P$PhysAttr`) — and the picture
+has changed materially:
+
+- **Impulse rig (default): unchanged, still the documented failure mode.**
+  `max_lin` decays to ~0.05, but the loaded hip holds a **9.6 cm** gap (other
+  hip ~2.4 cm — same systematic asymmetry), a ~1.6–2.2 rad/s angular twitch
+  persists indefinitely, and the settled pose is visually implausible (legs
+  folded straight up in the air).
+- **Multibody rig (`ragdoll_multibody`): the "extremities won't settle" blocker
+  is gone.** Where June measured a one-body limit-cycle of `max_ang`~8 /
+  `lin`~5, a 90 s run now tails at `max_lin` ~0.016–0.05 and `max_ang`
+  mean **0.43** (t>60), with occasional 1–3 rad/s blips. The settled pose is a
+  flat, believable prone corpse — clearly better than the impulse rig's.
+  Attribution is circumstantial (no bisect run) but #333's contact
+  friction/restitution change is exactly the mechanism the June log implicated
+  (floor-contact energy).
+- **Residual (small):** one extremity body keeps a ~0.5 rad/s buzz, and
+  **0/20 bodies ever sleep** over 90 s, so the rig never goes fully still.
+  Island sleeping (the step-2 fallback below) is now the graduation fix for the
+  *multibody* rig rather than a consolation for the impulse rig: sleep kills the
+  buzz, auto-wake on contact/force keeps the corpse pokeable.
+
+**Verdict: the multibody rig is now better on every axis** (no gap possible,
+better pose, lower residual energy). Plan: enable sleeping for ragdoll bodies,
+verify (bodies sleep, `max_ang` → 0, wake-on-impulse), then promote multibody to
+the default rig. The step-0 ideas below (joint damping, per-collider contact
+softness, velocity clamps) were **not needed** and are kept only for reference.
+
+## Recommended next steps (ranked) — as of 2026-06-18, see re-evaluation above
 
 ### 0. Crack the multibody floor-contact jitter (the one blocker left)
 Make the multibody rig settle so it can graduate from experimental to default. Ideas
