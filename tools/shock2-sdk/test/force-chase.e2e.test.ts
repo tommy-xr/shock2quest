@@ -81,14 +81,22 @@ test(
     // require progress from several, not all).
     await game.step({ frames: 1200 });
     let closer = 0;
+    let minFinal = Infinity;
     for (const h of hybrids) {
       const d = await game.entities.detail(h.id);
-      const delta = dist3(d.position, playerPos) - (before.get(h.id) ?? 0);
-      if (delta < -2.0) closer += 1;
+      const final = dist3(d.position, playerPos);
+      minFinal = Math.min(minFinal, final);
+      if (final - (before.get(h.id) ?? 0) < -2.0) closer += 1;
     }
     assert.ok(
       closer >= 2,
       `expected at least 2 of ${hybrids.length} hybrids to close on the player, got ${closer}`,
+    );
+    // ...and at least one actually ARRIVES (engagement range), not just
+    // drifts closer - the arrival is the point of the pin
+    assert.ok(
+      minFinal < 15.0,
+      `expected a hybrid to reach engagement range, closest ended at ${minFinal.toFixed(1)}`,
     );
 
     // DebugCalmAll clears the pin: alertness decays freely again.

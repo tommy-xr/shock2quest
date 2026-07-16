@@ -777,6 +777,20 @@ impl MissionCore {
             }
         }
 
+        // Drop AI path records (and their debug visuals) for entities that
+        // no longer exist, so dead AIs don't ghost in GET /v1/ai/paths
+        if time.elapsed.as_secs_f32() > 0.0 {
+            if let Some(service) = &self.pathfinding_service {
+                if let Ok(entities) = self.world.borrow::<shipyard::EntitiesView>() {
+                    service.prune_ai_paths(|inner| {
+                        shipyard::EntityId::from_inner(inner)
+                            .map(|id| entities.is_alive(id))
+                            .unwrap_or(false)
+                    });
+                }
+            }
+        }
+
         // Sync live door state into the pathfinding service: locked-and-
         // closed doors make their below-door cells unpathable, so A* routes
         // around them (or stops at them) instead of through them. Unlocked
@@ -1452,12 +1466,17 @@ impl MissionCore {
                 // AI steering publishes a locomotion scale (heading-error /
                 // arrival coupling); scale the horizontal root velocity so a
                 // turning AI slows instead of arcing at full stride. Vertical
-                // velocity (gravity) is untouched.
+                // velocity (gravity) is untouched. Consume-on-read: the
+                // component is removed after applying so a stale value can't
+                // slow non-steering animations (death, attack clips) - the
+                // steering republishes it every frame it runs.
                 let scale = self
                     .world
-                    .borrow::<View<crate::runtime_props::RuntimePropLocomotionScale>>()
-                    .ok()
-                    .and_then(|v| v.get(*id).ok().map(|s| s.0))
+                    .run(
+                        |mut v_scale: ViewMut<crate::runtime_props::RuntimePropLocomotionScale>| {
+                            v_scale.remove(*id).map(|s| s.0)
+                        },
+                    )
                     .unwrap_or(1.0);
                 let adj_velocity =
                     transform

@@ -218,6 +218,14 @@ impl PathfindingService {
         }
     }
 
+    /// Drop AI path records whose entity no longer satisfies `keep`
+    /// (e.g. it despawned), so introspection doesn't report ghosts
+    pub fn prune_ai_paths(&self, keep: impl Fn(u64) -> bool) {
+        if let Ok(mut paths) = self.ai_paths.lock() {
+            paths.retain(|&entity, _| keep(entity));
+        }
+    }
+
     /// Record the latest path an AI computed (key: EntityId::inner())
     pub fn record_ai_path(&self, entity: u64, record: AiPathRecord) {
         if let Ok(mut paths) = self.ai_paths.lock() {
@@ -792,7 +800,11 @@ fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> V
         best
     };
 
-    let mut bridges = Vec::new();
+    // Collect every qualifying candidate first, then union in a stable
+    // order (shortest gap first, cell ids as tiebreak) so the synthesized
+    // topology is deterministic across launches - HashMap iteration order
+    // must not pick the bridges.
+    let mut candidates: Vec<(f32, u32, u32)> = Vec::new();
     for (&(bx, bz), cells) in &buckets {
         // Scan the 3x3 bucket neighborhood; a_id < b_id dedupes pairs
         let mut neighborhood: Vec<u32> = Vec::new();
@@ -828,23 +840,42 @@ fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> V
                 if gap > BRIDGE_MAX_GAP {
                     continue;
                 }
-                let root_a = find(&mut parent, a_id);
-                parent[root_a as usize] = find(&mut parent, b_id);
-                let cost = ((gap * SCALE_FACTOR) as u8).max(1);
-                let bits = MovementBits::WALK | MovementBits::SMALL_CREATURE;
-                // No shared edge exists; u32::MAX vertex ids make waypoint
-                // building fall back to the destination cell center
-                for (from, to) in [(a_id, b_id), (b_id, a_id)] {
-                    bridges.push(PathCellLink {
-                        from_cell: from,
-                        to_cell: to,
-                        edge_vertex_a: u32::MAX,
-                        edge_vertex_b: u32::MAX,
-                        ok_bits: bits,
-                        cost,
-                    });
-                }
+                candidates.push((gap, a_id, b_id));
             }
+        }
+    }
+    candidates.sort_by(|x, y| {
+        x.0.partial_cmp(&y.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(x.1.cmp(&y.1))
+            .then(x.2.cmp(&y.2))
+    });
+
+    let mut bridges = Vec::new();
+    for (_, a_id, b_id) in candidates {
+        if find(&mut parent, a_id) == find(&mut parent, b_id) {
+            continue;
+        }
+        let root_a = find(&mut parent, a_id);
+        parent[root_a as usize] = find(&mut parent, b_id);
+        let (a, b) = (&db.cells[a_id as usize], &db.cells[b_id as usize]);
+        // Cost from center-to-center distance: the executed route runs
+        // through the cell centers (no shared edge exists), so this matches
+        // travel and keeps the center-distance A* heuristic admissible
+        let center_dist = (a.center - b.center).magnitude();
+        let cost = ((center_dist * SCALE_FACTOR) as u8).max(1);
+        let bits = MovementBits::WALK | MovementBits::SMALL_CREATURE;
+        // No shared edge exists; u32::MAX vertex ids make waypoint
+        // building fall back to the destination cell center
+        for (from, to) in [(a_id, b_id), (b_id, a_id)] {
+            bridges.push(PathCellLink {
+                from_cell: from,
+                to_cell: to,
+                edge_vertex_a: u32::MAX,
+                edge_vertex_b: u32::MAX,
+                ok_bits: bits,
+                cost,
+            });
         }
     }
     bridges
