@@ -61,6 +61,11 @@ const SLEEP_ANGULAR_THRESHOLD: f32 = 1.5;
 /// enters runaway feedback (which otherwise ends in a NaN AABB and a parry
 /// BVH panic). Applied once per frame in `RagDoll::update`.
 const MAX_BODY_SPEED: f32 = 30.0;
+/// Impulse magnitude (N*s, bodies are ~1 mass unit each) applied to the struck
+/// limb when a death ragdoll is seeded with the killing blow. Tuned in medsci1
+/// A/B runs: 8.0 gives the struck limb a clearly visible ~2.5 m/s reaction
+/// that propagates through the articulated rig without launching the corpse.
+const KILLING_BLOW_IMPULSE: f32 = 8.0;
 
 /// Quality/settle metrics for one ragdoll, for the verification harness.
 #[derive(Clone, Debug)]
@@ -602,6 +607,42 @@ impl RagDollManager {
             scene.extend(ragdoll.renderables());
         }
         scene
+    }
+
+    /// Seed a just-spawned corpse with its killing blow: shove the struck limb
+    /// (by skeleton joint id when the hitbox reported one, else the body
+    /// nearest the hit point) along the blow's direction. The articulated rig
+    /// propagates the reaction naturally.
+    pub fn apply_impact(
+        &mut self,
+        entity_id: EntityId,
+        impact: &crate::scripts::DamageImpact,
+        physics: &mut PhysicsWorld,
+    ) {
+        let Some(ragdoll) = self.ragdolls.get(&entity_id) else {
+            return;
+        };
+        let by_bone = impact
+            .bone
+            .and_then(|bone| ragdoll.joint_to_body.get(&bone).copied());
+        let handle = by_bone.or_else(|| {
+            // Nearest body to the hit point.
+            ragdoll
+                .physics_bodies
+                .iter()
+                .filter_map(|h| {
+                    physics.get_body_transform(*h).map(|iso| {
+                        let p =
+                            Vector3::new(iso.translation.x, iso.translation.y, iso.translation.z);
+                        (*h, (p - impact.point).magnitude2())
+                    })
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(h, _)| h)
+        });
+        if let Some(handle) = handle {
+            physics.apply_impulse_to_handle(handle, impact.direction * KILLING_BLOW_IMPULSE);
+        }
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId, physics: &mut PhysicsWorld) {

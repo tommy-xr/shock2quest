@@ -59,7 +59,14 @@ export interface PathfindingTestStatus {
  * Mirrors the engine's `DebugEntityMessage`; the `type` field is the serde tag.
  */
 export type DebugEntityMessage =
-  | { type: "Damage"; amount: number }
+  | {
+      type: "Damage";
+      amount: number;
+      /** Optional world-space blow direction (seeds a death-ragdoll reaction). */
+      direction?: [number, number, number];
+      /** Optional world-space hit point (defaults to the victim's position). */
+      point?: [number, number, number];
+    }
   | { type: "Frob" }
   | { type: "Signal"; name: string }
   | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }

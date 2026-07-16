@@ -235,11 +235,14 @@ pub enum Effect {
     },
 
     /// The death (crumple) animation finished: hand the corpse over to physics
-    /// as a ragdoll. Emitted unconditionally by the AI on death-animation
-    /// completion; the handler is a no-op unless the `ragdoll` experimental
-    /// flag is on (the animated corpse entity stays, exactly as before).
+    /// as a ragdoll, optionally seeded with the killing blow (so the corpse
+    /// reacts at the struck limb, in the shot's direction). Emitted
+    /// unconditionally by the AI on death-animation completion; the handler is
+    /// a no-op unless the `ragdoll` experimental flag is on (the animated
+    /// corpse entity stays, exactly as before).
     SpawnCorpseRagdoll {
         entity_id: EntityId,
+        impact: Option<crate::scripts::DamageImpact>,
     },
 
     QueueAnimationBySchema {

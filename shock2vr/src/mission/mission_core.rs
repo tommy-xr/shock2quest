@@ -837,8 +837,14 @@ impl MissionCore {
             )
         };
 
-        // Clear forces
-        self.physics.clear_forces();
+        // Clear one-shot forces - but only after a step actually consumed
+        // them. A paused (zero-dt) frame skips physics.update above, and
+        // clearing there would silently erase forces queued between frames
+        // (e.g. a killing-blow impulse on a multibody link, which is applied
+        // as a one-step force) before they ever acted.
+        if !time.elapsed.is_zero() {
+            self.physics.clear_forces();
+        }
         // A poisoned (transform-diverged) rig is despawned by the manager;
         // also delete its otherwise-empty corpse entity so it doesn't leak.
         for poisoned_id in self.rag_doll_manager.update(&mut self.physics) {
@@ -1565,7 +1571,12 @@ impl MissionCore {
                 if amount > 0.0 {
                     self.script_world.dispatch(Message {
                         to: entity_id,
-                        payload: MessagePayload::Damage { amount },
+                        // No impact vector: the blast's physical push is
+                        // applied radially to bodies by radius_blast itself.
+                        payload: MessagePayload::Damage {
+                            amount,
+                            impact: None,
+                        },
                     });
                 }
             }
@@ -2179,17 +2190,19 @@ impl MissionCore {
     /// fitted colliders don't start inside the level trimesh. Standing/mid-
     /// animation spawns (instant slays, the debug scene) pass false and keep
     /// the full self-colliding rig with no lift.
-    /// Returns true if a ragdoll was spawned (the creature is then removed).
+    /// Returns the corpse entity id if a ragdoll was spawned (the creature is
+    /// then removed) - the id keys the ragdoll in `rag_doll_manager` (e.g. for
+    /// `apply_impact`).
     pub fn spawn_ragdoll(
         &mut self,
         entity_id: EntityId,
         use_multibody: bool,
         crumpled_pose: bool,
-    ) -> bool {
-        let spawned = {
+    ) -> Option<EntityId> {
+        let (spawned, ragdoll_id) = {
             let model = match self.id_to_model.get(&entity_id) {
                 Some(model) if model.can_create_rag_doll() => model,
-                _ => return false,
+                _ => return None,
             };
 
             let (root_transform, joint_transforms) = {
@@ -2201,11 +2214,11 @@ impl MissionCore {
 
                 let root_transform = match v_transform.get(entity_id) {
                     Ok(transform) => transform.0,
-                    Err(_) => return false,
+                    Err(_) => return None,
                 };
                 let joint_transforms = match v_joint_transforms.get(entity_id) {
                     Ok(joints) => joints.0,
-                    Err(_) => return false,
+                    Err(_) => return None,
                 };
                 (root_transform, joint_transforms)
             };
@@ -2231,7 +2244,7 @@ impl MissionCore {
             } else {
                 0.0
             };
-            self.rag_doll_manager.add_ragdoll(
+            let spawned = self.rag_doll_manager.add_ragdoll(
                 ragdoll_id,
                 model,
                 root_transform,
@@ -2241,7 +2254,8 @@ impl MissionCore {
                 use_multibody,
                 !crumpled_pose,
                 &mut self.physics,
-            )
+            );
+            (spawned, ragdoll_id)
         };
 
         if spawned {
@@ -2249,8 +2263,10 @@ impl MissionCore {
             // AI scripts, and animated model so only the ragdoll remains.
             self.remove_entity(entity_id);
             println!("Spawned ragdoll and removed creature {:?}", entity_id);
+            Some(ragdoll_id)
+        } else {
+            None
         }
-        spawned
     }
 
     pub fn handle_effects(
@@ -2935,21 +2951,23 @@ impl MissionCore {
                         // non-ragdoll-able entities), fall back to the plain removal.
                         let spawned_ragdoll =
                             game_options.experimental_features.contains("ragdoll")
-                                && self.spawn_ragdoll(
-                                    entity_id,
-                                    !game_options
-                                        .experimental_features
-                                        .contains("ragdoll_impulse"),
-                                    // Slain mid-animation, usually upright -
-                                    // not a crumpled pose.
-                                    false,
-                                );
+                                && self
+                                    .spawn_ragdoll(
+                                        entity_id,
+                                        !game_options
+                                            .experimental_features
+                                            .contains("ragdoll_impulse"),
+                                        // Slain mid-animation, usually upright -
+                                        // not a crumpled pose.
+                                        false,
+                                    )
+                                    .is_some();
                         if !spawned_ragdoll {
                             self.remove_entity(entity_id);
                         }
                     }
                 }
-                Effect::SpawnCorpseRagdoll { entity_id } => {
+                Effect::SpawnCorpseRagdoll { entity_id, impact } => {
                     // Death-crumple handoff (AI deaths): once the death
                     // animation has finished, replace the animated corpse with
                     // a physics ragdoll seeded from its final pose. Gated on
@@ -2960,7 +2978,7 @@ impl MissionCore {
                     // creature entity is removed, which will matter once
                     // corpse looting (`creaturecontainer`) is implemented.)
                     if game_options.experimental_features.contains("ragdoll") {
-                        self.spawn_ragdoll(
+                        let ragdoll_id = self.spawn_ragdoll(
                             entity_id,
                             !game_options
                                 .experimental_features
@@ -2969,6 +2987,17 @@ impl MissionCore {
                             // overlapping.
                             true,
                         );
+                        // Seed the corpse with the killing blow: the struck
+                        // limb gets a shove along the shot's direction, so the
+                        // corpse reacts to HOW it died instead of collapsing
+                        // in place.
+                        if let (Some(ragdoll_id), Some(impact)) = (ragdoll_id, impact) {
+                            self.rag_doll_manager.apply_impact(
+                                ragdoll_id,
+                                &impact,
+                                &mut self.physics,
+                            );
+                        }
                     }
                 }
                 Effect::StopSound { handle } => {
@@ -5411,7 +5440,37 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         }
 
         let payload = match message {
-            DebugEntityMessage::Damage { amount } => MessagePayload::Damage { amount },
+            DebugEntityMessage::Damage {
+                amount,
+                direction,
+                point,
+            } => MessagePayload::Damage {
+                amount,
+                // A directional debug blow mirrors what a projectile hit
+                // carries (point falls back to the victim's position).
+                impact: direction.and_then(|d| {
+                    let d = vec3(d[0], d[1], d[2]);
+                    if d.magnitude2() <= 1.0e-12 {
+                        return None;
+                    }
+                    let point = point.map(|p| vec3(p[0], p[1], p[2])).or_else(|| {
+                        self.world
+                            .borrow::<View<RuntimePropTransform>>()
+                            .ok()
+                            .and_then(|v| {
+                                v.get(id)
+                                    .ok()
+                                    .map(|t| crate::util::get_position_from_matrix(&t.0))
+                            })
+                            .map(|p| vec3(p.x, p.y, p.z))
+                    })?;
+                    Some(crate::scripts::DamageImpact {
+                        direction: d.normalize(),
+                        point,
+                        bone: None,
+                    })
+                }),
+            },
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
             DebugEntityMessage::SetAlertness { level } => MessagePayload::SetAlertness { level },

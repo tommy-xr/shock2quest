@@ -1717,13 +1717,22 @@ impl PhysicsWorld {
         let Some(handle) = handle else {
             return false;
         };
-        // A multibody link ignores direct velocity writes: the reduced-
-        // coordinate solver recomputes every link body's velocity from the
-        // joint velocities each step (`Multibody` forward kinematics), so
-        // `apply_impulse` is silently overwritten. Its forward *dynamics* does
-        // read the per-body user-force accumulator, so convert the impulse to
-        // a force over one physics step - `clear_forces` (called right after
-        // each step) makes it impulsive.
+        self.apply_impulse_to_handle(handle, impulse)
+    }
+
+    /// Multibody-aware impulse on a body handle, waking it even for a zero
+    /// impulse. A multibody link ignores direct velocity writes: the reduced-
+    /// coordinate solver recomputes every link body's velocity from the joint
+    /// velocities each step (`Multibody` forward kinematics), so
+    /// `apply_impulse` is silently overwritten. Its forward *dynamics* does
+    /// read the per-body user-force accumulator, so convert the impulse to a
+    /// force over one physics step - `clear_forces` (called right after each
+    /// step) makes it impulsive. Free dynamic bodies get a plain impulse.
+    pub fn apply_impulse_to_handle(
+        &mut self,
+        handle: RigidBodyHandle,
+        impulse: Vector3<f32>,
+    ) -> bool {
         let is_multibody_link = self.multibody_joint_set.rigid_body_link(handle).is_some();
         let dt = self.integration_parameters.dt;
         if let Some(body) = self.rigid_body_set.get_mut(handle) {

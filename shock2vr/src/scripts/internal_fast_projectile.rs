@@ -77,7 +77,24 @@ impl Script for InternalFastProjectileScript {
                     msg: Message {
                         to: hit_entity_id,
                         // TODO: Properly calculate damage
-                        payload: MessagePayload::Damage { amount: 6.0 },
+                        payload: MessagePayload::Damage {
+                            amount: 6.0,
+                            // The shot's travel direction + hit point seed the
+                            // victim's death-ragdoll reaction. Bone is filled
+                            // in by the hitbox script when a hitbox was struck.
+                            impact: {
+                                let travel = hit_point - start_point;
+                                if travel.magnitude2() > 1.0e-12 {
+                                    Some(crate::scripts::DamageImpact {
+                                        direction: travel.normalize(),
+                                        point: hit_point.to_vec(),
+                                        bone: None,
+                                    })
+                                } else {
+                                    None
+                                }
+                            },
+                        },
                     },
                 },
                 Effect::DrawDebugLines {

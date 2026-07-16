@@ -727,7 +727,16 @@ pub struct DebugPathfindingStats {
 #[serde(tag = "type")]
 pub enum DebugEntityMessage {
     /// Deal `amount` damage (drives `InternalSimpleHealth` / AI health).
-    Damage { amount: f32 },
+    /// `direction` (world-space, need not be normalized) and `point` optionally
+    /// describe the blow so a death ragdoll reacts to it - same data a real
+    /// projectile hit carries. Omitted = directionless damage.
+    Damage {
+        amount: f32,
+        #[serde(default)]
+        direction: Option<[f32; 3]>,
+        #[serde(default)]
+        point: Option<[f32; 3]>,
+    },
     /// Frob (use) the entity.
     Frob,
     /// Send a named AI signal.

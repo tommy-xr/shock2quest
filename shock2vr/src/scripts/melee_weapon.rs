@@ -28,7 +28,10 @@ impl Script for MeleeWeapon {
                 let damage_effect = Effect::Send {
                     msg: Message {
                         to: *with,
-                        payload: MessagePayload::Damage { amount: 1.0 },
+                        payload: MessagePayload::Damage {
+                            amount: 1.0,
+                            impact: None,
+                        },
                     },
                 };
                 // Impact sound: the weapon's collision schema (weapontype

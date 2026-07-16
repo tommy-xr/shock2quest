@@ -25,7 +25,7 @@ impl Script for InternalSimpleHealth {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Damage { amount } => {
+            MessagePayload::Damage { amount, impact: _ } => {
                 // Damage amounts are authored as floats but hit points are an
                 // integer pool; round to match the AI damage path
                 // (animated_monster_ai).
@@ -72,7 +72,10 @@ mod tests {
             entity_id,
             world,
             &physics,
-            &MessagePayload::Damage { amount },
+            &MessagePayload::Damage {
+                amount,
+                impact: None,
+            },
         )
     }
 

@@ -80,6 +80,10 @@ pub struct AnimatedMonsterAI {
     /// `is_dead` is set, and would otherwise hand off before the crumple has
     /// even started. The real crumple completion arrives seconds later.
     updates_since_death: u32,
+    /// The blow that killed this creature (direction/point/bone), stashed at
+    /// the lethal Damage so the crumple->ragdoll handoff can seed the corpse's
+    /// physical reaction.
+    death_impact: Option<crate::scripts::DamageImpact>,
     took_damage: bool,
     animation_seq: u32,
     locomotion_seq: u32,
@@ -108,6 +112,7 @@ impl AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
             updates_since_death: 0,
+            death_impact: None,
             took_damage: false,
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
@@ -128,6 +133,7 @@ impl AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
             updates_since_death: 0,
+            death_impact: None,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
@@ -925,7 +931,7 @@ impl Script for AnimatedMonsterAI {
                 .handle_message(entity_id, world, physics, msg);
         }
         match msg {
-            MessagePayload::Damage { amount } => {
+            MessagePayload::Damage { amount, impact } => {
                 // Corpses don't bleed: no HP churn, aggro, or replayed death
                 // from shooting a dead monster. The world check also covers a
                 // post-load corpse, whose recreated script has is_dead reset
@@ -966,6 +972,9 @@ impl Script for AnimatedMonsterAI {
                 // interrupts the in-flight clip (cross-fading from its
                 // current pose) instead of waiting for it to complete
                 let death_effect = if lethal {
+                    // Remember how the killing blow landed for the
+                    // crumple->ragdoll handoff.
+                    self.death_impact = *impact;
                     self.enter_death(world, entity_id)
                 } else {
                     Effect::NoEffect
@@ -1088,7 +1097,10 @@ impl Script for AnimatedMonsterAI {
                     // the crumple itself (which just started) - swallow those,
                     // or the corpse would ragdoll from its still-standing pose.
                     if self.updates_since_death >= 1 {
-                        Effect::SpawnCorpseRagdoll { entity_id }
+                        Effect::SpawnCorpseRagdoll {
+                            entity_id,
+                            impact: self.death_impact,
+                        }
                     } else {
                         Effect::NoEffect
                     }
