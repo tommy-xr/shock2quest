@@ -173,9 +173,9 @@ impl RagdollHooks {
             );
             core.spawn_ragdoll(
                 entity_id,
-                game_options
+                !game_options
                     .experimental_features
-                    .contains("ragdoll_multibody"),
+                    .contains("ragdoll_impulse"),
             );
             println!(
                 "Applied massive damage to pipe hybrid entity {:?} for ragdoll testing",

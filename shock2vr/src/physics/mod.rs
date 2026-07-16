@@ -1111,24 +1111,35 @@ impl PhysicsWorld {
             &self.narrow_phase,
         );
 
-        // Joint-anchor overlay: each impulse joint constrains a point on the
-        // parent body (anchor1, cyan cross) to coincide with a point on the child
+        // Joint-anchor overlay: each joint constrains a point on the parent
+        // body (anchor1, cyan cross) to coincide with a point on the child
         // body (anchor2, magenta cross). A line connects them - a satisfied joint
         // has overlapping crosses and an invisible line; a sagging/separated joint
-        // (e.g. the hips) shows a visible gap.
-        for (_h, joint) in self.impulse_joint_set.iter() {
-            if let (Some(b1), Some(b2)) = (
-                self.rigid_body_set.get(joint.body1),
-                self.rigid_body_set.get(joint.body2),
-            ) {
-                let a1 = b1.position() * joint.data.local_frame1;
-                let a2 = b2.position() * joint.data.local_frame2;
-                let p1 = Vector3::new(a1.translation.x, a1.translation.y, a1.translation.z);
-                let p2 = Vector3::new(a2.translation.x, a2.translation.y, a2.translation.z);
-                debug_renderer.add_cross(p1, 0.12, Vector3::new(0.0, 0.6, 1.0)); // anchor1 blue
-                debug_renderer.add_cross(p2, 0.12, Vector3::new(1.0, 0.0, 1.0)); // anchor2 magenta
-                debug_renderer.add_line(p1, p2, Vector3::new(1.0, 1.0, 0.0)); // gap (yellow)
-            }
+        // (e.g. the hips) shows a visible gap. Impulse and multibody joints both
+        // draw (multibody anchors should always coincide - translation is not a
+        // DOF there).
+        let impulse_anchors = self
+            .impulse_joint_set
+            .iter()
+            .filter_map(|(_h, joint)| {
+                let b1 = self.rigid_body_set.get(joint.body1)?;
+                let b2 = self.rigid_body_set.get(joint.body2)?;
+                Some((
+                    b1.position() * joint.data.local_frame1,
+                    b2.position() * joint.data.local_frame2,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let multibody_anchors = self
+            .multibody_joint_anchor_pairs()
+            .into_iter()
+            .map(|(_, _, a1, a2)| (a1, a2));
+        for (a1, a2) in impulse_anchors.into_iter().chain(multibody_anchors) {
+            let p1 = Vector3::new(a1.translation.x, a1.translation.y, a1.translation.z);
+            let p2 = Vector3::new(a2.translation.x, a2.translation.y, a2.translation.z);
+            debug_renderer.add_cross(p1, 0.12, Vector3::new(0.0, 0.6, 1.0)); // anchor1 blue
+            debug_renderer.add_cross(p2, 0.12, Vector3::new(1.0, 0.0, 1.0)); // anchor2 magenta
+            debug_renderer.add_line(p1, p2, Vector3::new(1.0, 1.0, 0.0)); // gap (yellow)
         }
 
         debug_renderer.render()
@@ -1558,6 +1569,45 @@ impl PhysicsWorld {
         }
     }
 
+    /// Raise a body's sleep thresholds so residual solver noise (e.g. a ragdoll
+    /// extremity buzzing against the floor) still counts as "at rest". One
+    /// awake body keeps its whole jointed island awake, so without this a
+    /// settled ragdoll never sleeps. Sleeping bodies auto-wake on contact or
+    /// applied force, so the corpse stays interactive.
+    pub fn set_body_sleep_thresholds(
+        &mut self,
+        handle: RigidBodyHandle,
+        normalized_linear: f32,
+        angular: f32,
+    ) {
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            let activation = body.activation_mut();
+            activation.normalized_linear_threshold = normalized_linear;
+            activation.angular_threshold = angular;
+        }
+    }
+
+    /// Apply a world-space impulse to a dynamic body by its debug `body_id`
+    /// (the rigid body handle index, as reported by [`debug_list_bodies`]),
+    /// waking it. Debug/testing hook - e.g. poke a sleeping ragdoll to verify
+    /// wake-on-impulse. Returns false if no dynamic body matches.
+    pub fn apply_body_impulse(&mut self, body_id: u32, impulse: Vector3<f32>) -> bool {
+        let handle = self
+            .rigid_body_set
+            .iter()
+            .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
+            .map(|(handle, _)| handle);
+        if let Some(handle) = handle {
+            if let Some(body) = self.rigid_body_set.get_mut(handle) {
+                if body.body_type() == RigidBodyType::Dynamic {
+                    body.apply_impulse(vec_to_nvec(impulse), true);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Create a static (fixed) rigid body without requiring an EntityId
     /// Returns the handle for use in ragdoll systems
     pub fn create_static_body(
@@ -1753,7 +1803,8 @@ impl PhysicsWorld {
     /// `separation ≈ 0` and a small impulse; a persistent separation/impulse
     /// means the constraint can't be satisfied (the rig fights itself).
     pub fn debug_list_joints(&self) -> Vec<DebugJointInfo> {
-        self.impulse_joint_set
+        let impulse = self
+            .impulse_joint_set
             .iter()
             .filter_map(|(_handle, joint)| {
                 let b1 = self.rigid_body_set.get(joint.body1)?;
@@ -1772,12 +1823,55 @@ impl PhysicsWorld {
                 Some(DebugJointInfo {
                     body1_id: joint.body1.into_raw_parts().0,
                     body2_id: joint.body2.into_raw_parts().0,
+                    joint_type: "impulse",
                     anchor1: [a1.translation.x, a1.translation.y, a1.translation.z],
                     anchor2: [a2.translation.x, a2.translation.y, a2.translation.z],
                     separation,
                     linear_impulse,
                     angular_impulse,
                 })
+            });
+        let multibody = self
+            .multibody_joint_anchor_pairs()
+            .into_iter()
+            .map(|(b1, b2, a1, a2)| DebugJointInfo {
+                body1_id: b1.into_raw_parts().0,
+                body2_id: b2.into_raw_parts().0,
+                joint_type: "multibody",
+                anchor1: [a1.translation.x, a1.translation.y, a1.translation.z],
+                anchor2: [a2.translation.x, a2.translation.y, a2.translation.z],
+                separation: (a1.translation.vector - a2.translation.vector).norm(),
+                linear_impulse: 0.0,
+                angular_impulse: 0.0,
+            });
+        impulse.chain(multibody).collect()
+    }
+
+    /// `(parent body, child body, world anchor on parent, world anchor on child)`
+    /// for every multibody joint. Translation is structurally not a DOF for
+    /// these, so the anchors should always coincide.
+    fn multibody_joint_anchor_pairs(
+        &self,
+    ) -> Vec<(
+        RigidBodyHandle,
+        RigidBodyHandle,
+        Isometry<Real>,
+        Isometry<Real>,
+    )> {
+        self.multibody_joint_set
+            .iter()
+            .filter_map(|(_handle, _link_id, multibody, link)| {
+                let parent = multibody.link(link.parent_id()?)?;
+                let b1_handle = parent.rigid_body_handle();
+                let b2_handle = link.rigid_body_handle();
+                let b1 = self.rigid_body_set.get(b1_handle)?;
+                let b2 = self.rigid_body_set.get(b2_handle)?;
+                Some((
+                    b1_handle,
+                    b2_handle,
+                    b1.position() * link.joint.data.local_frame1,
+                    b2.position() * link.joint.data.local_frame2,
+                ))
             })
             .collect()
     }
@@ -1838,17 +1932,22 @@ impl PhysicsWorld {
     }
 }
 
-/// Rapier-free description of an impulse joint, for ragdoll diagnostics.
+/// Rapier-free description of a joint, for ragdoll diagnostics.
 #[derive(Debug, Clone)]
 pub struct DebugJointInfo {
     pub body1_id: u32,
     pub body2_id: u32,
+    /// `"impulse"` or `"multibody"` - which joint set this came from.
+    pub joint_type: &'static str,
     /// World anchor on each body (should coincide for a satisfied ball joint).
     pub anchor1: [f32; 3],
     pub anchor2: [f32; 3],
     /// Distance between the two anchors - the translation-constraint violation.
+    /// Structurally ~0 for multibody joints (translation is not a DOF there);
+    /// a persistent gap on a multibody joint means the frame setup is wrong.
     pub separation: f32,
     /// Magnitude of the linear (translation) constraint impulse this step.
+    /// Rapier does not expose applied impulses for multibody links, so 0 there.
     pub linear_impulse: f32,
     /// Magnitude of the angular (limit) constraint impulse this step.
     pub angular_impulse: f32,

@@ -2896,17 +2896,17 @@ impl MissionCore {
 
                         // With the `ragdoll` experimental flag, replace the slain
                         // creature with a physics ragdoll of its death pose (the
-                        // spawn removes the creature itself). `ragdoll_multibody`
-                        // selects the experimental reduced-coordinate joints. Without
-                        // the flag (or for non-ragdoll-able entities), fall back to
-                        // the plain removal.
+                        // spawn removes the creature itself). The reduced-coordinate
+                        // multibody rig is the default; `ragdoll_impulse` falls back
+                        // to the legacy impulse-joint rig. Without the flag (or for
+                        // non-ragdoll-able entities), fall back to the plain removal.
                         let spawned_ragdoll =
                             game_options.experimental_features.contains("ragdoll")
                                 && self.spawn_ragdoll(
                                     entity_id,
-                                    game_options
+                                    !game_options
                                         .experimental_features
-                                        .contains("ragdoll_multibody"),
+                                        .contains("ragdoll_impulse"),
                                 );
                         if !spawned_ragdoll {
                             self.remove_entity(entity_id);
@@ -4996,6 +4996,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 bone2: body_to_bone.get(&j.body2_id).copied(),
                 body1_id: j.body1_id,
                 body2_id: j.body2_id,
+                joint_type: j.joint_type.to_string(),
                 anchor1: j.anchor1,
                 anchor2: j.anchor2,
                 separation: j.separation,
@@ -5003,6 +5004,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 angular_impulse: j.angular_impulse,
             })
             .collect()
+    }
+
+    fn apply_body_impulse(&mut self, body_id: u32, impulse: [f32; 3]) -> bool {
+        self.physics
+            .apply_body_impulse(body_id, vec3(impulse[0], impulse[1], impulse[2]))
     }
 
     fn audit_colliders(&self) -> Vec<crate::game_scene::DebugColliderIssue> {
