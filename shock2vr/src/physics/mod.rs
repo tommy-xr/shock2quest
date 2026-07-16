@@ -430,6 +430,32 @@ fn sanitize_collider_size(entity_id: EntityId, context: &str, size: Vector3<f32>
     out
 }
 
+/// Scalar variant of [`sanitize_collider_size`] for ball colliders. A zero
+/// radius (e.g. medsci1's "Lift 1 Walls": a dynamic SPHERE with radius 0)
+/// yields a point AABB, and rapier 0.31's BVH broad-phase build panics on
+/// zero/non-finite AABBs (parry `bvh_binned_build` "index out of bounds") -
+/// the crash is nondeterministic because it depends on the bin layout around
+/// the degenerate AABB.
+fn sanitize_collider_radius(entity_id: EntityId, context: &str, radius: f32) -> f32 {
+    const MIN_RADIUS: f32 = 0.005;
+    const MAX_RADIUS: f32 = 5.0e3;
+    let out = if radius.is_finite() && radius > 0.0 {
+        radius.clamp(MIN_RADIUS, MAX_RADIUS)
+    } else {
+        MIN_RADIUS
+    };
+    if out != radius {
+        tracing::warn!(
+            "[physics] {} entity {:?}: invalid collider radius {} -> clamped to {}",
+            context,
+            entity_id,
+            radius,
+            out
+        );
+    }
+    out
+}
+
 impl PhysicsWorld {
     pub fn add_level_geometry(&mut self, entity_id: EntityId, level: &SystemShock2Level) {
         /* Create the ground. */
@@ -897,7 +923,8 @@ impl PhysicsWorld {
                     .build()
             }
             PhysicsShape::Sphere(size) => {
-                ColliderBuilder::ball(size)
+                let radius = sanitize_collider_radius(entity_id, "add_dynamic", size);
+                ColliderBuilder::ball(radius)
                     //.rotation(vector!(angles.0, angles.1, angles.2))
                     //.rotation(vector!(facing.z, facing.x, facing.y))
                     .translation(vec_to_nvec(offset))
