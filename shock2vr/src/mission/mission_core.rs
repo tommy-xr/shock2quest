@@ -1449,11 +1449,26 @@ impl MissionCore {
                 .get_velocity(*id)
                 .unwrap_or(vec3(0.0, 0.0, 0.0));
             if let Ok(transform) = maybe_transform {
+                // AI steering publishes a locomotion scale (heading-error /
+                // arrival coupling); scale the horizontal root velocity so a
+                // turning AI slows instead of arcing at full stride. Vertical
+                // velocity (gravity) is untouched.
+                let scale = self
+                    .world
+                    .borrow::<View<crate::runtime_props::RuntimePropLocomotionScale>>()
+                    .ok()
+                    .and_then(|v| v.get(*id).ok().map(|s| s.0))
+                    .unwrap_or(1.0);
                 let adj_velocity =
                     transform
                         .0
                         .transform_vector(vec3(velocity.z, curr_velocity.y, -velocity.x));
-                self.physics.set_velocity(*id, adj_velocity * 1.0);
+                let scaled = vec3(
+                    adj_velocity.x * scale,
+                    adj_velocity.y,
+                    adj_velocity.z * scale,
+                );
+                self.physics.set_velocity(*id, scaled);
             }
 
             if !flags.is_empty() {
@@ -3074,6 +3089,12 @@ impl MissionCore {
                             AIPropertyUpdate::Behavior { name } => {
                                 self.world
                                     .add_component(entity_id, RuntimePropAIBehavior(name));
+                            }
+                            AIPropertyUpdate::LocomotionScale { scale } => {
+                                self.world.add_component(
+                                    entity_id,
+                                    crate::runtime_props::RuntimePropLocomotionScale(scale),
+                                );
                             }
                             AIPropertyUpdate::TargetAwareness {
                                 last_known_pos,

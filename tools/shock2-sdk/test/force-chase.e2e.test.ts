@@ -39,28 +39,17 @@ test(
     await game.player.teleport({ x: -14.0, y: 0.5, z: -30.0 });
     await game.step({ frames: 10 });
 
-    // Negative control first: an unpinned DebugAlertAll decays back toward
-    // idle within a few seconds when the AI can't see the player.
     const hybrids = (await game.entities.list({ filter: "OG-", limit: 20 })).entities.filter(
       (e) => e.name.startsWith("OG-"),
     );
     assert.ok(hybrids.length >= 2, `expected hybrids in medsci1, got ${hybrids.length}`);
     const probe = hybrids[0];
 
-    await game.input.trigger("DebugAlertAll");
-    await game.step({ frames: 30 });
-    let detail = await game.entities.detail(probe.id);
-    assert.equal(aiProp(detail, "AIAlertness"), "Moderate");
-    await game.step({ frames: 600 }); // 10s unseen
-    detail = await game.entities.detail(probe.id);
-    assert.notEqual(
-      aiProp(detail, "AIAlertness"),
-      "Moderate",
-      "unpinned alertness should have decayed after 10s without sight",
-    );
-
     // Baseline distances BEFORE pinning - convergence is measured from the
-    // moment the pin lands, before anyone starts moving.
+    // moment the pin lands, before anyone starts moving. (The pin phase runs
+    // on a fresh world: alertness churn from a prior alert/decay cycle can
+    // leave AIs in a stuck animation state - a separate, pre-existing bug -
+    // which would corrupt the convergence measurement.)
     const player = await game.player.position();
     const playerPos: [number, number, number] = [player.x, player.y, player.z];
     const before = new Map<number, number>();
@@ -69,7 +58,9 @@ test(
       before.set(h.id, dist3(d.position, playerPos));
     }
 
-    // DebugForceChase: pinned - still chasing after the same 10s window.
+    // DebugForceChase: pinned - still chasing after a 10s unseen window
+    // (the negative decay control runs at the end of the test).
+    let detail: EntityDetailResult;
     await game.input.trigger("DebugForceChase");
     await game.step({ frames: 30 });
     detail = await game.entities.detail(probe.id);
@@ -111,6 +102,21 @@ test(
       aiProp(detail, "AIAlertness"),
       "Lowest",
       "after DebugCalmAll the pin must be gone (no snap back to chase)",
+    );
+
+    // Negative control last: an unpinned DebugAlertAll decays back toward
+    // idle within a few seconds when the AI can't see the player - the
+    // behavior the pin exists to override.
+    await game.input.trigger("DebugAlertAll");
+    await game.step({ frames: 30 });
+    detail = await game.entities.detail(probe.id);
+    assert.equal(aiProp(detail, "AIAlertness"), "Moderate");
+    await game.step({ frames: 600 }); // 10s unseen
+    detail = await game.entities.detail(probe.id);
+    assert.notEqual(
+      aiProp(detail, "AIAlertness"),
+      "Moderate",
+      "unpinned alertness should have decayed after 10s without sight",
     );
   },
 );

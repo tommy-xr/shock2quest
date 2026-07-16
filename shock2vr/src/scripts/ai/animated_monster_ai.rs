@@ -69,6 +69,22 @@ fn default_alert_cap() -> PropAIAlertCap {
     }
 }
 
+/// Forward-speed multiplier for a given heading error: 1.0 facing the
+/// travel direction, ramping down to a third by 60 degrees of error and
+/// flooring there. The floor is never zero - steering chains (collision
+/// avoidance vs path following) can hold a large transient error, and a
+/// zero scale deadlocks the AI in place.
+fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
+    const TURN_SLOW_ANGLE: f32 = 60.0;
+    const MIN_MOVING_SCALE: f32 = 0.33;
+    let error = delta.0.abs();
+    if error >= TURN_SLOW_ANGLE {
+        MIN_MOVING_SCALE
+    } else {
+        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - MIN_MOVING_SCALE)
+    }
+}
+
 pub struct AnimatedMonsterAI {
     last_hit_sensor: Option<EntityId>,
     current_behavior: Box<RefCell<dyn Behavior>>,
@@ -240,10 +256,22 @@ impl AnimatedMonsterAI {
 
         self.current_heading = Deg(self.current_heading.0 + turn_amount);
 
-        Effect::SetRotation {
-            entity_id,
-            rotation: Quaternion::from_angle_y(self.current_heading),
-        }
+        // Couple forward speed to heading error so the body doesn't arc at
+        // full stride while the heading catches up (the cause of orbiting a
+        // close target): full speed facing the travel direction, ramping to
+        // a third by 60 degrees of error.
+        let scale = locomotion_scale_for_heading_error(delta);
+
+        Effect::Multiple(vec![
+            Effect::SetRotation {
+                entity_id,
+                rotation: Quaternion::from_angle_y(self.current_heading),
+            },
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::LocomotionScale { scale },
+            },
+        ])
     }
 
     fn try_tickle_sensor(
@@ -1252,4 +1280,34 @@ fn is_attack_animation(motion_query_items: &[MotionQueryItem]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locomotion_scale_full_speed_when_facing_travel_direction() {
+        assert_eq!(locomotion_scale_for_heading_error(Deg(0.0)), 1.0);
+    }
+
+    #[test]
+    fn locomotion_scale_ramps_down_with_heading_error() {
+        let at_30 = locomotion_scale_for_heading_error(Deg(30.0));
+        assert!(at_30 > 0.33 && at_30 < 1.0, "got {at_30}");
+        // Symmetric for left/right error
+        assert_eq!(at_30, locomotion_scale_for_heading_error(Deg(-30.0)));
+        // A third of full speed by 60 degrees
+        assert_eq!(locomotion_scale_for_heading_error(Deg(60.0)), 0.33);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(89.0)), 0.33);
+    }
+
+    #[test]
+    fn locomotion_scale_floors_at_a_third_never_zero() {
+        // A zero scale can deadlock an AI whose steering chain holds a large
+        // transient error - the floor must stay positive even at 180 degrees
+        assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.33);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.33);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.33);
+    }
 }
