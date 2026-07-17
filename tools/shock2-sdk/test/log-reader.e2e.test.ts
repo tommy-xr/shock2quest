@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import path from "node:path";
+
 import { GameServer } from "../src/index.js";
+import { dataRoot, pcxSize, readCrfEntry } from "./helpers/crf.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end test for the flat-mode audio-log/email reader MFD + persistent
@@ -15,6 +18,9 @@ import { teleportVerified } from "./helpers/teleport.js";
 // Negative-first: on main, frobbing log 1608 plays LOG0220.wav and destroys
 // the disc - /v1/ui shows no panel, no transcript exists anywhere, and
 // /v1/info has no collected-log state, so every assertion below fails.
+// The review-fix assertion is also negative-verified: pre-fix, the backdrop
+// was requested as the plain "log.pcx", which obj.crf's 64x64 floppy model
+// texture wins - the archive-qualified assertions below fail on that build.
 //
 // Entity discovery is by stable template_id (1608 = the mission-file object
 // id); runtime entity ids are NOT stable across launches.
@@ -41,6 +47,11 @@ test(
       !(await game.ui.state()).active_panel,
       "no MFD panel should be active before frobbing the log",
     );
+
+    // (Content-less discs - a LogDiscScript entity without a readable PropLog -
+    // must not open the reader at all; every disc placed in medsci1 has real
+    // content, so that suppression is covered by the GuiScript/MediaGui unit
+    // test `contentless_disc_frob_does_not_open_the_panel` in media.rs.)
 
     // --- Discover the Amanpour log by stable template id 1608 ---
     const logs = (await game.entities.list({ filter: "Audio Log", limit: 80 }))
@@ -95,7 +106,29 @@ test(
     const textures = opened.active_panel.elements
       .filter((e) => e.kind === "image")
       .map((e) => e.texture?.toLowerCase());
-    assert.ok(textures.includes("log.pcx"), "reader should draw the LOG backdrop");
+    // Archive-aware: obj.crf ALSO ships a 64x64 model texture named LOG.PCX
+    // (the floppy-disc art) and its mount wins the plain-name lookup, so the
+    // backdrop must be requested via the archive-qualified "iface/" key. That
+    // key only resolves through the iface.crf mount (an unresolvable texture
+    // key panics the render, so this panel drawing proves it loaded).
+    assert.ok(
+      textures.includes("iface/log.pcx"),
+      `reader should draw the iface.crf LOG backdrop (images: ${textures.join(", ")})`,
+    );
+    assert.ok(
+      !textures.includes("log.pcx"),
+      "reader must not use the ambiguous plain log.pcx name (it resolves to obj.crf's 64x64 model texture)",
+    );
+    // And the art that key maps to is the 188x296 MFD frame - read the PCX
+    // header straight out of the shipped archive.
+    const backdrop = pcxSize(
+      readCrfEntry(path.join(dataRoot(), "res", "iface.crf"), "LOG.PCX"),
+    );
+    assert.deepEqual(
+      backdrop,
+      { width: 188, height: 296 },
+      "iface.crf's LOG.PCX (what iface/log.pcx resolves to) should be the 188x296 MFD frame",
+    );
     assert.ok(
       textures.includes("amanpour.pcx"),
       "reader should draw the sender portrait from book.crf",
