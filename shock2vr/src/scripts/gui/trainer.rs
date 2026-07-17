@@ -105,12 +105,17 @@ pub fn apply_purchase(stats: &mut PlayerStats, target: TrainerTarget) {
     }
 }
 
+// Canonical STATCOST row order (gamesys field order, verified against original
+// engine behavior): STR(0), END(1), PSI(2), AGI(3), CYB(4). Note PSI comes
+// BEFORE AGI - do not "fix" this back to enum order. Retail shock2.gam happens
+// to ship identical costs for all five rows, so tests on retail data cannot
+// catch a swap here.
 fn stat_row(stat: Stat) -> usize {
     match stat {
         Stat::Strength => 0,
         Stat::Endurance => 1,
-        Stat::Agility => 2,
-        Stat::PsionicAbility => 3,
+        Stat::PsionicAbility => 2,
+        Stat::Agility => 3,
         Stat::CyberAffinity => 4,
     }
 }
@@ -145,10 +150,11 @@ impl TrainerMode {
         let row = |label, target| TrainerRow { label, target };
         match self {
             TrainerMode::Stats => vec![
+                // Display order matches the original stats panel (PSI third).
                 row("Strength", TrainerTarget::Stat(Stat::Strength)),
                 row("Endurance", TrainerTarget::Stat(Stat::Endurance)),
-                row("Agility", TrainerTarget::Stat(Stat::Agility)),
                 row("Psionics", TrainerTarget::Stat(Stat::PsionicAbility)),
+                row("Agility", TrainerTarget::Stat(Stat::Agility)),
                 row("Cybernetics", TrainerTarget::Stat(Stat::CyberAffinity)),
             ],
             TrainerMode::Tech => vec![
