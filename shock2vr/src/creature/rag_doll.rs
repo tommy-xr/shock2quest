@@ -61,6 +61,11 @@ const SLEEP_ANGULAR_THRESHOLD: f32 = 1.5;
 /// enters runaway feedback (which otherwise ends in a NaN AABB and a parry
 /// BVH panic). Applied once per frame in `RagDoll::update`.
 const MAX_BODY_SPEED: f32 = 30.0;
+/// Impulse magnitude (N*s, bodies are ~1 mass unit each) applied to the struck
+/// limb when a death ragdoll is seeded with the killing blow. Tuned in medsci1
+/// A/B runs: 8.0 gives the struck limb a clearly visible ~2.5 m/s reaction
+/// that propagates through the articulated rig without launching the corpse.
+const KILLING_BLOW_IMPULSE: f32 = 8.0;
 
 /// Quality/settle metrics for one ragdoll, for the verification harness.
 #[derive(Clone, Debug)]
@@ -291,6 +296,11 @@ impl RagDollManager {
         // locked translation - settles but the hip can visibly sag/separate
         // under load).
         use_multibody: bool,
+        // The dying creature's bulk velocity (root-motion carries the crumple
+        // forward), inherited by the rig so the fall's momentum is continuous
+        // across the handoff. Multibody only (the legacy impulse rig isn't
+        // seeded - body-level writes work there but it's a deprecated path).
+        seed_velocity: Vector3<f32>,
         // When false, limbs collide with the world but not with each other
         // (CollisionGroup::ragdoll_no_self). Death-handoff rigs spawn in a
         // crumpled, limb-overlapping pose whose many deep limb-limb contacts
@@ -555,6 +565,19 @@ impl RagDollManager {
             }
         }
 
+        // Inherit the dying creature's bulk motion so the crumple's momentum
+        // is continuous across the handoff (mid-fall spawns would otherwise
+        // freeze for an instant). Written into the multibody's generalized
+        // root DOF - body-level set_linvel is clobbered by the readback.
+        if use_multibody && seed_velocity.magnitude2() > 1.0e-8 {
+            if let Some(first) = body_handles.first() {
+                if !physics.set_multibody_root_linvel(*first, seed_velocity) {
+                    // Best-effort momentum; note the miss rather than fail.
+                    tracing::debug!("ragdoll velocity seed not applied (non-finite or no body)");
+                }
+            }
+        }
+
         let ragdoll = RagDoll::new(
             joint_to_body,
             body_handles,
@@ -602,6 +625,42 @@ impl RagDollManager {
             scene.extend(ragdoll.renderables());
         }
         scene
+    }
+
+    /// Seed a just-spawned corpse with its killing blow: shove the struck limb
+    /// (by skeleton joint id when the hitbox reported one, else the body
+    /// nearest the hit point) along the blow's direction. The articulated rig
+    /// propagates the reaction naturally.
+    pub fn apply_impact(
+        &mut self,
+        entity_id: EntityId,
+        impact: &crate::scripts::DamageImpact,
+        physics: &mut PhysicsWorld,
+    ) {
+        let Some(ragdoll) = self.ragdolls.get(&entity_id) else {
+            return;
+        };
+        let by_bone = impact
+            .bone
+            .and_then(|bone| ragdoll.joint_to_body.get(&bone).copied());
+        let handle = by_bone.or_else(|| {
+            // Nearest body to the hit point.
+            ragdoll
+                .physics_bodies
+                .iter()
+                .filter_map(|h| {
+                    physics.get_body_transform(*h).map(|iso| {
+                        let p =
+                            Vector3::new(iso.translation.x, iso.translation.y, iso.translation.z);
+                        (*h, (p - impact.point).magnitude2())
+                    })
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(h, _)| h)
+        });
+        if let Some(handle) = handle {
+            physics.apply_impulse_to_handle(handle, impact.direction * KILLING_BLOW_IMPULSE);
+        }
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId, physics: &mut PhysicsWorld) {

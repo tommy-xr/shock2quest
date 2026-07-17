@@ -52,6 +52,15 @@ const DOOR_INTERACT_COOLDOWN: f32 = 2.0;
 /// bounds the "thwarted" gesture for an AI whose alert cap keeps it in a
 /// pursuing state even after the give-up's alertness drop.
 const DOOR_GIVEUP_COOLDOWN: f32 = 8.0;
+/// How far into the death crumple the corpse hands off to physics. Near-
+/// instant (a few frames) so the killing-blow impulse lands AT the kill -
+/// any longer and the reaction reads as delayed. The crumple still starts
+/// (its first frames shape the initial pose and root velocity, both of which
+/// the rig inherits - see spawn_ragdoll), but physics owns the death from
+/// here; the ragdoll spawns from the current pose, so there is no snap.
+/// Raise this to let more of the authored death animation play before
+/// physics takes over (at 0.5 the impulse visibly lags the shot).
+const CRUMPLE_HANDOFF_SECONDS: f32 = 0.05;
 
 /// Configuration for monster alertness behavior
 #[derive(Clone)]
@@ -74,12 +83,16 @@ pub struct AnimatedMonsterAI {
     current_behavior: Box<RefCell<dyn Behavior>>,
     current_heading: Deg<f32>,
     is_dead: bool,
-    /// Script updates seen since entering death. Guards the crumple->ragdoll
-    /// handoff against a stale AnimationCompleted: a clip that happened to
-    /// finish in the very tick the killing blow landed is dispatched after
-    /// `is_dead` is set, and would otherwise hand off before the crumple has
-    /// even started. The real crumple completion arrives seconds later.
-    updates_since_death: u32,
+    /// Seconds of sim time since entering death; drives the timed
+    /// crumple->ragdoll handoff.
+    death_elapsed: f32,
+    /// The handoff effect is emitted exactly once (a failed spawn - e.g. a
+    /// non-ragdollable model - must not re-emit every frame).
+    handoff_emitted: bool,
+    /// The blow that killed this creature (direction/point/bone), stashed at
+    /// the lethal Damage so the crumple->ragdoll handoff can seed the corpse's
+    /// physical reaction.
+    death_impact: Option<crate::scripts::DamageImpact>,
     took_damage: bool,
     animation_seq: u32,
     locomotion_seq: u32,
@@ -107,7 +120,9 @@ impl AnimatedMonsterAI {
     pub fn idle() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
-            updates_since_death: 0,
+            death_elapsed: 0.0,
+            handoff_emitted: false,
+            death_impact: None,
             took_damage: false,
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
@@ -127,7 +142,9 @@ impl AnimatedMonsterAI {
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
-            updates_since_death: 0,
+            death_elapsed: 0.0,
+            handoff_emitted: false,
+            death_impact: None,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
@@ -456,6 +473,10 @@ impl AnimatedMonsterAI {
     fn enter_death(&mut self, world: &World, entity_id: EntityId) -> Effect {
         self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
         self.is_dead = true;
+        // Anchor the ragdoll-handoff timer to the crumple's actual start
+        // (kills arriving via the AnimationCompleted fallback enter death
+        // later than they were dealt).
+        self.death_elapsed = 0.0;
 
         let death_sound_effect = if let Some(voice_index) =
             crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id)
@@ -663,7 +684,29 @@ impl Script for AnimatedMonsterAI {
         // behavior so introspection shows "Dead", and release a sensor the
         // ray was intersecting at death so its end-intersect isn't stranded.
         if self.is_dead || is_killed(entity_id, world) {
-            self.updates_since_death = self.updates_since_death.saturating_add(1);
+            // The handoff timer runs only through the real death flow
+            // (enter_death -> is_dead): a corpse recreated by save/load has
+            // is_killed true but is_dead false, and must stay an animated
+            // corpse rather than ragdoll-ify from whatever pose it loaded in.
+            if self.is_dead {
+                self.death_elapsed += time.elapsed.as_secs_f32();
+            }
+            // Near-instant handoff: once the death animation has had a few
+            // frames, offer the corpse to physics (no-op without the
+            // `ragdoll` experimental flag; a successful spawn removes this
+            // entity, so at most one emission ever matters).
+            let handoff_effect = if self.is_dead
+                && !self.handoff_emitted
+                && self.death_elapsed >= CRUMPLE_HANDOFF_SECONDS
+            {
+                self.handoff_emitted = true;
+                Effect::SpawnCorpseRagdoll {
+                    entity_id,
+                    impact: self.death_impact,
+                }
+            } else {
+                Effect::NoEffect
+            };
             let sensor_release_effect = match self.last_hit_sensor.take() {
                 Some(sensor_id) => Effect::Send {
                     msg: Message {
@@ -674,6 +717,7 @@ impl Script for AnimatedMonsterAI {
                 None => Effect::NoEffect,
             };
             return Effect::combine(vec![
+                handoff_effect,
                 sensor_release_effect,
                 self.publish_behavior(entity_id),
             ]);
@@ -925,7 +969,7 @@ impl Script for AnimatedMonsterAI {
                 .handle_message(entity_id, world, physics, msg);
         }
         match msg {
-            MessagePayload::Damage { amount } => {
+            MessagePayload::Damage { amount, impact } => {
                 // Corpses don't bleed: no HP churn, aggro, or replayed death
                 // from shooting a dead monster. The world check also covers a
                 // post-load corpse, whose recreated script has is_dead reset
@@ -966,6 +1010,9 @@ impl Script for AnimatedMonsterAI {
                 // interrupts the in-flight clip (cross-fading from its
                 // current pose) instead of waiting for it to complete
                 let death_effect = if lethal {
+                    // Remember how the killing blow landed for the
+                    // crumple->ragdoll handoff.
+                    self.death_impact = *impact;
                     self.enter_death(world, entity_id)
                 } else {
                     Effect::NoEffect
@@ -1077,21 +1124,11 @@ impl Script for AnimatedMonsterAI {
             }
             MessagePayload::AnimationCompleted => {
                 if self.is_dead {
-                    // The death crumple finished: offer the corpse to physics.
-                    // No-op unless the `ragdoll` experimental flag is on - the
-                    // animated corpse stays otherwise. (The is_dead branch
-                    // queues nothing and a successful spawn removes this
-                    // entity, so this cannot double-fire.)
-                    //
-                    // Completions dispatched in the same tick the killing blow
-                    // landed belong to the clip the crumple interrupted, not
-                    // the crumple itself (which just started) - swallow those,
-                    // or the corpse would ragdoll from its still-standing pose.
-                    if self.updates_since_death >= 1 {
-                        Effect::SpawnCorpseRagdoll { entity_id }
-                    } else {
-                        Effect::NoEffect
-                    }
+                    // The crumple->ragdoll handoff is timed from update()
+                    // (CRUMPLE_HANDOFF_SECONDS), not completion-driven - a
+                    // stale completion from the clip the crumple interrupted
+                    // could otherwise hand off from a still-standing pose.
+                    Effect::NoEffect
                 } else if is_killed(entity_id, world) {
                     // Fallback for kills that didn't arrive as a Damage
                     // message (the lethal-damage path enters death eagerly)

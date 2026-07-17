@@ -39,10 +39,19 @@ impl Script for HitBoxScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Damage { amount } => Effect::Send {
+            MessagePayload::Damage { amount, impact } => Effect::Send {
                 msg: Message {
                     to: self.parent_entity_id,
-                    payload: MessagePayload::Damage { amount: *amount },
+                    // Forward to the owning creature, stamping which skeleton
+                    // joint was struck so a death ragdoll can react at the
+                    // right limb.
+                    payload: MessagePayload::Damage {
+                        amount: *amount,
+                        impact: impact.map(|i| crate::scripts::DamageImpact {
+                            bone: Some(self.hit_box_joint_idx),
+                            ..i
+                        }),
+                    },
                 },
             },
             _ => Effect::NoEffect,

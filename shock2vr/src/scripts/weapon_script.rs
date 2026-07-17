@@ -242,6 +242,7 @@ fn melee_swing(
     );
     if let Some(RayCastResult {
         maybe_entity_id: Some(target),
+        hit_point,
         ..
     }) = hit
     {
@@ -251,6 +252,17 @@ fn melee_swing(
                 to: target,
                 payload: MessagePayload::Damage {
                     amount: MELEE_DAMAGE,
+                    // Swing direction + contact point seed the victim's
+                    // death-ragdoll reaction. No bone: melee resolves a hitbox
+                    // proxy to its parent BEFORE sending (so HitBoxScript
+                    // never stamps it) - the ragdoll's nearest-body-to-point
+                    // fallback picks the struck limb from the contact point
+                    // instead.
+                    impact: Some(crate::scripts::DamageImpact {
+                        direction: aim.forward.normalize(),
+                        point: hit_point.to_vec(),
+                        bone: None,
+                    }),
                 },
             },
         });
