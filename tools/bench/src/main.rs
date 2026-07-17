@@ -69,6 +69,10 @@ enum PathCommand {
         /// Emit JSON instead of a human-readable table
         #[arg(long)]
         json: bool,
+        /// Build the service with experimental island bridging (nav_bridges),
+        /// so cross-area queries route and are measured
+        #[arg(long)]
+        bridges: bool,
     },
     /// Compute one path and dump its waypoints (investigation aid)
     Show {
@@ -121,11 +125,12 @@ fn run_path_command(command: PathCommand) -> Result<()> {
             queries,
             seed,
             json,
+            bridges,
         } => {
             let mut reports = Vec::new();
             for mission in resolve_missions(mission, all)? {
                 match load_path_database(&mission) {
-                    Ok(db) => reports.extend(run_bench(&mission, db, queries, seed)),
+                    Ok(db) => reports.extend(run_bench(&mission, db, queries, seed, bridges)),
                     Err(e) => {
                         if !json {
                             println!("{mission}: {e}");
@@ -486,6 +491,14 @@ struct BenchReport {
     find_path_us: LatencyStats,
     /// find_path latency when no route exists (A* exhausts the component)
     unroutable_us: LatencyStats,
+    /// find_path_toward (partial-route fallback) latency on those same
+    /// cross-component queries - the full-component Dijkstra the game runs
+    /// when a goal is unreachable
+    toward_us: LatencyStats,
+    /// Synthesized island-bridge links (0 without --bridges)
+    bridge_links: usize,
+    /// Service construction time (effective bits + bridging), milliseconds
+    build_ms: u128,
     /// path length / straight-line distance, over successful queries
     mean_inflation: f32,
     p95_inflation: f32,
@@ -533,11 +546,20 @@ fn pathable_cell_ids(db: &PathDatabase) -> Vec<u32> {
         .collect()
 }
 
-fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Option<BenchReport> {
+fn run_bench(
+    mission: &str,
+    db: PathDatabase,
+    queries: usize,
+    seed: u64,
+    bridges: bool,
+) -> Option<BenchReport> {
     let cells = db.cells.len();
     let links = db.links.len();
     let components = walk_components(&db);
-    let service = PathfindingService::new(Arc::new(db));
+    let t_build = Instant::now();
+    let service = PathfindingService::with_nav_options(Arc::new(db), bridges);
+    let build_ms = t_build.elapsed().as_millis();
+    let bridge_links = service.bridge_link_count();
     // Sample start/goal from the largest walk component so queries are
     // routable, like real AI-to-player queries. Cross-component (unroutable)
     // queries are timed separately below: they are the worst case because
@@ -623,6 +645,7 @@ fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Opti
 
     // Worst case: queries that cannot route (goal in another component).
     let mut unroutable_samples = Vec::new();
+    let mut toward_samples = Vec::new();
     if components.len() > 1 {
         let other: Vec<u32> = components[1..].iter().flatten().copied().collect();
         for _ in 0..(queries / 10).max(1) {
@@ -633,6 +656,10 @@ fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Opti
             let t = Instant::now();
             let _ = service.find_path(start, goal, MovementBits::WALK);
             unroutable_samples.push(t.elapsed().as_micros());
+
+            let t = Instant::now();
+            let _ = service.find_path_toward(start, goal, MovementBits::WALK);
+            toward_samples.push(t.elapsed().as_micros());
         }
     }
 
@@ -650,6 +677,9 @@ fn run_bench(mission: &str, db: PathDatabase, queries: usize, seed: u64) -> Opti
         lookup_us: LatencyStats::from_samples(lookup_samples),
         find_path_us: LatencyStats::from_samples(path_samples),
         unroutable_us: LatencyStats::from_samples(unroutable_samples),
+        toward_us: LatencyStats::from_samples(toward_samples),
+        bridge_links,
+        build_ms,
         mean_inflation: mean(&inflations),
         p95_inflation,
         mean_turn_deg: mean(&turn_totals),
@@ -675,7 +705,7 @@ fn total_turn_degrees(waypoints: &[Vector3<f32>]) -> f32 {
 
 fn print_bench_table(reports: &[BenchReport]) {
     println!(
-        "{:<14} {:>6} {:>7} {:>6}/{:<5} {:>8} {:>11} {:>11} {:>11} {:>8} {:>9} {:>7}",
+        "{:<14} {:>6} {:>7} {:>6}/{:<5} {:>8} {:>11} {:>11} {:>11} {:>11} {:>8} {:>9} {:>7} {:>7} {:>7}",
         "mission",
         "cells",
         "links",
@@ -685,13 +715,16 @@ fn print_bench_table(reports: &[BenchReport]) {
         "lookup p50",
         "path p95",
         "noroute p95",
+        "toward p95",
         "inflate",
         "turn deg",
-        "waypts"
+        "waypts",
+        "bridges",
+        "build"
     );
     for r in reports {
         println!(
-            "{:<14} {:>6} {:>7} {:>6}/{:<5} {:>8} {:>10}u {:>10}u {:>10}u {:>8.2} {:>9.0} {:>7.1}",
+            "{:<14} {:>6} {:>7} {:>6}/{:<5} {:>8} {:>10}u {:>10}u {:>10}u {:>10}u {:>8.2} {:>9.0} {:>7.1} {:>7} {:>6}m",
             r.mission,
             r.cells,
             r.links,
@@ -701,9 +734,12 @@ fn print_bench_table(reports: &[BenchReport]) {
             r.lookup_us.p50,
             r.find_path_us.p95,
             r.unroutable_us.p95,
+            r.toward_us.p95,
             r.mean_inflation,
             r.mean_turn_deg,
-            r.mean_waypoints
+            r.mean_waypoints,
+            r.bridge_links,
+            r.build_ms
         );
     }
 }

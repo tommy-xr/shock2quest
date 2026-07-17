@@ -259,7 +259,10 @@ For debugging visual/rendering changes without a full interactive session:
    `{"duration":"3s"}` runs exactly `3 * 60` frames - deterministic and
    independent of HTTP request timing (a settling ragdoll falls at a real rate
    regardless of how fast you poll). Only free-running (not stepping) uses real
-   wall-clock dt.
+   wall-clock dt. One caveat: AI path queries run on a dedicated worker
+   thread (`pathfinding::async_queries`), so the exact frame an AI adopts a
+   new route can jitter by a frame or two between runs - assert on coarse AI
+   behavior (distances, alertness) rather than exact positions.
 
    **Reliable control (no headers/retries/sleeps needed)**: `/v1/step` **blocks
    until all requested frames have actually run**, and `/v1/screenshot` captures
@@ -457,6 +460,15 @@ The project supports experimental flags for gating in-progress features during d
   brief minimum, then the (currently synchronous) load runs. The `DebugReloadLevel` input
   action reloads the current level in place to exercise this. See
   `projects/loading-screen.md`. Without it, transitions are synchronous and unchanged.
+
+- **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
+  shipped mission data partitions the walk graph into per-area islands with no links
+  between them (original AI pathfinding was area-local); this flag synthesizes
+  island-crossing links across small gaps (stair strips, thresholds) and makes
+  blocking-OBB cells (furniture baked into the mesh) passable at a cost penalty so
+  A* can route across the whole level. Without it, pathfinding uses only the
+  faithful shipped graph (per-area, plus zone-pair and flat-seam traversal which are
+  always on). Verify AI routing with `GET /v1/ai/paths` on the debug runtime.
 
 #### Adding New Experimental Features
 

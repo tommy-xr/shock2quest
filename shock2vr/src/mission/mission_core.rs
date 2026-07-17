@@ -154,6 +154,15 @@ pub struct GlobalPresentationMode(pub crate::PresentationMode);
 #[derive(Unique, Clone)]
 pub struct GlobalPathfinding(pub Option<Arc<PathfindingService>>);
 
+/// Off-thread path query worker (see pathfinding::async_queries): steering
+/// submits queries here and adopts results on later frames, so A* runs in
+/// parallel with simulation + rendering instead of inside the frame. None
+/// when the mission has no AIPATH data.
+#[derive(Unique, Clone)]
+pub struct GlobalAsyncPathfinding(
+    pub Option<Arc<crate::pathfinding::async_queries::AsyncPathfinding>>,
+);
+
 #[derive(Unique, Clone)]
 pub struct EffectQueue {
     effects: Vec<Effect>,
@@ -707,13 +716,25 @@ impl MissionCore {
             }
         }
 
-        let pathfinding_service = abstract_mission
-            .path_database
-            .as_ref()
-            .map(|db| Arc::new(PathfindingService::new(Arc::new(db.clone()))));
+        let nav_bridges = game_options.experimental_features.contains("nav_bridges");
+        let pathfinding_service = abstract_mission.path_database.as_ref().map(|db| {
+            Arc::new(PathfindingService::with_nav_options(
+                Arc::new(db.clone()),
+                nav_bridges,
+            ))
+        });
         // Steering strategies path through this unique; MissionCore keeps its
         // own handle for the interactive pathfinding test.
         world.add_unique(GlobalPathfinding(pathfinding_service.clone()));
+        // Path queries run on a dedicated worker thread; the worker exits
+        // when this world (and with it the unique) is dropped
+        world.add_unique(GlobalAsyncPathfinding(pathfinding_service.as_ref().map(
+            |service| {
+                Arc::new(crate::pathfinding::async_queries::AsyncPathfinding::spawn(
+                    service.clone(),
+                ))
+            },
+        )));
         // Per-frame AI pathfind budget, refilled at the top of each update
         world.add_unique(crate::pathfinding::PathfindingFrameBudget::new());
 
@@ -776,6 +797,80 @@ impl MissionCore {
                 .borrow::<UniqueView<crate::pathfinding::PathfindingFrameBudget>>()
             {
                 budget.reset();
+            }
+        }
+
+        // Drop AI path records (and their debug visuals) for entities that
+        // no longer exist, so dead AIs don't ghost in GET /v1/ai/paths
+        if time.elapsed.as_secs_f32() > 0.0 {
+            if let Some(service) = &self.pathfinding_service {
+                if let Ok(entities) = self.world.borrow::<shipyard::EntitiesView>() {
+                    service.prune_ai_paths(|inner| {
+                        shipyard::EntityId::from_inner(inner)
+                            .map(|id| entities.is_alive(id))
+                            .unwrap_or(false)
+                    });
+                }
+            }
+        }
+
+        // Sync live door state into the pathfinding service: locked-and-
+        // closed doors make their below-door cells unpathable, so A* routes
+        // around them (or stops at them) instead of through them. Unlocked
+        // closed doors stay pathable - pursuing AIs open those on arrival.
+        if time.elapsed.as_secs_f32() > 0.0 {
+            if let Some(service) = &self.pathfinding_service {
+                if let Ok(id_map) = self
+                    .world
+                    .borrow::<UniqueView<crate::mission::GlobalTemplateIdMap>>()
+                {
+                    let locked: std::collections::HashSet<i32> = service
+                        .path_database
+                        .cell_doors
+                        .iter()
+                        .map(|cd| cd.door)
+                        .filter(|door| {
+                            let Some(ent) = id_map.0.get(door).map(|w| w.0) else {
+                                return false;
+                            };
+                            crate::scripts::script_util::door_is_closed(&self.world, ent)
+                                == Some(true)
+                                && crate::scripts::script_util::is_entity_locked(&self.world, ent)
+                        })
+                        .collect();
+                    service.set_locked_doors(locked);
+                }
+            }
+        }
+
+        // Mirror each AI's active route into the path visualization (orange),
+        // so debug-draw sessions show what every AI is following - the same
+        // data GET /v1/ai/paths reports
+        if game_options.debug_draw {
+            if let Some(service) = &self.pathfinding_service {
+                let stale: Vec<String> = self
+                    .path_visualization
+                    .paths
+                    .keys()
+                    .filter(|name| name.starts_with("ai_"))
+                    .cloned()
+                    .collect();
+                for name in stale {
+                    self.path_visualization.remove_path(&name);
+                }
+                for (entity, record) in service.ai_paths() {
+                    if record.waypoints.len() >= 2 {
+                        let name = format!("ai_{entity}");
+                        self.path_visualization.set_path(
+                            name.clone(),
+                            crate::pathfinding::path_visualization::ComputedPath::new(
+                                name,
+                                record.waypoints,
+                                crate::pathfinding::path_visualization::colors::AI_PATH,
+                            ),
+                        );
+                    }
+                }
             }
         }
         let mut effects = command_effects;
@@ -1401,11 +1496,31 @@ impl MissionCore {
                 .get_velocity(*id)
                 .unwrap_or(vec3(0.0, 0.0, 0.0));
             if let Ok(transform) = maybe_transform {
+                // AI steering publishes a locomotion scale (heading-error /
+                // arrival coupling); scale the horizontal root velocity so a
+                // turning AI slows instead of arcing at full stride. Vertical
+                // velocity (gravity) is untouched. Consume-on-read: the
+                // component is removed after applying so a stale value can't
+                // slow non-steering animations (death, attack clips) - the
+                // steering republishes it every frame it runs.
+                let scale = self
+                    .world
+                    .run(
+                        |mut v_scale: ViewMut<crate::runtime_props::RuntimePropLocomotionScale>| {
+                            v_scale.remove(*id).map(|s| s.0)
+                        },
+                    )
+                    .unwrap_or(1.0);
                 let adj_velocity =
                     transform
                         .0
                         .transform_vector(vec3(velocity.z, curr_velocity.y, -velocity.x));
-                self.physics.set_velocity(*id, adj_velocity * 1.0);
+                let scaled = vec3(
+                    adj_velocity.x * scale,
+                    adj_velocity.y,
+                    adj_velocity.z * scale,
+                );
+                self.physics.set_velocity(*id, scaled);
             }
 
             if !flags.is_empty() {
@@ -3107,6 +3222,12 @@ impl MissionCore {
                                 self.world
                                     .add_component(entity_id, RuntimePropAIBehavior(name));
                             }
+                            AIPropertyUpdate::LocomotionScale { scale } => {
+                                self.world.add_component(
+                                    entity_id,
+                                    crate::runtime_props::RuntimePropLocomotionScale(scale),
+                                );
+                            }
                             AIPropertyUpdate::TargetAwareness {
                                 last_known_pos,
                                 has_line_of_sight,
@@ -3131,7 +3252,7 @@ impl MissionCore {
                         }
                     }
                 }
-                Effect::SetAllAIAlertness { level } => {
+                Effect::SetAllAIAlertness { level, pin } => {
                     let creature_ids: Vec<EntityId> = {
                         let v_creature = self.world.borrow::<View<PropCreature>>().unwrap();
                         v_creature.iter().ids().collect()
@@ -3139,7 +3260,7 @@ impl MissionCore {
                     for id in creature_ids {
                         self.script_world.dispatch(Message {
                             to: id,
-                            payload: MessagePayload::SetAlertness { level },
+                            payload: MessagePayload::SetAlertness { level, pin },
                         });
                     }
                 }
@@ -5428,6 +5549,22 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         })
     }
 
+    fn ai_paths(&self) -> Vec<crate::game_scene::DebugAiPathEntry> {
+        let Some(service) = self.pathfinding_service.as_ref() else {
+            return Vec::new();
+        };
+        service
+            .ai_paths()
+            .into_iter()
+            .map(|(entity, record)| crate::game_scene::DebugAiPathEntry {
+                entity_id: entity as i32,
+                goal: record.goal.into(),
+                outcome: format!("{:?}", record.outcome),
+                waypoints: record.waypoints.into_iter().map(Into::into).collect(),
+            })
+            .collect()
+    }
+
     fn send_entity_message(
         &mut self,
         id: EntityId,
@@ -5481,7 +5618,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
             DebugEntityMessage::Frob => MessagePayload::Frob,
             DebugEntityMessage::Signal { name } => MessagePayload::Signal { name },
-            DebugEntityMessage::SetAlertness { level } => MessagePayload::SetAlertness { level },
+            DebugEntityMessage::SetAlertness { level } => {
+                MessagePayload::SetAlertness { level, pin: false }
+            }
             // Debug injections have no real sender; use the target itself.
             DebugEntityMessage::TurnOn => MessagePayload::TurnOn { from: id },
             DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },

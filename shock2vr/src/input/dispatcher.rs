@@ -83,11 +83,21 @@ impl ActionDispatcher {
             // the player is already in range
             effects.push(Effect::SetAllAIAlertness {
                 level: AIAlertLevel::Moderate,
+                pin: false,
             });
         }
         if state.just_triggered(InputAction::DebugCalmAll) {
             effects.push(Effect::SetAllAIAlertness {
                 level: AIAlertLevel::Lowest,
+                pin: false,
+            });
+        }
+        if state.just_triggered(InputAction::DebugForceChase) {
+            // Pinned: never decays, and every AI keeps hunting the player's
+            // live position until DebugCalmAll clears the pin
+            effects.push(Effect::SetAllAIAlertness {
+                level: AIAlertLevel::Moderate,
+                pin: true,
             });
         }
         if state.just_triggered(InputAction::ToggleUseMode) {
@@ -154,7 +164,23 @@ mod tests {
         assert!(matches!(
             effects[0],
             Effect::SetAllAIAlertness {
-                level: AIAlertLevel::Moderate
+                level: AIAlertLevel::Moderate,
+                pin: false
+            }
+        ));
+    }
+
+    #[test]
+    fn force_chase_maps_to_pinned_moderate_broadcast() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::DebugForceChase);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(
+            effects[0],
+            Effect::SetAllAIAlertness {
+                level: AIAlertLevel::Moderate,
+                pin: true
             }
         ));
     }
@@ -168,7 +194,8 @@ mod tests {
         assert!(matches!(
             effects[0],
             Effect::SetAllAIAlertness {
-                level: AIAlertLevel::Lowest
+                level: AIAlertLevel::Lowest,
+                pin: false
             }
         ));
     }

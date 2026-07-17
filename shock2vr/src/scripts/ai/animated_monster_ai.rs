@@ -78,6 +78,22 @@ fn default_alert_cap() -> PropAIAlertCap {
     }
 }
 
+/// Forward-speed multiplier for a given heading error: 1.0 facing the
+/// travel direction, ramping down to a third by 60 degrees of error and
+/// flooring there. The floor is never zero - steering chains (collision
+/// avoidance vs path following) can hold a large transient error, and a
+/// zero scale deadlocks the AI in place.
+fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
+    const TURN_SLOW_ANGLE: f32 = 60.0;
+    const MIN_MOVING_SCALE: f32 = 0.33;
+    let error = delta.0.abs();
+    if error >= TURN_SLOW_ANGLE {
+        MIN_MOVING_SCALE
+    } else {
+        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - MIN_MOVING_SCALE)
+    }
+}
+
 pub struct AnimatedMonsterAI {
     last_hit_sensor: Option<EntityId>,
     current_behavior: Box<RefCell<dyn Behavior>>,
@@ -114,12 +130,16 @@ pub struct AnimatedMonsterAI {
     published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
     /// Throttle between door interactions (open / locked-door give-up)
     door_cooldown: f32,
+    /// Pinned alertness (DebugForceChase): treated as permanent sight of the
+    /// player - no decay, live target position - until cleared
+    alertness_pinned: bool,
 }
 
 impl AnimatedMonsterAI {
     pub fn idle() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
+            alertness_pinned: false,
             death_elapsed: 0.0,
             handoff_emitted: false,
             death_impact: None,
@@ -142,6 +162,7 @@ impl AnimatedMonsterAI {
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
+            alertness_pinned: false,
             death_elapsed: 0.0,
             handoff_emitted: false,
             death_impact: None,
@@ -260,10 +281,22 @@ impl AnimatedMonsterAI {
 
         self.current_heading = Deg(self.current_heading.0 + turn_amount);
 
-        Effect::SetRotation {
-            entity_id,
-            rotation: Quaternion::from_angle_y(self.current_heading),
-        }
+        // Couple forward speed to heading error so the body doesn't arc at
+        // full stride while the heading catches up (the cause of orbiting a
+        // close target): full speed facing the travel direction, ramping to
+        // a third by 60 degrees of error.
+        let scale = locomotion_scale_for_heading_error(delta);
+
+        Effect::Multiple(vec![
+            Effect::SetRotation {
+                entity_id,
+                rotation: Quaternion::from_angle_y(self.current_heading),
+            },
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::LocomotionScale { scale },
+            },
+        ])
     }
 
     fn try_tickle_sensor(
@@ -729,8 +762,16 @@ impl Script for AnimatedMonsterAI {
         // Monster rotation is set directly via Effect::SetRotation, so pose.rotation
         // already contains the heading. Pass Deg(0.0) to avoid applying it twice.
         const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
-        let is_visible =
-            is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE);
+        // A pinned alertness (DebugForceChase) acts as permanent sight of
+        // the player: no decay, and the last-known position tracks them live
+        let is_visible = self.alertness_pinned
+            || is_player_visible_in_fov(
+                entity_id,
+                world,
+                physics,
+                Deg(0.0),
+                MONSTER_FOV_HALF_ANGLE,
+            );
 
         // Remember where the player was last seen, for SearchBehavior
         if is_visible {
@@ -1111,12 +1152,16 @@ impl Script for AnimatedMonsterAI {
                     Effect::NoEffect
                 }
             }
-            MessagePayload::SetAlertness { level } => {
+            MessagePayload::SetAlertness { level, pin } => {
                 // Dead AIs stay dead - a corpse keeps a live script, and the
                 // broadcast (DebugAlertAll) reaches every creature
                 if self.is_dead || is_killed(entity_id, world) {
                     return Effect::NoEffect;
                 }
+                // Pinned (DebugForceChase): the level never decays and the
+                // AI hunts the player's live position until a non-pinned
+                // SetAlertness (DebugCalmAll) clears it
+                self.alertness_pinned = *pin;
                 // The behavior reset is unconditional, even when the level
                 // didn't change - forcing is a debug reset, so it also
                 // cancels scripted sequences
@@ -1295,4 +1340,34 @@ fn is_attack_animation(motion_query_items: &[MotionQueryItem]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locomotion_scale_full_speed_when_facing_travel_direction() {
+        assert_eq!(locomotion_scale_for_heading_error(Deg(0.0)), 1.0);
+    }
+
+    #[test]
+    fn locomotion_scale_ramps_down_with_heading_error() {
+        let at_30 = locomotion_scale_for_heading_error(Deg(30.0));
+        assert!(at_30 > 0.33 && at_30 < 1.0, "got {at_30}");
+        // Symmetric for left/right error
+        assert_eq!(at_30, locomotion_scale_for_heading_error(Deg(-30.0)));
+        // A third of full speed by 60 degrees
+        assert_eq!(locomotion_scale_for_heading_error(Deg(60.0)), 0.33);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(89.0)), 0.33);
+    }
+
+    #[test]
+    fn locomotion_scale_floors_at_a_third_never_zero() {
+        // A zero scale can deadlock an AI whose steering chain holds a large
+        // transient error - the floor must stay positive even at 180 degrees
+        assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.33);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.33);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.33);
+    }
 }

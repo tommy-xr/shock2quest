@@ -203,9 +203,12 @@ pub enum MessagePayload {
         name: String,
     },
 
-    // Debug: force an AI's alertness level (clamped by its alert cap)
+    // Debug: force an AI's alertness level (clamped by its alert cap).
+    // `pin` holds it against decay (and tracks the live player) until a
+    // non-pinned SetAlertness clears it.
     SetAlertness {
         level: dark::properties::AIAlertLevel,
+        pin: bool,
     },
 
     Slay, // kill the entity

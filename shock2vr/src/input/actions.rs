@@ -52,8 +52,12 @@ pub enum InputAction {
     /// turrets manage their own alertness and ignore this.
     DebugAlertAll,
     /// Force every monster back to Lowest alertness (idle). Same caveats as
-    /// DebugAlertAll.
+    /// DebugAlertAll. Also clears a DebugForceChase pin.
     DebugCalmAll,
+    /// Like DebugAlertAll, but PINNED: alertness never decays and every
+    /// monster keeps hunting the player's live position until DebugCalmAll.
+    /// The demo cheat - "everything on the map converges on the player".
+    DebugForceChase,
 
     /// Toggle the flat-mode "use" (metagame) mode: cursor-driven UI over the
     /// 3D view, as the original game does on Tab. Shooter mode is restored on
@@ -80,6 +84,7 @@ impl InputAction {
             InputAction::DebugReloadLevel,
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
+            InputAction::DebugForceChase,
             InputAction::ToggleUseMode,
         ]
     }
@@ -100,6 +105,7 @@ impl InputAction {
             InputAction::DebugReloadLevel => "DebugReloadLevel",
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",
+            InputAction::DebugForceChase => "DebugForceChase",
             InputAction::ToggleUseMode => "ToggleUseMode",
         }
     }

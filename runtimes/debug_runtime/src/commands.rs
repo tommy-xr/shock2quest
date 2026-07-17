@@ -112,6 +112,9 @@ pub enum RuntimeCommand {
     /// scene has no pathfinding data)
     GetPathfindingStats(oneshot::Sender<Option<shock2vr::game_scene::DebugPathfindingStats>>),
 
+    /// Get the latest path each AI computed (goal, waypoints, outcome)
+    GetAiPaths(oneshot::Sender<Vec<shock2vr::game_scene::DebugAiPathEntry>>),
+
     /// List entities near the player
     ListEntities {
         limit: Option<usize>,
