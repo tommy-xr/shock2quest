@@ -365,6 +365,51 @@ pub fn hit_points(entity_id: EntityId, world: &World) -> Option<i32> {
     v_prop_hit_points.get(entity_id).ok().map(|p| p.hit_points)
 }
 
+/// Horizontal crowd-separation bias: the sum of repulsions from other
+/// LIVING creatures within `radius` of `position` (same floor), each
+/// weighted by proximity. Returns a direction-and-magnitude vector in the
+/// XZ plane; empty crowd = zero. Callers blend a capped amount of this
+/// into their steering target so converging AIs bend around each other
+/// instead of pushing capsule-to-capsule into a gridlock (issue #487) -
+/// it must BIAS the route, never veto it (see collision avoidance history).
+pub fn separation_bias(
+    world: &World,
+    entity_id: EntityId,
+    position: Vector3<f32>,
+    radius: f32,
+) -> Vector3<f32> {
+    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
+    let mut bias = vec3(0.0, 0.0, 0.0);
+    for (other_id, (_, xform)) in (&v_creature, &v_transform).iter().with_id() {
+        if other_id == entity_id {
+            continue;
+        }
+        // Corpses don't crowd (they're ragdolls on the floor)
+        if v_hit_points
+            .get(other_id)
+            .map(|hp| hp.hit_points <= 0)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let other = xform.0.transform_point(point3(0.0, 0.0, 0.0));
+        if (position.y - other.y).abs() > 2.0 {
+            continue; // different floor
+        }
+        let dx = position.x - other.x;
+        let dz = position.z - other.z;
+        let distance = (dx * dx + dz * dz).sqrt();
+        if distance >= radius || distance < 1e-3 {
+            continue;
+        }
+        let weight = (radius - distance) / radius;
+        bias += vec3(dx / distance, 0.0, dz / distance) * weight;
+    }
+    bias
+}
+
 pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
 
@@ -575,4 +620,63 @@ pub fn is_player_visible_in_fov(
     };
 
     false
+}
+
+#[cfg(test)]
+mod separation_tests {
+    use super::*;
+    use cgmath::Matrix4;
+    use shipyard::World;
+
+    fn spawn_creature(world: &mut World, at: Vector3<f32>, hit_points: i32) -> EntityId {
+        world.add_entity((
+            PropCreature(0),
+            RuntimePropTransform(Matrix4::from_translation(at)),
+            PropHitPoints { hit_points },
+        ))
+    }
+
+    #[test]
+    fn separation_pushes_away_from_a_close_neighbor() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
+
+        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        assert!(
+            bias.x < -0.1,
+            "neighbor at +x must push toward -x: {bias:?}"
+        );
+        assert_eq!(bias.y, 0.0, "bias is horizontal only");
+        assert!(bias.z.abs() < 1e-6);
+    }
+
+    #[test]
+    fn separation_ignores_corpses_far_neighbors_and_other_floors() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 0); // corpse
+        spawn_creature(&mut world, vec3(10.0, 0.0, 0.0), 10); // out of radius
+        spawn_creature(&mut world, vec3(1.0, 5.0, 0.0), 10); // floor above
+
+        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        assert!(
+            bias.magnitude() < 1e-6,
+            "corpses, far and stacked-floor creatures must not repel: {bias:?}"
+        );
+    }
+
+    #[test]
+    fn separation_from_two_sides_partially_cancels() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(-1.0, 0.0, 0.0), 10);
+
+        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        assert!(
+            bias.x.abs() < 1e-6,
+            "symmetric neighbors cancel on x: {bias:?}"
+        );
+    }
 }
