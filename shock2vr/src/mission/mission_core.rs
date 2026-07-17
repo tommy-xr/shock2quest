@@ -208,6 +208,13 @@ pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateHierarchy(pub HashMap<i32, Vec<i32>>);
 
+/// The trainer upgrade cost tables from the gamesys
+/// (`STATCOST`/`WTECHCOST`/`WSKILLCOST`/`PSICOST` chunks), so the trainer
+/// panel and the `TrainerPurchase` effect handler price upgrades from the
+/// same authored data. `None` if the gamesys lacks the chunks.
+#[derive(Unique, Clone)]
+pub struct GlobalTrainerCosts(pub Option<dark::gamesys::TrainerCostTables>);
+
 impl GlobalTemplateHierarchy {
     /// Whether `template_id` is `class_template_id` or inherits from it.
     pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
@@ -421,6 +428,9 @@ impl MissionCore {
         world.add_unique(GlobalTemplateObjIcons(template_obj_icons));
         world.add_unique(GlobalTemplateHierarchy(
             ss2_entity_info::get_hierarchy(&entity_info_rc).clone(),
+        ));
+        world.add_unique(GlobalTrainerCosts(
+            game_entity_info.trainer_costs().cloned(),
         ));
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         // Player-facing discipline names come from the psihelp string table;
@@ -3269,6 +3279,43 @@ impl MissionCore {
                             tour,
                             quests.player_stats()
                         );
+                    }
+                }
+
+                Effect::TrainerPurchase { target } => {
+                    // Authoritative validation + mutation (the panel only
+                    // pre-validates for feedback): re-quote from the cost
+                    // tables, spend atomically, then raise the target.
+                    use crate::scripts::gui::{apply_purchase, upgrade_quote};
+                    let costs = self
+                        .world
+                        .borrow::<UniqueView<GlobalTrainerCosts>>()
+                        .unwrap()
+                        .0
+                        .clone();
+                    if let Some(costs) = costs {
+                        let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                        let stats = quests.player_stats_mut();
+                        match upgrade_quote(&costs, stats, target) {
+                            Some(cost) if stats.spend_cyber_modules(cost) => {
+                                apply_purchase(stats, target);
+                                info!(
+                                    "Trainer purchase {:?} (-{} modules, balance {})",
+                                    target, cost, stats.cyber_modules
+                                );
+                            }
+                            Some(cost) => {
+                                info!(
+                                    "Trainer purchase {:?} refused: costs {}, balance {}",
+                                    target, cost, stats.cyber_modules
+                                );
+                            }
+                            None => {
+                                info!("Trainer purchase {:?} refused: maxed/locked", target);
+                            }
+                        }
+                    } else {
+                        warn!("TrainerPurchase dropped: gamesys has no cost tables");
                     }
                 }
 

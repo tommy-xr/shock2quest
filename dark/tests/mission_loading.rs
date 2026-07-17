@@ -262,3 +262,35 @@ fn medsci1_deaf_metaproperty_delivers_hearing_component() {
         );
     }
 }
+
+#[test]
+fn gamesys_trainer_cost_tables_match_the_retail_values() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let file = File::open(data.join("shock2.gam")).expect("shock2.gam should open");
+    let mut reader = BufReader::new(file);
+    let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+    let costs = dark::gamesys::TrainerCostTables::read(&toc, &mut reader)
+        .expect("retail shock2.gam carries the four cost chunks");
+
+    // The retail tables (projects/flat-ui-panels.md §3.2; identical to the
+    // community-documented values). Every stat row: 3/8/15/30/50.
+    for row in &costs.stat_cost {
+        assert_eq!(row, &[3, 8, 15, 30, 50]);
+    }
+    // Every tech-skill row: 10/5/8/12/25/50 (level 1 really costs more than 2).
+    for row in &costs.tech_cost {
+        assert_eq!(row, &[10, 5, 8, 12, 25, 50]);
+    }
+    // Every weapon-skill row: 12/6/8/15/36/50.
+    for row in &costs.weapon_cost {
+        assert_eq!(row, &[12, 6, 8, 15, 36, 50]);
+    }
+    // Psi tiers: first int = tier unlock (10/20/30/50/75), rest = per-power.
+    let unlocks: Vec<i32> = costs.psi_cost.iter().map(|t| t[0]).collect();
+    assert_eq!(unlocks, vec![10, 20, 30, 50, 75]);
+    assert_eq!(costs.psi_cost[0][1..], [3; 7]);
+    assert_eq!(costs.psi_cost[4][1..], [20; 7]);
+}

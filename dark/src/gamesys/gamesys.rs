@@ -4,6 +4,7 @@ use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 
 use crate::{
     EnvMap, EnvSoundQuery, SoundSchema, SpeechDB, TagDatabase,
+    gamesys::params::TrainerCostTables,
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},
     ss2_chunk_file_reader::{self},
     ss2_entity_info::{self, SystemShock2EntityInfo},
@@ -14,6 +15,9 @@ pub struct Gamesys {
     pub entity_info: SystemShock2EntityInfo,
     env_tag_map: TagDatabase,
     speech_db: SpeechDB,
+    /// Trainer upgrade cost tables (`STATCOST`/`WTECHCOST`/`WSKILLCOST`/
+    /// `PSICOST` file-var chunks); `None` if the gamesys lacks them.
+    trainer_costs: Option<TrainerCostTables>,
 }
 
 impl Gamesys {
@@ -54,6 +58,11 @@ impl Gamesys {
     pub fn into_entity_info(self) -> SystemShock2EntityInfo {
         self.entity_info
     }
+
+    /// The trainer upgrade cost tables, if this gamesys carries them.
+    pub fn trainer_costs(&self) -> Option<&TrainerCostTables> {
+        self.trainer_costs.as_ref()
+    }
 }
 
 pub fn read<T: io::Read + io::Seek>(
@@ -76,6 +85,7 @@ pub fn read<T: io::Read + io::Seek>(
 
     let env_tag_map = EnvMap::read(&table_of_contents, reader);
     let speech_db = SpeechDB::read(&table_of_contents, reader);
+    let trainer_costs = TrainerCostTables::read(&table_of_contents, reader);
 
     // Uncomment to output debug info for voices:
     // debug_print_voices(&sound_schema, &speech_db);
@@ -86,5 +96,6 @@ pub fn read<T: io::Read + io::Seek>(
         sound_schema,
         env_tag_map,
         speech_db,
+        trainer_costs,
     }
 }
