@@ -111,6 +111,26 @@ impl FontMetrics {
     }
 }
 
+/// Alpha for one bitmap byte of an *unpacked* (non-format-0) font.
+///
+/// - Format `0x0001` ("antialias-16", e.g. `METAFONT.FON`): each byte is a
+///   coverage level 0..=15; scale linearly so full coverage (15) is fully
+///   opaque (255). Without this the whole font renders at max alpha 15 -
+///   nearly invisible.
+/// - Other formats (e.g. the `0xCCCC` AA fonts): each byte is used as direct
+///   alpha. The `> 205` clamp works around artifacts (random bright pixels)
+///   seen in some of those fonts; the proper fix is palette/coverage
+///   normalization (see `projects/ui-font-fidelity.md` follow-ups).
+fn unpacked_byte_alpha(format: u16, value: u8) -> u8 {
+    if format == 1 {
+        value.saturating_mul(17)
+    } else if value > 205 {
+        0
+    } else {
+        value
+    }
+}
+
 impl FontHeader {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> FontHeader {
         let format = read_u16(reader);
@@ -258,14 +278,9 @@ impl Font {
 
                         image::Rgba([255, 255, 255, alpha])
                     } else {
-                        // If format is not 0, this is easy mode... each byte
-                        // just directly corresponds to an alpha value.
+                        // Unpacked formats: one byte per pixel.
                         let idx = (y * metrics.row_width as u32 + adj_x) as usize;
-                        let mut alpha = bitmap[idx];
-                        // Not sure why this is necessary... but we get artifacts (random bright pixels) in some fonts w/o this
-                        if alpha > 205 {
-                            alpha = 0;
-                        }
+                        let alpha = unpacked_byte_alpha(metrics.format, bitmap[idx]);
                         image::Rgba([255, 255, 255, alpha])
                     }
                 });
@@ -386,24 +401,29 @@ mod tests {
         assert_eq!(m.glyph_width(50), None);
     }
 
-    /// Real-font parse guarded by asset availability (game `.FON` files are not
-    /// in the repo, so this no-ops in CI). MAINFONT.FON: char 0..=225, 11px
-    /// tall, mono (format 0).
-    #[test]
-    fn mainfont_metrics_from_real_asset_when_present() {
-        let mut found = None;
+    /// Locate a game asset by data-root-relative path (fonts live under both
+    /// `res/fonts/` and `res/intrface/`). Returns `None` when the game data is
+    /// absent (e.g. CI), so real-asset tests can no-op.
+    fn find_asset(rel: &str) -> Option<std::path::PathBuf> {
         for root in [
             std::env::var("DARK_ASSET_PATH").unwrap_or_default(),
             "../Data".into(),
             "../../Data".into(),
         ] {
-            let p = std::path::Path::new(&root).join("res/fonts/MAINFONT.FON");
+            let p = std::path::Path::new(&root).join(rel);
             if p.exists() {
-                found = Some(p);
-                break;
+                return Some(p);
             }
         }
-        let Some(path) = found else {
+        None
+    }
+
+    /// Real-font parse guarded by asset availability (game `.FON` files are not
+    /// in the repo, so this no-ops in CI). MAINFONT.FON: char 0..=225, 11px
+    /// tall, mono (format 0).
+    #[test]
+    fn mainfont_metrics_from_real_asset_when_present() {
+        let Some(path) = find_asset("res/fonts/MAINFONT.FON") else {
             eprintln!("skipping: MAINFONT.FON asset not found");
             return;
         };
@@ -417,6 +437,35 @@ mod tests {
         assert_eq!(m.columns.len(), 227);
         let w0 = m.glyph_width(b'0' as i16).unwrap();
         assert!((1..=20).contains(&w0), "digit width {w0} out of range");
+    }
+
+    /// METAFONT.FON — the original's default GUI style font (main menu et al),
+    /// shipped under `res/intrface/`, format 0x0001 ("antialias-16"): each
+    /// bitmap byte is a 0..=15 coverage level. Asserts the 0..15 -> 0..255
+    /// alpha scaling reaches full opacity; before format-1 support the parser
+    /// treated these bytes as direct alpha (max 15/255 - nearly invisible).
+    #[test]
+    fn metafont_format1_alpha_from_real_asset_when_present() {
+        let Some(path) = find_asset("res/intrface/METAFONT.FON") else {
+            eprintln!("skipping: METAFONT.FON asset not found");
+            return;
+        };
+        let bytes = std::fs::read(path).unwrap();
+        let m = FontMetrics::read(&mut Cursor::new(bytes.clone()));
+        assert_eq!(m.format, 1);
+        assert_eq!(m.height, 20);
+        assert_eq!(m.first_char, 0);
+        assert_eq!(m.last_char, 225);
+
+        let bitmap = &bytes[m.bitmap_offset as usize..];
+        let max_coverage = bitmap.iter().copied().max().unwrap();
+        assert_eq!(max_coverage, 15, "format-1 coverage levels are 0..=15");
+        let max_alpha = bitmap
+            .iter()
+            .map(|&b| super::unpacked_byte_alpha(m.format, b))
+            .max()
+            .unwrap();
+        assert_eq!(max_alpha, 255, "full coverage must decode to full alpha");
     }
 
     #[test]
