@@ -51,10 +51,11 @@ impl SearchBehavior {
         SearchBehavior {
             goal,
             steering_strategy: steering::chained(vec![
-                Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
-                // Route to the fixed last-known position; without AIPATH
-                // data this returns None and the AI just scans in place
+                // Path steering leads; whisker avoidance only covers the
+                // no-route case (see chase_behavior for the deadlock this
+                // prevents)
                 Box::new(PathFollowSteeringStrategy::to_point(goal)),
+                Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
             ]),
             arrived: false,
             scan_seconds: 0.0,

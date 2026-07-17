@@ -18,13 +18,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-/// Taut crossing points keep this distance (1.5 Dark feet) from shared-edge
+/// Taut crossing points keep this distance (3 Dark feet) from shared-edge
 /// endpoints. Endpoints are wall corners: a fully-taut path has zero
-/// clearance there, dragging the AI's body through the corner and leaving
-/// whisker avoidance to fight the path every frame. One fixed radius for all
-/// creatures for now - it also (harmlessly) insets interior subdivision
-/// edges, not just walls.
-const EDGE_CLEARANCE: f32 = 1.5 / SCALE_FACTOR;
+/// clearance there, dragging the AI's body through the corner. 1.5 feet
+/// proved insufficient - it is under the widest creature capsule radius, so
+/// taut routes grazed door frames and the body WEDGED on the corner pushing
+/// full speed into it forever (stall cleared the path, the re-path produced
+/// the identical taut route - issue #481's remaining freeze). One fixed
+/// radius for all creatures for now - it also (harmlessly) insets interior
+/// subdivision edges, not just walls.
+const EDGE_CLEARANCE: f32 = 3.0 / SCALE_FACTOR;
 
 /// A zero-bit link counts as a flat walkable seam when the two cell floors
 /// differ by no more than this (3 Dark feet - covers small steps; genuine
@@ -121,6 +124,21 @@ pub struct AiPathRecord {
     pub outcome: AiPathOutcome,
 }
 
+/// Live path-following state, published by the steering every frame it
+/// runs - shows what the strategy is ACTUALLY following (which can lag or
+/// differ from the latest computed route in `AiPathRecord`)
+#[derive(Debug, Clone, Copy)]
+pub struct AiSteeringDebug {
+    /// Index of the waypoint currently steered toward
+    pub next_waypoint: usize,
+    /// Length of the path being followed (0 = no active path)
+    pub path_len: usize,
+    /// World position currently steered toward (waypoint), if any
+    pub target: Option<Vector3<f32>>,
+    /// Seconds without progress toward the current waypoint
+    pub stall_seconds: f32,
+}
+
 /// Pathfinding service for AI navigation
 ///
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
@@ -150,6 +168,8 @@ pub struct PathfindingService {
     /// Latest path per AI entity (key: EntityId::inner()), recorded by the
     /// path-follow steering so tooling can see what each AI is doing
     ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
+    /// Live steering state per AI (what it is actually following right now)
+    ai_steering: std::sync::Mutex<HashMap<u64, AiSteeringDebug>>,
     /// Mission object ids of doors that are currently locked AND closed -
     /// A* refuses links into their below-door cells (the runtime door gate;
     /// closed-but-openable doors stay pathable and are opened on arrival).
@@ -164,13 +184,22 @@ impl PathfindingService {
     /// Create a new pathfinding service with the given path database
     /// (faithful traversal rules; no island bridging)
     pub fn new(path_database: Arc<PathDatabase>) -> Self {
-        Self::with_nav_options(path_database, false)
+        Self::with_nav_options(path_database, false, None)
     }
 
     /// Create a pathfinding service; `bridge_islands` enables the
     /// experimental mesh reconnection (island-crossing links + relaxed
-    /// blocking-cell traversal) for full-map navigation.
-    pub fn with_nav_options(path_database: Arc<PathDatabase>, bridge_islands: bool) -> Self {
+    /// blocking-cell traversal) for full-map navigation. `bridge_validator`
+    /// (when provided) vets each candidate crossing - given the two cell
+    /// centers, return whether the straight walk between them is physically
+    /// clear. Without it bridges are purely geometric and can cross railings
+    /// or thin walls, leaving AIs stalling at a seam physics won't let them
+    /// pass.
+    pub fn with_nav_options(
+        path_database: Arc<PathDatabase>,
+        bridge_islands: bool,
+        bridge_validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
+    ) -> Self {
         let mut links_by_cell = vec![Vec::new(); path_database.cells.len()];
         for (idx, link) in path_database.links.iter().enumerate() {
             if let Some(links) = links_by_cell.get_mut(link.from_cell as usize) {
@@ -184,7 +213,7 @@ impl PathfindingService {
             .collect();
         let mut effective_bits = compute_effective_bits(&path_database);
         let bridge_links = if bridge_islands {
-            compute_bridge_links(&path_database, &effective_bits)
+            compute_bridge_links(&path_database, &effective_bits, bridge_validator)
         } else {
             Vec::new()
         };
@@ -209,6 +238,7 @@ impl PathfindingService {
             bridge_links,
             relaxed: bridge_islands,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
+            ai_steering: std::sync::Mutex::new(HashMap::new()),
             locked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
             queries: AtomicU64::new(0),
             stressed_retries: AtomicU64::new(0),
@@ -242,6 +272,22 @@ impl PathfindingService {
         if let Ok(mut paths) = self.ai_paths.lock() {
             paths.insert(entity, record);
         }
+    }
+
+    /// Publish an AI's live steering state (called by path-follow steering
+    /// every frame it runs)
+    pub fn record_ai_steering(&self, entity: u64, debug: AiSteeringDebug) {
+        if let Ok(mut steering) = self.ai_steering.lock() {
+            steering.insert(entity, debug);
+        }
+    }
+
+    /// The live steering state for an entity, if it has published any
+    pub fn ai_steering(&self, entity: u64) -> Option<AiSteeringDebug> {
+        self.ai_steering
+            .lock()
+            .ok()
+            .and_then(|steering| steering.get(&entity).copied())
     }
 
     /// Snapshot of every AI's latest recorded path
@@ -759,7 +805,11 @@ fn is_flat_seam(db: &PathDatabase, link: &PathCellLink) -> bool {
 /// of each other at a walkable slope. Purely geometric - a candidate through
 /// thick geometry is possible but rare at these gates, and steering/stall
 /// handling copes with the odd bad bridge.
-fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> Vec<PathCellLink> {
+fn compute_bridge_links(
+    db: &PathDatabase,
+    effective_bits: &[MovementBits],
+    validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
+) -> Vec<PathCellLink> {
     // Union-find over walk-usable links to label islands
     let mut parent: Vec<u32> = (0..db.cells.len() as u32).collect();
     fn find(parent: &mut Vec<u32>, mut a: u32) -> u32 {
@@ -869,10 +919,24 @@ fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> V
             .then(x.2.cmp(&y.2))
     });
 
+    /// Cast height above the cell floors: torso level, clearing steps but
+    /// under railings and half-walls a creature can't cross
+    const BRIDGE_PROBE_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
+
+    let mut rejected = 0usize;
     let mut bridges = Vec::new();
     for (_, a_id, b_id) in candidates {
         if find(&mut parent, a_id) == find(&mut parent, b_id) {
             continue;
+        }
+        if let Some(validate) = validator {
+            let lift = Vector3::new(0.0, BRIDGE_PROBE_HEIGHT, 0.0);
+            let from = db.cells[a_id as usize].center + lift;
+            let to = db.cells[b_id as usize].center + lift;
+            if !validate(from, to) {
+                rejected += 1;
+                continue;
+            }
         }
         let root_a = find(&mut parent, a_id);
         parent[root_a as usize] = find(&mut parent, b_id);
@@ -895,6 +959,12 @@ fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> V
                 cost,
             });
         }
+    }
+    if rejected > 0 {
+        tracing::info!(
+            "pathfinding: rejected {} island-bridge candidates blocked by geometry",
+            rejected
+        );
     }
     bridges
 }
@@ -1122,7 +1192,7 @@ pub(crate) mod tests {
             "islands must stay separate without nav_bridges"
         );
 
-        let bridged = PathfindingService::with_nav_options(Arc::new(db), true);
+        let bridged = PathfindingService::with_nav_options(Arc::new(db), true, None);
         let path = bridged
             .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
             .expect("nav_bridges must synthesize a crossing");
@@ -1182,7 +1252,7 @@ pub(crate) mod tests {
             ok_bits: MovementBits::WALK,
             cost: 1,
         });
-        let service = PathfindingService::with_nav_options(Arc::new(db), true);
+        let service = PathfindingService::with_nav_options(Arc::new(db), true, None);
         assert!(
             service
                 .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
@@ -1199,7 +1269,7 @@ pub(crate) mod tests {
         db.links.truncate(1); // cell 2 becomes an island, bridged below
         db.cells[2].flags = PathCellFlags::BELOW_DOOR;
         db.cell_doors.push(CellDoor { cell: 2, door: 99 });
-        let service = PathfindingService::with_nav_options(Arc::new(db), true);
+        let service = PathfindingService::with_nav_options(Arc::new(db), true, None);
         assert_eq!(service.doors_near_cell(0), vec![(99, vec3(5.0, 0.0, 1.0))]);
     }
 
@@ -1314,7 +1384,10 @@ pub(crate) mod tests {
         // A goal hugging the corridor wall (z near 0) pulls the taut points
         // toward the edge endpoints - wall corners. The crossing points must
         // keep EDGE_CLEARANCE distance from the endpoints so the AI's body
-        // doesn't drag through the corner.
+        // doesn't drag through (or wedge on) the corner. The test edges span
+        // z in [0, 2] - shorter than twice the clearance - so they collapse
+        // to their midpoint, the maximum available clearance.
+        assert!(2.0 < 2.0 * EDGE_CLEARANCE, "test assumes short edges");
         let service = service(three_cell_db(PathCellFlags::empty()));
         let start = vec3(1.0, 0.0, 1.0);
         let goal = vec3(5.0, 0.0, 0.05);
@@ -1322,16 +1395,14 @@ pub(crate) mod tests {
             .find_path(start, goal, MovementBits::WALK | MovementBits::STRESSED)
             .unwrap();
         assert_eq!(path.len(), 4, "start + 2 edge crossings + goal");
-        // Edges span z in [0, 2]; the goal at z=0.05 pulls both crossings to
-        // the inset endpoint, exactly EDGE_CLEARANCE from the z=0 corner
         assert!(
-            (path[1].z - EDGE_CLEARANCE).abs() < 1e-5,
-            "crossing 1 not clamped to the inset endpoint: z = {}",
+            (path[1].z - 1.0).abs() < 1e-5,
+            "crossing 1 not collapsed to the edge midpoint: z = {}",
             path[1].z
         );
         assert!(
-            (path[2].z - EDGE_CLEARANCE).abs() < 1e-5,
-            "crossing 2 not clamped to the inset endpoint: z = {}",
+            (path[2].z - 1.0).abs() < 1e-5,
+            "crossing 2 not collapsed to the edge midpoint: z = {}",
             path[2].z
         );
     }

@@ -557,7 +557,7 @@ fn run_bench(
     let links = db.links.len();
     let components = walk_components(&db);
     let t_build = Instant::now();
-    let service = PathfindingService::with_nav_options(Arc::new(db), bridges);
+    let service = PathfindingService::with_nav_options(Arc::new(db), bridges, None);
     let build_ms = t_build.elapsed().as_millis();
     let bridge_links = service.bridge_link_count();
     // Sample start/goal from the largest walk component so queries are
