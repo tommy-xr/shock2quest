@@ -82,15 +82,31 @@ test(
     await game.step({ frames: 1200 });
     let closer = 0;
     let minFinal = Infinity;
+    let sumDelta = 0;
     for (const h of hybrids) {
       const d = await game.entities.detail(h.id);
       const final = dist3(d.position, playerPos);
+      const delta = final - (before.get(h.id) ?? 0);
       minFinal = Math.min(minFinal, final);
-      if (final - (before.get(h.id) ?? 0) < -2.0) closer += 1;
+      sumDelta += delta;
+      if (delta < -2.0) closer += 1;
+      console.log(
+        `  hybrid ${h.id}: ${(before.get(h.id) ?? 0).toFixed(1)} -> ${final.toFixed(1)} (${delta >= 0 ? "+" : ""}${delta.toFixed(1)})`,
+      );
     }
+    console.log(`  sum distance delta: ${sumDelta.toFixed(1)} across ${hybrids.length} hybrids`);
     assert.ok(
       closer >= 2,
       `expected at least 2 of ${hybrids.length} hybrids to close on the player, got ${closer}`,
+    );
+    // Aggregate convergence metric: total approach across the fleet. The
+    // main-branch baseline measures ~-17 over 90s with everything the old
+    // graph allowed; a healthy pinned chase on the fixed graph clears -25
+    // in this 30s window with room to spare. Guards regressions in the
+    // pathfinding graph or steering without depending on any single hybrid.
+    assert.ok(
+      sumDelta <= -25.0,
+      `expected the fleet to approach by 25+ units total, got ${sumDelta.toFixed(1)}`,
     );
     // ...and at least one actually ARRIVES (engagement range), not just
     // drifts closer - the arrival is the point of the pin
