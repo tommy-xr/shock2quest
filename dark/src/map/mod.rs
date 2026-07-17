@@ -35,6 +35,30 @@ impl MapRect {
     }
 }
 
+/// `PAGE001.PCX` automap page-art size in pixels - every deck's page ships at
+/// this size. Shared by every map composition path (automap panel, world map
+/// renderer) so they cannot drift.
+pub const PAGE_WIDTH: f32 = 614.0;
+pub const PAGE_HEIGHT: f32 = 260.0;
+
+/// Path to a level's automap page art (`level` is the level file stem, e.g.
+/// "medsci1"; per-level art lives under `intrface/<LEVEL>/english/`).
+pub fn page_art_path(level: &str) -> String {
+    format!("{}/english/PAGE001.PCX", level.to_uppercase())
+}
+
+/// Bright "revealed" decal art for one map location (`P001R###.PCX`, indexed
+/// by the location's rect slot in `P001RA.BIN`).
+pub fn revealed_decal_path(level: &str, location: i32) -> String {
+    format!("{}/english/P001R{:03}.PCX", level.to_uppercase(), location)
+}
+
+/// Dim "explored" decal art for one map location (`P001X###.PCX`, indexed by
+/// the location's rect slot in `P001XA.BIN`).
+pub fn explored_decal_path(level: &str, location: i32) -> String {
+    format!("{}/english/P001X{:03}.PCX", level.to_uppercase(), location)
+}
+
 /// Map chunk data containing rectangles for both revealed and explored overlays
 #[derive(Debug)]
 pub struct MapChunkData {
