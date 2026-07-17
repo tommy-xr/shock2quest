@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
+use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -36,7 +37,12 @@ const NEW_GAME_MISSION: &str = "earth.mis";
 /// The menu is authored on the original 640x480 `MAIN.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
-const MENU_FONT: &str = "mainaa.fon"; // anti-aliased menu font (vs the bitmap mainfont)
+/// The original menu draws its labels with the default GUI style font -
+/// METAFONT.FON (`res/intrface/`), a 20px-cell antialias-16 display face.
+const MENU_FONT: &str = "metafont.fon";
+/// Original widget layout for `MAIN.PCX` - LTRB rects for the six buttons
+/// (top to bottom) plus the corner logo (`UI_LAYOUT_IMPORTER`).
+const LAYOUT_FILE: &str = "MAINR.BIN";
 /// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
@@ -49,33 +55,59 @@ enum MenuAction {
 struct MenuItem {
     label: &'static str,
     action: MenuAction,
-    /// Hit/draw rect in canvas pixels, over the MAIN.PCX button.
-    rect: Rect,
+    /// Index of this button's rect in the `MAINR.BIN` layout (six buttons top
+    /// to bottom, then the corner logo).
+    layout_index: usize,
+    /// Hit/draw rect in canvas pixels if the layout file is absent (the decoded
+    /// `MAINR.BIN` values: buttons at x=400, 179x60, 76px vertical pitch).
+    fallback_rect: Rect,
 }
 
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
-// side; centers (measured from the art's marker rows) are y = 37, 113, 190, 266,
-// 341, 418, each ~76 tall, left edge x ~= 405. New Game = top button, Quit =
-// bottom button. Labels are centered in the button rect.
+// side; New Game = top button, Quit = bottom button. Labels are centered in the
+// button rect.
 const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         label: "NEW GAME",
         action: MenuAction::NewGame,
-        rect: Rect::new(405.0, 0.0, 213.0, 76.0),
+        layout_index: 0,
+        fallback_rect: Rect::new(400.0, 20.0, 179.0, 60.0),
     },
     MenuItem {
         label: "QUIT",
         action: MenuAction::Quit,
-        rect: Rect::new(405.0, 380.0, 213.0, 76.0),
+        layout_index: 5,
+        fallback_rect: Rect::new(400.0, 400.0, 179.0, 60.0),
     },
 ];
 
-/// Pure click resolution: on a rising press edge over an item, return its
-/// action. Also returns the new `last_pressed` to track for the next frame.
+/// Resolve each menu item's canvas rect from the `MAINR.BIN` layout (falling
+/// back to the decoded values if it's absent). Parallel to [`MENU_ITEMS`].
+fn menu_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
+    MENU_ITEMS
+        .iter()
+        .map(
+            |item| match layout.and_then(|rects| rects.get(item.layout_index)) {
+                Some(r) => Rect::new(
+                    r.ul_x as f32,
+                    r.ul_y as f32,
+                    r.width() as f32,
+                    r.height() as f32,
+                ),
+                None => item.fallback_rect,
+            },
+        )
+        .collect()
+}
+
+/// Pure click resolution: on a rising press edge over an item (`rects` is
+/// parallel to [`MENU_ITEMS`]), return its action. Also returns the new
+/// `last_pressed` to track for the next frame.
 fn resolve_click(
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
+    rects: &[Rect],
 ) -> (Option<MenuAction>, bool) {
     match pointer {
         Some(p) => {
@@ -86,8 +118,13 @@ fn resolve_click(
                     screen_size,
                     SCALE_MODE,
                 )
-                .and_then(|c| MENU_ITEMS.iter().find(|it| it.rect.contains(c)))
-                .map(|it| it.action)
+                .and_then(|c| {
+                    MENU_ITEMS
+                        .iter()
+                        .zip(rects)
+                        .find(|(_, rect)| rect.contains(c))
+                })
+                .map(|(it, _)| it.action)
             } else {
                 None
             };
@@ -156,7 +193,7 @@ impl GameScene for MainMenuScene {
         &mut self,
         time: &Time,
         input_context: &InputContext,
-        _asset_cache: &mut AssetCache,
+        asset_cache: &mut AssetCache,
         _game_options: &GameOptions,
         _command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
@@ -164,11 +201,15 @@ impl GameScene for MainMenuScene {
             *world_time = time.clone();
         }
 
+        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
+        let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
+
         self.pointer = input_context.pointer;
         let (action, last_pressed) = resolve_click(
             input_context.pointer,
             self.last_pressed,
             self.last_screen_size,
+            &rects,
         );
         self.last_pressed = last_pressed;
 
@@ -214,6 +255,10 @@ impl GameScene for MainMenuScene {
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
 
         // Clickable items, centered in their button and brighter when hovered.
+        // Button rects come from the original `MAINR.BIN` layout (cached by the
+        // asset cache after the first load).
+        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
+        let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
         let pointer_canvas = self.pointer.and_then(|p| {
             pointer_to_canvas(
                 vec2(CANVAS_W, CANVAS_H),
@@ -222,16 +267,10 @@ impl GameScene for MainMenuScene {
                 SCALE_MODE,
             )
         });
-        for item in MENU_ITEMS {
-            let hovered = pointer_canvas.is_some_and(|pp| item.rect.contains(pp));
+        for (item, rect) in MENU_ITEMS.iter().zip(&rects) {
+            let hovered = pointer_canvas.is_some_and(|pp| rect.contains(pp));
             canvas
-                .text_native(
-                    item.rect,
-                    item.label,
-                    MENU_FONT,
-                    HAlign::Center,
-                    VAlign::Middle,
-                )
+                .text_native(*rect, item.label, MENU_FONT, HAlign::Center, VAlign::Middle)
                 .opacity(if hovered { 1.0 } else { 0.6 });
         }
 
@@ -290,36 +329,71 @@ mod tests {
     #[test]
     fn rising_edge_over_new_game_activates_it() {
         // Press edge over the top button (normalized ~ canvas (512, 37)).
-        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), false, SCREEN);
+        let (action, last) = resolve_click(
+            pointer_at(0.8, 0.078, true),
+            false,
+            SCREEN,
+            &menu_rects(None),
+        );
         assert_eq!(action, Some(MenuAction::NewGame));
         assert!(last);
     }
 
     #[test]
     fn rising_edge_over_quit_activates_it() {
-        let (action, _) = resolve_click(pointer_at(0.8, 0.870, true), false, SCREEN);
+        let (action, _) = resolve_click(
+            pointer_at(0.8, 0.870, true),
+            false,
+            SCREEN,
+            &menu_rects(None),
+        );
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
     #[test]
     fn held_press_does_not_re_activate() {
         // Already pressed last frame -> no new activation even over an item.
-        let (action, last) = resolve_click(pointer_at(0.8, 0.078, true), true, SCREEN);
+        let (action, last) = resolve_click(
+            pointer_at(0.8, 0.078, true),
+            true,
+            SCREEN,
+            &menu_rects(None),
+        );
         assert_eq!(action, None);
         assert!(last);
     }
 
     #[test]
     fn click_outside_items_does_nothing() {
-        let (action, _) = resolve_click(pointer_at(0.05, 0.05, true), false, SCREEN);
+        let (action, _) = resolve_click(
+            pointer_at(0.05, 0.05, true),
+            false,
+            SCREEN,
+            &menu_rects(None),
+        );
         assert_eq!(action, None);
     }
 
     #[test]
     fn no_pointer_means_no_action() {
-        let (action, last) = resolve_click(None, true, SCREEN);
+        let (action, last) = resolve_click(None, true, SCREEN, &menu_rects(None));
         assert_eq!(action, None);
         assert!(!last);
+    }
+
+    #[test]
+    fn menu_rects_prefer_layout_and_fall_back() {
+        // With a layout: New Game = rect 0, Quit = rect 5.
+        let layout: Vec<MapRect> = (0..7)
+            .map(|i| MapRect::new(10, i * 70, 110, i * 70 + 50))
+            .collect();
+        let rects = menu_rects(Some(&layout));
+        assert_eq!(rects[0], Rect::new(10.0, 0.0, 100.0, 50.0));
+        assert_eq!(rects[1], Rect::new(10.0, 350.0, 100.0, 50.0));
+        // Without: the decoded MAINR.BIN fallbacks.
+        let rects = menu_rects(None);
+        assert_eq!(rects[0], Rect::new(400.0, 20.0, 179.0, 60.0));
+        assert_eq!(rects[1], Rect::new(400.0, 400.0, 179.0, 60.0));
     }
 
     #[test]
