@@ -121,6 +121,20 @@ pub enum Effect {
         log: u32,
     },
 
+    /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
+    /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the
+    /// synthetic map-panel entity, or closes it if it is already open. No-op in
+    /// VR and in scenes without a map panel. See `projects/flat-ui-panels.md` §5.
+    ToggleMap,
+
+    /// Mark an automap location as explored for the current mission (persisted
+    /// in `QuestInfo`, the original's mission-scoped `EXPLORED[64]` file-var).
+    /// Emitted by `CoreRoom` when the player enters a room whose room object
+    /// carries `PropMapLoc`.
+    RevealMapLocation {
+        location: i32,
+    },
+
     /// Select the player's next *trained* psi power (advances
     /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
     /// skipping powers not in `PlayerPsiKnownPowers`).

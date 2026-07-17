@@ -656,6 +656,9 @@ pub struct PlayerInfo {
     /// Persisted in `QuestInfo`; survives level transitions and save/load. See
     /// `shock2vr::quest_info::CollectedLog`.
     pub collected_logs: Vec<shock2vr::quest_info::CollectedLog>,
+    /// The automap locations explored in the current mission (ascending).
+    /// Persisted per mission in `QuestInfo`; survives save/load.
+    pub explored_map_locations: Vec<i32>,
 }
 
 /// Input state snapshot

@@ -84,7 +84,7 @@ use self::choose_service::ChooseServiceScript;
 /// read them at draw time.
 pub use self::gui::ElevatorContext;
 use self::gui::{
-    ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MediaGui, ReplicatorGui, TrainerGui,
+    ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MapGui, MediaGui, ReplicatorGui, TrainerGui,
     TrainerMode,
 };
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
@@ -516,6 +516,7 @@ impl ScriptWorld {
             // Internal
             "internal_collision_type" => Box::new(InternalCollisionType::new()),
             "internal_inventory" => gui_script(Box::new(ContainerGui::inv_container())),
+            "internal_map" => gui_script(Box::new(MapGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
