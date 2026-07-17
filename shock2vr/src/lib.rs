@@ -252,6 +252,10 @@ pub struct PlayerStateSnapshot {
     /// when the scene has no `QuestInfo`. Persisted in `QuestInfo`, so it
     /// survives level transitions and save/load. See `crate::quest_info`.
     pub collected_logs: Vec<crate::quest_info::CollectedLog>,
+    /// The automap locations explored in the current mission (ascending).
+    /// Empty when the scene has no `QuestInfo` or no automap. Persisted per
+    /// mission in `QuestInfo`. See `projects/flat-ui-panels.md` §5.
+    pub explored_map_locations: Vec<i32>,
 }
 
 impl Game {
@@ -341,6 +345,11 @@ impl Game {
                 .borrow::<UniqueView<QuestInfo>>()
                 .ok()
                 .map(|q| q.collected_logs().to_vec())
+                .unwrap_or_default(),
+            explored_map_locations: world
+                .borrow::<UniqueView<QuestInfo>>()
+                .ok()
+                .map(|q| q.explored_map_locations(self.scene_name()))
                 .unwrap_or_default(),
         })
     }

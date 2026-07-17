@@ -5,9 +5,9 @@ use engine::{
     scene::{SceneObject, UI2DRenderer, basic_material, color_material},
 };
 
-/// Map rendering constants
-const MAP_WIDTH: f32 = 614.0; // PAGE001.PCX dimensions
-const MAP_HEIGHT: f32 = 260.0;
+/// Map rendering constants (shared with the automap panel via `dark::map`).
+const MAP_WIDTH: f32 = dark::map::PAGE_WIDTH;
+const MAP_HEIGHT: f32 = dark::map::PAGE_HEIGHT;
 
 /// Helper function to load texture material with fallback
 fn load_texture_material(
@@ -93,8 +93,7 @@ impl MapRenderer {
         );
 
         // Add background
-        let background_texture_path =
-            format!("{}/english/PAGE001.PCX", self.mission_name.to_uppercase());
+        let background_texture_path = dark::map::page_art_path(&self.mission_name);
         let background_material = load_texture_material(
             asset_cache,
             &background_texture_path,
@@ -110,11 +109,8 @@ impl MapRenderer {
                 }
 
                 if let Some(rect) = map_data.get_revealed_rect(slot_idx) {
-                    let chunk_texture_path = format!(
-                        "{}/english/P001R{:03}.PCX",
-                        self.mission_name.to_uppercase(),
-                        slot_idx
-                    );
+                    let chunk_texture_path =
+                        dark::map::revealed_decal_path(&self.mission_name, slot_idx as i32);
                     let chunk_material = load_texture_material(
                         asset_cache,
                         &chunk_texture_path,

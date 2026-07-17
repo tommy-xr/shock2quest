@@ -3,7 +3,7 @@
 ///
 /// Module keeping track of various quest-related items for player
 ///
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use dark::properties::{KeyCard, QuestBitValue};
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,12 @@ pub struct QuestInfo {
     /// `LOGTIMES` sort). `#[serde(default)]` keeps pre-collection saves loadable.
     #[serde(default)]
     collected_logs: Vec<CollectedLog>,
+    /// Automap locations the player has explored, per mission (lowercase level
+    /// file name -> ordered location set). The original's mission-scoped
+    /// `EXPLORED[64]` file-var; keyed per mission here so deck re-entry keeps
+    /// its reveal state. `#[serde(default)]` keeps older saves loadable.
+    #[serde(default)]
+    explored_maps: HashMap<String, BTreeSet<i32>>,
 }
 
 impl QuestInfo {
@@ -47,7 +53,25 @@ impl QuestInfo {
             key_cards: Vec::new(),
             player_stats: PlayerStats::new(),
             collected_logs: Vec::new(),
+            explored_maps: HashMap::new(),
         }
+    }
+
+    /// Mark an automap location explored for `mission` (lowercase level file
+    /// name, e.g. "medsci1.mis"). Returns `true` when newly revealed.
+    pub fn reveal_map_location(&mut self, mission: &str, location: i32) -> bool {
+        self.explored_maps
+            .entry(mission.to_ascii_lowercase())
+            .or_default()
+            .insert(location)
+    }
+
+    /// The explored automap locations for `mission`, ascending.
+    pub fn explored_map_locations(&self, mission: &str) -> Vec<i32> {
+        self.explored_maps
+            .get(&mission.to_ascii_lowercase())
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Record an audio log into the collection (no-op if already collected).

@@ -191,6 +191,21 @@ pub struct RuntimePropFlatAim {
     pub forward: Vector3<f32>,
 }
 
+// RuntimePropMapData - the automap page data for the current mission, attached
+// to the synthetic map-panel entity at mission init: the mission's level file
+// name (for the per-level `intrface/<LEVEL>/english/` art paths) and the decal
+// rects from P001RA.BIN / P001XA.BIN (empty when the mission ships no automap).
+// Not serialized - rebuilt from mission data on every load.
+#[derive(Component, Clone, Debug)]
+pub struct RuntimePropMapData {
+    /// Level file name as loaded (e.g. "medsci1.mis").
+    pub mission: String,
+    /// Bright "revealed" decal rects (P001RA.BIN), indexed by map location.
+    pub revealed_rects: Vec<dark::map::MapRect>,
+    /// Dim "explored" decal rects (P001XA.BIN), indexed by map location.
+    pub explored_rects: Vec<dark::map::MapRect>,
+}
+
 // RuntimePropLogData - the resolved presentation strings for an audio log,
 // attached to the log-disc entity when it is frobbed (collected). The reader
 // panel (`MediaGui`) reads it to render the portrait/deck-icon/name/transcript.

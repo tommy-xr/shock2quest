@@ -63,6 +63,10 @@ pub enum InputAction {
     /// 3D view, as the original game does on Tab. Shooter mode is restored on
     /// a second toggle. No-op in VR. See `projects/flat-ui.md`.
     ToggleUseMode,
+
+    /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
+    /// `M` key). No-op in VR. See `projects/flat-ui-panels.md` §5.
+    ToggleMap,
 }
 
 impl InputAction {
@@ -86,6 +90,7 @@ impl InputAction {
             InputAction::DebugCalmAll,
             InputAction::DebugForceChase,
             InputAction::ToggleUseMode,
+            InputAction::ToggleMap,
         ]
     }
 
@@ -107,6 +112,7 @@ impl InputAction {
             InputAction::DebugCalmAll => "DebugCalmAll",
             InputAction::DebugForceChase => "DebugForceChase",
             InputAction::ToggleUseMode => "ToggleUseMode",
+            InputAction::ToggleMap => "ToggleMap",
         }
     }
 }

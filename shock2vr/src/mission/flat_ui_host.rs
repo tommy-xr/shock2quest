@@ -9,8 +9,8 @@
 //!   Frob) binds the panel to one world object - the original's single
 //!   `gOverlayObj` binding.
 //! - **Render**: the panel's `Effect::SetUI` component list is intercepted
-//!   and drawn onto the shared 640x480 [`UiCanvas`] at the original left-MFD
-//!   anchor `(2, 124)` (shkmfddm.h), after the flat HUD, plus a host-drawn
+//!   and drawn onto the shared 640x480 [`UiCanvas`] at the original game's
+//!   left-MFD anchor `(2, 124)`, after the flat HUD, plus a host-drawn
 //!   close button and the `CURSOR.PCX` pointer.
 //! - **Input**: each frame the normalized 2D pointer is mapped through
 //!   [`pointer_to_canvas`] into panel-local normalized coordinates and sent
@@ -37,14 +37,14 @@ use crate::{
 /// The shared 640x480 virtual canvas the flat HUD renders on.
 const CANVAS_SIZE: Vector2<f32> = Vector2::new(640.0, 480.0);
 
-/// The original left MFD slot anchor for world-object panels (keypad,
-/// container, ...) on the 640x480 canvas (`shkmfddm.h`: `(2, 124, 188x300)`).
+/// The original game's left MFD slot anchor for world-object panels (keypad,
+/// container, ...) on the 640x480 canvas: rect `(2, 124, 188x300)`.
 /// The right slot `(450, 124)` is reserved for later character panels.
 const LEFT_MFD_ANCHOR: Vector2<f32> = Vector2::new(2.0, 124.0);
 
-/// The top-docked inventory strip anchor (`shkinv.cpp`: `INV_X = 2`,
-/// `INV_Y = 0`, `inv_rect = 636x121` - horizontally centered on the 640
-/// canvas, flush with the top edge).
+/// The top-docked inventory strip anchor, matching the original game's
+/// layout: `(2, 0)`, `inv_rect = 636x121` - horizontally centered on the 640
+/// canvas, flush with the top edge.
 const STRIP_ANCHOR: Vector2<f32> = Vector2::new(2.0, 0.0);
 
 /// Walk-away auto-close distance (world units; dark units / SCALE_FACTOR).
@@ -138,6 +138,10 @@ pub struct FlatUiHost {
     /// frame by the mission when use mode has a multi-ammo weapon wielded
     /// (flat UI 5); `None` otherwise. Clicking it emits `CycleAmmo`.
     ammo_cycle_rect: Option<Rect>,
+    /// The active panel was opened unbound (the automap): it has no world
+    /// object, so the walk-away distance auto-close is skipped. Cleared on
+    /// open/close.
+    sticky_panel: bool,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -167,6 +171,7 @@ impl FlatUiHost {
             cursor_item: None,
             last_lift: None,
             ammo_cycle_rect: None,
+            sticky_panel: false,
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -245,6 +250,7 @@ impl FlatUiHost {
             self.panel_size_px = None;
         }
         self.active_panel = Some(entity);
+        self.sticky_panel = false;
         // A button still held at open (e.g. the shift+LMB frob that opened
         // the panel on desktop) must not read as a fresh press-edge next
         // frame - it would instantly close the panel as a bare-view click.
@@ -252,8 +258,19 @@ impl FlatUiHost {
         self.last_pointer_pressed = true;
     }
 
+    /// Bind the MFD to a panel with no world object behind it (the automap's
+    /// synthetic player-owned entity): same as [`open`](Self::open) but the
+    /// walk-away distance auto-close is skipped - the original's map overlay
+    /// has no `distance` and closes only explicitly (close button / bare-view
+    /// click / `ToggleMap` again).
+    pub fn open_unbound(&mut self, entity: EntityId) {
+        self.open(entity);
+        self.sticky_panel = true;
+    }
+
     pub fn close(&mut self) {
         self.active_panel = None;
+        self.sticky_panel = false;
         self.panel_size_px = None;
         self.components.clear();
         self.hover_close = false;
@@ -343,6 +360,7 @@ impl FlatUiHost {
                 .map(|entities| entities.is_alive(panel))
                 .unwrap_or(false);
             let too_far = alive
+                && !self.sticky_panel
                 && (|| {
                     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
                     let v_pos = world
@@ -897,7 +915,7 @@ mod tests {
 
     #[test]
     fn panel_anchors_at_the_original_left_mfd_slot() {
-        // Keypad panel: 188x296 at (2, 124) - the shkmfddm.h left MFD rect.
+        // Keypad panel: 188x296 at (2, 124) - the original left MFD rect.
         let rect = panel_canvas_rect(vec2(188.0, 296.0));
         assert_eq!(rect, Rect::new(2.0, 124.0, 188.0, 296.0));
         // It fits on the 640x480 canvas.
@@ -940,6 +958,68 @@ mod tests {
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.y - (124.0 + 20.0)).abs() < 1e-3);
+    }
+
+    /// The automap panel is the wide one (MAPBACK 636x296, both MFD slots):
+    /// at the left-MFD anchor it must still fit the 640x480 canvas.
+    #[test]
+    fn wide_map_panel_fits_the_canvas() {
+        let rect = panel_canvas_rect(vec2(636.0, 296.0));
+        assert!(rect.x + rect.w <= CANVAS_SIZE.x);
+        assert!(rect.y + rect.h <= CANVAS_SIZE.y);
+    }
+
+    /// An unbound (sticky) panel - the automap - must NOT walk-away close,
+    /// even when its entity has a position far from the player; a regular
+    /// open with the same geometry does.
+    #[test]
+    fn unbound_panel_skips_the_walk_away_close() {
+        let mut world = World::new();
+        let player_entity = world.add_entity(());
+        let inventory = world.add_entity(());
+        // Panel entity parked at the origin; player 100 units away.
+        let panel = world.add_entity(dark::properties::PropPosition {
+            position: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion {
+                v: cgmath::vec3(0.0, 0.0, 0.0),
+                s: 1.0,
+            },
+            cell: 0,
+        });
+        world.add_unique(crate::mission::PlayerInfo {
+            rotation: cgmath::Quaternion {
+                v: cgmath::vec3(0.0, 0.0, 0.0),
+                s: 1.0,
+            },
+            pos: cgmath::vec3(100.0, 0.0, 100.0),
+            entity_id: player_entity,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        // Regular open: the distance check closes it.
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.update(&world, None);
+        assert!(
+            host.active_panel().is_none(),
+            "a bound panel far from the player must auto-close"
+        );
+
+        // Unbound open: it survives.
+        host.open_unbound(panel);
+        host.update(&world, None);
+        assert_eq!(
+            host.active_panel(),
+            Some(panel),
+            "an unbound (map) panel must not walk-away close"
+        );
+
+        // And a later regular open clears the stickiness.
+        host.open(panel);
+        host.update(&world, None);
+        assert!(host.active_panel().is_none());
     }
 
     #[test]
@@ -1047,8 +1127,8 @@ mod tests {
 
     #[test]
     fn strip_docks_at_the_top_of_the_canvas() {
-        // The inventory strip: 635x120 (invback) at the original inv_rect
-        // anchor (shkinv.cpp INV_X=2, INV_Y=0) - flush with the canvas top.
+        // The inventory strip: 635x120 (invback) at the original game's
+        // inv_rect anchor (2, 0) - flush with the canvas top.
         let rect = strip_canvas_rect(vec2(635.0, 120.0));
         assert_eq!(rect, Rect::new(2.0, 0.0, 635.0, 120.0));
         // It fits on the canvas and clears the left-MFD slot below (y 124+).

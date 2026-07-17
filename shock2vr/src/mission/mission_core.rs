@@ -201,6 +201,21 @@ pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 
+/// The synthetic player-owned entity hosting the automap panel (`MapGui`).
+/// Created at mission init; `Effect::ToggleMap` opens/closes its panel in the
+/// flat host. See `projects/flat-ui-panels.md` §5.
+#[derive(Unique, Clone, Copy)]
+pub struct MapPanelEntity(pub EntityId);
+
+/// The automap location (`PropMapLoc`) of the mapped room the player most
+/// recently entered - the player's *current* map location. The automap uses it
+/// to draw that location bright (R-art) while other explored locations draw
+/// dim (X-art), and to pick a per-frame `MapRef` marker when placing the
+/// player pip (multi-story areas relocated into the page's inset boxes). Not
+/// serialized: re-established by the room sensors as the player moves.
+#[derive(Unique, Clone, Copy, Default)]
+pub struct PlayerMapLocation(pub Option<i32>);
+
 /// Global template inheritance hierarchy (template id -> MetaProp parents),
 /// so scripts can answer class questions about entities at runtime - e.g.
 /// picking a projectile's hit spang by whether the victim descends from the
@@ -521,6 +536,47 @@ impl MissionCore {
             RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 1.0, 0.0))),
         );
         world.add_component(inventory, PlayerInventoryEntity {});
+
+        // The synthetic automap panel entity (projects/flat-ui-panels.md §5):
+        // carries `MapGui` (script `internal_map`) plus the level's page data.
+        // No world object opens the map - `Effect::ToggleMap` binds it to the
+        // flat host as an unbound (sticky) panel. Never serialized: rebuilt
+        // here on every load. Flat-only: in VR the panel cannot be opened
+        // (ToggleMap is flat-gated), and under `--experimental gui` its
+        // per-frame SetUI would otherwise materialize an undismissable world
+        // quad at the origin.
+        world.add_unique(PlayerMapLocation::default());
+        if game_options.presentation_mode == crate::PresentationMode::Flat {
+            let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
+            let (revealed_rects, explored_rects) =
+                dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
+                    .map(|data| (data.revealed_rects, data.explored_rects))
+                    .unwrap_or_default();
+            let entity = world.add_entity((
+                Links::empty(),
+                PropScripts {
+                    scripts: vec!["internal_map".to_owned()],
+                    inherits: false,
+                },
+                dark::properties::PropTemplateId { template_id: -1 },
+                PropPosition {
+                    position: vec3(0.0, 0.0, 0.0),
+                    rotation: Quaternion {
+                        v: vec3(0.0, 0.0, 0.0),
+                        s: 1.0,
+                    },
+                    cell: 0,
+                },
+                RuntimePropTransform(Matrix4::identity()),
+                RuntimePropDoNotSerialize,
+                crate::runtime_props::RuntimePropMapData {
+                    mission: mission.clone(),
+                    revealed_rects,
+                    explored_rects,
+                },
+            ));
+            world.add_unique(MapPanelEntity(entity));
+        }
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
@@ -2588,6 +2644,37 @@ impl MissionCore {
                                 icon: get("logicon"),
                             },
                         );
+                    }
+                }
+
+                Effect::ToggleMap => {
+                    // Flat-presentation only, like OpenPanel: the automap is a
+                    // flat MFD; VR panels are world quads (out of scope here).
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        if let Ok(map) = self.world.borrow::<UniqueView<MapPanelEntity>>() {
+                            let entity = map.0;
+                            drop(map);
+                            if self.flat_ui.active_panel() == Some(entity) {
+                                self.flat_ui.close();
+                            } else {
+                                // Unbound: no world object -> no walk-away close.
+                                self.flat_ui.open_unbound(entity);
+                            }
+                        }
+                    }
+                }
+
+                Effect::RevealMapLocation { location } => {
+                    let mission = self.level_name.to_ascii_lowercase();
+                    if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                        quests.reveal_map_location(&mission, location);
+                    }
+                    // Entering a mapped room also makes it the player's
+                    // *current* map location (bright automap art + per-frame
+                    // pip placement).
+                    if let Ok(mut current) = self.world.borrow::<UniqueViewMut<PlayerMapLocation>>()
+                    {
+                        current.0 = Some(location);
                     }
                 }
 
