@@ -1,9 +1,9 @@
 //! Trainer upgrade cost tables, read from the gamesys chunk file-vars.
 //!
 //! The retail engine stores the trainer costs as gamesys "file-var" chunks
-//! (`shkparam.h`): `STATCOST` (`sStatCost[5][5]`), `WTECHCOST`
-//! (`sTechSkillCost[5][6]`), `WSKILLCOST` (`sWeaponSkillCost[4][6]`) and
-//! `PSICOST` (`sPsiCost[5][8]`, first int of each tier row = the tier unlock
+//! with these layouts: `STATCOST` (5 stats x 5 levels), `WTECHCOST`
+//! (5 tech skills x 6 levels), `WSKILLCOST` (4 weapon skills x 6 levels) and
+//! `PSICOST` (5 tiers x 8 ints, first int of each tier row = the tier unlock
 //! cost, the remaining 7 = per-power costs within that tier). All values are
 //! little-endian `i32`, Normal difficulty (the per-difficulty multipliers live
 //! in `DIFFPARAM`, whose exact layout is unverified - Normal-only for now).

@@ -2,7 +2,7 @@
 //!
 //! Each trainer machine opens one category panel directly (there is no
 //! in-panel category chooser - the "category" is which machine was frobbed),
-//! mirroring the retail overlays 35-38 (`shktrain.cpp`/`shktrpsi.cpp`):
+//! mirroring the original engine's trainer overlays 35-38:
 //! stats / tech skills / weapon skills / psi. Rows list the current level and
 //! the cost of the next level from the gamesys cost tables
 //! (`STATCOST`/`WTECHCOST`/`WSKILLCOST`/`PSICOST`, Normal difficulty - see
@@ -171,7 +171,8 @@ impl TrainerMode {
                     row("Heavy", TrainerTarget::Skill(Skill::HeavyWeapons)),
                 ];
                 // The Exotic row is hidden until the AlienWeapons quest bit is
-                // set (shktrain.cpp gates the 4th weapon row the same way).
+                // set (the original trainer panel gates its 4th weapon row on
+                // the same quest bit).
                 let alien_weapons = world
                     .borrow::<UniqueView<QuestInfo>>()
                     .map(|q| q.read_quest_bit_value("AlienWeapons").bits() != 0)
@@ -240,8 +241,9 @@ pub enum TrainerGuiMsg {
     Buy(TrainerTarget),
 }
 
-// Row layout on the 188x296 panel (shktrain.cpp draws five rows starting at
-// y=21; ELBUTT art is the 138x28 generic row plate).
+// Row layout on the 188x296 panel (matches the original trainer panel, which
+// draws five rows starting at y=21; ELBUTT art is the 138x28 generic row
+// plate).
 const ROW_X: f32 = 13.0;
 const ROW_Y0: f32 = 21.0;
 const ROW_PITCH: f32 = 34.0;
@@ -308,7 +310,7 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
             );
         }
 
-        // Module pool counter (shktrain.cpp draws the pool at (68, 195)).
+        // Module pool counter (the original panel draws the pool at (68, 195)).
         components.push(
             gui::text(&format!("modules: {}", stats.cyber_modules))
                 .with_position(vec2(48.0, 195.0))
