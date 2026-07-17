@@ -5,8 +5,10 @@ use rand::Rng;
 use shipyard::{EntityId, UniqueView, World};
 
 use crate::{
-    mission::GlobalPathfinding,
-    pathfinding::{PathfindingFrameBudget, PathfindingService},
+    mission::{GlobalAsyncPathfinding, GlobalPathfinding},
+    pathfinding::{
+        AiPathOutcome, PathfindingFrameBudget, PathfindingService, async_queries::PathQueryRequest,
+    },
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util},
     time::Time,
@@ -119,6 +121,14 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             .ok()?
             .0
             .clone()?;
+        // Off-thread query worker: queries are SUBMITTED here and their
+        // results ADOPTED on a later frame, so A* runs in parallel with the
+        // frame instead of inside it
+        let async_pathfinding = world
+            .borrow::<UniqueView<GlobalAsyncPathfinding>>()
+            .ok()?
+            .0
+            .clone()?;
         // Live transform, not PropPosition - the latter lags behind
         // animation-driven movement
         let (position_point, _forward) = ai_util::get_position_and_forward(world, entity_id);
@@ -140,17 +150,54 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             PathTarget::Wander { .. } | PathTarget::Point(_) => None,
         };
 
+        // Zero-dt ticks are paused introspection updates (debug runtime) -
+        // adopt/submit only on advancing frames so stepped runs stay
+        // reproducible frame-to-frame
+        let advancing = time.elapsed.as_secs_f32() > 0.0;
+
+        // Adopt a completed off-thread route before deciding whether to
+        // re-path. A result whose goal has drifted too far from the current
+        // desire is discarded (the submit below re-queries).
+        if advancing {
+            if let Some(response) = async_pathfinding.take_result(entity_id.inner()) {
+                let goal_current = match desired_goal {
+                    Some(now) => xz_distance(response.goal, now) <= REPATH_TARGET_DRIFT,
+                    // Wander/Point requested this exact goal
+                    None => true,
+                };
+                match response.outcome {
+                    AiPathOutcome::Failed => {
+                        self.clear_path();
+                        // No route (even partially) - back off before asking
+                        // again; the fallback chain is the worker's most
+                        // expensive outcome
+                        self.repath_cooldown =
+                            REPATH_FAILURE_BACKOFF_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
+                    }
+                    _ if goal_current => {
+                        self.path = response.waypoints;
+                        self.path_goal = Some(response.goal);
+                        // waypoint 0 is the position the query started from
+                        self.next_waypoint = 1;
+                        self.reset_stall();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let needs_repath = match (self.path_goal, desired_goal) {
             (None, _) => true,
             (Some(prev), Some(now)) => xz_distance(prev, now) > REPATH_TARGET_DRIFT,
             (Some(_), None) => false,
         };
 
-        // The frame budget bounds how many AIs can re-path in one frame: a
-        // deferred AI keeps steering along its stale path (or falls through
-        // the chain) and tries again next frame, its cooldown untouched.
-        // (The unique is added alongside GlobalPathfinding, whose absence
-        // already bailed above - the fallback is purely defensive.)
+        // The frame budget bounds how many AIs can SUBMIT a query in one
+        // frame (the worker serializes the actual searches): a deferred AI
+        // keeps steering along its stale path and tries again next frame,
+        // its cooldown untouched. (The unique is added alongside
+        // GlobalPathfinding, whose absence already bailed above - the
+        // fallback is purely defensive.)
         let budget_available = || {
             world
                 .borrow::<UniqueView<PathfindingFrameBudget>>()
@@ -158,12 +205,11 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 .unwrap_or(true)
         };
 
-        // Zero-dt ticks are paused introspection updates (debug runtime) -
-        // no pathfinding work there, so query counts stay deterministic
-        // per stepped frame
-        let advancing = time.elapsed.as_secs_f32() > 0.0;
-
-        if advancing && needs_repath && self.repath_cooldown <= 0.0 {
+        if advancing
+            && needs_repath
+            && self.repath_cooldown <= 0.0
+            && !async_pathfinding.is_pending(entity_id.inner())
+        {
             // Pick the goal before touching the budget: a failed (cheap)
             // wander goal pick must not consume a query slot
             let goal = match self.target {
@@ -182,24 +228,18 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // same frames forever
                     self.repath_cooldown =
                         REPATH_COOLDOWN_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
-                    match service.find_path(position, goal, MovementBits::WALK) {
-                        Some(path) => {
-                            self.path = path;
-                            self.path_goal = Some(goal);
-                            // waypoint 0 is our own position
-                            self.next_waypoint = 1;
-                            self.reset_stall();
-                        }
-                        None => {
-                            self.clear_path();
-                            // Failure exhausted the reachable component
-                            // (twice, with the stressed retry) and won't
-                            // resolve immediately - back off harder than the
-                            // normal cooldown (jittered, as above)
-                            self.repath_cooldown = REPATH_FAILURE_BACKOFF_SECONDS
-                                * rand::thread_rng().gen_range(0.8..1.2);
-                        }
-                    }
+                    // The worker computes a full route, or - when the goal
+                    // is unreachable (another island, off-mesh) - a partial
+                    // route to the closest reachable point, so the AI
+                    // approaches instead of freezing against the nearest
+                    // wall. The result is adopted (above) on a later frame;
+                    // until then the current path keeps steering.
+                    async_pathfinding.submit(PathQueryRequest {
+                        entity: entity_id.inner(),
+                        start: position,
+                        goal,
+                        movement_bits: MovementBits::WALK,
+                    });
                 }
                 // Budget exhausted: defer to a later frame, cooldown untouched
                 Some(_) => {}

@@ -309,6 +309,7 @@ async fn start_http_server(
             axum::routing::post(pathfinding_test).get(pathfinding_test_status),
         )
         .route("/v1/pathfinding/stats", get(pathfinding_stats))
+        .route("/v1/ai/paths", get(ai_paths))
         .route(
             "/v1/input/action",
             axum::routing::post(trigger_input_action),
@@ -1226,6 +1227,15 @@ fn process_command(
                 .and_then(|debug_scene| debug_scene.pathfinding_stats());
             if reply.send(stats).is_err() {
                 tracing::warn!("Failed to send pathfinding stats - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetAiPaths(reply) => {
+            let paths = game
+                .debug_scene()
+                .map(|debug_scene| debug_scene.ai_paths())
+                .unwrap_or_default();
+            if reply.send(paths).is_err() {
+                tracing::warn!("Failed to send AI paths - receiver dropped");
             }
         }
         RuntimeCommand::ListEntities {
@@ -3210,6 +3220,30 @@ async fn pathfinding_stats(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive pathfinding stats - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// HTTP endpoint handler: the latest path each AI computed (goal, waypoints,
+/// outcome: Full/Partial/Failed). Empty until an AI has pathed.
+async fn ai_paths(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<Vec<shock2vr::game_scene::DebugAiPathEntry>>, StatusCode> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::GetAiPaths(reply_tx))
+        .is_err()
+    {
+        tracing::error!("Failed to send GetAiPaths - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        Ok(result) => Ok(Json(result)),
+        Err(_) => {
+            tracing::error!("Failed to receive AI paths - sender dropped");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

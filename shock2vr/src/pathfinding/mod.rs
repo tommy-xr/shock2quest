@@ -3,6 +3,7 @@
 /// This module provides A* pathfinding capabilities using the navigation mesh
 /// stored in AIPATH chunks. It maintains separation from the BSP tree system
 /// used for rendering/visibility queries.
+pub mod async_queries;
 pub mod path_visualization;
 
 use cgmath::{InnerSpace, Vector3};
@@ -10,9 +11,10 @@ use dark::{
     SCALE_FACTOR,
     mission::{
         PathDatabase,
-        path_database::{MovementBits, PathCell, PathCellFlags, PathCellLink},
+        path_database::{MovementBits, NO_ZONE, PathCell, PathCellFlags, PathCellLink},
     },
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -24,10 +26,33 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 /// edges, not just walls.
 const EDGE_CLEARANCE: f32 = 1.5 / SCALE_FACTOR;
 
-/// Per-frame cap on AI-initiated pathfind queries. At ~0.5ms typical / ~1ms
-/// worst-case per query, two queries bound pathfinding to ~2ms of a frame -
-/// safe even for the Quest's ~13.9ms budget at 72Hz. AIs that miss a slot
-/// keep steering along their stale path and re-path on a later frame.
+/// A zero-bit link counts as a flat walkable seam when the two cell floors
+/// differ by no more than this (3 Dark feet - covers small steps; genuine
+/// cliffs in the data differ by up to 15)
+const FLAT_SEAM_MAX_CENTER_DY: f32 = 3.0 / SCALE_FACTOR;
+/// ...and its shared-edge vertices sit within this of both floors
+const FLAT_SEAM_MAX_EDGE_DY: f32 = 5.0 / SCALE_FACTOR;
+
+/// Island bridging (experimental `nav_bridges`): maximum vertex-to-vertex
+/// gap between two islands' cells to synthesize a crossing link (10 Dark
+/// feet - wide enough for stair strips and doorway thresholds that shipped
+/// with no nav cells)
+const BRIDGE_MAX_GAP: f32 = 10.0 / SCALE_FACTOR;
+/// Spatial-hash bucket size for bridge candidate search (Dark feet)
+const BRIDGE_BUCKET: f32 = 12.0 / SCALE_FACTOR;
+/// Cost multiplier for entering a blocking-OBB cell in relaxed navigation:
+/// prefer clear floor, but allow squeezing past baked furniture
+const BLOCKING_CELL_COST_PENALTY: u32 = 4;
+
+/// Per-frame cap on AI-initiated pathfind queries. A slot now covers the
+/// full fallback chain (A* + stressed retry + partial-route Dijkstra when
+/// the goal is unreachable), benched at ~0.5ms p95 / ~3ms worst per slot on
+/// desktop. Quest's CPU is several times slower against a ~13.9ms frame at
+/// 72Hz, so Android gets one slot per frame; AIs that miss a slot keep
+/// steering along their stale path and re-path on a later frame.
+#[cfg(target_os = "android")]
+pub const PATHFINDING_QUERIES_PER_FRAME: u32 = 1;
+#[cfg(not(target_os = "android"))]
 pub const PATHFINDING_QUERIES_PER_FRAME: u32 = 2;
 
 /// Shipyard unique holding the remaining AI pathfind-query budget for the
@@ -76,6 +101,26 @@ pub struct PathfindingStats {
     pub no_route: u64,
 }
 
+/// Outcome of an AI's most recent path query
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiPathOutcome {
+    /// A* reached the goal
+    Full,
+    /// Goal unreachable; routed to the closest reachable point instead
+    Partial,
+    /// No route at all (not even partial progress)
+    Failed,
+}
+
+/// The most recent path an AI computed, for debug introspection
+/// (GET /v1/ai/paths in the debug runtime)
+#[derive(Debug, Clone)]
+pub struct AiPathRecord {
+    pub goal: Vector3<f32>,
+    pub waypoints: Vec<Vector3<f32>>,
+    pub outcome: AiPathOutcome,
+}
+
 /// Pathfinding service for AI navigation
 ///
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
@@ -83,12 +128,33 @@ pub struct PathfindingStats {
 pub struct PathfindingService {
     pub path_database: Arc<PathDatabase>,
     /// Outgoing link indices for each cell, so A* expansion is O(degree)
-    /// instead of a scan over every link in the mission.
+    /// instead of a scan over every link in the mission. Indices >=
+    /// `path_database.links.len()` refer to `bridge_links`.
     links_by_cell: Vec<Vec<u32>>,
     /// Below-door cell -> the mission object id of the door that gates it
     /// (from the AIPATH cell-door table). Lets an AI look up which door
     /// blocks a cell on its route.
     cell_to_door: std::collections::HashMap<u32, i32>,
+    /// Effective traversal bits per link (db links, then bridge links).
+    /// A link's own `ok_bits` byte is not the whole story in v2.9 data:
+    /// cross-zone links inherit bits from the zone-pair table, and flat
+    /// zero-bit seams (pervasive in shipped data) are granted WALK.
+    effective_bits: Vec<MovementBits>,
+    /// Synthesized island-crossing links (experimental `nav_bridges`),
+    /// indexed after `path_database.links`
+    bridge_links: Vec<PathCellLink>,
+    /// Relaxed navigation (experimental `nav_bridges`): blocking-OBB cells
+    /// (furniture baked into the mesh at build time) are passable at a cost
+    /// penalty - the objects are physically simulated, steering handles them
+    relaxed: bool,
+    /// Latest path per AI entity (key: EntityId::inner()), recorded by the
+    /// path-follow steering so tooling can see what each AI is doing
+    ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
+    /// Mission object ids of doors that are currently locked AND closed -
+    /// A* refuses links into their below-door cells (the runtime door gate;
+    /// closed-but-openable doors stay pathable and are opened on arrival).
+    /// Synced from live door state by the mission update.
+    locked_doors: std::sync::RwLock<std::collections::HashSet<i32>>,
     queries: AtomicU64,
     stressed_retries: AtomicU64,
     no_route: AtomicU64,
@@ -96,7 +162,15 @@ pub struct PathfindingService {
 
 impl PathfindingService {
     /// Create a new pathfinding service with the given path database
+    /// (faithful traversal rules; no island bridging)
     pub fn new(path_database: Arc<PathDatabase>) -> Self {
+        Self::with_nav_options(path_database, false)
+    }
+
+    /// Create a pathfinding service; `bridge_islands` enables the
+    /// experimental mesh reconnection (island-crossing links + relaxed
+    /// blocking-cell traversal) for full-map navigation.
+    pub fn with_nav_options(path_database: Arc<PathDatabase>, bridge_islands: bool) -> Self {
         let mut links_by_cell = vec![Vec::new(); path_database.cells.len()];
         for (idx, link) in path_database.links.iter().enumerate() {
             if let Some(links) = links_by_cell.get_mut(link.from_cell as usize) {
@@ -108,13 +182,84 @@ impl PathfindingService {
             .iter()
             .map(|cd| (cd.cell, cd.door))
             .collect();
+        let mut effective_bits = compute_effective_bits(&path_database);
+        let bridge_links = if bridge_islands {
+            compute_bridge_links(&path_database, &effective_bits)
+        } else {
+            Vec::new()
+        };
+        for (offset, link) in bridge_links.iter().enumerate() {
+            let idx = (path_database.links.len() + offset) as u32;
+            if let Some(links) = links_by_cell.get_mut(link.from_cell as usize) {
+                links.push(idx);
+            }
+            effective_bits.push(link.ok_bits);
+        }
+        if !bridge_links.is_empty() {
+            tracing::info!(
+                "pathfinding: synthesized {} island-bridge links (nav_bridges)",
+                bridge_links.len()
+            );
+        }
         Self {
             path_database,
             links_by_cell,
             cell_to_door,
+            effective_bits,
+            bridge_links,
+            relaxed: bridge_islands,
+            ai_paths: std::sync::Mutex::new(HashMap::new()),
+            locked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
             queries: AtomicU64::new(0),
             stressed_retries: AtomicU64::new(0),
             no_route: AtomicU64::new(0),
+        }
+    }
+
+    /// Replace the set of locked-and-closed doors (mission object ids).
+    /// Their below-door cells become unpathable until unlocked/opened.
+    pub fn set_locked_doors(&self, doors: std::collections::HashSet<i32>) {
+        if let Ok(mut locked) = self.locked_doors.write() {
+            *locked = doors;
+        }
+    }
+
+    /// Number of synthesized island-bridge links (0 in faithful mode)
+    pub fn bridge_link_count(&self) -> usize {
+        self.bridge_links.len()
+    }
+
+    /// Drop AI path records whose entity no longer satisfies `keep`
+    /// (e.g. it despawned), so introspection doesn't report ghosts
+    pub fn prune_ai_paths(&self, keep: impl Fn(u64) -> bool) {
+        if let Ok(mut paths) = self.ai_paths.lock() {
+            paths.retain(|&entity, _| keep(entity));
+        }
+    }
+
+    /// Record the latest path an AI computed (key: EntityId::inner())
+    pub fn record_ai_path(&self, entity: u64, record: AiPathRecord) {
+        if let Ok(mut paths) = self.ai_paths.lock() {
+            paths.insert(entity, record);
+        }
+    }
+
+    /// Snapshot of every AI's latest recorded path
+    pub fn ai_paths(&self) -> Vec<(u64, AiPathRecord)> {
+        self.ai_paths
+            .lock()
+            .map(|paths| paths.iter().map(|(k, v)| (*k, v.clone())).collect())
+            .unwrap_or_default()
+    }
+
+    /// Look up a link by combined index (db links, then bridge links)
+    fn link_at(&self, idx: u32) -> &PathCellLink {
+        let idx = idx as usize;
+        let n = self.path_database.links.len();
+        if idx < n {
+            &self.path_database.links[idx]
+        } else {
+            &self.bridge_links[idx - n]
         }
     }
 
@@ -146,7 +291,7 @@ impl PathfindingService {
                 }
                 if let Some(links) = self.links_by_cell.get(c as usize) {
                     for &idx in links {
-                        let to = self.path_database.links[idx as usize].to_cell;
+                        let to = self.link_at(idx).to_cell;
                         if visited.insert(to) {
                             next.push(to);
                         }
@@ -218,6 +363,52 @@ impl PathfindingService {
         }
         self.no_route.fetch_add(1, Ordering::Relaxed);
         None
+    }
+
+    /// Find a path that gets as close to `goal` as the mesh allows, for
+    /// goals with no full route (different island, off-mesh, behind missing
+    /// nav data). Explores everything reachable from `start` and routes to
+    /// the reachable cell nearest the goal - the counterpart of the original
+    /// engine's pathfind-near facility. Returns None when we're already in
+    /// the closest reachable cell (no progress possible).
+    pub fn find_path_toward(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+    ) -> Option<Vec<Vector3<f32>>> {
+        let start_cell = self.cell_from_position(start)?;
+        let reachable = pathfinding::directed::dijkstra::dijkstra_all(&start_cell, |&cell| {
+            self.get_successors(cell, movement_bits)
+        });
+
+        let distance_to_goal = |cell: u32| -> f32 {
+            (goal - self.path_database.cells[cell as usize].center).magnitude()
+        };
+        let mut best = start_cell;
+        let mut best_distance = distance_to_goal(start_cell);
+        for &cell in reachable.keys() {
+            let d = distance_to_goal(cell);
+            if d < best_distance {
+                best_distance = d;
+                best = cell;
+            }
+        }
+        if best == start_cell {
+            return None;
+        }
+
+        // Reconstruct the cell path from the dijkstra parent map
+        let mut cell_path = vec![best];
+        let mut cursor = best;
+        while cursor != start_cell {
+            cursor = reachable.get(&cursor)?.0;
+            cell_path.push(cursor);
+        }
+        cell_path.reverse();
+
+        let end = self.path_database.cells[best as usize].center;
+        Some(self.waypoints_for_cell_path(&cell_path, start, end, movement_bits))
     }
 
     fn find_path_with_bits(
@@ -304,8 +495,11 @@ impl PathfindingService {
         self.links_by_cell
             .get(from_cell as usize)?
             .iter()
-            .map(|&idx| &self.path_database.links[idx as usize])
-            .find(|link| link.to_cell == to_cell && self.can_use_link(link, movement_bits))
+            .copied()
+            .find(|&idx| {
+                self.link_at(idx).to_cell == to_cell && self.can_use_link(idx, movement_bits)
+            })
+            .map(|idx| self.link_at(idx))
     }
 
     /// Find the closest reachable cell to a goal position
@@ -344,40 +538,62 @@ impl PathfindingService {
         closest_cell
     }
 
-    /// Port of the original engine's AICanUseLink (aipthfnd.cpp): a link is
+    /// Port of the original engine's per-link traversal check: a link is
     /// traversable when the destination cell is not blocked, any condition
     /// bits on the link (stressed / high-strike) are satisfied by the AI,
-    /// and the movement medium matches. Door and app-callback gating from
-    /// the original are not modeled yet.
-    fn can_use_link(&self, link: &PathCellLink, movement_bits: MovementBits) -> bool {
+    /// and the movement medium matches. Uses the link's *effective* bits
+    /// (own okBits + zone-pair grants + flat-seam repair), not the raw byte.
+    /// Door and app-callback gating are not modeled yet. In relaxed mode
+    /// (`nav_bridges`) blocking-OBB cells are passable (penalized in cost).
+    fn can_use_link(&self, link_idx: u32, movement_bits: MovementBits) -> bool {
+        let link = self.link_at(link_idx);
+        let bits = self.effective_bits[link_idx as usize];
         let dest = match self.path_database.cells.get(link.to_cell as usize) {
             Some(dest) => dest,
             None => return false,
         };
-        if dest
-            .flags
-            .intersects(PathCellFlags::UNPATHABLE | PathCellFlags::BLOCKING_OBB)
-        {
+        let blocked = if self.relaxed {
+            PathCellFlags::UNPATHABLE
+        } else {
+            PathCellFlags::UNPATHABLE | PathCellFlags::BLOCKING_OBB
+        };
+        if dest.flags.intersects(blocked) {
             return false;
+        }
+
+        // Door gate: a below-door cell whose door is locked (and closed) is
+        // not traversable - the AI can't follow the player through it.
+        // Closed-but-openable doors stay pathable; the pursuing AI opens
+        // them on arrival.
+        if dest.flags.contains(PathCellFlags::BELOW_DOOR) {
+            if let Some(door) = self.cell_to_door.get(&link.to_cell) {
+                if self
+                    .locked_doors
+                    .read()
+                    .map(|locked| locked.contains(door))
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+            }
         }
 
         // Small creatures may only use small-creature links
         if movement_bits.contains(MovementBits::SMALL_CREATURE)
-            && !link.ok_bits.contains(MovementBits::SMALL_CREATURE)
+            && !bits.contains(MovementBits::SMALL_CREATURE)
         {
             return false;
         }
 
         // Condition-gated links (stressed / high-strike) require the AI to be
         // in that condition
-        let link_conditions = link.ok_bits & MovementBits::CONDITION_MASK;
+        let link_conditions = bits & MovementBits::CONDITION_MASK;
         if !link_conditions.is_empty() && (link_conditions & movement_bits).is_empty() {
             return false;
         }
 
         // Movement medium must match (condition bits alone don't qualify)
-        link.ok_bits
-            .intersects(movement_bits & !MovementBits::CONDITION_MASK)
+        bits.intersects(movement_bits & !MovementBits::CONDITION_MASK)
     }
 
     /// Get the successors of a cell for A* pathfinding
@@ -389,9 +605,18 @@ impl PathfindingService {
         };
         link_indices
             .iter()
-            .map(|&idx| &self.path_database.links[idx as usize])
-            .filter(|link| self.can_use_link(link, movement_bits))
-            .map(|link| (link.to_cell, link.cost as u32))
+            .filter(|&&idx| self.can_use_link(idx, movement_bits))
+            .map(|&idx| {
+                let link = self.link_at(idx);
+                let mut cost = (link.cost as u32).max(1);
+                if self.relaxed {
+                    let dest = &self.path_database.cells[link.to_cell as usize];
+                    if dest.flags.contains(PathCellFlags::BLOCKING_OBB) {
+                        cost *= BLOCKING_CELL_COST_PENALTY;
+                    }
+                }
+                (link.to_cell, cost)
+            })
             .collect()
     }
 
@@ -464,6 +689,216 @@ impl PathfindingService {
     }
 }
 
+/// Effective traversal bits per link. Shipped v2.9 data stores meaningful
+/// okBits only on some links; two documented-in-data mechanisms supply the
+/// rest:
+/// - Cross-zone links inherit the zone-pair reachability table's bits
+///   (mission data pairs zones as walkable while the crossing links' own
+///   okBits bytes are zero).
+/// - Flat zero-bit seams between cells (pervasive between zoned areas and
+///   the zone-less connector cells) are granted WALK; the floor-height gates
+///   keep genuine cliffs unwalkable.
+fn compute_effective_bits(db: &PathDatabase) -> Vec<MovementBits> {
+    let zone_of =
+        |cell: u32| -> u16 { db.cell_zones.get(cell as usize).copied().unwrap_or(NO_ZONE) };
+    let mut pair_bits: HashMap<(u16, u16), MovementBits> = HashMap::new();
+    for &(a, b, bits) in &db.zone_pairs {
+        *pair_bits.entry((a, b)).or_insert(MovementBits::empty()) |= bits;
+        *pair_bits.entry((b, a)).or_insert(MovementBits::empty()) |= bits;
+    }
+
+    db.links
+        .iter()
+        .map(|link| {
+            let mut bits = link.ok_bits;
+            let (za, zb) = (zone_of(link.from_cell), zone_of(link.to_cell));
+            if za != zb && za != NO_ZONE && zb != NO_ZONE {
+                if let Some(&granted) = pair_bits.get(&(za, zb)) {
+                    bits |= granted;
+                }
+            }
+            if link.ok_bits.is_empty() && is_flat_seam(db, link) {
+                bits |= MovementBits::WALK | MovementBits::SMALL_CREATURE;
+            }
+            bits
+        })
+        .collect()
+}
+
+/// A zero-bit link is a walkable seam when both cell floors and the shared
+/// edge sit at (nearly) the same height - rules out the cliff/drop links
+/// that also ship with zero okBits.
+fn is_flat_seam(db: &PathDatabase, link: &PathCellLink) -> bool {
+    let (Some(from), Some(to)) = (
+        db.cells.get(link.from_cell as usize),
+        db.cells.get(link.to_cell as usize),
+    ) else {
+        return false;
+    };
+    if (from.center.y - to.center.y).abs() > FLAT_SEAM_MAX_CENTER_DY {
+        return false;
+    }
+    let (Some(ea), Some(eb)) = (
+        db.vertices.get(link.edge_vertex_a as usize),
+        db.vertices.get(link.edge_vertex_b as usize),
+    ) else {
+        return false;
+    };
+    [ea.y, eb.y].iter().all(|&edge_y| {
+        (edge_y - from.center.y).abs() <= FLAT_SEAM_MAX_EDGE_DY
+            && (edge_y - to.center.y).abs() <= FLAT_SEAM_MAX_EDGE_DY
+    })
+}
+
+/// Synthesize island-crossing links (experimental `nav_bridges`).
+///
+/// The shipped link graph is partitioned into per-area islands with no links
+/// between them (stair strips and thresholds have no nav cells at all);
+/// original AI pathfinding was area-local. For full-map navigation, connect
+/// islands where two cells from different islands come within BRIDGE_MAX_GAP
+/// of each other at a walkable slope. Purely geometric - a candidate through
+/// thick geometry is possible but rare at these gates, and steering/stall
+/// handling copes with the odd bad bridge.
+fn compute_bridge_links(db: &PathDatabase, effective_bits: &[MovementBits]) -> Vec<PathCellLink> {
+    // Union-find over walk-usable links to label islands
+    let mut parent: Vec<u32> = (0..db.cells.len() as u32).collect();
+    fn find(parent: &mut Vec<u32>, mut a: u32) -> u32 {
+        while parent[a as usize] != a {
+            parent[a as usize] = parent[parent[a as usize] as usize];
+            a = parent[a as usize];
+        }
+        a
+    }
+    let n_cells = db.cells.len() as u32;
+    for (idx, link) in db.links.iter().enumerate() {
+        if !effective_bits[idx].contains(MovementBits::WALK) {
+            continue;
+        }
+        // Malformed tail links can carry out-of-range cell ids (observed in
+        // shipped data, e.g. hydro1); the query paths reject them via
+        // checked lookups, and the union must skip them too
+        if link.from_cell >= n_cells || link.to_cell >= n_cells {
+            continue;
+        }
+        let (a, b) = (
+            find(&mut parent, link.from_cell),
+            find(&mut parent, link.to_cell),
+        );
+        if a != b {
+            parent[a as usize] = b;
+        }
+    }
+
+    // Bucket pathable cells spatially (XZ) for pairwise candidate search
+    let mut buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+    let bucket_of = |cell: &PathCell| -> (i32, i32) {
+        (
+            (cell.center.x / BRIDGE_BUCKET).floor() as i32,
+            (cell.center.z / BRIDGE_BUCKET).floor() as i32,
+        )
+    };
+    for (idx, cell) in db.cells.iter().enumerate() {
+        if cell.flags.contains(PathCellFlags::UNPATHABLE) || cell.vertex_indices.len() < 3 {
+            continue;
+        }
+        buckets.entry(bucket_of(cell)).or_default().push(idx as u32);
+    }
+
+    let vertex_gap = |a: &PathCell, b: &PathCell| -> f32 {
+        let mut best = f32::INFINITY;
+        for &va in &a.vertex_indices {
+            for &vb in &b.vertex_indices {
+                if let (Some(pa), Some(pb)) =
+                    (db.vertices.get(va as usize), db.vertices.get(vb as usize))
+                {
+                    best = best.min((pa - pb).magnitude());
+                }
+            }
+        }
+        best
+    };
+
+    // Collect every qualifying candidate first, then union in a stable
+    // order (shortest gap first, cell ids as tiebreak) so the synthesized
+    // topology is deterministic across launches - HashMap iteration order
+    // must not pick the bridges.
+    let mut candidates: Vec<(f32, u32, u32)> = Vec::new();
+    for (&(bx, bz), cells) in &buckets {
+        // Scan the 3x3 bucket neighborhood; a_id < b_id dedupes pairs
+        let mut neighborhood: Vec<u32> = Vec::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if let Some(more) = buckets.get(&(bx + dx, bz + dz)) {
+                    neighborhood.extend_from_slice(more);
+                }
+            }
+        }
+        for &a_id in cells {
+            for &b_id in &neighborhood {
+                if a_id >= b_id {
+                    continue;
+                }
+                if find(&mut parent, a_id) == find(&mut parent, b_id) {
+                    continue;
+                }
+                let (a, b) = (&db.cells[a_id as usize], &db.cells[b_id as usize]);
+                let dy = (a.center.y - b.center.y).abs();
+                let dxz = {
+                    let dx = a.center.x - b.center.x;
+                    let dz = a.center.z - b.center.z;
+                    (dx * dx + dz * dz).sqrt()
+                };
+                // Slope gate: near-flat for close pairs, up to a stair-like
+                // grade across wider gaps
+                let max_dy = (2.0 / SCALE_FACTOR).max(1.25 * (dxz - 4.0 / SCALE_FACTOR));
+                if dy > max_dy {
+                    continue;
+                }
+                let gap = vertex_gap(a, b);
+                if gap > BRIDGE_MAX_GAP {
+                    continue;
+                }
+                candidates.push((gap, a_id, b_id));
+            }
+        }
+    }
+    candidates.sort_by(|x, y| {
+        x.0.partial_cmp(&y.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(x.1.cmp(&y.1))
+            .then(x.2.cmp(&y.2))
+    });
+
+    let mut bridges = Vec::new();
+    for (_, a_id, b_id) in candidates {
+        if find(&mut parent, a_id) == find(&mut parent, b_id) {
+            continue;
+        }
+        let root_a = find(&mut parent, a_id);
+        parent[root_a as usize] = find(&mut parent, b_id);
+        let (a, b) = (&db.cells[a_id as usize], &db.cells[b_id as usize]);
+        // Cost from center-to-center distance: the executed route runs
+        // through the cell centers (no shared edge exists), so this matches
+        // travel and keeps the center-distance A* heuristic admissible
+        let center_dist = (a.center - b.center).magnitude();
+        let cost = ((center_dist * SCALE_FACTOR) as u8).max(1);
+        let bits = MovementBits::WALK | MovementBits::SMALL_CREATURE;
+        // No shared edge exists; u32::MAX vertex ids make waypoint
+        // building fall back to the destination cell center
+        for (from, to) in [(a_id, b_id), (b_id, a_id)] {
+            bridges.push(PathCellLink {
+                from_cell: from,
+                to_cell: to,
+                edge_vertex_a: u32::MAX,
+                edge_vertex_b: u32::MAX,
+                ok_bits: bits,
+                cost,
+            });
+        }
+    }
+    bridges
+}
+
 /// Shrink an edge toward its center by EDGE_CLEARANCE on each end, so taut
 /// crossing points can't land on the endpoints (wall corners). Edges shorter
 /// than twice the clearance collapse to their midpoint - the doorway is
@@ -496,14 +931,14 @@ fn closest_point_on_segment(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cgmath::vec3;
     use dark::mission::path_database::{CellDoor, PathCell, PathCellLink};
 
     /// Three unit-square cells in a row along X: 0 -> 1 -> 2.
     /// The 1 -> 2 link is gated by STRESSED; everything else is plain WALK.
-    fn three_cell_db(last_cell_flags: PathCellFlags) -> PathDatabase {
+    pub(crate) fn three_cell_db(last_cell_flags: PathCellFlags) -> PathDatabase {
         let vertices = vec![
             vec3(0.0, 0.0, 0.0),
             vec3(2.0, 0.0, 0.0),
@@ -557,6 +992,8 @@ mod tests {
             vertices,
             links,
             cell_doors: Vec::new(),
+            cell_zones: Vec::new(),
+            zone_pairs: Vec::new(),
         }
     }
 
@@ -588,14 +1025,210 @@ mod tests {
     #[test]
     fn condition_gated_link_rejected_for_plain_walk() {
         let service = service(three_cell_db(PathCellFlags::empty()));
-        let gated = &service.path_database.links[1];
+        // Link index 1 is the STRESSED-gated 1 -> 2 link
         assert!(
-            !service.can_use_link(gated, MovementBits::WALK),
+            !service.can_use_link(1, MovementBits::WALK),
             "STRESSED-gated link must not be usable by a calm AI"
         );
         assert!(
-            service.can_use_link(gated, MovementBits::WALK | MovementBits::STRESSED),
+            service.can_use_link(1, MovementBits::WALK | MovementBits::STRESSED),
             "stressed AI can use the gated link"
+        );
+    }
+
+    #[test]
+    fn zone_pair_grants_cross_zone_zero_bit_link() {
+        // The 1 -> 2 link carries no okBits at all, but cells 1 and 2 are in
+        // different zones and the zone-pair table marks the pair walkable -
+        // the pattern shipped v2.9 data uses for area crossings.
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links[1].ok_bits = MovementBits::empty();
+        // Raise cell 2 and its edge high enough that the flat-seam repair
+        // alone would NOT grant this link - only the zone pair does.
+        let lift = 4.0 / SCALE_FACTOR + 2.0;
+        db.cells[2].center.y += lift;
+        for v in [4usize, 5, 6, 7] {
+            db.vertices[v].y += lift;
+        }
+        db.cell_zones = vec![7, 7, 9];
+        let without_pair = service(db.clone());
+        assert!(
+            without_pair
+                .find_path(
+                    vec3(1.0, 0.0, 1.0),
+                    vec3(5.0, lift, 1.0),
+                    MovementBits::WALK
+                )
+                .is_none(),
+            "zero-bit cross-zone link must be rejected without a zone-pair grant"
+        );
+
+        db.zone_pairs = vec![(7, 9, MovementBits::WALK)];
+        let with_pair = service(db);
+        assert!(
+            with_pair
+                .find_path(
+                    vec3(1.0, 0.0, 1.0),
+                    vec3(5.0, lift, 1.0),
+                    MovementBits::WALK
+                )
+                .is_some(),
+            "zone-pair table must grant the zero-bit crossing"
+        );
+    }
+
+    #[test]
+    fn flat_zero_bit_seam_is_walkable_but_cliff_is_not() {
+        // Flat seam: zero okBits, same floor height -> repaired to WALK
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links[1].ok_bits = MovementBits::empty();
+        let flat = service(db.clone());
+        assert!(
+            flat.find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+                .is_some(),
+            "flat zero-bit seam must be walkable"
+        );
+
+        // Cliff: same zero okBits, destination floor far below -> stays dead
+        let drop = 4.0 / SCALE_FACTOR + 2.0;
+        db.cells[2].center.y -= drop;
+        for v in [4usize, 5, 6, 7] {
+            db.vertices[v].y -= drop;
+        }
+        let cliff = service(db);
+        assert!(
+            cliff
+                .find_path(
+                    vec3(1.0, 0.0, 1.0),
+                    vec3(5.0, -drop, 1.0),
+                    MovementBits::WALK
+                )
+                .is_none(),
+            "zero-bit cliff link must stay unwalkable"
+        );
+    }
+
+    #[test]
+    fn bridge_connects_islands_only_with_nav_bridges() {
+        // Remove the 1 -> 2 link entirely: cell 2 becomes a separate island
+        // one edge-gap away (shared boundary at x = 4).
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links.truncate(1);
+        let faithful = PathfindingService::new(Arc::new(db.clone()));
+        assert!(
+            faithful
+                .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+                .is_none(),
+            "islands must stay separate without nav_bridges"
+        );
+
+        let bridged = PathfindingService::with_nav_options(Arc::new(db), true);
+        let path = bridged
+            .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+            .expect("nav_bridges must synthesize a crossing");
+        assert_eq!(path[0], vec3(1.0, 0.0, 1.0));
+        assert_eq!(*path.last().unwrap(), vec3(5.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn locked_door_gates_its_below_door_cell() {
+        // Cell 2 is below door 99. While the door is locked, A* must refuse
+        // to enter it; clearing the lock re-opens the route.
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links[1].ok_bits = MovementBits::WALK;
+        db.cells[2].flags = PathCellFlags::BELOW_DOOR;
+        db.cell_doors.push(CellDoor { cell: 2, door: 99 });
+        let service = service(db);
+
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        assert!(
+            service.find_path(start, goal, MovementBits::WALK).is_some(),
+            "unlocked door cell must be pathable"
+        );
+
+        service.set_locked_doors([99].into());
+        assert!(
+            service.find_path(start, goal, MovementBits::WALK).is_none(),
+            "locked door cell must be unpathable"
+        );
+
+        service.set_locked_doors(Default::default());
+        assert!(
+            service.find_path(start, goal, MovementBits::WALK).is_some(),
+            "unlocking must restore the route"
+        );
+    }
+
+    #[test]
+    fn bridging_skips_links_with_out_of_range_cell_ids() {
+        // Shipped data contains malformed tail links whose cell ids point
+        // past the cell array (observed in hydro1) - bridge computation must
+        // skip them instead of panicking
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links.push(PathCellLink {
+            from_cell: 61516,
+            to_cell: 2,
+            edge_vertex_a: 0,
+            edge_vertex_b: 1,
+            ok_bits: MovementBits::WALK,
+            cost: 1,
+        });
+        db.links.push(PathCellLink {
+            from_cell: 0,
+            to_cell: 61516,
+            edge_vertex_a: 0,
+            edge_vertex_b: 1,
+            ok_bits: MovementBits::WALK,
+            cost: 1,
+        });
+        let service = PathfindingService::with_nav_options(Arc::new(db), true);
+        assert!(
+            service
+                .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+                .is_some(),
+            "service must build and route despite malformed links"
+        );
+    }
+
+    #[test]
+    fn doors_near_cell_traverses_bridge_links_without_panicking() {
+        // Bridge link indices point past the raw link array; the door
+        // lookahead BFS must resolve them through the combined index space
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links.truncate(1); // cell 2 becomes an island, bridged below
+        db.cells[2].flags = PathCellFlags::BELOW_DOOR;
+        db.cell_doors.push(CellDoor { cell: 2, door: 99 });
+        let service = PathfindingService::with_nav_options(Arc::new(db), true);
+        assert_eq!(service.doors_near_cell(0), vec![(99, vec3(5.0, 0.0, 1.0))]);
+    }
+
+    #[test]
+    fn find_path_toward_routes_to_closest_reachable_cell() {
+        // Goal sits beyond cell 2, which is unreachable (link removed). The
+        // partial path should end at cell 1's center - the closest reachable
+        // cell to the goal - instead of failing outright.
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.links.truncate(1);
+        let service = service(db);
+        assert!(
+            service
+                .find_path(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+                .is_none()
+        );
+        let partial = service
+            .find_path_toward(vec3(1.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+            .expect("partial route must exist");
+        assert_eq!(
+            *partial.last().unwrap(),
+            vec3(3.0, 0.0, 1.0),
+            "partial path ends at the closest reachable cell center"
+        );
+        // Already standing in the closest reachable cell: nothing to do
+        assert!(
+            service
+                .find_path_toward(vec3(3.0, 0.0, 1.0), vec3(5.0, 0.0, 1.0), MovementBits::WALK)
+                .is_none()
         );
     }
 

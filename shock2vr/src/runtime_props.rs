@@ -36,6 +36,15 @@ pub struct RuntimePropAITargetAwareness {
     pub has_line_of_sight: bool,
 }
 
+// Horizontal locomotion speed scale for an AI, published by its steering
+// each frame: full speed when facing the travel direction, ramping down to
+// a floor of a third as heading error grows (never zero - see
+// locomotion_scale_for_heading_error). The animation velocity write
+// multiplies by this and consumes the component; absent = 1.0 (non-AI
+// animation players are unaffected).
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropLocomotionScale(pub f32);
+
 #[derive(Component)]
 pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
 

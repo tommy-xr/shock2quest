@@ -80,6 +80,17 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::ToggleUseMode,
             },
+            // AI debug: make everything hunt the player (pinned) / calm down
+            Binding {
+                key: Key::G,
+                modifier: Modifier::Alt,
+                action: InputAction::DebugForceChase,
+            },
+            Binding {
+                key: Key::C,
+                modifier: Modifier::Alt,
+                action: InputAction::DebugCalmAll,
+            },
         ];
 
         Self {
