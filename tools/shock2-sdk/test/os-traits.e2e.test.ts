@@ -11,8 +11,9 @@ import { teleportVerified } from "./helpers/teleport.js";
 // The trait machine offers a one-time pick from all 16 O/S traits (free, per
 // the original). The pick is stored on the persistent character sheet, the
 // machine becomes single-use (a quest bit keyed by its stable mission object
-// id), and implemented trait effects apply (Tank: +5 max HP, live and
-// re-derived across loads).
+// id), and implemented trait effects apply (Tank: +5 max AND current HP -
+// original behavior: buying at 25/30 yields 30/35 - live and re-derived
+// across loads).
 //
 // Negative-first: on the C2 base, `traitmachine` is a NoopScript - frobbing
 // medsci2's Trait Machine (mission id 133) opens nothing, so the "panel
@@ -82,8 +83,10 @@ test(
       return s;
     };
     assert.deepEqual((await stats()).os_traits, [], "fresh character has no O/S traits");
-    const hpBefore = (await game.info()).player.max_hit_points;
+    const before = (await game.info()).player;
+    const hpBefore = before.max_hit_points;
     assert.ok(hpBefore != null, "player has a hit-point pool");
+    assert.equal(before.hit_points, hpBefore, "the player starts at full health");
 
     // --- Frob the medsci2 machine: the panel must open (fails on the C2
     // base, where traitmachine is a NoopScript). ---
@@ -107,13 +110,26 @@ test(
       traitButton(name, els);
     }
 
-    // --- Pick Tank: stored + live +5 max HP. ---
+    // --- Pick Tank: stored + live +5 max AND current HP (the original
+    // raises both - buying wounded at 25/30 yields 30/35). The player can't
+    // be wounded headlessly (it has no scripts, so a debug Damage message is
+    // dropped), but the current-HP grant is still observable at full health:
+    // ceiling-only would leave 30/35, the original behavior yields 35/35. ---
     await clickElement(game, traitButton("Tank", els));
     await game.step({ frames: 3 });
     const afterPick = await stats();
     assert.deepEqual(afterPick.os_traits, [8], "Tank (trait 8) is recorded");
-    const hpAfter = (await game.info()).player.max_hit_points;
-    assert.equal(hpAfter, (hpBefore as number) + 5, "Tank grants +5 max HP live");
+    const hpAfter = (await game.info()).player;
+    assert.equal(
+      hpAfter.max_hit_points,
+      (hpBefore as number) + 5,
+      "Tank grants +5 max HP live",
+    );
+    assert.equal(
+      hpAfter.hit_points,
+      (hpBefore as number) + 5,
+      "Tank also grants +5 current HP live (original behavior; not left at the old max)",
+    );
     await game.screenshot("traits-after-pick.png");
 
     // --- The machine is now single-use: a second pick refuses. ---
@@ -129,9 +145,9 @@ test(
     const refusalUi = await game.ui.state();
     assert.ok(
       refusalUi.active_panel!.elements.some(
-        (e) => e.kind === "text" && e.text?.includes("used"),
+        (e) => e.kind === "text" && e.text?.includes("already been upgraded"),
       ),
-      "the panel shows the machine-used message",
+      "the panel shows the shipped machine-used message (MISC.STR TraitMachineUsed)",
     );
 
     // --- Used state + trait survive save/load. ---
@@ -139,10 +155,18 @@ test(
     await game.load(saveName);
     await game.step({ frames: 5 });
     assert.deepEqual((await stats()).os_traits, [8], "trait survives save/load");
+    const hpLoaded = (await game.info()).player;
     assert.equal(
-      (await game.info()).player.max_hit_points,
+      hpLoaded.max_hit_points,
       (hpBefore as number) + 5,
-      "Tank max-HP bonus re-derives after load",
+      "Tank max-HP bonus re-derives after load (not doubled)",
+    );
+    // Current HP is not persisted: it re-seeds to the (trait-adjusted) max on
+    // load, so the live +5 current-HP grant cannot double-apply.
+    assert.equal(
+      hpLoaded.hit_points,
+      hpLoaded.max_hit_points,
+      "current HP re-seeds to max on load (live grant does not double)",
     );
     const machine2 = await findMachine(game, 133);
     await standNear(game, machine2.id);

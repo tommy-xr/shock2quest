@@ -51,9 +51,10 @@ pub const OS_TRAITS: [(u8, &str); 16] = [
 pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_TANK: u8 = 8;
 
-/// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). Applied live on
-/// purchase and re-derived on every mission load (the player entity is
-/// rebuilt each load).
+/// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). The original raises the
+/// ceiling AND current HP by the bonus on purchase (buying at 25/30 yields
+/// 30/35); the live grant does the same, and both re-derive on every mission
+/// load (the player entity is rebuilt each load).
 pub const TANK_HP_BONUS: i32 = 5;
 
 /// Naturally Able: "One-time bonus of 8 Cyber Enhancement Units" (Trait6).
@@ -104,14 +105,24 @@ fn machine_used(world: &World, machine: EntityId) -> bool {
         .unwrap_or(false)
 }
 
-/// Preloaded `TRAITS.STR` descriptions (`Trait1..16`), added as a world unique
-/// at mission load so the (`AssetCache`-less) `TraitGui` can show the hovered
-/// trait's description - the `ElevatorContext` pattern.
+/// English fallbacks for the MISC.STR trait-panel strings (verbatim from the
+/// shipped table), used when a data install lacks it.
+const FALLBACK_HEADER_LABEL: &str = "Choose one upgrade.";
+const FALLBACK_USED_LABEL: &str = "Your OS has already been upgraded at this unit.";
+
+/// Preloaded trait-panel strings (`TRAITS.STR` descriptions plus the MISC.STR
+/// header / used-machine lines), added as a world unique at mission load so
+/// the (`AssetCache`-less) `TraitGui` can show them - the `ElevatorContext`
+/// pattern.
 #[derive(shipyard::Unique)]
 pub struct TraitsContext {
     /// `Trait1..16` description strings; index 0 = trait id 1. Falls back to
     /// the bare trait name when TRAITS.STR is absent.
     pub descriptions: [String; 16],
+    /// MISC.STR `TraitHeader` ("Choose one upgrade."), drawn atop the panel.
+    pub header_label: String,
+    /// MISC.STR `TraitMachineUsed`, the used-machine refusal.
+    pub used_label: String,
 }
 
 impl TraitsContext {
@@ -124,14 +135,35 @@ impl TraitsContext {
                 .and_then(|s| s.get(&key).cloned())
                 .unwrap_or_else(|| trait_name((i + 1) as u8).to_owned())
         });
-        TraitsContext { descriptions }
+        let misc = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "misc.str");
+        let misc_lookup = |key: &str, fallback: &str| -> String {
+            misc.as_ref()
+                .and_then(|s| s.get(key).cloned())
+                .unwrap_or_else(|| fallback.to_owned())
+        };
+        TraitsContext {
+            descriptions,
+            header_label: misc_lookup("traitheader", FALLBACK_HEADER_LABEL),
+            used_label: misc_lookup("traitmachineused", FALLBACK_USED_LABEL),
+        }
     }
 }
 
-// Panel layout on the 188x296 backdrop (shktrait.cpp): owned-slots row at
-// (15,35) in 35x34 cells; 4x4 selection matrix in (15,76)-(152,209), icons
-// TRAIT01..16 at 34x32, `which = col + row*4 + 1`; description text below
-// from (15,214).
+/// The used-machine refusal line (MISC.STR `TraitMachineUsed`), from the
+/// preloaded context (fallback for scenes that never load it).
+fn used_label(world: &World) -> String {
+    world
+        .borrow::<UniqueView<TraitsContext>>()
+        .map(|ctx| ctx.used_label.clone())
+        .unwrap_or_else(|_| FALLBACK_USED_LABEL.to_owned())
+}
+
+// Panel layout on the 188x296 backdrop: header text at (17,14); owned-slots
+// row at (15,35) in 35x34 cells; 4x4 selection matrix in (15,76)-(152,209),
+// icons TRAIT01..16 at 34x32, `which = col + row*4 + 1`; description text
+// below from (15,214).
+const HEADER_X: f32 = 17.0;
+const HEADER_Y: f32 = 14.0;
 const OWNED_X: f32 = 15.0;
 const OWNED_Y: f32 = 35.0;
 const OWNED_PITCH: f32 = 35.0;
@@ -197,10 +229,18 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
         world: &World,
         state: &TraitGuiState,
     ) -> Vec<GuiComponent<TraitGuiMsg>> {
+        let header = world
+            .borrow::<UniqueView<TraitsContext>>()
+            .map(|ctx| ctx.header_label.clone())
+            .unwrap_or_else(|_| FALLBACK_HEADER_LABEL.to_owned());
         let mut components: Vec<GuiComponent<TraitGuiMsg>> = vec![
             gui::image("traits.pcx")
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(188.0, 296.0)),
+            // Panel header (MISC.STR TraitHeader), as in the original.
+            gui::text(&header)
+                .with_position(vec2(HEADER_X, HEADER_Y))
+                .with_size(vec2(160.0, 12.0)),
         ];
 
         let owned: Vec<u8> = world
@@ -242,10 +282,14 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
         // hovered description there).
         let mut lines: Vec<String> = Vec::new();
         if machine_used(world, entity_id) {
-            lines.push("This upgrade unit has been used.".to_owned());
+            lines.push(used_label(world));
         }
         if let Some(message) = &state.message {
-            lines.push(message.clone());
+            // A used-machine refusal repeats the standing used line - skip
+            // the duplicate.
+            if !lines.contains(message) {
+                lines.push(message.clone());
+            }
         }
         if let Some(hovered) = cursor.as_ref().and_then(|c| hovered_trait(c.position)) {
             let description = world
@@ -298,7 +342,7 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
             if machine_template_id(world, entity_id).is_none() {
                 Some("This upgrade unit is not responding.".to_string())
             } else if machine_used(world, entity_id) {
-                Some("This upgrade unit has already been used.".to_string())
+                Some(used_label(world))
             } else if stats.has_os_trait(*trait_id) {
                 Some(format!("{} is already installed.", trait_name(*trait_id)))
             } else if stats.os_traits.len() >= OS_TRAIT_SLOTS {

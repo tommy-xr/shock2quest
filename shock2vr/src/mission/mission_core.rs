@@ -3470,9 +3470,13 @@ impl MissionCore {
                                     .award_cyber_modules(NATURALLY_ABLE_MODULES);
                             }
                             TRAIT_TANK => {
-                                // "+5 MAXIMUM hit points" (Trait8): the live
-                                // grant raises only the ceiling; current HP is
-                                // untouched (loads reset current = max anyway).
+                                // Tank (Trait8): the original raises the
+                                // ceiling AND current HP by the bonus (buying
+                                // at 25/30 yields 30/35), clamped to the new
+                                // max. Loads re-derive both from the trait
+                                // list (current HP is not persisted - it
+                                // re-seeds from template + career + traits),
+                                // so the live grant cannot double-apply.
                                 drop(quests);
                                 let player_entity = self
                                     .world
@@ -3480,9 +3484,21 @@ impl MissionCore {
                                     .unwrap()
                                     .entity_id;
                                 self.world.run(
-                                    |mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
-                                        if let Ok(max) = (&mut v_max).get(player_entity) {
-                                            max.hit_points += TANK_HP_BONUS as u32;
+                                    |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
+                                     mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
+                                        let new_max = (&mut v_max)
+                                            .get(player_entity)
+                                            .map(|max| {
+                                                max.hit_points += TANK_HP_BONUS as u32;
+                                                max.hit_points
+                                            })
+                                            .ok();
+                                        if let Ok(hp) = (&mut v_hp).get(player_entity) {
+                                            hp.hit_points += TANK_HP_BONUS;
+                                            if let Some(new_max) = new_max {
+                                                hp.hit_points =
+                                                    hp.hit_points.min(new_max as i32);
+                                            }
                                         }
                                     },
                                 );
