@@ -213,10 +213,11 @@ impl UiCanvas {
         self
     }
 
-    /// Add a text element sized in **canvas pixels** (`size` = cap-to-baseline
-    /// pixel height at the 640x480 canvas scale). Pass `size <= 0.0` to render
-    /// at the font's *native* pixel height (`base_height`); prefer
-    /// [`text_native`](Self::text_native) for that.
+    /// Add a text element sized in **canvas pixels** (`size` = the full
+    /// glyph-cell height at the 640x480 canvas scale - `.FON` cells include the
+    /// font's internal leading, so the visible cap ink is shorter than `size`).
+    /// Pass `size <= 0.0` to render at the font's *native* pixel height
+    /// (`base_height`); prefer [`text_native`](Self::text_native) for that.
     pub fn text(
         &mut self,
         rect: Rect,
