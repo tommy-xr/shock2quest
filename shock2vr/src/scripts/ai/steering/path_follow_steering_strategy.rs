@@ -61,6 +61,14 @@ const STALL_SECONDS: f32 = 3.0;
 const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
+/// Crowd separation: repel from living creatures within this radius (6 Dark
+/// feet - about two body widths)
+const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
+/// ...bending the aim point at most this far sideways (3 Dark feet). A cap
+/// keeps separation a BIAS on the route, never a veto - a dense crowd can't
+/// steer an AI backwards, it just bows its line around the neighbors
+/// (issue #487).
+const SEPARATION_MAX_OFFSET: f32 = 3.0 / SCALE_FACTOR;
 
 /// Steers along a route computed by the PathfindingService, the counterpart
 /// of the original engine's cAIPath following (Advance / UpdateTargetEdge in
@@ -300,6 +308,22 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // No route (or none yet) - let the next strategy in the chain steer
         let waypoint = *self.path.get(self.next_waypoint)?;
 
+        // Crowd separation: bend the aim point away from nearby living
+        // creatures so converging AIs pass around each other instead of
+        // pushing capsule-to-capsule into a gridlock. The waypoint (and the
+        // path) stay authoritative - the bias is capped well below the
+        // waypoint spacing.
+        let separation = ai_util::separation_bias(world, entity_id, position, SEPARATION_RADIUS);
+        let aim = {
+            let magnitude = (separation.x * separation.x + separation.z * separation.z).sqrt();
+            if magnitude > 1e-3 {
+                let capped = magnitude.min(SEPARATION_MAX_OFFSET);
+                waypoint + separation * (capped / magnitude)
+            } else {
+                waypoint
+            }
+        };
+
         // Stall escape: if we stop making progress toward the current
         // waypoint (blocked by a prop, another AI, or bad geometry), drop
         // the path so the next re-path - or wander goal - starts fresh
@@ -350,7 +374,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         }
 
         Some((
-            Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(waypoint)),
+            Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(aim)),
             Effect::DrawDebugLines { lines },
         ))
     }

@@ -57,8 +57,10 @@ test(
     //   reachable point) or with no route at all (sealed rooms - Failed);
     // - within engagement range of the player (arrived; jostling against
     //   the player's capsule is combat, not navigation);
-    // - another creature within 2 units (a mutual crowd jam - real but a
-    //   separate, softer issue: crowd separation steering).
+    // - another creature within 2.5 units: either a mutual crowd jam or the
+    //   crowd-separation equilibrium (separation holds neighbors apart at
+    //   roughly its 2.4-unit radius); such pairs are crowd dynamics, not a
+    //   navigation freeze (see #487 / the furniture-route issue).
     const before = new Map<number, [number, number, number]>();
     for (const h of hybrids) {
       const d = await game.entities.detail(h.id);
@@ -81,7 +83,7 @@ test(
       if (!route || route.outcome === "Failed" || route.waypoints.length === 0) continue;
       if (dist3(p, playerPos) < 6.0) continue; // arrived / engaging
       const jammed = hybrids.some(
-        (o) => o.id !== h.id && dist3(positions.get(o.id)!, p) < 2.0,
+        (o) => o.id !== h.id && dist3(positions.get(o.id)!, p) < 2.5,
       );
       if (jammed) continue; // mutual crowd jam - tracked separately
       const routeEnd = route.waypoints[route.waypoints.length - 1];
