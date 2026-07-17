@@ -207,6 +207,15 @@ pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 #[derive(Unique, Clone, Copy)]
 pub struct MapPanelEntity(pub EntityId);
 
+/// The automap location (`PropMapLoc`) of the mapped room the player most
+/// recently entered - the player's *current* map location. The automap uses it
+/// to draw that location bright (R-art) while other explored locations draw
+/// dim (X-art), and to pick a per-frame `MapRef` marker when placing the
+/// player pip (multi-story areas relocated into the page's inset boxes). Not
+/// serialized: re-established by the room sensors as the player moves.
+#[derive(Unique, Clone, Copy, Default)]
+pub struct PlayerMapLocation(pub Option<i32>);
+
 /// Global template inheritance hierarchy (template id -> MetaProp parents),
 /// so scripts can answer class questions about entities at runtime - e.g.
 /// picking a projectile's hit spang by whether the victim descends from the
@@ -536,11 +545,12 @@ impl MissionCore {
         // (ToggleMap is flat-gated), and under `--experimental gui` its
         // per-frame SetUI would otherwise materialize an undismissable world
         // quad at the origin.
+        world.add_unique(PlayerMapLocation::default());
         if game_options.presentation_mode == crate::PresentationMode::Flat {
             let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
-            let revealed_rects =
+            let (revealed_rects, explored_rects) =
                 dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
-                    .map(|data| data.revealed_rects)
+                    .map(|data| (data.revealed_rects, data.explored_rects))
                     .unwrap_or_default();
             let entity = world.add_entity((
                 Links::empty(),
@@ -562,6 +572,7 @@ impl MissionCore {
                 crate::runtime_props::RuntimePropMapData {
                     mission: mission.clone(),
                     revealed_rects,
+                    explored_rects,
                 },
             ));
             world.add_unique(MapPanelEntity(entity));
@@ -2657,6 +2668,13 @@ impl MissionCore {
                     let mission = self.level_name.to_ascii_lowercase();
                     if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
                         quests.reveal_map_location(&mission, location);
+                    }
+                    // Entering a mapped room also makes it the player's
+                    // *current* map location (bright automap art + per-frame
+                    // pip placement).
+                    if let Ok(mut current) = self.world.borrow::<UniqueViewMut<PlayerMapLocation>>()
+                    {
+                        current.0 = Some(location);
                     }
                 }
 

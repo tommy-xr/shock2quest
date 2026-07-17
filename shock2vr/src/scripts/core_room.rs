@@ -67,8 +67,12 @@ impl Script for CoreRoom {
             Effect::NoEffect
         };
 
-        // The player entering a mapped room explores its automap location
-        // (the original's ShockMapSetExplored on room enter).
+        // The player entering a mapped room explores its automap location.
+        // NOTE: this is a deliberate player-friendly *superset* of the
+        // original engine, which marks a location explored only when the
+        // automap actually draws the player's position inside it - here every
+        // mapped room entered is revealed immediately. Don't "fix" this in
+        // either direction without deciding that tradeoff on purpose.
         let map_effect = match (msg, self.map_location) {
             (MessagePayload::SensorBeginIntersect { with }, Some(location))
                 if is_player(world, *with) =>

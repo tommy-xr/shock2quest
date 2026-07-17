@@ -1,9 +1,12 @@
 //! Flat-mode automap panel (`projects/flat-ui-panels.md` §5, `kOverlayMap 26`).
 //!
 //! The wide map MFD: `MAPBACK.PCX` frame (636x296 - the one panel spanning both
-//! MFD slots), the current level's `PAGE001.PCX` page art, one bright
-//! `P001R###.PCX` decal per *explored* map location (rects from `P001RA.BIN`),
-//! and the player marker placed by the level's `MapRef` world->page transform.
+//! MFD slots), the current level's `PAGE001.PCX` page art, one dim
+//! `P001X###.PCX` decal per *explored* map location (rects from `P001XA.BIN`)
+//! with the bright `P001R###.PCX` art only for the location the player is
+//! currently in, and the player marker placed by the level's `MapRef`
+//! world->page transform (per-frame markers relocate multi-story areas into
+//! the page's inset boxes).
 //! Bound to a synthetic player-owned entity (no world object opens the map -
 //! the original uses the BIOFULL MAP button / `M`); opened via
 //! `Effect::ToggleMap` and hosted sticky (no walk-away close).
@@ -28,11 +31,13 @@ use crate::scripts::Effect;
 const PANEL_W: f32 = 636.0;
 const PANEL_H: f32 = 296.0;
 
-/// `PAGE001.PCX` page-art size and its centered offset inside the frame.
-const PAGE_W: f32 = 614.0;
-const PAGE_H: f32 = 260.0;
-const PAGE_X: f32 = (PANEL_W - PAGE_W) / 2.0;
-const PAGE_Y: f32 = (PANEL_H - PAGE_H) / 2.0;
+/// `PAGE001.PCX` page-art size (shared with the world map renderer via
+/// `dark::map`) and its fixed offset inside the frame - the original engine
+/// draws the page at (10, 8), leaving the frame's bottom strip clear.
+const PAGE_W: f32 = dark::map::PAGE_WIDTH;
+const PAGE_H: f32 = dark::map::PAGE_HEIGHT;
+const PAGE_X: f32 = 10.0;
+const PAGE_Y: f32 = 8.0;
 
 /// Player marker art (`Plrpip.pcx`) size, drawn centered on the position.
 const MARKER_SIZE: f32 = 16.0;
@@ -124,25 +129,69 @@ impl MapTransform {
         };
         (self.sx * a + self.bx, self.sy * b + self.by)
     }
+
+    /// Map a world-space delta (dx, dz) to a page-pixel delta - scale only, no
+    /// translation. Used to place positions relative to a per-frame marker.
+    pub fn apply_delta(&self, world_dx: f32, world_dz: f32) -> (f32, f32) {
+        let (a, b) = if self.swapped {
+            (world_dz, world_dx)
+        } else {
+            (world_dx, world_dz)
+        };
+        (self.sx * a, self.sy * b)
+    }
 }
 
-/// Solve the current level's transform from the world's `MapRef` scale markers
-/// (`frame == -1`; they carry both the page point and a world position).
-fn solve_transform_from_world(world: &World) -> Option<MapTransform> {
-    let v_map_ref = world.borrow::<View<PropMapRef>>().ok()?;
-    let v_pos = world.borrow::<View<PropPosition>>().ok()?;
-    let mut markers = (&v_map_ref, &v_pos)
+/// One `MapRef` marker: a page-pixel anchor tied to a world position.
+/// `frame == -1` markers are the level's two global scale references; a
+/// `frame >= 0` marker relocates one map location - typically a multi-story
+/// area drawn in one of the page's inset boxes - so positions inside that
+/// location are placed relative to it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MapRefMarker {
+    pub frame: i32,
+    pub world: (f32, f32),
+    pub page: (f32, f32),
+}
+
+/// Place the player pip in page pixels, following the original engine's
+/// resolution order: if a `MapRef` marker exists for the player's current map
+/// location, place relative to it (using the global transform's scale);
+/// otherwise fall back to the global affine solved from the `frame == -1`
+/// scale markers.
+pub fn place_player_pip(
+    markers: &[MapRefMarker],
+    current_location: Option<i32>,
+    world_pos: (f32, f32),
+) -> Option<(f32, f32)> {
+    let mut scale_markers = markers.iter().filter(|m| m.frame == -1);
+    let (m1, m2) = (scale_markers.next()?, scale_markers.next()?);
+    let transform = MapTransform::solve(m1.world, m1.page, m2.world, m2.page)?;
+    if let Some(marker) = current_location.and_then(|loc| markers.iter().find(|m| m.frame == loc)) {
+        let (dx, dy) =
+            transform.apply_delta(world_pos.0 - marker.world.0, world_pos.1 - marker.world.1);
+        return Some((marker.page.0 + dx, marker.page.1 + dy));
+    }
+    Some(transform.apply(world_pos.0, world_pos.1))
+}
+
+/// Collect the level's `MapRef` markers (each carries a page point, a frame,
+/// and - via its entity - a world position).
+fn collect_markers(world: &World) -> Vec<MapRefMarker> {
+    let Ok(v_map_ref) = world.borrow::<View<PropMapRef>>() else {
+        return Vec::new();
+    };
+    let Ok(v_pos) = world.borrow::<View<PropPosition>>() else {
+        return Vec::new();
+    };
+    (&v_map_ref, &v_pos)
         .iter()
-        .filter(|(map_ref, _)| map_ref.frame == -1)
-        .map(|(map_ref, pos)| {
-            (
-                (pos.position.x, pos.position.z),
-                (map_ref.x as f32, map_ref.y as f32),
-            )
-        });
-    let (w1, p1) = markers.next()?;
-    let (w2, p2) = markers.next()?;
-    MapTransform::solve(w1, p1, w2, p2)
+        .map(|(map_ref, pos)| MapRefMarker {
+            frame: map_ref.frame,
+            world: (pos.position.x, pos.position.z),
+            page: (map_ref.x as f32, map_ref.y as f32),
+        })
+        .collect()
 }
 
 impl Gui<MapGuiState, MapGuiMsg> for MapGui {
@@ -164,55 +213,78 @@ impl Gui<MapGuiState, MapGuiMsg> for MapGui {
             return components;
         };
         if data.revealed_rects.is_empty() {
-            // Level ships no automap page - the original's `nomap` art.
+            // Level ships no automap page - the original's `nomap` art, at the
+            // same fixed page offset inside the frame.
             components.push(
                 gui::image("nomap.pcx")
-                    .with_position(vec2((PANEL_W - 593.0) / 2.0, (PANEL_H - 281.0) / 2.0))
+                    .with_position(vec2(PAGE_X, PAGE_Y))
                     .with_size(vec2(593.0, 281.0)),
             );
             return components;
         }
 
         // Per-level art lives under `intrface/<LEVEL>/english/`.
-        let level = data
-            .mission
-            .split('.')
-            .next()
-            .unwrap_or(&data.mission)
-            .to_uppercase();
+        let level = data.mission.split('.').next().unwrap_or(&data.mission);
         components.push(
-            gui::image(&format!("{level}/english/PAGE001.PCX"))
+            gui::image(&dark::map::page_art_path(level))
                 .with_position(vec2(PAGE_X, PAGE_Y))
                 .with_size(vec2(PAGE_W, PAGE_H)),
         );
 
-        // One bright decal per explored location (rect + art indexed by the
-        // room's MapLoc), in page space offset into the frame.
+        // The location the player is currently in (the mapped room the room
+        // sensors last placed them in) draws bright; the rest draw dim.
+        let current_location = world
+            .borrow::<UniqueView<crate::mission::PlayerMapLocation>>()
+            .ok()
+            .and_then(|current| current.0);
+
+        // One dim `X` decal per explored location (rect + art indexed by the
+        // room's MapLoc), with the bright `R` art on top only for the current
+        // location - original engine behavior.
         let explored = world
             .borrow::<UniqueView<QuestInfo>>()
             .map(|q| q.explored_map_locations(&data.mission))
             .unwrap_or_default();
         for location in explored {
-            let Some(rect) = usize::try_from(location)
-                .ok()
-                .and_then(|idx| data.revealed_rects.get(idx))
-            else {
+            let Some(idx) = usize::try_from(location).ok() else {
                 continue;
             };
-            components.push(
-                gui::image(&format!("{level}/english/P001R{location:03}.PCX"))
-                    .with_position(vec2(PAGE_X + rect.ul_x as f32, PAGE_Y + rect.ul_y as f32))
-                    .with_size(vec2(rect.width() as f32, rect.height() as f32)),
-            );
+            if let Some(rect) = data.explored_rects.get(idx) {
+                components.push(
+                    gui::image(&dark::map::explored_decal_path(level, location))
+                        .with_position(vec2(PAGE_X + rect.ul_x as f32, PAGE_Y + rect.ul_y as f32))
+                        .with_size(vec2(rect.width() as f32, rect.height() as f32)),
+                );
+            }
+            if Some(location) == current_location {
+                if let Some(rect) = data.revealed_rects.get(idx) {
+                    components.push(
+                        gui::image(&dark::map::revealed_decal_path(level, location))
+                            .with_position(vec2(
+                                PAGE_X + rect.ul_x as f32,
+                                PAGE_Y + rect.ul_y as f32,
+                            ))
+                            .with_size(vec2(rect.width() as f32, rect.height() as f32)),
+                    );
+                }
+            }
         }
 
-        // Player marker: world position through the MapRef transform, clamped
-        // onto the page. (Heading rotation - MapObjRotate - is deferred.)
-        if let (Some(transform), Ok(player)) = (
-            solve_transform_from_world(world),
-            world.borrow::<UniqueView<crate::mission::PlayerInfo>>(),
-        ) {
-            let (px, py) = transform.apply(player.pos.x, player.pos.z);
+        // Player marker: world position through the MapRef markers (per-frame
+        // marker for the current location if one exists, else the global
+        // affine), clamped onto the page as a last resort. (Heading rotation -
+        // MapObjRotate - is deferred.)
+        let pip = world
+            .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+            .ok()
+            .and_then(|player| {
+                place_player_pip(
+                    &collect_markers(world),
+                    current_location,
+                    (player.pos.x, player.pos.z),
+                )
+            });
+        if let Some((px, py)) = pip {
             // Clamp the marker fully inside the page art.
             let px = px.clamp(MARKER_SIZE / 2.0, PAGE_W - MARKER_SIZE / 2.0);
             let py = py.clamp(MARKER_SIZE / 2.0, PAGE_H - MARKER_SIZE / 2.0);
@@ -282,6 +354,87 @@ mod tests {
             MapTransform::solve((1.0, 2.0), (10.0, 20.0), (1.0, 2.0), (30.0, 40.0)),
             None
         );
+    }
+
+    /// All four real medsci1 `MapRef` markers, decoded from the shipped
+    /// mission data: the two `frame == -1` global scale markers (ids
+    /// 1032/1034) plus the per-frame markers for map locations 0 and 2 - the
+    /// two "INSET LOWER LEVEL" boxes on the page art.
+    fn medsci1_markers() -> Vec<MapRefMarker> {
+        vec![
+            MapRefMarker {
+                frame: -1,
+                world: (-40.311_17, 32.874_435),
+                page: (536.0, 239.0),
+            },
+            MapRefMarker {
+                frame: -1,
+                world: (44.685_417, -76.398_605),
+                page: (232.0, 10.0),
+            },
+            MapRefMarker {
+                frame: 0,
+                world: (11.585_943, 7.603_475),
+                page: (92.0, 30.0),
+            },
+            MapRefMarker {
+                frame: 2,
+                world: (-19.003_445, -54.242_805),
+                page: (72.0, 127.0),
+            },
+        ]
+    }
+
+    /// A player inside a location that has a per-frame `MapRef` marker must be
+    /// placed relative to that marker - which relocates them into the page's
+    /// inset box - NOT through the global affine (which would put the pip at
+    /// the upper level's drawing of the same world x/z). Real medsci1 data:
+    /// map location 2's inset rect is LTRB (25, 100, 144, 169) in P001RA.BIN.
+    #[test]
+    fn pip_uses_per_frame_marker_for_inset_locations() {
+        let markers = medsci1_markers();
+        // Standing exactly at the frame-2 marker's world position.
+        let (px, py) = place_player_pip(&markers, Some(2), (-19.003_445, -54.242_805))
+            .expect("markers must place the pip");
+        assert!((px - 72.0).abs() < 0.5 && (py - 127.0).abs() < 0.5);
+        // The global affine would have placed it far away (in the upper
+        // level's drawing of that world x/z) - the relocation matters.
+        let (gx, gy) = place_player_pip(&markers, None, (-19.003_445, -54.242_805)).unwrap();
+        assert!(((px - gx).abs() + (py - gy).abs()) > 50.0);
+        // A position a few world units into the room stays inside the
+        // location's inset rect, LTRB (25, 100, 144, 169).
+        let (nx, ny) = place_player_pip(&markers, Some(2), (-22.0, -58.0)).unwrap();
+        assert!((25.0..=144.0).contains(&nx), "pip x {nx} outside inset");
+        assert!((100.0..=169.0).contains(&ny), "pip y {ny} outside inset");
+        // Same for map location 0's marker (inset rect LTRB (26, 30, 93, 90)).
+        let (fx, fy) = place_player_pip(&markers, Some(0), (11.585_943, 7.603_475)).unwrap();
+        assert!((fx - 92.0).abs() < 0.5 && (fy - 30.0).abs() < 0.5);
+    }
+
+    /// A location with no per-frame marker falls back to the global affine
+    /// solved from the two `frame == -1` scale markers.
+    #[test]
+    fn pip_falls_back_to_global_affine_without_per_frame_marker() {
+        let markers = medsci1_markers();
+        let t = MapTransform::solve(
+            markers[0].world,
+            markers[0].page,
+            markers[1].world,
+            markers[1].page,
+        )
+        .unwrap();
+        for current in [None, Some(4), Some(9)] {
+            let (px, py) = place_player_pip(&markers, current, (10.0, -20.0)).unwrap();
+            let (ex, ey) = t.apply(10.0, -20.0);
+            assert!((px - ex).abs() < 1e-3 && (py - ey).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn pip_needs_two_scale_markers() {
+        let mut markers = medsci1_markers();
+        markers.remove(0);
+        assert_eq!(place_player_pip(&markers, None, (0.0, 0.0)), None);
     }
 
     #[test]
