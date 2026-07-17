@@ -724,6 +724,15 @@ pub struct DebugAiPathEntry {
     pub outcome: String,
     /// Waypoints of the computed route (empty for Failed)
     pub waypoints: Vec<[f32; 3]>,
+    /// Index of the waypoint the steering is CURRENTLY following (its live
+    /// path may lag the latest computed route above)
+    pub live_next_waypoint: Option<usize>,
+    /// Length of the live path being followed
+    pub live_path_len: Option<usize>,
+    /// World position currently steered toward
+    pub live_target: Option<[f32; 3]>,
+    /// Seconds without progress toward the current waypoint
+    pub live_stall_seconds: Option<f32>,
 }
 
 /// Snapshot of the pathfinding service's monotonic query counters.

@@ -55,10 +55,10 @@ impl PatrolBehavior {
 
     fn steering_to(goal: Vector3<f32>) -> Box<dyn SteeringStrategy> {
         steering::chained(vec![
-            Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
-            // Route to the fixed patrol point via the nav mesh; without AIPATH
-            // data this returns None and the AI just holds its heading.
+            // Path steering leads; whisker avoidance only covers the no-route
+            // case (see chase_behavior for the deadlock this prevents)
             Box::new(PathFollowSteeringStrategy::to_point(goal)),
+            Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
         ])
     }
 

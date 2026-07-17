@@ -717,10 +717,32 @@ impl MissionCore {
         }
 
         let nav_bridges = game_options.experimental_features.contains("nav_bridges");
+        // Vet each synthesized island crossing against the static level
+        // geometry: a torso-height ray between the two cell centers must be
+        // clear, so bridges can't route AIs into railings or thin walls
+        // (which left them stalling at the seam forever - issue #481).
+        let bridge_validator = |from: cgmath::Vector3<f32>, to: cgmath::Vector3<f32>| -> bool {
+            let delta = to - from;
+            let distance = delta.magnitude();
+            if distance <= f32::EPSILON {
+                return true;
+            }
+            physics
+                .ray_cast2(
+                    Point3::new(from.x, from.y, from.z),
+                    delta / distance,
+                    distance,
+                    crate::physics::InternalCollisionGroups::WORLD,
+                    None,
+                    true,
+                )
+                .is_none()
+        };
         let pathfinding_service = abstract_mission.path_database.as_ref().map(|db| {
             Arc::new(PathfindingService::with_nav_options(
                 Arc::new(db.clone()),
                 nav_bridges,
+                Some(&bridge_validator),
             ))
         });
         // Steering strategies path through this unique; MissionCore keeps its
@@ -5556,11 +5578,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         service
             .ai_paths()
             .into_iter()
-            .map(|(entity, record)| crate::game_scene::DebugAiPathEntry {
-                entity_id: entity as i32,
-                goal: record.goal.into(),
-                outcome: format!("{:?}", record.outcome),
-                waypoints: record.waypoints.into_iter().map(Into::into).collect(),
+            .map(|(entity, record)| {
+                let live = service.ai_steering(entity);
+                crate::game_scene::DebugAiPathEntry {
+                    entity_id: entity as i32,
+                    goal: record.goal.into(),
+                    outcome: format!("{:?}", record.outcome),
+                    waypoints: record.waypoints.into_iter().map(Into::into).collect(),
+                    live_next_waypoint: live.map(|l| l.next_waypoint),
+                    live_path_len: live.map(|l| l.path_len),
+                    live_target: live.and_then(|l| l.target).map(Into::into),
+                    live_stall_seconds: live.map(|l| l.stall_seconds),
+                }
             })
             .collect()
     }
