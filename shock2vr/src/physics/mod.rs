@@ -13,6 +13,7 @@ use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
     control::{CharacterLength, KinematicCharacterController},
+    na,
     na::UnitQuaternion,
     prelude::*,
 };
@@ -229,6 +230,7 @@ impl Default for DynamicPhysicsOptions {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct CollisionGroup(InteractionGroups);
 
 impl CollisionGroup {
@@ -302,6 +304,20 @@ impl CollisionGroup {
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::SELECTABLE.bits)
                 .into(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Ragdoll limbs that collide with the world but NOT with each other (nor
+    /// other selectables). Used for death-handoff rigs spawned in a crumpled,
+    /// limb-overlapping pose: the many simultaneous deep limb-limb contacts
+    /// there can drive the articulated (multibody) solve to non-finite
+    /// positions in a single step. Floor contact is what matters for a lying
+    /// corpse; limb self-collision is cosmetic in that pose.
+    pub fn ragdoll_no_self() -> CollisionGroup {
+        CollisionGroup(InteractionGroups {
+            memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
+            filter: InternalCollisionGroups::WORLD.bits.into(),
             test_mode: Default::default(),
         })
     }
@@ -407,7 +423,11 @@ fn sanitize_collider_size(entity_id: EntityId, context: &str, size: Vector3<f32>
     const MAX_SIZE: f32 = 1.0e4;
     let clamp = |v: f32| -> f32 {
         if v.is_finite() && v > 0.0 {
-            v.min(MAX_SIZE)
+            // Clamp up as well as down: a tiny-but-positive size (e.g. medsci1's
+            // "Lift 1 Walls" wall segment) yields a point-like AABB, and parry's
+            // debug-build ray-AABB test overflows on those (FeatureId::Face(0 - 1))
+            // - any AI vision/ground probe crossing it panics the game thread.
+            v.clamp(MIN_SIZE, MAX_SIZE)
         } else {
             MIN_SIZE
         }
@@ -419,6 +439,32 @@ fn sanitize_collider_size(entity_id: EntityId, context: &str, size: Vector3<f32>
             context,
             entity_id,
             size,
+            out
+        );
+    }
+    out
+}
+
+/// Scalar variant of [`sanitize_collider_size`] for ball colliders. A zero
+/// radius (e.g. medsci1's "Lift 1 Walls": a dynamic SPHERE with radius 0)
+/// yields a point AABB, and rapier 0.31's BVH broad-phase build panics on
+/// zero/non-finite AABBs (parry `bvh_binned_build` "index out of bounds") -
+/// the crash is nondeterministic because it depends on the bin layout around
+/// the degenerate AABB.
+fn sanitize_collider_radius(entity_id: EntityId, context: &str, radius: f32) -> f32 {
+    const MIN_RADIUS: f32 = 0.005;
+    const MAX_RADIUS: f32 = 5.0e3;
+    let out = if radius.is_finite() && radius > 0.0 {
+        radius.clamp(MIN_RADIUS, MAX_RADIUS)
+    } else {
+        MIN_RADIUS
+    };
+    if out != radius {
+        tracing::warn!(
+            "[physics] {} entity {:?}: invalid collider radius {} -> clamped to {}",
+            context,
+            entity_id,
+            radius,
             out
         );
     }
@@ -892,7 +938,8 @@ impl PhysicsWorld {
                     .build()
             }
             PhysicsShape::Sphere(size) => {
-                ColliderBuilder::ball(size)
+                let radius = sanitize_collider_radius(entity_id, "add_dynamic", size);
+                ColliderBuilder::ball(radius)
                     //.rotation(vector!(angles.0, angles.1, angles.2))
                     //.rotation(vector!(facing.z, facing.x, facing.y))
                     .translation(vec_to_nvec(offset))
@@ -1111,24 +1158,35 @@ impl PhysicsWorld {
             &self.narrow_phase,
         );
 
-        // Joint-anchor overlay: each impulse joint constrains a point on the
-        // parent body (anchor1, cyan cross) to coincide with a point on the child
+        // Joint-anchor overlay: each joint constrains a point on the parent
+        // body (anchor1, cyan cross) to coincide with a point on the child
         // body (anchor2, magenta cross). A line connects them - a satisfied joint
         // has overlapping crosses and an invisible line; a sagging/separated joint
-        // (e.g. the hips) shows a visible gap.
-        for (_h, joint) in self.impulse_joint_set.iter() {
-            if let (Some(b1), Some(b2)) = (
-                self.rigid_body_set.get(joint.body1),
-                self.rigid_body_set.get(joint.body2),
-            ) {
-                let a1 = b1.position() * joint.data.local_frame1;
-                let a2 = b2.position() * joint.data.local_frame2;
-                let p1 = Vector3::new(a1.translation.x, a1.translation.y, a1.translation.z);
-                let p2 = Vector3::new(a2.translation.x, a2.translation.y, a2.translation.z);
-                debug_renderer.add_cross(p1, 0.12, Vector3::new(0.0, 0.6, 1.0)); // anchor1 blue
-                debug_renderer.add_cross(p2, 0.12, Vector3::new(1.0, 0.0, 1.0)); // anchor2 magenta
-                debug_renderer.add_line(p1, p2, Vector3::new(1.0, 1.0, 0.0)); // gap (yellow)
-            }
+        // (e.g. the hips) shows a visible gap. Impulse and multibody joints both
+        // draw (multibody anchors should always coincide - translation is not a
+        // DOF there).
+        let impulse_anchors = self
+            .impulse_joint_set
+            .iter()
+            .filter_map(|(_h, joint)| {
+                let b1 = self.rigid_body_set.get(joint.body1)?;
+                let b2 = self.rigid_body_set.get(joint.body2)?;
+                Some((
+                    b1.position() * joint.data.local_frame1,
+                    b2.position() * joint.data.local_frame2,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let multibody_anchors = self
+            .multibody_joint_anchor_pairs()
+            .into_iter()
+            .map(|(_, _, a1, a2)| (a1, a2));
+        for (a1, a2) in impulse_anchors.into_iter().chain(multibody_anchors) {
+            let p1 = Vector3::new(a1.translation.x, a1.translation.y, a1.translation.z);
+            let p2 = Vector3::new(a2.translation.x, a2.translation.y, a2.translation.z);
+            debug_renderer.add_cross(p1, 0.12, Vector3::new(0.0, 0.6, 1.0)); // anchor1 blue
+            debug_renderer.add_cross(p2, 0.12, Vector3::new(1.0, 0.0, 1.0)); // anchor2 magenta
+            debug_renderer.add_line(p1, p2, Vector3::new(1.0, 1.0, 0.0)); // gap (yellow)
         }
 
         debug_renderer.render()
@@ -1432,8 +1490,20 @@ impl PhysicsWorld {
         let binding = |_collider_handle: ColliderHandle, collider: &Collider| {
             let data = collider.user_data;
             let maybe_entity_id = EntityId::from_inner(data as u64);
-
-            maybe_entity_id != entity_to_ignore
+            if maybe_entity_id == entity_to_ignore {
+                return false;
+            }
+            // A degenerate collider (zero-extent / non-finite AABB, e.g.
+            // medsci1's point-sized "Lift 1 Walls") poisons parry's ray-AABB
+            // clip the same way a degenerate ray does: face index 0 ->
+            // `0u32 - 1` overflow panic in debug builds, NaN normals in
+            // release. Skip such colliders - a point can't meaningfully block
+            // a ray, and letting one through crashes AI vision/ground probes.
+            // (`GET /v1/physics/colliders/validate` audits the data root
+            // cause.)
+            let aabb = collider.compute_aabb();
+            aabb.mins.iter().all(|v| v.is_finite())
+                && aabb.extents().iter().all(|e| e.is_finite() && *e > 1.0e-5)
         };
         filter = filter.predicate(&binding);
 
@@ -1556,6 +1626,176 @@ impl PhysicsWorld {
             body.set_linear_damping(linear);
             body.set_angular_damping(angular);
         }
+    }
+
+    /// Raise a body's angular sleep threshold so residual solver noise (e.g. a
+    /// ragdoll extremity buzzing against the floor) still counts as "at rest".
+    /// One awake body keeps its whole jointed island awake, so without this a
+    /// settled ragdoll never sleeps. Sleeping bodies auto-wake on contact or
+    /// applied force, so the corpse stays interactive. (The linear threshold is
+    /// left at rapier's default - the residual buzz is angular.)
+    pub fn set_body_angular_sleep_threshold(&mut self, handle: RigidBodyHandle, angular: f32) {
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            body.activation_mut().angular_threshold = angular;
+        }
+    }
+
+    /// Clamp ragdoll body velocities to finite, bounded magnitudes. The spawn
+    /// transient of a ragdoll can (rarely, and nondeterministically across
+    /// processes) enter a runaway feedback loop - a contact spike begets a
+    /// bigger spike next frame until a position goes non-finite and the parry
+    /// BVH broad-phase panics on the NaN AABB. Clamping once per frame breaks
+    /// the cascade while leaving normal collapse dynamics (peaks well below
+    /// the cap) untouched.
+    ///
+    /// Multibody-linked bodies clamp the owning multibody's generalized (DOF)
+    /// velocities - writing a link body's linvel/angvel would be overwritten
+    /// by the reduced-coordinate readback. Each multibody is clamped once no
+    /// matter how many of its links appear in `handles`. Free bodies clamp
+    /// linvel/angvel directly. Returns the number of corrected values.
+    pub fn sanitize_ragdoll_bodies(&mut self, handles: &[RigidBodyHandle], max_speed: f32) -> u32 {
+        let mut corrected = 0u32;
+        let mut seen_multibodies = Vec::new();
+        for handle in handles {
+            if let Some(link) = self.multibody_joint_set.rigid_body_link(*handle) {
+                let index = link.multibody;
+                if seen_multibodies.contains(&index) {
+                    continue;
+                }
+                seen_multibodies.push(index);
+                if let Some(multibody) = self.multibody_joint_set.get_multibody_mut(index) {
+                    for v in multibody.generalized_velocity_mut().iter_mut() {
+                        if !v.is_finite() {
+                            *v = 0.0;
+                            corrected += 1;
+                        } else if v.abs() > max_speed {
+                            *v = v.clamp(-max_speed, max_speed);
+                            corrected += 1;
+                        }
+                    }
+                }
+            } else if let Some(body) = self.rigid_body_set.get_mut(*handle) {
+                let lin = *body.linvel();
+                let ang = *body.angvel();
+                if !lin.iter().all(|v| v.is_finite()) || lin.norm() > max_speed {
+                    let new_lin = if lin.iter().all(|v| v.is_finite()) {
+                        lin * (max_speed / lin.norm())
+                    } else {
+                        na::zero()
+                    };
+                    body.set_linvel(new_lin, false);
+                    corrected += 1;
+                }
+                if !ang.iter().all(|v| v.is_finite()) || ang.norm() > max_speed {
+                    let new_ang = if ang.iter().all(|v| v.is_finite()) {
+                        ang * (max_speed / ang.norm())
+                    } else {
+                        na::zero()
+                    };
+                    body.set_angvel(new_ang, false);
+                    corrected += 1;
+                }
+            }
+        }
+        corrected
+    }
+
+    /// Apply a world-space impulse to a dynamic body by its debug `body_id`
+    /// (the rigid body handle index, as reported by [`debug_list_bodies`]),
+    /// waking it even for a zero impulse (rapier skips a zero `apply_impulse`
+    /// entirely, so the wake is explicit - `{"impulse":[0,0,0]}` is a pure
+    /// wake). Debug/testing hook - e.g. poke a sleeping ragdoll to verify
+    /// wake-on-impulse. Matches by handle index like the other debug-endpoint
+    /// lookups (the generation isn't exposed over HTTP), so callers must use
+    /// ids from a fresh body listing. Returns false if no dynamic body matches.
+    pub fn apply_body_impulse(&mut self, body_id: u32, impulse: Vector3<f32>) -> bool {
+        let handle = self
+            .rigid_body_set
+            .iter()
+            .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
+            .map(|(handle, _)| handle);
+        let Some(handle) = handle else {
+            return false;
+        };
+        self.apply_impulse_to_handle(handle, impulse)
+    }
+
+    /// Seed a multibody's free-root velocity with a world-space linear
+    /// velocity (rapier free-joint DOF layout: linear xyz at generalized
+    /// indices 0..3, angular at 3..6 - see `MultibodyJoint::integrate`).
+    /// Body-level `set_linvel` is clobbered by the reduced-coordinate
+    /// readback, so inherited motion (e.g. a dying creature's root-motion
+    /// velocity carrying into its ragdoll) must be written into the
+    /// generalized coordinates. `body` may be any link of the multibody.
+    /// Returns false for non-multibody bodies.
+    pub fn set_multibody_root_linvel(
+        &mut self,
+        body: RigidBodyHandle,
+        linvel: Vector3<f32>,
+    ) -> bool {
+        // Sanitize the seed: it gets a full physics step before the ragdoll's
+        // per-frame velocity clamp sees it, so a non-finite or runaway value
+        // (e.g. a capsule mid-knockback) must not reach the solver verbatim.
+        const MAX_SEED_SPEED: f32 = 30.0;
+        if !(linvel.x.is_finite() && linvel.y.is_finite() && linvel.z.is_finite()) {
+            return false;
+        }
+        let norm = linvel.magnitude();
+        let linvel = if norm > MAX_SEED_SPEED {
+            linvel * (MAX_SEED_SPEED / norm)
+        } else {
+            linvel
+        };
+        let Some(link) = self.multibody_joint_set.rigid_body_link(body) else {
+            // Not articulated (e.g. a one-bone skeleton spawns a lone free
+            // body): a direct write works there.
+            if let Some(rigid_body) = self.rigid_body_set.get_mut(body) {
+                rigid_body.set_linvel(vec_to_nvec(linvel), true);
+                return true;
+            }
+            return false;
+        };
+        let index = link.multibody;
+        if let Some(multibody) = self.multibody_joint_set.get_multibody_mut(index) {
+            let mut generalized = multibody.generalized_velocity_mut();
+            if generalized.len() >= 3 {
+                generalized[0] = linvel.x;
+                generalized[1] = linvel.y;
+                generalized[2] = linvel.z;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Multibody-aware impulse on a body handle, waking it even for a zero
+    /// impulse. A multibody link ignores direct velocity writes: the reduced-
+    /// coordinate solver recomputes every link body's velocity from the joint
+    /// velocities each step (`Multibody` forward kinematics), so
+    /// `apply_impulse` is silently overwritten. Its forward *dynamics* does
+    /// read the per-body user-force accumulator, so convert the impulse to a
+    /// force over one physics step - `clear_forces` (called right after each
+    /// step) makes it impulsive. Free dynamic bodies get a plain impulse.
+    pub fn apply_impulse_to_handle(
+        &mut self,
+        handle: RigidBodyHandle,
+        impulse: Vector3<f32>,
+    ) -> bool {
+        let is_multibody_link = self.multibody_joint_set.rigid_body_link(handle).is_some();
+        let dt = self.integration_parameters.dt;
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            if body.body_type() == RigidBodyType::Dynamic {
+                body.wake_up(true);
+                if is_multibody_link {
+                    body.add_force(vec_to_nvec(impulse) / dt, true);
+                    self.rigid_bodies_with_forces.push(handle);
+                } else {
+                    body.apply_impulse(vec_to_nvec(impulse), true);
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// Create a static (fixed) rigid body without requiring an EntityId
@@ -1753,7 +1993,8 @@ impl PhysicsWorld {
     /// `separation ≈ 0` and a small impulse; a persistent separation/impulse
     /// means the constraint can't be satisfied (the rig fights itself).
     pub fn debug_list_joints(&self) -> Vec<DebugJointInfo> {
-        self.impulse_joint_set
+        let impulse = self
+            .impulse_joint_set
             .iter()
             .filter_map(|(_handle, joint)| {
                 let b1 = self.rigid_body_set.get(joint.body1)?;
@@ -1772,12 +2013,55 @@ impl PhysicsWorld {
                 Some(DebugJointInfo {
                     body1_id: joint.body1.into_raw_parts().0,
                     body2_id: joint.body2.into_raw_parts().0,
+                    joint_type: "impulse",
                     anchor1: [a1.translation.x, a1.translation.y, a1.translation.z],
                     anchor2: [a2.translation.x, a2.translation.y, a2.translation.z],
                     separation,
                     linear_impulse,
                     angular_impulse,
                 })
+            });
+        let multibody = self
+            .multibody_joint_anchor_pairs()
+            .into_iter()
+            .map(|(b1, b2, a1, a2)| DebugJointInfo {
+                body1_id: b1.into_raw_parts().0,
+                body2_id: b2.into_raw_parts().0,
+                joint_type: "multibody",
+                anchor1: [a1.translation.x, a1.translation.y, a1.translation.z],
+                anchor2: [a2.translation.x, a2.translation.y, a2.translation.z],
+                separation: (a1.translation.vector - a2.translation.vector).norm(),
+                linear_impulse: 0.0,
+                angular_impulse: 0.0,
+            });
+        impulse.chain(multibody).collect()
+    }
+
+    /// `(parent body, child body, world anchor on parent, world anchor on child)`
+    /// for every multibody joint. Translation is structurally not a DOF for
+    /// these, so the anchors should always coincide.
+    fn multibody_joint_anchor_pairs(
+        &self,
+    ) -> Vec<(
+        RigidBodyHandle,
+        RigidBodyHandle,
+        Isometry<Real>,
+        Isometry<Real>,
+    )> {
+        self.multibody_joint_set
+            .iter()
+            .filter_map(|(_handle, _link_id, multibody, link)| {
+                let parent = multibody.link(link.parent_id()?)?;
+                let b1_handle = parent.rigid_body_handle();
+                let b2_handle = link.rigid_body_handle();
+                let b1 = self.rigid_body_set.get(b1_handle)?;
+                let b2 = self.rigid_body_set.get(b2_handle)?;
+                Some((
+                    b1_handle,
+                    b2_handle,
+                    b1.position() * link.joint.data.local_frame1,
+                    b2.position() * link.joint.data.local_frame2,
+                ))
             })
             .collect()
     }
@@ -1838,17 +2122,22 @@ impl PhysicsWorld {
     }
 }
 
-/// Rapier-free description of an impulse joint, for ragdoll diagnostics.
+/// Rapier-free description of a joint, for ragdoll diagnostics.
 #[derive(Debug, Clone)]
 pub struct DebugJointInfo {
     pub body1_id: u32,
     pub body2_id: u32,
+    /// `"impulse"` or `"multibody"` - which joint set this came from.
+    pub joint_type: &'static str,
     /// World anchor on each body (should coincide for a satisfied ball joint).
     pub anchor1: [f32; 3],
     pub anchor2: [f32; 3],
     /// Distance between the two anchors - the translation-constraint violation.
+    /// Structurally ~0 for multibody joints (translation is not a DOF there);
+    /// a persistent gap on a multibody joint means the frame setup is wrong.
     pub separation: f32,
     /// Magnitude of the linear (translation) constraint impulse this step.
+    /// Rapier does not expose applied impulses for multibody links, so 0 there.
     pub linear_impulse: f32,
     /// Magnitude of the angular (limit) constraint impulse this step.
     pub angular_impulse: f32,

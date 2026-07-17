@@ -12,6 +12,7 @@ import type {
   PathfindingTestStatus,
   PhysicsBodyListResult,
   Position,
+  RagdollMetricsResult,
   RayCastRequest,
   RayCastResult,
   ScreenshotResult,
@@ -196,6 +197,11 @@ export class PhysicsApi {
     if (options?.limit !== undefined) params.set("limit", String(options.limit));
     const query = params.size > 0 ? `?${params}` : "";
     return this.client.get<PhysicsBodyListResult>(`/v1/physics/bodies${query}`);
+  }
+
+  /** Per-ragdoll settle/quality metrics (empty list when no ragdolls exist). */
+  async ragdolls(): Promise<RagdollMetricsResult> {
+    return this.client.get<RagdollMetricsResult>("/v1/ragdoll/metrics");
   }
 }
 

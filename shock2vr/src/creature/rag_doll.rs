@@ -44,6 +44,28 @@ const MIN_VOLUME: f32 = 1e-4;
 /// measured from the bind/rest pose. Keeps the rig from folding/twisting through
 /// itself. Per-bone limit profiles (hinge knees, cone shoulders) are a follow-up.
 const JOINT_CONE_LIMIT: f32 = 1.05;
+/// Angular sleep threshold for ragdoll bodies (rad/s). A settled extremity can
+/// hold a low-grade contact buzz (~0.5-1 rad/s) that sits above rapier's
+/// default angular threshold (0.5), and one awake body keeps the whole jointed
+/// island awake - so the corpse never sleeps and the buzz never stops. Raising
+/// it lets the island sleep once bulk motion is done (rapier needs the entire
+/// island below thresholds for ~2s continuously, so a corpse in real motion
+/// won't freeze); sleep zeroes the buzz, and contact or an applied impulse
+/// wakes the corpse (it stays pokeable). Tradeoff: a limb rotating alone at up
+/// to ~1.5 rad/s for 2s could hard-stop - lower toward 1.0 if that's ever
+/// visible.
+const SLEEP_ANGULAR_THRESHOLD: f32 = 1.5;
+/// Hard cap on ragdoll body velocities (per generalized-DOF component for the
+/// multibody rig; linvel/angvel norms for free bodies). Healthy collapse
+/// dynamics peak around 7-20; the cap only engages when a spawn transient
+/// enters runaway feedback (which otherwise ends in a NaN AABB and a parry
+/// BVH panic). Applied once per frame in `RagDoll::update`.
+const MAX_BODY_SPEED: f32 = 30.0;
+/// Impulse magnitude (N*s, bodies are ~1 mass unit each) applied to the struck
+/// limb when a death ragdoll is seeded with the killing blow. Tuned in medsci1
+/// A/B runs: 8.0 gives the struck limb a clearly visible ~2.5 m/s reaction
+/// that propagates through the articulated rig without launching the corpse.
+const KILLING_BLOW_IMPULSE: f32 = 8.0;
 
 /// Quality/settle metrics for one ragdoll, for the verification harness.
 #[derive(Clone, Debug)]
@@ -161,7 +183,51 @@ impl RagDoll {
         }
     }
 
-    fn update(&mut self, physics: &PhysicsWorld) {
+    /// Advance this ragdoll's render transforms from physics, sanitizing the
+    /// rig on the way. Returns false when the rig is poisoned (a body position
+    /// went non-finite/absurd) - the caller must despawn it before the next
+    /// physics step, or the broad-phase BVH build will panic on the bad AABB.
+    fn update(&mut self, physics: &mut PhysicsWorld) -> bool {
+        // Break runaway spawn transients before they cascade to a NaN AABB
+        // (which panics the parry BVH broad-phase). Normal collapse dynamics
+        // peak well below the cap, so this is a no-op except in the rare
+        // diverging run.
+        let corrected = physics.sanitize_ragdoll_bodies(&self.physics_bodies, MAX_BODY_SPEED);
+        if corrected > 0 {
+            // Common during the spawn transient (several frames per death),
+            // so debug rather than warn.
+            tracing::debug!(
+                "ragdoll velocity runaway: clamped {} velocity components",
+                corrected
+            );
+        }
+        // The velocity clamp bounds what enters each step, but a single solve
+        // can still explode (deep-penetration recovery at spawn) and integrate
+        // a non-finite position within that same step. The BVH panic only
+        // happens on the NEXT step's broad-phase, so catching it here - and
+        // having the manager despawn the rig - keeps the game alive.
+        for handle in &self.physics_bodies {
+            if let Some(iso) = physics.get_body_transform(*handle) {
+                let t = iso.translation;
+                let sane = |v: f32| v.is_finite() && v.abs() < 1.0e6;
+                // The AABB is computed from the full isometry, so a non-finite
+                // ROTATION poisons it just like a non-finite translation (an
+                // angular DOF can blow up while linear stays bounded).
+                let r = iso.rotation;
+                let rot_finite =
+                    r.i.is_finite() && r.j.is_finite() && r.k.is_finite() && r.w.is_finite();
+                if !(sane(t.x) && sane(t.y) && sane(t.z) && rot_finite) {
+                    tracing::warn!(
+                        "ragdoll body transform diverged (pos {}, {}, {}; rot finite: {}) - despawning the corpse",
+                        t.x,
+                        t.y,
+                        t.z,
+                        rot_finite
+                    );
+                    return false;
+                }
+            }
+        }
         for (joint_id, handle) in &self.joint_to_body {
             if let Some(isometry) = physics.get_body_transform(*handle) {
                 let world = matrix_from_isometry(isometry);
@@ -176,6 +242,7 @@ impl RagDoll {
                 }
             }
         }
+        true
     }
 
     fn renderables(&self) -> Vec<SceneObject> {
@@ -222,17 +289,34 @@ impl RagDollManager {
         joint_transforms: &[Matrix4<f32>; 40],
         root_offset: Vector3<f32>,
         joint_limits: &HashMap<u32, JointLimit>,
-        // When true, use reduced-coordinate (multibody) joints anchored at the
-        // articulation point: limbs can't separate (no hip gap), but the rig is
-        // experimental (extremities can jitter on floor contact). When false, the
-        // stable impulse-joint rig (heavier core, soft locked translation - settles
-        // but the hip can visibly sag/separate under load).
+        // When true (the default rig), use reduced-coordinate (multibody) joints
+        // anchored at the articulation point: limbs structurally can't separate
+        // (no hip gap) and the rig settles. When false (the legacy
+        // `ragdoll_impulse` fallback), the impulse-joint rig (heavier core, soft
+        // locked translation - settles but the hip can visibly sag/separate
+        // under load).
         use_multibody: bool,
+        // The dying creature's bulk velocity (root-motion carries the crumple
+        // forward), inherited by the rig so the fall's momentum is continuous
+        // across the handoff. Multibody only (the legacy impulse rig isn't
+        // seeded - body-level writes work there but it's a deprecated path).
+        seed_velocity: Vector3<f32>,
+        // When false, limbs collide with the world but not with each other
+        // (CollisionGroup::ragdoll_no_self). Death-handoff rigs spawn in a
+        // crumpled, limb-overlapping pose whose many deep limb-limb contacts
+        // can explode the articulated solve to non-finite positions in one
+        // step; the debug scene's standing-fall spawn keeps self-collision.
+        self_collide: bool,
         physics: &mut PhysicsWorld,
     ) -> bool {
         if !model.can_create_rag_doll() {
             return false;
         }
+        let collision_group = if self_collide {
+            CollisionGroup::ragdoll()
+        } else {
+            CollisionGroup::ragdoll_no_self()
+        };
 
         let (bones, _) = match model.ragdoll_source() {
             Some(data) => data,
@@ -286,6 +370,7 @@ impl RagDollManager {
 
             let handle = physics.create_dynamic_body(isometry, Some(entity_id));
             physics.set_body_damping(handle, LINEAR_DAMPING, ANGULAR_DAMPING);
+            physics.set_body_angular_sleep_threshold(handle, SLEEP_ANGULAR_THRESHOLD);
             spawn_positions.insert(handle, pos_vec);
 
             // Build the collider from the joint's fitted shape. Density is chosen
@@ -308,7 +393,7 @@ impl RagDollManager {
                             *radius,
                         ),
                         density,
-                        CollisionGroup::ragdoll(),
+                        collision_group,
                     );
                 }
                 Some(HitBoxShape::Cuboid {
@@ -336,19 +421,14 @@ impl RagDollManager {
                         SharedShape::cuboid(he.x, he.y, he.z),
                         vec3(center.x, center.y, center.z),
                         density,
-                        CollisionGroup::ragdoll(),
+                        collision_group,
                     );
                 }
                 None => {
                     let r = DEFAULT_JOINT_RADIUS;
                     let volume = 4.0 / 3.0 * std::f32::consts::PI * r * r * r;
                     let density = TARGET_BODY_MASS / volume.max(MIN_VOLUME);
-                    physics.attach_collider(
-                        handle,
-                        SharedShape::ball(r),
-                        density,
-                        CollisionGroup::ragdoll(),
-                    );
+                    physics.attach_collider(handle, SharedShape::ball(r), density, collision_group);
                 }
             }
 
@@ -485,6 +565,19 @@ impl RagDollManager {
             }
         }
 
+        // Inherit the dying creature's bulk motion so the crumple's momentum
+        // is continuous across the handoff (mid-fall spawns would otherwise
+        // freeze for an instant). Written into the multibody's generalized
+        // root DOF - body-level set_linvel is clobbered by the readback.
+        if use_multibody && seed_velocity.magnitude2() > 1.0e-8 {
+            if let Some(first) = body_handles.first() {
+                if !physics.set_multibody_root_linvel(*first, seed_velocity) {
+                    // Best-effort momentum; note the miss rather than fail.
+                    tracing::debug!("ragdoll velocity seed not applied (non-finite or no body)");
+                }
+            }
+        }
+
         let ragdoll = RagDoll::new(
             joint_to_body,
             body_handles,
@@ -499,10 +592,23 @@ impl RagDollManager {
         true
     }
 
-    pub fn update(&mut self, physics: &PhysicsWorld) {
-        for ragdoll in self.ragdolls.values_mut() {
-            ragdoll.update(physics);
+    /// Advance all ragdolls. Returns the corpse entity ids of any rigs that
+    /// were despawned because a body transform went non-finite (the broad-
+    /// phase BVH build would panic on their AABB next step) - the caller
+    /// should delete those (otherwise-empty) corpse entities from the world.
+    /// Losing a corpse is the rare last-resort outcome; the velocity clamp in
+    /// `RagDoll::update` makes it rarer still.
+    pub fn update(&mut self, physics: &mut PhysicsWorld) -> Vec<EntityId> {
+        let mut poisoned = Vec::new();
+        for (entity_id, ragdoll) in self.ragdolls.iter_mut() {
+            if !ragdoll.update(physics) {
+                poisoned.push(*entity_id);
+            }
         }
+        for entity_id in &poisoned {
+            self.remove_entity(*entity_id, physics);
+        }
+        poisoned
     }
 
     /// Per-ragdoll quality metrics (keyed by the corpse entity id).
@@ -519,6 +625,42 @@ impl RagDollManager {
             scene.extend(ragdoll.renderables());
         }
         scene
+    }
+
+    /// Seed a just-spawned corpse with its killing blow: shove the struck limb
+    /// (by skeleton joint id when the hitbox reported one, else the body
+    /// nearest the hit point) along the blow's direction. The articulated rig
+    /// propagates the reaction naturally.
+    pub fn apply_impact(
+        &mut self,
+        entity_id: EntityId,
+        impact: &crate::scripts::DamageImpact,
+        physics: &mut PhysicsWorld,
+    ) {
+        let Some(ragdoll) = self.ragdolls.get(&entity_id) else {
+            return;
+        };
+        let by_bone = impact
+            .bone
+            .and_then(|bone| ragdoll.joint_to_body.get(&bone).copied());
+        let handle = by_bone.or_else(|| {
+            // Nearest body to the hit point.
+            ragdoll
+                .physics_bodies
+                .iter()
+                .filter_map(|h| {
+                    physics.get_body_transform(*h).map(|iso| {
+                        let p =
+                            Vector3::new(iso.translation.x, iso.translation.y, iso.translation.z);
+                        (*h, (p - impact.point).magnitude2())
+                    })
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(h, _)| h)
+        });
+        if let Some(handle) = handle {
+            physics.apply_impulse_to_handle(handle, impact.direction * KILLING_BLOW_IMPULSE);
+        }
     }
 
     pub fn remove_entity(&mut self, entity_id: EntityId, physics: &mut PhysicsWorld) {

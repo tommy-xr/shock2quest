@@ -447,10 +447,12 @@ The project supports experimental flags for gating in-progress features during d
 - **`ragdoll`**: spawn a physics ragdoll on creature death (`SlayEntity`) instead of
   just removing the entity. Without it, death is unchanged.
 
-- **`ragdoll_multibody`**: make ragdolls use reduced-coordinate (multibody) joints
-  anchored at the limb articulation points — limbs can't separate (no hip gap), but
-  the rig is experimental (extremities can jitter on floor contact). Without it,
-  ragdolls use the stable impulse-joint rig. See `projects/ragdoll-settling-followup.md`.
+- **`ragdoll_impulse`**: make ragdolls fall back to the legacy impulse-joint rig
+  (heavier core, soft locked translation — settles but the hip visibly sags/separates
+  under load). Without it, ragdolls use the default reduced-coordinate (multibody)
+  rig — joints anchored at the limb articulation points, so limbs structurally can't
+  separate — with raised sleep thresholds so the settled corpse goes fully still
+  (and wakes again on contact/impulse). See `projects/ragdoll-settling-followup.md`.
 
 - **`loading_screen`**: show the animated loading screen during level transitions
   (`GlobalEffect::TransitionLevel` / `TestReload`) instead of switching instantly. The

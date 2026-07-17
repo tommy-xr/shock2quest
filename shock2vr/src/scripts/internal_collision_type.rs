@@ -73,7 +73,10 @@ impl Script for InternalCollisionType {
                         // data - shared follow-up with the fast (raycast)
                         // projectile path's hardcoded 6.0 in
                         // internal_fast_projectile.rs.
-                        payload: MessagePayload::Damage { amount: 1.0 },
+                        payload: MessagePayload::Damage {
+                            amount: 1.0,
+                            impact: None,
+                        },
                     },
                 };
                 let mut effects = vec![initial_effect, damage_effect];
