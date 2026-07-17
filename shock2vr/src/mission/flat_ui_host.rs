@@ -9,8 +9,8 @@
 //!   Frob) binds the panel to one world object - the original's single
 //!   `gOverlayObj` binding.
 //! - **Render**: the panel's `Effect::SetUI` component list is intercepted
-//!   and drawn onto the shared 640x480 [`UiCanvas`] at the original left-MFD
-//!   anchor `(2, 124)` (shkmfddm.h), after the flat HUD, plus a host-drawn
+//!   and drawn onto the shared 640x480 [`UiCanvas`] at the original game's
+//!   left-MFD anchor `(2, 124)`, after the flat HUD, plus a host-drawn
 //!   close button and the `CURSOR.PCX` pointer.
 //! - **Input**: each frame the normalized 2D pointer is mapped through
 //!   [`pointer_to_canvas`] into panel-local normalized coordinates and sent
@@ -37,14 +37,14 @@ use crate::{
 /// The shared 640x480 virtual canvas the flat HUD renders on.
 const CANVAS_SIZE: Vector2<f32> = Vector2::new(640.0, 480.0);
 
-/// The original left MFD slot anchor for world-object panels (keypad,
-/// container, ...) on the 640x480 canvas (`shkmfddm.h`: `(2, 124, 188x300)`).
+/// The original game's left MFD slot anchor for world-object panels (keypad,
+/// container, ...) on the 640x480 canvas: rect `(2, 124, 188x300)`.
 /// The right slot `(450, 124)` is reserved for later character panels.
 const LEFT_MFD_ANCHOR: Vector2<f32> = Vector2::new(2.0, 124.0);
 
-/// The top-docked inventory strip anchor (`shkinv.cpp`: `INV_X = 2`,
-/// `INV_Y = 0`, `inv_rect = 636x121` - horizontally centered on the 640
-/// canvas, flush with the top edge).
+/// The top-docked inventory strip anchor, matching the original game's
+/// layout: `(2, 0)`, `inv_rect = 636x121` - horizontally centered on the 640
+/// canvas, flush with the top edge.
 const STRIP_ANCHOR: Vector2<f32> = Vector2::new(2.0, 0.0);
 
 /// Walk-away auto-close distance (world units; dark units / SCALE_FACTOR).
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn panel_anchors_at_the_original_left_mfd_slot() {
-        // Keypad panel: 188x296 at (2, 124) - the shkmfddm.h left MFD rect.
+        // Keypad panel: 188x296 at (2, 124) - the original left MFD rect.
         let rect = panel_canvas_rect(vec2(188.0, 296.0));
         assert_eq!(rect, Rect::new(2.0, 124.0, 188.0, 296.0));
         // It fits on the 640x480 canvas.
@@ -1127,8 +1127,8 @@ mod tests {
 
     #[test]
     fn strip_docks_at_the_top_of_the_canvas() {
-        // The inventory strip: 635x120 (invback) at the original inv_rect
-        // anchor (shkinv.cpp INV_X=2, INV_Y=0) - flush with the canvas top.
+        // The inventory strip: 635x120 (invback) at the original game's
+        // inv_rect anchor (2, 0) - flush with the canvas top.
         let rect = strip_canvas_rect(vec2(635.0, 120.0));
         assert_eq!(rect, Rect::new(2.0, 0.0, 635.0, 120.0));
         // It fits on the canvas and clears the left-MFD slot below (y 124+).
