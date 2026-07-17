@@ -1717,13 +1717,70 @@ impl PhysicsWorld {
         let Some(handle) = handle else {
             return false;
         };
-        // A multibody link ignores direct velocity writes: the reduced-
-        // coordinate solver recomputes every link body's velocity from the
-        // joint velocities each step (`Multibody` forward kinematics), so
-        // `apply_impulse` is silently overwritten. Its forward *dynamics* does
-        // read the per-body user-force accumulator, so convert the impulse to
-        // a force over one physics step - `clear_forces` (called right after
-        // each step) makes it impulsive.
+        self.apply_impulse_to_handle(handle, impulse)
+    }
+
+    /// Seed a multibody's free-root velocity with a world-space linear
+    /// velocity (rapier free-joint DOF layout: linear xyz at generalized
+    /// indices 0..3, angular at 3..6 - see `MultibodyJoint::integrate`).
+    /// Body-level `set_linvel` is clobbered by the reduced-coordinate
+    /// readback, so inherited motion (e.g. a dying creature's root-motion
+    /// velocity carrying into its ragdoll) must be written into the
+    /// generalized coordinates. `body` may be any link of the multibody.
+    /// Returns false for non-multibody bodies.
+    pub fn set_multibody_root_linvel(
+        &mut self,
+        body: RigidBodyHandle,
+        linvel: Vector3<f32>,
+    ) -> bool {
+        // Sanitize the seed: it gets a full physics step before the ragdoll's
+        // per-frame velocity clamp sees it, so a non-finite or runaway value
+        // (e.g. a capsule mid-knockback) must not reach the solver verbatim.
+        const MAX_SEED_SPEED: f32 = 30.0;
+        if !(linvel.x.is_finite() && linvel.y.is_finite() && linvel.z.is_finite()) {
+            return false;
+        }
+        let norm = linvel.magnitude();
+        let linvel = if norm > MAX_SEED_SPEED {
+            linvel * (MAX_SEED_SPEED / norm)
+        } else {
+            linvel
+        };
+        let Some(link) = self.multibody_joint_set.rigid_body_link(body) else {
+            // Not articulated (e.g. a one-bone skeleton spawns a lone free
+            // body): a direct write works there.
+            if let Some(rigid_body) = self.rigid_body_set.get_mut(body) {
+                rigid_body.set_linvel(vec_to_nvec(linvel), true);
+                return true;
+            }
+            return false;
+        };
+        let index = link.multibody;
+        if let Some(multibody) = self.multibody_joint_set.get_multibody_mut(index) {
+            let mut generalized = multibody.generalized_velocity_mut();
+            if generalized.len() >= 3 {
+                generalized[0] = linvel.x;
+                generalized[1] = linvel.y;
+                generalized[2] = linvel.z;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Multibody-aware impulse on a body handle, waking it even for a zero
+    /// impulse. A multibody link ignores direct velocity writes: the reduced-
+    /// coordinate solver recomputes every link body's velocity from the joint
+    /// velocities each step (`Multibody` forward kinematics), so
+    /// `apply_impulse` is silently overwritten. Its forward *dynamics* does
+    /// read the per-body user-force accumulator, so convert the impulse to a
+    /// force over one physics step - `clear_forces` (called right after each
+    /// step) makes it impulsive. Free dynamic bodies get a plain impulse.
+    pub fn apply_impulse_to_handle(
+        &mut self,
+        handle: RigidBodyHandle,
+        impulse: Vector3<f32>,
+    ) -> bool {
         let is_multibody_link = self.multibody_joint_set.rigid_body_link(handle).is_some();
         let dt = self.integration_parameters.dt;
         if let Some(body) = self.rigid_body_set.get_mut(handle) {

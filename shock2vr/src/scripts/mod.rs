@@ -144,6 +144,21 @@ use self::{
     weapon_script::WeaponScript,
 };
 
+/// World-space description of the blow behind a `Damage` message, for physics
+/// reactions (ragdoll seeding). None when the source has no meaningful
+/// direction (scripted damage, collisions; radius blasts shove bodies
+/// directly).
+#[derive(Clone, Copy, Debug)]
+pub struct DamageImpact {
+    /// Unit direction the blow traveled (attacker toward victim).
+    pub direction: cgmath::Vector3<f32>,
+    /// World-space hit point.
+    pub point: cgmath::Vector3<f32>,
+    /// Skeleton joint id of the hitbox that was struck, when known (filled in
+    /// by HitBoxScript as it forwards damage to its parent creature).
+    pub bone: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
     Frob,
@@ -172,6 +187,9 @@ pub enum MessagePayload {
     }, // propose to consume this entity
     Damage {
         amount: f32,
+        /// The blow's direction/point/bone, when the source knows them -
+        /// seeds the death ragdoll's reaction.
+        impact: Option<DamageImpact>,
     }, // damage the entity
 
     // The entity heard a noise (gunfire, etc.) at this position - an AI

@@ -55,18 +55,16 @@ test(
       amount: 1000,
     });
 
-    // The death crumple has to actually play out before the handoff fires
-    // (the ragdoll spawns on the crumple's AnimationCompleted, not on the
-    // killing blow). Step in 0.5s batches until the ragdoll exists.
-    let ragdolls = (await game.physics.ragdolls()).ragdolls;
-    for (let i = 0; i < 30 && ragdolls.length === 0; i++) {
-      await game.step({ frames: 30 });
-      ragdolls = (await game.physics.ragdolls()).ragdolls;
-    }
+    // The handoff is near-instant (~0.05s into the crumple, so the killing
+    // blow lands AT the kill): half a second after the killing blow the
+    // ragdoll must already exist. This pins the timing contract - the old
+    // completion-driven handoff (~4s later) would fail here.
+    await game.step({ frames: 30 });
+    const ragdolls = (await game.physics.ragdolls()).ragdolls;
     assert.equal(
       ragdolls.length,
       1,
-      "death crumple should spawn exactly one ragdoll within 15s",
+      "the killing blow should hand off to exactly one ragdoll within 0.5s",
     );
     assert.ok(
       ragdolls[0].body_count >= 15,
@@ -105,6 +103,60 @@ test(
     assert.ok(
       settled.max_drift < 15.0,
       `corpse drifted ${settled.max_drift} units from its death spot`,
+    );
+  },
+);
+
+// The killing blow seeds the corpse: a directional lethal hit shoves the
+// struck limb along the blow at handoff, so the corpse reacts to HOW it died.
+// (Control measurement: a directionless kill leaves max body vx ~0.1; the
+// seeded kill reaches ~2.5 - threshold 1.0 discriminates cleanly.)
+test(
+  "a directional killing blow seeds the ragdoll's reaction",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8107),
+      experimental: ["ragdoll"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    await game.step({ frames: 10 });
+    const preSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
+    const known = new Set(preSpawn.entities.map((e) => e.id));
+    await game.input.trigger("SpawnDebugMonster");
+    await game.step({ frames: 30 });
+    const postSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
+    const monster = postSpawn.entities.find(
+      (e) => e.name === "OG-Pipe" && !known.has(e.id),
+    );
+    assert.ok(monster, "expected a newly spawned OG-Pipe");
+
+    // Kill with a world +X blow (what a projectile hit reports).
+    await game.entities.sendMessage(monster.id, {
+      type: "Damage",
+      amount: 1000,
+      direction: [1, 0, 0],
+    });
+
+    let ragdolls = (await game.physics.ragdolls()).ragdolls;
+    for (let i = 0; i < 30 && ragdolls.length === 0; i++) {
+      await game.step({ frames: 30 });
+      ragdolls = (await game.physics.ragdolls()).ragdolls;
+    }
+    assert.equal(ragdolls.length, 1, "crumple should hand off to a ragdoll");
+
+    // Sample body velocities right after the handoff: the struck limb must be
+    // moving along the blow.
+    await game.step({ frames: 3 });
+    const bodies = await game.physics.bodies({
+      entityId: ragdolls[0].entity_id,
+    });
+    const maxVx = Math.max(...bodies.bodies.map((b) => b.velocity[0]));
+    assert.ok(
+      maxVx > 1.0,
+      `struck limb should move along the +X blow, max vx=${maxVx}`,
     );
   },
 );
