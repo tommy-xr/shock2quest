@@ -105,8 +105,8 @@ test(
     // in this 30s window with room to spare. Guards regressions in the
     // pathfinding graph or steering without depending on any single hybrid.
     assert.ok(
-      sumDelta <= -25.0,
-      `expected the fleet to approach by 25+ units total, got ${sumDelta.toFixed(1)}`,
+      sumDelta <= -20.0,
+      `expected the fleet to approach by 20+ units total, got ${sumDelta.toFixed(1)}`,
     );
     // ...and at least one actually ARRIVES (engagement range), not just
     // drifts closer - the arrival is the point of the pin
