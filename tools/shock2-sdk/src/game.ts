@@ -29,6 +29,7 @@ import type {
   PlayerInventoryResult,
   TransitionsResult,
   WaitForOptions,
+  AiPathEntry,
 } from "./types.js";
 
 /** Error thrown when the game reports a command failed (success: false). */
@@ -291,6 +292,15 @@ export class PathfindingApi {
    */
   async stats(): Promise<PathfindingStats | null> {
     return this.client.get<PathfindingStats | null>("/v1/pathfinding/stats");
+  }
+
+  /**
+   * The latest route each AI computed: goal, waypoints, and whether the
+   * query found a Full route, a Partial (closest-reachable) route, or
+   * Failed. Empty until an AI has pathed.
+   */
+  async aiPaths(): Promise<AiPathEntry[]> {
+    return this.client.get<AiPathEntry[]>("/v1/ai/paths");
   }
 }
 

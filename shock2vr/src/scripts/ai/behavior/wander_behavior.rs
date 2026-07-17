@@ -29,11 +29,11 @@ impl WanderBehavior {
     pub fn new() -> WanderBehavior {
         WanderBehavior {
             steering_strategy: steering::chained(vec![
-                Box::new(CollisionAvoidanceSteeringStrategy::comprehensive()),
-                // Roam to random reachable spots; without AIPATH data this
-                // returns None and the AI just walks its current heading
-                // (the previous behavior).
+                // Path steering leads; whisker avoidance only covers the
+                // no-route case (see chase_behavior for the deadlock this
+                // prevents)
                 Box::new(PathFollowSteeringStrategy::wander(WANDER_RADIUS)),
+                Box::new(CollisionAvoidanceSteeringStrategy::comprehensive()),
             ]),
         }
     }

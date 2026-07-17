@@ -24,13 +24,15 @@ impl ChaseBehavior {
     pub fn new() -> ChaseBehavior {
         ChaseBehavior {
             steering_strategy: steering::chained(vec![
+                // Path steering leads: the route already avoids static
+                // geometry (nav-mesh + edge clearance), and letting whisker
+                // avoidance preempt it deadlocks AIs against walls the path
+                // was about to turn away from (issue #481). Avoidance guards
+                // only the direct-chase fallback below.
+                Box::new(PathFollowSteeringStrategy::chase_player()),
                 Box::new(
                     CollisionAvoidanceSteeringStrategy::conservative(), /* conservative so we can focus on the chase */
                 ),
-                // Route to the player through the navigation mesh; falls
-                // through to the direct chase when there is no AIPATH data
-                // or no route.
-                Box::new(PathFollowSteeringStrategy::chase_player()),
                 Box::new(ChasePlayerSteeringStrategy),
             ]),
         }

@@ -42,6 +42,18 @@ export interface CommandResult {
 }
 
 /** Monotonic pathfinding query counters (diff across steps for rates). */
+/** One AI's most recent path query (GET /v1/ai/paths). */
+export interface AiPathEntry {
+  /** EntityId::inner() as i32 - same id space as the entity endpoints. */
+  entity_id: number;
+  /** Where the AI was trying to go. */
+  goal: [number, number, number];
+  /** "Full", "Partial" (closest reachable), or "Failed". */
+  outcome: string;
+  /** Route waypoints (empty for Failed). */
+  waypoints: [number, number, number][];
+}
+
 export interface PathfindingStats {
   queries: number;
   stressed_retries: number;

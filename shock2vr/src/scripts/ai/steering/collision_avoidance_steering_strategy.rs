@@ -48,13 +48,15 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
         entity_id: EntityId,
         _time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
-        // TODO
-        let height = 1.0 / SCALE_FACTOR;
         let whisker_angle = Deg(30.0);
         let target_offset = 8.0 / SCALE_FACTOR;
 
-        let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0))
-            + vec3(0.0, -height, 0.0);
+        // Cast from the body center, NOT below it: a knee-height whisker
+        // looking down a descending staircase hits the lower steps' risers
+        // (vertical faces, so the mostly-vertical-normal filter doesn't
+        // reject them) and treats the descent the route chose as a wall.
+        // Real walls extend above body center and are still seen.
+        let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
 
         let mut debug_lines = vec![];
 
@@ -76,7 +78,12 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
                 extra_whisker_distance,
                 Some(Deg(-30.0)),
             ),
-            (rotation, main_whisker_distance, Some(Deg(180.0))),
+            // The main (straight-ahead) whisker deflects along the wall via
+            // the hit normal (below) instead of carrying a fixed mitigation:
+            // a fixed 180 reversal fights the path steering command straight
+            // back at the obstacle, flip-flopping the heading forever while
+            // the AI runs in place (issue #481's freeze).
+            (rotation, main_whisker_distance, None),
             //(rotation, main_whisker_distance, None),
         ];
 
@@ -124,15 +131,19 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
                 // dist = distance_to_hit;
 
                 if !is_normal_mostly_vertical && !entity_is_door {
-                    if mitigation.is_none() {
-                        maybe_steering_output = Some(Steering::from_current(
-                            current_heading + self.last_mitigation_direction,
-                        ));
-                    } else {
-                        self.last_mitigation_direction = mitigation.unwrap();
-                        maybe_steering_output = Some(Steering::from_current(
-                            current_heading + mitigation.unwrap(),
-                        ));
+                    match mitigation {
+                        // Main whisker: steer toward the point deflected off
+                        // the obstacle along its surface normal - glancing
+                        // away instead of reversing into a heading war with
+                        // the path steering
+                        None => {
+                            maybe_steering_output = Some(Steering::turn_to_point(position, target));
+                        }
+                        Some(mitigation) => {
+                            self.last_mitigation_direction = mitigation;
+                            maybe_steering_output =
+                                Some(Steering::from_current(current_heading + mitigation));
+                        }
                     }
                 }
                 // }

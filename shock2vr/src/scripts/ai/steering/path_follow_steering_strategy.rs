@@ -30,9 +30,15 @@ pub enum PathTarget {
 
 /// A waypoint counts as reached within this XZ distance (2 Dark feet)
 const WAYPOINT_ADVANCE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
-/// ...and within this height difference (4 Dark feet): feet-vs-cell-floor
-/// offsets are small, a waypoint on the floor above/below is not "reached"
-const WAYPOINT_ADVANCE_HEIGHT: f32 = 4.0 / SCALE_FACTOR;
+/// ...and within this height difference (7 Dark feet). Waypoint heights are
+/// cell-FLOOR heights while an AI's position is its body center, which for
+/// the tall grunt models sits ~4.2 Dark feet above the floor - the previous
+/// 4-foot gate was at that boundary, so physics jitter could leave an AI
+/// permanently "not arrived" at a waypoint it was standing on (running in
+/// place through an endless stall/re-path loop). 7 feet clears the tallest
+/// body-center offset while still rejecting waypoints on a stacked floor
+/// (floor-to-floor separation is 10+ feet).
+const WAYPOINT_ADVANCE_HEIGHT: f32 = 7.0 / SCALE_FACTOR;
 /// Re-path when a moving target strays this far from the path's goal
 const REPATH_TARGET_DRIFT: f32 = 6.0 / SCALE_FACTOR;
 /// Minimum seconds between A* queries per strategy instance (behaviors are
@@ -46,6 +52,13 @@ const REPATH_FAILURE_BACKOFF_SECONDS: f32 = 2.0;
 /// Drop the path when we can't get closer to the current waypoint for this
 /// long (blocked by a prop, another AI, or unreachable geometry)
 const STALL_SECONDS: f32 = 3.0;
+/// After a stall, back out toward the previous waypoint for about this long
+/// before re-pathing. Without the retreat, the fresh route is identical to
+/// the one that just wedged (same start cell, same taut corners), so an AI
+/// pressed against a door frame - or two AIs pressed against each other -
+/// repeated the wedge forever (issue #481). Jittered per stall so mutually
+/// blocking AIs unstick on different frames.
+const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
 
@@ -65,6 +78,8 @@ pub struct PathFollowSteeringStrategy {
     stall_waypoint: usize,
     stall_best: f32,
     stall_seconds: f32,
+    /// Active stall recovery: seconds left, and the point to back out toward
+    recovery: Option<(f32, Vector3<f32>)>,
 }
 
 impl PathFollowSteeringStrategy {
@@ -90,6 +105,7 @@ impl PathFollowSteeringStrategy {
             stall_waypoint: usize::MAX,
             stall_best: f32::INFINITY,
             stall_seconds: 0.0,
+            recovery: None,
         }
     }
 
@@ -135,6 +151,22 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         let position = position_point.to_vec();
 
         self.repath_cooldown = (self.repath_cooldown - time.elapsed.as_secs_f32()).max(0.0);
+
+        // Stall recovery: back out toward the previous waypoint (ground we
+        // know we stood on) so the next route doesn't start from the wedged
+        // pose and reproduce the wedge
+        if let Some((seconds_left, retreat)) = self.recovery {
+            let seconds_left = seconds_left - time.elapsed.as_secs_f32();
+            if seconds_left <= 0.0 || xz_distance(position, retreat) < WAYPOINT_ADVANCE_DISTANCE {
+                self.recovery = None;
+            } else {
+                self.recovery = Some((seconds_left, retreat));
+                return Some((
+                    Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(retreat)),
+                    Effect::NoEffect,
+                ));
+            }
+        }
 
         // Path is exhausted - forget it so we re-path (chase) or pick a new
         // destination (wander)
@@ -255,6 +287,16 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
 
         self.next_waypoint = advance_waypoint(position, &self.path, self.next_waypoint);
 
+        service.record_ai_steering(
+            entity_id.inner(),
+            crate::pathfinding::AiSteeringDebug {
+                next_waypoint: self.next_waypoint,
+                path_len: self.path.len(),
+                target: self.path.get(self.next_waypoint).copied(),
+                stall_seconds: self.stall_seconds,
+            },
+        );
+
         // No route (or none yet) - let the next strategy in the chain steer
         let waypoint = *self.path.get(self.next_waypoint)?;
 
@@ -272,8 +314,25 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         } else {
             self.stall_seconds += time.elapsed.as_secs_f32();
             if self.stall_seconds >= STALL_SECONDS {
+                // Back out toward the previous waypoint (or straight back
+                // when the route began here), then re-path from clear ground
+                let retreat = self
+                    .path
+                    .get(self.next_waypoint.saturating_sub(1))
+                    .copied()
+                    .filter(|p| xz_distance(position, *p) >= WAYPOINT_ADVANCE_DISTANCE)
+                    .unwrap_or_else(|| {
+                        let (_, forward) = ai_util::get_position_and_forward(world, entity_id);
+                        position - forward * 2.0
+                    });
+                let jitter = rand::thread_rng().gen_range(0.8..1.6);
+                self.recovery = Some((STALL_RECOVERY_SECONDS * jitter, retreat));
                 self.clear_path();
-                return None;
+                self.repath_cooldown = STALL_RECOVERY_SECONDS * jitter;
+                return Some((
+                    Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(retreat)),
+                    Effect::NoEffect,
+                ));
             }
         }
 
@@ -371,8 +430,18 @@ mod tests {
 
     #[test]
     fn advance_tolerates_small_height_offsets() {
-        // Feet vs cell-floor offset (well under 4 Dark feet) still reaches
+        // Feet vs cell-floor offset (well under the gate) still reaches
         let path = vec![vec3(0.0, 0.5, 0.0), vec3(10.0, 0.0, 0.0)];
+        assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 1);
+    }
+
+    #[test]
+    fn advance_tolerates_body_center_above_cell_floor() {
+        // Waypoint heights are cell-floor heights; a tall creature's body
+        // center rides ~1.7 units above them. Standing on the waypoint must
+        // count as reached (the freeze in issue #481: it didn't, and the AI
+        // ran in place through an endless stall/re-path loop).
+        let path = vec![vec3(0.0, -1.7, 0.0), vec3(10.0, -1.7, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 1);
     }
 
