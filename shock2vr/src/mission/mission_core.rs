@@ -109,6 +109,11 @@ pub use crate::resource_path;
 /// (starting hit points, psi pool, base stats, vulnerabilities, ...).
 pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 
+/// Vertical clearance (world units) a death-handoff ragdoll spawns with, so a
+/// floor-lying crumple pose doesn't start deeply interpenetrating the level
+/// trimesh (see `spawn_ragdoll`).
+const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
+
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
     pub pos: Vector3<f32>,
@@ -834,7 +839,11 @@ impl MissionCore {
 
         // Clear forces
         self.physics.clear_forces();
-        self.rag_doll_manager.update(&mut self.physics);
+        // A poisoned (transform-diverged) rig is despawned by the manager;
+        // also delete its otherwise-empty corpse entity so it doesn't leak.
+        for poisoned_id in self.rag_doll_manager.update(&mut self.physics) {
+            self.world.delete_entity(poisoned_id);
+        }
 
         let (left_hand_entity_id, right_hand_entity_id) = self.interaction.held_entities();
 
@@ -2162,9 +2171,21 @@ impl MissionCore {
     /// creature is torn down via `remove_entity`, which also clears any ragdoll
     /// keyed by that id - so the corpse must live under its own id to survive.
     /// Replace a creature with a physics ragdoll of its current pose. `use_multibody`
-    /// selects reduced-coordinate (multibody) joints over the default impulse joints.
+    /// selects reduced-coordinate (multibody) joints over the legacy impulse joints.
+    /// `crumpled_pose` marks rigs spawned from a finished death crumple (floor-
+    /// lying, limb-overlapping): those spawn without limb self-collision (the
+    /// pose's deep limb-limb contacts can explode the articulated solve - see
+    /// `CollisionGroup::ragdoll_no_self`) and with a small vertical lift so the
+    /// fitted colliders don't start inside the level trimesh. Standing/mid-
+    /// animation spawns (instant slays, the debug scene) pass false and keep
+    /// the full self-colliding rig with no lift.
     /// Returns true if a ragdoll was spawned (the creature is then removed).
-    pub fn spawn_ragdoll(&mut self, entity_id: EntityId, use_multibody: bool) -> bool {
+    pub fn spawn_ragdoll(
+        &mut self,
+        entity_id: EntityId,
+        use_multibody: bool,
+        crumpled_pose: bool,
+    ) -> bool {
         let spawned = {
             let model = match self.id_to_model.get(&entity_id) {
                 Some(model) if model.can_create_rag_doll() => model,
@@ -2199,14 +2220,26 @@ impl MissionCore {
             // not tear down the ragdoll (the manager keys ragdolls by entity id).
             let ragdoll_id = self.world.add_entity(RuntimePropDoNotSerialize {});
 
+            // A crumple pose ends lying ON the floor, so the fitted colliders
+            // start interpenetrating the level trimesh - the deep-penetration
+            // recovery through the articulated solver exploded ~half of
+            // medsci1 handoffs to non-finite positions within a step. A few cm
+            // of clearance lets the rig drop back down instead (imperceptible
+            // at spawn). Standing spawns don't need it.
+            let lift = if crumpled_pose {
+                RAGDOLL_SPAWN_LIFT
+            } else {
+                0.0
+            };
             self.rag_doll_manager.add_ragdoll(
                 ragdoll_id,
                 model,
                 root_transform,
                 &joint_transforms,
-                vec3(0.0, 0.0, 0.0),
+                vec3(0.0, lift, 0.0),
                 &joint_limits,
                 use_multibody,
+                !crumpled_pose,
                 &mut self.physics,
             )
         };
@@ -2907,10 +2940,35 @@ impl MissionCore {
                                     !game_options
                                         .experimental_features
                                         .contains("ragdoll_impulse"),
+                                    // Slain mid-animation, usually upright -
+                                    // not a crumpled pose.
+                                    false,
                                 );
                         if !spawned_ragdoll {
                             self.remove_entity(entity_id);
                         }
+                    }
+                }
+                Effect::SpawnCorpseRagdoll { entity_id } => {
+                    // Death-crumple handoff (AI deaths): once the death
+                    // animation has finished, replace the animated corpse with
+                    // a physics ragdoll seeded from its final pose. Gated on
+                    // the `ragdoll` experimental flag - without it the
+                    // animated corpse entity persists exactly as before.
+                    // (Known experimental limitations: the ragdoll corpse is
+                    // not serialized, so it vanishes on save/load; and the
+                    // creature entity is removed, which will matter once
+                    // corpse looting (`creaturecontainer`) is implemented.)
+                    if game_options.experimental_features.contains("ragdoll") {
+                        self.spawn_ragdoll(
+                            entity_id,
+                            !game_options
+                                .experimental_features
+                                .contains("ragdoll_impulse"),
+                            // Finished death crumple: floor-lying and limb-
+                            // overlapping.
+                            true,
+                        );
                     }
                 }
                 Effect::StopSound { handle } => {

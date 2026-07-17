@@ -176,6 +176,10 @@ impl RagdollHooks {
                 !game_options
                     .experimental_features
                     .contains("ragdoll_impulse"),
+                // Standing-fall spawn, not a crumpled pose: keeps limb
+                // self-collision and no lift (the config the settle metrics
+                // are calibrated against).
+                false,
             );
             println!(
                 "Applied massive damage to pipe hybrid entity {:?} for ragdoll testing",
