@@ -94,6 +94,18 @@ fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
+/// The disc's readable `(deck, log)` pair, if its `PropLog` names a real log.
+/// Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys off the
+/// `log` field; 33 (the empty-bitmask sentinel) in either field means "not
+/// set", so such a disc has nothing to read.
+fn readable_log(world: &World, entity_id: EntityId) -> Option<(u32, u32)> {
+    let v_log = world.borrow::<View<PropLog>>().unwrap();
+    match v_log.get(entity_id) {
+        Ok(log) if log.deck > 0 && log.log > 0 && log.log != LOG_UNSET => Some((log.deck, log.log)),
+        _ => None,
+    }
+}
+
 fn transcript_line_count(world: &World, entity_id: EntityId) -> usize {
     let v = world.borrow::<View<RuntimePropLogData>>().unwrap();
     v.get(entity_id)
@@ -212,16 +224,8 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
     }
 
     fn on_frob(&self, entity_id: EntityId, world: &World) -> Effect {
-        // Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys
-        // off the `log` field; 33 in either field means "not set".
-        let (deck, log) = {
-            let v_log = world.borrow::<View<PropLog>>().unwrap();
-            match v_log.get(entity_id) {
-                Ok(log) if log.deck > 0 && log.log > 0 && log.log != LOG_UNSET => {
-                    (log.deck, log.log)
-                }
-                _ => return Effect::NoEffect,
-            }
+        let Some((deck, log)) = readable_log(world, entity_id) else {
+            return Effect::NoEffect;
         };
         let audio = Effect::PlaySound {
             handle: AudioHandle::new(),
@@ -247,11 +251,155 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         };
         Effect::combine(vec![collect, audio, switchlinks])
     }
+
+    /// A disc with no readable log (unset `PropLog` sentinel) must not open an
+    /// empty backdrop with dead scroll buttons - its frob does nothing, just
+    /// like `on_frob` above.
+    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
+        readable_log(world, entity_id).is_some()
+    }
+
+    /// The original resets the reader on every open - a reopened transcript
+    /// starts at the top, not at the last scroll position.
+    fn resets_state_on_frob(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gui::GuiScript;
+    use crate::physics::PhysicsWorld;
+    use crate::scripts::Script;
+    use crate::time::Time;
+    use crate::vr_config::Handedness;
+    use cgmath::point2;
+
+    /// Whether a (possibly combined) effect includes opening the panel.
+    fn opens_panel(effect: Effect) -> bool {
+        Effect::flatten(vec![effect])
+            .iter()
+            .any(|e| matches!(e, Effect::OpenPanel { .. }))
+    }
+
+    /// The body text lines the reader currently draws (via the same
+    /// `GuiScript::update` -> `Effect::SetUI` path the game renders).
+    fn drawn_lines(
+        script: &mut GuiScript<MediaGuiState, MediaGuiMsg>,
+        entity_id: EntityId,
+        world: &World,
+        physics: &PhysicsWorld,
+    ) -> Vec<String> {
+        match script.update(entity_id, world, physics, &Time::default()) {
+            Effect::SetUI { components, .. } => components
+                .into_iter()
+                .filter_map(|c| match c {
+                    crate::gui::GuiComponentRenderInfo::Text { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect(),
+            other => panic!("expected SetUI, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    /// A `GUIHover` at panel-pixel coordinates (the contract the VR hand ray
+    /// and the flat host both synthesize).
+    fn hover_at(x: f32, y: f32, pressed: bool) -> MessagePayload {
+        MessagePayload::GUIHover {
+            held_entity_id: None,
+            screen_coordinates: point2(x / PANEL_W, y / PANEL_H),
+            is_triggered: pressed,
+            is_grabbing: false,
+            hand: Handedness::Right,
+        }
+    }
+
+    /// A content-less disc (unset `PropLog` sentinel) must not open the reader
+    /// panel on frob - previously `GuiScript` emitted `OpenPanel`
+    /// unconditionally, showing an empty backdrop with dead scroll buttons.
+    #[test]
+    fn contentless_disc_frob_does_not_open_the_panel() {
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        let disc = world.add_entity(PropLog {
+            deck: 2,
+            email: 1,
+            log: LOG_UNSET,
+            note: 0,
+            video: 0,
+        });
+        let mut script = GuiScript::new(Box::new(MediaGui));
+        let effect = script.handle_message(disc, &world, &physics, &MessagePayload::Frob);
+        assert!(
+            !opens_panel(effect),
+            "frobbing a content-less disc must not open the panel"
+        );
+    }
+
+    /// A real log still opens, and reopening resets the scroll position to the
+    /// top (the original re-creates the overlay on every open).
+    #[test]
+    fn frob_opens_a_real_log_and_reopening_resets_scroll() {
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        // 20 one-word lines: one PageDown scrolls to the clamped last page
+        // (20 - 13 = 7), so the first drawn line becomes "l8".
+        let text = (1..=20)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let disc = world.add_entity((
+            PropLog {
+                deck: 2,
+                email: 33,
+                log: 20,
+                note: 0,
+                video: 0,
+            },
+            RuntimePropLogData {
+                name: None,
+                text: Some(text),
+                portrait: None,
+                icon: None,
+            },
+        ));
+        let mut script = GuiScript::new(Box::new(MediaGui));
+        script.initialize(disc, &world);
+
+        let effect = script.handle_message(disc, &world, &physics, &MessagePayload::Frob);
+        assert!(opens_panel(effect), "a readable log must open the panel");
+        assert_eq!(
+            drawn_lines(&mut script, disc, &world, &physics)
+                .first()
+                .map(String::as_str),
+            Some("l1")
+        );
+
+        // Click PGDN (center of the 18x26 gadget at SCROLL_X/PGDN_Y): hover to
+        // arm the edge detector, then press.
+        let (cx, cy) = (SCROLL_X + 9.0, PGDN_Y + 13.0);
+        script.handle_message(disc, &world, &physics, &hover_at(cx, cy, false));
+        script.handle_message(disc, &world, &physics, &hover_at(cx, cy, true));
+        assert_eq!(
+            drawn_lines(&mut script, disc, &world, &physics)
+                .first()
+                .map(String::as_str),
+            Some("l8"),
+            "PageDown should scroll to the clamped last page"
+        );
+
+        // Re-frob: the reader reopens scrolled back to the top.
+        let effect = script.handle_message(disc, &world, &physics, &MessagePayload::Frob);
+        assert!(opens_panel(effect));
+        assert_eq!(
+            drawn_lines(&mut script, disc, &world, &physics)
+                .first()
+                .map(String::as_str),
+            Some("l1"),
+            "reopening must reset the scroll position"
+        );
+    }
 
     #[test]
     fn wrap_keeps_codes_intact_and_honors_newlines() {
