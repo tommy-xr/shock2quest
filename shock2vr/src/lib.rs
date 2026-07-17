@@ -623,7 +623,13 @@ impl Game {
             // Log/email sender portraits + deck icons (the reader panel art).
             ZipAssetPath::new(resource_path("res/book.crf")),
             ZipAssetPath::new(resource_path("res/fam.crf")),
-            ZipAssetPath::new(resource_path("res/iface.crf")),
+            // Also mounted under the "iface/" namespace: iface.crf shares seven
+            // basenames with the obj/bitmap mounts above (access/block/log/
+            // plant1/repair/stats.pcx + palette1.pal), and first-mount-wins
+            // means those plain names must keep resolving to the model
+            // textures. GUI code that wants the interface art requests the
+            // archive-qualified "iface/<name>" key instead.
+            ZipAssetPath::with_namespace(resource_path("res/iface.crf"), "iface"),
             ZipAssetPath::new(resource_path("res/intrface.crf")),
             ZipAssetPath::new(resource_path("res/mesh.crf")),
             ZipAssetPath::new(resource_path("res/motions.crf")),

@@ -1,7 +1,7 @@
 //! Audio-log / email reader MFD (`projects/flat-ui-panels.md` §1).
 //!
-//! The flat-mode reader panel the original opens as `kOverlayEmail`: a `LOG.PCX`
-//! backdrop with the sender portrait, deck icon, header line and a word-wrapped,
+//! The flat-mode reader panel matching the original game's email/log overlay: a
+//! `LOG.PCX` backdrop with the sender portrait, deck icon, header line and a word-wrapped,
 //! scrollable transcript. It is bound to the frobbed log-disc entity (the flat
 //! host's single-slot MFD), and reads its presentation strings from
 //! `RuntimePropLogData` - attached by the `Effect::CollectLog` handler when the
@@ -22,7 +22,7 @@ use crate::scripts::{Effect, MessagePayload, script_util::send_to_all_switch_lin
 const PANEL_W: f32 = 188.0;
 const PANEL_H: f32 = 296.0;
 
-/// Layout per the original reader (`shkemail.cpp`): portrait at (15,13),
+/// Layout matching the original game's reader overlay: portrait at (15,13),
 /// deck icon at (83,13) (58x84 / 68x84 native art), header + word-wrapped
 /// transcript in the text rect (15,105,136x175), scroll column at x=159
 /// (pgup y=174, pgdn y=203).
@@ -111,7 +111,10 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         state: &MediaGuiState,
     ) -> Vec<GuiComponent<MediaGuiMsg>> {
         let mut components: Vec<GuiComponent<MediaGuiMsg>> = vec![
-            gui::image("log.pcx")
+            // Archive-qualified: obj.crf also ships a 64x64 model texture named
+            // LOG.PCX (the floppy disc art) and its mount wins the plain name -
+            // "iface/" pins the 188x296 MFD frame from the interface archive.
+            gui::image("iface/log.pcx")
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(PANEL_W, PANEL_H)),
         ];

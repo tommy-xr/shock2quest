@@ -16,10 +16,24 @@ pub struct ZipAssetPath {
 
 impl ZipAssetPath {
     pub fn new(zip_path: String) -> Box<ZipAssetPath> {
-        Self::new2(zip_path, true)
+        Self::build(zip_path, true, None)
     }
 
     pub fn new2(zip_path: String, collapse_paths: bool) -> Box<ZipAssetPath> {
+        Self::build(zip_path, collapse_paths, None)
+    }
+
+    /// Mount like [`ZipAssetPath::new`], but *additionally* register every entry
+    /// under an archive-qualified key `"<namespace>/<name>"`. The plain keys are
+    /// unchanged, so existing lookups are untouched; the qualified keys let a
+    /// caller pin an asset to this archive when several mounted archives share a
+    /// basename (e.g. `"iface/log.pcx"` selects iface.crf's 188x296 MFD frame
+    /// rather than obj.crf's 64x64 model texture, both named `LOG.PCX`).
+    pub fn with_namespace(zip_path: String, namespace: &str) -> Box<ZipAssetPath> {
+        Self::build(zip_path, true, Some(namespace))
+    }
+
+    fn build(zip_path: String, collapse_paths: bool, namespace: Option<&str>) -> Box<ZipAssetPath> {
         let file = File::open(zip_path).unwrap();
         let reader = BufReader::new(file);
 
@@ -48,7 +62,16 @@ impl ZipAssetPath {
                     outpath.to_str().unwrap().to_string(),
                 );
                 if collapse_paths {
-                    asset_to_path.insert(just_file_name, outpath.to_str().unwrap().to_string());
+                    asset_to_path.insert(
+                        just_file_name.clone(),
+                        outpath.to_str().unwrap().to_string(),
+                    );
+                }
+                if let Some(namespace) = namespace {
+                    asset_to_path.insert(
+                        format!("{}/{}", namespace, just_file_name),
+                        outpath.to_str().unwrap().to_string(),
+                    );
                 }
             }
         }
