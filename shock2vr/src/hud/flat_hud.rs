@@ -42,7 +42,6 @@ const METERS_H: f32 = 64.0;
 const BAR_W: f32 = 80.0;
 const BAR_H: f32 = 14.0;
 const TEXT_W: f32 = 60.0;
-const TEXT_SIZE: f32 = 16.0;
 
 /// Bio-monitor backdrop (BIO.PCX, 128x64) the bars/numbers sit on, the
 /// health/psi equivalent of the ammo gauge's AMMOBACK frame.
@@ -62,14 +61,14 @@ const AMMO_W: f32 = 94.0;
 const AMMO_H: f32 = 64.0;
 const AMMO_GAUGE: Rect = Rect::new(AMMO_X, AMMO_Y, AMMO_W, AMMO_H);
 
-// Use-mode expanded readouts (flat UI 5). Anchors pinned from the Dark source:
-//  - BIOFULL (shkmeter.cpp): `meters_rect = {{2,414},{262,478}}` - the bio
+// Use-mode expanded readouts (flat UI 5). Anchors match the original layout:
+//  - BIOFULL: the original meters rect is {{2,414},{262,478}} - the bio
 //    panel stays at (2,414); only the backdrop art widens 128->260 (BIO.PCX is
 //    the left crop of BIOFULL.PCX, so the bars/numbers land identically). The
 //    right half is baked research/query/map + nanite/cyber chrome (art stub).
-//  - AMMOFULL (shkammov.cpp): use ("mouse") mode expands the ammo panel LEFT by
-//    `AMMO_MODE_DX = 166` (AMMOBACK 94 -> AMMOFULL 260), UL = (378,414); the
-//    ammo-type CYCLE button is `cycle_rect = {{186,15},{198,56}}` panel-local
+//  - AMMOFULL: use ("mouse") mode expands the ammo panel LEFT by
+//    166 (AMMOBACK 94 -> AMMOFULL 260), UL = (378,414); the
+//    ammo-type CYCLE button is {{186,15},{198,56}} panel-local
 //    (art ammoarw0/1), i.e. canvas (564,429,12,41). The round count/icon stay
 //    in the panel's right gauge (the AMMOBACK footprint), so their compact
 //    offsets are reused.
@@ -77,18 +76,16 @@ const METERS_FULL_W: f32 = 260.0;
 const AMMO_FULL_MODE_DX: f32 = 166.0;
 const AMMO_FULL_X: f32 = AMMO_X - AMMO_FULL_MODE_DX; // 378
 const AMMO_FULL_GAUGE: Rect = Rect::new(AMMO_FULL_X, AMMO_Y, METERS_FULL_W, AMMO_H);
-/// The AMMOFULL ammo-type cycle button (`shkammov.cpp` cycle_rect, ammoarw
+/// The AMMOFULL ammo-type cycle button (the original's cycle hotspot, ammoarw
 /// art). Clicking it cycles the wielded weapon's ammo type. Exposed so the
 /// flat pointer host can hit-test the same rect it is drawn at.
 pub(crate) const AMMO_CYCLE_BUTTON: Rect =
     Rect::new(AMMO_FULL_X + 186.0, AMMO_Y + 15.0, 12.0, 41.0);
 const AMMO_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 22.0, AMMO_W, 20.0); // centered over the gauge
-const AMMO_TEXT_SIZE: f32 = 18.0;
 // Selected ammo-type indicator: the projectile's object icon (P$ObjIcon) just
 // left of the gauge, with its type label (std/he/ap) below the round count.
 const AMMO_ICON: Rect = Rect::new(AMMO_X - 40.0, AMMO_Y + 16.0, 32.0, 32.0);
 const AMMO_TYPE_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 44.0, AMMO_W, 16.0);
-const AMMO_TYPE_TEXT_SIZE: f32 = 12.0;
 
 // Selected psi power display - drawn in the ammo section while the psi amp
 // is wielded (replacing the meaningless clip readout): the tier badge
@@ -98,7 +95,6 @@ const PSI_TIER_BADGE: Rect = Rect::new(AMMO_X - 44.0, AMMO_Y + 22.0, 32.0, 19.0)
 // The discipline names ("Projected Cryokinesis") are long, so the label rect
 // extends left of the gauge and uses a smaller size than the ammo-type label.
 const PSI_POWER_NAME: Rect = Rect::new(AMMO_X - 60.0, AMMO_Y + 44.0, AMMO_W + 60.0, 16.0);
-const PSI_POWER_NAME_SIZE: f32 = 10.0;
 
 // Psi overload meter - drawn center-screen below the crosshair while the psi
 // amp's trigger is held on an overloadable power (and briefly after release,
@@ -164,19 +160,17 @@ pub(crate) fn build_flat_hud_canvas(
     let health_pct = (health_fraction.clamp(0.0, 1.0) * 100.0).round() as i32;
     let psi_pct = (psi_fraction.clamp(0.0, 1.0) * 100.0).round() as i32;
     canvas
-        .text(
+        .text_native(
             HEALTH_TEXT,
             &format!("{health_pct}"),
             "mainfont.fon",
-            TEXT_SIZE,
             HAlign::Left,
             VAlign::Middle,
         )
-        .text(
+        .text_native(
             PSI_TEXT,
             &format!("{psi_pct}"),
             "mainfont.fon",
-            TEXT_SIZE,
             HAlign::Left,
             VAlign::Middle,
         );
@@ -207,19 +201,17 @@ pub(crate) fn build_flat_hud_canvas(
         canvas
             .image(ammo_backdrop, ammo_art)
             .image(PSI_TIER_BADGE, &format!("AmPsi{}1.PCX", tier.clamp(1, 5)))
-            .text(
+            .text_native(
                 AMMO_TEXT,
                 &format!("{tier}"),
                 "mainfont.fon",
-                AMMO_TEXT_SIZE,
                 HAlign::Center,
                 VAlign::Middle,
             )
-            .text(
+            .text_native(
                 PSI_POWER_NAME,
                 &power_name.to_ascii_uppercase(),
                 "mainfont.fon",
-                PSI_POWER_NAME_SIZE,
                 HAlign::Center,
                 VAlign::Middle,
             );
@@ -228,11 +220,10 @@ pub(crate) fn build_flat_hud_canvas(
 
     // Ammo gauge (only when a weapon with a clip is wielded).
     if let Some(rounds) = ammo {
-        canvas.image(ammo_backdrop, ammo_art).text(
+        canvas.image(ammo_backdrop, ammo_art).text_native(
             AMMO_TEXT,
             &format!("{rounds}"),
             "mainfont.fon",
-            AMMO_TEXT_SIZE,
             HAlign::Center,
             VAlign::Middle,
         );
@@ -242,11 +233,10 @@ pub(crate) fn build_flat_hud_canvas(
             canvas.image(AMMO_ICON, &icon);
         }
         if let Some(ammo_type) = ammo_type {
-            canvas.text(
+            canvas.text_native(
                 AMMO_TYPE_TEXT,
                 &ammo_type.to_ascii_uppercase(),
                 "mainfont.fon",
-                AMMO_TYPE_TEXT_SIZE,
                 HAlign::Center,
                 VAlign::Middle,
             );
@@ -435,7 +425,7 @@ mod tests {
 
     #[test]
     fn ammo_cycle_button_sits_in_the_ammofull_panel() {
-        // The cycle button (shkammov.cpp cycle_rect) is inside the expanded
+        // The cycle button (the original's cycle hotspot) is inside the expanded
         // AMMOFULL gauge and left of the compact AMMOBACK footprint.
         assert!(AMMO_FULL_GAUGE.x <= AMMO_CYCLE_BUTTON.x);
         assert!(AMMO_CYCLE_BUTTON.x + AMMO_CYCLE_BUTTON.w <= AMMO_FULL_GAUGE.x + AMMO_FULL_GAUGE.w);
