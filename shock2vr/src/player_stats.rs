@@ -134,7 +134,17 @@ pub struct PlayerStats {
     /// purchases are deferred (see `scripts::gui::trainer`).
     #[serde(default)]
     pub psi_tier: i32,
+    /// O/S upgrade traits acquired at trait machines, by the original game's
+    /// trait id (1..=16, the shipped `TRAITS.STR` `Trait1..16` order), in
+    /// acquisition order. At most [`OS_TRAIT_SLOTS`]: the whole game has
+    /// exactly four machines and each is single-use. See
+    /// `scripts::gui::traits` for names and which traits have live effects.
+    #[serde(default)]
+    pub os_traits: Vec<u8>,
 }
+
+/// The player has four O/S trait slots (one per single-use machine in the game).
+pub const OS_TRAIT_SLOTS: usize = 4;
 
 impl Default for PlayerStats {
     fn default() -> PlayerStats {
@@ -152,6 +162,7 @@ impl Default for PlayerStats {
             granted_years: BTreeSet::new(),
             cyber_modules: 0,
             psi_tier: 0,
+            os_traits: Vec::new(),
         }
     }
 }
@@ -220,6 +231,25 @@ impl PlayerStats {
     /// Raise a trainable skill by one level (a trainer purchase).
     pub fn raise_skill(&mut self, skill: Skill) {
         *self.skills.get_mut(skill) += 1;
+    }
+
+    /// Whether an O/S trait (retail id 1..=16) is owned.
+    pub fn has_os_trait(&self, trait_id: u8) -> bool {
+        self.os_traits.contains(&trait_id)
+    }
+
+    /// Acquire an O/S trait. Returns `false` (unchanged) if the id is out of
+    /// the retail 1..=16 range, already owned, or all [`OS_TRAIT_SLOTS`]
+    /// slots are taken.
+    pub fn add_os_trait(&mut self, trait_id: u8) -> bool {
+        if !(1..=16).contains(&trait_id)
+            || self.has_os_trait(trait_id)
+            || self.os_traits.len() >= OS_TRAIT_SLOTS
+        {
+            return false;
+        }
+        self.os_traits.push(trait_id);
+        true
     }
 
     fn stat_mut(&mut self, stat: Stat) -> &mut i32 {

@@ -85,7 +85,7 @@ use self::choose_service::ChooseServiceScript;
 pub use self::gui::ElevatorContext;
 use self::gui::{
     ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MapGui, MediaGui, ReplicatorGui, TrainerGui,
-    TrainerMode,
+    TrainerMode, TraitGui,
 };
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::psi_amp_script::PsiAmpScript;
@@ -659,7 +659,7 @@ impl ScriptWorld {
             "psitrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Psi))),
             "techtrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Tech))),
             "statstrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Stats))),
-            "traitmachine" => Box::new(NoopScript::new()),
+            "traitmachine" => gui_script(Box::new(TraitGui)),
 
             // medsci2
             // Keycard in watt's office

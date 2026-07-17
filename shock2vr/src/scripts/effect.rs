@@ -401,6 +401,17 @@ pub enum Effect {
         target: crate::scripts::gui::TrainerTarget,
     },
 
+    /// Acquire an O/S upgrade trait at a trait machine: atomically validate
+    /// (machine unused, trait not owned, a free slot), record the trait on the
+    /// persistent character sheet, mark the machine used (a quest bit keyed by
+    /// its stable mission object id), and apply the trait's live effect where
+    /// implemented (Tank, Naturally Able). Emitted by `TraitGui`; purchases
+    /// are free, per the original.
+    AcquireOsTrait {
+        trait_id: u8,
+        machine: EntityId,
+    },
+
     SetAIProperty {
         entity_id: EntityId,
         update: AIPropertyUpdate,

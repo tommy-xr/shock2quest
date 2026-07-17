@@ -6,6 +6,7 @@ mod map;
 mod media;
 mod replicator;
 mod trainer;
+mod traits;
 
 pub use container::*;
 pub use elevator::*;
@@ -15,3 +16,4 @@ pub use map::*;
 pub use media::*;
 pub use replicator::*;
 pub use trainer::*;
+pub use traits::*;
