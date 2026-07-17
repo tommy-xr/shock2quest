@@ -134,8 +134,8 @@ pub struct PlayerStats {
     /// purchases are deferred (see `scripts::gui::trainer`).
     #[serde(default)]
     pub psi_tier: i32,
-    /// O/S upgrade traits acquired at trait machines, by retail trait id
-    /// (1..=16, `shktrcst.h` enum order = `TRAITS.STR` `Trait1..16`), in
+    /// O/S upgrade traits acquired at trait machines, by the original game's
+    /// trait id (1..=16, the shipped `TRAITS.STR` `Trait1..16` order), in
     /// acquisition order. At most [`OS_TRAIT_SLOTS`]: the whole game has
     /// exactly four machines and each is single-use. See
     /// `scripts::gui::traits` for names and which traits have live effects.

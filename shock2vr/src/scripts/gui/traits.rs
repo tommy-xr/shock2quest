@@ -1,10 +1,10 @@
 //! O/S upgrade machine MFD panel (projects/flat-ui-panels.md §4).
 //!
-//! The retail overlay (`shktrait.cpp`, `kOverlayBuyTraits 20`): one pick from
-//! all 16 traits on a 4x4 icon matrix, an owned-slots row (up to 4 - the whole
-//! game has exactly four machines), a description of the hovered trait from
-//! `TRAITS.STR`, no confirmation step, and **purchases are free**. On buy the
-//! machine becomes single-use ("Used").
+//! The original game's O/S upgrade overlay: one pick from all 16 traits on a
+//! 4x4 icon matrix, an owned-slots row (up to 4 - the whole game has exactly
+//! four machines), a description of the hovered trait from `TRAITS.STR`, no
+//! confirmation step, and **purchases are free**. On buy the machine becomes
+//! single-use ("Used").
 //!
 //! Ours mirrors that: traits are stored on the character sheet
 //! (`PlayerStats::os_traits`, persisted via `QuestInfo`), the per-machine used
@@ -26,8 +26,8 @@ use crate::scripts::Effect;
 
 use crate::gui;
 
-/// The 16 O/S traits, by retail id (`shktrcst.h` enum order = `TRAITS.STR`
-/// `Trait1..16` order, verified against the shipped strings).
+/// The 16 O/S traits, by the original game's trait id (matching the shipped
+/// `TRAITS.STR` `Trait1..16` order, verified against those strings).
 pub const OS_TRAITS: [(u8, &str); 16] = [
     (1, "Strong Metabolism"),
     (2, "Pharmo-Friendly"),
