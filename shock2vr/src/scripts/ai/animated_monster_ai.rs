@@ -74,6 +74,12 @@ pub struct AnimatedMonsterAI {
     current_behavior: Box<RefCell<dyn Behavior>>,
     current_heading: Deg<f32>,
     is_dead: bool,
+    /// Script updates seen since entering death. Guards the crumple->ragdoll
+    /// handoff against a stale AnimationCompleted: a clip that happened to
+    /// finish in the very tick the killing blow landed is dispatched after
+    /// `is_dead` is set, and would otherwise hand off before the crumple has
+    /// even started. The real crumple completion arrives seconds later.
+    updates_since_death: u32,
     took_damage: bool,
     animation_seq: u32,
     locomotion_seq: u32,
@@ -101,6 +107,7 @@ impl AnimatedMonsterAI {
     pub fn idle() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
+            updates_since_death: 0,
             took_damage: false,
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
             current_heading: Deg(0.0),
@@ -120,6 +127,7 @@ impl AnimatedMonsterAI {
     pub fn new() -> AnimatedMonsterAI {
         AnimatedMonsterAI {
             is_dead: false,
+            updates_since_death: 0,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
             current_behavior: Box::new(RefCell::new(IdleBehavior)),
@@ -655,6 +663,7 @@ impl Script for AnimatedMonsterAI {
         // behavior so introspection shows "Dead", and release a sensor the
         // ray was intersecting at death so its end-intersect isn't stranded.
         if self.is_dead || is_killed(entity_id, world) {
+            self.updates_since_death = self.updates_since_death.saturating_add(1);
             let sensor_release_effect = match self.last_hit_sensor.take() {
                 Some(sensor_id) => Effect::Send {
                     msg: Message {
@@ -1068,7 +1077,21 @@ impl Script for AnimatedMonsterAI {
             }
             MessagePayload::AnimationCompleted => {
                 if self.is_dead {
-                    Effect::NoEffect
+                    // The death crumple finished: offer the corpse to physics.
+                    // No-op unless the `ragdoll` experimental flag is on - the
+                    // animated corpse stays otherwise. (The is_dead branch
+                    // queues nothing and a successful spawn removes this
+                    // entity, so this cannot double-fire.)
+                    //
+                    // Completions dispatched in the same tick the killing blow
+                    // landed belong to the clip the crumple interrupted, not
+                    // the crumple itself (which just started) - swallow those,
+                    // or the corpse would ragdoll from its still-standing pose.
+                    if self.updates_since_death >= 1 {
+                        Effect::SpawnCorpseRagdoll { entity_id }
+                    } else {
+                        Effect::NoEffect
+                    }
                 } else if is_killed(entity_id, world) {
                     // Fallback for kills that didn't arrive as a Damage
                     // message (the lethal-damage path enters death eagerly)

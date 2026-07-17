@@ -230,6 +230,7 @@ impl Default for DynamicPhysicsOptions {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct CollisionGroup(InteractionGroups);
 
 impl CollisionGroup {
@@ -303,6 +304,20 @@ impl CollisionGroup {
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::SELECTABLE.bits)
                 .into(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Ragdoll limbs that collide with the world but NOT with each other (nor
+    /// other selectables). Used for death-handoff rigs spawned in a crumpled,
+    /// limb-overlapping pose: the many simultaneous deep limb-limb contacts
+    /// there can drive the articulated (multibody) solve to non-finite
+    /// positions in a single step. Floor contact is what matters for a lying
+    /// corpse; limb self-collision is cosmetic in that pose.
+    pub fn ragdoll_no_self() -> CollisionGroup {
+        CollisionGroup(InteractionGroups {
+            memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
+            filter: InternalCollisionGroups::WORLD.bits.into(),
             test_mode: Default::default(),
         })
     }
