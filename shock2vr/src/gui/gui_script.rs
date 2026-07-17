@@ -98,8 +98,21 @@ where
             },
             // Frobbing a GUI-bearing entity opens its panel as a flat-mode MFD
             // (the original's frob-script -> overlay flow). VR ignores the
-            // effect - its panels are world quads driven by `Hover` instead.
-            MessagePayload::Frob => Effect::OpenPanel { entity: entity_id },
+            // OpenPanel effect - its panels are world quads driven by `Hover` -
+            // but the `on_frob` side effects (e.g. an audio log recording +
+            // playing its clip) fire in both presentations. A gui can veto the
+            // open (a content-less log disc) and/or ask for fresh per-open
+            // state (the reader's scroll position).
+            MessagePayload::Frob => {
+                let frob_effect = self.gui.on_frob(entity_id, world);
+                if !self.gui.opens_on_frob(entity_id, world) {
+                    return frob_effect;
+                }
+                if self.gui.resets_state_on_frob() {
+                    self.state = TState::default();
+                }
+                Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
+            }
             MessagePayload::GUIHover {
                 held_entity_id,
                 screen_coordinates,

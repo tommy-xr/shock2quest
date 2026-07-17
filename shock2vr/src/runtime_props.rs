@@ -190,3 +190,17 @@ pub struct RuntimePropFlatAim {
     pub origin: Point3<f32>,
     pub forward: Vector3<f32>,
 }
+
+// RuntimePropLogData - the resolved presentation strings for an audio log,
+// attached to the log-disc entity when it is frobbed (collected). The reader
+// panel (`MediaGui`) reads it to render the portrait/deck-icon/name/transcript.
+// Not serialized: it is a presentation cache derived from the string tables and
+// is re-resolved on the next frob (the log identity itself persists in
+// `QuestInfo`).
+#[derive(Component, Clone, Debug)]
+pub struct RuntimePropLogData {
+    pub name: Option<String>,
+    pub text: Option<String>,
+    pub portrait: Option<String>,
+    pub icon: Option<String>,
+}
