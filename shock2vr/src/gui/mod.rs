@@ -58,4 +58,30 @@ where
         state: &TState,
         msg: &TMsg,
     ) -> (TState, crate::Effect);
+
+    /// Extra effect to run when this panel's entity is frobbed, in addition to
+    /// opening the panel (`GuiScript` combines the two). Default: nothing. The
+    /// audio-log reader (`MediaGui`) overrides it to record the log into the
+    /// collection and play its audio - side effects that must fire on frob, not
+    /// on a panel button.
+    fn on_frob(&self, _entity_id: EntityId, _world: &World) -> crate::Effect {
+        crate::Effect::NoEffect
+    }
+
+    /// Whether frobbing this panel's entity should open it as a flat-mode MFD
+    /// (`GuiScript` gates `Effect::OpenPanel` on this; the `on_frob` effect
+    /// runs regardless). Default: always open. The audio-log reader overrides
+    /// it so a content-less disc (unset `PropLog`) doesn't open an empty
+    /// backdrop with dead scroll buttons.
+    fn opens_on_frob(&self, _entity_id: EntityId, _world: &World) -> bool {
+        true
+    }
+
+    /// Whether the panel's transient state resets each time a frob opens it
+    /// (the original re-creates its overlay state on every open). Default:
+    /// keep state. The audio-log reader opts in so a reopened transcript
+    /// starts back at the top instead of the last scroll position.
+    fn resets_state_on_frob(&self) -> bool {
+        false
+    }
 }

@@ -24,7 +24,7 @@ pub mod paths;
 mod physics;
 pub mod player_stats;
 mod psi;
-mod quest_info;
+pub mod quest_info;
 mod runtime_props;
 mod scripts;
 mod systems;
@@ -248,6 +248,10 @@ pub struct PlayerStateSnapshot {
     /// psi disciplines), accumulated from career + training tours. `None` when
     /// the scene has no `QuestInfo` (e.g. a menu). See `crate::player_stats`.
     pub stats: Option<crate::player_stats::PlayerStats>,
+    /// The audio logs the player has collected (frobbed), in pickup order. Empty
+    /// when the scene has no `QuestInfo`. Persisted in `QuestInfo`, so it
+    /// survives level transitions and save/load. See `crate::quest_info`.
+    pub collected_logs: Vec<crate::quest_info::CollectedLog>,
 }
 
 impl Game {
@@ -333,6 +337,11 @@ impl Game {
                 .borrow::<UniqueView<QuestInfo>>()
                 .ok()
                 .map(|q| q.player_stats().clone()),
+            collected_logs: world
+                .borrow::<UniqueView<QuestInfo>>()
+                .ok()
+                .map(|q| q.collected_logs().to_vec())
+                .unwrap_or_default(),
         })
     }
 
@@ -611,8 +620,16 @@ impl Game {
             // AssetPath::folder(resource_path("res/obj/txt16")),
             ZipAssetPath::new(resource_path("res/obj.crf")),
             ZipAssetPath::new(resource_path("res/bitmap.crf")),
+            // Log/email sender portraits + deck icons (the reader panel art).
+            ZipAssetPath::new(resource_path("res/book.crf")),
             ZipAssetPath::new(resource_path("res/fam.crf")),
-            ZipAssetPath::new(resource_path("res/iface.crf")),
+            // Also mounted under the "iface/" namespace: iface.crf shares seven
+            // basenames with the obj/bitmap mounts above (access/block/log/
+            // plant1/repair/stats.pcx + palette1.pal), and first-mount-wins
+            // means those plain names must keep resolving to the model
+            // textures. GUI code that wants the interface art requests the
+            // archive-qualified "iface/<name>" key instead.
+            ZipAssetPath::with_namespace(resource_path("res/iface.crf"), "iface"),
             ZipAssetPath::new(resource_path("res/intrface.crf")),
             ZipAssetPath::new(resource_path("res/mesh.crf")),
             ZipAssetPath::new(resource_path("res/motions.crf")),

@@ -2544,6 +2544,43 @@ impl MissionCore {
                     }
                 }
 
+                Effect::CollectLog {
+                    entity_id,
+                    deck,
+                    log,
+                } => {
+                    // Record the log identity into the persistent collection...
+                    {
+                        let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                        quests.collect_log(deck, log);
+                    }
+                    // ...and resolve the reader strings from `level<deck>.str`,
+                    // caching them on the disc so the MediaGui panel can render
+                    // the portrait / deck icon / header / transcript.
+                    let level_file = format!("level{deck:02}.str");
+                    if let Some(strings) =
+                        asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
+                    {
+                        // The .str values carry literal backslash-n escapes
+                        // ("AMANPOUR 07.JUL.14\nre: New code\n"); unescape them
+                        // into real line breaks so the reader never draws "\n".
+                        let get = |prefix: &str| {
+                            strings
+                                .get(&format!("{prefix}{log}"))
+                                .map(|s| s.replace("\\n", "\n"))
+                        };
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropLogData {
+                                name: get("logname"),
+                                text: get("logtext"),
+                                portrait: get("logportrait"),
+                                icon: get("logicon"),
+                            },
+                        );
+                    }
+                }
+
                 Effect::CyclePsiPower => {
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let known = self
@@ -2996,6 +3033,13 @@ impl MissionCore {
                             Some(AudioChannel::new("email".to_owned())),
                             audio_clip,
                         );
+                        // Observability: record the email so the headless e2e
+                        // can assert it played (and only once).
+                        crate::audio_log::record(
+                            &email_file,
+                            vec![("kind".to_string(), "email".to_string())],
+                            [0.0, 0.0, 0.0],
+                        );
                     }
                     drop(quests);
                 }
@@ -3008,6 +3052,14 @@ impl MissionCore {
                     if let Some(audio_clip) = maybe_audio_clip {
                         info!("Playing clip: {} handle: {:?}", name, &handle);
                         engine::audio::play_audio(audio_context, handle, None, audio_clip);
+                        // Observability: record scripted one-shot sounds (audio
+                        // logs, keypad beeps, ...) so headless tooling can assert
+                        // a schema actually resolved and played.
+                        crate::audio_log::record(
+                            &audio_file,
+                            vec![("kind".to_string(), "sound".to_string())],
+                            [0.0, 0.0, 0.0],
+                        );
                     } else {
                         warn!("Unable to load clip: {}", name)
                     }
