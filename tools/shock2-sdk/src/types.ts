@@ -318,6 +318,8 @@ export interface PlayerStats {
    * transitions and save/load. Defaults to 0 for saves written before the
    * currency existed. */
   cyber_modules: number;
+  /** Highest psi tier unlocked at a psi trainer (0..=5, sequential). */
+  psi_tier: number;
 }
 
 export interface FrameSnapshot {
