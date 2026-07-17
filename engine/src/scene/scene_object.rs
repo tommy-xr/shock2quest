@@ -138,7 +138,10 @@ impl SceneObject {
                 },
             ]);
 
-            x += adj_width + multiplier;
+            // Advance is exactly the `.FON` offset-table column difference -
+            // side bearings are baked into the glyph cells, nothing is added
+            // between glyphs (matches the original engine's layout).
+            x += adj_width;
         }
 
         let mesh = mesh::create(vertices);
