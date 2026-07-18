@@ -62,7 +62,7 @@ impl Script for ChooseServiceScript {
                     effects.push(Effect::GlobalEffect(GlobalEffect::TransitionLevel {
                         level_file: format!("{}.mis", dest_level.0),
                         loc: dest_loc,
-                        entities_to_trigger: vec![],
+                        entities_to_trigger: vec![career.station_start_trigger(1)],
                     }));
                 }
 

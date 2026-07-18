@@ -1,5 +1,5 @@
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{Link, PropInventoryDimensions, PropObjIcon};
+use dark::properties::{FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon};
 
 use shipyard::{EntityId, Get, View, World};
 
@@ -241,9 +241,33 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // feeds an item into a container (drop_entity_into_container).
             // Guarded by the same grabbability check as the debug give
             // lever: reparenting a non-grabbable entity would corrupt it.
+            // Use-only contained objects (notably corpse audio logs) still
+            // need their normal Frob behavior when clicked; they are consumed
+            // or recorded in place rather than moved into the backpack.
             ContainerGuiMsg::Take(ent) => {
                 if !crate::virtual_hand::can_grab_item(world, *ent) {
-                    return (state.clone(), Effect::NoEffect);
+                    let is_use_only = world
+                        .borrow::<View<PropFrobInfo>>()
+                        .map(|frob| {
+                            frob.get(*ent).is_ok_and(|frob| {
+                                frob.world_action.contains(FrobFlag::SCRIPT)
+                                    || frob.inventory_action.contains(FrobFlag::SCRIPT)
+                            })
+                        })
+                        .unwrap_or(false);
+                    return if is_use_only {
+                        (
+                            state.clone(),
+                            Effect::Send {
+                                msg: Message {
+                                    payload: MessagePayload::Frob,
+                                    to: *ent,
+                                },
+                            },
+                        )
+                    } else {
+                        (state.clone(), Effect::NoEffect)
+                    };
                 }
                 let inventory_entity = world
                     .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
@@ -356,6 +380,60 @@ mod tests {
             }
             other => panic!("Take should transfer via DropEntityInfo, got {:?}", other),
         }
+    }
+
+    /// Use-only objects can be contained too. Audio logs are the critical
+    /// retail case: they deliberately cannot be grabbed, but clicking their
+    /// corpse-loot icon must still run `LogDiscScript`'s normal Frob path.
+    #[test]
+    fn loot_container_click_frobs_a_non_grabbable_item() {
+        let mut world = World::new();
+        let item = world.add_entity((
+            PropObjIcon("disc".to_owned()),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+        let container = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(item)),
+                link: Link::Contains(0),
+            }],
+        });
+        let player = world.add_entity(());
+        let inventory = world.add_entity(Links::empty());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        let gui = ContainerGui::loot_container();
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+
+        assert!(
+            matches!(
+                effect,
+                Effect::Send {
+                    msg: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                } if to == item
+            ),
+            "non-grabbable contained objects should be used in place"
+        );
     }
 
     /// A contained entity that is not grabbable (no MOVE/USE_AMMO frob

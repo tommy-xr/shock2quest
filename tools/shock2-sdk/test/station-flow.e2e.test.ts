@@ -66,6 +66,39 @@ const TOUR_TRIP: Vec3 = [-22.6, -5.6, 8.0];
 const CAREER_SPAWN_DESIGNED: Vec3 = [81.78026, -3.6, 16.539234];
 const CAREER_SPAWN_TOLERANCE = 3.0;
 
+// START_01's YEAR-1 chain teleports the authored recruiter (mission object
+// 881, exposed as the stable template_id) from its below-map storage position
+// into this exhibit. Checking that exact object guards the destination setup;
+// merely reaching station.mis or its exit tripwire does not.
+const MARINE_YEAR_ONE_RECRUITER_TEMPLATE = 881;
+const MARINE_YEAR_ONE_RECRUITER_POSITION: Vec3 = [15.6, -3.2, 10.4];
+const STAGED_ENTITY_TOLERANCE = 1.0;
+
+async function assertStagedEntity(
+  game: GameServer,
+  filter: string,
+  templateId: number,
+  expected: Vec3,
+  label: string,
+): Promise<void> {
+  const entity = (await game.entities.list({ filter, limit: 20 })).entities.find(
+    (candidate) => candidate.template_id === templateId,
+  );
+  assert.ok(entity, `${label}: expected stable template ${templateId}`);
+  assert.ok(entity.position, `${label}: entity should expose a world position`);
+  const delta = Math.hypot(
+    entity.position[0] - expected[0],
+    entity.position[1] - expected[1],
+    entity.position[2] - expected[2],
+  );
+  assert.ok(
+    delta < STAGED_ENTITY_TOLERANCE,
+    `${label}: expected template ${templateId} near ${JSON.stringify(expected)}, got ${JSON.stringify(
+      entity.position,
+    )} (delta ${delta.toFixed(2)}u)`,
+  );
+}
+
 async function teleportTo(game: GameServer, [x, y, z]: Vec3): Promise<void> {
   await game.player.teleport({ x, y, z });
 }
@@ -139,6 +172,18 @@ test(
       )} (delta ${spawnDelta.toFixed(2)}u)`,
     );
 
+    // #497 (negative-first): loading Station must activate START_01 after the
+    // destination scripts initialize. Before the fix, ChooseService passed an
+    // empty entities_to_trigger list and this recruiter stayed below the map at
+    // y=-26 even though the test could still teleport to the exit tripwire.
+    await assertStagedEntity(
+      game,
+      "MaleRec",
+      MARINE_YEAR_ONE_RECRUITER_TEMPLATE,
+      MARINE_YEAR_ONE_RECRUITER_POSITION,
+      "#497 START_01 recruiter",
+    );
+
     // Step 2: tours 1 and 2 each set exactly the next training_year bit, loop
     // back to station.mis, and grant the tour-0 reward for that Marine year
     // (#453). hp/psi are unchanged by these grants (they touch STR/skills), so
@@ -158,6 +203,13 @@ test(
     assert.deepEqual(info.player.stats.granted_years, [1], "tour 1 records year 1 granted");
     assert.equal(info.player.max_hit_points, 45, "tour 1 leaves max HP unchanged (grant is STR)");
     assert.equal(info.player.max_psi_points, 20, "tour 1 leaves max psi unchanged");
+    await assertStagedEntity(
+      game,
+      "Marines 4",
+      360,
+      [0.012, -1.6, 8.0],
+      "#497 START_02 Marine choice",
+    );
 
     await teleportTo(game, TOUR_TRIP);
     await game.step({ frames: 20 });
@@ -174,6 +226,13 @@ test(
     assert.equal(info.player.stats.skills.energy_weapons, 1, "#453: tour 2 grants +1 Energy Weapons (Mission4)");
     assert.equal(info.player.stats.cyber_affinity, baseCyb + 1, "#453: tour 2 grants +1 Cyber Affinity (Mission4)");
     assert.deepEqual(info.player.stats.granted_years, [1, 2], "tour 2 records years 1+2 granted");
+    await assertStagedEntity(
+      game,
+      "Marines 7",
+      369,
+      [0.012, -1.6, 8.0],
+      "#497 START_03 Marine choice",
+    );
 
     // Save/load leg: persist mid-flow (after year 2) and reload in the same
     // runtime; the accumulated stats must survive the round-trip byte-for-byte.

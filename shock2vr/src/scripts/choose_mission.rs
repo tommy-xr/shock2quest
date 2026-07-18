@@ -106,6 +106,12 @@ impl Script for ChooseMissionScript {
                     // For years 1, 2: loop back to station.mis for the next tour.
                     // The transition uses the level's default spawn (loc: None);
                     // the marker's PropDestLoc is only used on the final deploy.
+                    let entities_to_trigger = {
+                        let quest_info = world.borrow::<UniqueView<QuestInfo>>().unwrap();
+                        Career::from_quest_info(&quest_info)
+                            .map(|career| vec![career.station_start_trigger(new_year)])
+                            .unwrap_or_default()
+                    };
 
                     Effect::Multiple(vec![
                         set_year_effect,
@@ -113,7 +119,7 @@ impl Script for ChooseMissionScript {
                         Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
                             level_file: "station.mis".to_string(),
                             loc: None,
-                            entities_to_trigger: vec![],
+                            entities_to_trigger,
                         }),
                     ])
                 } else {

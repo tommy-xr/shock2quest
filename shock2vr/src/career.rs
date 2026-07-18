@@ -65,6 +65,19 @@ impl Career {
         }
     }
 
+    /// Stable symbolic name of Station's authored initialization root for this
+    /// service and training year. Destination missions resolve this name only
+    /// after their scripts exist, so runtime entity ids never cross a level
+    /// transition.
+    pub fn station_start_trigger(&self, year: u32) -> String {
+        let service = match self {
+            Career::Marine => 0,
+            Career::Navy => 1,
+            Career::Osa => 2,
+        };
+        format!("START_{}{}", service, year)
+    }
+
     /// The career the player selected, read from the persisted quest bits, or
     /// `None` if no branch was chosen (the player template defaults stand).
     pub fn from_quest_info(quest_info: &QuestInfo) -> Option<Career> {
@@ -125,6 +138,15 @@ mod tests {
         assert_eq!(Career::from_service(1), Career::Navy);
         assert_eq!(Career::from_service(2), Career::Osa);
         assert_eq!(Career::from_service(99), Career::Marine);
+    }
+
+    #[test]
+    fn station_start_roots_match_authored_service_and_year_names() {
+        assert_eq!(Career::Marine.station_start_trigger(1), "START_01");
+        assert_eq!(Career::Marine.station_start_trigger(3), "START_03");
+        assert_eq!(Career::Navy.station_start_trigger(2), "START_12");
+        assert_eq!(Career::Osa.station_start_trigger(1), "START_21");
+        assert_eq!(Career::Osa.station_start_trigger(3), "START_23");
     }
 
     #[test]
