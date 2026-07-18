@@ -717,32 +717,63 @@ impl MissionCore {
         }
 
         let nav_bridges = game_options.experimental_features.contains("nav_bridges");
-        // Vet each synthesized island crossing against the static level
-        // geometry: a torso-height ray between the two cell centers must be
-        // clear, so bridges can't route AIs into railings or thin walls
-        // (which left them stalling at the seam forever - issue #481).
-        let bridge_validator = |from: cgmath::Vector3<f32>, to: cgmath::Vector3<f32>| -> bool {
+        // Vet nav crossings (island bridges, relaxed blocking-cell
+        // traversal) against real geometry: a torso-height ray between the
+        // two points must be clear, so routes can't run through railings,
+        // thin walls (issue #481), or furniture spanning the corridor
+        // (issue #489). Doors and creatures don't count as blockers - doors
+        // open at runtime and creatures wander off - so the ray advances
+        // past those hits (bounded).
+        let nav_validator = |from: cgmath::Vector3<f32>, to: cgmath::Vector3<f32>| -> bool {
             let delta = to - from;
-            let distance = delta.magnitude();
-            if distance <= f32::EPSILON {
+            let total = delta.magnitude();
+            if total <= f32::EPSILON {
                 return true;
             }
-            physics
-                .ray_cast2(
-                    Point3::new(from.x, from.y, from.z),
-                    delta / distance,
-                    distance,
-                    crate::physics::InternalCollisionGroups::WORLD,
+            let direction = delta / total;
+            let mut origin = Point3::new(from.x, from.y, from.z);
+            let mut remaining = total;
+            // A crossing rarely stacks more than a couple of pass-through
+            // entities; bail as blocked beyond that
+            for _ in 0..4 {
+                let Some(hit) = physics.ray_cast2(
+                    origin,
+                    direction,
+                    remaining,
+                    crate::physics::InternalCollisionGroups::WORLD
+                        | crate::physics::InternalCollisionGroups::ENTITY,
                     None,
                     true,
-                )
-                .is_none()
+                ) else {
+                    return true;
+                };
+                let pass_through = hit
+                    .maybe_entity_id
+                    .map(|id| {
+                        crate::scripts::ai::ai_util::is_entity_door(&world, id)
+                            || world
+                                .borrow::<View<PropCreature>>()
+                                .map(|v| v.contains(id))
+                                .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if !pass_through {
+                    return false;
+                }
+                let travelled = (hit.hit_point - origin).magnitude() + 0.05;
+                if travelled >= remaining {
+                    return true;
+                }
+                remaining -= travelled;
+                origin += direction * travelled;
+            }
+            false
         };
         let pathfinding_service = abstract_mission.path_database.as_ref().map(|db| {
             Arc::new(PathfindingService::with_nav_options(
                 Arc::new(db.clone()),
                 nav_bridges,
-                Some(&bridge_validator),
+                Some(&nav_validator),
             ))
         });
         // Steering strategies path through this unique; MissionCore keeps its
@@ -836,10 +867,14 @@ impl MissionCore {
             }
         }
 
-        // Sync live door state into the pathfinding service: locked-and-
-        // closed doors make their below-door cells unpathable, so A* routes
-        // around them (or stops at them) instead of through them. Unlocked
-        // closed doors stay pathable - pursuing AIs open those on arrival.
+        // Sync live door state into the pathfinding service: impassable
+        // doors make their below-door cells unpathable, so A* routes around
+        // them (or stops at them) instead of through them. Impassable means
+        // locked-and-closed, OR a door this engine cannot operate at all - no
+        // runtime entity, or no TransDoor prop (e.g. medsci1's space-shield
+        // membranes, which StdDoor can't move; AIs wedged against them
+        // forever - issue #489). Unlocked closed translating doors stay
+        // pathable - pursuing AIs open those on arrival.
         if time.elapsed.as_secs_f32() > 0.0 {
             if let Some(service) = &self.pathfinding_service {
                 if let Ok(id_map) = self
@@ -853,11 +888,20 @@ impl MissionCore {
                         .map(|cd| cd.door)
                         .filter(|door| {
                             let Some(ent) = id_map.0.get(door).map(|w| w.0) else {
-                                return false;
+                                // The gating door has no runtime entity:
+                                // nothing can ever open it
+                                return true;
                             };
-                            crate::scripts::script_util::door_is_closed(&self.world, ent)
-                                == Some(true)
-                                && crate::scripts::script_util::is_entity_locked(&self.world, ent)
+                            match crate::scripts::script_util::door_is_closed(&self.world, ent) {
+                                Some(true) => {
+                                    crate::scripts::script_util::is_entity_locked(&self.world, ent)
+                                }
+                                Some(false) => false,
+                                // Not a translating door: neither AIs nor
+                                // StdDoor can move it - a wall until shield/
+                                // rotating door support exists
+                                None => true,
+                            }
                         })
                         .collect();
                     service.set_locked_doors(locked);

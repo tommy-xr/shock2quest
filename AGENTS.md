@@ -468,7 +468,10 @@ The project supports experimental flags for gating in-progress features during d
   blocking-OBB cells (furniture baked into the mesh) passable at a cost penalty so
   A* can route across the whole level. Without it, pathfinding uses only the
   faithful shipped graph (per-area, plus zone-pair and flat-seam traversal which are
-  always on). Verify AI routing with `GET /v1/ai/paths` on the debug runtime.
+  always on). In every mode, link crossings are swept against the live physics
+  world at load and physically obstructed ones are dropped - the shipped mesh and
+  this engine's physics are independent world models, and where they disagree the
+  physics wins. Verify AI routing with `GET /v1/ai/paths` on the debug runtime.
 
 #### Adding New Experimental Features
 

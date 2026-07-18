@@ -165,6 +165,15 @@ pub struct PathfindingService {
     /// (furniture baked into the mesh at build time) are passable at a cost
     /// penalty - the objects are physically simulated, steering handles them
     relaxed: bool,
+    /// Links whose crossing is physically obstructed in OUR runtime
+    /// (validated against real geometry at build). The shipped AIPATH bake
+    /// and this engine's physics are two independent world models; where
+    /// they disagree - unbaked furniture, shield doors, collider-shape
+    /// differences - an AI told "walkable" by the mesh wedges against
+    /// geometry forever (issue #489). Every traversable link is swept at
+    /// build and the liars are dropped, in every mode. Empty without a
+    /// validator (e.g. the bench, which measures the graph itself).
+    physically_blocked: std::collections::HashSet<u32>,
     /// Latest path per AI entity (key: EntityId::inner()), recorded by the
     /// path-follow steering so tooling can see what each AI is doing
     ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
@@ -189,16 +198,18 @@ impl PathfindingService {
 
     /// Create a pathfinding service; `bridge_islands` enables the
     /// experimental mesh reconnection (island-crossing links + relaxed
-    /// blocking-cell traversal) for full-map navigation. `bridge_validator`
-    /// (when provided) vets each candidate crossing - given the two cell
-    /// centers, return whether the straight walk between them is physically
-    /// clear. Without it bridges are purely geometric and can cross railings
-    /// or thin walls, leaving AIs stalling at a seam physics won't let them
-    /// pass.
+    /// blocking-cell traversal) for full-map navigation. `nav_validator`
+    /// (when provided) vets crossings - given two points, return whether the
+    /// straight walk between them is physically clear (doors and creatures
+    /// should count as clear: doors open at runtime, creatures wander off).
+    /// It gates both synthesized island bridges and relaxed traversal of
+    /// blocking-OBB (furniture) cells; without it those are purely
+    /// geometric and can route through railings, thin walls, or furniture
+    /// that physics won't let an AI pass.
     pub fn with_nav_options(
         path_database: Arc<PathDatabase>,
         bridge_islands: bool,
-        bridge_validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
+        nav_validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
     ) -> Self {
         let mut links_by_cell = vec![Vec::new(); path_database.cells.len()];
         for (idx, link) in path_database.links.iter().enumerate() {
@@ -213,10 +224,16 @@ impl PathfindingService {
             .collect();
         let mut effective_bits = compute_effective_bits(&path_database);
         let bridge_links = if bridge_islands {
-            compute_bridge_links(&path_database, &effective_bits, bridge_validator)
+            compute_bridge_links(&path_database, &effective_bits, nav_validator)
         } else {
             Vec::new()
         };
+        let physically_blocked = compute_physically_blocked(
+            &path_database,
+            &effective_bits,
+            bridge_islands,
+            nav_validator,
+        );
         for (offset, link) in bridge_links.iter().enumerate() {
             let idx = (path_database.links.len() + offset) as u32;
             if let Some(links) = links_by_cell.get_mut(link.from_cell as usize) {
@@ -237,6 +254,7 @@ impl PathfindingService {
             effective_bits,
             bridge_links,
             relaxed: bridge_islands,
+            physically_blocked,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
             ai_steering: std::sync::Mutex::new(HashMap::new()),
             locked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
@@ -606,6 +624,11 @@ impl PathfindingService {
         if dest.flags.intersects(blocked) {
             return false;
         }
+        // Never route across a crossing our physics rejects, whatever the
+        // mesh claims (validated against real geometry at build)
+        if self.physically_blocked.contains(&link_idx) {
+            return false;
+        }
 
         // Door gate: a below-door cell whose door is locked (and closed) is
         // not traversable - the AI can't follow the player through it.
@@ -794,6 +817,65 @@ fn is_flat_seam(db: &PathDatabase, link: &PathCellLink) -> bool {
         (edge_y - from.center.y).abs() <= FLAT_SEAM_MAX_EDGE_DY
             && (edge_y - to.center.y).abs() <= FLAT_SEAM_MAX_EDGE_DY
     })
+}
+
+/// Links whose crossing is physically obstructed in this runtime.
+///
+/// The shipped mesh and our physics can disagree (unbaked furniture,
+/// membrane doors, collider differences). Sweep every link an AI could
+/// traverse: a torso-height crossing between the two cell centers must be
+/// clear per the validator (which treats doors and creatures as clear -
+/// doors open at runtime, creatures wander off). Exemptions:
+/// - either endpoint BELOW_DOOR: door gating owns that crossing;
+/// - links that no mode can traverse anyway (no effective bits, or a
+///   blocking-OBB endpoint outside relaxed mode) - no ray wasted.
+fn compute_physically_blocked(
+    db: &PathDatabase,
+    effective_bits: &[MovementBits],
+    relaxed: bool,
+    validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
+) -> std::collections::HashSet<u32> {
+    let Some(validate) = validator else {
+        return std::collections::HashSet::new();
+    };
+    const PROBE_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
+    let lift = Vector3::new(0.0, PROBE_HEIGHT, 0.0);
+    let mut blocked = std::collections::HashSet::new();
+    let mut swept = 0usize;
+    for (idx, link) in db.links.iter().enumerate() {
+        if effective_bits[idx].is_empty() {
+            continue;
+        }
+        let (Some(from), Some(to)) = (
+            db.cells.get(link.from_cell as usize),
+            db.cells.get(link.to_cell as usize),
+        ) else {
+            continue;
+        };
+        if (from.flags | to.flags).contains(PathCellFlags::BELOW_DOOR) {
+            continue;
+        }
+        let blocked_flags = if relaxed {
+            PathCellFlags::UNPATHABLE
+        } else {
+            PathCellFlags::UNPATHABLE | PathCellFlags::BLOCKING_OBB
+        };
+        if (from.flags | to.flags).intersects(blocked_flags) {
+            continue;
+        }
+        swept += 1;
+        if !validate(from.center + lift, to.center + lift) {
+            blocked.insert(idx as u32);
+        }
+    }
+    if !blocked.is_empty() {
+        tracing::info!(
+            "pathfinding: {} of {} swept link crossings physically obstructed - dropped",
+            blocked.len(),
+            swept
+        );
+    }
+    blocked
 }
 
 /// Synthesize island-crossing links (experimental `nav_bridges`).
@@ -1227,6 +1309,63 @@ pub(crate) mod tests {
         assert!(
             service.find_path(start, goal, MovementBits::WALK).is_some(),
             "unlocking must restore the route"
+        );
+    }
+
+    #[test]
+    fn obstructed_ordinary_crossings_are_refused_in_every_mode() {
+        // The mesh says walkable, our physics says no (issue #489): the
+        // link must be dropped even in faithful mode.
+        let db = three_cell_db(PathCellFlags::empty());
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(3.0, 0.0, 1.0);
+        let clear =
+            PathfindingService::with_nav_options(Arc::new(db.clone()), false, Some(&|_, _| true));
+        assert!(clear.find_path(start, goal, MovementBits::WALK).is_some());
+        let obstructed =
+            PathfindingService::with_nav_options(Arc::new(db), false, Some(&|_, _| false));
+        assert!(
+            obstructed
+                .find_path(start, goal, MovementBits::WALK)
+                .is_none(),
+            "a physically obstructed crossing must be dropped in faithful mode too"
+        );
+    }
+
+    #[test]
+    fn obstructed_blocking_cell_crossings_are_refused_in_relaxed_mode() {
+        // Cell 1 is a blocking-OBB (furniture) cell on the only route from
+        // 0 to 2. Relaxed mode admits it - unless the validator says the
+        // crossing is physically obstructed (issue #489: bunks spanning the
+        // corridor).
+        let mut db = three_cell_db(PathCellFlags::empty());
+        db.cells[1].flags = PathCellFlags::BLOCKING_OBB;
+        db.links[1].ok_bits = MovementBits::WALK;
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+
+        let clear =
+            PathfindingService::with_nav_options(Arc::new(db.clone()), true, Some(&|_, _| true));
+        assert!(
+            clear.find_path(start, goal, MovementBits::WALK).is_some(),
+            "physically clear furniture cell stays passable in relaxed mode"
+        );
+
+        let obstructed =
+            PathfindingService::with_nav_options(Arc::new(db.clone()), true, Some(&|_, _| false));
+        assert!(
+            obstructed
+                .find_path(start, goal, MovementBits::WALK)
+                .is_none(),
+            "physically obstructed furniture crossing must be refused"
+        );
+
+        // Below-door cells are exempt: door gating owns those crossings
+        db.cells[1].flags = PathCellFlags::BLOCKING_OBB | PathCellFlags::BELOW_DOOR;
+        let door = PathfindingService::with_nav_options(Arc::new(db), true, Some(&|_, _| false));
+        assert!(
+            door.find_path(start, goal, MovementBits::WALK).is_some(),
+            "below-door crossings are governed by door state, not the validator"
         );
     }
 
