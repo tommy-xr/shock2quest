@@ -189,16 +189,18 @@ impl PathfindingService {
 
     /// Create a pathfinding service; `bridge_islands` enables the
     /// experimental mesh reconnection (island-crossing links + relaxed
-    /// blocking-cell traversal) for full-map navigation. `bridge_validator`
-    /// (when provided) vets each candidate crossing - given the two cell
-    /// centers, return whether the straight walk between them is physically
-    /// clear. Without it bridges are purely geometric and can cross railings
-    /// or thin walls, leaving AIs stalling at a seam physics won't let them
-    /// pass.
+    /// blocking-cell traversal) for full-map navigation. `nav_validator`
+    /// (when provided) vets synthesized island bridges - given two points,
+    /// return whether the straight walk between them is physically clear
+    /// (doors and creatures should count as clear: doors open at runtime,
+    /// creatures wander off). A corpus sweep of all 23 shipped missions
+    /// found the SHIPPED graph's own links physically clear everywhere once
+    /// unopenable doors are sealed (see the mission update's door sync), so
+    /// only synthesized links are validated.
     pub fn with_nav_options(
         path_database: Arc<PathDatabase>,
         bridge_islands: bool,
-        bridge_validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
+        nav_validator: Option<&dyn Fn(Vector3<f32>, Vector3<f32>) -> bool>,
     ) -> Self {
         let mut links_by_cell = vec![Vec::new(); path_database.cells.len()];
         for (idx, link) in path_database.links.iter().enumerate() {
@@ -213,7 +215,7 @@ impl PathfindingService {
             .collect();
         let mut effective_bits = compute_effective_bits(&path_database);
         let bridge_links = if bridge_islands {
-            compute_bridge_links(&path_database, &effective_bits, bridge_validator)
+            compute_bridge_links(&path_database, &effective_bits, nav_validator)
         } else {
             Vec::new()
         };

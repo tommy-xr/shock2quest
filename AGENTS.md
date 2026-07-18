@@ -468,7 +468,9 @@ The project supports experimental flags for gating in-progress features during d
   blocking-OBB cells (furniture baked into the mesh) passable at a cost penalty so
   A* can route across the whole level. Without it, pathfinding uses only the
   faithful shipped graph (per-area, plus zone-pair and flat-seam traversal which are
-  always on). Verify AI routing with `GET /v1/ai/paths` on the debug runtime.
+  always on). Doors the engine cannot operate (no runtime entity / no TransDoor
+  prop, e.g. shield membranes) are sealed in A* in every mode. Verify AI routing
+  with `GET /v1/ai/paths` on the debug runtime.
 
 #### Adding New Experimental Features
 
