@@ -5176,6 +5176,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         })
     }
 
+    fn resolve_entity_id(&self, id: i32) -> Option<EntityId> {
+        use shipyard::EntitiesView;
+
+        self.world
+            .borrow::<EntitiesView>()
+            .ok()
+            .and_then(|entities| entities.iter().find(|e| e.inner() as i32 == id))
+    }
+
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
         use crate::game_scene::{DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo};
         use shipyard::*;

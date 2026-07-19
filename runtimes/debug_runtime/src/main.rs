@@ -39,7 +39,7 @@ use shock2vr::{
 
 // Property imports for state queries
 use dark::properties::{PropModelName, PropPosition, PropSymName, PropTemplateId};
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, View};
+use shipyard::{Get, IntoIter, IntoWithId, View};
 
 // Screen dimensions for the debug window
 const SCR_WIDTH: u32 = 800;
@@ -1126,15 +1126,15 @@ fn process_command(
             }
         }
         RuntimeCommand::GiveItem { entity_id, reply } => {
-            // The list/detail endpoints expose `EntityId::inner() as i32`;
-            // `from_inner` is the exact inverse (see SendEntityMessage).
-            let result = match (
-                EntityId::from_inner(entity_id as u64),
-                game.debug_scene_mut(),
-            ) {
-                (Some(eid), Some(scene)) => scene.give_item(eid),
-                (None, _) => Err(format!("invalid entity id {}", entity_id)),
-                (_, None) => Err("no debuggable scene available".to_string()),
+            // Client-supplied ids are `EntityId::inner() as i32` (generation
+            // bits truncated); resolve against the live entities to recover
+            // the full id (see SendEntityMessage).
+            let result = match game.debug_scene_mut() {
+                Some(scene) => match scene.resolve_entity_id(entity_id) {
+                    Some(eid) => scene.give_item(eid),
+                    None => Err(format!("invalid entity id {}", entity_id)),
+                },
+                None => Err("no debuggable scene available".to_string()),
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send give-item result - receiver dropped");
@@ -1278,11 +1278,11 @@ fn process_command(
         }
         RuntimeCommand::EntityDetail { id, reply } => {
             let result = if let Some(debug_scene) = game.debug_scene() {
-                // `id` is `EntityId::inner() as i32` (= index + 1) from the list
-                // endpoint; `from_inner` is its exact inverse. Using
-                // `new_from_index_and_gen(id, 0)` here resolved the wrong entity.
-                let entity_id = EntityId::from_inner(id as u64);
-                entity_id
+                // `id` is `EntityId::inner() as i32` from the list endpoint,
+                // which drops the generation bits - resolve against the live
+                // entities to recover the full id (see SendEntityMessage).
+                debug_scene
+                    .resolve_entity_id(id)
                     .and_then(|entity_id| debug_scene.entity_detail(entity_id))
                     .map(|detail| EntityDetailResult {
                         entity_id: detail.entity_id,
@@ -1329,7 +1329,8 @@ fn process_command(
         RuntimeCommand::AnimationState { id, reply } => {
             let result = game.debug_scene().and_then(|debug_scene| {
                 // Same id space as /v1/entities (`EntityId::inner() as i32`).
-                EntityId::from_inner(id as u64)
+                debug_scene
+                    .resolve_entity_id(id)
                     .and_then(|entity_id| debug_scene.animation_state(entity_id))
             });
 
@@ -1338,30 +1339,32 @@ fn process_command(
             }
         }
         RuntimeCommand::SendEntityMessage { id, message, reply } => {
-            // The list/detail endpoints expose `EntityId::inner() as i32`, which
-            // for a live entity is `index + 1`. `from_inner` is the exact
-            // inverse; `new_from_index_and_gen(id, 0)` would double the +1 and
-            // resolve the wrong entity.
-            let entity_id = EntityId::from_inner(id as u64);
-            let result = match (entity_id, game.debug_scene_mut()) {
-                (Some(entity_id), Some(debug_scene)) => {
-                    let queued = debug_scene.send_entity_message(entity_id, message);
-                    CommandResult {
-                        success: queued,
-                        message: if queued {
-                            format!("Message queued for entity {}", id)
-                        } else {
-                            format!("Entity {} not found or not alive", id)
-                        },
-                        data: None,
+            // The list/detail endpoints expose `EntityId::inner() as i32`,
+            // which truncates the generation bits: `from_inner(id as u64)`
+            // would rebuild a generation-0 handle that is stale for any
+            // recycled slot (issue #484). Resolve against the live entities
+            // instead, which recovers the full id by index.
+            let result = match game.debug_scene_mut() {
+                Some(debug_scene) => match debug_scene.resolve_entity_id(id) {
+                    Some(entity_id) => {
+                        let queued = debug_scene.send_entity_message(entity_id, message);
+                        CommandResult {
+                            success: queued,
+                            message: if queued {
+                                format!("Message queued for entity {}", id)
+                            } else {
+                                format!("Entity {} not found or not alive", id)
+                            },
+                            data: None,
+                        }
                     }
-                }
-                (None, _) => CommandResult {
-                    success: false,
-                    message: format!("Invalid entity id {}", id),
-                    data: None,
+                    None => CommandResult {
+                        success: false,
+                        message: format!("Entity {} not found or not alive", id),
+                        data: None,
+                    },
                 },
-                (_, None) => CommandResult {
+                None => CommandResult {
                     success: false,
                     message: "No debuggable scene available".to_string(),
                     data: None,
