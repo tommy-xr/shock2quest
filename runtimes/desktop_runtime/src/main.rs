@@ -347,7 +347,7 @@ pub fn main() {
             cursor_visible = wants_pointer;
         }
 
-        let (mut input_context, input_state) = process_events(
+        let mut input_context = process_events(
             &mut window,
             &mut camera_context,
             &mut hand_context,
@@ -411,11 +411,10 @@ pub fn main() {
 
         let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", game.render());
 
-        let head_height = if input_state.is_crouching {
-            1.5
-        } else {
-            shock2vr::PLAYER_EYE_HEIGHT
-        };
+        // Crouch-aware, and reflects the ACTUAL collider state (standing up
+        // is refused without headroom), so the camera can't rise through a
+        // ceiling the body still crouches under.
+        let head_height = game.player_eye_height();
         let render_context = engine::EngineRenderContext {
             time: glfw.get_time() as f32,
             camera_offset: pawn_offset,
@@ -493,17 +492,6 @@ fn parse_mission(mission: &str) -> (String, SpawnLocation) {
     return (mission.to_owned(), spawn_location);
 }
 
-struct InputState {
-    is_crouching: bool,
-}
-impl InputState {
-    pub fn new() -> Self {
-        Self {
-            is_crouching: false,
-        }
-    }
-}
-
 // NOTE: not the same version as in common.rs!
 fn process_events(
     //audio: &mut AudioContext,
@@ -515,7 +503,7 @@ fn process_events(
     input_mapper: &mut DesktopInputMapper,
     action_state: &mut InputActionState,
     wants_pointer: bool,
-) -> (InputContext, InputState) {
+) -> InputContext {
     let _speed = 20.0;
     let head_rot_speed = 10.0;
 
@@ -695,12 +683,11 @@ fn process_events(
         }
     }
 
-    let mut input_state = InputState::new();
-    input_state.is_crouching = window.get_key(Key::LeftControl) == Action::Press;
+    input_context.crouch = window.get_key(Key::LeftControl) == Action::Press;
 
     // Discrete actions (spawn, save/load, inventory, pathfinding test) are
     // handled by the mapper, which edge-detects key presses.
     input_mapper.poll(window, action_state);
 
-    (input_context, input_state)
+    input_context
 }

@@ -245,6 +245,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.wants_pointer()
     }
 
+    fn player_is_crouched(&self) -> bool {
+        self.mission_core.player_is_crouched()
+    }
+
     fn world(&self) -> &World {
         &self.mission_core.world
     }

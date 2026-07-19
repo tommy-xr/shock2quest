@@ -361,6 +361,9 @@ pub struct InputState {
     /// 2D screen pointer (flat-mode cursor); `None` until a pointer channel
     /// is set. Position is normalized [0,1] per axis, origin top-left.
     pub pointer: Option<InputPointer>,
+    /// Crouch REQUEST (the `crouch` channel), not the resulting collider
+    /// state - standing up is refused while there is no headroom.
+    pub crouch: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -391,6 +394,7 @@ impl Default for InputState {
             left_hand: InputHand::default(),
             right_hand: InputHand::default(),
             pointer: None,
+            crouch: false,
         }
     }
 }
