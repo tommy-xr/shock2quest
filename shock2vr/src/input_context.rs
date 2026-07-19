@@ -18,6 +18,12 @@ pub struct InputContext {
     // interaction is hand/pointer-ray based. Populated by flat runtimes when a
     // scene wants a cursor (e.g. menus).
     pub pointer: Option<Pointer2D>,
+
+    // Flat-runtime crouch request (desktop key / debug-runtime channel). The
+    // *actual* crouch state can lag this: standing up is refused while there
+    // is no headroom. VR leaves this false - physically crouching moves the
+    // HMD instead.
+    pub crouch: bool,
 }
 
 impl InputContext {
@@ -28,6 +34,7 @@ impl InputContext {
             left_hand: Hand::default(),
             right_hand: Hand::default(),
             pointer: None,
+            crouch: false,
         }
     }
 }

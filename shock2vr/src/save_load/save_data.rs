@@ -34,9 +34,17 @@ impl SaveData {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct GlobalData {
+    /// Player collider center, normalized to STANDING height: a game saved
+    /// while crouched stores `center + crouch shift` (plus `is_crouched`),
+    /// so load always creates the standing capsule here - never one embedded
+    /// in the floor - and then re-applies the crouch.
     pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
     pub quest_info: QuestInfo,
     pub held_items: HeldItemSaveData,
     pub active_mission: String,
+    /// Whether the player was crouched at save time. Defaults false for
+    /// saves that predate crouch.
+    #[serde(default)]
+    pub is_crouched: bool,
 }

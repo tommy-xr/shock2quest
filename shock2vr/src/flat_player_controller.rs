@@ -41,11 +41,6 @@ const VIEWMODEL_OFFSET: Vector3<f32> = vec3(2.0, -2.5, -5.0);
 /// "Arm Ang Offset" is zero, so the arm root takes the camera rotation
 /// directly.
 const MELEE_VIEWMODEL_OFFSET: Vector3<f32> = vec3(0.6, -2.4, 0.2);
-/// Camera (eye) height above the player's feet, in SS2 units before the
-/// world-scale divide. Shared with the runtimes' render-camera `head_offset` via
-/// `crate::PLAYER_EYE_HEIGHT` so the shot/viewmodel origin coincides with the
-/// rendered eye - otherwise horizontal shots land above/below the crosshair.
-const HEAD_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT;
 
 /// Base yaw applied to every first-person gun model before its per-weapon
 /// `PropPlayerGun.heading`. The pistol (`atek_h`, heading 0) renders correctly
@@ -128,13 +123,14 @@ impl FlatPlayerController {
         player_pos: Vector3<f32>,
         player_rotation: Quaternion<f32>,
         head_rotation: Quaternion<f32>,
+        eye_height: f32,
         world: &World,
         physics: &PhysicsWorld,
     ) -> (Vec<VirtualHandEffect>, Option<EntityId>) {
         let mut effects = Vec::new();
 
         let look = player_rotation * head_rotation;
-        let camera_pos = player_pos + vec3(0.0, HEAD_HEIGHT / SCALE_FACTOR, 0.0);
+        let camera_pos = player_pos + vec3(0.0, eye_height / SCALE_FACTOR, 0.0);
 
         // Crosshair raycast: the frobbable entity under the reticle (resolving
         // hitbox proxies to their parent, and ignoring the weapon we hold).

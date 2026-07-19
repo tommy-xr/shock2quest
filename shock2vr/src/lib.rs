@@ -44,9 +44,29 @@ pub use mission::visibility_engine::CullingInfo;
 /// runtime's render camera (`head_offset`) AND the flat controller's
 /// shot/viewmodel origin, so the rendered view and where shots come from stay
 /// consistent - if these drift, shots no longer line up with the crosshair and
-/// the debug runtime renders at a different height than desktop. Desktop crouch
-/// lowers the camera separately.
+/// the debug runtime renders at a different height than desktop. Crouch swaps
+/// this for [`PLAYER_CROUCH_EYE_HEIGHT`] - flat runtimes should use
+/// [`Game::player_eye_height`] rather than reading the constants directly.
 pub const PLAYER_EYE_HEIGHT: f32 = 4.0;
+
+/// Crouched eye height above the (crouched) body position, in SS2 units.
+/// The crouched capsule is 2.8 ft tall with its center 1.4 ft above the feet;
+/// +1.2 puts the eye at 2.6 ft above the feet - ~90% of crouched body height
+/// like the original engine's crouch, and inside the capsule so the camera
+/// cannot poke through a low ceiling the collider clears.
+pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
+
+/// The single mapping from crouch state to eye height. The render camera and
+/// the flat controller's shot/viewmodel origin must both go through this (or
+/// [`Game::player_eye_height`], which wraps it) so shots stay on the
+/// crosshair.
+pub fn player_eye_height_for(crouched: bool) -> f32 {
+    if crouched {
+        PLAYER_CROUCH_EYE_HEIGHT
+    } else {
+        PLAYER_EYE_HEIGHT
+    }
+}
 
 use std::{
     collections::{HashMap, HashSet},
@@ -908,13 +928,21 @@ impl Game {
     fn load_from_file(&mut self, file_name: String) {
         let mut file = OpenOptions::new().read(true).open(file_name).unwrap();
         let save_data = SaveData::read(&mut file);
-        let (mission, level_map) = Self::load_from_save_data(
+        let was_crouched = save_data.global_data.is_crouched;
+        let (mut mission, level_map) = Self::load_from_save_data(
             save_data,
             &mut self.asset_cache,
             &mut self.audio_context,
             &self.global_context,
             &self.options,
         );
+        // The saved position is the standing-equivalent center (see
+        // GlobalData) and the player was created standing there; re-applying
+        // the crouch drops the capsule back into the saved crouched pose
+        // (e.g. inside a crawlspace the standing capsule wouldn't fit).
+        if was_crouched {
+            mission.mission_core.restore_saved_crouch();
+        }
         self.active_game_scene = Box::new(mission);
         self.mission_to_save_data = level_map;
     }
@@ -951,6 +979,16 @@ impl Game {
             (player_info.pos, player_info.rotation)
         };
 
+        // Normalize the saved center to standing height (see GlobalData): the
+        // live position of a crouched player is the LOWERED collider center,
+        // and load always creates a standing capsule first.
+        let is_crouched = self.active_game_scene.player_is_crouched();
+        let position = if is_crouched {
+            position + vec3(0.0, physics::player_crouch_center_shift(), 0.0)
+        } else {
+            position
+        };
+
         let quest_info = self
             .active_game_scene
             .world()
@@ -964,6 +1002,7 @@ impl Game {
             rotation,
             quest_info,
             active_mission: self.active_game_scene.scene_name().to_string(),
+            is_crouched,
         };
 
         SaveData {
@@ -1001,6 +1040,14 @@ impl Game {
                         .unwrap();
                     (player_info.pos, player_info.rotation)
                 };
+                // As with saves, respawn a crouched player at the
+                // standing-equivalent center (the reload creates a standing
+                // capsule; held crouch input re-applies on the next step).
+                let position = if self.active_game_scene.player_is_crouched() {
+                    position + vec3(0.0, physics::player_crouch_center_shift(), 0.0)
+                } else {
+                    position
+                };
                 let level_name = self.active_game_scene.scene_name().to_string();
                 let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
                 if self.loading_screen_enabled() {
@@ -1018,6 +1065,15 @@ impl Game {
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
         self.active_game_scene.get_hand_spotlights(&self.options)
+    }
+
+    /// Eye (render camera) height above the pawn position returned by
+    /// [`Game::render`], in SS2 units - crouch-aware, reflecting the player's
+    /// *actual* collider state (stand-up can be refused for lack of headroom).
+    /// Flat runtimes should use this for their camera `head_offset` so the
+    /// view matches the flat controller's shot origin.
+    pub fn player_eye_height(&self) -> f32 {
+        player_eye_height_for(self.active_game_scene.player_is_crouched())
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
