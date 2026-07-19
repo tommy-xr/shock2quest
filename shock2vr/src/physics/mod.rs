@@ -408,6 +408,11 @@ pub struct PhysicsWorld {
     // Sensor Intersection List
     player_sensor_intersections: HashSet<EntityId>,
 
+    // Entities already reported by report_nonfinite_rigid_body_state, so a
+    // body fed bad state every frame (e.g. NaN animation joints driving a
+    // kinematic hitbox) is reported once instead of every frame.
+    reported_nonfinite_entities: HashSet<Option<EntityId>>,
+
     // Collision Events
     events: PhysicsEvents,
 }
@@ -1142,6 +1147,8 @@ impl PhysicsWorld {
 
             player_sensor_intersections: HashSet::new(),
 
+            reported_nonfinite_entities: HashSet::new(),
+
             events: PhysicsEvents::new(),
         }
     }
@@ -1192,11 +1199,88 @@ impl PhysicsWorld {
         debug_renderer.render()
     }
 
+    /// Report (once per entity, ERROR level) any rigid body whose state went
+    /// non-finite before it reaches the broad-phase. Detection only - no
+    /// state is mutated.
+    ///
+    /// A NaN velocity integrates into a NaN pose, which puts a NaN collider
+    /// AABB into the broad-phase BVH. parry's binned rebuild
+    /// (`bvh_binned_build.rs`) bins leaves by their AABB centers, and a NaN
+    /// center silently truncates the computed centroid range (NaN drops the
+    /// accumulated min/max), so valid leaves land outside it and the bin
+    /// index goes out of bounds - possibly many frames later, whenever the
+    /// incremental optimizer happens to rebuild the poisoned subtree
+    /// (issue #506; upstream: dimforge/rapier#961, still unfixed as of parry
+    /// 0.29). The creation-time size sanitizers above can't catch this: the
+    /// state goes bad at *runtime* (e.g. NaN animation joints driving a
+    /// kinematic hitbox, #508). This report names the exact entity and the
+    /// offending field(s) at the first bad frame, so the parry crash that
+    /// follows a few frames later is fully attributed; the fix belongs at
+    /// the producer's source, not here.
+    fn report_nonfinite_rigid_body_state(&mut self) {
+        fn finite_pose(pose: &Isometry<Real>) -> bool {
+            pose.translation.vector.iter().all(|c| c.is_finite())
+                && pose.rotation.coords.iter().all(|c| c.is_finite())
+        }
+
+        for (_handle, body) in self.rigid_body_set.iter() {
+            if !body.is_enabled() {
+                continue;
+            }
+
+            let linvel_bad = !body.linvel().iter().all(|c| c.is_finite());
+            let angvel_bad = !body.angvel().iter().all(|c| c.is_finite());
+            let pose_bad = !finite_pose(body.position());
+            let next_pose_bad = body.is_kinematic() && !finite_pose(body.next_position());
+
+            if !(linvel_bad || angvel_bad || pose_bad || next_pose_bad) {
+                continue;
+            }
+
+            let entity_id = body
+                .colliders()
+                .first()
+                .and_then(|c| self.collider_set.get(*c))
+                .and_then(|c| EntityId::from_inner(c.user_data as u64));
+            // A body fed bad state every frame (e.g. NaN animation joints
+            // driving a kinematic hitbox) is only reported once.
+            if !self.reported_nonfinite_entities.insert(entity_id) {
+                continue;
+            }
+
+            let mut bad_fields = Vec::new();
+            if linvel_bad {
+                bad_fields.push(format!("linvel {:?}", body.linvel()));
+            }
+            if angvel_bad {
+                bad_fields.push(format!("angvel {:?}", body.angvel()));
+            }
+            if pose_bad {
+                bad_fields.push(format!("pose {:?}", body.position()));
+            }
+            if next_pose_bad {
+                bad_fields.push(format!("next kinematic pose {:?}", body.next_position()));
+            }
+            tracing::error!(
+                "[physics] entity {:?} ({:?} body at {:?}): non-finite rigid-body state: {} - this poisons the broad-phase BVH and will panic parry's binned rebuild within a few frames (#506; reported once per entity)",
+                entity_id,
+                body.body_type(),
+                body.translation(),
+                bad_fields.join(", "),
+            );
+        }
+    }
+
     pub fn update(
         &mut self,
         desired_movement: Vector3<f32>,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        // Attribute any non-finite body state to its entity before the step
+        // consumes it (see report_nonfinite_rigid_body_state) - by the time
+        // parry panics, the culprit is already named in the log.
+        self.report_nonfinite_rigid_body_state();
+
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
             self.physics_pipeline.step(
