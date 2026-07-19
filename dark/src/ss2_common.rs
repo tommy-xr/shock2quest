@@ -73,6 +73,15 @@ pub fn read_quat<T: io::Read>(reader: &mut T) -> Quaternion<f32> {
         v: vec3(-neg_x, y, z),
         s: w,
     };
+    // An all-zero quaternion marks an unanimated joint track in shipped
+    // motion data (23 of 613 stock clips have one, e.g. bh114009, humwalks).
+    // `invert()` divides by the zero magnitude and turns the whole track into
+    // NaN, which poisons every downstream pose (issue #508). The original
+    // engine's unnormalized quat->matrix conversion reads a zero quaternion
+    // as the identity rotation, so do the same.
+    if q.magnitude2() <= f32::EPSILON {
+        return Quaternion::new(1.0, 0.0, 0.0, 0.0);
+    }
     q.invert()
 }
 

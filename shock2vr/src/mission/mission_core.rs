@@ -3039,6 +3039,13 @@ impl MissionCore {
                         "bh114001", // action
                         "BH413001", // combat
                         "BH212oo8", // reach
+                        // Regression pose (#508): this stock idle gesture is
+                        // one of 23 clips whose unanimated joints are stored
+                        // as all-zero quaternions; it used to parse to NaN
+                        // joint matrices and poison the hitbox kinematic
+                        // bodies. Cycling to it must pose (bind rotation on
+                        // those joints) without a single non-finite value.
+                        "bh114009", // idle gesture with zero-quat joint tracks
                     ];
                     let clip_name =
                         DEBUG_POSE_CLIPS[self.debug_pose_index as usize % DEBUG_POSE_CLIPS.len()];
