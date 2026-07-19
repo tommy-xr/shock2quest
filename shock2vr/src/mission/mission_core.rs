@@ -1079,6 +1079,11 @@ impl MissionCore {
                 Vec::new(),
             )
         } else {
+            // Apply the crouch request before moving: swaps the capsule size
+            // feet-planted; standing up is refused without headroom (the
+            // actual state is read back via `player_is_crouched`).
+            self.physics
+                .set_player_crouch(input_context.crouch, &mut self.player_handle);
             profile!(
                 "shock2.update.physics",
                 self.physics.update(
@@ -1215,6 +1220,7 @@ impl MissionCore {
             player_pos,
             player_rotation: player_rot,
             head_rotation: input_context.head.rotation,
+            eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
         });
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
 
@@ -4552,6 +4558,21 @@ impl MissionCore {
     /// inherently false in VR.
     pub fn wants_pointer(&self) -> bool {
         self.flat_ui.active_panel().is_some() || self.flat_use_mode
+    }
+
+    /// Actual crouch state of the player collider (stand-up can be refused
+    /// for lack of headroom, so this can lag the crouch input).
+    pub fn player_is_crouched(&self) -> bool {
+        self.player_handle.is_crouched()
+    }
+
+    /// Re-apply a crouch recorded in save data. The save stores the
+    /// standing-equivalent center and the player is created standing there;
+    /// this drops the capsule back into the saved crouched pose before the
+    /// first step (a standing capsule may not even fit, e.g. mid-crawlspace).
+    pub fn restore_saved_crouch(&mut self) {
+        self.physics
+            .set_player_crouch(true, &mut self.player_handle);
     }
 
     /// Apply the effects produced by an interaction controller (the VR hands or

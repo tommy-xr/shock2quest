@@ -91,6 +91,13 @@ pub trait GameScene {
         false
     }
 
+    /// Whether the player's collider is currently crouched (the *actual*
+    /// physics state - stand-up can be refused for lack of headroom). Drives
+    /// the crouch-aware camera height; non-mission scenes have no player.
+    fn player_is_crouched(&self) -> bool {
+        false
+    }
+
     /// Get lighting information for VR enhancement
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight>;
 

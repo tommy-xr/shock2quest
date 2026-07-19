@@ -260,6 +260,10 @@ impl GameScene for DebugScene {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn player_is_crouched(&self) -> bool {
+        self.core.player_is_crouched()
+    }
+
     fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {
         Some(&self.core)
     }
@@ -470,6 +474,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.core.queue_entity_trigger(entity_name)
+    }
+
+    fn player_is_crouched(&self) -> bool {
+        self.core.player_is_crouched()
     }
 
     fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {

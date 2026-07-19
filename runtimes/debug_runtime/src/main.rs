@@ -732,10 +732,11 @@ fn run_game_blocking(
             time: actual_game_time, // Use accumulated game time, not real time
             camera_offset: pawn_offset,
             camera_rotation: pawn_rotation,
-            // Standing eye height, shared with desktop and the flat controller
-            // via shock2vr::PLAYER_EYE_HEIGHT, so the debug-runtime camera sits
-            // at the same height as desktop and shots land on the crosshair.
-            head_offset: vec3(0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0),
+            // Crouch-aware eye height, shared with desktop and the flat
+            // controller via Game::player_eye_height, so the debug-runtime
+            // camera sits at the same height as desktop and shots land on the
+            // crosshair.
+            head_offset: vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
             // Same head rotation fed to game.update, so the rendered view and the
             // flat viewmodel agree. Controllable via `/v1/control/input` head.look.
             head_rotation: current_input.head.rotation,
@@ -1627,6 +1628,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         },
         left_hand: hand(&input.left_hand),
         right_hand: hand(&input.right_hand),
+        crouch: input.crouch,
     }
 }
 
@@ -1651,7 +1653,8 @@ fn input_channels_help() -> &'static str {
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
-     {left,right}_hand.rotation [x,y,z,w]; \
+     {left,right}_hand.rotation [x,y,z,w], \
+     crouch 0|1 (stand-up refused without headroom); \
      locomotion: right_hand.thumbstick [strafe, forward] moves the player, \
      left_hand.thumbstick.x turns, left_hand.thumbstick.y flies up/down"
 }
@@ -1787,6 +1790,19 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
                     pressed: false,
                 });
             pointer.pressed = pressed;
+            Ok(())
+        }
+        // Crouch request: like the desktop LeftControl hold. The ACTUAL state
+        // can lag (standing up is refused without headroom); observe it via
+        // the player's body y (the collider center drops when crouched).
+        "crouch" => {
+            input.crouch = match num(channel, value)? {
+                v if v == 0.0 => false,
+                v if v == 1.0 => true,
+                v => {
+                    return Err(format!("channel '{channel}' expects 0 or 1, got {v}"));
+                }
+            };
             Ok(())
         }
         _ => Err(format!(

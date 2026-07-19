@@ -29,6 +29,32 @@ use self::debug_render_pipeline::DebugRenderer;
 const PLAYER_HEIGHT: f32 = 4.8;
 const PLAYER_RADIUS: f32 = 0.8;
 
+/// Crouched capsule height (SS2 ft). The original engine's crouched COLLISION
+/// profile (a stack of two 1.2 ft spheres, body-bottom -1.8 to head-top +1.0
+/// around the object origin) is ~2.8 ft tall - its taller "crouch height" is
+/// only the camera. The authored crawl routes are built for that: the MedSci
+/// air shaft behind keypad 45100 chokes to ~3.1 ft between its floor grate
+/// and entrance lip, which a 2.8 ft capsule plus the 0.1 ft contact offset
+/// clears with margin while 3.0+ scrapes.
+const PLAYER_CROUCH_HEIGHT: f32 = 2.8;
+
+/// Margin (SS2 ft) for the stand-up headroom test capsule: its radius is
+/// shrunk by this and its pose lifted by it, keeping the test top exactly at
+/// the standing crown while floating the test bottom off the floor. Without
+/// it, grazing contacts (the floor rest gap, walls the crouched capsule
+/// already touches) would falsely refuse standing; anything the lateral
+/// shrink lets through is well inside the controller's contact offset and
+/// resolves over the next frames.
+const PLAYER_STAND_TEST_MARGIN: f32 = 0.05;
+
+/// How far (world units) the collider CENTER sits below its standing height
+/// while crouched (the feet stay planted while the capsule shrinks). Save
+/// code uses this to store a standing-equivalent center so a game saved
+/// while crouched doesn't reload a standing capsule embedded in the floor.
+pub fn player_crouch_center_shift() -> f32 {
+    (PLAYER_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
+}
+
 /// Gap (SS2 ft) the character controller keeps between the player collider
 /// and world geometry (`KinematicCharacterController::offset`).
 const PLAYER_CONTACT_OFFSET: f32 = 0.1;
@@ -379,6 +405,19 @@ pub struct PlayerHandle {
     // Player
     controller: KinematicCharacterController,
     character_handle: RigidBodyHandle,
+    // Whether the collider is currently the crouched capsule. Mutated only by
+    // `PhysicsWorld::set_player_crouch`, which keeps the shape and this flag
+    // in sync.
+    is_crouched: bool,
+}
+
+impl PlayerHandle {
+    /// Whether the player collider is currently the crouched capsule. This is
+    /// the *actual* state (stand-up can be refused for lack of headroom), not
+    /// the requested input.
+    pub fn is_crouched(&self) -> bool {
+        self.is_crouched
+    }
 }
 
 pub struct PhysicsWorld {
@@ -1091,7 +1130,91 @@ impl PhysicsWorld {
         PlayerHandle {
             controller,
             character_handle,
+            is_crouched: false,
         }
+    }
+
+    /// Set the player's crouch state, resizing the capsule with the feet
+    /// planted (the body translation is the collider center, so half the
+    /// height difference is added/removed from it). Standing up is refused
+    /// while there is not enough headroom for the standing capsule; the
+    /// returned bool is the *resulting* crouch state.
+    pub fn set_player_crouch(
+        &mut self,
+        want_crouch: bool,
+        player_handle: &mut PlayerHandle,
+    ) -> bool {
+        if want_crouch == player_handle.is_crouched {
+            return player_handle.is_crouched;
+        }
+
+        let character_handle = player_handle.character_handle;
+        let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
+        // Feet-planted center shift between the two capsule sizes.
+        let center_shift = (PLAYER_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR;
+
+        if want_crouch {
+            let crouched = SharedShape::capsule_y(
+                (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+                PLAYER_RADIUS / SCALE_FACTOR,
+            );
+            self.collider_set[collider_handle].set_shape(crouched);
+            let body = &mut self.rigid_body_set[character_handle];
+            let mut translation = *body.translation();
+            translation.y -= center_shift;
+            body.set_translation(translation, true);
+            player_handle.is_crouched = true;
+        } else {
+            // Headroom check: intersect a test capsule at the feet-planted
+            // standing pose against the same groups the movement casts use.
+            // The test capsule keeps the full segment but shrinks the radius
+            // by the margin and is lifted by the margin, so its TOP sits
+            // exactly at the standing crown (a ceiling lower than standing
+            // height always blocks) while its BOTTOM floats 2x the margin
+            // above the standing feet (the floor/steps the player rests on
+            // never falsely block).
+            let standing_pos = Translation::from(
+                Vector::y() * (center_shift + PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR),
+            ) * self.rigid_body_set[character_handle].position();
+            let test_shape = Capsule::new_y(
+                (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+                (PLAYER_RADIUS - PLAYER_STAND_TEST_MARGIN) / SCALE_FACTOR,
+            );
+            let filter = QueryFilter::new()
+                .groups(InteractionGroups::new(
+                    InternalCollisionGroups::PLAYER.bits.into(),
+                    InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                    Default::default(),
+                ))
+                .exclude_rigid_body(character_handle)
+                .exclude_sensors();
+            let dispatcher = self.narrow_phase.query_dispatcher();
+            let queries = self.broad_phase.as_query_pipeline(
+                dispatcher,
+                &self.rigid_body_set,
+                &self.collider_set,
+                filter,
+            );
+            let blocked = queries
+                .intersect_shape(standing_pos, &test_shape)
+                .next()
+                .is_some();
+
+            if !blocked {
+                let standing = SharedShape::capsule_y(
+                    (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+                    PLAYER_RADIUS / SCALE_FACTOR,
+                );
+                self.collider_set[collider_handle].set_shape(standing);
+                let body = &mut self.rigid_body_set[character_handle];
+                let mut translation = *body.translation();
+                translation.y += center_shift;
+                body.set_translation(translation, true);
+                player_handle.is_crouched = false;
+            }
+        }
+
+        player_handle.is_crouched
     }
 
     pub fn new() -> PhysicsWorld {

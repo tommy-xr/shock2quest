@@ -37,6 +37,9 @@ pub struct InteractionContext<'a> {
     pub player_pos: Vector3<f32>,
     pub player_rotation: Quaternion<f32>,
     pub head_rotation: Quaternion<f32>,
+    /// Eye height above `player_pos` in SS2 units - crouch-aware, so the flat
+    /// controller's shot/viewmodel origin follows the actual camera.
+    pub eye_height: f32,
 }
 
 /// How the player interacts with the world. The effects returned by `update`
@@ -276,6 +279,7 @@ impl PlayerInteraction for FlatInteraction {
             ctx.player_pos,
             ctx.player_rotation,
             ctx.head_rotation,
+            ctx.eye_height,
             ctx.world,
             ctx.physics,
         );
