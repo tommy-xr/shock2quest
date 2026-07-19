@@ -482,6 +482,19 @@ pub trait DebuggableScene {
     /// Vector of entity summaries sorted by distance from player
     fn list_entities(&self, limit: Option<usize>, filter: Option<&str>) -> Vec<DebugEntitySummary>;
 
+    /// Resolve a client-facing entity id back to the live `EntityId`.
+    ///
+    /// The entity endpoints expose ids as `EntityId::inner() as i32`, which
+    /// keeps only the low 32 bits of the index part (the low 48 bits hold
+    /// `index + 1`; the top 16 hold the generation). Reconstructing via
+    /// `EntityId::from_inner(id as u64)` therefore yields a generation-0
+    /// handle that is stale for any recycled slot. This looks up the live
+    /// entity whose truncated id matches instead.
+    ///
+    /// # Returns
+    /// The live `EntityId`, or None if no live entity matches
+    fn resolve_entity_id(&self, id: i32) -> Option<EntityId>;
+
     /// Get detailed information about a specific entity
     ///
     /// Returns comprehensive entity information including properties, links,
