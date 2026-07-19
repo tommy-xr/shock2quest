@@ -291,6 +291,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.list_entities(limit, filter)
     }
 
+    fn resolve_entity_id(&self, id: i32) -> Option<EntityId> {
+        self.mission_core.resolve_entity_id(id)
+    }
+
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
         self.mission_core.entity_detail(id)
     }
