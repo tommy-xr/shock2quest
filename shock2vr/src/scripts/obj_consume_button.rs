@@ -21,30 +21,43 @@ impl Script for ObjConsumeButton {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
+            // VR: the player holds a specific item against the receptor.
             MessagePayload::ProvideForConsumption { entity } => {
                 if can_consume_entity(world, entity_id, *entity) {
-                    let switch_link_efect = send_to_all_switch_links_and_self(
-                        world,
-                        entity_id,
-                        MessagePayload::TurnOn { from: entity_id },
-                    );
-                    let destroy_consumee = Effect::DestroyEntity { entity_id: *entity };
-
-                    let sound_effect = play_environmental_sound(
-                        world,
-                        entity_id,
-                        "activate",
-                        vec![],
-                        AudioHandle::new(),
-                    );
-                    Effect::combine(vec![switch_link_efect, destroy_consumee, sound_effect])
+                    consume(world, entity_id, *entity)
                 } else {
                     Effect::NoEffect
+                }
+            }
+            // Flat: frobbing the receptor consumes the first matching item the
+            // player carries (no hold-item-near-the-receptor step - that is
+            // VR-only, handled above).
+            MessagePayload::Frob => {
+                match super::script_util::player_carried_items(world)
+                    .into_iter()
+                    .find(|item| can_consume_entity(world, entity_id, *item))
+                {
+                    Some(item) => consume(world, entity_id, item),
+                    None => Effect::NoEffect,
                 }
             }
             _ => Effect::NoEffect,
         }
     }
+}
+
+fn consume(world: &World, entity_id: EntityId, entity_to_consume: EntityId) -> Effect {
+    let switch_link_efect = send_to_all_switch_links_and_self(
+        world,
+        entity_id,
+        MessagePayload::TurnOn { from: entity_id },
+    );
+    let destroy_consumee = Effect::DestroyEntity {
+        entity_id: entity_to_consume,
+    };
+    let sound_effect =
+        play_environmental_sound(world, entity_id, "activate", vec![], AudioHandle::new());
+    Effect::combine(vec![switch_link_efect, destroy_consumee, sound_effect])
 }
 
 fn can_consume_entity(world: &World, self_id: EntityId, entity_to_consume_id: EntityId) -> bool {
