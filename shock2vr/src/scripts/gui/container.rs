@@ -1,5 +1,7 @@
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon};
+use dark::properties::{
+    FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon, ReceptronEffect,
+};
 
 use shipyard::{EntityId, Get, View, World};
 
@@ -25,6 +27,39 @@ pub struct ContainerGui {
     /// ("left clicking on the contents picks them up", manual p.7). The
     /// player's own backpack keeps click = use-the-item (`Frob`) instead.
     take_on_click: bool,
+    /// Gate a creature's inventory (`creaturecontainer`) behind
+    /// [`creature_is_lootable`]: a live, killable hostile must be slain first;
+    /// a corpse or an invulnerable posed NPC is lootable on frob. Off for
+    /// plain containers (corpses/desks) and the player's own backpack, which
+    /// always open.
+    require_lootable_creature: bool,
+}
+
+/// The basic weapon-impact stim archetype (`Standard Impact`, shock2.gam
+/// template -385). Every killable creature carries a `Damage` receptron for
+/// it; only an invulnerable set-piece NPC `Abort`s it.
+const STANDARD_IMPACT_STIM: i32 = -385;
+
+/// Whether a `creaturecontainer` creature may be looted by frobbing it.
+///
+/// Faithful gate: a creature's inventory opens only when it is a corpse
+/// (dead/incapacitated) OR an invulnerable, posed non-combatant (e.g. Dr.
+/// Watts). A live, killable hostile stays sealed until slain. Invulnerability
+/// is read straight off the creature's own receptrons - an invulnerable NPC
+/// `Abort`s the basic weapon-impact stim, which no killable hostile ever does
+/// - so this predicate can never open a live threat's inventory.
+fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
+    if crate::scripts::ai::ai_util::is_killed(entity_id, world) {
+        return true;
+    }
+    script_util::get_all_links_with_template(world, entity_id, |link| match link {
+        Link::Receptron(options) => Some(options.clone()),
+        _ => None,
+    })
+    .into_iter()
+    .any(|(stim_template_id, options)| {
+        stim_template_id == STANDARD_IMPACT_STIM && matches!(options.effect, ReceptronEffect::Abort)
+    })
 }
 
 impl ContainerGui {
@@ -38,6 +73,18 @@ impl ContainerGui {
             num_slots_x: 4,
             num_slots_y: 4,
             take_on_click: true,
+            require_lootable_creature: false,
+        }
+    }
+
+    /// Loot panel for a creature's inventory (`creaturecontainer`). Same layout
+    /// as [`loot_container`], but gated: frobbing only opens it once the
+    /// creature is a corpse or an invulnerable posed NPC (see
+    /// [`creature_is_lootable`]).
+    pub fn loot_creature() -> ContainerGui {
+        ContainerGui {
+            require_lootable_creature: true,
+            ..ContainerGui::loot_container()
         }
     }
 
@@ -51,6 +98,7 @@ impl ContainerGui {
             num_slots_x: 15,
             num_slots_y: 3,
             take_on_click: false,
+            require_lootable_creature: false,
         }
     }
 }
@@ -179,6 +227,13 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             world_offset: Vector3::new(0.0, 1.0, 0.0),
             screen_size_in_pixels: Vector2::new(self.width, self.height),
         }
+    }
+
+    /// A creature's loot panel opens on frob only when it is lootable (corpse
+    /// or invulnerable posed NPC); a live hostile stays sealed. Plain
+    /// containers and the backpack always open.
+    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
+        !self.require_lootable_creature || creature_is_lootable(world, entity_id)
     }
 
     fn handle_msg(

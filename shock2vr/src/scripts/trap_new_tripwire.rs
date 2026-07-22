@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use dark::properties::{PropLocalPlayer, PropTranslatingDoor, PropTripFlags, TripFlags};
+use dark::properties::{
+    PropLocalPlayer, PropTeleported, PropTranslatingDoor, PropTripFlags, TeleportSource, TripFlags,
+};
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
 
@@ -15,6 +17,18 @@ pub fn is_player(world: &World, entity_id: EntityId) -> bool {
     let v_prop_player = world.borrow::<View<PropLocalPlayer>>().unwrap();
 
     v_prop_player.get(entity_id).is_ok()
+}
+
+/// Did this entity arrive via a *scripted* teleport trap (as opposed to walking
+/// or VR teleport locomotion)? Scripted-trap arrivals must not fire tripwire
+/// ENTER, so a return teleport that lands inside another trap's box doesn't
+/// re-fire it (#515). Locomotion teleports still fire (e.g. ops1 cutscene).
+fn arrived_via_scripted_teleport(world: &World, entity_id: EntityId) -> bool {
+    let v_teleported = world.borrow::<View<PropTeleported>>().unwrap();
+    matches!(
+        v_teleported.get(entity_id),
+        Ok(t) if t.source == TeleportSource::ScriptedTrap
+    )
 }
 
 pub struct TrapNewTripwire {
@@ -103,12 +117,23 @@ impl Script for TrapNewTripwire {
         let trip_flags = v_trip_flags.get(entity_id).unwrap_or(&default_flags);
 
         // NOTE: intersections count no matter how the entity got here - walking,
-        // VR teleport locomotion, a teleport trap, or a debug teleport. The Dark
-        // engine fires PhysEnter/PhysExit for teleports too, and suppressing
-        // them made teleported-in players silently skip triggers (e.g. the ops1
-        // cutscene tripwire).
+        // VR teleport locomotion, or a debug teleport. The Dark engine fires
+        // PhysEnter/PhysExit for teleports too, and suppressing them made
+        // teleported-in players silently skip triggers (e.g. the ops1 cutscene
+        // tripwire).
         match msg {
             MessagePayload::SensorBeginIntersect { with } => {
+                // The ONE exception: a *scripted* teleport trap. Its arrival must
+                // not touch this tripwire at all - no ENTER signal AND not tracked
+                // as present. If we tracked it, walking back out would fire an
+                // unbalanced EXIT TurnOff and re-trigger the trap (the earth.mis
+                // montage loop, #515). This matches the original engine ignoring
+                // teleported-in entities. Consume the marker so a later walk-in to
+                // a *different* nearby tripwire still fires normally.
+                if arrived_via_scripted_teleport(world, *with) {
+                    return Effect::ClearTeleportedMarker { entity_id: *with };
+                }
+
                 if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
                     info!("activating tripwire");
                     self.has_activated = true;

@@ -2,7 +2,7 @@ use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, Vector4};
 use dark::{
     EnvSoundQuery,
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
-    properties::{AIAlertLevel, AIMode, KeyCard, QuestBitValue},
+    properties::{AIAlertLevel, AIMode, KeyCard, QuestBitValue, TeleportSource},
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;
@@ -352,6 +352,16 @@ pub enum Effect {
     SetPlayerPosition {
         position: Vector3<f32>,
         is_teleport: bool,
+        /// What repositioned the player. `ScriptedTrap` arrivals suppress
+        /// tripwire ENTER (#515); `Locomotion` (VR teleport) still fires it.
+        source: TeleportSource,
+    },
+
+    /// Remove an entity's `PropTeleported` marker. Emitted by a tripwire once it
+    /// has consumed a scripted-teleport arrival, so the ~1s marker can't also
+    /// suppress a later walk-in to a *different* nearby tripwire (#515).
+    ClearTeleportedMarker {
+        entity_id: EntityId,
     },
 
     /// Set an entity's render alpha (Renderer\Transparency (alpha): 1.0 =

@@ -1,4 +1,4 @@
-use dark::properties::PropPosition;
+use dark::properties::{PropPosition, TeleportSource};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
@@ -27,6 +27,9 @@ impl Script for TrapTeleportPlayer {
             Effect::SetPlayerPosition {
                 position: position.position,
                 is_teleport: true,
+                // Scripted trap arrival: don't re-fire the tripwire we land in
+                // (e.g. the earth.mis montage return teleport, #515).
+                source: TeleportSource::ScriptedTrap,
             }
         } else {
             Effect::NoEffect
