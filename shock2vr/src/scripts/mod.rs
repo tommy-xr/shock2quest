@@ -738,7 +738,7 @@ impl ScriptWorld {
             "cameradeath" => Box::new(UnimplementedScript::new(&script_name)),
             "censor" => Box::new(UnimplementedScript::new(&script_name)),
             "censorme" => Box::new(UnimplementedScript::new(&script_name)),
-            "creaturecontainer" => Box::new(NoopScript {}),
+            "creaturecontainer" => gui_script(Box::new(ContainerGui::loot_creature())),
             "chemical" => Box::new(NoopScript::new()),
             "chooseservice" => Box::new(ChooseServiceScript::new()),
             "infocomputer" => Box::new(UnimplementedScript::new(&script_name)),
