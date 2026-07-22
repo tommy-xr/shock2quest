@@ -3404,6 +3404,13 @@ impl MissionCore {
                             .add_component(player_entity, PropTeleported::with_source(source))
                     }
                 }
+                Effect::ClearTeleportedMarker { entity_id } => {
+                    self.world.run(
+                        |mut v_teleported: ViewMut<dark::properties::PropTeleported>| {
+                            v_teleported.remove(entity_id);
+                        },
+                    );
+                }
                 Effect::SetRenderAlpha { entity_id, alpha } => {
                     self.world.add_component(
                         entity_id,

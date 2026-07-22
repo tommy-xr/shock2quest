@@ -120,21 +120,28 @@ impl Script for TrapNewTripwire {
         // VR teleport locomotion, or a debug teleport. The Dark engine fires
         // PhysEnter/PhysExit for teleports too, and suppressing them made
         // teleported-in players silently skip triggers (e.g. the ops1 cutscene
-        // tripwire). The ONE exception is a *scripted* teleport trap: its
-        // arrival must not re-fire the tripwire it lands in (#515) - so we track
-        // the entity as present but skip the ENTER signal for that case.
+        // tripwire).
         match msg {
             MessagePayload::SensorBeginIntersect { with } => {
+                // The ONE exception: a *scripted* teleport trap. Its arrival must
+                // not touch this tripwire at all - no ENTER signal AND not tracked
+                // as present. If we tracked it, walking back out would fire an
+                // unbalanced EXIT TurnOff and re-trigger the trap (the earth.mis
+                // montage loop, #515). This matches the original engine ignoring
+                // teleported-in entities. Consume the marker so a later walk-in to
+                // a *different* nearby tripwire still fires normally.
+                if arrived_via_scripted_teleport(world, *with) {
+                    return Effect::ClearTeleportedMarker { entity_id: *with };
+                }
+
                 if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
                     info!("activating tripwire");
                     self.has_activated = true;
                     let was_empty = self.entity_in_trap.is_empty();
-                    let scripted_teleport = arrived_via_scripted_teleport(world, *with);
 
                     self.entity_in_trap.insert(*with);
 
-                    if was_empty && !scripted_teleport && self.trip_flags.contains(TripFlags::ENTER)
-                    {
+                    if was_empty && self.trip_flags.contains(TripFlags::ENTER) {
                         send_to_all_switch_links(
                             world,
                             entity_id,

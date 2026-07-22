@@ -357,6 +357,13 @@ pub enum Effect {
         source: TeleportSource,
     },
 
+    /// Remove an entity's `PropTeleported` marker. Emitted by a tripwire once it
+    /// has consumed a scripted-teleport arrival, so the ~1s marker can't also
+    /// suppress a later walk-in to a *different* nearby tripwire (#515).
+    ClearTeleportedMarker {
+        entity_id: EntityId,
+    },
+
     /// Set an entity's render alpha (Renderer\Transparency (alpha): 1.0 =
     /// opaque, 0.0 = invisible). Drives holo/ghost fades (Transluce scripts,
     /// CS9 cutscene exhibits).

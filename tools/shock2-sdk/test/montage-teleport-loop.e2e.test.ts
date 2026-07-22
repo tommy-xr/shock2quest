@@ -76,5 +76,21 @@ test(
       Math.abs(pos.z - MONTAGE_ENTRY_Z) > 50.0,
       `player must NOT bounce to the montage entry (z~=${MONTAGE_ENTRY_Z}), got ${JSON.stringify(pos)}`,
     );
+
+    // Now WALK OUT of the entry tripwire box. This is the real test of #515: if
+    // the scripted arrival was tracked as "present", leaving fires an unbalanced
+    // EXIT TurnOff -> the montage trap re-fires (TrapTeleportPlayer teleports on
+    // ANY message, including TurnOff) -> the player is yanked back to the montage.
+    // The fix ignores the scripted arrival entirely, so walking out is a no-op.
+    await game.input.set("right_hand.thumbstick", [0.0, -1.0]);
+    await game.step({ frames: 60 });
+    await game.input.set("right_hand.thumbstick", [0.0, 0.0]);
+
+    const outPos = await game.player.position();
+    assert.ok(
+      Math.abs(outPos.z - MONTAGE_ENTRY_Z) > 50.0,
+      `walking out of the box must NOT bounce the player to the montage entry ` +
+        `(z~=${MONTAGE_ENTRY_Z}), got ${JSON.stringify(outPos)}`,
+    );
   },
 );
