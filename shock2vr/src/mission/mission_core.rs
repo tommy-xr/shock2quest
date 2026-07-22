@@ -3773,11 +3773,9 @@ impl MissionCore {
                         None,
                         true,
                     ) {
-                        Some(hit) => Point3::new(
-                            hit.hit_point.x,
-                            hit.hit_point.y + 0.1,
-                            hit.hit_point.z,
-                        ),
+                        Some(hit) => {
+                            Point3::new(hit.hit_point.x, hit.hit_point.y + 0.1, hit.hit_point.z)
+                        }
                         None => pos,
                     };
                     let info = self.create_entity_with_position(
