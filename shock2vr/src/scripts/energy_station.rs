@@ -39,11 +39,13 @@ impl Script for EnergyStation {
                 }
             }
             MessagePayload::Collided { with } => do_recharge(world, entity_id, with),
-            // Flat presentation: frobbing the station recharges every
-            // rechargeable item the player carries at once (there is no
+            // Flat presentation: frobbing the station sends Recharge to every
+            // item the player carries at once (there is no
             // hold-one-item-near-the-station step - that is VR-only, handled by
             // Hover/Collided above). Each item self-handles Recharge, so only
-            // the ones that respond (dead power cell, energy weapons, ...) react.
+            // responders react - today that is the dead power cell. Energy-weapon
+            // recharge would be a separate follow-up, once those gain a Recharge
+            // handler; the mechanism here is already general.
             MessagePayload::Frob => do_recharge_all(world, entity_id),
             _ => Effect::NoEffect,
         }
