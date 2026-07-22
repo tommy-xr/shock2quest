@@ -581,8 +581,15 @@ impl ScriptWorld {
             "trapqbset" => Box::new(TrapQBSet::new()),
             "trapquestbitsimple" => Box::new(TrapQuestbitSimple::new()),
 
+            // SimpleLevelChangeButton is the ungated frob-to-travel variant of the
+            // Level Change Button: on frob it reads the object's PropDestLevel/PropDestLoc
+            // and transitions the level, identical to LevelChangeButton. Objects override
+            // their template's LevelChangeButton with this to select the "simple" behavior
+            // (e.g. the rec1 tram and the Rickenbacker shuttle buttons), so reuse the same
+            // implemented script rather than duplicating it.
+            "simplelevelchangebutton" => Box::new(LevelChangeButton::new()),
+
             // TODO:
-            "simplelevelchangebutton" => Box::new(UnimplementedScript::new(&script_name)), // rec1
             "freezefx" => Box::new(UnimplementedScript::new(&script_name)), // command1
             "torpedolift" => Box::new(UnimplementedScript::new(&script_name)), // rick1
             "torpedohack" => Box::new(UnimplementedScript::new(&script_name)), // rick1
