@@ -3,7 +3,6 @@ use dark::{
     properties::{PropClassTag, PropPosition},
 };
 use engine::audio::AudioHandle;
-use engine::script_log;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
@@ -40,38 +39,54 @@ impl Script for EnergyStation {
                 }
             }
             MessagePayload::Collided { with } => do_recharge(world, entity_id, with),
+            // Flat presentation: frobbing the station recharges every
+            // rechargeable item the player carries at once (there is no
+            // hold-one-item-near-the-station step - that is VR-only, handled by
+            // Hover/Collided above). Each item self-handles Recharge, so only
+            // the ones that respond (dead power cell, energy weapons, ...) react.
+            MessagePayload::Frob => do_recharge_all(world, entity_id),
             _ => Effect::NoEffect,
         }
     }
 }
 
-fn do_recharge(world: &World, entity_id: EntityId, with: &EntityId) -> Effect {
+fn do_recharge_all(world: &World, entity_id: EntityId) -> Effect {
+    let mut effects: Vec<Effect> = super::script_util::player_carried_items(world)
+        .into_iter()
+        .map(|item| Effect::Send {
+            msg: Message {
+                to: item,
+                payload: MessagePayload::Recharge,
+            },
+        })
+        .collect();
+    effects.push(activate_sound(world, entity_id));
+    Effect::combine(effects)
+}
+
+fn activate_sound(world: &World, entity_id: EntityId) -> Effect {
     let v_pos = world.borrow::<View<PropPosition>>().unwrap();
     let v_class_tag = world.borrow::<View<PropClassTag>>().unwrap();
     let mut class_tags = v_class_tag
         .get(entity_id)
         .map(|p| p.class_tags())
         .unwrap_or(vec![]);
-
-    // log_property::<PropClassTag>(world);
-    // panic!();
-    //log_property::<PropDeviceTag>(world);
     let pos = v_pos.get(entity_id).unwrap();
+    let mut query = vec![("event", "activate")];
+    query.append(&mut class_tags);
+    Effect::PlayEnvironmentalSound {
+        audio_handle: AudioHandle::new(),
+        query: EnvSoundQuery::from_tag_values(query),
+        position: pos.position,
+    }
+}
+
+fn do_recharge(world: &World, entity_id: EntityId, with: &EntityId) -> Effect {
     let recharge_effect = Effect::Send {
         msg: Message {
             to: *with,
             payload: MessagePayload::Recharge,
         },
     };
-
-    let mut query = vec![("event", "activate")];
-    query.append(&mut class_tags);
-    script_log!(DEBUG, "Energy station activate query: {:?}", query);
-    let sound_effect = Effect::PlayEnvironmentalSound {
-        audio_handle: AudioHandle::new(),
-        query: EnvSoundQuery::from_tag_values(query),
-        position: pos.position,
-    };
-
-    Effect::combine(vec![recharge_effect, sound_effect])
+    Effect::combine(vec![recharge_effect, activate_sound(world, entity_id)])
 }
