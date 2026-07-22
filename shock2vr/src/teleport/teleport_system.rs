@@ -182,6 +182,9 @@ impl TeleportSystem {
                     return Some(Effect::SetPlayerPosition {
                         position: target_pos,
                         is_teleport: true,
+                        // VR teleport locomotion still fires tripwires on
+                        // arrival (e.g. the ops1 cutscene tripwire).
+                        source: dark::properties::TeleportSource::Locomotion,
                     });
                 }
             }

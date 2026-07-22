@@ -3395,12 +3395,13 @@ impl MissionCore {
                 Effect::SetPlayerPosition {
                     position,
                     is_teleport,
+                    source,
                 } => {
                     self.physics
                         .set_player_translation(position, &mut self.player_handle);
                     if is_teleport {
                         self.world
-                            .add_component(player_entity, PropTeleported::new())
+                            .add_component(player_entity, PropTeleported::with_source(source))
                     }
                 }
                 Effect::SetRenderAlpha { entity_id, alpha } => {

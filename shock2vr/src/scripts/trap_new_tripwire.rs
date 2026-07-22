@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use dark::properties::{PropLocalPlayer, PropTranslatingDoor, PropTripFlags, TripFlags};
+use dark::properties::{
+    PropLocalPlayer, PropTeleported, PropTranslatingDoor, PropTripFlags, TeleportSource, TripFlags,
+};
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
 
@@ -15,6 +17,18 @@ pub fn is_player(world: &World, entity_id: EntityId) -> bool {
     let v_prop_player = world.borrow::<View<PropLocalPlayer>>().unwrap();
 
     v_prop_player.get(entity_id).is_ok()
+}
+
+/// Did this entity arrive via a *scripted* teleport trap (as opposed to walking
+/// or VR teleport locomotion)? Scripted-trap arrivals must not fire tripwire
+/// ENTER, so a return teleport that lands inside another trap's box doesn't
+/// re-fire it (#515). Locomotion teleports still fire (e.g. ops1 cutscene).
+fn arrived_via_scripted_teleport(world: &World, entity_id: EntityId) -> bool {
+    let v_teleported = world.borrow::<View<PropTeleported>>().unwrap();
+    matches!(
+        v_teleported.get(entity_id),
+        Ok(t) if t.source == TeleportSource::ScriptedTrap
+    )
 }
 
 pub struct TrapNewTripwire {
@@ -103,20 +117,24 @@ impl Script for TrapNewTripwire {
         let trip_flags = v_trip_flags.get(entity_id).unwrap_or(&default_flags);
 
         // NOTE: intersections count no matter how the entity got here - walking,
-        // VR teleport locomotion, a teleport trap, or a debug teleport. The Dark
-        // engine fires PhysEnter/PhysExit for teleports too, and suppressing
-        // them made teleported-in players silently skip triggers (e.g. the ops1
-        // cutscene tripwire).
+        // VR teleport locomotion, or a debug teleport. The Dark engine fires
+        // PhysEnter/PhysExit for teleports too, and suppressing them made
+        // teleported-in players silently skip triggers (e.g. the ops1 cutscene
+        // tripwire). The ONE exception is a *scripted* teleport trap: its
+        // arrival must not re-fire the tripwire it lands in (#515) - so we track
+        // the entity as present but skip the ENTER signal for that case.
         match msg {
             MessagePayload::SensorBeginIntersect { with } => {
                 if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
                     info!("activating tripwire");
                     self.has_activated = true;
                     let was_empty = self.entity_in_trap.is_empty();
+                    let scripted_teleport = arrived_via_scripted_teleport(world, *with);
 
                     self.entity_in_trap.insert(*with);
 
-                    if was_empty && self.trip_flags.contains(TripFlags::ENTER) {
+                    if was_empty && !scripted_teleport && self.trip_flags.contains(TripFlags::ENTER)
+                    {
                         send_to_all_switch_links(
                             world,
                             entity_id,

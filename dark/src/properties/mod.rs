@@ -108,13 +108,30 @@ pub struct PropPosition {
     pub rotation: Quaternion<f32>,
 }
 
+/// How an entity arrived at its current position when marked `PropTeleported`.
+/// Distinguishes player-initiated movement (which fires tripwires on arrival,
+/// like the original engine) from a scripted teleport trap (whose arrival must
+/// NOT re-fire the tripwire it lands in - see #515).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TeleportSource {
+    /// Player-initiated movement teleport: VR teleport locomotion or a debug
+    /// teleport. Tripwire ENTER fires on arrival.
+    #[default]
+    Locomotion,
+    /// A scripted teleport trap (TrapTeleportPlayer) repositioned the player.
+    /// Tripwire ENTER is suppressed for this arrival so a return teleport that
+    /// lands inside another trap's tripwire box doesn't re-fire it (#515).
+    ScriptedTrap,
+}
+
 #[derive(Debug, Component, Serialize, Deserialize)]
 /// Marks an entity as having just teleported (VR teleport locomotion, teleport
-/// traps, debug teleport). Currently has no readers - tripwires deliberately
-/// fire on teleport-entry like the original engine - but the marker is kept
-/// (and serialized in saves) for scripts that may need teleport-awareness.
+/// traps, debug teleport). Tripwires fire on teleport-entry like the original
+/// engine, EXCEPT for `ScriptedTrap` arrivals which are suppressed (#515).
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'
+    #[serde(default)]
+    pub source: TeleportSource,
 }
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -122,8 +139,13 @@ pub struct PropKeypadCode(pub u32);
 
 impl PropTeleported {
     pub fn new() -> PropTeleported {
+        PropTeleported::with_source(TeleportSource::Locomotion)
+    }
+
+    pub fn with_source(source: TeleportSource) -> PropTeleported {
         PropTeleported {
             countdown_timer: 1.0,
+            source,
         }
     }
 }
