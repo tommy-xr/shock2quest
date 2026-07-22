@@ -3751,10 +3751,37 @@ impl MissionCore {
                         (vec3_to_point3(player.pos), player.rotation * head_rotation)
                     };
                     let forward = rot * vec3(0.0, 2.5 / SCALE_FACTOR, -10.0 / SCALE_FACTOR);
+                    let target = pos + forward;
+                    // Drop-to-floor: the naive forward offset can land inside or
+                    // below the level geometry (e.g. on pitched-down aim), which
+                    // drops the spawn out of the world. Cast straight down onto
+                    // the floor at the target's XZ and rest the monster there.
+                    // The ray starts a fixed height above the PLAYER's floor
+                    // (`pos.y`), not above the naive target - a pitched target
+                    // can land below the floor, and a ray starting there would
+                    // miss the floor above it. If no floor is found within range,
+                    // fall back to the player's own position (known-good ground)
+                    // rather than the naive target - the naive point is exactly
+                    // the below-floor case this fixes, so it must not be the
+                    // fallback.
+                    let ray_start = Point3::new(target.x, pos.y + 2.0, target.z);
+                    let spawn_pos = match self.physics.ray_cast2(
+                        ray_start,
+                        vec3(0.0, -1.0, 0.0),
+                        20.0,
+                        crate::physics::InternalCollisionGroups::WORLD,
+                        None,
+                        true,
+                    ) {
+                        Some(hit) => {
+                            Point3::new(hit.hit_point.x, hit.hit_point.y + 0.1, hit.hit_point.z)
+                        }
+                        None => pos,
+                    };
                     let info = self.create_entity_with_position(
                         asset_cache,
                         template_id,
-                        pos + forward,
+                        spawn_pos,
                         rot,
                         Matrix4::identity(),
                         CreateEntityOptions::default(),
