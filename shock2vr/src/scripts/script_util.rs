@@ -270,6 +270,62 @@ pub fn get_first_link_of_type(
     all_links.get(0).copied()
 }
 
+/// Every item the player is currently carrying: each wielded/hand-held entity
+/// plus everything nested under it, and the backpack (inventory) entity's
+/// contents - following `Contains` links to depth 2 (mirrors the item set the
+/// save system and the debug inventory enumerate). The hand/inventory container
+/// entities themselves are excluded; a wielded item *is* its hand entity, so it
+/// is included. Empty when there is no player (e.g. a debug scene without one).
+pub fn player_carried_items(world: &World) -> Vec<EntityId> {
+    let player = match world.borrow::<UniqueView<crate::mission::PlayerInfo>>() {
+        Ok(player) => player,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+
+    // Hands first: the hand entity itself is the wielded item, plus its contents.
+    for hand in [player.left_hand_entity_id, player.right_hand_entity_id]
+        .into_iter()
+        .flatten()
+    {
+        if seen.insert(hand) {
+            out.push(hand);
+        }
+        collect_contained_items(world, hand, 2, &mut seen, &mut out);
+    }
+
+    // Backpack: only the inventory container's contents (the container is not an item).
+    seen.insert(player.inventory_entity_id);
+    collect_contained_items(world, player.inventory_entity_id, 2, &mut seen, &mut out);
+
+    out
+}
+
+fn collect_contained_items(
+    world: &World,
+    entity_id: EntityId,
+    depth: u32,
+    seen: &mut std::collections::HashSet<EntityId>,
+    out: &mut Vec<EntityId>,
+) {
+    if depth == 0 {
+        return;
+    }
+    for_each_link(world, entity_id, &mut |link| {
+        if matches!(link.link, Link::Contains(_)) {
+            if let Some(to_entity_id) = link.to_entity_id {
+                let child = to_entity_id.0;
+                if seen.insert(child) {
+                    out.push(child);
+                    collect_contained_items(world, child, depth - 1, seen, out);
+                }
+            }
+        }
+    });
+}
+
 pub fn get_all_switch_links(world: &World, producing_entity_id: EntityId) -> Vec<EntityId> {
     let links = world.borrow::<View<Links>>().unwrap();
     let mut linked_entities = Vec::new();

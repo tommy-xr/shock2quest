@@ -1958,13 +1958,7 @@ impl MissionCore {
             let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
 
             for (id, links) in (&mut v_links).iter().with_id() {
-                links.to_links.retain(|link| {
-                    let is_link_to_entity = matches!(link.link, Link::Contains(_))
-                        && link.to_entity_id.is_some()
-                        && link.to_entity_id.unwrap().0 == dropped_entity_id;
-
-                    !is_link_to_entity
-                });
+                drop_contains_links_to(links, dropped_entity_id);
 
                 // If it is the container, we'll add the link!
                 if id == container_entity_id {
@@ -1983,6 +1977,49 @@ impl MissionCore {
             self.make_un_physical(dropped_entity_id);
         }
         was_able_to_drop
+    }
+
+    /// When an entity is replaced (e.g. a dead power cell recharged into a live
+    /// one), any container that held the old entity via a `Contains` link should
+    /// keep holding the new one - otherwise the replacement is orphaned in the
+    /// world and the container is left with a dangling link. Rewrites those
+    /// incoming `Contains` links in place (preserving slot ordinal) and makes the
+    /// new entity a proper contained item (un-physical, no refs). Returns whether
+    /// the new entity was placed into a container. VR held items are tracked by
+    /// the hand, not a `Contains` link, so this leaves the VR hold path untouched.
+    fn transfer_containment(&mut self, old_entity_id: EntityId, new_entity_id: EntityId) -> bool {
+        let mut transferred = false;
+        {
+            let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
+            for (_id, links) in (&mut v_links).iter().with_id() {
+                for link in links.to_links.iter_mut() {
+                    if matches!(link.link, Link::Contains(_))
+                        && link.to_entity_id.map(|e| e.0) == Some(old_entity_id)
+                    {
+                        link.to_entity_id = Some(WrappedEntityId(new_entity_id));
+                        transferred = true;
+                    }
+                }
+            }
+        }
+        if transferred {
+            self.world.add_component(new_entity_id, PropHasRefs(false));
+            self.make_un_physical(new_entity_id);
+        }
+        transferred
+    }
+
+    /// Drop any container's `Contains` link that points at `entity_id`. Called
+    /// when an entity is destroyed so a consumed/used inventory item (e.g. a
+    /// power cell inserted into an aux-power receptor) leaves no dangling link
+    /// behind - a stale link would otherwise resolve to whatever entity later
+    /// recycles the slot. Only invoked for contained items (see the destroy
+    /// path), so the full scan is not run for world-present FX/projectiles.
+    fn remove_incoming_contains_links(&mut self, entity_id: EntityId) {
+        let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
+        for (_id, links) in (&mut v_links).iter().with_id() {
+            drop_contains_links_to(links, entity_id);
+        }
     }
 
     pub fn make_physical(&mut self, entity_id: EntityId) {
@@ -3156,6 +3193,10 @@ impl MissionCore {
                         );
                     }
 
+                    // Keep a contained item (e.g. an inventory power cell
+                    // recharged at a station) in its container after replacement.
+                    self.transfer_containment(entity_id, new_entity_info.entity_id);
+
                     self.remove_entity(entity_id);
                 }
 
@@ -3381,6 +3422,15 @@ impl MissionCore {
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.interaction.on_entity_destroyed(entity_id);
+                    // Only a contained item (no world presence, PropHasRefs
+                    // false) can leave a dangling inventory `Contains` link
+                    // behind. World-present entities - FX spangs, projectiles,
+                    // creatures - are never `Contains` targets, so skip the
+                    // full link scan for them (several are destroyed per frame
+                    // in combat).
+                    if !crate::util::has_refs(&self.world, entity_id) {
+                        self.remove_incoming_contains_links(entity_id);
+                    }
                     self.remove_entity(entity_id);
                 }
                 Effect::ResetGravity { entity_id } => {
@@ -4877,6 +4927,15 @@ fn option_to_vec<T>(option: Option<T>) -> Vec<T> {
         None => vec![],
         Some(v) => vec![v],
     }
+}
+
+/// Remove every `Contains` link in `links` that points at `target` - used when
+/// an item leaves a container (moved/dropped into another container, or
+/// destroyed while contained), so no stale `Contains` link is left behind.
+fn drop_contains_links_to(links: &mut Links, target: EntityId) {
+    links.to_links.retain(|link| {
+        !(matches!(link.link, Link::Contains(_)) && link.to_entity_id.map(|e| e.0) == Some(target))
+    });
 }
 
 pub fn make_un_physical2(
