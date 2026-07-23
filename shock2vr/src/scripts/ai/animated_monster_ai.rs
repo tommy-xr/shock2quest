@@ -681,6 +681,19 @@ impl Script for AnimatedMonsterAI {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.current_heading = current_yaw(entity_id, world);
 
+        // Save/load rebuilds scripts after restoring serialized hit points. A
+        // killed monster must start in its inert state: queueing the fresh
+        // script's idle clip would stand the corpse up, then its completion
+        // would enter the normal death path and replay the crumple + speech.
+        if is_killed(entity_id, world) {
+            self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
+            self.is_dead = true;
+            // This corpse did not enter death in this runtime, so it must not
+            // run the timed animated-crumple -> ragdoll handoff either.
+            self.handoff_emitted = true;
+            return self.publish_behavior(entity_id);
+        }
+
         // Load alertness configuration from entity properties
         self.config = Self::build_config(world, entity_id);
 
@@ -717,10 +730,10 @@ impl Script for AnimatedMonsterAI {
         // behavior so introspection shows "Dead", and release a sensor the
         // ray was intersecting at death so its end-intersect isn't stranded.
         if self.is_dead || is_killed(entity_id, world) {
-            // The handoff timer runs only through the real death flow
-            // (enter_death -> is_dead): a corpse recreated by save/load has
-            // is_killed true but is_dead false, and must stay an animated
-            // corpse rather than ragdoll-ify from whatever pose it loaded in.
+            // A corpse recreated by save/load also latches is_dead so stale
+            // animation completions stay inert, but initialize() pre-marks
+            // its handoff as emitted: it must not ragdoll-ify from whatever
+            // pose the save restored.
             if self.is_dead {
                 self.death_elapsed += time.elapsed.as_secs_f32();
             }

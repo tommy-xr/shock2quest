@@ -99,5 +99,79 @@ test(
       drift < 0.5,
       `corpse moved ${drift.toFixed(2)} units after death`,
     );
+
+    // Save/load rebuilds scripts rather than serializing their internal
+    // behavior state. Rediscover the corpse after load by its stable template
+    // plus saved position: runtime entity IDs are assigned afresh.
+    const savedCorpse = detail;
+    const saveName = `monster_death_e2e_${Date.now()}`;
+    await game.save(saveName);
+    await game.load(saveName);
+
+    const loadedMonsters = await game.entities.list({
+      filter: "OG-Pipe",
+      limit: 50,
+    });
+    const loadedCorpse = loadedMonsters.entities
+      .filter(
+        (entity) =>
+          entity.name === monster.name &&
+          entity.template_id === monster.template_id,
+      )
+      .map((entity) => ({
+        entity,
+        distance: Math.hypot(
+          entity.position[0] - savedCorpse.position[0],
+          entity.position[1] - savedCorpse.position[1],
+          entity.position[2] - savedCorpse.position[2],
+        ),
+      }))
+      .sort((a, b) => a.distance - b.distance)[0];
+    assert.ok(
+      loadedCorpse && loadedCorpse.distance < 1.0,
+      `expected the saved corpse near ${JSON.stringify(savedCorpse.position)}, got ${JSON.stringify(loadedMonsters.entities)}`,
+    );
+
+    // A loaded corpse must be inert immediately. Sample through the old idle
+    // clip's completion window as well: before the fix initialize() queued an
+    // idle, then AnimationCompleted replayed the death clip and death speech.
+    const loadedStates: Array<{
+      frame: number;
+      behavior: string | undefined;
+      clip: string | null;
+      clipFrame: number;
+      lastClip: string | null;
+      queuedClips: Array<string | null>;
+    }> = [];
+    for (let frame = 0; frame <= 120; frame += 30) {
+      if (frame > 0) {
+        await game.step({ frames: 30 });
+      }
+      const loadedDetail = await game.entities.detail(loadedCorpse.entity.id);
+      const animation = await game.entities.animation(loadedCorpse.entity.id);
+      assert.ok(animation, "loaded OG-Pipe should have an animation player");
+      loadedStates.push({
+        frame,
+        behavior: aiProp(loadedDetail, "AIBehavior"),
+        clip: animation.clip,
+        clipFrame: animation.frame,
+        lastClip: animation.last_clip,
+        queuedClips: animation.queue.map((entry) => entry.name),
+      });
+    }
+
+    const initialPlayback = loadedStates[0];
+    assert.ok(initialPlayback, "expected at least one loaded animation sample");
+    assert.ok(
+      loadedStates.every(
+        (state) =>
+          state.behavior === "Dead" &&
+          state.clip === initialPlayback.clip &&
+          state.clipFrame === initialPlayback.clipFrame &&
+          state.lastClip === initialPlayback.lastClip &&
+          state.queuedClips.length === 0,
+      ),
+      `loaded corpse replayed animation or left Dead behavior: ${JSON.stringify(loadedStates)}`,
+    );
   },
 );
