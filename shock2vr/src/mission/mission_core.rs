@@ -2649,6 +2649,20 @@ impl MissionCore {
                     }
                 }
 
+                Effect::RechargeAmmo {
+                    entity_id,
+                    capacity,
+                } => {
+                    let mut v_gun_state = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropGunState>>()
+                        .unwrap();
+
+                    if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
+                        crate::scripts::effect::recharge_ammo_to_capacity(gun_state, capacity);
+                    }
+                }
+
                 Effect::RadiusBlast {
                     center,
                     radius,

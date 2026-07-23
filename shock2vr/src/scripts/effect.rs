@@ -2,7 +2,7 @@ use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, Vector4};
 use dark::{
     EnvSoundQuery,
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
-    properties::{AIAlertLevel, AIMode, KeyCard, QuestBitValue, TeleportSource},
+    properties::{AIAlertLevel, AIMode, KeyCard, PropGunState, QuestBitValue, TeleportSource},
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;
@@ -88,6 +88,14 @@ pub enum Effect {
     AdjustAmmo {
         entity_id: EntityId,
         delta: i32,
+    },
+
+    /// Raise an energy weapon's charge to at least its authored capacity.
+    /// Applied against the live gun state so duplicate recharge messages in one
+    /// tick remain idempotent. No-op for entities without a gun state.
+    RechargeAmmo {
+        entity_id: EntityId,
+        capacity: i32,
     },
 
     /// Cycle the player's wielded weapon to its next ammo type (the next
@@ -493,6 +501,50 @@ pub enum Effect {
     /// Advance every creature to its next animation pose. Debug-only, used by the
     /// `debug_hitbox` scene to inspect per-joint hitbox/ragdoll fit across poses.
     DebugCycleHitboxPose,
+}
+
+pub(crate) fn recharge_ammo_to_capacity(gun_state: &mut PropGunState, capacity: i32) {
+    gun_state.ammo = gun_state.ammo.max(capacity.max(0));
+}
+
+#[cfg(test)]
+mod tests {
+    use dark::properties::PropGunState;
+
+    use super::recharge_ammo_to_capacity;
+
+    fn gun_state(ammo: i32) -> PropGunState {
+        PropGunState {
+            ammo,
+            condition: 0.75,
+            setting: 1,
+            modification: 2,
+            silence_value: 0.25,
+        }
+    }
+
+    #[test]
+    fn duplicate_same_tick_recharges_are_idempotent_and_preserve_other_state() {
+        let mut state = gun_state(0);
+
+        recharge_ammo_to_capacity(&mut state, 100);
+        recharge_ammo_to_capacity(&mut state, 100);
+
+        assert_eq!(state.ammo, 100);
+        assert_eq!(state.condition, 0.75);
+        assert_eq!(state.setting, 1);
+        assert_eq!(state.modification, 2);
+        assert_eq!(state.silence_value, 0.25);
+    }
+
+    #[test]
+    fn recharge_does_not_reduce_over_capacity_charge() {
+        let mut state = gun_state(125);
+
+        recharge_ammo_to_capacity(&mut state, 100);
+
+        assert_eq!(state.ammo, 125);
+    }
 }
 
 impl Effect {
