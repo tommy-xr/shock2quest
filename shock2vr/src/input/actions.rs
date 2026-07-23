@@ -36,9 +36,9 @@ pub enum InputAction {
     /// previous). Cycles the full SS2 weapon roster for flat-mode aim/viewmodel
     /// testing.
     CycleWeapon,
-    /// Cycle the wielded weapon's ammo type (its next Projectile link).
+    /// Cycle an empty wielded weapon's ammo type (its next Projectile link).
     CycleAmmo,
-    /// Reload the wielded weapon: refill its clip to capacity.
+    /// Reload the wielded weapon from compatible backpack reserve.
     Reload,
     /// Select the next psi power (used when firing the psi amp).
     CyclePsiPower,

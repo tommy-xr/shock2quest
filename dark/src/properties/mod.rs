@@ -392,6 +392,9 @@ pub enum Link {
     AIRangedWeapon,
     AIWatchObj(AIWatchOptions),
     Contains(u32),
+    /// From a projectile archetype to the compatible inventory-ammo archetype
+    /// (e.g. Standard Bullet -> Standard Clip).
+    Clip,
     Corpse(CorpseOptions),
     Flinderize(FlinderizeOptions),
     GunFlash(GunFlashOptions),
@@ -972,6 +975,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$Teleport", |_| Link::Teleport),
         define_link("L$TPathInit", |_| Link::TPathInit),
         define_link("L$AIPatrol", |_| Link::AIPatrol),
+        define_link("L$Clip", |_| Link::Clip),
         define_link("L$Miss Span", |_| Link::MissSpang),
         //define_link("L$TPath", |_| Link::TPath),
         //define_link("L$TPathNext", |_| Link::TPath),

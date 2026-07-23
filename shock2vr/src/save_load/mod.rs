@@ -18,7 +18,7 @@ use crate::{
     creature::RuntimePropHitBox,
     gui::GuiPropProxyEntity,
     mission::{GlobalTemplateIdMap, PlayerInfo},
-    runtime_props::RuntimePropDoNotSerialize,
+    runtime_props::{RuntimePropDoNotSerialize, RuntimePropSelectedAmmo},
     scripts::script_util,
     util::partition_map,
 };
@@ -92,6 +92,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
     let entities_to_filter = get_entities_to_filter_out(world);
 
     let v_links = world.borrow::<View<Links>>().unwrap();
+    let v_selected_ammo = world.borrow::<View<RuntimePropSelectedAmmo>>().unwrap();
     let v_entities = world.borrow::<EntitiesView>().unwrap();
 
     let (all_properties, _, _) = dark::properties::get::<File>();
@@ -139,11 +140,22 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         }
     }
 
+    let raw_selected_ammo: HashMap<u64, usize> = v_selected_ammo
+        .iter()
+        .with_id()
+        .filter(|(entity_id, _)| !entities_to_filter.contains(&entity_id.inner()))
+        .map(|(entity_id, selected)| (entity_id.inner(), selected.0))
+        .collect();
+    let (held_selected_ammo, world_selected_ammo) = partition_map(raw_selected_ammo, |entity_id| {
+        held_entities.contains(entity_id)
+    });
+
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
         links: world_serialized_links,
         all_entities: all_world_entities,
+        selected_ammo: world_selected_ammo,
     };
 
     let held_entity_data = EntitySaveData {
@@ -151,6 +163,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         template_id_to_entity_id: HashMap::new(),
         links: held_serialized_links,
         properties: held_serialized_properties,
+        selected_ammo: held_selected_ammo,
     };
 
     let held_metadata = HeldItemSaveData {

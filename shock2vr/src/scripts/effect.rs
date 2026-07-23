@@ -92,7 +92,7 @@ pub enum Effect {
 
     /// Cycle the player's wielded weapon to its next ammo type (the next
     /// `Projectile` link). No-op when no weapon is wielded or it has fewer than
-    /// two projectile links.
+    /// two projectile links, or while its magazine still has loaded rounds.
     CycleAmmo,
 
     /// Toggle the flat-mode "use" (metagame) mode - cursor-driven UI over the
@@ -179,10 +179,10 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
-    /// Reload the player's wielded weapon: refill its clip (`PropGunState.ammo`)
-    /// to the magazine capacity (`PropBaseGunDesc.clip`). No-op when no weapon is
-    /// wielded or it has no gun state / clip. (Reserve ammo is unlimited for now -
-    /// there is no inventory ammo model yet.)
+    /// Reload the player's wielded weapon from compatible backpack reserve,
+    /// up to its magazine capacity (`PropBaseGunDesc.clip`). No-op when no
+    /// weapon is wielded, it has no gun state / clip, or no matching reserve is
+    /// carried.
     ReloadWeapon,
 
     ApplyForce {

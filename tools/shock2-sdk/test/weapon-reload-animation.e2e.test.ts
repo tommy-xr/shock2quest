@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { pickupEarthWeapons } from "./helpers/earth-weapons.js";
 import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end regression test for the reload ANIMATION + fire gate. The wielded
@@ -24,20 +25,25 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
-      mission: "debug_weapons",
+      mission: "earth.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8098),
     });
 
-    await game.step({ frames: 5 });
-    await game.input.trigger("CycleWeapon");
-    await game.step({ frames: 5 });
+    await game.step({ frames: 30 });
+    const { pistol, clips } = await pickupEarthWeapons(game, 3);
+    const pistolId = pistol.id;
+    assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "Earth pistol starts empty");
 
-    const pistolId = (await game.entities.list({ limit: 60 })).entities.find(
-      (e) => e.name === "Pistol",
-    )?.id;
-    assert.ok(pistolId !== undefined, "pistol should be wielded");
-
+    // Seed a full magazine from two authored reserve clips, then wait for that
+    // reload to finish before testing the next reload's animation.
+    await game.input.trigger("Reload");
+    await game.step({ frames: 140 });
     const clip = ammoOf(await game.entities.detail(pistolId));
+    assert.equal(clip, 12, "two small clips filled the pistol");
+    assert.ok(
+      (await game.player.inventory()).items.some((item) => item.entity_id === clips[2].id),
+      "third reserve clip remains for the animated partial reload",
+    );
 
     // Not reloading at rest.
     let snap = (await game.info()).player;

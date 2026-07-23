@@ -113,6 +113,18 @@ pub fn ordered_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, Pr
     links
 }
 
+/// Whether `weapon` may select a different projectile type. Until magazine
+/// unload semantics exist, a gun must be empty so loaded rounds cannot be
+/// converted to a different ammo type for free.
+pub fn can_cycle_ammo(world: &World, weapon: EntityId) -> bool {
+    let is_empty = world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.ammo <= 0))
+        .unwrap_or(false);
+    is_empty && ordered_projectile_links(world, weapon).len() >= 2
+}
+
 pub fn get_first_link_with_template_and_data<TData: Clone>(
     world: &World,
     producing_entity_id: EntityId,
