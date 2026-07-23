@@ -490,7 +490,7 @@ impl AnimatedMonsterAI {
             sync_effect,
             Effect::PlayAnimationBySchema {
                 entity_id,
-                motion_queries: vec![self.current_behavior.borrow().animation()],
+                motion_queries: self.current_behavior.borrow().animation_queries(),
                 selection_strategy,
             },
         ])
@@ -697,7 +697,7 @@ impl Script for AnimatedMonsterAI {
         let selection_strategy = self.next_selection(is_locomotion);
         let animation_effect = Effect::QueueAnimationBySchema {
             entity_id,
-            motion_queries: vec![self.current_behavior.borrow().animation()],
+            motion_queries: self.current_behavior.borrow().animation_queries(),
             selection_strategy,
         };
 
@@ -871,7 +871,7 @@ impl Script for AnimatedMonsterAI {
                         let selection_strategy = self.next_selection(is_locomotion);
                         Effect::PlayAnimationBySchema {
                             entity_id,
-                            motion_queries: vec![self.current_behavior.borrow().animation()],
+                            motion_queries: self.current_behavior.borrow().animation_queries(),
                             selection_strategy,
                         }
                     } else {
@@ -918,7 +918,7 @@ impl Script for AnimatedMonsterAI {
                 let selection_strategy = self.next_selection(is_locomotion);
                 return Effect::PlayAnimationBySchema {
                     entity_id,
-                    motion_queries: vec![self.current_behavior.borrow().animation()],
+                    motion_queries: self.current_behavior.borrow().animation_queries(),
                     selection_strategy,
                 };
             }
@@ -948,7 +948,7 @@ impl Script for AnimatedMonsterAI {
                 let selection_strategy = self.next_selection(is_locomotion);
                 Effect::PlayAnimationBySchema {
                     entity_id,
-                    motion_queries: vec![self.current_behavior.borrow().animation()],
+                    motion_queries: self.current_behavior.borrow().animation_queries(),
                     selection_strategy,
                 }
             } else {
@@ -1093,7 +1093,7 @@ impl Script for AnimatedMonsterAI {
                     let selection_strategy = self.next_selection(is_locomotion);
                     Effect::PlayAnimationBySchema {
                         entity_id,
-                        motion_queries: vec![self.current_behavior.borrow().animation()],
+                        motion_queries: self.current_behavior.borrow().animation_queries(),
                         selection_strategy,
                     }
                 } else {
@@ -1145,7 +1145,7 @@ impl Script for AnimatedMonsterAI {
                     let selection_strategy = self.next_selection(is_locomotion);
                     Effect::PlayAnimationBySchema {
                         entity_id,
-                        motion_queries: vec![self.current_behavior.borrow().animation()],
+                        motion_queries: self.current_behavior.borrow().animation_queries(),
                         selection_strategy,
                     }
                 } else {
@@ -1229,10 +1229,13 @@ impl Script for AnimatedMonsterAI {
                     //self.current_behavior = Rc::new(IdleBehavior);
                     let is_locomotion = self.current_behavior.borrow().is_locomotion();
                     let selection_strategy = self.next_selection(is_locomotion);
-                    let motion_query_items = self.current_behavior.borrow().animation();
+                    let motion_queries = self.current_behavior.borrow().animation_queries();
 
                     // Check if this is an attack animation and play attack sound
-                    let attack_sound_effect = if is_attack_animation(&motion_query_items) {
+                    let attack_sound_effect = if motion_queries
+                        .iter()
+                        .any(|query| is_attack_animation(query))
+                    {
                         if let Some(voice_index) =
                             crate::scripts::speech_util::resolve_entity_voice_index(
                                 world, entity_id,
@@ -1253,7 +1256,7 @@ impl Script for AnimatedMonsterAI {
 
                     let queue_animation_effect = Effect::QueueAnimationBySchema {
                         entity_id,
-                        motion_queries: vec![motion_query_items],
+                        motion_queries,
                         selection_strategy,
                         //tag: "idlegesture".to_owned(),
                         // motion_query_items: vec![
