@@ -62,6 +62,11 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
+    /// Flat-only world pickup of ordinary loot into the player backpack.
+    /// VR preserves its physical hand-grab path and never emits this.
+    StoreItem {
+        entity_id: EntityId,
+    },
     DropItem {
         entity_id: EntityId,
     },

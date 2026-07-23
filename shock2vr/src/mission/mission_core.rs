@@ -4717,6 +4717,16 @@ impl MissionCore {
                         to: entity_id,
                     });
                 }
+                VirtualHandEffect::StoreItem { entity_id } => {
+                    let inventory_entity = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .map(|player| player.inventory_entity_id)
+                        .ok();
+                    if let Some(inventory_entity) = inventory_entity {
+                        self.drop_entity_into_container(inventory_entity, entity_id);
+                    }
+                }
                 VirtualHandEffect::DropItem { entity_id } => {
                     self.make_physical(entity_id);
 
