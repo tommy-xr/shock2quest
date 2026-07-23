@@ -251,6 +251,7 @@ pub struct DebugPhysicsBodySummary {
     pub collision_groups: Vec<String>,
     pub is_sensor: bool,
     pub is_enabled: bool,
+    pub is_sleeping: bool,
 }
 
 /// Detailed information about a physics body for debug inspection

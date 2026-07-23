@@ -9,6 +9,7 @@
  */
 use cgmath::{Matrix4, Point3, Vector3};
 use dark::ss2_bin_obj_loader::Vhot;
+use serde::{Deserialize, Serialize};
 use shipyard::Component;
 
 // RuntimePropGazeAmount - track how much the player is gazing at a prop
@@ -47,6 +48,22 @@ pub struct RuntimePropLocomotionScale(pub f32);
 
 #[derive(Component)]
 pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
+
+/// Exact resolved death clip used to reconstruct a killed creature's
+/// terminal pose.
+///
+/// Runtime properties are normally rebuilt rather than saved, but this one
+/// is explicitly persisted by `EntitySaveData`: random motion-schema
+/// resolution cannot be repeated on load without risking a different corpse
+/// pose. Keeping it separate from Dark's authored `P$CretPose` also leaves
+/// mission-placed corpse decorations untouched.
+///
+/// The marker is attached when the random crumple query resolves. A save
+/// taken during that crumple therefore resumes at the already-selected
+/// clip's canonical final pose without replaying events. Saves created before
+/// this marker existed cannot recover which random clip had been selected.
+#[derive(Component, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePropDeathPose(pub String);
 
 #[derive(Component)]
 pub struct RuntimePropSpawnTimeInSeconds(pub f32);

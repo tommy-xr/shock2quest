@@ -1360,6 +1360,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn killed_monster_initializes_inert_without_replaying_death_effects() {
+        let mut world = World::new();
+        let entity_id = world.add_entity((
+            dark::properties::PropHitPoints { hit_points: 0 },
+            crate::runtime_props::RuntimePropTransform(cgmath::Matrix4::from_scale(1.0)),
+        ));
+        let mut monster = AnimatedMonsterAI::new();
+
+        let effects = Effect::flatten(vec![monster.initialize(entity_id, &world)]);
+
+        assert!(monster.is_dead);
+        assert!(monster.handoff_emitted);
+        assert_eq!(monster.current_behavior.borrow().name(), "Dead");
+        assert!(effects.iter().all(|effect| !matches!(
+            effect,
+            Effect::QueueAnimationBySchema { .. }
+                | Effect::PlayAnimationBySchema { .. }
+                | Effect::PlaySpeech { .. }
+                | Effect::SpawnCorpseRagdoll { .. }
+        )));
+    }
+
+    #[test]
     fn locomotion_scale_full_speed_when_facing_travel_direction() {
         assert_eq!(locomotion_scale_for_heading_error(Deg(0.0)), 1.0);
     }

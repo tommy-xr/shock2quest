@@ -103,6 +103,26 @@ impl AnimationPlayer {
             cancel_root_motion: false,
         }
     }
+
+    /// Hold `animation_clip` on its final frame without ever playing it.
+    ///
+    /// This is the same state a one-shot reaches after its queue drains, but
+    /// constructed directly for restored static poses. Because the playback
+    /// queue is empty, [`Self::update`] emits no motion flags, completion or
+    /// direction events, and no root velocity.
+    pub fn from_completed_animation(animation_clip: Rc<AnimationClip>) -> AnimationPlayer {
+        AnimationPlayer {
+            animation: immutable::List::new(),
+            additional_joint_transforms: immutable::HashTrieMap::new(),
+            last_animation: Some(animation_clip),
+            current_frame: 0,
+            remaining_time: 0.0,
+            blend_state: None,
+            rotation_pos: 0.0,
+            cancel_root_motion: false,
+        }
+    }
+
     pub fn queue_animation(
         player: &AnimationPlayer,
         animation: Rc<AnimationClip>,
@@ -484,6 +504,10 @@ impl AnimationPlayer {
                     elapsed: blend.elapsed,
                 }),
         }
+    }
+
+    pub fn is_queue_empty(&self) -> bool {
+        self.animation.is_empty()
     }
 
     pub fn get_transforms(&self, skeleton: &Skeleton) -> [Matrix4<f32>; 40] {
@@ -925,6 +949,30 @@ mod tests {
         let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(300));
         let player = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
         assert!(player.snapshot().blend.is_none());
+    }
+
+    #[test]
+    fn completed_animation_constructor_holds_without_events_or_motion() {
+        let mut clip = (*clip_with_root_motion()).clone();
+        clip.name = Some("death_pose".to_owned());
+        let player = AnimationPlayer::from_completed_animation(Rc::new(clip));
+
+        let snapshot = player.snapshot();
+        assert!(snapshot.queue.is_empty());
+        assert_eq!(snapshot.last_clip.as_deref(), Some("death_pose"));
+
+        for duration in [
+            Duration::from_millis(16),
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        ] {
+            let (next, flags, events, velocity) = AnimationPlayer::update(&player, duration);
+            assert!(flags.is_empty());
+            assert!(events.is_empty());
+            assert_eq!(velocity, vec3(0.0, 0.0, 0.0));
+            assert!(next.snapshot().queue.is_empty());
+            assert_eq!(next.snapshot().last_clip.as_deref(), Some("death_pose"));
+        }
     }
 
     #[test]
