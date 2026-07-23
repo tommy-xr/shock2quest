@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end test for the BIOFULL/AMMOFULL expanded readouts in use mode
 // (flat UI 5, projects/flat-ui.md §1.2 / §6 PR 5):
@@ -9,8 +10,9 @@ import { GameServer } from "../src/index.js";
 //   - Entering use mode (Tab) expands the compact bottom readouts: BIO.PCX ->
 //     BIOFULL.PCX (bottom-left) and AMMOBACK -> AMMOFULL.PCX (bottom-right).
 //   - With a gun that has 2+ ammo types wielded, AMMOFULL shows an ammo-type
-//     CYCLE button, exposed via /v1/ui `ammo_cycle`. Clicking it cycles the
-//     wielded weapon's ammo type (Effect::CycleAmmo).
+//     CYCLE button while the magazine is empty, exposed via /v1/ui
+//     `ammo_cycle`. Clicking it cycles the wielded weapon's ammo type
+//     (Effect::CycleAmmo).
 //   - Shooter mode keeps the compact readouts (no ammo_cycle element).
 //
 // Negative-first: on the base branch (flat UI 4.5) there is no AMMOFULL cycle
@@ -20,8 +22,14 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // The Pistol (gamesys template -17) has 3 ammo types (Standard / HE / AP).
 
+function ammoOf(detail: { properties: { name: string; value: string }[] }): number {
+  const p = detail.properties.find((x) => x.name === "Ammo");
+  assert.ok(p, "weapon should expose an Ammo property");
+  return Number(p.value);
+}
+
 test(
-  "use mode exposes AMMOFULL ammo-cycle, which cycles the wielded ammo type",
+  "use mode exposes AMMOFULL ammo-cycle for an empty multi-ammo weapon",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -69,7 +77,23 @@ test(
       `the Pistol should be wielded with an ammo type (got ${JSON.stringify(wielded.player)})`,
     );
 
-    // --- KEY: use mode exposes the AMMOFULL ammo-cycle button ---
+    // Loaded rounds have an established projectile identity, so drain the
+    // magazine before asking the UI to expose its ammo-type cycle control.
+    const loaded = ammoOf(await game.entities.detail(pistol.id));
+    if (loaded > 0) {
+      assert.ok(
+        !(await game.ui.state()).ammo_cycle,
+        "loaded magazine must not expose a conversion control",
+      );
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 5 });
+      for (let i = 0; i < loaded; i++) await fireOnce(game);
+      assert.equal(ammoOf(await game.entities.detail(pistol.id)), 0);
+      await game.input.trigger("ToggleUseMode");
+      await game.step({ frames: 5 });
+    }
+
+    // --- KEY: use mode exposes the AMMOFULL ammo-cycle button when empty ---
     const use = await game.ui.state();
     assert.equal(use.mode, "use");
     assert.ok(

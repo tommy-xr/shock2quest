@@ -278,8 +278,8 @@ pub(crate) fn create_flat_hud(
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
 }
 
-/// Whether the wielded weapon has 2+ selectable ammo types (so the AMMOFULL
-/// cycle button is meaningful). Mirrors `cycle_ammo`'s `count < 2` guard.
+/// Whether the wielded weapon may cycle ammo (empty, with 2+ selectable
+/// projectile types). Uses the same predicate as `cycle_ammo`.
 pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
     let Some(player) = world
         .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
@@ -290,16 +290,15 @@ pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
     let Some(weapon) = player.left_hand_entity_id else {
         return false;
     };
-    crate::scripts::script_util::ordered_projectile_links(world, weapon).len() >= 2
+    crate::scripts::script_util::can_cycle_ammo(world, weapon)
 }
 
 /// The single source of truth for whether the AMMOFULL ammo-cycle button is
 /// shown/active this frame - used for BOTH rendering (via `create_flat_hud`'s
 /// `can_cycle_ammo`) and pointer hit-testing (`mission_core`), so the drawn and
 /// clickable regions never diverge. Requires use mode, a wielded gun with a
-/// clip (`get_wielded_ammo`), 2+ ammo types, and no psi-amp display (which
-/// replaces the ammo section - `build_flat_hud_canvas`'s psi-power early
-/// return).
+/// empty clip, 2+ ammo types, and no psi-amp display (which replaces the ammo
+/// section - `build_flat_hud_canvas`'s psi-power early return).
 pub(crate) fn ammo_cycle_button_visible(world: &World, use_mode: bool) -> bool {
     use_mode
         && get_wielded_psi_power(world).is_none()
@@ -391,9 +390,9 @@ mod tests {
             true,
         );
         assert_eq!(shooter.element_count(), 8);
-        // Use mode (crosshair off) with a multi-ammo weapon: the same readouts
-        // (expanded backdrops swap in place, same element count) PLUS the
-        // AMMOFULL cycle button = 8 - 1 (crosshair) + 1 (cycle) = 8.
+        // Use mode (crosshair off) with an empty multi-ammo weapon: the same
+        // readouts (expanded backdrops swap in place, same element count) PLUS
+        // the AMMOFULL cycle button = 8 - 1 (crosshair) + 1 (cycle) = 8.
         let use_mode = build_flat_hud_canvas(
             false,
             true,
@@ -401,7 +400,7 @@ mod tests {
             0.75,
             None,
             None,
-            Some(12),
+            Some(0),
             None,
             None,
             true,
@@ -415,7 +414,7 @@ mod tests {
             0.75,
             None,
             None,
-            Some(12),
+            Some(0),
             None,
             None,
             false,

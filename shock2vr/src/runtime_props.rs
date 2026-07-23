@@ -114,7 +114,8 @@ pub struct RuntimePropAttachment {
 //
 // Like all runtime props this is not serialized: a save taken mid-reload loads
 // with the reload already "finished" (no tilt, firing allowed). That is benign -
-// `begin_reload` refills the clip up front, so there is no ammo inconsistency.
+// `begin_reload` transfers reserve rounds up front, so there is no ammo
+// inconsistency.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropReloading {
     pub elapsed: f32,
@@ -166,12 +167,11 @@ impl RuntimePropReloading {
 // one. Absent = index 0 (the first/default link). Ignored for weapons with no
 // Projectile links (melee).
 //
-// Scope notes (deliberate simplifications for now):
-// - Not serialized (like all runtime props), so the selection resets to the
-//   first link across save/load and level transitions.
-// - All ammo types share one clip (`PropGunState.ammo`); switching type does not
-//   switch loaded rounds. Per-ammo-type counts need an inventory-ammo model we
-//   don't have yet, so this behaves like a fire-mode selector for now.
+// This runtime component is explicitly persisted by EntitySaveData (including
+// held items) so loaded alternate-ammo magazines retain their identity across
+// save/load and level transitions. Ammo type can only be changed while
+// PropGunState.ammo is empty; reload reserve is then selected through the
+// authored projectile -> Clip relation.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropSelectedAmmo(pub usize);
 
