@@ -230,6 +230,45 @@ impl FlatUiHost {
         self.cursor_item.take().map(|c| c.entity)
     }
 
+    /// Drop every host-side reference to a destroyed entity immediately.
+    /// Normally `update` notices a dead panel on the next frame, but a cursor
+    /// item and its double-click mark are pure host state and otherwise retain
+    /// a recycled `EntityId`. The destruction effect pipeline calls this before
+    /// deleting the world entity.
+    pub fn on_entity_destroyed(&mut self, entity: EntityId) {
+        if self.active_panel == Some(entity) {
+            self.close();
+        }
+        if self
+            .strip
+            .as_ref()
+            .is_some_and(|strip| strip.entity == entity)
+        {
+            self.strip = None;
+        }
+        self.components
+            .retain(|component| component_entity(component) != Some(entity));
+        if let Some(strip) = self.strip.as_mut() {
+            strip
+                .components
+                .retain(|component| component_entity(component) != Some(entity));
+        }
+        if self
+            .cursor_item
+            .as_ref()
+            .is_some_and(|item| item.entity == entity)
+        {
+            self.cursor_item = None;
+        }
+        if self
+            .last_lift
+            .as_ref()
+            .is_some_and(|mark| mark.entity == entity)
+        {
+            self.last_lift = None;
+        }
+    }
+
     /// Enter/leave Tab metagame mode: bind (or drop) the top-docked
     /// inventory strip. `Some(entity)` is the player's `internal_inventory`
     /// entity, whose `GuiScript` already emits `SetUI` every frame - the
@@ -281,24 +320,41 @@ impl FlatUiHost {
     /// untouched by this).
     pub fn on_set_ui(
         &mut self,
+        world: &World,
         parent_entity: EntityId,
         world_size: Vector2<f32>,
         components: &[GuiComponentRenderInfo],
     ) {
+        let is_strip = self
+            .strip
+            .as_ref()
+            .is_some_and(|strip| strip.entity == parent_entity);
+        if !is_strip && self.active_panel != Some(parent_entity) {
+            return;
+        }
+
+        // SetUI effects are snapshots produced during script update. A
+        // DestroyEntity earlier in the same effect batch can invalidate one
+        // of their entity-bound buttons, so never cache a dead/recycled id.
+        let entities = world.borrow::<EntitiesView>().unwrap();
+        let components: Vec<_> = components
+            .iter()
+            .filter(|component| {
+                component_entity(component).is_none_or(|entity| entities.is_alive(entity))
+            })
+            .cloned()
+            .collect();
+
         // `SetUI.world_size` is `screen_size_in_pixels * GUI_PIXEL_TO_WORLD_SIZE`.
         let size_px = world_size / crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
-        if let Some(strip) = self.strip.as_mut() {
-            if strip.entity == parent_entity {
-                strip.size_px = Some(size_px);
-                strip.components = components.to_vec();
-                return;
-            }
-        }
-        if self.active_panel != Some(parent_entity) {
+        if is_strip {
+            let strip = self.strip.as_mut().unwrap();
+            strip.size_px = Some(size_px);
+            strip.components = components;
             return;
         }
         self.panel_size_px = Some(size_px);
-        self.components = components.to_vec();
+        self.components = components;
     }
 
     /// The render-target size, for the pointer->canvas letterbox mapping.
@@ -850,6 +906,13 @@ fn component_canvas_rect(info: &GuiComponentRenderInfo, panel: Rect) -> Rect {
     )
 }
 
+fn component_entity(info: &GuiComponentRenderInfo) -> Option<EntityId> {
+    match info {
+        GuiComponentRenderInfo::Image { entity, .. } => *entity,
+        GuiComponentRenderInfo::Text { .. } => None,
+    }
+}
+
 /// Host-drawn close button: top-right corner of the panel (the original
 /// keypad overlay's CloseOff gadget position).
 fn close_button_canvas_rect(panel: Rect) -> Rect {
@@ -1069,6 +1132,7 @@ mod tests {
         let mut host = FlatUiHost::new();
         host.open(panel);
         host.on_set_ui(
+            &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[],
@@ -1108,6 +1172,7 @@ mod tests {
         let mut host = FlatUiHost::new();
         host.open(panel);
         host.on_set_ui(
+            &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[GuiComponentRenderInfo::Image {
@@ -1151,11 +1216,13 @@ mod tests {
         host.set_strip(Some(inventory));
         host.open(panel);
         host.on_set_ui(
+            &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[],
         );
         host.on_set_ui(
+            &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[],
@@ -1192,11 +1259,13 @@ mod tests {
         host.set_strip(Some(inventory));
         host.open(panel);
         host.on_set_ui(
+            &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[],
         );
         host.on_set_ui(
+            &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[],
@@ -1256,6 +1325,7 @@ mod tests {
         let mut host = FlatUiHost::new();
         host.set_strip(Some(inventory));
         host.on_set_ui(
+            &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[
@@ -1359,6 +1429,7 @@ mod tests {
         let mut host = FlatUiHost::new();
         host.set_strip(Some(inventory));
         host.on_set_ui(
+            &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[strip_item(wrench, 0)],
@@ -1385,6 +1456,98 @@ mod tests {
             "the lifted item leaves the strip grid",
         );
         assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), None);
+    }
+
+    #[test]
+    fn destroying_a_cursor_item_clears_host_references_immediately() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        press_edge(&mut host, &world, (23.5, 34.0));
+        assert!(host.cursor_debug().is_some());
+        assert!(host.last_lift.is_some());
+
+        host.on_entity_destroyed(wrench);
+
+        assert!(host.cursor_debug().is_none());
+        assert!(host.last_lift.is_none());
+    }
+
+    #[test]
+    fn destroying_the_active_panel_closes_it_immediately() {
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+
+        host.on_entity_destroyed(panel);
+
+        assert!(host.active_panel().is_none());
+    }
+
+    #[test]
+    fn destroying_the_strip_container_clears_its_binding() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+
+        host.on_entity_destroyed(inventory);
+
+        assert!(host.strip_entity().is_none());
+    }
+
+    #[test]
+    fn destroying_an_item_prunes_cached_panel_and_strip_components() {
+        let (mut world, mut host, wrench, _inventory) = drag_world();
+        let panel = world.add_entity(());
+        host.open(panel);
+        host.on_set_ui(
+            &world,
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[strip_item(wrench, 0)],
+        );
+        let wrench_id = wrench.inner() as i32;
+        assert!(
+            host.debug_elements(&world)
+                .iter()
+                .any(|element| element.entity_id == Some(wrench_id))
+        );
+        assert!(
+            host.strip_debug_elements(&world)
+                .iter()
+                .any(|element| element.entity_id == Some(wrench_id))
+        );
+
+        host.on_entity_destroyed(wrench);
+
+        assert!(
+            host.debug_elements(&world)
+                .iter()
+                .all(|element| element.entity_id != Some(wrench_id))
+        );
+        assert!(
+            host.strip_debug_elements(&world)
+                .iter()
+                .all(|element| element.entity_id != Some(wrench_id))
+        );
+    }
+
+    #[test]
+    fn stale_set_ui_cannot_restore_an_item_destroyed_earlier_in_the_batch() {
+        let (mut world, mut host, wrench, inventory) = drag_world();
+        world.delete_entity(wrench);
+        host.on_entity_destroyed(wrench);
+
+        // This snapshot was produced before DestroyEntity, but is applied
+        // afterwards in the same effect batch.
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[strip_item(wrench, 0)],
+        );
+
+        assert!(host.strip_debug_elements(&world).is_empty());
     }
 
     #[test]
@@ -1418,6 +1581,7 @@ mod tests {
             dark::properties::PropSymName("Pistol".to_owned()),
         ));
         host.on_set_ui(
+            &world,
             inventory,
             vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[strip_item(wrench, 0), strip_item(pistol, 1)],
@@ -1490,6 +1654,7 @@ mod tests {
         let panel = world.add_entity(());
         host.open(panel);
         host.on_set_ui(
+            &world,
             panel,
             vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
             &[],

@@ -3153,7 +3153,7 @@ impl MissionCore {
                     // keeps its gating (projects/flat-ui.md §7).
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_ui
-                            .on_set_ui(parent_entity, world_size, &components);
+                            .on_set_ui(&self.world, parent_entity, world_size, &components);
                     }
                     if game_options.experimental_features.contains("gui") {
                         self.gui.update_ui(
@@ -3439,6 +3439,20 @@ impl MissionCore {
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.interaction.on_entity_destroyed(entity_id);
+                    self.flat_ui.on_entity_destroyed(entity_id);
+                    // `PlayerInfo` mirrors the interaction controller each
+                    // update, but effects later in this same batch may inspect
+                    // it before then. Clear destroyed hand/wield references
+                    // atomically so no system can observe a live player
+                    // pointing at a dead (or recycled) entity.
+                    if let Ok(mut player) = self.world.borrow::<UniqueViewMut<PlayerInfo>>() {
+                        if player.left_hand_entity_id == Some(entity_id) {
+                            player.left_hand_entity_id = None;
+                        }
+                        if player.right_hand_entity_id == Some(entity_id) {
+                            player.right_hand_entity_id = None;
+                        }
+                    }
                     // Only a contained item (no world presence, PropHasRefs
                     // false) can leave a dangling inventory `Contains` link
                     // behind. World-present entities - FX spangs, projectiles,
