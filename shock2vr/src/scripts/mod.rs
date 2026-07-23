@@ -61,6 +61,7 @@ mod trigger_multi;
 mod tweq_depressable;
 mod tweqable;
 mod use_sound;
+mod vaporize_inventory;
 mod weapon_script;
 use std::collections::{HashMap, HashSet};
 
@@ -141,6 +142,7 @@ use self::{
     tweq_depressable::TweqDepressable,
     tweqable::Tweqable,
     use_sound::UseSound,
+    vaporize_inventory::VaporizeInventory,
     weapon_script::WeaponScript,
 };
 
@@ -511,7 +513,7 @@ impl ScriptWorld {
             "charmable" => Box::new(NoopScript::new()),
             "transientcorpse" => Box::new(NoopScript::new()),
             "whiteout" => Box::new(NoopScript::new()),
-            "vaporizeinventory" => Box::new(NoopScript::new()),
+            "vaporizeinventory" => Box::new(VaporizeInventory::new()),
 
             // Internal
             "internal_collision_type" => Box::new(InternalCollisionType::new()),
