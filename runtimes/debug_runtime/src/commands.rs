@@ -15,7 +15,7 @@ pub enum RuntimeCommand {
     GetInfo(oneshot::Sender<FrameSnapshot>),
 
     /// Step the simulation forward by frames or time
-    Step(StepSpec, oneshot::Sender<StepResult>),
+    Step(StepSpec, oneshot::Sender<Result<StepResult, StepError>>),
 
     /// Take a screenshot of the current frame
     Screenshot(ScreenshotSpec, oneshot::Sender<ScreenshotResult>),
@@ -191,6 +191,13 @@ pub enum StepSpec {
     Frames { frames: u32 },
     /// Step by duration
     Duration { duration: String }, // Will be parsed with humantime
+}
+
+/// Error returned when a step command cannot be started.
+#[derive(Debug)]
+pub enum StepError {
+    /// Another step request is still advancing the simulation.
+    AlreadyInProgress,
 }
 
 /// Result of stepping the simulation

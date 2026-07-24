@@ -517,7 +517,7 @@ fn run_game_blocking(
     // - `Screenshot` captures after the frame is fully rendered (below), not at
     //   command-receive time (which is before this iteration's render/swap and
     //   would read a stale/blank back buffer -> intermittent black screenshots).
-    let mut pending_step_reply: Option<oneshot::Sender<StepResult>> = None;
+    let mut pending_step_reply: Option<oneshot::Sender<Result<StepResult, StepError>>> = None;
     let mut frames_advanced_this_step = 0u32;
     let mut pending_screenshots: Vec<(ScreenshotSpec, oneshot::Sender<ScreenshotResult>)> =
         Vec::new();
@@ -557,6 +557,14 @@ fn run_game_blocking(
         while let Ok(command) = command_rx.try_recv() {
             match command {
                 RuntimeCommand::Step(step_spec, reply) => {
+                    if pending_step_reply.is_some() {
+                        tracing::warn!(
+                            "Rejected Step command - another step is already in progress"
+                        );
+                        let _ = reply.send(Err(StepError::AlreadyInProgress));
+                        continue;
+                    }
+
                     match step_spec {
                         StepSpec::Frames { frames } => {
                             frames_to_step = frames;
@@ -583,12 +591,12 @@ fn run_game_blocking(
                                     );
                                     // Nothing to step; reply immediately so the
                                     // caller isn't left hanging.
-                                    let _ = reply.send(StepResult {
+                                    let _ = reply.send(Ok(StepResult {
                                         frames_advanced: 0,
                                         time_advanced: 0.0,
                                         new_frame_index: frame_counter,
                                         new_total_time: accumulated_time,
-                                    });
+                                    }));
                                     continue;
                                 }
                             }
@@ -694,12 +702,12 @@ fn run_game_blocking(
                     // frame is rendered later this same loop iteration, so by the
                     // time the HTTP response is observed the frame is up to date.)
                     if let Some(reply) = pending_step_reply.take() {
-                        let _ = reply.send(StepResult {
+                        let _ = reply.send(Ok(StepResult {
                             frames_advanced: frames_advanced_this_step,
                             time_advanced: frames_advanced_this_step as f32 * FIXED_STEP_DT,
                             new_frame_index: frame_counter,
                             new_total_time: accumulated_time,
-                        });
+                        }));
                     }
                 }
             }
@@ -2017,15 +2025,24 @@ async fn step_frame(
     // Send command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::Step(step_spec, reply_tx)) {
         tracing::error!("Failed to send Step command - game loop receiver dropped");
-        return Err(game_loop_unavailable());
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Game loop command channel closed - the game thread may have stopped (check the debug_runtime process output)".to_string(),
+        ));
     }
 
     // Wait for response
     match reply_rx.await {
-        Ok(result) => Ok(Json(result)),
+        Ok(Ok(result)) => Ok(Json(result)),
+        Ok(Err(StepError::AlreadyInProgress)) => {
+            Err((StatusCode::CONFLICT, "Step already in progress".to_string()))
+        }
         Err(_) => {
-            tracing::error!("Failed to receive step result - sender dropped");
-            Err(game_loop_unavailable())
+            tracing::error!("Game loop dropped Step reply sender before completion");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Game loop dropped the Step reply before completion (check the debug_runtime process output)".to_string(),
+            ))
         }
     }
 }
