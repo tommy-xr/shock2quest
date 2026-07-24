@@ -51,6 +51,13 @@ where
 
     fn get_config(&self) -> GuiConfig;
 
+    /// State-aware panel geometry. Most panels are fixed-size and use
+    /// `get_config`; overlays with a companion plug (the retail replicator
+    /// PLUGHACK sidecar) can widen only while that companion is present.
+    fn get_config_for(&self, _entity_id: EntityId, _world: &World, _state: &TState) -> GuiConfig {
+        self.get_config()
+    }
+
     fn handle_msg(
         &self,
         entity_id: EntityId,
@@ -83,5 +90,14 @@ where
     /// starts back at the top instead of the last scroll position.
     fn resets_state_on_frob(&self) -> bool {
         false
+    }
+
+    /// Prepare transient state when a frob reopens this panel. The default
+    /// honors `resets_state_on_frob`; stateful flows can preserve only the
+    /// portion that must survive closing and reopening.
+    fn prepare_state_on_frob(&self, state: &mut TState) {
+        if self.resets_state_on_frob() {
+            *state = TState::default();
+        }
     }
 }

@@ -33,7 +33,7 @@ const BOARD_DX: f32 = 30.0;
 const BOARD_DY: f32 = 36.0;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum HackPhase {
+pub(crate) enum HackPhase {
     #[default]
     Unpaid,
     Playing,
@@ -44,7 +44,7 @@ enum HackPhase {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum HackNode {
+pub(crate) enum HackNode {
     #[default]
     Free,
     Lit,
@@ -54,10 +54,10 @@ enum HackNode {
 }
 
 #[derive(Clone, Debug)]
-struct HackState {
-    phase: HackPhase,
-    nodes: [HackNode; BOARD_WIDTH * BOARD_HEIGHT],
-    rng_state: u64,
+pub(crate) struct HackState {
+    pub(crate) phase: HackPhase,
+    pub(crate) nodes: [HackNode; BOARD_WIDTH * BOARD_HEIGHT],
+    pub(crate) rng_state: u64,
 }
 
 impl Default for HackState {
@@ -70,11 +70,11 @@ impl Default for HackState {
     }
 }
 
-const fn board_index(x: usize, y: usize) -> usize {
+pub(crate) const fn board_index(x: usize, y: usize) -> usize {
     y * BOARD_WIDTH + x
 }
 
-const fn base_hack_board() -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
+pub(crate) const fn base_hack_board() -> [HackNode; BOARD_WIDTH * BOARD_HEIGHT] {
     use HackNode::{Empty as E, Free as F};
     [
         E, E, F, F, F, //
@@ -246,7 +246,15 @@ fn draw_number(num: u32) -> Vec<GuiComponent<KeyPadMsg>> {
     ret
 }
 
-fn draw_hack_board(state: &HackState, diff: PropHackDiff) -> Vec<GuiComponent<KeyPadMsg>> {
+pub(crate) fn draw_hack_board<TMsg, F>(
+    state: &HackState,
+    diff: PropHackDiff,
+    wrap: F,
+) -> Vec<GuiComponent<TMsg>>
+where
+    TMsg: Clone,
+    F: Fn(KeyPadMsg) -> TMsg + Copy,
+{
     let mut components = vec![
         gui::image("hack.pcx")
             .with_position(vec2(0.0, 0.0))
@@ -301,7 +309,7 @@ fn draw_hack_board(state: &HackState, diff: PropHackDiff) -> Vec<GuiComponent<Ke
             // zero-alpha button supplies a normal 16x16 hit target without
             // painting a placeholder over that authored art.
             components.push(
-                gui::button(KeyPadMsg::PlayNode { x, y })
+                gui::button(wrap(KeyPadMsg::PlayNode { x, y }))
                     .with_position(position)
                     .with_size(vec2(16.0, 16.0))
                     .with_image("hrmpip.pcx")
@@ -343,7 +351,7 @@ fn draw_hack_board(state: &HackState, diff: PropHackDiff) -> Vec<GuiComponent<Ke
                 ("start0.pcx", "start1.pcx", "start-hack")
             };
         components.push(
-            gui::button(KeyPadMsg::StartHack)
+            gui::button(wrap(KeyPadMsg::StartHack))
                 .with_position(vec2(157.0, 232.0))
                 .with_size(vec2(20.0, 56.0))
                 .with_image(normal)
@@ -354,21 +362,25 @@ fn draw_hack_board(state: &HackState, diff: PropHackDiff) -> Vec<GuiComponent<Ke
     components
 }
 
-fn handle_hack_msg(
+pub(crate) struct HackOutcomeEffects {
+    pub(crate) success: fn(EntityId, &World) -> Effect,
+    pub(crate) critical_failure: fn(EntityId, &World) -> Effect,
+}
+
+pub(crate) fn handle_hack_msg(
     entity_id: EntityId,
     world: &World,
-    state: &KeyPadState,
+    state: &HackState,
     msg: &KeyPadMsg,
     diff: PropHackDiff,
-) -> (KeyPadState, Effect) {
+    outcomes: HackOutcomeEffects,
+) -> (HackState, Effect) {
     let mut new_state = state.clone();
     match msg {
-        KeyPadMsg::StartHack
-            if !matches!(new_state.hack.phase, HackPhase::Won | HackPhase::Lost) =>
-        {
+        KeyPadMsg::StartHack if !matches!(new_state.phase, HackPhase::Won | HackPhase::Lost) => {
             let cost = hack_cost(diff);
             let Some(payment) = spend_player_nanites(world, cost) else {
-                new_state.hack.phase = HackPhase::InsufficientNanites;
+                new_state.phase = HackPhase::InsufficientNanites;
                 return (
                     new_state,
                     Effect::PlaySound {
@@ -386,7 +398,7 @@ fn handle_hack_msg(
                 rng_state,
                 "HRM rng initialized after mine placement"
             );
-            new_state.hack = HackState {
+            new_state = HackState {
                 phase: HackPhase::Playing,
                 nodes,
                 rng_state,
@@ -403,12 +415,10 @@ fn handle_hack_msg(
             )
         }
         KeyPadMsg::PlayNode { x, y }
-            if *x < BOARD_WIDTH
-                && *y < BOARD_HEIGHT
-                && new_state.hack.phase == HackPhase::Playing =>
+            if *x < BOARD_WIDTH && *y < BOARD_HEIGHT && new_state.phase == HackPhase::Playing =>
         {
             let index = board_index(*x, *y);
-            let node = new_state.hack.nodes[index];
+            let node = new_state.nodes[index];
             if !matches!(node, HackNode::Free | HackNode::Mine) {
                 return (
                     new_state,
@@ -420,26 +430,22 @@ fn handle_hack_msg(
             }
 
             let was_mine = node == HackNode::Mine;
-            let roll = outcome_roll(&mut new_state.hack.rng_state);
+            let roll = outcome_roll(&mut new_state.rng_state);
             tracing::debug!(
                 entity = entity_id.inner(),
                 roll,
-                rng_state = new_state.hack.rng_state,
+                rng_state = new_state.rng_state,
                 "HRM rng outcome"
             );
             let (chance, _) = effective_hack_values(world, diff);
             if roll_succeeds(roll, chance) {
-                new_state.hack.nodes[index] = HackNode::Lit;
-                if has_connected_three(&new_state.hack.nodes) {
-                    new_state.hack.phase = HackPhase::Won;
+                new_state.nodes[index] = HackNode::Lit;
+                if has_connected_three(&new_state.nodes) {
+                    new_state.phase = HackPhase::Won;
                     return (
                         new_state,
                         Effect::combine(vec![
-                            send_to_all_switch_links_and_self(
-                                world,
-                                entity_id,
-                                MessagePayload::TurnOn { from: entity_id },
-                            ),
+                            (outcomes.success)(entity_id, world),
                             Effect::PlaySound {
                                 handle: AudioHandle::new(),
                                 name: "hack_success".to_owned(),
@@ -448,18 +454,21 @@ fn handle_hack_msg(
                     );
                 }
             } else if was_mine {
-                new_state.hack.phase = HackPhase::Lost;
+                new_state.phase = HackPhase::Lost;
                 return (
                     new_state,
-                    Effect::PlaySound {
-                        handle: AudioHandle::new(),
-                        name: "hack_critical".to_owned(),
-                    },
+                    Effect::combine(vec![
+                        (outcomes.critical_failure)(entity_id, world),
+                        Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            name: "hack_critical".to_owned(),
+                        },
+                    ]),
                 );
             } else {
-                new_state.hack.nodes[index] = HackNode::Burned;
-                if !board_has_potential_path(&new_state.hack.nodes) {
-                    new_state.hack.phase = HackPhase::Unwinnable;
+                new_state.nodes[index] = HackNode::Burned;
+                if !board_has_potential_path(&new_state.nodes) {
+                    new_state.phase = HackPhase::Unwinnable;
                 }
             }
 
@@ -475,6 +484,14 @@ fn handle_hack_msg(
     }
 }
 
+fn keypad_hack_success(entity_id: EntityId, world: &World) -> Effect {
+    send_to_all_switch_links_and_self(world, entity_id, MessagePayload::TurnOn { from: entity_id })
+}
+
+fn keypad_hack_critical_failure(_entity_id: EntityId, _world: &World) -> Effect {
+    Effect::NoEffect
+}
+
 impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     fn get_components(
         &self,
@@ -485,7 +502,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     ) -> Vec<GuiComponent<KeyPadMsg>> {
         let hack_diff = hack_diff_for_entity(_world, _entity_id);
         if let Some(hack_diff) = hack_diff {
-            return draw_hack_board(&_state.hack, hack_diff);
+            return draw_hack_board(&_state.hack, hack_diff, |msg| msg);
         }
 
         let button_width = 45.0;
@@ -614,7 +631,24 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     ) -> (KeyPadState, crate::Effect) {
         let hack_diff = hack_diff_for_entity(world, entity_id);
         if let Some(hack_diff) = hack_diff {
-            return handle_hack_msg(entity_id, world, state, msg, hack_diff);
+            let (hack, effect) = handle_hack_msg(
+                entity_id,
+                world,
+                &state.hack,
+                msg,
+                hack_diff,
+                HackOutcomeEffects {
+                    success: keypad_hack_success,
+                    critical_failure: keypad_hack_critical_failure,
+                },
+            );
+            return (
+                KeyPadState {
+                    hack,
+                    ..state.clone()
+                },
+                effect,
+            );
         }
 
         let v_prop_keypad_code = world.borrow::<View<PropKeypadCode>>().unwrap();
@@ -790,12 +824,9 @@ mod tests {
     fn critical_loss_is_terminal_for_the_live_panel_state() {
         let mut world = World::new();
         let entity = world.add_entity(());
-        let state = KeyPadState {
-            hack: HackState {
-                phase: HackPhase::Lost,
-                ..HackState::default()
-            },
-            ..KeyPadState::default()
+        let state = HackState {
+            phase: HackPhase::Lost,
+            ..HackState::default()
         };
         let diff = PropHackDiff {
             success_chance: 50,
@@ -803,9 +834,19 @@ mod tests {
             cost: 3.0,
         };
 
-        let (after, effect) = handle_hack_msg(entity, &world, &state, &KeyPadMsg::StartHack, diff);
+        let (after, effect) = handle_hack_msg(
+            entity,
+            &world,
+            &state,
+            &KeyPadMsg::StartHack,
+            diff,
+            HackOutcomeEffects {
+                success: keypad_hack_success,
+                critical_failure: keypad_hack_critical_failure,
+            },
+        );
 
-        assert_eq!(after.hack.phase, HackPhase::Lost);
+        assert_eq!(after.phase, HackPhase::Lost);
         assert!(matches!(effect, Effect::NoEffect));
     }
 }

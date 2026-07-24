@@ -2,7 +2,9 @@ use cgmath::{Matrix4, Point3, Quaternion, Vector2, Vector3, Vector4};
 use dark::{
     EnvSoundQuery,
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
-    properties::{AIAlertLevel, AIMode, KeyCard, PropGunState, QuestBitValue, TeleportSource},
+    properties::{
+        AIAlertLevel, AIMode, KeyCard, ObjectState, PropGunState, QuestBitValue, TeleportSource,
+    },
 };
 use engine::audio::AudioHandle;
 use shipyard::EntityId;
@@ -393,6 +395,14 @@ pub enum Effect {
     SetVisibility {
         entity_id: EntityId,
         visible: bool,
+    },
+
+    /// Persistently set Dark's `P$ObjState` on one live object. Replicator HRM
+    /// success uses Hacked; a critical failure uses Broken. Because ObjState is
+    /// a registered Dark property, mission save/load serializes the result.
+    SetObjectState {
+        entity_id: EntityId,
+        state: ObjectState,
     },
 
     ResetGravity {
