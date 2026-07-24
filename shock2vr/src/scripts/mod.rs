@@ -15,6 +15,7 @@ mod cs9;
 mod dead_power_cell;
 mod destroy_all_by_name;
 mod energy_station;
+mod energy_weapon;
 mod exp_cookie;
 mod frob_qb;
 pub mod gui;
@@ -103,6 +104,7 @@ use self::{
     dead_power_cell::DeadPowerCell,
     destroy_all_by_name::DestroyAllByName,
     energy_station::EnergyStation,
+    energy_weapon::EnergyWeapon,
     exp_cookie::ExpCookie,
     frob_qb::FrobQB,
     internal_collision_type::InternalCollisionType,
@@ -621,7 +623,7 @@ impl ScriptWorld {
             "riflemodify" => Box::new(NoopScript::new()),
             "stasismodify" => Box::new(NoopScript::new()),
             "shotgunmodify" => Box::new(NoopScript::new()),
-            "energyweapon" => Box::new(NoopScript::new()),
+            "energyweapon" => Box::new(EnergyWeapon::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Weapons))),
             "wrench" => Box::new(CompositeScript::new(vec![

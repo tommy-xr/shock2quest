@@ -43,9 +43,8 @@ impl Script for EnergyStation {
             // item the player carries at once (there is no
             // hold-one-item-near-the-station step - that is VR-only, handled by
             // Hover/Collided above). Each item self-handles Recharge, so only
-            // responders react - today that is the dead power cell. Energy-weapon
-            // recharge would be a separate follow-up, once those gain a Recharge
-            // handler; the mechanism here is already general.
+            // responders react - dead power cells replace themselves with charged
+            // cells, while energy weapons replenish their internal charge.
             MessagePayload::Frob => do_recharge_all(world, entity_id),
             _ => Effect::NoEffect,
         }
