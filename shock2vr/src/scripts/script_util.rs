@@ -14,7 +14,7 @@ use dark::{
     ss2_entity_info::SystemShock2EntityInfo,
 };
 use engine::audio::AudioHandle;
-use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
+use shipyard::{Component, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, ViewMut, World};
 use std::collections::HashMap;
 
 use super::{Effect, Message, MessagePayload};
@@ -324,26 +324,7 @@ pub fn spend_player_nanites(world: &World, amount: i32) -> Option<Effect> {
         return Some(Effect::NoEffect);
     }
 
-    let icons = world.borrow::<View<dark::properties::PropObjIcon>>().ok()?;
-    let stacks = world
-        .borrow::<View<dark::properties::PropStackCount>>()
-        .ok()?;
-    let nanite_stacks: Vec<_> = player_carried_items(world)
-        .into_iter()
-        .filter_map(|entity| {
-            let icon = icons.get(entity).ok()?;
-            let stack = stacks.get(entity).ok()?.0;
-            (icon.0.eq_ignore_ascii_case("nan_ic") && stack > 0).then_some((entity, stack))
-        })
-        .collect();
-
-    let debits = plan_stack_payment(
-        &nanite_stacks
-            .iter()
-            .map(|(_, stack)| *stack)
-            .collect::<Vec<_>>(),
-        amount,
-    )?;
+    let (nanite_stacks, debits) = player_nanite_payment_plan(world, amount)?;
     let mut effects = Vec::new();
     for ((entity_id, stack), paid) in nanite_stacks.into_iter().zip(debits) {
         if paid == 0 {
@@ -361,13 +342,96 @@ pub fn spend_player_nanites(world: &World, amount: i32) -> Option<Effect> {
     Some(Effect::combine(effects))
 }
 
+/// Atomically debit the player's live carried nanite stacks. Returns the
+/// entities whose stack count reached zero so the mission can remove their
+/// runtime state before vending an item. A stale or insufficient plan leaves
+/// every stack unchanged.
+pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>> {
+    if amount <= 0 {
+        return None;
+    }
+
+    let (nanite_stacks, debits) = player_nanite_payment_plan(world, amount)?;
+    let mut stacks = world
+        .borrow::<ViewMut<dark::properties::PropStackCount>>()
+        .ok()?;
+
+    // Validate every live stack before applying any mutation.
+    for ((entity_id, _), paid) in nanite_stacks.iter().zip(&debits) {
+        if *paid > 0 && stacks.get(*entity_id).ok()?.0 < *paid {
+            return None;
+        }
+    }
+
+    let mut exhausted = Vec::new();
+    for ((entity_id, _), paid) in nanite_stacks.into_iter().zip(debits) {
+        if paid == 0 {
+            continue;
+        }
+        let stack = (&mut stacks).get(entity_id).ok()?;
+        stack.0 -= paid;
+        if stack.0 == 0 {
+            exhausted.push(entity_id);
+        }
+    }
+    Some(exhausted)
+}
+
+/// The player's spendable nanite balance across all real carried stacks.
+/// Uses the same identification and traversal as [`spend_player_nanites`], so
+/// the UI balance and the debit path cannot disagree.
+pub fn player_nanite_total(world: &World) -> i32 {
+    player_nanite_stacks(world)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, stack)| stack)
+        .fold(0, i32::saturating_add)
+}
+
+fn player_nanite_payment_plan(
+    world: &World,
+    amount: i32,
+) -> Option<(Vec<(EntityId, i32)>, Vec<i32>)> {
+    let nanite_stacks = player_nanite_stacks(world)?;
+    let debits = plan_stack_payment(
+        &nanite_stacks
+            .iter()
+            .map(|(_, stack)| *stack)
+            .collect::<Vec<_>>(),
+        amount,
+    )?;
+    Some((nanite_stacks, debits))
+}
+
+fn player_nanite_stacks(world: &World) -> Option<Vec<(EntityId, i32)>> {
+    let icons = world.borrow::<View<dark::properties::PropObjIcon>>().ok()?;
+    let stacks = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()?;
+    Some(
+        player_carried_items(world)
+            .into_iter()
+            .filter_map(|entity| {
+                let icon = icons.get(entity).ok()?;
+                let stack = stacks.get(entity).ok()?.0;
+                (icon.0.eq_ignore_ascii_case("nan_ic") && stack > 0).then_some((entity, stack))
+            })
+            .collect(),
+    )
+}
+
 /// Plan an atomic payment across ordered stacks. Each returned entry is the
 /// amount debited from the corresponding stack.
 fn plan_stack_payment(stacks: &[i32], amount: i32) -> Option<Vec<i32>> {
     if amount <= 0 {
         return Some(vec![0; stacks.len()]);
     }
-    if stacks.iter().copied().sum::<i32>() < amount {
+    let total = stacks
+        .iter()
+        .copied()
+        .filter(|stack| *stack > 0)
+        .fold(0, i32::saturating_add);
+    if total < amount {
         return None;
     }
 
@@ -647,7 +711,11 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 
 #[cfg(test)]
 mod tests {
-    use super::plan_stack_payment;
+    use super::{debit_player_nanites, plan_stack_payment};
+    use crate::mission::PlayerInfo;
+    use cgmath::{Quaternion, vec3};
+    use dark::properties::{Link, Links, PropObjIcon, PropStackCount, ToLink, WrappedEntityId};
+    use shipyard::{Get, View, World};
 
     #[test]
     fn stack_payment_is_atomic_when_total_is_insufficient() {
@@ -662,5 +730,52 @@ mod tests {
     #[test]
     fn stack_payment_ignores_non_positive_entries() {
         assert_eq!(plan_stack_payment(&[-1, 0, 5], 3), Some(vec![0, 0, 3]));
+    }
+
+    #[test]
+    fn live_nanite_debit_crosses_stacks_and_refuses_a_second_stale_purchase() {
+        let mut world = World::new();
+        let first = world.add_entity((PropObjIcon("nan_ic".to_owned()), PropStackCount(2)));
+        let second = world.add_entity((PropObjIcon("nan_ic".to_owned()), PropStackCount(3)));
+        let inventory = world.add_entity(Links {
+            to_links: vec![
+                ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(first)),
+                    link: Link::Contains(0),
+                },
+                ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(second)),
+                    link: Link::Contains(0),
+                },
+            ],
+        });
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        assert_eq!(debit_player_nanites(&world, 3), Some(vec![first]));
+        assert_eq!(
+            debit_player_nanites(&world, 3),
+            None,
+            "a second same-tick purchase must revalidate the mutated balance"
+        );
+
+        let stacks = world.borrow::<View<PropStackCount>>().unwrap();
+        assert_eq!(stacks.get(first).unwrap().0, 0);
+        assert_eq!(stacks.get(second).unwrap().0, 2);
+        drop(stacks);
+        assert_eq!(
+            debit_player_nanites(&world, 0),
+            None,
+            "the authoritative debit path must reject a free purchase"
+        );
     }
 }

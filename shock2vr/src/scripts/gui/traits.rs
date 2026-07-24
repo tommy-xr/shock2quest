@@ -11,9 +11,9 @@
 //! flag is a quest bit keyed by the machine's stable mission object id (also
 //! `QuestInfo`, so it survives save/load and deck re-entry), and
 //! `Effect::AcquireOsTrait` applies the pick atomically. Live effects are
-//! implemented for the subset with existing consumers (Tank, Naturally Able -
-//! see [`live_effect_note`]); everything else is storage-only for now, listed
-//! per-trait in the PR.
+//! implemented for the subset with existing consumers (Tank, Naturally Able,
+//! Replicator Expert - see [`live_effect_note`]); everything else is
+//! storage-only for now, listed per-trait in the PR.
 
 use cgmath::{Vector2, Vector3, vec2};
 use engine::assets::asset_cache::AssetCache;
@@ -50,6 +50,7 @@ pub const OS_TRAITS: [(u8, &str); 16] = [
 /// Retail trait ids with live gameplay effects here (see the effect handler).
 pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_TANK: u8 = 8;
+pub const TRAIT_REPLICATOR_EXPERT: u8 = 13;
 
 /// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). The original raises the
 /// ceiling AND current HP by the bonus on purchase (buying at 25/30 yields
@@ -391,6 +392,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
     match trait_id {
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
+        TRAIT_REPLICATOR_EXPERT => Some("20% replicator discount"),
         _ => None,
     }
 }
