@@ -9,17 +9,15 @@ use crate::{
     util::vec3_to_point3,
 };
 
+use super::GuiPropProxySize;
+
 pub struct ProxyGuiScript {
-    world_size: Vector2<f32>,
     parent_entity_id: EntityId,
 }
 
 impl ProxyGuiScript {
-    pub fn new(world_size: Vector2<f32>, parent_entity_id: EntityId) -> ProxyGuiScript {
-        ProxyGuiScript {
-            world_size,
-            parent_entity_id,
-        }
+    pub fn new(parent_entity_id: EntityId) -> ProxyGuiScript {
+        ProxyGuiScript { parent_entity_id }
     }
 }
 
@@ -62,13 +60,18 @@ impl Script for ProxyGuiScript {
                 let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
                 let maybe_transform = v_transform.get(entity_id);
                 if let Ok(transform) = maybe_transform {
+                    let world_size = world
+                        .borrow::<View<GuiPropProxySize>>()
+                        .ok()
+                        .and_then(|sizes| sizes.get(entity_id).ok().map(|size| size.0))
+                        .unwrap_or(Vector2::new(1.0, 1.0));
                     let inv_transform = transform.0.inverse_transform().unwrap();
                     let local_point =
                         inv_transform.transform_point(vec3_to_point3(*world_position));
 
                     let screen_point = point2(
-                        1.0 - (local_point.x + self.world_size.x / 2.0) / self.world_size.x,
-                        1.0 - (local_point.y + self.world_size.y / 2.0) / self.world_size.y,
+                        1.0 - (local_point.x + world_size.x / 2.0) / world_size.x,
+                        1.0 - (local_point.y + world_size.y / 2.0) / world_size.y,
                     );
 
                     Effect::Send {

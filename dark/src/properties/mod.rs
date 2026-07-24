@@ -21,6 +21,7 @@ mod prop_hack_diff;
 mod prop_hit_points;
 mod prop_key;
 mod prop_log;
+mod prop_obj_state;
 mod prop_particles;
 mod prop_phys_attr;
 mod prop_phys_initial_velocity;
@@ -59,6 +60,7 @@ pub use prop_hack_diff::*;
 pub use prop_hit_points::*;
 pub use prop_key::*;
 pub use prop_log::*;
+pub use prop_obj_state::*;
 pub use prop_particles::*;
 pub use prop_phys_attr::*;
 pub use prop_phys_initial_velocity::*;
@@ -1375,6 +1377,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$ObjState",
+            PropObjState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$ObjShort",
             read_variable_length_string,
             PropObjShortName,
@@ -1566,6 +1574,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$RepConten",
             PropReplicatorContents::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RepHacked",
+            PropReplicatorHackedContents::read,
             identity,
             accumulator::latest,
         ),

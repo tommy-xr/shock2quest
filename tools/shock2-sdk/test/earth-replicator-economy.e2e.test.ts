@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntitySummary, UiElement } from "../src/types.js";
+import {
+  carriedNaniteTotal,
+  physicallyOpenEarthReplicator,
+} from "./helpers/earth-replicator.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
-import { teleportVerified } from "./helpers/teleport.js";
+import { clickUiElement } from "./helpers/ui.js";
 
 // Honest Earth Technical Training regression for #543. Runtime entity ids are
 // rediscovered every launch; the positive ids are stable authored mission
@@ -23,51 +26,6 @@ const EARTH_NANITE_REWARD = 542;
 const EARTH_REPLICATOR = 262;
 const EARTH_REPLICATOR_OUTPUT = 284;
 const CHIPS_TEMPLATE = -92;
-
-async function clickElement(game: GameServer, element: UiElement) {
-  const [x, y, width, height] = element.screen_rect;
-  await game.input.set("pointer.position", [
-    x + width / 2,
-    y + height / 2,
-  ]);
-  await game.step({ frames: 2 });
-  await game.input.set("pointer.pressed", 1);
-  await game.step({ frames: 2 });
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 2 });
-}
-
-async function carriedNaniteTotal(game: GameServer): Promise<number> {
-  const inventory = await game.player.inventory();
-  let total = 0;
-  for (const item of inventory.items) {
-    if (!item.name?.toLowerCase().includes("nanite")) continue;
-    const detail = await game.entities.detail(item.entity_id);
-    const stack = detail.properties.find(
-      (property) => property.name === "StackCount",
-    );
-    assert.ok(stack, `carried nanite entity ${item.entity_id} needs StackCount`);
-    total += Number(stack.value);
-  }
-  return total;
-}
-
-async function physicallyOpenReplicator(
-  game: GameServer,
-  replicator: EntitySummary,
-) {
-  const [x, _y, z] = (await game.entities.detail(replicator.id)).position;
-  // This is the same clear standing point used by the accepted Technical
-  // play-through. The fresh Earth body heading makes negative yaw face the
-  // machine; a modest upward pitch hits its green interaction screen.
-  await teleportVerified(game, { x: x - 1.59, y: 21.404, z: z - 2.23 });
-  await game.input.set("head.look", [-35.3, -22]);
-  await game.step({ frames: 3 });
-  await game.input.set("right_hand.squeeze", 1);
-  await game.step({ frames: 2 });
-  await game.input.set("right_hand.squeeze", 0);
-  await game.step({ frames: 5 });
-}
 
 test(
   "Earth replicator charges authored prices and refuses unaffordable output",
@@ -97,7 +55,7 @@ test(
       "physical pickup should carry both authored 250 + 20 nanite stacks",
     );
 
-    await physicallyOpenReplicator(game, replicator);
+    await physicallyOpenEarthReplicator(game, replicator);
     const opened = (await game.ui.state()).active_panel;
     assert.ok(opened, "physical replicator frob should open an MFD panel");
     assert.equal(opened.template_id, EARTH_REPLICATOR);
@@ -132,7 +90,7 @@ test(
     const chipsBefore = new Set(
       (await game.entities.byTemplate(CHIPS_TEMPLATE)).map((entity) => entity.id),
     );
-    await clickElement(game, chipsButton);
+    await clickUiElement(game, chipsButton);
     await game.step({ frames: 20 });
     assert.equal(
       await carriedNaniteTotal(game),
@@ -166,7 +124,7 @@ test(
       (element) => element.label === "close",
     );
     assert.ok(close, "replicator panel should expose the ordinary close control");
-    await clickElement(game, close);
+    await clickUiElement(game, close);
     await earthWorldUse(game, dispensedChips);
     assert.ok(
       (await game.player.inventory()).items.some(
@@ -175,7 +133,7 @@ test(
       "the physically dispensed Chips should be collectible normally",
     );
 
-    await physicallyOpenReplicator(game, replicator);
+    await physicallyOpenEarthReplicator(game, replicator);
     // Spend through both carried StackCounts. After Chips, 267 - 6*40 - 2*4
     // leaves 19; the second Juice crosses the remaining balance of the first
     // stack, so exact payment must remove that exhausted entity and continue
@@ -187,7 +145,7 @@ test(
         (element) => element.label === "buy:small standard clip",
       );
       assert.ok(clip, "Standard Clip row should remain available");
-      await clickElement(game, clip);
+      await clickUiElement(game, clip);
     }
     for (let purchase = 0; purchase < 2; purchase++) {
       const panel = (await game.ui.state()).active_panel;
@@ -196,7 +154,7 @@ test(
         (element) => element.label === "buy:juice bottle",
       );
       assert.ok(juice, "Juice row should remain available");
-      await clickElement(game, juice);
+      await clickUiElement(game, juice);
     }
     assert.equal(
       await carriedNaniteTotal(game),
@@ -243,7 +201,7 @@ test(
       (element) => element.label === "buy:small standard clip",
     );
     assert.ok(unaffordableClip, "unaffordable row should remain inspectable");
-    await clickElement(game, unaffordableClip);
+    await clickUiElement(game, unaffordableClip);
     await game.step({ frames: 20 });
 
     assert.equal(
