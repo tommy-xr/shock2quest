@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end regression test for ammo-type cycling (InputAction::CycleAmmo). The
 // pistol carries three Projectile links (std / he / ap); cycling advances the
@@ -15,8 +16,14 @@ async function ammoType(game: GameServer): Promise<string | null> {
   return (await game.info()).player.wielded_ammo_type;
 }
 
+function ammoOf(detail: { properties: { name: string; value: string }[] }): number {
+  const p = detail.properties.find((x) => x.name === "Ammo");
+  assert.ok(p, "weapon should expose an Ammo property");
+  return Number(p.value);
+}
+
 test(
-  "cycling advances the wielded weapon's ammo type and wraps",
+  "cycling requires an empty magazine, then advances and wraps",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -32,8 +39,20 @@ test(
     await game.input.trigger("CycleWeapon");
     await game.step({ frames: 5 });
     assert.equal(await ammoType(game), "std", "pistol starts on its first ammo type");
+    const pistolId = (await game.info()).player.wielded_entity_id;
+    assert.ok(pistolId !== null, "pistol should be wielded");
 
-    // Cycle through all three and wrap back.
+    // A loaded magazine has an established projectile identity. Cycling it
+    // would otherwise turn standard rounds into AP/HE for free.
+    const loaded = ammoOf(await game.entities.detail(pistolId));
+    assert.ok(loaded > 0, "debug pistol starts loaded");
+    await game.input.trigger("CycleAmmo");
+    await game.step({ frames: 2 });
+    assert.equal(await ammoType(game), "std", "loaded pistol cannot change ammo type");
+    for (let i = 0; i < loaded; i++) await fireOnce(game);
+    assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "pistol is empty");
+
+    // Once empty, cycle through all three and wrap back.
     const sequence: string[] = [];
     for (let i = 0; i < 3; i++) {
       await game.input.trigger("CycleAmmo");

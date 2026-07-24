@@ -7,6 +7,7 @@ pub mod flat_ui_host;
 pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
+mod reload;
 pub mod spatial_query;
 mod spawn_location;
 pub mod stim_response;

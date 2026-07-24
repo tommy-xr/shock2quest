@@ -361,8 +361,9 @@ pub struct DebugUiState {
     /// The item held on the cursor mid-drag (the original's "cursor IS the
     /// item", §2.4). `Some` between a lift and the place/throw that clears it.
     pub cursor: Option<DebugUiCursor>,
-    /// The AMMOFULL ammo-cycle button (use mode + multi-ammo weapon wielded);
-    /// clicking it cycles the wielded weapon's ammo type. `None` otherwise.
+    /// The AMMOFULL ammo-cycle button (use mode + empty multi-ammo weapon
+    /// wielded); clicking it cycles the wielded weapon's ammo type. `None`
+    /// otherwise.
     pub ammo_cycle: Option<DebugUiElement>,
 }
 
