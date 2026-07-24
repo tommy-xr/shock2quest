@@ -50,6 +50,11 @@ pub trait Behavior {
         vec![]
     }
 
+    /// Motion schema queries to try in priority order for this behavior.
+    fn animation_queries(&self) -> Vec<Vec<MotionQueryItem>> {
+        vec![self.animation()]
+    }
+
     ///
     /// turn_speed
     ///
