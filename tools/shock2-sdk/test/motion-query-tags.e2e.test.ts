@@ -24,6 +24,38 @@ function failedQueries(logs: string[], tag: string): string[] {
 }
 
 test(
+  "idle droid falls back to an authored stand motion",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
+    });
+
+    await game.step({ frames: 10 });
+
+    const maintenance = await game.entities.list({
+      filter: "Maintenance",
+      limit: 10,
+    });
+    const droid = maintenance.entities.find((entity) => entity.name === "Maintenance");
+    assert.ok(droid, "expected the medsci1 maintenance droid");
+
+    const animation = await game.entities.animation(droid.id);
+    assert.ok(animation, "maintenance droid should have an animation player");
+    assert.ok(
+      ["mbtstd", "mbtfake1", "mbtfake2"].includes(animation.clip ?? ""),
+      `expected an authored droid stand clip, got ${animation.clip}`,
+    );
+    assert.deepEqual(
+      failedQueries(game.logs(), "idlegesture"),
+      [],
+      "idle droid query should resolve without entering the failure loop",
+    );
+  },
+);
+
+test(
   "wound and death motion queries resolve (hybrid wound, human death)",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
