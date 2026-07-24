@@ -427,6 +427,18 @@ pub enum Effect {
         target: crate::scripts::gui::TrainerTarget,
     },
 
+    /// Buy one replicator item: atomically revalidate the player's live
+    /// carried nanite stacks, debit `cost`, then create the item at the
+    /// authored output marker. `ReplicatorGui` pre-validates for immediate
+    /// refusal text, but the effect handler is authoritative so two
+    /// same-frame selections cannot both spend the same balance.
+    ReplicatorPurchase {
+        cost: i32,
+        template_name: String,
+        position: Point3<f32>,
+        orientation: Quaternion<f32>,
+    },
+
     /// Acquire an O/S upgrade trait at a trait machine: atomically validate
     /// (machine unused, trait not owned, a free slot), record the trait on the
     /// persistent character sheet, mark the machine used (a quest bit keyed by

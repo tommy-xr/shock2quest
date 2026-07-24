@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::File,
     io::BufReader,
     rc::Rc,
@@ -2443,6 +2443,31 @@ impl MissionCore {
         ret
     }
 
+    /// Canonical destruction cleanup for one runtime entity. Keep interaction
+    /// state and incoming inventory links in sync before the entity id can be
+    /// recycled, then tear down its scripts, physics, render state, and
+    /// attached children through [`Self::remove_entity`].
+    fn destroy_entity(&mut self, entity_id: EntityId) {
+        self.interaction.on_entity_destroyed(entity_id);
+        self.flat_ui.on_entity_destroyed(entity_id);
+        // `PlayerInfo` mirrors the interaction controller each update, but
+        // later effects in this batch may inspect it before then.
+        if let Ok(mut player) = self.world.borrow::<UniqueViewMut<PlayerInfo>>() {
+            if player.left_hand_entity_id == Some(entity_id) {
+                player.left_hand_entity_id = None;
+            }
+            if player.right_hand_entity_id == Some(entity_id) {
+                player.right_hand_entity_id = None;
+            }
+        }
+        // Only a contained item (no world presence, PropHasRefs false) can
+        // leave a dangling inventory `Contains` link behind.
+        if !crate::util::has_refs(&self.world, entity_id) {
+            self.remove_incoming_contains_links(entity_id);
+        }
+        self.remove_entity(entity_id);
+    }
+
     pub fn remove_entity(&mut self, entity_id: EntityId) {
         // Entities riding this one (attached particle trails/FX) die with it -
         // otherwise a projectile's trail would linger at its last transform
@@ -2650,7 +2675,8 @@ impl MissionCore {
             player_info.entity_id
         };
 
-        for effect in effects {
+        let mut effects = VecDeque::from(effects);
+        while let Some(effect) = effects.pop_front() {
             match effect {
                 Effect::AcquireKeyCard { key_card } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
@@ -3490,31 +3516,7 @@ impl MissionCore {
                 }
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
-                    self.interaction.on_entity_destroyed(entity_id);
-                    self.flat_ui.on_entity_destroyed(entity_id);
-                    // `PlayerInfo` mirrors the interaction controller each
-                    // update, but effects later in this same batch may inspect
-                    // it before then. Clear destroyed hand/wield references
-                    // atomically so no system can observe a live player
-                    // pointing at a dead (or recycled) entity.
-                    if let Ok(mut player) = self.world.borrow::<UniqueViewMut<PlayerInfo>>() {
-                        if player.left_hand_entity_id == Some(entity_id) {
-                            player.left_hand_entity_id = None;
-                        }
-                        if player.right_hand_entity_id == Some(entity_id) {
-                            player.right_hand_entity_id = None;
-                        }
-                    }
-                    // Only a contained item (no world presence, PropHasRefs
-                    // false) can leave a dangling inventory `Contains` link
-                    // behind. World-present entities - FX spangs, projectiles,
-                    // creatures - are never `Contains` targets, so skip the
-                    // full link scan for them (several are destroyed per frame
-                    // in combat).
-                    if !crate::util::has_refs(&self.world, entity_id) {
-                        self.remove_incoming_contains_links(entity_id);
-                    }
-                    self.remove_entity(entity_id);
+                    self.destroy_entity(entity_id);
                 }
                 Effect::ResetGravity { entity_id } => {
                     self.physics.set_gravity(entity_id, 1.0);
@@ -3625,6 +3627,56 @@ impl MissionCore {
                         }
                     } else {
                         warn!("TrainerPurchase dropped: gamesys has no cost tables");
+                    }
+                }
+
+                Effect::ReplicatorPurchase {
+                    cost,
+                    template_name,
+                    position,
+                    orientation,
+                } => {
+                    use crate::scripts::script_util::debit_player_nanites;
+
+                    let template_exists = self
+                        .template_name_to_template_id
+                        .contains_key(&template_name.to_ascii_lowercase());
+                    if cost <= 0 || !template_exists {
+                        info!(
+                            "Replicator purchase refused: invalid request for {} at cost {}",
+                            template_name, cost
+                        );
+                        effects.push_front(Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            name: "repfail".to_owned(),
+                        });
+                    } else if let Some(exhausted) = debit_player_nanites(&self.world, cost) {
+                        for entity_id in exhausted {
+                            self.destroy_entity(entity_id);
+                        }
+                        let created = self.create_entity_by_template_name(
+                            asset_cache,
+                            &template_name,
+                            position,
+                            orientation,
+                        );
+                        debug_assert!(
+                            created.is_some(),
+                            "prevalidated replicator template disappeared"
+                        );
+                        effects.push_front(Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            name: "replic2e".to_owned(),
+                        });
+                    } else {
+                        info!(
+                            "Replicator purchase refused: {} costs {} nanites",
+                            template_name, cost
+                        );
+                        effects.push_front(Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            name: "repfail".to_owned(),
+                        });
                     }
                 }
 
