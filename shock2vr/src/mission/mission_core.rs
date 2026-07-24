@@ -125,6 +125,65 @@ pub struct PlayerInfo {
     pub inventory_entity_id: EntityId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PsiKitUseOutcome {
+    NotUsed,
+    DecrementedStack,
+    DestroyEntity,
+}
+
+fn update_player_psi_points(world: &World, update: impl FnOnce(i32) -> i32) -> bool {
+    let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
+    let mut psi_states = world
+        .borrow::<ViewMut<dark::properties::PropPsiState>>()
+        .unwrap();
+    if let Ok(psi) = (&mut psi_states).get(player_entity) {
+        let maximum = psi.max_psi_points.max(0);
+        let updated = update(psi.psi_points).clamp(0, maximum);
+        let changed = psi.psi_points != updated;
+        psi.psi_points = updated;
+        changed
+    } else {
+        false
+    }
+}
+
+/// Apply the stateful portion of one psi-kit effect against the live world.
+/// The caller performs canonical entity teardown for [`PsiKitUseOutcome::DestroyEntity`].
+fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitUseOutcome {
+    if amount <= 0 {
+        return PsiKitUseOutcome::NotUsed;
+    }
+    let is_alive = world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(entity_id));
+    if !is_alive {
+        return PsiKitUseOutcome::NotUsed;
+    }
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
+    if stack_count.is_some_and(|stack| stack <= 0) {
+        return PsiKitUseOutcome::NotUsed;
+    }
+    if !update_player_psi_points(world, |current| current.saturating_add(amount)) {
+        return PsiKitUseOutcome::NotUsed;
+    }
+
+    if stack_count.is_some_and(|stack| stack > 1) {
+        let mut stacks = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        if let Ok(stack) = (&mut stacks).get(entity_id) {
+            stack.0 -= 1;
+        }
+        PsiKitUseOutcome::DecrementedStack
+    } else {
+        PsiKitUseOutcome::DestroyEntity
+    }
+}
+
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
 /// used to pose the flat melee viewmodel in its ready stance.
 const MELEE_IDLE_CLIP: &str = "ph212203";
@@ -2981,17 +3040,35 @@ impl MissionCore {
                 }
 
                 Effect::SpendPsiPoints { amount } => {
-                    let player_entity = self
-                        .world
-                        .borrow::<UniqueView<PlayerInfo>>()
-                        .unwrap()
-                        .entity_id;
-                    let mut v_psi = self
-                        .world
-                        .borrow::<ViewMut<dark::properties::PropPsiState>>()
-                        .unwrap();
-                    if let Ok(psi) = (&mut v_psi).get(player_entity) {
-                        psi.psi_points = (psi.psi_points - amount).max(0);
+                    update_player_psi_points(&self.world, |current| current.saturating_sub(amount));
+                }
+
+                Effect::SetPsiPoints { points } => {
+                    update_player_psi_points(&self.world, |_| points);
+                }
+
+                Effect::UsePsiKit { entity_id, amount } => {
+                    // This mutation and the consumption below happen while
+                    // processing one effect against live state. Two boosters
+                    // used in the same update therefore add independently;
+                    // a duplicate use of an already-destroyed booster no-ops.
+                    let outcome = apply_psi_kit_use(&self.world, entity_id, amount);
+                    if outcome == PsiKitUseOutcome::NotUsed {
+                        continue;
+                    }
+
+                    let sound = crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        entity_id,
+                        "activate",
+                        vec![],
+                        AudioHandle::new(),
+                    );
+                    if outcome == PsiKitUseOutcome::DestroyEntity {
+                        self.destroy_entity(entity_id);
+                    }
+                    if !matches!(sound, Effect::NoEffect) {
+                        effects.push_front(sound);
                     }
                 }
 
@@ -5515,6 +5592,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let stack_count = self
             .world
             .run(|v: View<dark::properties::PropStackCount>| v.get(id).ok().map(|s| s.0));
+        // Live health is rendered in the HUD target label and is equally
+        // useful to deterministic gameplay scenarios (for example proving a
+        // real projectile damaged its intended target).
+        let hit_points = self
+            .world
+            .run(|v: View<dark::properties::PropHitPoints>| v.get(id).ok().map(|hp| hp.hit_points));
+        let max_hit_points = self
+            .world
+            .run(|v: View<dark::properties::PropMaxHitPoints>| {
+                v.get(id).ok().map(|hp| hp.hit_points)
+            });
 
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
@@ -5585,6 +5673,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "StackCount".to_string(),
                         value: stack.to_string(),
+                    });
+                }
+                if let Some(hit_points) = hit_points {
+                    properties.push(DebugPropertyInfo {
+                        name: "HitPoints".to_string(),
+                        value: hit_points.to_string(),
+                    });
+                }
+                if let Some(max_hit_points) = max_hit_points {
+                    properties.push(DebugPropertyInfo {
+                        name: "MaxHitPoints".to_string(),
+                        value: max_hit_points.to_string(),
                     });
                 }
 
@@ -6316,6 +6416,127 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         self.script_world.dispatch(Message { to: id, payload });
         true
+    }
+}
+
+#[cfg(test)]
+mod psi_kit_use_tests {
+    use dark::properties::{PropPsiState, PropStackCount};
+    use shipyard::{EntitiesView, Get, View};
+
+    use super::*;
+
+    fn world_with_player(psi_points: i32) -> World {
+        let mut world = World::new();
+        let inventory_entity_id = world.add_entity(());
+        let player = world.add_entity(PropPsiState {
+            psi_points,
+            max_psi_points: 50,
+            unknown: 50,
+        });
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id,
+        });
+        world
+    }
+
+    fn apply_effect_batch(world: &mut World, effects: Vec<Effect>) {
+        for effect in effects {
+            let Effect::UsePsiKit { entity_id, amount } = effect else {
+                panic!("unexpected effect in psi-kit test batch");
+            };
+            if apply_psi_kit_use(world, entity_id, amount) == PsiKitUseOutcome::DestroyEntity {
+                // Production performs MissionCore's canonical teardown here;
+                // this state-level regression has no render/physics/script maps.
+                world.delete_entity(entity_id);
+            }
+        }
+    }
+
+    fn player_psi_points(world: &World) -> i32 {
+        let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
+        world
+            .borrow::<View<PropPsiState>>()
+            .unwrap()
+            .get(player)
+            .unwrap()
+            .psi_points
+    }
+
+    #[test]
+    fn two_same_update_psi_kit_effects_restore_against_live_state_and_consume_both() {
+        let mut world = world_with_player(5);
+        let first = world.add_entity(PropStackCount(1));
+        let second = world.add_entity(PropStackCount(1));
+
+        // Both effects represent Frobs dispatched before one handle_effects
+        // pass. Applying them as one batch must not reuse a stale psi snapshot.
+        apply_effect_batch(
+            &mut world,
+            vec![
+                Effect::UsePsiKit {
+                    entity_id: first,
+                    amount: 20,
+                },
+                Effect::UsePsiKit {
+                    entity_id: second,
+                    amount: 20,
+                },
+            ],
+        );
+
+        assert_eq!(player_psi_points(&world), 45);
+        let entities = world.borrow::<EntitiesView>().unwrap();
+        assert!(!entities.is_alive(first));
+        assert!(!entities.is_alive(second));
+    }
+
+    #[test]
+    fn psi_kit_clamps_to_max_and_consumes_only_one_stack_unit() {
+        let mut world = world_with_player(45);
+        let booster = world.add_entity(PropStackCount(2));
+
+        assert_eq!(
+            apply_psi_kit_use(&world, booster, 20),
+            PsiKitUseOutcome::DecrementedStack
+        );
+        assert_eq!(player_psi_points(&world), 50);
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(booster)
+                .unwrap()
+                .0,
+            1
+        );
+    }
+
+    #[test]
+    fn psi_kit_at_full_pool_leaves_the_source_untouched() {
+        let mut world = world_with_player(50);
+        let booster = world.add_entity(PropStackCount(1));
+
+        assert_eq!(
+            apply_psi_kit_use(&world, booster, 20),
+            PsiKitUseOutcome::NotUsed
+        );
+        assert_eq!(player_psi_points(&world), 50);
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(booster));
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(booster)
+                .unwrap()
+                .0,
+            1
+        );
     }
 }
 
