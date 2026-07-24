@@ -277,7 +277,7 @@ pub fn load_mission_from_save_data(
         save_data.global_data.rotation,
     );
 
-    let active_mission = Mission::load(
+    let mut active_mission = Mission::load(
         current_mission,
         asset_cache,
         audio_context,
@@ -287,6 +287,26 @@ pub fn load_mission_from_save_data(
         populator,
         save_data.global_data.held_items,
         game_options,
+    );
+
+    // A loaded mission rebuilds Rapier from scratch. Mark the restored player
+    // so the first BeginIntersect events reconstruct already-existing sensor
+    // overlaps without replaying their ENTER actions (#547). This is distinct
+    // from locomotion teleport (which must trigger) and scripted teleport
+    // suppression (#515).
+    let player_entity = {
+        let player = active_mission
+            .mission_core
+            .world
+            .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+            .unwrap();
+        player.entity_id
+    };
+    active_mission.mission_core.world.add_component(
+        player_entity,
+        dark::properties::PropTeleported::with_source(
+            dark::properties::TeleportSource::LoadRestore,
+        ),
     );
 
     (active_mission, save_data.level_data)

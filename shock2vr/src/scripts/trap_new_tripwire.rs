@@ -19,21 +19,15 @@ pub fn is_player(world: &World, entity_id: EntityId) -> bool {
     v_prop_player.get(entity_id).is_ok()
 }
 
-/// Did this entity arrive via a *scripted* teleport trap (as opposed to walking
-/// or VR teleport locomotion)? Scripted-trap arrivals must not fire tripwire
-/// ENTER, so a return teleport that lands inside another trap's box doesn't
-/// re-fire it (#515). Locomotion teleports still fire (e.g. ops1 cutscene).
-fn arrived_via_scripted_teleport(world: &World, entity_id: EntityId) -> bool {
+fn teleport_source(world: &World, entity_id: EntityId) -> Option<TeleportSource> {
     let v_teleported = world.borrow::<View<PropTeleported>>().unwrap();
-    matches!(
-        v_teleported.get(entity_id),
-        Ok(t) if t.source == TeleportSource::ScriptedTrap
-    )
+    v_teleported.get(entity_id).ok().map(|marker| marker.source)
 }
 
 pub struct TrapNewTripwire {
     has_activated: bool,
     entity_in_trap: HashSet<EntityId>,
+    reconstructed_after_load: HashSet<EntityId>,
     trip_flags: TripFlags,
 }
 impl TrapNewTripwire {
@@ -42,6 +36,7 @@ impl TrapNewTripwire {
             trip_flags: TripFlags::DEFAULT,
             has_activated: false,
             entity_in_trap: HashSet::new(),
+            reconstructed_after_load: HashSet::new(),
         }
     }
 
@@ -123,15 +118,29 @@ impl Script for TrapNewTripwire {
         // tripwire).
         match msg {
             MessagePayload::SensorBeginIntersect { with } => {
-                // The ONE exception: a *scripted* teleport trap. Its arrival must
-                // not touch this tripwire at all - no ENTER signal AND not tracked
-                // as present. If we tracked it, walking back out would fire an
-                // unbalanced EXIT TurnOff and re-trigger the trap (the earth.mis
-                // montage loop, #515). This matches the original engine ignoring
-                // teleported-in entities. Consume the marker so a later walk-in to
-                // a *different* nearby tripwire still fires normally.
-                if arrived_via_scripted_teleport(world, *with) {
-                    return Effect::ClearTeleportedMarker { entity_id: *with };
+                match teleport_source(world, *with) {
+                    // A scripted teleport trap's arrival must not touch this
+                    // tripwire at all - no ENTER signal and not tracked as
+                    // present. Tracking it would make walking back out emit an
+                    // unbalanced EXIT TurnOff and re-trigger the earth montage
+                    // loop (#515).
+                    Some(TeleportSource::ScriptedTrap) => {
+                        return Effect::ClearTeleportedMarker { entity_id: *with };
+                    }
+                    // Loading creates a new physics world, so Rapier reports
+                    // every sensor containing the restored player as a fresh
+                    // BeginIntersect. Reconstruct that existing overlap in the
+                    // transient set without replaying ENTER. Unlike a scripted
+                    // teleport, track presence so leaving establishes the clean
+                    // edge needed for a later genuine re-entry (#547).
+                    Some(TeleportSource::LoadRestore) => {
+                        if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
+                            self.entity_in_trap.insert(*with);
+                            self.reconstructed_after_load.insert(*with);
+                        }
+                        return Effect::NoEffect;
+                    }
+                    Some(TeleportSource::Locomotion) | None => {}
                 }
 
                 if self.should_activate(world, entity_id, *with, &trip_flags.trip_flags) {
@@ -156,6 +165,7 @@ impl Script for TrapNewTripwire {
             }
             MessagePayload::SensorEndIntersect { with } => {
                 let had_keys_before = !self.entity_in_trap.is_empty();
+                let was_reconstructed_after_load = self.reconstructed_after_load.remove(with);
 
                 self.entity_in_trap.remove(with);
 
@@ -166,7 +176,17 @@ impl Script for TrapNewTripwire {
                     with, has_keys_now, had_keys_before, trip_flags
                 );
 
-                if !has_keys_now && had_keys_before && self.trip_flags.contains(TripFlags::EXIT) {
+                // The first EndIntersect paired with a load-reconstructed
+                // overlap is not a gameplay EXIT edge. Emitting TurnOff here
+                // would be as unbalanced as replaying ENTER and, on Earth,
+                // would activate the same teleport wiring while merely
+                // leaving the lobby sensor. Once removed, a later genuine
+                // enter/exit pair behaves normally.
+                if !was_reconstructed_after_load
+                    && !has_keys_now
+                    && had_keys_before
+                    && self.trip_flags.contains(TripFlags::EXIT)
+                {
                     send_to_all_switch_links(
                         world,
                         entity_id,

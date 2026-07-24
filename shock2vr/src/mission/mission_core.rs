@@ -43,7 +43,7 @@ use dark::{
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropTeleported,
         PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType,
-        ToLink, TripFlags, TweqAnimationState, WrappedEntityId,
+        TeleportSource, ToLink, TripFlags, TweqAnimationState, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -1169,6 +1169,13 @@ impl MissionCore {
             |mut v_teleported: ViewMut<dark::properties::PropTeleported>| {
                 let mut ents_to_remove = Vec::new();
                 for (id, door) in (&mut v_teleported).iter().with_id() {
+                    // Load restoration is a one-script-update marker, not a
+                    // wall-clock timer. It must survive even a slow first
+                    // frame so initial sensor overlaps can be reconstructed.
+                    if door.source == TeleportSource::LoadRestore {
+                        continue;
+                    }
+
                     door.countdown_timer -= time.elapsed.as_secs_f32();
 
                     if door.countdown_timer < 0.0 {
@@ -1292,6 +1299,27 @@ impl MissionCore {
             self.script_world.update(&self.world, &self.physics, time)
         );
         effects.append(&mut script_effects);
+
+        // Any load-restored entity that did not overlap a tripwire still only
+        // needs the marker for the first physics-backed script update. Paused
+        // zero-time updates cannot emit initial overlaps, so they must retain
+        // it. Clear after the first nonzero update so a genuine sensor entry on
+        // a later frame is never suppressed.
+        if !time.elapsed.is_zero() {
+            self.world.run(|mut v_teleported: ViewMut<PropTeleported>| {
+                let load_restores = (&v_teleported)
+                    .iter()
+                    .with_id()
+                    .filter_map(|(id, marker)| {
+                        (marker.source == TeleportSource::LoadRestore).then_some(id)
+                    })
+                    .collect::<Vec<_>>();
+
+                for id in load_restores {
+                    v_teleported.remove(id);
+                }
+            });
+        }
 
         // Handle any pending entity triggers now that scripts are initialized
         if !self.pending_entity_triggers.is_empty() {
