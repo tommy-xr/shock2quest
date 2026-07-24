@@ -122,6 +122,18 @@ fn climb_redirect(desired: Vector<Real>, toward_ladder: Vector<Real>) -> Option<
     Some(desired_h - toward_ladder * into + Vector::y() * vertical * CLIMB_SPEED_SCALE)
 }
 
+/// Whether testing a vertical capsule only at the end of `lift` also covers
+/// every side contact its rounded cap could sweep through along the way.
+///
+/// This holds when the capsule's cylindrical segment spans the whole lift: a
+/// point touched by the moving cap then still intersects the full-radius
+/// cylinder at the endpoint. It does not hold for the shorter crouched player.
+fn lifted_pose_covers_swept_cap(shape: &dyn Shape, lift: Real) -> bool {
+    shape
+        .as_capsule()
+        .is_some_and(|capsule| 2.0 * capsule.half_height() >= lift)
+}
+
 /// Step-up probe (the original engine's stair-climbing approach: probe up,
 /// forward, then down from the blocked position). Called when the player's
 /// horizontal movement was mostly blocked; returns the extra translation that
@@ -183,12 +195,34 @@ fn try_step_up(
         )
     };
 
-    // 1) Headroom directly above.
-    if cast(pos, Vector::y(), step_height, 0.0).is_some() {
-        return None;
+    let lifted = Translation::from(Vector::y() * step_height) * pos;
+    // 1) Headroom directly above. A capsule pressed against a nearly-vertical
+    // level-trimesh riser can produce a zero-time "penetrating" hit whose
+    // normal is lateral (Station's service-hall riser is one example). That
+    // contact does not oppose the upward probe and must not masquerade as a
+    // ceiling. Only ignore this narrow initial-contact case; later hits and
+    // normals with a meaningful downward component still block. Because that
+    // first lateral hit can mask another collider (or another triangle in the
+    // same mesh), also verify that the fully lifted pose does not intersect
+    // anything before accepting the clearance.
+    if let Some((_, hit)) = cast(pos, Vector::y(), step_height, 0.0) {
+        // For a vertical capsule, an endpoint overlap is sufficient to cover
+        // contacts swept by its rounded cap only when the cylindrical segment
+        // is at least as long as this lift. The standing capsule satisfies
+        // that invariant; the shorter crouched capsule does not, so retain the
+        // old conservative rejection while crouched rather than risk skipping
+        // a narrow intermediate protrusion.
+        let is_initial_tangential_contact = hit.status
+            == rapier3d::parry::query::ShapeCastStatus::PenetratingOrWithinTargetDist
+            && hit.normal1.y >= -1.0e-4;
+        if !is_initial_tangential_contact
+            || !lifted_pose_covers_swept_cap(shape, step_height)
+            || queries.intersect_shape(lifted, shape).next().is_some()
+        {
+            return None;
+        }
     }
     // 2) Forward clearance at the lifted height.
-    let lifted = Translation::from(Vector::y() * step_height) * pos;
     if cast(&lifted, dir, forward, 0.0).is_some() {
         return None;
     }
@@ -2835,6 +2869,121 @@ mod tests {
             ledge < 0.1,
             "a 3 ft ledge must not be auto-stepped, rose {ledge}"
         );
+    }
+
+    /// Height gained while walking into a Station-style step built as one
+    /// connected level trimesh. Unlike a separate cuboid, the vertical riser
+    /// remains the first contact of an upward sweep when the capsule is
+    /// pressed against it.
+    fn run_level_trimesh_step(ceiling_bottom: Option<f32>, crouched: bool) -> f32 {
+        let mut world = PhysicsWorld::new();
+        let step_height = 0.6;
+        let half_width = 4.0;
+        // Match the tiny non-vertical error in Station's authored riser. Its
+        // face normal has a roughly -5e-6 vertical component, so an upward
+        // cast from beside it reports a zero-time contact even though the
+        // surface is lateral to the cast.
+        let riser_top_x = -0.000_003;
+        let verts = vec![
+            // Lower floor.
+            point![-8.0, 0.0, -half_width],
+            point![0.0, 0.0, -half_width],
+            point![0.0, 0.0, half_width],
+            point![-8.0, 0.0, half_width],
+            // Upper tread.
+            point![riser_top_x, step_height, -half_width],
+            point![8.0, step_height, -half_width],
+            point![8.0, step_height, half_width],
+            point![riser_top_x, step_height, half_width],
+        ];
+        let tris = vec![
+            [0u32, 1, 2],
+            [0, 2, 3],
+            [1, 4, 7],
+            [1, 7, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(verts, tris)
+                .expect("connected step trimesh")
+                .build(),
+        );
+
+        if let Some(bottom) = ceiling_bottom {
+            world.add_kinematic(
+                EntityId::from_inner(1001).unwrap(),
+                vec3(0.0, bottom + 0.2, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(16.0, 0.4, 8.0),
+                CollisionGroup::entity(),
+                false,
+            );
+        }
+
+        let mut player =
+            world.create_player(vec3(-2.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        if crouched {
+            assert!(
+                world.set_player_crouch(true, &mut player),
+                "test player should enter crouch"
+            );
+        }
+        let start = world.get_player_translation(&player);
+        let mut max_y = start.y;
+        for _ in 0..120 {
+            world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+            max_y = max_y.max(world.get_player_translation(&player).y);
+        }
+        max_y - start.y
+    }
+
+    /// Station's service-hall rise is part of the level trimesh. At the
+    /// blocked pose, its vertical face is a zero-time tangential contact for
+    /// the upward step probe; that side contact must not be mistaken for a
+    /// ceiling.
+    #[test]
+    fn player_steps_up_connected_level_trimesh() {
+        let rise = run_level_trimesh_step(None, false);
+        assert!(
+            rise > 0.5,
+            "a 0.6u connected-trimesh riser should be stepped up, rose {rise}"
+        );
+    }
+
+    /// Ignoring a tangential riser contact must not permit stepping through a
+    /// real ceiling that leaves insufficient room for the player's final pose.
+    #[test]
+    fn player_does_not_step_connected_trimesh_without_headroom() {
+        let rise = run_level_trimesh_step(Some(2.3), false);
+        assert!(
+            rise < 0.1,
+            "a connected-trimesh riser under a true low ceiling must block, rose {rise}"
+        );
+    }
+
+    /// The standing capsule's cylindrical segment covers the full step probe,
+    /// but the crouched capsule's does not. This is the safety gate on using an
+    /// endpoint overlap after a tangential contact masked the original sweep.
+    #[test]
+    fn only_standing_capsule_endpoint_covers_step_sweep() {
+        let standing = Capsule::new_y(
+            (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+            PLAYER_RADIUS / SCALE_FACTOR,
+        );
+        let crouched = Capsule::new_y(
+            (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+            PLAYER_RADIUS / SCALE_FACTOR,
+        );
+        let step_height = PLAYER_STEP_HEIGHT / SCALE_FACTOR;
+
+        assert!(lifted_pose_covers_swept_cap(&standing, step_height));
+        assert!(!lifted_pose_covers_swept_cap(&crouched, step_height));
     }
 
     /// Walking along the top of a yaw-ROTATED kinematic cuboid (e.g. the
