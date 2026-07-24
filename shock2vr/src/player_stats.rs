@@ -16,9 +16,9 @@
 //! bits), so it rides the existing persistence path for free: it survives level
 //! transitions (`QuestInfo` is threaded through `Game::save_active_scene` ->
 //! `load_mission_into_scene`) and save/load (`QuestInfo` is embedded in
-//! `SaveData::global_data`). This mirrors how hp/psi "persist": those are
-//! re-derived from the persisted career quest bits on every mission load
-//! (`mission_core.rs`); stats are the same idea but accumulate across tours.
+//! `SaveData::global_data`). HP/PSI use a sibling global-data snapshot: mission
+//! construction first derives template/career/trait defaults, then ordinary
+//! transitions and current-format saves restore the exact live pools.
 //!
 //! Deferred (storage + grants only, per issue #453): career-specific stat
 //! baselines (all careers start from the uniform [`PlayerStats::default`]

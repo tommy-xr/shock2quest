@@ -288,6 +288,10 @@ pub fn load_mission_from_save_data(
         save_data.global_data.held_items,
         game_options,
     );
+    crate::save_load::restore_player_vitals(
+        &active_mission.mission_core.world,
+        save_data.global_data.player_vitals,
+    );
 
     // A loaded mission rebuilds Rapier from scratch. Mark the restored player
     // so the first BeginIntersect events reconstruct already-existing sensor

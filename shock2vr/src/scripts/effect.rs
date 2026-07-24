@@ -17,6 +17,18 @@ use crate::{
 
 use super::Message;
 
+/// How a level transition initializes the destination player's HP/PSI pools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayerVitalsTransition {
+    /// Carry the live pools into the destination. This is the normal behavior
+    /// for deck changes, reloads, and station training-year transitions.
+    Preserve,
+    /// Let the destination derive fresh pools from its player template,
+    /// selected career, and persistent traits. Used when character creation
+    /// deliberately selects the first career loadout.
+    InitializeFromDestination,
+}
+
 #[derive(Clone, Debug)]
 pub enum GlobalEffect {
     // Save the game state to the given file_name
@@ -33,6 +45,7 @@ pub enum GlobalEffect {
         level_file: String,
         loc: Option<i32>,
         entities_to_trigger: Vec<String>,
+        vitals_transition: PlayerVitalsTransition,
     },
 
     // Test the reload functionality (as if saving + loading)

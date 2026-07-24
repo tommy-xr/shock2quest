@@ -63,6 +63,7 @@ impl Script for ChooseServiceScript {
                         level_file: format!("{}.mis", dest_level.0),
                         loc: dest_loc,
                         entities_to_trigger: vec![career.station_start_trigger(1)],
+                        vitals_transition: super::PlayerVitalsTransition::InitializeFromDestination,
                     }));
                 }
 

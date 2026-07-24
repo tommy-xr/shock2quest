@@ -161,12 +161,12 @@ test(
       (hpBefore as number) + 5,
       "Tank max-HP bonus re-derives after load (not doubled)",
     );
-    // Current HP is not persisted: it re-seeds to the (trait-adjusted) max on
-    // load, so the live +5 current-HP grant cannot double-apply.
+    // Current and maximum HP persist together. This full-health snapshot stays
+    // exactly 35/35, so the live +5 grant cannot double-apply on load.
     assert.equal(
       hpLoaded.hit_points,
       hpLoaded.max_hit_points,
-      "current HP re-seeds to max on load (live grant does not double)",
+      "current HP persists exactly at the trait-adjusted max",
     );
     const machine2 = await findMachine(game, 133);
     await standNear(game, machine2.id);
