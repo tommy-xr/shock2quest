@@ -2,12 +2,19 @@ use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{FONT_IMPORTER, TEXTURE_IMPORTER},
-    properties::{PropHitPoints, PropObjName, PropTemplateId},
+    properties::{PropHitPoints, PropObjName, PropStackCount, PropTemplateId},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
+
+fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
+    match stack_count {
+        Some(count) => item_name.replace("%d", &count.to_string()),
+        None => item_name.to_owned(),
+    }
+}
 
 pub fn draw_item_name(
     asset_cache: &mut AssetCache,
@@ -41,6 +48,14 @@ pub fn draw_item_name(
         return vec![];
     }
 
+    let stack_count = world
+        .borrow::<View<PropStackCount>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|stack| stack.0)
+        .ok();
+    let item_name = format_stack_aware_item_name(&prop_obj_short_name.0, stack_count);
+
     let aabb = maybe_bbox.unwrap();
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
     let extents = project_aabb3(&aabb, view, projection, screen_size);
@@ -54,13 +69,13 @@ pub fn draw_item_name(
     let text_content = if debug_show_ids {
         format!(
             "{} | {} (Tem {}| Ent {})",
-            prop_obj_short_name.0,
+            item_name,
             &maybe_hitpoints,
             prop_template_id.template_id,
             entity_id.inner(),
         )
     } else {
-        format!("{} | {}", prop_obj_short_name.0, &maybe_hitpoints,)
+        format!("{} | {}", item_name, &maybe_hitpoints,)
     };
 
     let text_obj_0_0 = SceneObject::screen_space_text(
@@ -73,6 +88,35 @@ pub fn draw_item_name(
     );
 
     vec![text_obj_0_0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_stack_aware_item_name;
+
+    #[test]
+    fn stack_count_replaces_object_name_decimal_placeholder() {
+        assert_eq!(
+            format_stack_aware_item_name(r#"Nanites: "%d nanites.""#, Some(250)),
+            r#"Nanites: "250 nanites.""#,
+        );
+    }
+
+    #[test]
+    fn object_name_without_decimal_placeholder_is_unchanged() {
+        assert_eq!(
+            format_stack_aware_item_name("Maintenance Tool", Some(12)),
+            "Maintenance Tool",
+        );
+    }
+
+    #[test]
+    fn decimal_placeholder_is_preserved_without_a_stack_count() {
+        assert_eq!(
+            format_stack_aware_item_name(r#"Nanites: "%d nanites.""#, None),
+            r#"Nanites: "%d nanites.""#,
+        );
+    }
 }
 
 pub fn draw_item_outline(
