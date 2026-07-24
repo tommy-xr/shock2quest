@@ -56,7 +56,7 @@ where
         _physics: &PhysicsWorld,
         _time: &Time,
     ) -> Effect {
-        let config = self.gui.get_config();
+        let config = self.gui.get_config_for(entity_id, world, &self.state);
         let mut components = {
             let cursor = &self.last_cursor;
             self.gui
@@ -108,9 +108,7 @@ where
                 if !self.gui.opens_on_frob(entity_id, world) {
                     return frob_effect;
                 }
-                if self.gui.resets_state_on_frob() {
-                    self.state = TState::default();
-                }
+                self.gui.prepare_state_on_frob(&mut self.state);
                 Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
             }
             MessagePayload::GUIHover {
@@ -120,7 +118,7 @@ where
                 is_grabbing,
                 hand,
             } => {
-                let config = self.gui.get_config();
+                let config = self.gui.get_config_for(entity_id, world, &self.state);
                 let cursor = point2(
                     screen_coordinates.x * config.screen_size_in_pixels.x,
                     screen_coordinates.y * config.screen_size_in_pixels.y,

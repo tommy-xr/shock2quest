@@ -1,12 +1,14 @@
 use cgmath::{Vector2, Vector3, vec2, vec3};
-use dark::properties::PropReplicatorContents;
+use dark::properties::{
+    ObjectState, PropHackDiff, PropObjState, PropReplicatorContents, PropReplicatorHackedContents,
+};
 use engine::audio::AudioHandle;
 use num_traits::ToPrimitive;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
+    gui::{ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor},
     mission::GlobalEntityMetadata,
     quest_info::QuestInfo,
     util::{get_position_from_transform, get_rotation_from_transform},
@@ -16,18 +18,110 @@ use crate::gui;
 
 use crate::scripts::{Effect, script_util::*};
 
-use super::traits::TRAIT_REPLICATOR_EXPERT;
+use super::{
+    keypad::{
+        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, handle_hack_msg,
+    },
+    traits::TRAIT_REPLICATOR_EXPERT,
+};
 
 pub struct ReplicatorGui;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ReplicatorPanel {
+    #[default]
+    Inventory,
+    Hacking,
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ReplicatorState {
     message: Option<String>,
+    panel: ReplicatorPanel,
+    hack: HackState,
 }
 
 #[derive(Clone)]
 pub enum ReplicatorMsg {
     SelectItem(usize),
+    OpenHack,
+    Hack(KeyPadMsg),
+}
+
+#[derive(Clone)]
+struct ReplicatorInventory {
+    costs: [i32; 6],
+    object_names: [String; 6],
+}
+
+fn object_state(world: &World, entity_id: EntityId) -> ObjectState {
+    world
+        .borrow::<View<PropObjState>>()
+        .ok()
+        .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
+        .unwrap_or(ObjectState::Normal)
+}
+
+fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInventory> {
+    match object_state(world, entity_id) {
+        ObjectState::Broken | ObjectState::Destroyed => None,
+        ObjectState::Hacked => world
+            .borrow::<View<PropReplicatorHackedContents>>()
+            .ok()
+            .and_then(|contents| {
+                contents
+                    .get(entity_id)
+                    .ok()
+                    .map(|contents| ReplicatorInventory {
+                        costs: contents.costs,
+                        object_names: contents.object_names.clone(),
+                    })
+            }),
+        _ => world
+            .borrow::<View<PropReplicatorContents>>()
+            .ok()
+            .and_then(|contents| {
+                contents
+                    .get(entity_id)
+                    .ok()
+                    .map(|contents| ReplicatorInventory {
+                        costs: contents.costs,
+                        object_names: contents.object_names.clone(),
+                    })
+            }),
+    }
+}
+
+fn hack_diff(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
+    world
+        .borrow::<View<PropHackDiff>>()
+        .ok()
+        .and_then(|diffs| diffs.get(entity_id).ok().copied())
+}
+
+fn can_hack(world: &World, entity_id: EntityId) -> bool {
+    !matches!(
+        object_state(world, entity_id),
+        ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
+    ) && hack_diff(world, entity_id).is_some()
+        && world
+            .borrow::<View<PropReplicatorHackedContents>>()
+            .ok()
+            .is_some_and(|contents| contents.get(entity_id).is_ok())
+}
+
+fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
+    Effect::SetObjectState {
+        entity_id,
+        state: ObjectState::Hacked,
+    }
+}
+
+fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
+    Effect::SetObjectState {
+        entity_id,
+        state: ObjectState::Broken,
+    }
 }
 
 impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
@@ -38,19 +132,24 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         world: &World,
         state: &ReplicatorState,
     ) -> Vec<GuiComponent<ReplicatorMsg>> {
+        if state.panel == ReplicatorPanel::Hacking {
+            if let Some(diff) = hack_diff(world, entity_id) {
+                return draw_hack_board(&state.hack, diff, ReplicatorMsg::Hack);
+            }
+        }
+
         let button_height = 60.0;
         let initial_padding_y = 10.0;
         let button_width = 188.0;
         let button_padding = 4.0;
-
-        let v_prop_replicator = world.borrow::<View<PropReplicatorContents>>().unwrap();
-        let replicator_contents = v_prop_replicator.get(entity_id).unwrap();
-
-        let entity_metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().unwrap();
+        let replicator_contents = active_inventory(world, entity_id);
+        let current_state = object_state(world, entity_id);
+        let has_sidecar = can_hack(world, entity_id) || current_state == ObjectState::Broken;
+        let main_x = if has_sidecar { 73.0 } else { 0.0 };
 
         let replicator_icon = |icon: &str, position: f32| GuiComponent::Image {
             position: vec2(
-                10.0,
+                main_x + 10.0,
                 5.0 + initial_padding_y + (button_height + button_padding) * position,
             ),
             size: vec2(30.0, button_height - 10.0),
@@ -60,56 +159,86 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
 
         let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![
             gui::image("replic.pcx")
-                .with_position(vec2(0.0, 0.0))
+                .with_position(vec2(main_x, 0.0))
                 .with_size(vec2(188.0, 296.0)),
         ];
-        for (i, (obj_name, authored_cost)) in replicator_contents
-            .object_names
-            .iter()
-            .zip(replicator_contents.costs)
-            .enumerate()
-        {
-            let float_i = i.to_f32().unwrap();
+        if let Some(replicator_contents) = replicator_contents {
+            let entity_metadata = world.borrow::<UniqueView<GlobalEntityMetadata>>().unwrap();
+            for (i, (obj_name, authored_cost)) in replicator_contents
+                .object_names
+                .iter()
+                .zip(replicator_contents.costs)
+                .enumerate()
+            {
+                let float_i = i.to_f32().unwrap();
 
-            if obj_name.is_empty() || authored_cost <= 0 {
-                continue;
+                if obj_name.is_empty() || authored_cost <= 0 {
+                    continue;
+                }
+                let cost = effective_replicator_cost(world, authored_cost);
+                if cost <= 0 {
+                    continue;
+                }
+
+                let metadata = entity_metadata.0.get(obj_name).unwrap();
+                let obj_icon = metadata.obj_icon.as_ref().unwrap();
+
+                components.push(
+                    gui::button(ReplicatorMsg::SelectItem(i))
+                        .with_position(vec2(
+                            main_x,
+                            initial_padding_y + (button_height + button_padding) * float_i,
+                        ))
+                        .with_size(vec2(button_width, button_height))
+                        .with_image("key0.pcx")
+                        .with_label(&format!("buy:{obj_name}")),
+                );
+
+                components.push(replicator_icon(obj_icon, float_i));
+
+                if let Some(short_name) = metadata.obj_short_name.as_ref() {
+                    components.push(gui::text(short_name).with_position(vec2(
+                        main_x + 50.0,
+                        button_height / 2.0 + (button_height + button_padding) * float_i,
+                    )));
+                }
+
+                // Retail draws the three-digit price beneath the item icon.
+                components.push(
+                    gui::text(&format!("{cost:03}"))
+                        .with_position(vec2(
+                            main_x + 19.0,
+                            47.0 + (button_height + button_padding) * float_i,
+                        ))
+                        .with_size(vec2(34.0, 12.0)),
+                );
             }
-            let cost = effective_replicator_cost(world, authored_cost);
-            if cost <= 0 {
-                continue;
-            }
+        }
 
-            let metadata = entity_metadata.0.get(obj_name).unwrap();
-            let obj_icon = metadata.obj_icon.as_ref().unwrap();
-
+        if can_hack(world, entity_id) {
+            // Retail raises this 73x194 companion beside the MFD, with its
+            // 52x74 PLUGH button at sidecar-local (16,114).
             components.push(
-                gui::button(ReplicatorMsg::SelectItem(i))
-                    .with_position(vec2(
-                        0.0,
-                        initial_padding_y + (button_height + button_padding) * float_i,
-                    ))
-                    .with_size(vec2(button_width, button_height))
-                    .with_image("key0.pcx")
-                    .with_label(&format!("buy:{obj_name}")),
+                gui::image("plughack.pcx")
+                    .with_position(vec2(0.0, 96.0))
+                    .with_size(vec2(73.0, 194.0)),
             );
-
-            components.push(replicator_icon(obj_icon, float_i));
-
-            if let Some(short_name) = metadata.obj_short_name.as_ref() {
-                components.push(gui::text(short_name).with_position(vec2(
-                    50.0,
-                    button_height / 2.0 + (button_height + button_padding) * float_i,
-                )));
-            }
-
-            // Retail draws the three-digit price beneath the item icon.
             components.push(
-                gui::text(&format!("{cost:03}"))
-                    .with_position(vec2(
-                        19.0,
-                        47.0 + (button_height + button_padding) * float_i,
-                    ))
-                    .with_size(vec2(34.0, 12.0)),
+                gui::button(ReplicatorMsg::OpenHack)
+                    .with_position(vec2(16.0, 210.0))
+                    .with_size(vec2(52.0, 74.0))
+                    .with_image("plugh0.pcx")
+                    .with_hover(ButtonHoverBehavior::Texture("plugh1.pcx".to_owned()))
+                    .with_label("hack-replicator"),
+            );
+        } else if current_state == ObjectState::Broken {
+            // Original raises the repair plug for a broken replicator. Repair
+            // is not implemented yet, so expose the authored status art but
+            // deliberately no clickable repair/hack/purchase path.
+            components.push(
+                gui::image("plugrep.pcx")
+                    .with_position(vec2(0.0, 96.0))
+                    .with_size(vec2(73.0, 194.0)),
             );
         }
 
@@ -117,13 +246,20 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         // live balance at (104, 274) beside it.
         components.push(
             gui::text(&format!("{:04}", player_nanite_total(world)))
-                .with_position(vec2(104.0, 274.0))
+                .with_position(vec2(main_x + 104.0, 274.0))
                 .with_size(vec2(40.0, 14.0)),
         );
-        if let Some(message) = &state.message {
+        let message = if current_state == ObjectState::Broken {
+            Some("Replicator broken; repair required")
+        } else if active_inventory(world, entity_id).is_none() {
+            Some("Replicator offline")
+        } else {
+            state.message.as_deref()
+        };
+        if let Some(message) = message {
             components.push(
                 gui::text(message)
-                    .with_position(vec2(10.0, 248.0))
+                    .with_position(vec2(main_x + 10.0, 248.0))
                     .with_size(vec2(168.0, 14.0)),
             );
         }
@@ -138,27 +274,41 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
         }
     }
 
-    fn resets_state_on_frob(&self) -> bool {
-        true
+    fn get_config_for(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        state: &ReplicatorState,
+    ) -> GuiConfig {
+        let has_sidecar = state.panel == ReplicatorPanel::Inventory
+            && (can_hack(world, entity_id)
+                || object_state(world, entity_id) == ObjectState::Broken);
+        GuiConfig {
+            world_offset: Vector3::new(0.0, 0.0, -1.0),
+            screen_size_in_pixels: Vector2::new(if has_sidecar { 261.0 } else { 188.0 }, 296.0),
+        }
+    }
+
+    fn prepare_state_on_frob(&self, state: &mut ReplicatorState) {
+        if state.panel != ReplicatorPanel::Hacking || state.hack.phase != HackPhase::Playing {
+            *state = ReplicatorState::default();
+        }
     }
 
     fn handle_msg(
         &self,
         entity_id: EntityId,
         world: &World,
-        _state: &ReplicatorState,
+        state: &ReplicatorState,
         msg: &ReplicatorMsg,
     ) -> (ReplicatorState, Effect) {
         match msg {
             ReplicatorMsg::SelectItem(slot) => {
-                let contents = world
-                    .borrow::<View<PropReplicatorContents>>()
-                    .ok()
-                    .and_then(|view| view.get(entity_id).ok().cloned());
-                let Some(contents) = contents else {
+                let Some(contents) = active_inventory(world, entity_id) else {
                     return (
                         ReplicatorState {
                             message: Some("Replicator offline".to_owned()),
+                            ..state.clone()
                         },
                         Effect::NoEffect,
                     );
@@ -172,6 +322,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     return (
                         ReplicatorState {
                             message: Some("Item unavailable".to_owned()),
+                            ..state.clone()
                         },
                         Effect::NoEffect,
                     );
@@ -183,6 +334,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     return (
                         ReplicatorState {
                             message: Some("Item unavailable".to_owned()),
+                            ..state.clone()
                         },
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
@@ -194,6 +346,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     return (
                         ReplicatorState {
                             message: Some("Insufficient nanites".to_owned()),
+                            ..state.clone()
                         },
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
@@ -207,6 +360,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     return (
                         ReplicatorState {
                             message: Some("Replicator offline".to_owned()),
+                            ..state.clone()
                         },
                         Effect::NoEffect,
                     );
@@ -219,7 +373,58 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     orientation: get_rotation_from_transform(world, link),
                 };
 
-                (ReplicatorState { message: None }, purchase)
+                (
+                    ReplicatorState {
+                        message: None,
+                        ..state.clone()
+                    },
+                    purchase,
+                )
+            }
+            ReplicatorMsg::OpenHack => {
+                if can_hack(world, entity_id) {
+                    (
+                        ReplicatorState {
+                            message: None,
+                            panel: ReplicatorPanel::Hacking,
+                            hack: HackState::default(),
+                        },
+                        Effect::NoEffect,
+                    )
+                } else {
+                    (state.clone(), Effect::NoEffect)
+                }
+            }
+            ReplicatorMsg::Hack(hack_msg) => {
+                let Some(diff) = hack_diff(world, entity_id) else {
+                    return (state.clone(), Effect::NoEffect);
+                };
+                if state.panel != ReplicatorPanel::Hacking
+                    || matches!(
+                        object_state(world, entity_id),
+                        ObjectState::Broken | ObjectState::Destroyed
+                    )
+                {
+                    return (state.clone(), Effect::NoEffect);
+                }
+                let (hack, effect) = handle_hack_msg(
+                    entity_id,
+                    world,
+                    &state.hack,
+                    hack_msg,
+                    diff,
+                    HackOutcomeEffects {
+                        success: replicator_hack_success,
+                        critical_failure: replicator_hack_critical_failure,
+                    },
+                );
+                (
+                    ReplicatorState {
+                        hack,
+                        ..state.clone()
+                    },
+                    effect,
+                )
             }
         }
     }
@@ -242,6 +447,7 @@ fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::keypad::{HackNode, HackPhase, base_hack_board, board_index};
     use super::*;
     use crate::mission::PlayerInfo;
     use crate::runtime_props::RuntimePropTransform;
@@ -256,6 +462,132 @@ mod tests {
             Effect::Combined { effects } => effects.iter().any(creates_template),
             _ => false,
         }
+    }
+
+    #[test]
+    fn hack_action_requires_an_authored_hacked_inventory() {
+        let mut world = World::new();
+        let replicator = world.add_entity((
+            PropHackDiff {
+                success_chance: 50,
+                critical_chance: 0,
+                cost: 3.0,
+            },
+            PropReplicatorContents {
+                costs: [3, 0, 0, 0, 0, 0],
+                object_names: [
+                    "chips".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+            },
+        ));
+
+        assert!(
+            !can_hack(&world, replicator),
+            "success must not turn a usable machine into an offline Hacked state"
+        );
+        world.add_component(
+            replicator,
+            PropReplicatorHackedContents {
+                costs: [70, 0, 0, 0, 0, 0],
+                object_names: [
+                    "small he clip".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+            },
+        );
+        assert!(can_hack(&world, replicator));
+    }
+
+    #[test]
+    fn critical_hack_loss_persistently_breaks_and_disables_the_replicator() {
+        let mut world = World::new();
+        let replicator = world.add_entity((
+            PropHackDiff {
+                success_chance: 0,
+                critical_chance: 0,
+                cost: 3.0,
+            },
+            PropReplicatorContents {
+                costs: [3, 0, 0, 0, 0, 0],
+                object_names: [
+                    "chips".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+            },
+            PropReplicatorHackedContents {
+                costs: [70, 0, 0, 0, 0, 0],
+                object_names: [
+                    "small he clip".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+            },
+        ));
+        let mut nodes = base_hack_board();
+        nodes[board_index(2, 0)] = HackNode::Mine;
+        let state = ReplicatorState {
+            panel: ReplicatorPanel::Hacking,
+            hack: HackState {
+                phase: HackPhase::Playing,
+                nodes,
+                rng_state: 1,
+            },
+            ..ReplicatorState::default()
+        };
+
+        let (after, effect) = ReplicatorGui.handle_msg(
+            replicator,
+            &world,
+            &state,
+            &ReplicatorMsg::Hack(KeyPadMsg::PlayNode { x: 2, y: 0 }),
+        );
+        assert_eq!(after.hack.phase, HackPhase::Lost);
+
+        let mut applied = false;
+        for effect in Effect::flatten(vec![effect]) {
+            if let Effect::SetObjectState { entity_id, state } = effect {
+                assert_eq!(entity_id, replicator);
+                assert_eq!(state, ObjectState::Broken);
+                world.add_component(entity_id, PropObjState(state));
+                applied = true;
+            }
+        }
+        assert!(applied, "critical loss must emit persistent Broken state");
+        assert_eq!(object_state(&world, replicator), ObjectState::Broken);
+        assert!(active_inventory(&world, replicator).is_none());
+        assert!(!can_hack(&world, replicator));
+
+        let reopened =
+            ReplicatorGui.get_components(&None, replicator, &world, &ReplicatorState::default());
+        assert!(
+            reopened.iter().any(|component| matches!(
+                component,
+                GuiComponent::Image { texture, .. } if texture == "plugrep.pcx"
+            )),
+            "broken state should expose the authored repair status sidecar"
+        );
+        assert!(
+            reopened
+                .iter()
+                .all(|component| !matches!(component, GuiComponent::Button { .. })),
+            "broken state must disable every purchase and hack action"
+        );
     }
 
     #[test]
@@ -294,7 +626,7 @@ mod tests {
         let (_state, effect) = gui.handle_msg(
             replicator,
             &world,
-            &ReplicatorState { message: None },
+            &ReplicatorState::default(),
             &ReplicatorMsg::SelectItem(0),
         );
 
@@ -306,17 +638,42 @@ mod tests {
         let (_state, zero_cost_effect) = gui.handle_msg(
             replicator,
             &world,
-            &ReplicatorState { message: None },
+            &ReplicatorState::default(),
             &ReplicatorMsg::SelectItem(1),
         );
         assert!(
             !creates_template(&zero_cost_effect),
             "a zero-cost replicator slot must not mint a free item: {zero_cost_effect:?}"
         );
-        assert!(
-            gui.resets_state_on_frob(),
-            "reopening the panel should clear transient refusal text"
-        );
+        let mut refused_state = ReplicatorState {
+            message: Some("Insufficient nanites".to_owned()),
+            ..ReplicatorState::default()
+        };
+        gui.prepare_state_on_frob(&mut refused_state);
+        assert_eq!(refused_state.message, None);
+    }
+
+    #[test]
+    fn reopening_preserves_only_a_paid_in_progress_hack() {
+        let gui = ReplicatorGui;
+        let mut playing = ReplicatorState {
+            panel: ReplicatorPanel::Hacking,
+            hack: HackState {
+                phase: HackPhase::Playing,
+                rng_state: 42,
+                ..HackState::default()
+            },
+            ..ReplicatorState::default()
+        };
+        gui.prepare_state_on_frob(&mut playing);
+        assert_eq!(playing.panel, ReplicatorPanel::Hacking);
+        assert_eq!(playing.hack.phase, HackPhase::Playing);
+        assert_eq!(playing.hack.rng_state, 42);
+
+        playing.hack.phase = HackPhase::Won;
+        gui.prepare_state_on_frob(&mut playing);
+        assert_eq!(playing.panel, ReplicatorPanel::Inventory);
+        assert_eq!(playing.hack.phase, HackPhase::Unpaid);
     }
 
     #[test]
@@ -375,7 +732,7 @@ mod tests {
         let (_state, effect) = ReplicatorGui.handle_msg(
             replicator,
             &world,
-            &ReplicatorState { message: None },
+            &ReplicatorState::default(),
             &ReplicatorMsg::SelectItem(0),
         );
         assert!(
@@ -405,7 +762,7 @@ mod tests {
         let (_state, discounted_to_zero) = ReplicatorGui.handle_msg(
             replicator,
             &world,
-            &ReplicatorState { message: None },
+            &ReplicatorState::default(),
             &ReplicatorMsg::SelectItem(1),
         );
         assert!(

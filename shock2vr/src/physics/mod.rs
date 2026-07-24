@@ -708,6 +708,40 @@ impl PhysicsWorld {
         );
     }
 
+    /// Resize every cuboid collider attached to a kinematic body. GUI panels
+    /// use this when their authored pixel geometry changes while the proxy
+    /// entity remains live.
+    pub fn resize_kinematic_cuboid(
+        &mut self,
+        handle: RigidBodyHandle,
+        entity_id: EntityId,
+        size: Vector3<f32>,
+    ) {
+        let size = sanitize_collider_size(entity_id, "resize_kinematic_cuboid", size);
+        let Some(body) = self.rigid_body_set.get(handle) else {
+            return;
+        };
+        let collider_handles = body.colliders().to_vec();
+        let shape = SharedShape::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0);
+        for collider_handle in collider_handles {
+            if let Some(collider) = self.collider_set.get_mut(collider_handle) {
+                collider.set_shape(shape.clone());
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cuboid_full_size(&self, handle: RigidBodyHandle) -> Option<Vector3<f32>> {
+        let body = self.rigid_body_set.get(handle)?;
+        let collider = self.collider_set.get(*body.colliders().first()?)?;
+        let cuboid = collider.shape().as_cuboid()?;
+        Some(vec3(
+            cuboid.half_extents.x * 2.0,
+            cuboid.half_extents.y * 2.0,
+            cuboid.half_extents.z * 2.0,
+        ))
+    }
+
     pub fn remove_impulse_joint(&mut self, handle: ImpulseJointHandle) {
         self.impulse_joint_set.remove(handle, true);
     }

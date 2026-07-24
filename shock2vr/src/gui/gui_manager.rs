@@ -37,6 +37,9 @@ pub struct GuiPropProxyEntity {
     entity_id: EntityId,
 }
 
+#[derive(Component, Clone, Copy)]
+pub struct GuiPropProxySize(pub Vector2<f32>);
+
 impl GuiManager {
     pub fn new() -> GuiManager {
         GuiManager {
@@ -64,6 +67,7 @@ impl GuiManager {
                 GuiPropProxyEntity {
                     entity_id: parent_entity,
                 },
+                GuiPropProxySize(world_size),
                 RuntimePropDoNotSerialize,
             ));
             self.entity_id_to_proxy_entity_id.insert(parent_entity, ent);
@@ -83,7 +87,7 @@ impl GuiManager {
             );
             id_to_physics.insert(ent, physics_handle);
 
-            let script = Box::new(ProxyGuiScript::new(world_size, parent_entity));
+            let script = Box::new(ProxyGuiScript::new(parent_entity));
             scripts.add_entity2(ent, script);
 
             e.insert(GuiInstanceInfo {
@@ -97,6 +101,15 @@ impl GuiManager {
         } else {
             let instance: &mut GuiInstanceInfo = self.handle_to_instance.get_mut(&handle).unwrap();
             instance.components = components;
+            if instance.world_size != world_size {
+                instance.world_size = world_size;
+                world.add_component(instance.proxy_entity, GuiPropProxySize(world_size));
+                physics.resize_kinematic_cuboid(
+                    instance.physics_handle,
+                    instance.proxy_entity,
+                    vec3(world_size.x, world_size.y, 0.0),
+                );
+            }
             let pos = get_position_from_transform(world, parent_entity, offset);
             let facing = get_rotation_from_transform(world, parent_entity);
             physics.set_position_rotation(instance.physics_handle, pos.to_vec(), facing)
@@ -139,5 +152,63 @@ impl GuiManager {
             //ret.push(gui_obj);
         }
         ret
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Matrix4, vec2, vec3};
+    use shipyard::Get;
+
+    use super::*;
+
+    #[test]
+    fn live_panel_resize_updates_render_input_and_collider_geometry() {
+        let mut world = World::new();
+        let parent = world.add_entity((RuntimePropTransform(Matrix4::from_scale(1.0)),));
+        let mut physics = PhysicsWorld::new();
+        let mut scripts = ScriptWorld::new();
+        let mut id_to_physics = HashMap::new();
+        let mut manager = GuiManager::new();
+        let handle = GuiHandle::new();
+
+        manager.update_ui(
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+            handle,
+            parent,
+            vec2(261.0, 296.0),
+            vec3(0.0, 0.0, -1.0),
+            Vec::new(),
+        );
+        manager.update_ui(
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+            handle,
+            parent,
+            vec2(188.0, 296.0),
+            vec3(0.0, 0.0, -1.0),
+            Vec::new(),
+        );
+
+        let instance = manager.handle_to_instance.get(&handle).unwrap();
+        assert_eq!(instance.world_size, vec2(188.0, 296.0));
+        assert_eq!(
+            world
+                .borrow::<View<GuiPropProxySize>>()
+                .unwrap()
+                .get(instance.proxy_entity)
+                .unwrap()
+                .0,
+            vec2(188.0, 296.0)
+        );
+        assert_eq!(
+            physics.cuboid_full_size(instance.physics_handle),
+            Some(vec3(188.0, 296.0, 0.01))
+        );
     }
 }

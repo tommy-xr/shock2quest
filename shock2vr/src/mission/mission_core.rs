@@ -39,11 +39,11 @@ use dark::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
         PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
-        PropModelName, PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo,
-        PropPhysDimensions, PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPlayerGun,
-        PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
-        PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType, ToLink,
-        TripFlags, TweqAnimationState, WrappedEntityId,
+        PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
+        PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
+        PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropTeleported,
+        PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType,
+        ToLink, TripFlags, TweqAnimationState, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -3560,6 +3560,16 @@ impl MissionCore {
                         .unwrap_or(false);
                     if is_alive {
                         self.world.add_component(entity_id, PropHasRefs(visible));
+                    }
+                }
+                Effect::SetObjectState { entity_id, state } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world.add_component(entity_id, PropObjState(state));
                     }
                 }
                 Effect::SetQuestBit {
