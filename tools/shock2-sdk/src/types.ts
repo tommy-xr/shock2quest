@@ -213,6 +213,7 @@ export interface PhysicsBodySummary {
   collision_groups: string[];
   is_sensor: boolean;
   is_enabled: boolean;
+  is_sleeping: boolean;
 }
 
 export interface PhysicsBodyListResult {

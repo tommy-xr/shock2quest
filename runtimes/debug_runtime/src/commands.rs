@@ -262,6 +262,7 @@ pub struct PhysicsBodySummary {
     pub collision_groups: Vec<String>,
     pub is_sensor: bool,
     pub is_enabled: bool,
+    pub is_sleeping: bool,
 }
 
 /// Per-ragdoll quality/settle metrics

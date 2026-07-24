@@ -38,12 +38,12 @@ use dark::{
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
         PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
-        PropFrameAnimState, PropHasRefs, PropLimbModel, PropLocalPlayer, PropModelName,
-        PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo, PropPhysDimensions,
-        PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPlayerGun, PropPosition,
-        PropRenderType, PropScripts, PropTeleported, PropTripFlags, PropTweqDeleteConfig,
-        PropTweqDeleteState, PropertyDefinition, RenderType, ToLink, TripFlags, TweqAnimationState,
-        WrappedEntityId,
+        PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
+        PropModelName, PropMotionActorTags, PropParticleGroup, PropParticleLaunchInfo,
+        PropPhysDimensions, PropPhysInitialVelocity, PropPhysState, PropPhysType, PropPlayerGun,
+        PropPosition, PropRenderType, PropScripts, PropTeleported, PropTripFlags,
+        PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType, ToLink,
+        TripFlags, TweqAnimationState, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -81,9 +81,9 @@ use crate::{
     physics::{self, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
-        RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDoNotSerialize,
-        RuntimePropFlatAim, RuntimePropJointTransforms, RuntimePropReloading,
-        RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
+        RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
+        RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -1483,6 +1483,11 @@ impl MissionCore {
         selection_strategy: MotionQuerySelectionStrategy,
         apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
     ) {
+        let is_death_query = motion_queries
+            .iter()
+            .flatten()
+            .any(|item| item.tag_name() == "crumple");
+        let mut resolved_death_pose = None;
         let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
         if let Some(player) = maybe_player {
             let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
@@ -1531,6 +1536,20 @@ impl MissionCore {
                     if let Some(clip) = maybe_clip {
                         self.failed_animation_queries.remove(&entity_id);
                         *player = apply(player, clip);
+
+                        // The motion query is random, so its resolved clip name
+                        // is the only durable identity of the corpse pose.
+                        // EntitySaveData explicitly persists this generated
+                        // runtime fact separately from authored P$CretPose.
+                        let is_killed = self
+                            .world
+                            .borrow::<View<PropHitPoints>>()
+                            .ok()
+                            .and_then(|view| view.get(entity_id).ok().map(|hp| hp.hit_points <= 0))
+                            .unwrap_or(false);
+                        if is_death_query && is_killed {
+                            resolved_death_pose = Some(next_animation);
+                        }
                     } else {
                         // Report completion just like the query-miss branch
                         // below, so anything waiting on this animation
@@ -1573,6 +1592,11 @@ impl MissionCore {
                     }
                 }
             }
+        }
+
+        if let Some(motion_or_tag_name) = resolved_death_pose {
+            self.world
+                .add_component(entity_id, RuntimePropDeathPose(motion_or_tag_name));
         }
     }
 
@@ -1682,7 +1706,20 @@ impl MissionCore {
                     adj_velocity.y,
                     adj_velocity.z * scale,
                 );
-                self.physics.set_velocity(*id, scaled);
+                // A restored terminal death player has no queued motion, but
+                // even writing zero velocity wakes its deliberately sleeping
+                // dynamic corpse body. Leave physics ownership untouched:
+                // it stays stable at rest and remains wakeable by contact or
+                // an impulse.
+                let holds_terminal_death_pose = player.is_queue_empty()
+                    && self
+                        .world
+                        .borrow::<View<RuntimePropDeathPose>>()
+                        .unwrap()
+                        .contains(*id);
+                if !holds_terminal_death_pose {
+                    self.physics.set_velocity(*id, scaled);
+                }
             }
 
             if !flags.is_empty() {
@@ -5637,6 +5674,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     collision_groups: info.collision_groups,
                     is_sensor: info.is_sensor,
                     is_enabled: info.is_enabled,
+                    is_sleeping: info.is_sleeping,
                 }
             })
             .collect();

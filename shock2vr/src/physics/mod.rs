@@ -1835,6 +1835,14 @@ impl PhysicsWorld {
         }
     }
 
+    /// Put a dynamic body to sleep at its current transform. Contact or an
+    /// explicit impulse can still wake it.
+    pub fn sleep_body(&mut self, handle: RigidBodyHandle) {
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            body.sleep();
+        }
+    }
+
     /// Raise a body's angular sleep threshold so residual solver noise (e.g. a
     /// ragdoll extremity buzzing against the floor) still counts as "at rest".
     /// One awake body keeps its whole jointed island awake, so without this a
@@ -2472,6 +2480,34 @@ mod tests {
         for _ in 0..frames {
             world.update(Vector3::new(0.0, 0.0, 0.0), player);
         }
+    }
+
+    #[test]
+    fn sleeping_dynamic_body_stays_dynamic_and_wakes_on_impulse() {
+        let mut world = PhysicsWorld::new();
+        let handle = world.add_dynamic(
+            EntityId::from_inner(1).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 1.0,
+                radius: 0.5,
+            },
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+
+        world.sleep_body(handle);
+        let sleeping = world.debug_body_info(handle, &world.rigid_body_set[handle]);
+        assert_eq!(sleeping.body_type, "dynamic");
+        assert!(sleeping.is_sleeping);
+
+        world.apply_impulse(handle, vec3(1.0, 0.0, 0.0));
+        let woken = world.debug_body_info(handle, &world.rigid_body_set[handle]);
+        assert_eq!(woken.body_type, "dynamic");
+        assert!(!woken.is_sleeping);
     }
 
     /// A higher-elasticity object must rebound higher than a low-elasticity one
