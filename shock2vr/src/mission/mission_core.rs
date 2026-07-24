@@ -434,6 +434,9 @@ impl MissionCore {
         world.add_unique(GlobalPresentationMode(game_options.presentation_mode));
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
+        world.add_unique(
+            crate::mission::reload::GlobalProjectileClips::from_entity_info(&entity_info_rc),
+        );
         // Reuse the obj-icons already hydrated into the template metadata above
         // (keyed by template id) rather than rescanning every template.
         let template_obj_icons: HashMap<i32, String> = template_name_to_template_id
@@ -3976,15 +3979,16 @@ impl MissionCore {
         }
     }
 
-    /// Begin a reload on `weapon`: refill its clip to capacity and start the
-    /// reload animation (a `RuntimePropReloading` on the weapon). SS2's
+    /// Begin a reload on `weapon`: consume compatible backpack reserve to refill
+    /// its clip and start the reload animation (a `RuntimePropReloading` on the
+    /// weapon). SS2's
     /// first-person reload tilts the gun down to a peak angle, holds while the
     /// clip is swapped, then raises it back up; the peak angle and pitch speed
     /// come from the weapon's own data (`PropPlayerGun`'s reload pitch/rate, as
     /// 16-bit angle units where 65536 = 360 deg) and the hold from its reload
     /// time (`PropBaseGunDesc.reload_time_ms`). No-op for non-guns (no
-    /// `PropBaseGunDesc`) and while a reload is already in progress. Reserve ammo
-    /// is unlimited for now (no inventory ammo model yet).
+    /// `PropBaseGunDesc`), while a reload is already in progress, or when no
+    /// compatible reserve rounds are available.
     fn begin_reload(&mut self, weapon: EntityId) {
         // Sensible fallbacks used only when a gun has no PropPlayerGun at all, so
         // the reload is still visible.
@@ -4037,16 +4041,17 @@ impl MissionCore {
         };
         let leg = peak_deg.abs() / rate; // tilt-down (and tilt-up) duration
 
-        // Refill now: firing is gated for the whole reload, so the exact moment
-        // the clip refills is not observable.
-        {
-            let mut v_gun_state = self
-                .world
-                .borrow::<ViewMut<dark::properties::PropGunState>>()
-                .unwrap();
-            if let Ok(gun_state) = (&mut v_gun_state).get(weapon) {
-                gun_state.ammo = clip.max(0);
-            }
+        // Consume the selected projectile's authored Clip type from the
+        // backpack. Multiple small stacks may contribute to one magazine.
+        let reload = crate::mission::reload::load_from_reserve(&self.world, weapon, clip);
+        if reload.rounds_loaded == 0 {
+            return;
+        }
+        for item in reload.depleted_items {
+            self.interaction.on_entity_destroyed(item);
+            self.flat_ui.on_entity_destroyed(item);
+            self.remove_incoming_contains_links(item);
+            self.remove_entity(item);
         }
 
         self.world.add_component(
@@ -4062,13 +4067,15 @@ impl MissionCore {
     }
 
     /// Cycle `weapon` to its next ammo type (next `Projectile` link). No-op when
-    /// the weapon has fewer than two projectile links.
+    /// the weapon has fewer than two projectile links or still has loaded
+    /// rounds; until magazine-unload semantics exist, requiring an empty gun
+    /// prevents standard rounds from turning into AP/HE rounds for free.
     fn cycle_ammo(&mut self, weapon: EntityId) {
+        if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
+            return;
+        }
         let count =
             crate::scripts::script_util::ordered_projectile_links(&self.world, weapon).len();
-        if count < 2 {
-            return; // single ammo type (or melee) - nothing to cycle
-        }
         let current = self
             .world
             .borrow::<View<RuntimePropSelectedAmmo>>()
