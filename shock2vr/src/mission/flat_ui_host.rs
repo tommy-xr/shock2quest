@@ -860,6 +860,16 @@ fn draw_components(
             // VR quads; the host draws the real screen cursor instead.
             continue;
         }
+        // A zero-alpha button is a hit target over art already baked into the
+        // panel backdrop (the HRM board's unlit node boxes). Keep it in input
+        // routing and debug introspection, but do not paint its placeholder
+        // texture over the backdrop.
+        if matches!(
+            component,
+            GuiComponentRenderInfo::Image { alpha, .. } if *alpha <= 0.0
+        ) {
+            continue;
+        }
         if let GuiComponentRenderInfo::Image {
             entity: Some(entity),
             ..

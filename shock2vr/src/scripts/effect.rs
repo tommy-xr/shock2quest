@@ -83,6 +83,14 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Adjust an item's stack count (`P$StackCoun`) by `delta`. The caller is
+    /// responsible for destroying a stack it exhausts; this effect is used by
+    /// authored-currency operations such as the HRM hacking board.
+    AdjustStackCount {
+        entity_id: EntityId,
+        delta: i32,
+    },
+
     /// Adjust a weapon's current clip ammo (`PropGunState.ammo`) by `delta`
     /// (negative to consume). No-op for entities without a gun state.
     AdjustAmmo {

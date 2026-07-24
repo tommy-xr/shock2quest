@@ -230,6 +230,10 @@ pub struct GlobalTemplateHierarchy(pub HashMap<i32, Vec<i32>>);
 #[derive(Unique, Clone)]
 pub struct GlobalTrainerCosts(pub Option<dark::gamesys::TrainerCostTables>);
 
+/// Retail HRM tuning from the gamesys `HRM` chunk, shared with hackable GUIs.
+#[derive(Unique, Clone)]
+pub struct GlobalHrmParams(pub Option<dark::gamesys::HrmParams>);
+
 impl GlobalTemplateHierarchy {
     /// Whether `template_id` is `class_template_id` or inherits from it.
     pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
@@ -450,6 +454,7 @@ impl MissionCore {
         world.add_unique(GlobalTrainerCosts(
             game_entity_info.trainer_costs().cloned(),
         ));
+        world.add_unique(GlobalHrmParams(game_entity_info.hrm_params().cloned()));
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         // Player-facing discipline names come from the psihelp string table;
         // a data install without it just keeps the gamesys symbolic names.
@@ -2672,6 +2677,16 @@ impl MissionCore {
                             delta,
                             hp
                         );
+                    }
+                }
+
+                Effect::AdjustStackCount { entity_id, delta } => {
+                    let mut stacks = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropStackCount>>()
+                        .unwrap();
+                    if let Ok(stack) = (&mut stacks).get(entity_id) {
+                        stack.0 = (stack.0 + delta).max(0);
                     }
                 }
 

@@ -17,6 +17,7 @@ mod prop_frame_anim_config;
 mod prop_frame_anim_state;
 mod prop_frob_info;
 mod prop_gun_state;
+mod prop_hack_diff;
 mod prop_hit_points;
 mod prop_key;
 mod prop_log;
@@ -54,6 +55,7 @@ pub use prop_frame_anim_config::*;
 pub use prop_frame_anim_state::*;
 pub use prop_frob_info::*;
 pub use prop_gun_state::*;
+pub use prop_hack_diff::*;
 pub use prop_hit_points::*;
 pub use prop_key::*;
 pub use prop_log::*;
@@ -1211,6 +1213,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$GunState",
             PropGunState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$HackDiff",
+            PropHackDiff::read,
             identity,
             accumulator::latest,
         ),
