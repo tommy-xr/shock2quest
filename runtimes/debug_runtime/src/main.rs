@@ -1411,6 +1411,7 @@ fn process_command(
                             collision_groups: b.collision_groups,
                             is_sensor: b.is_sensor,
                             is_enabled: b.is_enabled,
+                            is_sleeping: b.is_sleeping,
                         })
                         .collect(),
                 };

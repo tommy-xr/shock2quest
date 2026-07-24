@@ -408,6 +408,7 @@ fn create_model(
         v_prop_position,
         v_prop_model,
         v_creature_pose,
+        v_death_pose,
         _v_hasrefs,
         _v_rendertype,
         v_scale,
@@ -418,6 +419,7 @@ fn create_model(
             View<PropPosition>,
             View<PropModelName>,
             View<PropCreaturePose>,
+            View<RuntimePropDeathPose>,
             View<PropHasRefs>,
             View<PropRenderType>,
             View<PropScale>,
@@ -457,9 +459,19 @@ fn create_model(
 
         let transform = translation * rotation * scale;
 
-        // TODO: Handle creature pose
+        // Runtime-generated terminal death poses are separate from authored
+        // P$CretPose data, so mission-placed corpse decorations retain their
+        // historical frame-1 bake and physics behavior.
         let (model, animation_player) = {
-            if let Ok(creature_pose) = v_creature_pose.get(entity_id) {
+            if let Ok(death_pose) = v_death_pose.get(entity_id) {
+                let animation_clip =
+                    asset_cache.get(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", death_pose.0));
+                let transformed_model = Model::transform(model_ref, transform);
+                (
+                    transformed_model,
+                    Some(AnimationPlayer::from_completed_animation(animation_clip)),
+                )
+            } else if let Ok(creature_pose) = v_creature_pose.get(entity_id) {
                 // let motion_db = { asset_cache.get(&MOTIONDB_IMPORTER, "motiondb.bin".to_owned()) };
                 // TODO: We can only handle motion name props at the moment..
                 if creature_pose.pose_type.contains(PoseType::MOTION_NAME) {
@@ -688,6 +700,7 @@ pub fn create_physics_representation(
         v_hud_select,
         v_creature,
         v_creature_pose,
+        v_death_pose,
     ) = world
         .borrow::<(
             View<PropPosition>,
@@ -698,6 +711,7 @@ pub fn create_physics_representation(
             View<PropHUDSelect>,
             View<PropCreature>,
             View<PropCreaturePose>,
+            View<RuntimePropDeathPose>,
         )>()
         .unwrap();
     let default_size = 0.5 / SCALE_FACTOR;
@@ -724,6 +738,38 @@ pub fn create_physics_representation(
     } else {
         DynamicPhysicsOptions::default()
     };
+
+    // A restored generated death pose is a completed, resting corpse. Its
+    // serialized P$Position is already the live Rapier body position:
+    // applying the normal creature spawn lift again would raise it by
+    // SCALE_FACTOR/6 (0.4167 world units) and make it visibly settle after
+    // every load. Preserve the live creature's dynamic capsule geometry and
+    // material, place it at the exact saved transform, then start it asleep.
+    // Contacts and impulses can still wake/push it.
+    if v_death_pose.get(entity_id).is_ok() {
+        if let (Ok(pos), Ok(creature_type)) = (v_pos.get(entity_id), v_creature.get(entity_id)) {
+            let creature_def = get_creature_definition(creature_type.0).unwrap();
+            let bbox = creature_def.bounding_size;
+            let radius = bbox.x.max(bbox.z) / 2.0;
+            let creature_shape = PhysicsShape::Capsule {
+                height: radius.max(bbox.y - radius * 2.0),
+                radius,
+            };
+            let rigid_body_handle = physics.add_dynamic(
+                entity_id,
+                pos.position,
+                pos.rotation,
+                vec3(0.0, -creature_def.physics_offset_height, 0.0),
+                creature_shape,
+                CollisionGroup::entity(),
+                false,
+                dynamics_options,
+            );
+            physics.set_enabled_rotations(entity_id, false, false, false);
+            physics.sleep_body(rigid_body_handle);
+            return Some(rigid_body_handle);
+        }
+    }
 
     // Frobbable item, let's see what we can do...
     if let (Ok(pos), Ok(frob_info)) = (v_pos.get(entity_id), v_frob_info.get(entity_id)) {

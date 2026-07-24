@@ -18,7 +18,7 @@ use crate::{
     creature::RuntimePropHitBox,
     gui::GuiPropProxyEntity,
     mission::{GlobalTemplateIdMap, PlayerInfo},
-    runtime_props::RuntimePropDoNotSerialize,
+    runtime_props::{RuntimePropDeathPose, RuntimePropDoNotSerialize},
     scripts::script_util,
     util::partition_map,
 };
@@ -139,11 +139,26 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         }
     }
 
+    let v_death_poses = world.borrow::<View<RuntimePropDeathPose>>().unwrap();
+    let mut world_death_poses = HashMap::new();
+    let mut held_death_poses = HashMap::new();
+    for (entity_id, death_pose) in v_death_poses.iter().with_id() {
+        if entities_to_filter.contains(&entity_id.inner()) {
+            continue;
+        }
+        if held_entities.contains(&entity_id.inner()) {
+            held_death_poses.insert(entity_id.inner(), death_pose.clone());
+        } else {
+            world_death_poses.insert(entity_id.inner(), death_pose.clone());
+        }
+    }
+
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
         links: world_serialized_links,
         all_entities: all_world_entities,
+        death_poses: world_death_poses,
     };
 
     let held_entity_data = EntitySaveData {
@@ -151,6 +166,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         template_id_to_entity_id: HashMap::new(),
         links: held_serialized_links,
         properties: held_serialized_properties,
+        death_poses: held_death_poses,
     };
 
     let held_metadata = HeldItemSaveData {
