@@ -36,6 +36,21 @@ pub struct TrainerCostTables {
     pub psi_cost: [[i32; 8]; 5],
 }
 
+/// Retail `HRM` gamesys file-var (`sHRMParams`): bonuses applied to an
+/// object's `P$HackDiff` base values for the player's relevant tech skill and
+/// Cyber Affinity stat.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HrmParams {
+    pub skill_critical_bonus: i32,
+    pub skill_success_bonus: i32,
+    pub stat_critical_bonus: i32,
+    pub stat_success_bonus: i32,
+    /// Authored `m_statBreak` table for Cyber Affinity 1..=8. Retail exposes
+    /// this data in the editor but `ShockHRMTriggerEffect` does not consult it:
+    /// landing on a failed mine breaks a hack target unconditionally.
+    pub stat_break_chance: [f32; 8],
+}
+
 fn read_table<T: io::Read + io::Seek, const COLS: usize, const ROWS: usize>(
     table_of_contents: &ChunkFileTableOfContents,
     reader: &mut T,
@@ -72,5 +87,43 @@ impl TrainerCostTables {
             weapon_cost: read_table(table_of_contents, reader, "WSKILLCOST")?,
             psi_cost: read_table(table_of_contents, reader, "PSICOST")?,
         })
+    }
+}
+
+impl HrmParams {
+    /// Read the 48-byte `HRM` chunk. Returns `None` for a missing/truncated
+    /// gamesys rather than reading through into the next chunk.
+    pub fn read<T: io::Read + io::Seek>(
+        table_of_contents: &ChunkFileTableOfContents,
+        reader: &mut T,
+    ) -> Option<Self> {
+        let chunk = table_of_contents.get_chunk("HRM".to_owned())?;
+        if chunk.length < 48 {
+            return None;
+        }
+        reader.seek(io::SeekFrom::Start(chunk.offset)).ok()?;
+        let skill_critical_bonus = reader.read_i32::<LittleEndian>().ok()?;
+        let skill_success_bonus = reader.read_i32::<LittleEndian>().ok()?;
+        let stat_critical_bonus = reader.read_i32::<LittleEndian>().ok()?;
+        let stat_success_bonus = reader.read_i32::<LittleEndian>().ok()?;
+        let mut stat_break_chance = [0.0; 8];
+        for chance in &mut stat_break_chance {
+            *chance = reader.read_f32::<LittleEndian>().ok()?;
+        }
+        Some(Self {
+            skill_critical_bonus,
+            skill_success_bonus,
+            stat_critical_bonus,
+            stat_success_bonus,
+            stat_break_chance,
+        })
+    }
+
+    pub fn success_chance(&self, base: i32, skill: i32, stat: i32) -> i32 {
+        (base + skill * self.skill_success_bonus + stat * self.stat_success_bonus).min(85)
+    }
+
+    pub fn mine_count(&self, base: i32, skill: i32, stat: i32) -> i32 {
+        (base - skill * self.skill_critical_bonus - stat * self.stat_critical_bonus).max(0)
     }
 }

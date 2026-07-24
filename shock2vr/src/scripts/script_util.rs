@@ -315,6 +315,75 @@ pub fn player_carried_items(world: &World) -> Vec<EntityId> {
     out
 }
 
+/// Build the effects that pay `amount` nanites from the player's real carried
+/// stacks. Nanites are identified by their inherited inventory icon
+/// (`nan_ic`), not by a mission/runtime id. Returns `None` without side effects
+/// when the carried total is insufficient.
+pub fn spend_player_nanites(world: &World, amount: i32) -> Option<Effect> {
+    if amount <= 0 {
+        return Some(Effect::NoEffect);
+    }
+
+    let icons = world.borrow::<View<dark::properties::PropObjIcon>>().ok()?;
+    let stacks = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()?;
+    let nanite_stacks: Vec<_> = player_carried_items(world)
+        .into_iter()
+        .filter_map(|entity| {
+            let icon = icons.get(entity).ok()?;
+            let stack = stacks.get(entity).ok()?.0;
+            (icon.0.eq_ignore_ascii_case("nan_ic") && stack > 0).then_some((entity, stack))
+        })
+        .collect();
+
+    let debits = plan_stack_payment(
+        &nanite_stacks
+            .iter()
+            .map(|(_, stack)| *stack)
+            .collect::<Vec<_>>(),
+        amount,
+    )?;
+    let mut effects = Vec::new();
+    for ((entity_id, stack), paid) in nanite_stacks.into_iter().zip(debits) {
+        if paid == 0 {
+            continue;
+        }
+        if paid == stack {
+            effects.push(Effect::DestroyEntity { entity_id });
+        } else {
+            effects.push(Effect::AdjustStackCount {
+                entity_id,
+                delta: -paid,
+            });
+        }
+    }
+    Some(Effect::combine(effects))
+}
+
+/// Plan an atomic payment across ordered stacks. Each returned entry is the
+/// amount debited from the corresponding stack.
+fn plan_stack_payment(stacks: &[i32], amount: i32) -> Option<Vec<i32>> {
+    if amount <= 0 {
+        return Some(vec![0; stacks.len()]);
+    }
+    if stacks.iter().copied().sum::<i32>() < amount {
+        return None;
+    }
+
+    let mut remaining = amount;
+    Some(
+        stacks
+            .iter()
+            .map(|stack| {
+                let paid = remaining.min((*stack).max(0));
+                remaining -= paid;
+                paid
+            })
+            .collect(),
+    )
+}
+
 fn collect_contained_items(
     world: &World,
     entity_id: EntityId,
@@ -573,5 +642,25 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
         }
     } else {
         Effect::NoEffect
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plan_stack_payment;
+
+    #[test]
+    fn stack_payment_is_atomic_when_total_is_insufficient() {
+        assert_eq!(plan_stack_payment(&[1, 1], 3), None);
+    }
+
+    #[test]
+    fn stack_payment_consumes_full_stacks_before_partial_stack() {
+        assert_eq!(plan_stack_payment(&[2, 5, 4], 9), Some(vec![2, 5, 2]));
+    }
+
+    #[test]
+    fn stack_payment_ignores_non_positive_entries() {
+        assert_eq!(plan_stack_payment(&[-1, 0, 5], 3), Some(vec![0, 0, 3]));
     }
 }

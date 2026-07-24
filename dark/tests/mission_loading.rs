@@ -294,3 +294,30 @@ fn gamesys_trainer_cost_tables_match_the_retail_values() {
     assert_eq!(costs.psi_cost[0][1..], [3; 7]);
     assert_eq!(costs.psi_cost[4][1..], [20; 7]);
 }
+
+#[test]
+fn gamesys_hrm_params_match_retail_hacking_tuning() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let file = File::open(data.join("shock2.gam")).expect("shock2.gam should open");
+    let mut reader = BufReader::new(file);
+    let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+    let params = dark::gamesys::HrmParams::read(&toc, &mut reader)
+        .expect("retail shock2.gam carries the 48-byte HRM chunk");
+
+    assert_eq!(params.skill_critical_bonus, 0);
+    assert_eq!(params.skill_success_bonus, 10);
+    assert_eq!(params.stat_critical_bonus, 1);
+    assert_eq!(params.stat_success_bonus, 5);
+    assert_eq!(
+        params.stat_break_chance,
+        [10.0, 14.0, 20.0, 28.0, 38.0, 50.0, 75.0, 95.0]
+    );
+
+    // Earth starts at Hack 0 / Cyber 1. Its object-266 override (50,2)
+    // therefore plays at 55% with one mine, not raw 50% / two mines.
+    assert_eq!(params.success_chance(50, 0, 1), 55);
+    assert_eq!(params.mine_count(2, 0, 1), 1);
+}
