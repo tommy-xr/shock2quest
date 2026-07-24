@@ -30,6 +30,10 @@ const BASIC_CHEM = 242;
 const BASIC_JUICE = 355;
 const BASIC_EXIT_TRIPWIRE = 380;
 const BASIC_EXIT_DESTINATION = 379;
+const TECHNICAL_ENTRY_TRIPWIRE = 314;
+const TECHNICAL_ENTRY_DESTINATION = 324;
+const TECHNICAL_EXIT_TRIPWIRE = 375;
+const TECHNICAL_EXIT_DESTINATION = 372;
 
 const ADVANCED_EXITS = [
   { name: "Weapons", tripwire: 374, destination: 371 },
@@ -329,3 +333,113 @@ for (const advanced of ADVANCED_EXITS) {
     },
   );
 }
+
+test(
+  "loading at the Earth Technical lobby return does not replay tripwire ENTER",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "earth.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8198),
+    });
+    await game.step({ frames: 5 });
+
+    // Carry a real mission item through the genuine Technical exit so this
+    // setup also proves the authored cleanup + return teleport completed
+    // before saving.
+    const juice = await exactlyOne(game, BASIC_JUICE, "control Juice bottle");
+    await game.player.give(juice.id);
+    await crossRealExit(
+      game,
+      TECHNICAL_EXIT_TRIPWIRE,
+      TECHNICAL_EXIT_DESTINATION,
+    );
+    assert.equal(
+      (await game.player.inventory()).count,
+      0,
+      "Technical exit should clean up training inventory before the save",
+    );
+
+    const lobbyPosition = await game.player.position();
+    const technicalEntryDestination = await exactlyOne(
+      game,
+      TECHNICAL_ENTRY_DESTINATION,
+      "Technical entry teleport destination",
+    );
+    const [entryX, , entryZ] = technicalEntryDestination.position;
+    assert.ok(
+      Math.hypot(lobbyPosition.x - entryX, lobbyPosition.z - entryZ) > 100,
+      `genuine Technical exit should return to the lobby, got ${JSON.stringify(lobbyPosition)}`,
+    );
+
+    await game.step({ frames: 10 });
+    const saveName = `earth_technical_lobby_${Date.now()}`;
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+
+    // Loading is synchronous: first prove the serialized position itself was
+    // restored, then step the newly-built physics world. Before #547 that
+    // first step creates a fresh overlap with entry tripwire 314, replays its
+    // ENTER, and sends the player back to destination 324.
+    const loadedPosition = await game.player.position();
+    assert.ok(
+      Math.hypot(
+        loadedPosition.x - lobbyPosition.x,
+        loadedPosition.z - lobbyPosition.z,
+      ) < 1,
+      `load should initially restore the saved lobby position: saved=${JSON.stringify(lobbyPosition)} loaded=${JSON.stringify(loadedPosition)}`,
+    );
+    await game.step({ frames: 5 });
+    const settledPosition = await game.player.position();
+    assert.ok(
+      Math.hypot(
+        settledPosition.x - lobbyPosition.x,
+        settledPosition.z - lobbyPosition.z,
+      ) < 3,
+      `initial overlap reconstruction must not replay ENTER: lobby=${JSON.stringify(lobbyPosition)} afterStep=${JSON.stringify(settledPosition)}`,
+    );
+    assert.equal(
+      (await game.player.inventory()).count,
+      0,
+      "the cleaned inventory should remain empty after load",
+    );
+
+    // Suppression is only for the overlap reconstructed by load. Leave the
+    // real entry sensor with bounded collision-valid movement, then walk back
+    // into its authored center: a later genuine ENTER must still activate 324.
+    const technicalEntry = await exactlyOne(
+      game,
+      TECHNICAL_ENTRY_TRIPWIRE,
+      "Technical lobby entry tripwire",
+    );
+    const [sensorX, sensorY, sensorZ] = technicalEntry.position;
+    const outside = {
+      x: sensorX + 4,
+      y: sensorY + 0.5,
+      z: sensorZ,
+    };
+    const leave = await game.player.moveTo(outside);
+    assert.ok(leave.moved, `player should leave entry sensor: ${JSON.stringify(leave)}`);
+    await game.step({ frames: 8 });
+    const outsidePosition = await game.player.position();
+    assert.ok(
+      Math.hypot(outsidePosition.x - sensorX, outsidePosition.z - sensorZ) > 3,
+      `load-reconstructed overlap should end without activating the entry wiring: outside=${JSON.stringify(outside)} actual=${JSON.stringify(outsidePosition)}`,
+    );
+    const reenter = await game.player.moveTo({
+      x: sensorX,
+      y: sensorY + 0.5,
+      z: sensorZ,
+    });
+    assert.ok(
+      reenter.moved,
+      `player should genuinely re-enter entry sensor: ${JSON.stringify(reenter)}`,
+    );
+    await game.step({ frames: 12 });
+    const reenteredPosition = await game.player.position();
+    assert.ok(
+      Math.hypot(reenteredPosition.x - entryX, reenteredPosition.z - entryZ) < 3,
+      `genuine leave/re-entry should still activate destination 324: destination=${JSON.stringify(technicalEntryDestination.position)} actual=${JSON.stringify(reenteredPosition)}`,
+    );
+  },
+);

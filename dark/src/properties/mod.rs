@@ -114,8 +114,8 @@ pub struct PropPosition {
 
 /// How an entity arrived at its current position when marked `PropTeleported`.
 /// Distinguishes player-initiated movement (which fires tripwires on arrival,
-/// like the original engine) from a scripted teleport trap (whose arrival must
-/// NOT re-fire the tripwire it lands in - see #515).
+/// like the original engine) from arrivals whose initial sensor overlaps must
+/// be reconstructed without replaying tripwire ENTER.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TeleportSource {
     /// Player-initiated movement teleport: VR teleport locomotion or a debug
@@ -126,12 +126,17 @@ pub enum TeleportSource {
     /// Tripwire ENTER is suppressed for this arrival so a return teleport that
     /// lands inside another trap's tripwire box doesn't re-fire it (#515).
     ScriptedTrap,
+    /// Save/load rebuilt the physics world at the serialized player position.
+    /// Initial sensor overlaps are tracked, but their ENTER is not replayed;
+    /// leaving and genuinely re-entering later still fires normally (#547).
+    LoadRestore,
 }
 
 #[derive(Debug, Component, Serialize, Deserialize)]
 /// Marks an entity as having just teleported (VR teleport locomotion, teleport
-/// traps, debug teleport). Tripwires fire on teleport-entry like the original
-/// engine, EXCEPT for `ScriptedTrap` arrivals which are suppressed (#515).
+/// traps, debug teleport, or save restore). Tripwires fire on locomotion
+/// teleport-entry like the original engine; the other sources reconstruct
+/// their arrival without replaying ENTER.
 pub struct PropTeleported {
     pub countdown_timer: f32, // Remaining time to be considered 'recently teleported'
     #[serde(default)]
