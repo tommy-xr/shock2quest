@@ -23,7 +23,7 @@ use crate::{
     runtime_props::RuntimePropReloading,
     scripts::{Message, MessagePayload},
     util::resolve_proxy_entity,
-    virtual_hand::{VirtualHandEffect, can_grab_item},
+    virtual_hand::{VirtualHandEffect, can_grab_item, is_wieldable_weapon},
 };
 
 /// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
@@ -113,6 +113,16 @@ impl FlatPlayerController {
         self.last_fire_pressed = false;
         effects.push(VirtualHandEffect::HoldItem { entity_id });
         effects
+    }
+
+    /// Apply the original flat pickup split: weapons become the first-person
+    /// viewmodel, while ordinary loot goes straight into the backpack.
+    fn pick_up(&mut self, world: &World, entity_id: EntityId) -> Vec<VirtualHandEffect> {
+        if is_wieldable_weapon(world, entity_id) {
+            self.wield(entity_id)
+        } else {
+            vec![VirtualHandEffect::StoreItem { entity_id }]
+        }
     }
 
     /// Per-frame update. Returns the effects to apply plus the entity currently
@@ -238,8 +248,9 @@ impl FlatPlayerController {
         if use_pressed && !self.last_use_pressed {
             if let Some(target) = highlighted {
                 if can_grab_item(world, target) {
-                    // A pickup-able object (e.g. a weapon): wield it.
-                    effects.extend(self.wield(target));
+                    // Weapons become the flat viewmodel; ordinary loot goes
+                    // into the backpack without displacing that viewmodel.
+                    effects.extend(self.pick_up(world, target));
                 } else {
                     // Otherwise interact with it.
                     effects.push(out_message(target, MessagePayload::Frob));
@@ -271,4 +282,66 @@ fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
         .borrow::<View<PropFrobInfo>>()
         .map(|v| v.get(entity_id).is_ok())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dark::properties::PropPlayerGun;
+
+    fn pistol() -> PropPlayerGun {
+        PropPlayerGun {
+            flags: 0,
+            hand_model: "atek_h".to_owned(),
+            icon_file: String::new(),
+            model_offset: vec3(0.0, 0.0, 0.0),
+            fire_offset: vec3(0.0, 0.0, 0.0),
+            heading: 0,
+            reload_pitch: 0,
+            reload_rate: 0,
+            gun_type: 0,
+        }
+    }
+
+    #[test]
+    fn world_use_of_nonweapon_stores_it_without_displacing_wielded_weapon() {
+        let mut world = World::new();
+        let pistol = world.add_entity(pistol());
+        let ammo = world.add_entity(());
+        let mut controller = FlatPlayerController::new();
+        controller.wield(pistol);
+
+        let effects = controller.pick_up(&world, ammo);
+
+        assert_eq!(
+            controller.wielded_entity(),
+            Some(pistol),
+            "ordinary loot must not replace the wielded weapon"
+        );
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [VirtualHandEffect::StoreItem { entity_id }] if *entity_id == ammo
+            ),
+            "ordinary loot should be sent to the backpack"
+        );
+    }
+
+    #[test]
+    fn world_use_of_weapon_still_wields_it() {
+        let mut world = World::new();
+        let weapon = world.add_entity(pistol());
+        let mut controller = FlatPlayerController::new();
+
+        let effects = controller.pick_up(&world, weapon);
+
+        assert_eq!(controller.wielded_entity(), Some(weapon));
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [VirtualHandEffect::HoldItem { entity_id }] if *entity_id == weapon
+            ),
+            "weapon pickup should preserve flat auto-wield"
+        );
+    }
 }
