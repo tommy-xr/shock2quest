@@ -5,6 +5,8 @@ import { join } from "node:path";
 
 import { GameServer, HttpError, findRepoRoot } from "../src/index.js";
 import type { Position } from "../src/types.js";
+import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
+import { earthWorldUse } from "./helpers/earth-world-use.js";
 
 // End-to-end test for the save-to-file / load-from-file endpoints. Requires game
 // assets in Data/ and compiles the runtime on first run, so it is opt-in:
@@ -22,8 +24,36 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8101);
 
+interface PlayerVitals {
+  hitPoints: number;
+  maxHitPoints: number;
+  psiPoints: number;
+  maxPsiPoints: number;
+}
+
 function distance(a: Position, b: Position): number {
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function playerVitals(
+  info: Awaited<ReturnType<GameServer["info"]>>,
+): PlayerVitals {
+  const {
+    hit_points: hitPoints,
+    max_hit_points: maxHitPoints,
+    psi_points: psiPoints,
+    max_psi_points: maxPsiPoints,
+  } = info.player;
+  assert.notEqual(hitPoints, null, "player should have current hit points");
+  assert.notEqual(maxHitPoints, null, "player should have maximum hit points");
+  assert.notEqual(psiPoints, null, "player should have current psi points");
+  assert.notEqual(maxPsiPoints, null, "player should have maximum psi points");
+  return {
+    hitPoints: hitPoints as number,
+    maxHitPoints: maxHitPoints as number,
+    psiPoints: psiPoints as number,
+    maxPsiPoints: maxPsiPoints as number,
+  };
 }
 
 // Locate the on-disk .sav for a freshly-saved name by scanning the candidate
@@ -193,5 +223,85 @@ test(
       "medsci1.mis",
       "runtime should stay live on medsci1 after a failed load",
     );
+  },
+);
+
+test(
+  "current and maximum player vitals survive mission transition and cross-process save/load",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // Negative-first for #551: Earth Psionic Training gives us a production
+    // path to non-default PSI and HP. The authored room entry sets PSI to 5,
+    // then a real psi-amp burnout spends one point and deals three damage.
+    // Before the fix, the transition below resets 27/30 HP + 4/50 PSI to the
+    // destination's template defaults, and a fresh-process load does likewise.
+    const saveName = `player_vitals_e2e_${Date.now()}`;
+    let expected: PlayerVitals;
+
+    {
+      await using game = await GameServer.launch({
+        mission: "earth.mis",
+        port: basePort + 3,
+      });
+      await game.step({ frames: 5 });
+
+      await crossEarthTrainingTripwire(game, 320, 325);
+      const [amp] = await game.entities.byTemplate(290);
+      assert.ok(amp, "Earth Psionic Training should contain its authored Psi Amp");
+      await earthWorldUse(game, amp);
+      assert.equal(
+        (await game.info()).player.wielded_entity_id,
+        amp.id,
+        "normal world-use should wield the authored Psi Amp",
+      );
+
+      await game.input.set("right_hand.trigger", 1);
+      await game.step({ frames: 130 });
+      await game.input.set("right_hand.trigger", 0);
+      await game.step({ frames: 45 });
+
+      expected = playerVitals(await game.info());
+      assert.deepEqual(
+        expected,
+        {
+          hitPoints: 27,
+          maxHitPoints: 30,
+          psiPoints: 4,
+          maxPsiPoints: 50,
+        },
+        "the test setup should establish non-default current HP and PSI",
+      );
+
+      await game.transitionLevel("medsci1.mis");
+      await game.step({ frames: 5 });
+      assert.equal((await game.info()).mission, "medsci1.mis");
+      assert.deepEqual(
+        playerVitals(await game.info()),
+        expected,
+        "an ordinary mission transition should carry exact current and maximum vitals",
+      );
+
+      const saveResult = await game.save(saveName);
+      assert.equal(saveResult.success, true);
+      assert.equal(saveResult.mission, "medsci1.mis");
+    }
+
+    {
+      await using game = await GameServer.launch({
+        mission: "eng1.mis",
+        port: basePort + 4,
+      });
+      await game.step({ frames: 2 });
+      assert.equal((await game.info()).mission, "eng1.mis");
+
+      const loadResult = await game.load(saveName);
+      assert.equal(loadResult.success, true);
+      assert.equal(loadResult.mission, "medsci1.mis");
+      assert.deepEqual(
+        playerVitals(await game.info()),
+        expected,
+        "a fresh runtime process should restore exact current and maximum vitals",
+      );
+    }
   },
 );

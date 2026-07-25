@@ -219,6 +219,8 @@ impl GameScene for MainMenuScene {
                     level_file: NEW_GAME_MISSION.to_owned(),
                     loc: None,
                     entities_to_trigger: vec![],
+                    vitals_transition:
+                        crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
                 })]
             }
             Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],

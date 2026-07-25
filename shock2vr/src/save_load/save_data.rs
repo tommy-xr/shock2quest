@@ -3,7 +3,7 @@
  *
  * Data type for information we serialize to load/save the game
  */
-use super::{EntitySaveData, HeldItemSaveData};
+use super::{EntitySaveData, HeldItemSaveData, PlayerVitals};
 use crate::quest_info::QuestInfo;
 use cgmath::{Quaternion, Vector3};
 use serde::{Deserialize, Serialize};
@@ -42,9 +42,68 @@ pub struct GlobalData {
     pub rotation: Quaternion<f32>,
     pub quest_info: QuestInfo,
     pub held_items: HeldItemSaveData,
+    /// Exact live player HP/PSI pools. Older saves omit this field and retain
+    /// the pre-existing template/career initialization behavior.
+    #[serde(default)]
+    pub player_vitals: Option<PlayerVitals>,
     pub active_mission: String,
     /// Whether the player was crouched at save time. Defaults false for
     /// saves that predate crouch.
     #[serde(default)]
     pub is_crouched: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::save_load::{PlayerVitalPool, PlayerVitals};
+    use cgmath::{Quaternion, vec3};
+
+    fn global_data(player_vitals: Option<PlayerVitals>) -> GlobalData {
+        GlobalData {
+            position: vec3(1.0, 2.0, 3.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            quest_info: QuestInfo::new(),
+            held_items: HeldItemSaveData::empty(),
+            player_vitals,
+            active_mission: "earth.mis".to_owned(),
+            is_crouched: false,
+        }
+    }
+
+    fn sample_vitals() -> PlayerVitals {
+        PlayerVitals {
+            hit_points: PlayerVitalPool {
+                current: 27,
+                maximum: 35,
+            },
+            psi_points: PlayerVitalPool {
+                current: 4,
+                maximum: 60,
+            },
+        }
+    }
+
+    #[test]
+    fn player_vitals_round_trip_current_and_maximum_values() {
+        let original = global_data(Some(sample_vitals()));
+        let decoded: GlobalData =
+            serde_json::from_value(serde_json::to_value(&original).unwrap()).unwrap();
+
+        assert_eq!(decoded.player_vitals, Some(sample_vitals()));
+    }
+
+    #[test]
+    fn older_save_without_player_vitals_uses_existing_load_defaults() {
+        let mut legacy = serde_json::to_value(global_data(Some(sample_vitals()))).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("player_vitals")
+            .unwrap();
+
+        let decoded: GlobalData = serde_json::from_value(legacy).unwrap();
+
+        assert_eq!(decoded.player_vitals, None);
+    }
 }

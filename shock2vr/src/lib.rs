@@ -94,9 +94,9 @@ use engine::{
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
 use quest_info::QuestInfo;
 
-use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, SaveData};
+use save_load::{EntitySaveData, GlobalData, HeldItemSaveData, PlayerVitals, SaveData};
 use scenes::LoadingScene;
-use scripts::GlobalEffect;
+use scripts::{GlobalEffect, PlayerVitalsTransition};
 use shipyard::*;
 use time::Time;
 use tracing::{Level, info, span, trace, warn};
@@ -182,6 +182,7 @@ struct PendingTransition {
     entities_to_trigger: Vec<String>,
     quest_info: QuestInfo,
     held_data: HeldItemSaveData,
+    player_vitals: Option<PlayerVitals>,
     /// The CPU parse running on a worker thread. While this is in flight the loading
     /// screen renders (and animates) every frame; once it finishes, the main thread runs
     /// the GPU `build` and swaps to the mission.
@@ -384,7 +385,7 @@ impl Game {
     /// Capture the outgoing scene's save data (so its state survives the transition)
     /// and return the context the new mission needs. Must run while the outgoing scene
     /// is still active.
-    fn save_active_scene(&mut self) -> (QuestInfo, HeldItemSaveData) {
+    fn save_active_scene(&mut self) -> (QuestInfo, HeldItemSaveData, Option<PlayerVitals>) {
         let current_quest_info = self
             .active_game_scene
             .world()
@@ -405,7 +406,9 @@ impl Game {
             current_save_data,
         );
 
-        (current_quest_info, held_data)
+        let player_vitals = save_load::capture_player_vitals(self.active_game_scene.world());
+
+        (current_quest_info, held_data, player_vitals)
     }
 
     /// Load a mission (using previously-captured save context) and make it the active
@@ -416,6 +419,7 @@ impl Game {
         spawn_loc: SpawnLocation,
         quest_info: QuestInfo,
         held_data: HeldItemSaveData,
+        player_vitals: Option<PlayerVitals>,
     ) {
         let populator: Box<dyn EntityPopulator> = {
             if let Some(save_data) = self
@@ -441,12 +445,21 @@ impl Game {
             held_data,
             &self.options,
         );
+        save_load::restore_player_vitals(&active_mission.mission_core.world, player_vitals);
         self.active_game_scene = Box::new(active_mission);
     }
 
-    fn switch_mission(&mut self, level_name: String, spawn_loc: SpawnLocation) {
-        let (quest_info, held_data) = self.save_active_scene();
-        self.load_mission_into_scene(level_name, spawn_loc, quest_info, held_data);
+    fn switch_mission(
+        &mut self,
+        level_name: String,
+        spawn_loc: SpawnLocation,
+        vitals_transition: PlayerVitalsTransition,
+    ) {
+        let (quest_info, held_data, mut player_vitals) = self.save_active_scene();
+        if vitals_transition == PlayerVitalsTransition::InitializeFromDestination {
+            player_vitals = None;
+        }
+        self.load_mission_into_scene(level_name, spawn_loc, quest_info, held_data, player_vitals);
     }
 
     /// Start a background transition: save the outgoing scene, spawn the GL-free level
@@ -457,12 +470,16 @@ impl Game {
         level_name: String,
         spawn_loc: SpawnLocation,
         entities_to_trigger: Vec<String>,
+        vitals_transition: PlayerVitalsTransition,
     ) {
         tracing::info!(
             "[loading-screen] begin_transition -> {} (background parse)",
             level_name
         );
-        let (quest_info, held_data) = self.save_active_scene();
+        let (quest_info, held_data, mut player_vitals) = self.save_active_scene();
+        if vitals_transition == PlayerVitalsTransition::InitializeFromDestination {
+            player_vitals = None;
+        }
 
         // Spawn the GL-free parse off-thread. It owns `Arc`s of the asset-path layer and
         // the global context (gamesys + definitions), all `Send + Sync`, and produces a
@@ -482,6 +499,7 @@ impl Game {
             entities_to_trigger,
             quest_info,
             held_data,
+            player_vitals,
             parse_handle,
             frames_shown: 0,
         });
@@ -522,6 +540,7 @@ impl Game {
             pending.held_data,
             &self.options,
         );
+        save_load::restore_player_vitals(&mission.mission_core.world, pending.player_vitals);
         self.active_game_scene = Box::new(mission);
 
         for entity_name in pending.entities_to_trigger {
@@ -534,9 +553,10 @@ impl Game {
         level_name: String,
         spawn_loc: SpawnLocation,
         entities_to_trigger: Vec<String>,
+        vitals_transition: PlayerVitalsTransition,
     ) {
         // First, switch to the new mission
-        self.switch_mission(level_name, spawn_loc);
+        self.switch_mission(level_name, spawn_loc, vitals_transition);
 
         // Then, queue the entities to be triggered after scripts are initialized
         for entity_name in entities_to_trigger {
@@ -585,6 +605,7 @@ impl Game {
             level_file,
             loc,
             entities_to_trigger: vec![],
+            vitals_transition: PlayerVitalsTransition::Preserve,
         });
     }
 
@@ -593,7 +614,8 @@ impl Game {
     /// `file` is a bare name (no extension / path separators - validate at the
     /// edge); it resolves to `<data_root>/saves/<file>.sav`. This is the same
     /// serialization an in-game quicksave performs (`GlobalEffect::Save`) -
-    /// active mission, player position/rotation, quest bits, and held items.
+    /// active mission, player position/rotation, quest bits, held items, and
+    /// exact current/maximum player vitals.
     /// Returns the scene name that was saved so the caller can report it.
     pub fn save_game(&mut self, file: String) -> String {
         let path = save_file_path(&file);
@@ -607,10 +629,11 @@ impl Game {
     }
 
     /// Load a previously-saved game from `<data_root>/saves/<file>.sav`,
-    /// restoring the active mission, player position/rotation, quest bits, and
-    /// held items. The switch is synchronous (no loading-screen deferral), so
-    /// the returned scene name already reflects the restored mission. The caller
-    /// must ensure the file exists - the load path panics on a missing file.
+    /// restoring the active mission, player position/rotation, quest bits, held
+    /// items, and exact current/maximum player vitals. The switch is synchronous
+    /// (no loading-screen deferral), so the returned scene name already reflects
+    /// the restored mission. The caller must ensure the file exists - the load
+    /// path panics on a missing file.
     pub fn load_game(&mut self, file: String) -> String {
         let path = save_file_path(&file);
         self.handle_global_effect(GlobalEffect::Load {
@@ -1001,6 +1024,7 @@ impl Game {
             position,
             rotation,
             quest_info,
+            player_vitals: save_load::capture_player_vitals(self.active_game_scene.world()),
             active_mission: self.active_game_scene.scene_name().to_string(),
             is_crouched,
         };
@@ -1019,6 +1043,7 @@ impl Game {
                 level_file,
                 loc,
                 entities_to_trigger,
+                vitals_transition,
             } => {
                 let spawn_loc = match loc {
                     None => SpawnLocation::MapDefault,
@@ -1026,9 +1051,19 @@ impl Game {
                 };
 
                 if self.loading_screen_enabled() {
-                    self.begin_transition(level_file, spawn_loc, entities_to_trigger);
+                    self.begin_transition(
+                        level_file,
+                        spawn_loc,
+                        entities_to_trigger,
+                        vitals_transition,
+                    );
                 } else {
-                    self.switch_mission_with_trigger(level_file, spawn_loc, entities_to_trigger);
+                    self.switch_mission_with_trigger(
+                        level_file,
+                        spawn_loc,
+                        entities_to_trigger,
+                        vitals_transition,
+                    );
                 }
             }
             GlobalEffect::TestReload => {
@@ -1051,9 +1086,14 @@ impl Game {
                 let level_name = self.active_game_scene.scene_name().to_string();
                 let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
                 if self.loading_screen_enabled() {
-                    self.begin_transition(level_name, spawn_loc, vec![]);
+                    self.begin_transition(
+                        level_name,
+                        spawn_loc,
+                        vec![],
+                        PlayerVitalsTransition::Preserve,
+                    );
                 } else {
-                    self.switch_mission(level_name, spawn_loc);
+                    self.switch_mission(level_name, spawn_loc, PlayerVitalsTransition::Preserve);
                 }
             }
             GlobalEffect::Quit => {
