@@ -1,4 +1,104 @@
-use dark::properties::{ReceptronEffect, ReceptronOptions};
+use std::collections::HashMap;
+
+use dark::{
+    properties::{Link, Links, ReceptronEffect, ReceptronOptions, StimPropagator},
+    ss2_entity_info::{self, SystemShock2EntityInfo},
+};
+use shipyard::{EntityId, Get, Unique, UniqueView, View, World};
+
+/// Every archetype's effective `Contact` stim sources - the `L$arSrcDesc`
+/// links whose propagator is `Contact`, inherited down the metaproperty
+/// hierarchy the same way properties are - as `(stim archetype, intensity)`.
+///
+/// A contact stim fires when the emitting object touches something. For an
+/// AI's melee weapon (the hybrid's `Lead Pipe`, a `Rumbler Claw`, a `Midwife
+/// Spike`) that touch *is* the swing landing, so these links are where the
+/// gamesys authors AI melee damage: `Lead Pipe -> WeaponBash @ 10`, `Rumbler
+/// Claw -> WeaponBash @ 20`, `Baby Arachnid Claw -> WeaponBash @ 2`, etc.
+///
+/// Keyed by template id rather than entity id because these archetypes are
+/// never instantiated - a melee weapon is a virtual object hanging off the
+/// creature's `L$Weapon` link.
+#[derive(Unique, Clone, Default)]
+pub struct GlobalContactStims(pub HashMap<i32, Vec<(i32, f32)>>);
+
+impl GlobalContactStims {
+    pub fn from_entity_info(entity_info: &SystemShock2EntityInfo) -> Self {
+        let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+        let mut contact_stims = HashMap::new();
+
+        for template_id in entity_info.entity_to_properties.keys() {
+            let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, template_id);
+            ancestors.push(*template_id);
+            let mut stims: Vec<(i32, f32)> = Vec::new();
+            for ancestor in ancestors {
+                let Some(links) = entity_info.template_to_links.get(&ancestor) else {
+                    continue;
+                };
+                for link in &links.to_links {
+                    let Link::StimSource(options) = &link.link else {
+                        continue;
+                    };
+                    if options.propagator != StimPropagator::Contact {
+                        continue;
+                    }
+                    // A child archetype re-authoring the same stim replaces the
+                    // inherited intensity rather than stacking with it.
+                    match stims.iter_mut().find(|(stim, _)| *stim == link.to_template_id) {
+                        Some(existing) => existing.1 = options.intensity,
+                        None => stims.push((link.to_template_id, options.intensity)),
+                    }
+                }
+            }
+            if !stims.is_empty() {
+                contact_stims.insert(*template_id, stims);
+            }
+        }
+
+        Self(contact_stims)
+    }
+}
+
+/// The damage `emitter_template`'s contact stims deal to `victim`, resolved
+/// through the victim's own receptrons (so vulnerabilities, armor Amplify
+/// receptrons and outright immunities all apply exactly as they do for
+/// explosions and projectiles). Contributions from every contact stim the
+/// emitter carries are summed; a victim with no receptron for a stim simply
+/// feels nothing from it.
+pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityId) -> f32 {
+    let Ok(contact_stims) = world.borrow::<UniqueView<GlobalContactStims>>() else {
+        return 0.0;
+    };
+    let Some(stims) = contact_stims.0.get(&emitter_template) else {
+        return 0.0;
+    };
+
+    let receptrons = victim_receptrons(world, victim);
+    stims
+        .iter()
+        .filter_map(|(stim_template_id, intensity)| {
+            resolve_stim_damage(&receptrons, *stim_template_id, *intensity)
+        })
+        .filter(|damage| *damage > 0.0)
+        .sum()
+}
+
+fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
+    let Ok(v_links) = world.borrow::<View<Links>>() else {
+        return Vec::new();
+    };
+    let Ok(links) = v_links.get(victim) else {
+        return Vec::new();
+    };
+    links
+        .to_links
+        .iter()
+        .filter_map(|link| match &link.link {
+            Link::Receptron(options) => Some((link.to_template_id, options.clone())),
+            _ => None,
+        })
+        .collect()
+}
 
 /// Resolve what damage a stim deals to a receiver, given the receiver's
 /// receptron links (as `(stim_template_id, options)` pairs, i.e. the entity's
