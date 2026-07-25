@@ -45,6 +45,7 @@ mod trap_destroyer;
 mod trap_email;
 mod trap_exp_once;
 mod trap_inverter;
+mod trap_lock;
 mod trap_new_tripwire;
 mod trap_off_filter;
 mod trap_on_filter;
@@ -131,6 +132,7 @@ use self::{
     trap_email::TrapEmail,
     trap_exp_once::TrapEXPOnce,
     trap_inverter::TrapInverter,
+    trap_lock::TrapLock,
     trap_new_tripwire::TrapNewTripwire,
     trap_on_filter::TrapOffFilter,
     trap_qb_filter::TrapQBFilter,
@@ -455,7 +457,11 @@ impl ScriptWorld {
             "transluceinoutprop" => Box::new(NoopScript::new()),
 
             // KEYCARD stuff
-            "trapunlock" => Box::new(NoopScript::new()),
+            // Lock traps: triggering sets the lock state of the objects the
+            // trap controls via SwitchLinks (eng1's Unlock Trap hands out the
+            // elevator / grav-lift call buttons this way).
+            "traplock" => Box::new(TrapLock::lock()),
+            "trapunlock" => Box::new(TrapLock::unlock()),
 
             "createsound" => Box::new(CreateSound::new()),
 

@@ -3713,6 +3713,13 @@ impl MissionCore {
                         self.world.add_component(entity_id, PropObjState(state));
                     }
                 }
+                Effect::SetLocked { entity_id, locked } => {
+                    crate::scripts::script_util::set_entity_locked(
+                        &mut self.world,
+                        entity_id,
+                        locked,
+                    );
+                }
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
