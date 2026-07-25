@@ -490,6 +490,43 @@ motion system animates is still unknown; likely nearest-pivot matching or an imp
 ordering. Static rendering (or a fixed-pose arm/weapon) needs nothing further; **animated
 creatures need that mapping solved.**
 
+### Static-pose path — implemented, opt-in
+
+`dark/src/ss2_bin_pmnm.rs` parses the chunk and `ss2_bin_ai_loader::pmnm_to_scene_objects`
+renders it unskinned, in its authored rest pose. Enable with `SS2_PMNM_MESHES=1` (an env var
+rather than an `--experimental` flag because model loading lives in `dark`, which has no
+access to `shock2vr`'s options — the same reason `SS2_DEBUG_NORMALS` works this way).
+
+Deliberately conservative:
+
+- **Opt-in.** Default behaviour is byte-for-byte what it was.
+- **Hitboxes still come from the original mesh**, so damage locations and ragdoll fitting are
+  untouched. The swap is purely what gets drawn.
+- **`read` returns `None` on any structural mismatch**, so an unexpected chunk degrades to
+  "no high-detail mesh" rather than to garbage geometry, and every index is range-checked
+  before it reaches the renderer.
+
+One bug worth recording, because it is the kind that looks like a parser failure and is not:
+the first render came out **rotated 90°**. PMNM stores vectors in Dark's axis convention
+(`(x, z, y)`, x negated), the same as every other Dark reader — `vec3_at` now applies the
+same conversion as `ss2_common::read_vec3`, and the mesh lines up with its own skeleton.
+
+Verified: all 66 chunks parse through the Rust parser (asset_probe reports them, and a
+present-but-unparseable chunk is a probe failure); `debug_hitbox` renders the pipe hybrid's
+2 488-triangle chunk with `ND-ogp.psd` resolving to `txt16/nd-ogp.dds`; and the mesh is
+upright, correctly scaled, and aligned with the hitbox skeleton.
+
+The visible trade-off today is exactly the expected one — high-detail geometry and the
+upgraded texture, but a T-pose instead of the animated pose:
+
+| `SS2_PMNM_MESHES` unset | `SS2_PMNM_MESHES=1` |
+| --- | --- |
+| original mesh, correctly posed, muddy texture | 8.6x the triangles + upgraded DDS, rest pose |
+
+So this is a **proof step, not a shippable creature path** — an unskinned creature is worse
+in play than a posed low-poly one. It de-risks the parser and the texture plumbing so the
+remaining work is purely the joint mapping.
+
 ### What this means for the flat vs VR weapon strategy
 
 Today the two paths diverge by necessity:
@@ -535,7 +572,7 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
 | 1 | Mount `.kpf` archives + accept the 25AE layout (loose `data/res/**`, `motiondb.bin` under `res/mschema/`, `shock2.gam`/`motiondb.bin` via asset paths not `File::open`) | Point straight at an unmodified 25AE install; **both** installs supported. Removes the repack scaffolding this spike used. | S — `ZipAssetPath` already handles stored ZIPs, and mount-first resolution is now in place |
-| 2 | **Parse the appended `PMNM` mesh chunk** (see §4b) | The creature upgrade (6–12× tris), the first-person/VR arm upgrade, and the whole `mesh/` DDS texture layer — none of which is reachable any other way | M–L — needs format reversing, but it is the biggest single visual win left |
+| 2 | **Solve PMNM skeleton binding** — map the chunk's joint pivots onto the `.cal` skeleton so the high-detail meshes animate (the parser and static path already landed, see §4b) | Turns the PMNM path from a proof into the shippable creature + VR-arm upgrade | M — the format is mapped; this is the one remaining unknown |
 | 3 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
 | 4 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
 | 5 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |

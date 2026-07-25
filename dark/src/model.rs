@@ -184,10 +184,21 @@ impl Model {
     pub fn from_ai_bin(
         ai_mesh: SystemShock2AIMesh,
         skeleton: Rc<Skeleton>,
+        pmnm: Option<crate::ss2_bin_pmnm::PmnmMesh>,
         asset_cache: &mut AssetCache,
     ) -> Model {
-        let (scene_objects, hit_boxes) =
+        let (mut scene_objects, hit_boxes) =
             ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
+
+        // Swap the rendered geometry for the high-detail chunk when we have one.
+        // Hitboxes stay derived from the original mesh, so this is purely visual
+        // and gameplay (damage locations, ragdoll fitting) is untouched.
+        if let Some(pmnm) = pmnm {
+            let replacement = ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, asset_cache);
+            if !replacement.is_empty() {
+                scene_objects = replacement;
+            }
+        }
         let hit_box_shapes = fit_hit_box_shapes(&ai_mesh, &skeleton);
         Model {
             transform: Matrix4::identity(),

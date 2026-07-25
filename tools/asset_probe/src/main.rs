@@ -97,7 +97,21 @@ fn probe_bin(buf: &[u8]) -> Result<String, String> {
             }
             dark::ss2_bin_header::BinFileType::Mesh => {
                 dark::ss2_bin_ai_loader::read(&mut c, &header);
-                format!("LGMM v{version}")
+                // 25AE meshes append a high-detail PMNM chunk; report it so a
+                // parse regression there shows up as a probe failure.
+                match dark::ss2_bin_pmnm::find_chunk(buf) {
+                    Some(base) => match dark::ss2_bin_pmnm::read(buf, base) {
+                        Some(m) => format!(
+                            "LGMM v{version} + PMNM ({} tris, {} verts, {} mats, {} joints)",
+                            m.triangle_count(),
+                            m.vertices.len(),
+                            m.materials.len(),
+                            m.joint_pivots.len()
+                        ),
+                        None => panic!("PMNM chunk present at {base} but failed to parse"),
+                    },
+                    None => format!("LGMM v{version}"),
+                }
             }
         }
     })

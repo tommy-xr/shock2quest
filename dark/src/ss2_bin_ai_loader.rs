@@ -742,3 +742,48 @@ mod tests {
         }
     }
 }
+
+/// Build scene objects from an appended `PMNM` high-detail chunk, in its authored
+/// rest pose.
+///
+/// Opt-in via `SS2_PMNM_MESHES=1`. Skeleton binding is unsolved (see
+/// `ss2_bin_pmnm`), so these render unskinned and therefore do NOT animate -
+/// this exists to prove the geometry and the upgraded `ND-*` textures parse and
+/// render, ahead of solving the joint mapping.
+pub fn pmnm_to_scene_objects(
+    mesh: &crate::ss2_bin_pmnm::PmnmMesh,
+    asset_cache: &mut AssetCache,
+) -> Vec<SceneObject> {
+    let mut scene_objects = Vec::new();
+    for (material_name, vertices) in mesh.to_static_vertices() {
+        if vertices.is_empty() {
+            continue;
+        }
+        let geometry: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+
+        // PMNM material names carry their authoring extension (`ND-rumbler.psd`);
+        // the shipped texture is `ND-rumbler.dds`, which the resolver finds by stem.
+        let Some(texture) = crate::util::load_texture_with_fallback(asset_cache, &material_name)
+        else {
+            warn!("no texture for PMNM material \"{material_name}\"; dropping it");
+            continue;
+        };
+
+        let diffuse: Rc<dyn TextureTrait> = texture;
+        let material = RefCell::new(engine::scene::basic_material::create(diffuse, 0.0, 0.0));
+        scene_objects.push(engine::scene::scene_object::SceneObject::create(
+            material, geometry,
+        ));
+    }
+    scene_objects
+}
+
+/// Whether the high-detail `PMNM` path is enabled.
+///
+/// An env var rather than the `--experimental` flag list because model loading
+/// lives in `dark`, which has no access to `shock2vr`'s options (the same reason
+/// `SS2_DEBUG_NORMALS` works this way).
+pub fn pmnm_enabled() -> bool {
+    std::env::var_os("SS2_PMNM_MESHES").is_some()
+}
