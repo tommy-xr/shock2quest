@@ -378,13 +378,7 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         return Effect::NoEffect;
     }
 
-    if !is_player_visible_in_fov(
-        entity_id,
-        world,
-        physics,
-        Deg(0.0),
-        MONSTER_FOV_HALF_ANGLE,
-    ) {
+    if !is_player_visible_in_fov(entity_id, world, physics, Deg(0.0), MONSTER_FOV_HALF_ANGLE) {
         return Effect::NoEffect;
     }
 
