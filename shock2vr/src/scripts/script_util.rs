@@ -55,10 +55,9 @@ pub fn is_entity_locked(world: &World, entity_id: EntityId) -> bool {
 }
 
 /// Set the lock state of one live entity, writing Dark's own `P$Locked`
-/// property. That is the same state [`is_entity_locked`] reads, and because
-/// Locked is a registered Dark property, mission save/load persists it with
-/// the rest. This is the application of `Effect::SetLocked` - the in-world
-/// lock traps (`TrapLock` / `TrapUnlock`) are its only source.
+/// property - the same state [`is_entity_locked`] reads. This is the
+/// application of `Effect::SetLocked`; see `scripts::trap_lock` for why the
+/// lock lives in the property rather than in runtime state.
 pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
     let is_alive = world
         .borrow::<shipyard::EntitiesView>()

@@ -16,14 +16,14 @@ import type { Vec3 } from "../src/types.js";
 // `hackfail`.
 //
 // eng1 wiring (stable mission object ids, reported as `template_id`):
-//   Once Router 878 -> Unlock Trap 1213 -> buttons 990, 1787, 1210
+//   QB Filter 155 -> Once Router 878 -> Unlock Trap 1213 -> buttons 990, 1787, 1210
 //   grav-lift button 1787 -> Lift 1 (1856)
 //   storage-4 button 948 -> its own Unlock Trap 838 (deliberately NOT fired)
 // Runtime entity ids are not stable across runs, so everything is discovered by
 // mission object id.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const UNLOCK_TRAP = 1213; // controls the grav-lift button
+const ONCE_ROUTER = 878; // power restoration fires this, which fires the trap
 const GRAV_LIFT_BUTTON = 1787;
 const GRAV_LIFT = 1856;
 const UNLOCKED_TWIN_BUTTON = 1871; // control: never locked
@@ -102,9 +102,10 @@ test(
       "a refused press must not call the lift",
     );
 
-    // Fire the unlock trap over the same SwitchLink path the Once Router uses.
-    const trap = await only(game, UNLOCK_TRAP);
-    await game.entities.sendMessage(trap.id, { type: "TurnOn" });
+    // Fire the authored chain the player actually triggers: the Once Router
+    // relays TurnOn over its SwitchLinks, one of which is the Unlock Trap.
+    const router = await only(game, ONCE_ROUTER);
+    await game.entities.sendMessage(router.id, { type: "TurnOn" });
     await game.step({ frames: 10 });
 
     // After: the same button now drives the lift.

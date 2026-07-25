@@ -18,10 +18,16 @@ use super::{Effect, MessagePayload, Script, script_util::get_all_switch_links};
 /// so it is the same state every lock check already reads and mission
 /// save/load persists it with the rest of the registered properties.
 ///
-/// Only the trigger (`TurnOn`) acts; `TurnOff` is left alone rather than
-/// guessing at an inverse, matching the trigger-only traps already here
-/// (`TrapSlayer`, `TrapQBSet`). Levels that want the inverse wire a
-/// `TrapInverter`.
+/// Only the trigger (`TurnOn`) acts; `TurnOff` is ignored, matching the
+/// trigger-only traps already here (`TrapSlayer`, `TrapQBSet`). The missions
+/// convert an off-edge into a trigger themselves - `TrapInverter` and the
+/// on/off filters exist for exactly that - so a trap acting on both edges
+/// would make those relays meaningless. Shipped data does route an off-edge
+/// into an unlock trap (rec2's Inverter 760 also feeds Unlock Trap 148, which
+/// a plain button drives directly too), and reading that as "re-lock" would
+/// risk sealing a progression button; ignoring it can only ever leave
+/// something unlocked that the original re-locked, which cannot soft-lock a
+/// player.
 pub struct TrapLock {
     locked: bool,
 }
@@ -94,18 +100,13 @@ mod tests {
         })
     }
 
-    /// Apply what the trap emitted, exactly as `Mission::handle_effects` does.
+    /// Apply what the trap emitted, exactly as `Mission::handle_effects` does:
+    /// the shared flatten, then the shared `SetLocked` application.
     fn apply(world: &mut World, effect: Effect) {
-        for (entity_id, locked) in lock_changes(effect) {
-            set_entity_locked(world, entity_id, locked);
-        }
-    }
-
-    fn lock_changes(effect: Effect) -> Vec<(EntityId, bool)> {
-        match effect {
-            Effect::SetLocked { entity_id, locked } => vec![(entity_id, locked)],
-            Effect::Combined { effects } => effects.into_iter().flat_map(lock_changes).collect(),
-            _ => vec![],
+        for effect in Effect::flatten(vec![effect]) {
+            if let Effect::SetLocked { entity_id, locked } = effect {
+                set_entity_locked(world, entity_id, locked);
+            }
         }
     }
 
