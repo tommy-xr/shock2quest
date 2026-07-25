@@ -1,7 +1,12 @@
 # 25th Anniversary Edition assets — compatibility spike
 
-**Status:** spike. Parser/decoder fixes implemented and verified against a running
-game; asset *mounting* (reading a stock 25AE install directly) is still outstanding.
+**Status:** the parsers, decoders and KPF mounting are implemented and verified against a
+running game. One gap remains before a stock install boots with no manual step: `shock2.gam`
+is still opened with `File::open`, so it must be extracted alongside the KPFs (see §5 item 1).
+
+This started as a spike and has outgrown the label — it now changes default behaviour on the
+classic path too (six parser fixes, the PCX/TGA additions, and the texture resolver run for
+every install). It should land titled as a fix/feature, not as exploration.
 **Asset source analysed:** `/Users/bryan/ss2-25th` (SystemShock2Remastered, KEX engine build, Jun 2025 binaries).
 **Question:** can we switch to the 25th Anniversary Edition (25AE) assets, ideally supporting both?
 
@@ -44,10 +49,15 @@ load_path     ./data + kpf:/data
 
 This maps cleanly onto our existing `AssetPath::combine`, which is already first-mount-wins.
 
-One layout difference: the classic install packs resources as `res/<family>.crf`; 25AE ships
-them **loose** under `data/res/<family>/`. Also `motiondb.bin` moves from the data root to
-`data/res/mschema/motiondb.bin`, and `shock2vr/src/lib.rs` opens it (and `shock2.gam`) with a
-direct `File::open`, not through the asset paths.
+One layout difference: the classic install packs resources as `res/<family>.crf` — one family
+at the archive root — while 25AE packs every family into one KPF (`data/res/<family>/...` in
+the base archive, `<family>/...` in a mod layer). `ZipAssetPath::with_prefix` mounts a single
+family with that prefix stripped, so a KPF behaves exactly like the `.crf` it replaces and
+one family-ordered mount list serves both installs. `is_25th_anniversary_install()` picks
+between them.
+
+`motiondb.bin` also moves from the data root to `data/res/mschema/motiondb.bin` — now read
+through the asset paths. `shock2.gam` is not yet: see §5 item 1.
 
 ## 2. Base data is identical
 
