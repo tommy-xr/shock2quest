@@ -431,6 +431,65 @@ magic varies between files.
 the creature upgrade, the first-person/VR arm upgrade, and the entire `mesh/` texture layer
 in one go.
 
+### The `PMNM` format, as reverse-engineered
+
+Mapped empirically and validated against **all 66 chunks**. Every stride below holds
+66/66 unless noted. All offsets are relative to the `PMNM` marker.
+
+**Header (60 bytes)**
+
+| offset | type | meaning |
+| --- | --- | --- |
+| +0 | `char[4]` | `"PMNM"` |
+| +4 | `u32` | 0 in every file |
+| +8 | `u32` | `num_materials` |
+| +12 | `u32` | `num_joints` |
+| +16 | `u32` | `num_vertices` |
+| +20 | `u32` | `num_indices` (always divisible by 3) |
+| +24 | `u32` | `morph_vertex_count` (`C`) — 0 in 35 of 66 |
+| +28 | `u32` | `morph_target_count` (`D`) — 0 when `C` is 0 |
+| +32 | `u32[7]` | section offsets |
+
+**Sections**
+
+| section | start | stride | contents |
+| --- | --- | --- | --- |
+| materials | `offs[0]` (always 60) | **56** | 16-byte name (`ND-rumbler.psd`), then floats, then what looks like the material's index start/count (`5634` for single-material `rumbler`, matching `num_indices`) |
+| joints | `offs[1]` | **12** | `3 × f32` — a joint pivot **in model space** |
+| vertices | `offs[2]` | **40** | see below |
+| morph targets | `offs[3]` | `16 × D` | only when `D > 0` |
+| morph deltas | `offs[4]` | `32 × D × C` | only when `C > 0` |
+| indices | `offs[5]` | **2** | `u16` triangle list, `num_indices` entries |
+| morph vertex list | `offs[6]` | **2** | `u16 × C` |
+
+**Vertex (40 bytes)** — a modern interleaved skinned vertex:
+
+| offset | type | meaning | validation |
+| --- | --- | --- | --- |
+| +0 | `3 × f32` | position (model space) | joint pivots span the same range |
+| +12 | `2 × f32` | UV | lands in 0..1 |
+| +20 | `3 × f32` | normal | length is exactly 1.0000 |
+| +32 | `4 × u8` | bone indices | always `< num_joints` |
+| +36 | `4 × u8` | bone weights | **always sum to exactly 255** |
+
+The weights-sum-to-255 and unit-normal invariants hold for every vertex of every chunk
+except a single degenerate vertex in `protodmg.bin` (1 of 1 676, zero normal) — a data
+artifact, not a layout error. Every index is `< num_vertices` in all 66.
+
+Summed over all 66 chunks: **132 320 PMNM triangles against 18 289 vanilla — 7.2×.**
+
+This maps almost directly onto what the renderer already has:
+`VertexPositionTextureSkinnedNormal` is already position + UV + normal + `bone_indices[4]`
++ `bone_weights[4]`.
+
+**The one genuine blocker left is skeleton binding.** The vanilla LGMM stores vertices in
+**joint-local** space with its own joint count (24 for `rumbler`); PMNM stores them in
+**model** space against its own **20** pivots, and the joint records carry only a position —
+no parent index, no name. So how those 20 pivots correspond to the `.cal` skeleton the
+motion system animates is still unknown; likely nearest-pivot matching or an implied
+ordering. Static rendering (or a fixed-pose arm/weapon) needs nothing further; **animated
+creatures need that mapping solved.**
+
 ### What this means for the flat vs VR weapon strategy
 
 Today the two paths diverge by necessity:
