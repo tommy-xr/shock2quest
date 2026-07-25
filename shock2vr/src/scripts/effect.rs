@@ -433,6 +433,15 @@ pub enum Effect {
         state: ObjectState,
     },
 
+    /// Persistently set Dark's `P$Locked` on one live object. This is the
+    /// lock state `script_util::is_entity_locked` consults, so a button or
+    /// door unlocked by a `TrapUnlock` becomes usable. Because Locked is a
+    /// registered Dark property, mission save/load serializes the result.
+    SetLocked {
+        entity_id: EntityId,
+        locked: bool,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },
