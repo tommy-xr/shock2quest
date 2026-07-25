@@ -235,12 +235,36 @@ emails in the same file (`EmailTextN`). Objective strings are in
    — `PictureSwap` is a `NoopScript`, so the frames never cycle to their
    `code<N>` model. Until that lands, the code cannot be read in-world.
 8. **Enter `14106` on `Transmitter Tower Off` 89** at (−11.31, 3.20, −214.75).
-   The tower sits on a **mezzanine at y = +3.20**, ~7.4 units above the floor
-   (y ≈ −5.2) — the climb is untested; check the `gravshaft 4` pair (778 / 416
-   @ y = −0.30, z ≈ −251) at the far south end and the Base Rooms at y = 4.80.
-   If the port cannot ride a grav shaft, that is the next real blocker.
+   The tower sits on a **mezzanine at y = +3.20**, ~9 units above the pool floor
+   (y ≈ −5.2). **You do not climb up under the tower** — the ceiling there is a
+   featureless slab. The intended route is a **zero-gravity grav shaft at the far
+   south end (x ≈ −9.7, z ≈ −251)**, which lifts you to an upper deck at
+   y = +0.4; you then walk *north* along that deck to the transmitter.
+
+   **VERIFIED WORKING 2026-07-25** (real walking, no teleport): grav shafts are
+   implemented. The shaft is authored as **room objects**, not as the
+   `Grav Shaft FX` particle props (422/423 are visuals only) — `EnterRoom`
+   → `gravup1` @ (−9.6, −2.3, −251.3) and → `gravup2` @ (−9.6, +3.1, −251.0),
+   the latter carrying the **`ZeroGravRoom`** script. Chain:
+   `scripts/mod.rs:586 "zerogravroom" => CoreRoom` → `room_trigger.rs` forwards
+   `SensorBeginIntersect` → `core_room.rs:48-65` applies `PropRoomGravity` as
+   `Effect::SetGravity` on enter / `ResetGravity` on exit.
+
+   Confirmed route from the door: (−0.83,−196.6) → (5.75,−199.8) →
+   (1.50,−206.7) → (−0.30,−215.9) [`Sci Med Door`, auto-opens] → (−2.72,−223.6)
+   → (−5.10,−234.4) → (−7.30,−238.0) → (−9.70,−247.1) → **(−9.70,−251.1)**
+   ⇒ y rises −5.2 → +3.9. Hold forward at the top to land on the upper deck at
+   (−9.70, 1.40, −244.26), then north: (−13.0,−243) → (−13.0,−218) →
+   **(−12.46, 1.40, −214.38)**, 1.15 units from the tower (its plinth radius).
+
+   ⚠️ The mezzanine cells (3262 @ y 1.88, 3263 @ y 1.60, and the 59-cell
+   component at y 0.40) are genuine A* islands disjoint from the floor
+   component — **as expected**, because the connection is a grav shaft, which
+   the AI walk graph never encodes. Do not read that as broken navigation.
+
    Verify: `Transmit` becomes raw 1, `note_5_4` and `note_5_7` complete, +20
-   modules, the dish spins, and after 8 s the spawn ambush arrives.
+   modules, the dish spins, and after 8 s the spawn ambush arrives (the ambush
+   is silently missing today — `trapspawn` is a `NoopScript`).
 9. Step ~960 frames and record which SHODAN email lands (6 "The cancer" +
    `note_5_3`, or 10 "My revenge" + `note_5_2`).
 10. If (and only if) `reprogram` is also set: frob **`Big_Orange_Button` 653**,
