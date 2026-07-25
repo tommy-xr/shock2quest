@@ -483,6 +483,35 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | 6 | Optional: offline ASTC transcode + compressed upload path | Best quality/byte on Quest | L |
 | 7 | Not recommended: `.dml`, `.itl`, `.nut` | SCP gamesys patches / KEX HUD / KEX scripts | L — and largely duplicates logic we implement in Rust |
 
+### Nightdive string tables are localization stubs — do not let them override
+
+Capturing the weapon visuals surfaced this: with the full mod stack the psi-amp HUD renders
+the raw key `$PSI6` where the original data reads `PROJECTED CRYOKINESIS`.
+
+ND's `strings/psihelp.str` is 2 668 bytes against vanilla's 7 741, and every entry is an
+indirection token:
+
+```
+Psi6:"$Psi6"
+Psi7:"$Psi7"
+```
+
+KEX resolves `$Psi6` through `localization/loc_english.txt` in `base.kpf` (428 KB, and it
+does contain the real text). We have no localization layer, so we render the token.
+
+This is systemic, not a one-off — and it separates cleanly by layer:
+
+| layer | `.str` files | entries | files >80% `$`-token stubs |
+| --- | --- | --- | --- |
+| original game data | 80 | 7 091 | **0** |
+| `sshock2ee` (Nightdive) | 42 | 3 636 | **41** |
+| `scp` | 37 | 3 225 | 0 |
+
+So: **the Nightdive layer's `strings/` must not override the original tables** until the KEX
+localization file is supported. SCP's string tables are real text and are fine to take. The
+staged build used for the screenshots does let them override, which is why `$PSI6` appears
+in the psi-amp capture.
+
 Known gaps carried forward (raised by the cross-engine review, deferred deliberately):
 
 - **Terrain families still hardcode PCX.** `dark/src/mission/scene_builder.rs` and
