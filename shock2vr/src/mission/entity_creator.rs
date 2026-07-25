@@ -886,11 +886,16 @@ pub fn create_physics_representation(
             .unwrap();
         let immobile = v_immobile.get(entity_id).is_ok();
 
-        if let (Ok(pos), Ok(dimensions), Ok(phys_type)) = (
-            v_pos.get(entity_id),
-            v_dimensions.get(entity_id),
-            v_phys_type.get(entity_id),
-        ) {
+        // `P$PhysDims` is optional: an author who never opened the physics
+        // dimensions dialog leaves the object with only a physics *type*. The
+        // original engine then falls back to the model's bounding box - the
+        // shipped data proves it, because every ladder that *does* carry
+        // authored dimensions carries exactly the model bbox (e.g. eng1's
+        // `Ladder 16'` #945: size (1.65, 6.40, 0.14) == ladder.bin's bounds).
+        // Without this fallback the object silently got no collider at all, so
+        // most ladders were neither solid nor climbable (issue #589).
+        let maybe_dimensions = v_dimensions.get(entity_id).ok();
+        if let (Ok(pos), Ok(phys_type)) = (v_pos.get(entity_id), v_phys_type.get(entity_id)) {
             let qrotation = pos.rotation;
 
             let mut is_sensor = false;
@@ -922,17 +927,27 @@ pub fn create_physics_representation(
                 // scale_factor *= 1.2;
             }
 
+            // Without authored dimensions, fall back to the model bounds
+            // (`abs_dimensions`, already clamped to a minimum size above).
+            let unscaled_size = maybe_dimensions
+                .map(|dimensions| dimensions.size)
+                .unwrap_or(abs_dimensions);
             let size = vec3(
-                dimensions.size.x.abs() * scale_factor.x.abs(),
-                dimensions.size.y.abs() * scale_factor.y.abs(),
-                dimensions.size.z.abs() * scale_factor.z.abs(),
+                unscaled_size.x.abs() * scale_factor.x.abs(),
+                unscaled_size.y.abs() * scale_factor.y.abs(),
+                unscaled_size.z.abs() * scale_factor.z.abs(),
             );
 
-            let shape = match phys_type.phys_type {
-                PhysicsModelType::ORIENTED_BOUNDING_BOX => PhysicsShape::Cuboid(size),
-                PhysicsModelType::SPHERE => {
+            let shape = match (phys_type.phys_type, maybe_dimensions) {
+                (PhysicsModelType::ORIENTED_BOUNDING_BOX, _) => PhysicsShape::Cuboid(size),
+                (PhysicsModelType::SPHERE, Some(dimensions)) => {
                     PhysicsShape::Sphere(dimensions.radius0.abs().max(dimensions.radius1.abs()))
                 }
+                // A sphere with no authored dimensions has no authored radius
+                // either, and the model's bounding *sphere* would swallow the
+                // whole object (a 16' ladder becomes an 8' ball). The bounding
+                // box is the only geometry we have, so use it.
+                (PhysicsModelType::SPHERE, None) => PhysicsShape::Cuboid(size),
                 _ => {
                     warn!("unhandled physics type: {:?}", phys_type);
                     return None;
@@ -957,6 +972,10 @@ pub fn create_physics_representation(
                 CollisionGroup::entity()
             };
 
+            let offset = maybe_dimensions
+                .map(|dimensions| dimensions.offset0)
+                .unwrap_or(Vector3::zero());
+
             let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
             {
                 physics_log!(DEBUG, "Creating dynamic hitbox entity");
@@ -964,7 +983,7 @@ pub fn create_physics_representation(
                     entity_id,
                     pos.position,
                     qrotation,
-                    dimensions.offset0,
+                    offset,
                     shape,
                     //size,
                     group,
@@ -976,7 +995,7 @@ pub fn create_physics_representation(
                     entity_id,
                     pos.position,
                     qrotation,
-                    dimensions.offset0,
+                    offset,
                     size,
                     group,
                     is_sensor,
@@ -1016,7 +1035,92 @@ impl Default for CreateEntityOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use collision::Aabb3;
     use dark::properties::{Links, ToLink};
+
+    /// A ladder-shaped entity: climbable terrain with a physics type but - like
+    /// most shipped ladders - no `P$PhysDims` at all.
+    fn add_ladder(world: &mut World, phys_type: PhysicsModelType) -> EntityId {
+        world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropPhysType {
+                phys_type,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysAttr {
+                gravity_scale: 1.0,
+                mass: 30.0,
+                density: 1.0,
+                elasticity: 1.0,
+                friction: 0.0,
+                cog: Vector3::zero(),
+                rotation_axes: 7,
+                rest_axes: 63,
+                // The shipped ladder value: the four vertical sides.
+                climbable: 27,
+                edge_trigger: false,
+            },
+            PropImmobile(true),
+        ))
+    }
+
+    /// `ladder.bin`'s bounds: 16 SS2 ft tall, flat against a wall.
+    fn ladder_model() -> Model {
+        Model::from_glb(
+            vec![],
+            Aabb3::new(
+                Point3::new(-0.823, -3.2, -0.071),
+                Point3::new(0.823, 3.2, 0.071),
+            ),
+            None,
+        )
+    }
+
+    /// A climbable entity with no `PropPhysDimensions` still gets a collider,
+    /// sized from the model bounds and tagged climbable (issue #589 - 24 of
+    /// eng1's 30 ladders had no collider at all, so they were neither solid nor
+    /// climbable). Negative-first: before the fallback, the missing dimensions
+    /// property made `create_physics_representation` return `None`.
+    #[test]
+    fn climbable_without_dimensions_gets_collider_from_model_bounds() {
+        for phys_type in [
+            PhysicsModelType::ORIENTED_BOUNDING_BOX,
+            // The leaf ladder templates say SPHERE while their parent says OBB;
+            // with no authored radius the model box is all we have.
+            PhysicsModelType::SPHERE,
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_ladder(&mut world, phys_type);
+            let model = ladder_model();
+
+            let handle =
+                create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                    .expect("climbable entity without dimensions should still get a collider");
+
+            let size = physics
+                .cuboid_full_size(handle)
+                .expect("collider should be a box matching the model bounds");
+            assert!(
+                (size.y - 6.4).abs() < 0.01,
+                "collider should be as tall as the model ({size:?})"
+            );
+
+            let bodies = physics.debug_list_bodies();
+            assert_eq!(bodies.len(), 1, "expected exactly one body in the world");
+            let groups = &bodies[0].collision_groups;
+            assert!(
+                groups.iter().any(|g| g == "climbable"),
+                "ladder collider should be climbable, got {groups:?}"
+            );
+        }
+    }
 
     fn contains_link(to: EntityId) -> ToLink {
         ToLink {
