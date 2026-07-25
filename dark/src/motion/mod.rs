@@ -304,8 +304,20 @@ bitflags! {
         const UNK2 = 1 << 10;
         const UNK3 = 1 << 11;
         const UNK4 = 1 << 12;
-        const UNK5 = 1 << 13;
-        const UNK6 = 1 << 14;
+
+        /// Melee contact window open / close - the frames during which a swing
+        /// can connect (the Dark "damage hitbox" triggers that ShockEd's motion
+        /// editor authors on melee moves).
+        ///
+        /// Identified by scanning every clip referenced by the shipped motion
+        /// schemas (`references/animation_{0,2,4}.spew`, 997 clips): these two
+        /// bits appear together, in this order, in essentially only
+        /// `+meleecombat` clips - every melee *attack* clip carries them, the
+        /// "std" transition clips of those same schema entries do not, and no
+        /// `+rangedcombat` clip has them (those carry `FIRE` instead).
+        const MELEE_CONTACT_START = 1 << 13;
+        const MELEE_CONTACT_END = 1 << 14;
+
         const UNK7 = 1 << 15;
         const UNK8 = 1 << 16;
     }
