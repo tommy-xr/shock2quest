@@ -171,6 +171,21 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Set the player's current psi-point pool, clamped to `[0, max]`.
+    /// Emitted by authored psi consumables and training-room scripts.
+    SetPsiPoints {
+        points: i32,
+    },
+
+    /// Atomically restore the live player's psi pool and consume one unit of
+    /// the originating booster. Applied against live state so simultaneous
+    /// uses add independently, while an already-full pool or an already-used
+    /// entity remains untouched.
+    UsePsiKit {
+        entity_id: EntityId,
+        amount: i32,
+    },
+
     /// Activate (or refresh) a sustained psi power on the player for
     /// `duration_secs` (`ActivePsiPowers` unique). Emitted by the psi amp
     /// when a sustained (activation type 1) power is cast; a per-frame tick
