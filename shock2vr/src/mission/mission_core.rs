@@ -282,13 +282,6 @@ pub struct PlayerMapLocation(pub Option<i32>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateHierarchy(pub HashMap<i32, Vec<i32>>);
 
-/// The merged (mission + gamesys) entity info, so scripts can consult an
-/// entity's *authored* template properties at runtime - e.g. a camera's
-/// original model name - rather than re-deriving them from mutated runtime
-/// state that persists into saves.
-#[derive(Unique, Clone)]
-pub struct GlobalEntityInfo(pub Arc<SystemShock2EntityInfo>);
-
 /// The trainer upgrade cost tables from the gamesys
 /// (`STATCOST`/`WTECHCOST`/`WSKILLCOST`/`PSICOST` chunks), so the trainer
 /// panel and the `TrainerPurchase` effect handler price upgrades from the
@@ -517,7 +510,6 @@ impl MissionCore {
         world.add_unique(GlobalTemplateHierarchy(
             ss2_entity_info::get_hierarchy(&entity_info_rc).clone(),
         ));
-        world.add_unique(GlobalEntityInfo(entity_info_rc.clone()));
         world.add_unique(GlobalTrainerCosts(
             game_entity_info.trainer_costs().cloned(),
         ));
@@ -3446,8 +3438,16 @@ impl MissionCore {
                 } => {
                     if let Some(model) = self.id_to_model.get(&entity_id) {
                         let xform = model.get_transform();
-                        let donor_model =
-                            asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
+                        // Same hazard as ChangeModel above: a missing donor
+                        // model must not panic the frame.
+                        let Some(donor_model) =
+                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
+                        else {
+                            tracing::error!(
+                                "SetVhotsFromModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current vhots"
+                            );
+                            continue;
+                        };
                         let vhots = Model::transform(donor_model.as_ref(), xform).vhots();
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
                     }
