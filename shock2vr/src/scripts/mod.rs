@@ -30,6 +30,7 @@ mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
 mod once_router;
+mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
@@ -93,6 +94,7 @@ use self::gui::{
     TrainerMode, TraitGui,
 };
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
+use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
 use self::reduce_psi::ReducePsi;
@@ -723,7 +725,7 @@ impl ScriptWorld {
             // rec1
             // elevator buttons
             "elevatorbutton" => gui_script(Box::new(ElevatorGui)),
-            "pictureswap" => Box::new(NoopScript::new()),
+            "pictureswap" => Box::new(PictureSwap::new()),
             "testimplant" => Box::new(UnimplementedScript::new(&script_name)),
 
             // ric2:

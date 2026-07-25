@@ -77,6 +77,11 @@ impl PropTweqRotateState {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTweqModelState {
     pub animation_state: TweqAnimationState,
+    /// Index into [`PropTweqModelConfig::model_names`] of the model currently
+    /// displayed. Authored data starts at 0; the model tweq advances it (see
+    /// `PictureSwap`). Older saves predate the field and resume from frame 0.
+    #[serde(default)]
+    pub frame: usize,
 }
 
 impl PropTweqModelState {
@@ -85,9 +90,12 @@ impl PropTweqModelState {
         let animation_state = TweqAnimationState::from_bits(animation_state_bits.into()).unwrap();
         let _misc = read_u16(reader); // misc state, is this used?
         let _time = read_u16(reader); // misc state, is this used?
-        let _frame = read_u16(reader); // misc state, is this used?
+        let frame = read_u16(reader);
 
-        PropTweqModelState { animation_state }
+        PropTweqModelState {
+            animation_state,
+            frame: frame as usize,
+        }
     }
 }
 
