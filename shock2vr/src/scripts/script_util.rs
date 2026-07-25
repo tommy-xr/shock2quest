@@ -54,6 +54,20 @@ pub fn is_entity_locked(world: &World, entity_id: EntityId) -> bool {
     }
 }
 
+/// Set the lock state of one live entity, writing Dark's own `P$Locked`
+/// property - the same state [`is_entity_locked`] reads. This is the
+/// application of `Effect::SetLocked`; see `scripts::trap_lock` for why the
+/// lock lives in the property rather than in runtime state.
+pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
+    let is_alive = world
+        .borrow::<shipyard::EntitiesView>()
+        .map(|entities| entities.is_alive(entity_id))
+        .unwrap_or(false);
+    if is_alive {
+        world.add_component(entity_id, dark::properties::PropLocked(locked));
+    }
+}
+
 /// Whether a translating door is nearer its closed endpoint than its open
 /// one (i.e. worth opening). `None` for entities that aren't translating
 /// doors.
