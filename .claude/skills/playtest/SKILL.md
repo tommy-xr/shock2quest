@@ -43,6 +43,32 @@ the `play-through` manager triages and delegates fixes.
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 
+### Frobbing *in world* (flat mode) — squeeze, not trigger
+
+`POST /v1/entities/:id/message {type:"Frob"}` is a **debug injection**: it drives
+the script directly and is fine for diagnosis, but it does **not** prove a player
+could do it. To frob the way a player does, in flat mode (the default):
+
+1. **Aim** — the target must be under the crosshair. The flat path raycasts from
+   the camera (`FlatInteraction` passes `head_rotation` through), so turn with
+   `{left_hand.thumbstick:[turn,0]}` / set `head.rotation`, and confirm with
+   `GET /v1/info` or a screenshot that the thing is actually centered.
+2. **Squeeze** — the use button is **`right_hand.squeeze_value`**, on a *rising
+   edge*: set it `>0.5`, `step`, then back to `0.0`, `step`.
+   **`trigger_value` fires the wielded weapon — it does NOT frob.**
+3. The target must be frobbable (`PropFrobInfo`) and is the *highlighted* entity
+   under the reticle; `GET /v1/info` reports what's highlighted.
+
+```bash
+curl -X POST .../v1/control/input -d '{"right_hand.squeeze_value": 1.0}'
+curl -X POST .../v1/step -d '{"frames": 2}'
+curl -X POST .../v1/control/input -d '{"right_hand.squeeze_value": 0.0}'
+curl -X POST .../v1/step -d '{"frames": 2}'
+```
+
+A session that reports "frob does nothing" **without** having driven the squeeze
+edge has not tested frobbing — that finding will be rejected at review.
+
 **Tab opens the inventory UI in flat mode.** `POST /v1/input/action
 {action:"ToggleUseMode"}` enters the original's metagame "use" mode: `/v1/ui`
 flips to `mode:"use"` and its `strip` lists the carried items as labeled,
