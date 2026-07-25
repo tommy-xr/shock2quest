@@ -512,6 +512,19 @@ localization file is supported. SCP's string tables are real text and are fine t
 staged build used for the screenshots does let them override, which is why `$PSI6` appears
 in the psi-amp capture.
 
+### Two engine-side gaps the weapon captures exposed
+
+Neither is an asset problem, and neither is a 25AE regression — both were verified against
+the original data too:
+
+- **The flat viewmodel does not animate.** Firing decrements ammo and produces hit spangs,
+  and `Reload` is a real action, but the viewmodel itself does not move on either — no
+  recoil, no slide or magazine travel. So the extra sub-objects ND ships on `atek_h` and
+  `ar15_h` (4 each) are loaded but have nothing driving them yet.
+- **The four exotic viewmodels are oversized and clip the frame** (stasis generator, fusion
+  cannon, worm launcher, viral proliferator). Equally broken on the original data, so this is
+  a pre-existing flat-viewmodel framing bug in this port.
+
 Known gaps carried forward (raised by the cross-engine review, deferred deliberately):
 
 - **Terrain families still hardcode PCX.** `dark/src/mission/scene_builder.rs` and
