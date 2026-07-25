@@ -112,11 +112,10 @@ const CLIMB_MIN_PROGRESS_FRACTION: f32 = 0.1;
 /// the contact query - NOT the collider-center direction, which tilts away from
 /// the surface whenever the player is off-center and so mis-measures both the
 /// grip test and the climb speed). Returns `None` when the player is not
-/// pushing mostly toward
-/// the ladder (no grip - normal walking/gravity applies). Looking down (a
-/// downward-pitched desired movement) descends instead of ascending, so the
-/// same input walks down a shaft ladder; the sign flip at the pitch threshold
-/// matches classic ladder feel.
+/// pushing mostly toward the ladder (no grip - normal walking/gravity
+/// applies). Looking down (a downward-pitched desired movement) descends
+/// instead of ascending, so the same input walks down a shaft ladder; the sign
+/// flip at the pitch threshold matches classic ladder feel.
 ///
 /// **A grip climbs straight up the face: the horizontal movement is dropped
 /// entirely, not just its into-ladder component.** The into-ladder part has to
