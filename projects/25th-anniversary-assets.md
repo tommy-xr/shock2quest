@@ -361,6 +361,104 @@ Practical options for Quest, in order of effort:
 3. **Native BC7 on desktop** (`GL_ARB_texture_compression_bptc`) to save desktop memory.
    Doesn't help Quest, and desktop isn't under pressure — low priority.
 
+## 4b. Two very different upgrade mechanisms: `obj/` vs `mesh/`
+
+Weapons and world objects upgrade in a way we already consume. Creatures and first-person
+arms do not — and the difference is structural, not cosmetic.
+
+### `obj/*.bin` — upgraded in place, and already working
+
+The Nightdive layer replaces every weapon model as a plain LGMD, upgraded in the file
+itself. First-person viewmodels (`_h`) gain the most, and pick up extra sub-objects
+(articulated slides/magazines, which is what reload animation needs):
+
+| model | vanilla polys | ND polys | factor | ND sub-objects |
+| --- | --- | --- | --- | --- |
+| `atek_h` (pistol) | 79 | 1 739 | **22×** | 4 |
+| `empgun_h` | 59 | 1 359 | **23×** | 1 |
+| `sg_h` (shotgun) | 60 | 1 213 | **20×** | 2 |
+| `ar15_h` (assault rifle) | 126 | 1 695 | **14×** | 4 |
+| `gren_h` (grenade launcher) | 47 | 531 | 11× | 1 |
+| `lasehand` | 185 | 1 869 | 10× | 2 |
+| `amp_h` (psi amp) | 114 | 1 173 | 10× | 2 |
+| world models (`_w`) | — | — | 3–7× | 1 |
+
+`pipewrench_h` / `pipewrench_w` are **new** — vanilla has no such model.
+
+**These load today**, through the existing LGMD path plus the mount-first resolver.
+
+### `mesh/*.bin` — a second mesh appended in an unparsed format
+
+Every one of ND's 66 `mesh/` files is **two meshes concatenated**: first a copy of the
+vanilla LGMM (byte-identical geometry, same triangle count, same vanilla material names
+like `RUMBLER.gif`), then a **second mesh tagged `PMNM`** whose materials are the upgraded
+`ND-*.psd` names:
+
+```
+mesh/player.bin   file=265 214   vanilla LGMM ends ~15 364   then:
+  "LGMM" v1 ... "PMNM" ... materials: ND-player.psd, ND-teeth.psd
+```
+
+| mesh | vanilla tris | vanilla KB | ND KB | size | PMNM verts / indices |
+| --- | --- | --- | --- | --- | --- |
+| `grunt_p` (pipe hybrid) | 297 | 14 | 585 | **41×** | 1 704 / 7 464 |
+| `grunt_g` (shotgun hybrid) | 291 | 14 | 431 | 30× | 2 779 / 10 836 |
+| `cruf_*` / `ghost_f` (crew) | 270 | 13 | 304 | 23× | 1 627 / 7 674 |
+| `crum_*` (crew) | 266 | 12 | 250 | 19× | 1 576 / 7 404 |
+| `rumbler` | 290 | 13 | 153 | 11× | 1 242 / 5 634 |
+| `player` (first-person arms) | 288 | 14 | 258 | 17× | 1 544 / 6 906 |
+| `psword_h` (psi sword + arm) | 98 | — | — | — | 3 141 |
+
+Reading the second field as an index count (÷3) puts the upgraded creature meshes at
+roughly **6–12× the triangles**. That interpretation is not yet confirmed — the `PMNM`
+field layout has only been partially mapped, and the marker's offset relative to the `LGMM`
+magic varies between files.
+
+**Consequences, which are worth being blunt about:**
+
+- We read the *first* chunk and ignore the tail, so **every ND creature and the
+  first-person arms currently render at vanilla quality**. A rumbler/midwife/crew
+  before-after would show **no difference at all** — the upgrade is entirely in the
+  unparsed chunk.
+- The upgraded `mesh/` textures are unreachable for the same reason. `ND-rumbler.dds` is
+  only ever named by the PMNM chunk's material (`ND-rumbler.psd`); the vanilla chunk still
+  says `RUMBLER.gif`, and there is no `RUMBLER.mtl` redirect. So no amount of extension
+  fallback finds them — the material name itself has to come from the new chunk.
+- Same for VR arms: `ND-melee_arm.dds` (699 KB), `ND-player.dds` and its `_s` shine map all
+  hang off PMNM material names.
+
+**Parsing the `PMNM` chunk is therefore the single highest-value follow-up** — it unlocks
+the creature upgrade, the first-person/VR arm upgrade, and the entire `mesh/` texture layer
+in one go.
+
+### What this means for the flat vs VR weapon strategy
+
+Today the two paths diverge by necessity:
+
+- **Flat** uses `PropPlayerGun.hand_model` (the `_h` viewmodel) or `PropLimbModel` for
+  melee, camera-anchored at authored offsets.
+- **VR** mostly shows the **world** model (`PropModelName`), because
+  `internal_switch_held_model` only swaps in an `_h` viewmodel when it appears in
+  `vr_config::is_allowed_hand_model` — a hand-tuned allowlist. The vanilla `_h` meshes were
+  too crude and too screen-space-authored to hold in a tracked hand.
+
+The 25AE assets weaken that reason: at 1 200–1 700 polys with articulated sub-objects, the
+`_h` models are now genuinely good enough to hold, and they share a single orientation
+(corrected by one base yaw) rather than the inconsistently-keyed table
+`flat_player_controller` complains about. So a unified "`_h` everywhere, anchored to the
+camera in flat and to the hand in VR" path becomes plausible.
+
+Two real caveats before committing to that:
+
+1. Some viewmodels **include an arm** — `psword_h`'s materials are `ND-melee_arm.psd` +
+   `ND-psword.psd`. In VR that duplicates the player's own hand/glove, so arm-inclusive
+   viewmodels need either arm-part suppression or a separate VR variant.
+2. The `_h` models are framed for a single one-handed screen-space pose; two-handed VR grips
+   still need their own handling.
+
+Worth noting the asset quality is no longer the blocker — the blocker is that the melee/arm
+half of this lives in the unparsed `PMNM` chunk (caveat 1 is invisible to us today).
+
 ## 5. What we would need to change
 
 Ordered by value-per-unit-effort. Each step is independently shippable and verifiable.
@@ -378,11 +476,12 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
 | 1 | Mount `.kpf` archives + accept the 25AE layout (loose `data/res/**`, `motiondb.bin` under `res/mschema/`, `shock2.gam`/`motiondb.bin` via asset paths not `File::open`) | Point straight at an unmodified 25AE install; **both** installs supported. Removes the repack scaffolding this spike used. | S — `ZipAssetPath` already handles stored ZIPs, and mount-first resolution is now in place |
-| 2 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
-| 3 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
-| 4 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |
-| 5 | Optional: offline ASTC transcode + compressed upload path | Best quality/byte on Quest | L |
-| 6 | Not recommended: `.dml`, `.itl`, `.nut` | SCP gamesys patches / KEX HUD / KEX scripts | L — and largely duplicates logic we implement in Rust |
+| 2 | **Parse the appended `PMNM` mesh chunk** (see §4b) | The creature upgrade (6–12× tris), the first-person/VR arm upgrade, and the whole `mesh/` DDS texture layer — none of which is reachable any other way | M–L — needs format reversing, but it is the biggest single visual win left |
+| 3 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
+| 4 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
+| 5 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |
+| 6 | Optional: offline ASTC transcode + compressed upload path | Best quality/byte on Quest | L |
+| 7 | Not recommended: `.dml`, `.itl`, `.nut` | SCP gamesys patches / KEX HUD / KEX scripts | L — and largely duplicates logic we implement in Rust |
 
 Known gaps carried forward (raised by the cross-engine review, deferred deliberately):
 
