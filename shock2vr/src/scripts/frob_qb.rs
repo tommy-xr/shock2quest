@@ -149,6 +149,46 @@ mod tests {
         );
     }
 
+    /// With no `PlayerInfo` (a debug scene) there is no backpack to transfer
+    /// into, so a take-able object falls back to consume-on-frob. Leaving it
+    /// alive would let a second frob re-fire the other scripts attached to it
+    /// (`BaseButton` resends every SwitchLink) after its one-shot award.
+    #[test]
+    fn a_takeable_object_is_consumed_when_there_is_no_backpack() {
+        let mut world = World::new();
+        let object = world.add_entity((
+            PropQuestBitName("Note_1_10".to_owned()),
+            PropQuestBitValue(QuestBitValue::COMPLETE),
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE | FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+
+        let effects = Effect::flatten(vec![FrobQB::new().handle_message(
+            object,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        )]);
+
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::SetQuestBit { quest_bit_name, .. } if quest_bit_name == "Note_1_10"
+            )),
+            "the quest bit must be awarded, got {effects:?}"
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::DestroyEntity { entity_id } if *entity_id == object
+            )),
+            "with no backpack the object must not be left frobbable, got {effects:?}"
+        );
+    }
+
     /// Use-in-place objects (corpses, the Shield Computer, plot buttons) have no
     /// MOVE in their world action and keep the consume-on-frob behavior.
     #[test]
