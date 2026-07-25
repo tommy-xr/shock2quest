@@ -1,0 +1,14 @@
+[package]
+name = "asset_probe"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "asset_probe"
+path = "src/main.rs"
+
+[dependencies]
+dark = { path = "../../dark" }
+engine = { path = "../../engine" }
+clap = { version = "4.5.4", features = ["derive"] }
+walkdir = "2"

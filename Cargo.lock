@@ -208,6 +208,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "asset_probe"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dark",
+ "engine",
+ "walkdir",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1153,6 +1163,7 @@ dependencies = [
  "rand",
  "rb",
  "rodio",
+ "texture2ddecoder",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4168,6 +4179,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be55cf8942feac5c765c2c993422806843c9a9a45d4d5c407ad6dd2ea95eb9b6"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "texture2ddecoder"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "427ae8ec7f2f0fdd3146b77cfa44bea880caf066f7e55398a8467afe2645c832"
+dependencies = [
+ "paste",
 ]
 
 [[package]]

@@ -87,6 +87,30 @@ impl PcxFormat {
         trace!("size: {size}");
         let mut data: Vec<u8> = vec![0; size as usize];
 
+        // Dark's own art is 8-bit paletted, but mod layers ship some 24-bit PCX
+        // files, which have no palette to read. Decode those directly as RGB.
+        if !pcx.is_paletted() {
+            let mut row: Vec<u8> = vec![0; (width * 3) as usize];
+            for y in 0..height {
+                pcx.next_row_rgb(&mut row).unwrap();
+                for x in 0..width {
+                    let src = (x * 3) as usize;
+                    let idx = (((y * width) + x) * 4) as usize;
+                    data[idx] = row[src];
+                    data[idx + 1] = row[src + 1];
+                    data[idx + 2] = row[src + 2];
+                    data[idx + 3] = 255;
+                }
+            }
+            apply_color_key(&mut data, width, height);
+            return RawTextureData {
+                bytes: data,
+                width,
+                height,
+                format: PixelFormat::RGBA,
+            };
+        }
+
         let mut image = Vec::new();
         for _ in 0..pcx.height() {
             let mut row: Vec<u8> = std::iter::repeat(0).take(pcx.width() as usize).collect();
@@ -138,6 +162,11 @@ impl TextureFormat for PcxFormat {
 pub const PNG: FormatUsingImageCrate = FormatUsingImageCrate {
     image_format: image::ImageFormat::Png,
 };
+
+// A handful of mod-layer textures ship as Targa (e.g. SCP's grdrust.tga).
+pub const TGA: FormatUsingImageCrate = FormatUsingImageCrate {
+    image_format: image::ImageFormat::Tga,
+};
 pub const JPEG: FormatUsingImageCrate = FormatUsingImageCrate {
     image_format: image::ImageFormat::Jpeg,
 };
@@ -154,9 +183,20 @@ pub fn extension_to_format(str: String) -> Option<Box<dyn TextureFormat>> {
         "gif" => Some(Box::new(GIF)),
         "jpeg" => Some(Box::new(JPEG)),
         "jpg" => Some(Box::new(JPEG)),
+        "tga" => Some(Box::new(TGA)),
+        "dds" => Some(Box::new(crate::dds::DDS)),
         _ => None,
     }
 }
+
+/// Every extension `extension_to_format` can decode, so callers can look for an
+/// alternate encoding of the same texture. Mod layers routinely ship a texture
+/// under a different extension than the one baked into a model's material list
+/// (e.g. a model names `FOO.PCX` while the layer supplies `FOO.PNG`).
+/// Candidate extensions for that search, most-upgraded first. This order only
+/// arbitrates between files that share a stem; a texture that exists under the
+/// exact name a model asked for is always used as-is.
+pub const DECODABLE_EXTENSIONS: &[&str] = &["dds", "png", "pcx", "gif", "tga", "jpg", "jpeg"];
 
 #[cfg(test)]
 mod tests {

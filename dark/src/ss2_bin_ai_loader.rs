@@ -471,7 +471,12 @@ pub fn to_scene_objects(
         let geometry: Rc<Box<dyn engine::scene::Geometry>> =
             Rc::new(Box::new(engine::scene::mesh::create(vertices)));
 
-        let texture = asset_cache.get(&TEXTURE_IMPORTER, &material_name).clone();
+        // Allow a mod layer to supply this texture under a different extension. If
+        // nothing resolves we fall back to the literal name so the failure surfaces
+        // exactly as it did before.
+        let resolved = crate::util::resolve_texture_name(asset_cache, &material_name)
+            .unwrap_or_else(|| material_name.clone());
+        let texture = asset_cache.get(&TEXTURE_IMPORTER, &resolved).clone();
         let diffuse_texture: Rc<dyn TextureTrait> = {
             let mut animation_frames =
                 load_multiple_textures_for_model(asset_cache, &material_name);
