@@ -120,6 +120,7 @@ impl Script for ChooseMissionScript {
                             level_file: "station.mis".to_string(),
                             loc: None,
                             entities_to_trigger,
+                            vitals_transition: super::PlayerVitalsTransition::Preserve,
                         }),
                     ])
                 } else {
@@ -140,6 +141,7 @@ impl Script for ChooseMissionScript {
                             level_file,
                             loc: dest_loc,
                             entities_to_trigger: vec![],
+                            vitals_transition: super::PlayerVitalsTransition::Preserve,
                         }),
                     ])
                 }

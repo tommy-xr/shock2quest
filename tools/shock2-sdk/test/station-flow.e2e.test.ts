@@ -140,7 +140,9 @@ test(
     assert.equal(await game.quests.get("career_navy"), "unknown", "Navy bit should be clear");
     assert.equal(await game.quests.get("career_osa"), "unknown", "OSA bit should be clear");
     // Marine loadout applied on the station load.
+    assert.equal(info.player.hit_points, 45, "first Marine selection starts at full career HP");
     assert.equal(info.player.max_hit_points, 45, "Marine deploys with 45 max HP");
+    assert.equal(info.player.psi_points, 20, "first Marine selection starts at full career psi");
     assert.equal(info.player.max_psi_points, 20, "Marine deploys with 20 max psi");
 
     // #453: the persistent character sheet exists and starts at baseline (no
@@ -292,7 +294,13 @@ test(
 async function enlist(
   branch: keyof typeof CAREER_DOORS,
   port: number,
-): Promise<{ bit: string; maxHp: number | null; maxPsi: number | null }> {
+): Promise<{
+  bit: string;
+  hitPoints: number | null;
+  maxHp: number | null;
+  psiPoints: number | null;
+  maxPsi: number | null;
+}> {
   const door = CAREER_DOORS[branch];
   await using game = await GameServer.launch({ mission: "earth.mis", port });
   await game.step({ frames: 5 });
@@ -308,7 +316,9 @@ async function enlist(
   );
   return {
     bit: await game.quests.get(door.bit),
+    hitPoints: info.player.hit_points,
     maxHp: info.player.max_hit_points,
+    psiPoints: info.player.psi_points,
     maxPsi: info.player.max_psi_points,
   };
 }
@@ -323,12 +333,16 @@ test(
     // marker (P$Service=1). Correct engine behavior yields the Navy career.
     const navy = await enlist("navy", basePort);
     assert.equal(navy.bit, "complete", "Navy door should set career_navy (despite the 'SendToMarines' misnomer)");
+    assert.equal(navy.hitPoints, CAREER_DOORS.navy.maxHp, "Navy starts at full career HP");
     assert.equal(navy.maxHp, CAREER_DOORS.navy.maxHp, "Navy deploys with 35 max HP");
+    assert.equal(navy.psiPoints, CAREER_DOORS.navy.maxPsi, "Navy starts at full career psi");
     assert.equal(navy.maxPsi, CAREER_DOORS.navy.maxPsi, "Navy deploys with 35 max psi");
 
     const osa = await enlist("osa", basePort + 1);
     assert.equal(osa.bit, "complete", "OSA door should set career_osa");
+    assert.equal(osa.hitPoints, CAREER_DOORS.osa.maxHp, "OSA starts at full career HP");
     assert.equal(osa.maxHp, CAREER_DOORS.osa.maxHp, "OSA deploys with 30 max HP");
+    assert.equal(osa.psiPoints, CAREER_DOORS.osa.maxPsi, "OSA starts at full career psi");
     assert.equal(osa.maxPsi, CAREER_DOORS.osa.maxPsi, "OSA deploys with 60 max psi");
   },
 );

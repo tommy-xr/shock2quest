@@ -32,6 +32,7 @@ impl Script for TrapTripLevel {
                     level_file: format!("{}.mis", level_file.0),
                     loc: maybe_dest_loc,
                     entities_to_trigger: vec![],
+                    vitals_transition: super::PlayerVitalsTransition::Preserve,
                 })
             }
             _ => Effect::NoEffect,

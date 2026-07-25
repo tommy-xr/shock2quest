@@ -536,11 +536,9 @@ impl MissionCore {
         // The choice is persisted as a quest bit, so it re-applies on every
         // deployment; with no career selected the player template defaults
         // (30 HP, 40/50 psi) stand. Absolute values keep re-application
-        // idempotent across level loads. Setting current = max mirrors the
-        // engine's existing model: the player is `RuntimePropDoNotSerialize` and
-        // its HP/psi are re-seeded from the template on every load (there is no
-        // current-HP persistence yet), so this only changes the values arrived
-        // with, not whether a reset happens.
+        // idempotent across level loads. These are the deliberate first-career
+        // and legacy-save defaults; ordinary transitions and current-format
+        // saves restore their exact persisted pools after mission construction.
         if let Some(career) = crate::career::Career::from_quest_info(&quest_info) {
             let loadout = career.loadout();
             world.run(
@@ -3838,10 +3836,9 @@ impl MissionCore {
                                 // Tank (Trait8): the original raises the
                                 // ceiling AND current HP by the bonus (buying
                                 // at 25/30 yields 30/35), clamped to the new
-                                // max. Loads re-derive both from the trait
-                                // list (current HP is not persisted - it
-                                // re-seeds from template + career + traits),
-                                // so the live grant cannot double-apply.
+                                // max. Loads first re-derive the trait-adjusted
+                                // default, then restore the persisted live pool,
+                                // so the grant cannot double-apply.
                                 drop(quests);
                                 let player_entity = self
                                     .world
