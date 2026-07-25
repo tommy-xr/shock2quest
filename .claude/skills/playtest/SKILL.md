@@ -67,6 +67,12 @@ short hops, checking screenshots — this is what makes it a real playtest inste
 of warping to arbitrary (often out-of-level) entity coordinates. Raw
 `/v1/player/teleport` is reserved for manager-driven setup/frontier-resume.
 
+It **walks** the same way the player does — stairs, ramps and small ledges are
+traversed, and it climbs/descends them for you — so `blocked` means a real
+obstruction, not a step. Only the horizontal direction of the target is used;
+gravity decides the vertical, so aim at where you want to *stand*, not at a
+point in the air.
+
 **Doors block the shapecast** — you can't move through a closed one. The pattern:
 move up to the door → it trips the tripwire (or `Frob` it) → `step` and wait for
 it to open (re-screenshot) → then `move` through. That's genuine door-by-door
