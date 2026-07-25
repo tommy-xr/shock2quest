@@ -587,6 +587,7 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::Corpse(_) => "Corpse".to_string(),
         dark::properties::Link::AIProjectile(_) => "AIProjectile".to_string(),
         dark::properties::Link::AIRangedWeapon => "AIRangedWeapon".to_string(),
+        dark::properties::Link::Weapon => "Weapon".to_string(),
         dark::properties::Link::Clip => "Clip".to_string(),
         dark::properties::Link::GunFlash(_) => "GunFlash".to_string(),
         dark::properties::Link::LandingPoint => "LandingPoint".to_string(),

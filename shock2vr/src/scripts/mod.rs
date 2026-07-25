@@ -30,6 +30,7 @@ mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
 mod once_router;
+pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
 mod reduce_psi;
