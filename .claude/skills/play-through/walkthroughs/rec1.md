@@ -208,17 +208,42 @@ emails in the same file (`EmailTextN`). Objective strings are in
    **`Viral Prolif`** (775). `note_5_8` completes here.
 4. Optional: read log 11 (1983), then reach the pool-side breaker **807** and
    the `Light_button` **77** to complete `note_5_5`.
-5. Optional: take **`Crew_Card2`** (80) in the athletic sector and use it at
-   `Card slot` **125** to open `Residential Door` 302.
+5. **REQUIRED — this is the gate to the whole south wing, not a side room.**
+   Take **`Crew_Card2`** (80) in the athletic sector @ (73.70, 3.85, −120.58)
+   (sets `ladycrewcard`), then frob `Card slot` **125** @ (−1.46, −3.40,
+   −198.35) *while holding it* to open `Residential Door` **302** @
+   (−0.95, −3.10, −196.60); `Experience Trap` 496 pays out.
+
+   Verified 2026-07-25 by navmesh + in-game walk: door 302 is the **sole**
+   entrance to everything south of z ≈ −201, including the transmitter. Every
+   A* route from the north region to the south wing passes the same pinch
+   (cells 3305 → 3306 → 3320). It is **not** reachable from rec3 (both rec1↔rec3
+   return markers are at z = −98 and z = −187.4, north of the boundary) and not
+   by an upper route. Without the card, `/v1/player/move` blocks at the door
+   plane (−1.44, −4.19, −196.12).
+
+   ⚠️ A prior session mistook this refusal for "an optional side room" and then
+   spent most of the run proving a nonexistent traversal bug at z ≈ −201. **Do
+   not re-probe that boundary — it is a locked door.** Confirmed walk route once
+   open: (−0.83, −196.6) → (5.77, −199.8) → (3.5, −201) → (1.5, −206.7) →
+   (−0.5, −211.9) → (−10.94, −214.33), standing under the transmitter.
 6. **Work south to the transmitter.** Doors 1922/1923 (via `Simple Button` 124)
    are the authored gate; the real anchor is `Tripwire` **752** @
    (−8.47, −4.40, −137.87), which fires `Trigger Delay` 271 → button 124.
-7. **Enter `14106` on `Transmitter Tower Off` 89** at (−11.31, 3.20, −214.75).
+7. **Learn `14106` from the four `Code Art` frames** (see "Codes & required
+   items"). ⚠️ **Blocked today by [#587](https://github.com/tommy-xr/shock2quest/issues/587)**
+   — `PictureSwap` is a `NoopScript`, so the frames never cycle to their
+   `code<N>` model. Until that lands, the code cannot be read in-world.
+8. **Enter `14106` on `Transmitter Tower Off` 89** at (−11.31, 3.20, −214.75).
+   The tower sits on a **mezzanine at y = +3.20**, ~7.4 units above the floor
+   (y ≈ −5.2) — the climb is untested; check the `gravshaft 4` pair (778 / 416
+   @ y = −0.30, z ≈ −251) at the far south end and the Base Rooms at y = 4.80.
+   If the port cannot ride a grav shaft, that is the next real blocker.
    Verify: `Transmit` becomes raw 1, `note_5_4` and `note_5_7` complete, +20
    modules, the dish spins, and after 8 s the spawn ambush arrives.
-8. Step ~960 frames and record which SHODAN email lands (6 "The cancer" +
+9. Step ~960 frames and record which SHODAN email lands (6 "The cancer" +
    `note_5_3`, or 10 "My revenge" + `note_5_2`).
-9. If (and only if) `reprogram` is also set: frob **`Big_Orange_Button` 653**,
+10. If (and only if) `reprogram` is also set: frob **`Big_Orange_Button` 653**,
    confirm doors 650/651 (then 497/652) open, enter the car, and frob
    **`Level Change Button` 664** → **`command1`, loc 56**. Otherwise the
    correct outcome is a `Message Trap` refusal and a return to Operations.
