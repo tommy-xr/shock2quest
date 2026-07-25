@@ -70,8 +70,7 @@ pub fn player_eye_height_for(crouched: bool) -> f32 {
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::{File, OpenOptions},
-    io::BufReader,
+    fs::OpenOptions,
     path::Path,
     rc::Rc,
     sync::Arc,
@@ -832,14 +831,11 @@ impl Game {
 
         let (properties, links, links_with_data) = dark::properties::get();
 
-        // NOT yet routed through the asset paths, unlike `motiondb.bin` below:
-        // `dark::properties::get()` is instantiated at `BufReader<File>` and the
-        // resulting `PropertyDefinition`s are shared with mission loading, so
-        // handing `gamesys::read` a boxed archive reader does not typecheck
-        // without making that whole chain generic. Until then a 25AE install
-        // needs `shock2.gam` extracted from `sshock2.kpf` alongside it.
-        let game_file = File::open(resource_path("shock2.gam")).unwrap();
-        let mut game_reader = BufReader::new(game_file);
+        // Through the asset paths, like the missions and motiondb: on a 25AE
+        // install the gamesys lives inside `sshock2.kpf`.
+        let game_reader = asset_cache
+            .get_raw_reader("shock2.gam")
+            .expect("shock2.gam should be present in the mounted data");
 
         let _strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
 
@@ -849,7 +845,12 @@ impl Game {
         // let header = ss2_bin_header::read(&mut atek_reader);
         // let obj = ss2_bin_obj_loader::read(&mut atek_reader, &header);
 
-        let gamesys = gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
+        let gamesys = gamesys::read(
+            &mut *game_reader.borrow_mut(),
+            &links,
+            &links_with_data,
+            &properties,
+        );
 
         // Likewise: 25AE moves this to `data/res/mschema/motiondb.bin`.
         let motiondb_reader = asset_cache
