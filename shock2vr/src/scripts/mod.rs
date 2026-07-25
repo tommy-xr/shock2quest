@@ -60,6 +60,7 @@ mod trap_teleport;
 mod trap_teleport_player;
 mod trap_trip_level;
 mod trap_tweq;
+mod trap_unlock;
 mod trigger_collide;
 mod trigger_multi;
 mod tweq_depressable;
@@ -144,6 +145,7 @@ use self::{
     trap_teleport_player::TrapTeleportPlayer,
     trap_trip_level::TrapTripLevel,
     trap_tweq::TrapTweq,
+    trap_unlock::TrapUnlock,
     trigger_collide::TriggerCollide,
     trigger_multi::TriggerMulti,
     tweq_depressable::TweqDepressable,
@@ -455,7 +457,10 @@ impl ScriptWorld {
             "transluceinoutprop" => Box::new(NoopScript::new()),
 
             // KEYCARD stuff
-            "trapunlock" => Box::new(NoopScript::new()),
+            // The unlock trap sets the lock state of the objects it controls
+            // via SwitchLinks (eng1's Unlock Trap hands out the elevator /
+            // grav-lift call buttons this way).
+            "trapunlock" => Box::new(TrapUnlock::new()),
 
             "createsound" => Box::new(CreateSound::new()),
 
