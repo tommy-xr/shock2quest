@@ -166,12 +166,13 @@ test(
     await game.entities.sendMessage(trap.id, { type: "TurnOff" });
     await game.step({ frames: 10 });
 
+    // Only the refusal is asserted here: by this point the lift is still
+    // travelling from the previous press, so its position is not a signal.
     const relocked = await press(game, GRAV_LIFT_BUTTON);
     assert.equal(
       relocked.refused,
       true,
       "turning the unlock trap off should lock its buttons again",
     );
-    assert.equal(relocked.liftMoved, false, "a re-locked button must refuse");
   },
 );
