@@ -52,6 +52,10 @@ pub struct PmnmVertex {
 #[derive(Debug, Clone)]
 pub struct PmnmMaterial {
     pub name: String,
+    /// This material's slice of the index buffer. Across all 66 shipped chunks
+    /// the ranges are contiguous, start at 0, and sum to the index count.
+    pub index_start: usize,
+    pub index_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -143,8 +147,19 @@ pub fn read(buf: &[u8], base: usize) -> Option<PmnmMesh> {
         let at = base + offsets[0] + i * MATERIAL_STRIDE;
         let raw = buf.get(at..at + MATERIAL_NAME_LEN)?;
         let end = raw.iter().position(|c| *c == 0).unwrap_or(raw.len());
+        let index_start = u32_at(buf, at + 48)? as usize;
+        let index_count = u32_at(buf, at + 52)? as usize;
+        // A range that escapes the index buffer would slice out of bounds later.
+        if index_start + index_count > num_indices {
+            trace!(
+                "PMNM material {i} index range {index_start}+{index_count} exceeds {num_indices}"
+            );
+            return None;
+        }
         materials.push(PmnmMaterial {
             name: String::from_utf8_lossy(&raw[..end]).into_owned(),
+            index_start,
+            index_count,
         });
     }
 
@@ -218,57 +233,52 @@ impl PmnmMesh {
         String,
         Vec<engine::scene::VertexPositionTextureSkinnedNormal>,
     )> {
-        let Some(material) = self.materials.first() else {
-            return vec![];
-        };
-
-        let vertices = self
-            .indices
-            .iter()
-            .filter_map(|i| self.vertices.get(*i as usize))
-            .map(|v| {
-                // Weights are authored as bytes summing to 255.
-                let total = v.bone_weights.iter().map(|w| *w as f32).sum::<f32>();
-                let scale = if total > 0.0 { 1.0 / total } else { 0.0 };
-                engine::scene::VertexPositionTextureSkinnedNormal {
-                    position: v.position,
-                    uv: v.uv,
-                    normal: v.normal,
-                    bone_indices: v.bone_indices.map(|b| b as u32),
-                    bone_weights: v.bone_weights.map(|w| w as f32 * scale),
-                }
-            })
-            .collect();
-
-        vec![(material.name.clone(), vertices)]
-    }
-
-    /// Expand the triangle list into the per-material vertex runs the renderer
-    /// consumes, in the mesh's authored rest pose (no skinning applied).
-    ///
-    /// The material each triangle belongs to is not yet decoded, so every
-    /// triangle is attributed to the first material. That is exact for the 35
-    /// single-material chunks and approximate for the rest - enough to prove the
-    /// geometry and textures, not enough to ship multi-material creatures.
-    pub fn to_static_vertices(
-        &self,
-    ) -> Vec<(String, Vec<engine::scene::VertexPositionTextureNormal>)> {
-        let Some(material) = self.materials.first() else {
-            return vec![];
-        };
-
-        let vertices = self
-            .indices
-            .iter()
-            .filter_map(|i| self.vertices.get(*i as usize))
-            .map(|v| engine::scene::VertexPositionTextureNormal {
+        self.per_material(|v| {
+            // Weights are authored as bytes summing to 255.
+            let total = v.bone_weights.iter().map(|w| *w as f32).sum::<f32>();
+            let scale = if total > 0.0 { 1.0 / total } else { 0.0 };
+            engine::scene::VertexPositionTextureSkinnedNormal {
                 position: v.position,
                 uv: v.uv,
                 normal: v.normal,
-            })
-            .collect();
+                bone_indices: v.bone_indices.map(|b| b as u32),
+                bone_weights: v.bone_weights.map(|w| w as f32 * scale),
+            }
+        })
+    }
 
-        vec![(material.name.clone(), vertices)]
+    /// Expand into unskinned vertex runs, one per material, in the mesh's
+    /// authored rest pose.
+    pub fn to_static_vertices(
+        &self,
+    ) -> Vec<(String, Vec<engine::scene::VertexPositionTextureNormal>)> {
+        self.per_material(|v| engine::scene::VertexPositionTextureNormal {
+            position: v.position,
+            uv: v.uv,
+            normal: v.normal,
+        })
+    }
+
+    /// Each material paired with the vertices of **its own slice** of the index
+    /// buffer, mapped through `f`.
+    ///
+    /// The per-material range comes from the material record (`+48` start, `+52`
+    /// count); across all 66 shipped chunks those ranges are contiguous, start at
+    /// 0, and sum to the index count. Without this a multi-material creature
+    /// draws one material's texture over the whole body.
+    fn per_material<T>(&self, f: impl Fn(&PmnmVertex) -> T) -> Vec<(String, Vec<T>)> {
+        self.materials
+            .iter()
+            .filter(|m| m.index_count > 0)
+            .map(|m| {
+                let verts = self.indices[m.index_start..m.index_start + m.index_count]
+                    .iter()
+                    .filter_map(|i| self.vertices.get(*i as usize))
+                    .map(&f)
+                    .collect();
+                (m.name.clone(), verts)
+            })
+            .collect()
     }
 }
 
@@ -278,8 +288,18 @@ mod tests {
 
     /// Build a minimal single-material, single-triangle chunk.
     fn synth() -> Vec<u8> {
-        let (num_materials, num_joints, num_vertices, num_indices) =
-            (1usize, 1usize, 3usize, 3usize);
+        synth_with(1, 1, 3, 3, &[(0, 3)])
+    }
+
+    /// Build a chunk with the given counts and per-material index ranges.
+    fn synth_with(
+        num_materials: usize,
+        num_joints: usize,
+        num_vertices: usize,
+        num_indices: usize,
+        ranges: &[(u32, u32)],
+    ) -> Vec<u8> {
+        assert_eq!(ranges.len(), num_materials);
         let offsets = [
             HEADER_LEN,
             HEADER_LEN + MATERIAL_STRIDE * num_materials,
@@ -313,19 +333,25 @@ mod tests {
             b.extend_from_slice(&(o as u32).to_le_bytes());
         }
         assert_eq!(b.len(), 4 + HEADER_LEN);
-        // material: 16-byte name + padding to 56
-        let mut name = b"ND-test.psd".to_vec();
-        name.resize(MATERIAL_NAME_LEN, 0);
-        b.extend_from_slice(&name);
-        b.extend(std::iter::repeat_n(
-            0u8,
-            MATERIAL_STRIDE - MATERIAL_NAME_LEN,
-        ));
-        // joint pivot
-        for f in [1.0f32, 2.0, 3.0] {
-            b.extend_from_slice(&f.to_le_bytes());
+        // materials: 16-byte name, then index_start/index_count at +48/+52
+        for (m, (start, count)) in ranges.iter().enumerate() {
+            let mut name = format!("ND-test{m}.psd").into_bytes();
+            name.resize(MATERIAL_NAME_LEN, 0);
+            b.extend_from_slice(&name);
+            let mut rest = vec![0u8; MATERIAL_STRIDE - MATERIAL_NAME_LEN];
+            rest[48 - MATERIAL_NAME_LEN..52 - MATERIAL_NAME_LEN]
+                .copy_from_slice(&start.to_le_bytes());
+            rest[52 - MATERIAL_NAME_LEN..56 - MATERIAL_NAME_LEN]
+                .copy_from_slice(&count.to_le_bytes());
+            b.extend_from_slice(&rest);
         }
-        // three vertices
+        // joint pivots
+        for _ in 0..num_joints {
+            for f in [1.0f32, 2.0, 3.0] {
+                b.extend_from_slice(&f.to_le_bytes());
+            }
+        }
+        // vertices
         for i in 0..num_vertices {
             for f in [i as f32, 0.0, 0.0] {
                 b.extend_from_slice(&f.to_le_bytes());
@@ -340,7 +366,7 @@ mod tests {
             b.extend_from_slice(&[255, 0, 0, 0]);
         }
         for i in 0..num_indices {
-            b.extend_from_slice(&(i as u16).to_le_bytes());
+            b.extend_from_slice(&((i % num_vertices) as u16).to_le_bytes());
         }
         b
     }
@@ -351,7 +377,7 @@ mod tests {
         let base = find_chunk(&buf).expect("marker should be found");
         let mesh = read(&buf, base).expect("should parse");
         assert_eq!(mesh.materials.len(), 1);
-        assert_eq!(mesh.materials[0].name, "ND-test.psd");
+        assert_eq!(mesh.materials[0].name, "ND-test0.psd");
         assert_eq!(mesh.vertices.len(), 3);
         assert_eq!(mesh.triangle_count(), 1);
         assert_eq!(mesh.joint_pivots.len(), 1);
@@ -404,6 +430,50 @@ mod tests {
         assert!(read(&buf, base).is_none());
     }
 
+    /// Two materials each owning half of a six-index buffer.
+    fn synth_two_materials() -> Vec<u8> {
+        // 6 indices over 3 vertices: `synth_with` writes them as i % num_vertices,
+        // so material 0 owns [0,1,2] and material 1 owns [0,1,2] again - which is
+        // not distinguishable. Rewrite material 1's slice to start at vertex 1.
+        let mut b = synth_with(2, 1, 3, 6, &[(0, 3), (3, 3)]);
+        let idx_at = 4 + HEADER_LEN + MATERIAL_STRIDE * 2 + JOINT_STRIDE + VERTEX_STRIDE * 3;
+        for (k, v) in [0u16, 1, 2, 1, 2, 1].iter().enumerate() {
+            b[idx_at + k * 2..idx_at + k * 2 + 2].copy_from_slice(&v.to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn each_material_gets_only_its_own_index_range() {
+        let buf = synth_two_materials();
+        let mesh = read(&buf, find_chunk(&buf).unwrap()).expect("should parse");
+        assert_eq!(mesh.materials.len(), 2);
+        assert_eq!(
+            (mesh.materials[0].index_start, mesh.materials[0].index_count),
+            (0, 3)
+        );
+        assert_eq!(
+            (mesh.materials[1].index_start, mesh.materials[1].index_count),
+            (3, 3)
+        );
+        let runs = mesh.to_skinned_vertices();
+        assert_eq!(runs.len(), 2, "one run per material");
+        assert_eq!(runs[0].1.len(), 3);
+        assert_eq!(runs[1].1.len(), 3);
+        // The two ranges cover different triangles, so the runs differ.
+        assert_ne!(
+            runs[0].1[0].position, runs[1].1[0].position,
+            "the second material must draw its own slice, not the first's"
+        );
+    }
+
+    #[test]
+    fn rejects_a_material_range_past_the_index_buffer() {
+        // Claim 99 indices when only 6 exist.
+        let buf = synth_with(2, 1, 3, 6, &[(0, 3), (3, 99)]);
+        assert!(read(&buf, find_chunk(&buf).unwrap()).is_none());
+    }
+
     #[test]
     fn absent_marker_yields_none() {
         assert!(find_chunk(&[0u8; 64]).is_none());
@@ -416,7 +486,7 @@ mod tests {
         let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
         let runs = mesh.to_skinned_vertices();
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].0, "ND-test.psd");
+        assert_eq!(runs[0].0, "ND-test0.psd");
         assert_eq!(runs[0].1.len(), 3);
         let v = &runs[0].1[0];
         // Authored weights are bytes summing to 255; the renderer wants 0..1.
@@ -449,7 +519,7 @@ mod tests {
         let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
         let runs = mesh.to_static_vertices();
         assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].0, "ND-test.psd");
+        assert_eq!(runs[0].0, "ND-test0.psd");
         assert_eq!(runs[0].1.len(), 3);
     }
 }

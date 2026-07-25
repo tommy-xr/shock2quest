@@ -454,7 +454,7 @@ Mapped empirically and validated against **all 66 chunks**. Every stride below h
 
 | section | start | stride | contents |
 | --- | --- | --- | --- |
-| materials | `offs[0]` (always 60) | **56** | 16-byte name (`ND-rumbler.psd`), then floats, then what looks like the material's index start/count (`5634` for single-material `rumbler`, matching `num_indices`) |
+| materials | `offs[0]` (always 60) | **56** | 16-byte name (`ND-rumbler.psd`), then floats, then **`index_start` at +48 and `index_count` at +52** — this material's slice of the index buffer. Verified 66/66: the ranges are contiguous, start at 0, and sum to `num_indices` |
 | joints | `offs[1]` | **12** | `3 × f32` — a joint pivot **in model space** |
 | vertices | `offs[2]` | **40** | see below |
 | morph targets | `offs[3]` | `16 × D` | only when `D > 0` |
@@ -560,6 +560,17 @@ the vanilla mesh at the same pose index — same stance, same capsule fit — wi
 high-detail geometry and upgraded texture. That is the check that matters: a wrong mapping
 or a missed yaw produces an obviously mangled or rotated mesh, not a subtly wrong one.
 
+### Multi-material meshes
+
+Each material record carries its own slice of the index buffer — `index_start` at +48,
+`index_count` at +52 — so a mesh draws one run per material rather than one material
+stretched over the whole body. Confirmed 66/66: the ranges are contiguous, begin at 0, and
+sum to `num_indices`. `corf_com.bin` splits into body (4 026 indices), a small insert (144)
+and head (1 494); `assassin.bin` into body (6 078) and a 24-index visor plate.
+
+31 of the 66 chunks are multi-material, so this is what took the PMNM path from "proves the
+format" to "renders the creature correctly".
+
 ### What this means for the flat vs VR weapon strategy
 
 Today the two paths diverge by necessity:
@@ -597,7 +608,7 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | Change | Unlocks |
 | --- | --- |
 | Parser/decoder fixes 1–6 in §3a + the transparency convention | Mod stack loads and renders |
-| `PMNM` chunk parsing + skeleton binding (§4b) | The high-detail creature and first-person-arm meshes, animating, with their upgraded textures |
+| `PMNM` chunk parsing, skeleton binding, and multi-material splitting (§4b) | The high-detail creature and first-person-arm meshes — animating, correctly textured per material |
 | Mount-first, `txt16/`-qualified texture resolution (`AbstractAssetPath::resolve_first` + `dark::util::resolve_texture_name`) | Upgraded encodings actually win; stops props vanishing |
 | DDS decoder (BC1/2/3/7 + uncompressed) in `engine::dds` | The ~3 262 upgraded textures — the actual visual upgrade |
 
@@ -606,12 +617,11 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
 | 1 | Mount `.kpf` archives + accept the 25AE layout (loose `data/res/**`, `motiondb.bin` under `res/mschema/`, `shock2.gam`/`motiondb.bin` via asset paths not `File::open`) | Point straight at an unmodified 25AE install; **both** installs supported. Removes the repack scaffolding this spike used. | S — `ZipAssetPath` already handles stored ZIPs, and mount-first resolution is now in place |
-| 2 | Multi-material PMNM draw splitting — the material's index range is in its 56-byte record but not yet decoded, so every triangle is attributed to the first material (exact for the 35 single-material chunks, approximate for the other 31) | Correct textures on multi-material creatures, which is what stands between the PMNM path and shipping it on by default | S–M |
-| 3 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
-| 4 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
-| 5 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |
-| 6 | Optional: offline ASTC transcode + compressed upload path | Best quality/byte on Quest | L |
-| 7 | Not recommended: `.dml`, `.itl`, `.nut` | SCP gamesys patches / KEX HUD / KEX scripts | L — and largely duplicates logic we implement in Rust |
+| 2 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
+| 3 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
+| 4 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |
+| 5 | Optional: offline ASTC transcode + compressed upload path | Best quality/byte on Quest | L |
+| 6 | Not recommended: `.dml`, `.itl`, `.nut` | SCP gamesys patches / KEX HUD / KEX scripts | L — and largely duplicates logic we implement in Rust |
 
 ### Nightdive string tables are localization stubs — do not let them override
 
