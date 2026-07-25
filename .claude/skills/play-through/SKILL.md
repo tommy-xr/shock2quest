@@ -101,6 +101,23 @@ fix agent follows the repo's incremental, review, and negative-first-test
 discipline, opens a PR `Fixes #n`, and re-validates. Non-blockers: log them,
 keep playing past them.
 
+**Opening the PR is not the finish line — the fix agent watches it land green:**
+- `cargo fmt --check --all`. `format` is a separate, fast-failing CI job, and it
+  fails on changes that compile and test perfectly.
+- **Restack before finishing.** Fix agents branch off whatever `main` was when
+  they spawned; on a long run `main` moves underneath them (it may even have
+  refactored the very function being fixed). `git fetch origin && git rebase
+  origin/main`, resolve, then **re-run the tests** — a conflict resolution can
+  silently drop a test or revert half a hunk.
+- **Read `gh pr checks <N>`** after pushing, and fix what's red. A PR is done
+  when CI is green, not when the push succeeds.
+- **Widen the build check when touching shared types.** AGENTS.md's
+  `-p shock2vr -p desktop_runtime -p debug_runtime` skips `tools/`, which CI
+  builds — so a new variant on a `dark` enum breaks `dark_query`'s exhaustive
+  matches with a clean local check. For enum/trait changes, check every
+  non-Android package (`dark_viewer`, `dark_query`, `debug_command`,
+  `hitbox_analyzer`, `bench` too).
+
 ## 5. Replay & frontier
 
 Track the **frontier**: the furthest state reached. The robust, faithful way to
@@ -111,6 +128,25 @@ launch, since fixes rebuild the binary) resumes with `POST /v1/load
 {file:"frontier"}`. That survives relaunches, which `QuickLoad` (same-session
 only) and manual `transitionLevel`+`teleport` do not. Each iteration starts at
 the frontier and pushes further.
+
+**Rebase the campaign branch on `main` every iteration**, before the replay
+build. A campaign runs for many hours while `main` keeps moving, and a stale
+`fix_branch` makes the loop hunt ghosts: in the Engineering campaign a session
+hit a hard crash entering eng1 (`asset_cache` unwrapping `None` on a missing
+model, via an alert security camera's model swap), reported it as a Critical
+blocker, and burned the rest of the session on it — the fix had already landed
+upstream in #576. A stale branch also silently re-tests bugs that are already
+gone, and makes every fix PR conflict later. So each iteration:
+
+```
+git fetch origin && git merge origin/main   # or rebase; resolve, then re-run tests
+RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime
+cargo test -p shock2vr
+```
+
+If a session reports a crash or a hard blocker, **check whether it reproduces on
+current `main` before filing** — "already fixed upstream" is a real and common
+outcome, and filing it anyway wastes a reviewer's time.
 
 ## Report (aggregate, self-contained)
 
