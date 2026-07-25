@@ -330,6 +330,93 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     }
 }
 
+/// Monster FOV half-angle, in degrees (matches `FovDebugConfig::monster()`).
+/// Shared by sight checks and the melee connect check so an AI can only hit
+/// what it could see.
+pub const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
+
+/// How close an AI must be to melee. The attack behavior uses this to decide
+/// whether to keep swinging, and a swing may only connect inside it.
+pub const MELEE_ATTACK_RANGE: f32 = 8.0 / SCALE_FACTOR;
+
+///
+/// Melee Contact
+///
+/// A melee swing reaching its contact frame. Dark authors the connect moment
+/// on the animation itself - ShockEd's motion editor marks a damage window on
+/// the attack clip, which the port surfaces as the `MELEE_CONTACT_START`
+/// motion flag - so this runs off the animation, not a timer.
+///
+/// The blow itself is resolved entirely from the gamesys: the attacker's
+/// `L$Weapon` archetype (`Lead Pipe`, `Rumbler Claw`, `Midwife Spike`, ...)
+/// carries the `Contact` stim sources that describe what a landing hit does
+/// (`WeaponBash` at an authored intensity, plus e.g. `Venom` for arachnids),
+/// and the victim's own receptrons turn those into damage. Nothing here
+/// invents a damage number.
+///
+/// The swing connects only if the player is actually within melee range and
+/// inside the attacker's field of view - the AI swings at where it believes
+/// the target is, but only reality can be hit.
+pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &PhysicsWorld) -> Effect {
+    let Some((player_entity_id, player_pos)) = world
+        .borrow::<UniqueView<PlayerInfo>>()
+        .ok()
+        .map(|player| (player.entity_id, player.pos))
+    else {
+        return Effect::NoEffect;
+    };
+
+    let in_range = {
+        let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+        v_current_pos
+            .get(entity_id)
+            .ok()
+            .map(|pos| (pos.position - player_pos).magnitude() < MELEE_ATTACK_RANGE)
+            .unwrap_or(false)
+    };
+    if !in_range {
+        return Effect::NoEffect;
+    }
+
+    if !is_player_visible_in_fov(
+        entity_id,
+        world,
+        physics,
+        Deg(0.0),
+        MONSTER_FOV_HALF_ANGLE,
+    ) {
+        return Effect::NoEffect;
+    }
+
+    let Some((weapon_template_id, _)) =
+        get_first_link_with_template_and_data(world, entity_id, |link| match link {
+            Link::Weapon => Some(()),
+            _ => None,
+        })
+    else {
+        return Effect::NoEffect;
+    };
+
+    let damage = crate::mission::stim_response::contact_stim_damage(
+        world,
+        weapon_template_id,
+        player_entity_id,
+    );
+    if damage <= 0.0 {
+        return Effect::NoEffect;
+    }
+
+    Effect::Send {
+        msg: crate::scripts::Message {
+            to: player_entity_id,
+            payload: crate::scripts::MessagePayload::Damage {
+                amount: damage,
+                impact: None,
+            },
+        },
+    }
+}
+
 /// Where this AI should chase: its last-known target position when it has
 /// published awareness (frozen at the point sight broke), falling back to
 /// the player's true position for entities without awareness (scripts that
