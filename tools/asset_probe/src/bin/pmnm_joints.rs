@@ -34,7 +34,7 @@ fn main() {
         .read_to_end(&mut buf)
         .expect("read mesh");
 
-    let base = match dark::ss2_bin_pmnm::find_chunk(&buf) {
+    let base = match dark::ss2_bin_pmnm::find_chunk(&buf, 0) {
         Some(b) => b,
         None => {
             println!("{mesh_path}: no PMNM chunk");

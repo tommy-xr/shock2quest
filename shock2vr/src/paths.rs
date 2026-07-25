@@ -26,7 +26,16 @@ static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 const DESKTOP_CANDIDATES: &[&str] = &["./Data", "../Data", "../../Data", "."];
 
 #[cfg(not(target_os = "android"))]
-const SENTINELS: &[&str] = &["shock2.gam", "res/obj.crf", "res/mesh.crf", "motiondb.bin"];
+/// Files that mark a directory as a game-data root. A classic install has the
+/// loose gamesys and `.crf` archives; a 25th Anniversary Edition install has
+/// none of those at the root, keeping everything inside `sshock2.kpf` instead.
+const SENTINELS: &[&str] = &[
+    "shock2.gam",
+    "res/obj.crf",
+    "res/mesh.crf",
+    "motiondb.bin",
+    "sshock2.kpf",
+];
 
 #[cfg(not(target_os = "android"))]
 pub fn data_root() -> &'static Path {

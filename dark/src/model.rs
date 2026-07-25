@@ -221,33 +221,42 @@ impl Model {
         pmnm: Option<crate::ss2_bin_pmnm::PmnmMesh>,
         asset_cache: &mut AssetCache,
     ) -> Model {
-        let (mut scene_objects, hit_boxes) =
-            ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
+        // Render the high-detail chunk when we have one, and in that case skip
+        // building the original mesh's scene objects entirely - they would be
+        // discarded, and building them uploads a vertex buffer and decodes every
+        // original texture per creature. Hitboxes still come from the original
+        // mesh, so damage locations and ragdoll *physics* fitting are untouched.
+        // Ragdoll *rendering* is not automatic: it poses `clone_scene_objects()`
+        // from physics rather than from an `AnimationPlayer`, so it reads
+        // `bind_matrices()` and folds the same product in - see
+        // `RagDoll::renderables`.
+        let high_detail = pmnm.and_then(|pmnm| {
+            let objects = ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, asset_cache);
+            (!objects.is_empty()).then_some(objects)
+        });
 
-        // Swap the rendered geometry for the high-detail chunk when we have one.
-        // Hitboxes stay derived from the original mesh, so damage locations and
-        // ragdoll *physics* fitting are untouched. Ragdoll *rendering* is not
-        // automatic: it poses `clone_scene_objects()` from physics rather than
-        // from an `AnimationPlayer`, so it reads `bind_matrices()` and folds the
-        // same product in - see `RagDoll::renderables`.
-        let mut bind = None;
-        if let Some(pmnm) = pmnm {
-            let replacement = ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, asset_cache);
-            if !replacement.is_empty() {
+        let (scene_objects, hit_boxes, bind) = match high_detail {
+            None => {
+                let (objects, hit_boxes) =
+                    ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
+                (objects, hit_boxes, None)
+            }
+            Some(objects) => {
+                let (_, hit_boxes) = ss2_bin_ai_loader::to_vertices(&ai_mesh, &skeleton);
                 let matrices = Rc::new(ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton));
                 // Bake the rest palette so an un-animated draw is correct too,
                 // not just the animated paths.
                 let rest = build_palette(&skeleton.get_transforms(), &skeleton, Some(&matrices));
-                scene_objects = replacement
+                let objects = objects
                     .into_iter()
                     .map(|mut o| {
                         o.set_skinning_palette(rest);
                         o
                     })
                     .collect();
-                bind = Some(matrices);
+                (objects, hit_boxes, Some(matrices))
             }
-        }
+        };
         let hit_box_shapes = fit_hit_box_shapes(&ai_mesh, &skeleton);
         Model {
             transform: Matrix4::identity(),

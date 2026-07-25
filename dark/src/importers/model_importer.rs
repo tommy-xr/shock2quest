@@ -47,14 +47,18 @@ fn load_model(
             let ai_mesh = ss2_bin_ai_loader::read(reader, &common_header);
 
             // The high-detail chunk is appended past the LGMM data, so it needs
-            // the whole file rather than the streaming reader.
+            // the whole file rather than the streaming reader. The reader is
+            // sitting at the end of the LGMM data now, which is where the scan
+            // should start - searching from 0 would also search the vertex and
+            // index bytes.
             let pmnm = if ss2_bin_ai_loader::pmnm_enabled() {
+                let lgmm_end = reader.stream_position().unwrap_or(0) as usize;
                 let mut buf = Vec::new();
                 reader
                     .seek(std::io::SeekFrom::Start(0))
                     .and_then(|_| reader.read_to_end(&mut buf))
                     .ok()
-                    .and_then(|_| crate::ss2_bin_pmnm::find_chunk(&buf))
+                    .and_then(|_| crate::ss2_bin_pmnm::find_chunk(&buf, lgmm_end))
                     .and_then(|base| crate::ss2_bin_pmnm::read(&buf, base))
             } else {
                 None

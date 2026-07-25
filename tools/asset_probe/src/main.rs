@@ -99,7 +99,7 @@ fn probe_bin(buf: &[u8]) -> Result<String, String> {
                 dark::ss2_bin_ai_loader::read(&mut c, &header);
                 // 25AE meshes append a high-detail PMNM chunk; report it so a
                 // parse regression there shows up as a probe failure.
-                match dark::ss2_bin_pmnm::find_chunk(buf) {
+                match dark::ss2_bin_pmnm::find_chunk(buf, 0) {
                     Some(base) => match dark::ss2_bin_pmnm::read(buf, base) {
                         Some(m) => format!(
                             "LGMM v{version} + PMNM ({} tris, {} verts, {} mats, {} joints)",

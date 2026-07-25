@@ -811,5 +811,9 @@ pub fn pmnm_bind_matrices(skeleton: &Skeleton) -> [Matrix4<f32>; MAX_JOINTS] {
 /// lives in `dark`, which has no access to `shock2vr`'s options (the same reason
 /// `SS2_DEBUG_NORMALS` works this way).
 pub fn pmnm_enabled() -> bool {
-    std::env::var_os("SS2_PMNM_MESHES").is_some()
+    // Not `is_some()`: that would make `SS2_PMNM_MESHES=0` *enable* the path.
+    matches!(
+        std::env::var("SS2_PMNM_MESHES").as_deref(),
+        Ok("1" | "true" | "yes")
+    )
 }

@@ -226,11 +226,58 @@ pub fn decode_rgba8(buffer: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     Some((argb_u32_to_rgba8(&pixels), header.width, header.height))
 }
 
+/// Largest edge a decoded DDS keeps, per platform.
+///
+/// A decoded DDS is uncompressed RGBA8 (the renderer uploads nothing else), so
+/// the 25AE texture set costs roughly 12x the original's memory at full
+/// resolution - about 1.5 GB if it were all resident, against 681 MB capped at
+/// 256 px. Desktop can afford the full size; Quest cannot, and 256 px is already
+/// the modal size in the upgraded set, so the cap costs little visually.
+/// See `projects/25th-anniversary-assets.md` for the measurements.
+#[cfg(target_os = "android")]
+const MAX_EDGE: Option<u32> = Some(256);
+#[cfg(not(target_os = "android"))]
+const MAX_EDGE: Option<u32> = None;
+
+/// Halve `(w, h)` repeatedly until both fit `max_edge`, box-filtering each step.
+///
+/// Successive halving rather than a single resample: it is a few lines, needs no
+/// filter kernel, and each step averages exactly 4 source texels.
+fn downscale_to_fit(
+    mut data: Vec<u8>,
+    mut w: u32,
+    mut h: u32,
+    max_edge: u32,
+) -> (Vec<u8>, u32, u32) {
+    while w.max(h) > max_edge && w > 1 && h > 1 {
+        let (nw, nh) = (w / 2, h / 2);
+        let mut out = Vec::with_capacity((nw * nh * 4) as usize);
+        for y in 0..nh {
+            for x in 0..nw {
+                for c in 0..4 {
+                    let at = |sx: u32, sy: u32| data[(((sy * w) + sx) * 4 + c) as usize] as u32;
+                    let (sx, sy) = (x * 2, y * 2);
+                    let sum = at(sx, sy) + at(sx + 1, sy) + at(sx, sy + 1) + at(sx + 1, sy + 1);
+                    out.push((sum / 4) as u8);
+                }
+            }
+        }
+        data = out;
+        w = nw;
+        h = nh;
+    }
+    (data, w, h)
+}
+
 pub struct DdsFormat {}
 
 impl TextureFormat for DdsFormat {
     fn load(&self, buffer: &[u8]) -> RawTextureData {
         let (bytes, width, height) = decode_rgba8(buffer).expect("Failed to decode DDS texture");
+        let (bytes, width, height) = match MAX_EDGE {
+            Some(max) => downscale_to_fit(bytes, width, height, max),
+            None => (bytes, width, height),
+        };
         RawTextureData {
             bytes,
             width,
@@ -319,6 +366,31 @@ mod tests {
         assert!(decode_rgba8(&dds).is_none());
         let zero = dx10_bc7(0, 4, &[0u8; 16]);
         assert!(decode_rgba8(&zero).is_none());
+    }
+
+    #[test]
+    fn downscale_halves_until_it_fits_and_averages_texels() {
+        // 4x4, every texel of the top-left 2x2 block set to 100/200/40/80 so the
+        // averaged result is predictable.
+        let mut data = vec![0u8; 4 * 4 * 4];
+        for (y, v) in [(0u32, 100u8), (1, 200)] {
+            for x in 0..2u32 {
+                let at = (((y * 4) + x) * 4) as usize;
+                data[at] = v;
+            }
+        }
+        let (out, w, h) = downscale_to_fit(data, 4, 4, 2);
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(out.len(), 2 * 2 * 4);
+        // Top-left output texel averages 100, 100, 200, 200.
+        assert_eq!(out[0], 150);
+    }
+
+    #[test]
+    fn downscale_is_a_no_op_when_already_small_enough() {
+        let data = vec![7u8; 2 * 2 * 4];
+        let (out, w, h) = downscale_to_fit(data.clone(), 2, 2, 256);
+        assert_eq!((w, h, out), (2, 2, data));
     }
 
     #[test]

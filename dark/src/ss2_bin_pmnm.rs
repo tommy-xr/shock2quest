@@ -99,13 +99,19 @@ fn vec3_at(buf: &[u8], offset: usize) -> Option<Vector3<f32>> {
 ///
 /// The marker's position relative to the trailing chunk's own `LGMM` magic
 /// varies between files, so it is located by scanning rather than computed.
-pub fn find_chunk(buf: &[u8]) -> Option<usize> {
-    // Skip the first 4 bytes so a file that somehow *starts* with the marker
-    // can't be mistaken for an appended chunk.
-    buf.get(4..)?
+///
+/// `from` should be the end of the original LGMM data. Scanning the whole file
+/// instead would search the LGMM vertex and index bytes too, where a chance
+/// `50 4D 4E 4D` would shadow the real chunk and silently lose the high-detail
+/// mesh. Callers that don't know the boundary can pass 0.
+pub fn find_chunk(buf: &[u8], from: usize) -> Option<usize> {
+    // Never start at 0: a file that somehow *begins* with the marker is not an
+    // appended chunk.
+    let start = from.max(4).min(buf.len());
+    buf.get(start..)?
         .windows(MAGIC.len())
         .position(|w| w == MAGIC)
-        .map(|p| p + 4)
+        .map(|p| p + start)
 }
 
 /// Parse the `PMNM` chunk at `base`. Returns `None` for anything that does not
@@ -398,7 +404,7 @@ mod tests {
     #[test]
     fn finds_and_parses_a_synthetic_chunk() {
         let buf = synth();
-        let base = find_chunk(&buf).expect("marker should be found");
+        let base = find_chunk(&buf, 0).expect("marker should be found");
         let mesh = read(&buf, base).expect("should parse");
         assert_eq!(mesh.materials.len(), 1);
         assert_eq!(mesh.materials[0].name, "ND-test0.psd");
@@ -410,7 +416,7 @@ mod tests {
     #[test]
     fn positions_are_scaled_and_converted_to_engine_axes() {
         let buf = synth();
-        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
+        let mesh = read(&buf, find_chunk(&buf, 0).unwrap()).unwrap();
         // Vertex 1 is authored at Dark (1, 0, 0); the conversion negates x and
         // swaps the last two components, then scales.
         assert_eq!(
@@ -429,7 +435,7 @@ mod tests {
     #[test]
     fn weights_and_indices_survive_verbatim() {
         let buf = synth();
-        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
+        let mesh = read(&buf, find_chunk(&buf, 0).unwrap()).unwrap();
         assert_eq!(mesh.vertices[0].bone_weights, [255, 0, 0, 0]);
         assert_eq!(mesh.vertices[0].bone_indices, [0, 0, 0, 0]);
         assert_eq!(mesh.indices, vec![0, 1, 2]);
@@ -439,7 +445,7 @@ mod tests {
     fn rejects_a_layout_that_does_not_match() {
         let mut buf = synth();
         // Claim one more vertex than the section can hold.
-        let base = find_chunk(&buf).unwrap();
+        let base = find_chunk(&buf, 0).unwrap();
         let bad = 4u32.to_le_bytes();
         buf[base + 16..base + 20].copy_from_slice(&bad);
         assert!(read(&buf, base).is_none());
@@ -448,7 +454,7 @@ mod tests {
     #[test]
     fn rejects_an_out_of_range_index() {
         let mut buf = synth();
-        let base = find_chunk(&buf).unwrap();
+        let base = find_chunk(&buf, 0).unwrap();
         let idx_at = base + HEADER_LEN + MATERIAL_STRIDE + JOINT_STRIDE + VERTEX_STRIDE * 3;
         buf[idx_at..idx_at + 2].copy_from_slice(&99u16.to_le_bytes());
         assert!(read(&buf, base).is_none());
@@ -470,7 +476,7 @@ mod tests {
     #[test]
     fn each_material_gets_only_its_own_index_range() {
         let buf = synth_two_materials();
-        let mesh = read(&buf, find_chunk(&buf).unwrap()).expect("should parse");
+        let mesh = read(&buf, find_chunk(&buf, 0).unwrap()).expect("should parse");
         assert_eq!(mesh.materials.len(), 2);
         assert_eq!(
             (mesh.materials[0].index_start, mesh.materials[0].index_count),
@@ -495,19 +501,19 @@ mod tests {
     fn rejects_a_material_range_past_the_index_buffer() {
         // Claim 99 indices when only 6 exist.
         let buf = synth_with(2, 1, 3, 6, &[(0, 3), (3, 99)]);
-        assert!(read(&buf, find_chunk(&buf).unwrap()).is_none());
+        assert!(read(&buf, find_chunk(&buf, 0).unwrap()).is_none());
     }
 
     #[test]
     fn absent_marker_yields_none() {
-        assert!(find_chunk(&[0u8; 64]).is_none());
-        assert!(find_chunk(&[]).is_none());
+        assert!(find_chunk(&[0u8; 64], 0).is_none());
+        assert!(find_chunk(&[], 0).is_none());
     }
 
     #[test]
     fn skinned_expansion_normalizes_weights_and_keeps_bone_indices() {
         let buf = synth();
-        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
+        let mesh = read(&buf, find_chunk(&buf, 0).unwrap()).unwrap();
         let runs = mesh.to_skinned_vertices();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].0, "ND-test0.psd");
@@ -523,11 +529,11 @@ mod tests {
     #[test]
     fn skinned_expansion_handles_a_blended_vertex() {
         let mut buf = synth();
-        let base = find_chunk(&buf).unwrap();
+        let base = find_chunk(&buf, 0).unwrap();
         let v0 = base + HEADER_LEN + MATERIAL_STRIDE + JOINT_STRIDE;
         buf[v0 + 32..v0 + 36].copy_from_slice(&[0, 0, 0, 0]);
         buf[v0 + 36..v0 + 40].copy_from_slice(&[193, 62, 0, 0]);
-        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
+        let mesh = read(&buf, find_chunk(&buf, 0).unwrap()).unwrap();
         let v = &mesh.to_skinned_vertices()[0].1[0];
         let sum: f32 = v.bone_weights.iter().sum();
         assert!(
@@ -542,7 +548,7 @@ mod tests {
     #[test]
     fn rejects_a_header_whose_counts_exceed_the_buffer() {
         let mut buf = synth();
-        let base = find_chunk(&buf).unwrap();
+        let base = find_chunk(&buf, 0).unwrap();
         // num_vertices large enough that `40 * n` alone would size a huge Vec.
         buf[base + 16..base + 20].copy_from_slice(&107_000_000u32.to_le_bytes());
         assert!(read(&buf, base).is_none());
@@ -557,7 +563,7 @@ mod tests {
     #[test]
     fn rejects_a_bone_index_beyond_the_joint_count() {
         let mut buf = synth();
-        let base = find_chunk(&buf).unwrap();
+        let base = find_chunk(&buf, 0).unwrap();
         let v0 = base + HEADER_LEN + MATERIAL_STRIDE + JOINT_STRIDE;
         // synth has 1 joint, so index 5 is out of range.
         buf[v0 + 32] = 5;

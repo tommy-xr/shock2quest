@@ -73,7 +73,7 @@ All of it is in formats we already parse — no new container or archive format:
 | Textures | 3 262 `.dds` | **BC7_UNORM** (DX10 header) | **no decoder** |
 | Textures | ~1 200 `.png`/`.pcx`/`.gif` | standard | fine |
 | Materials | 3 507 `.mtl` / `.inc` | KEX text material DSL | **unsupported** |
-| Gamesys patches | 74 `.dml` | DML1 text patch scripts | **unsupported** |
+| Gamesys patches | 103 `.dml` (74 Nightdive + 25 `patch_ext` + 4 SHTUP) | DML1 text patch scripts | **unsupported** |
 | Game scripts | 61 `.nut` | Squirrel | not applicable (we reimplement scripts in Rust) |
 | HUD text layouts | 109 `.itl` | KEX text layout | **unsupported** |
 
@@ -339,22 +339,42 @@ surfaces, mip 0 only, since the engine builds its own mip chain.
   128×128, so as RGBA8 they cost roughly **12×** the vanilla set (64.5 MB → 772.7 MB for
   the stems present in both), plus ~808 MB of textures with no vanilla counterpart.
 
-Full-residency footprint, and what a decode-time downscale cap would cost:
+Full-residency footprint, and what a decode-time downscale cap would cost.
 
-| | RGBA8 footprint |
+**What this measures:** the decoded mip-0 bytes for every upgraded texture, as if all
+were resident at once. It is an upper bound and it excludes the engine's own generated mip
+chain (which adds ~33%). Whether a decoded `RawTextureData` is also retained CPU-side after
+GPU upload has not been checked — if it is, double these figures. The 256 px conclusion
+holds under any of those readings, but the absolute number should be re-measured on device
+before it is used to size anything.
+
+| | RGBA8 footprint (mip 0, upper bound) |
 | --- | --- |
 | full resolution | 1 540 MB |
 | cap 512 px | 1 302 MB |
 | cap 256 px | 681 MB |
 | cap 128 px | 186 MB |
 
-(Upper bounds — nothing loads every texture at once — but the ratios are what matter.)
+**What this measures:** decoded mip-0 bytes for every upgraded texture, as if all were
+resident at once. Upper bounds — nothing loads every texture at once — and they exclude the
+engine's own generated mip chain (~+33%). Whether a decoded `RawTextureData` is also
+retained CPU-side after upload has not been checked; if it is, double these figures. The
+256 px conclusion holds under any of those readings, but the absolute number should be
+re-measured on device before it sizes anything.
+
+**All of this is extrapolated from an M-series desktop — none of it has run on Quest
+hardware.** Two costs it under-states: the decode is currently *synchronous*, so 25AE level
+loads on device may stretch noticeably; and asset delivery is unexamined (~1.3 GB of KPFs on
+`/mnt/sdcard/shock2quest`, the `ZipAssetPath` index for ~24 000 entries across seven
+archives, and sdcard I/O for stored-zip random access). That is the largest remaining
+unknown between "works on desktop" and "ships on Quest".
 
 Practical options for Quest, in order of effort:
 
 1. **Decode + downscale on Android.** A max-dimension cap in the DDS path (256 px keeps
    most of the visual gain, since that is already the modal size). Bounded memory, small
-   change, no new upload path. This is the obvious first move.
+   change, no new upload path. This is the obvious first move — and it is now implemented
+   (`engine::dds::MAX_EDGE`, under `#[cfg(target_os = "android")]`).
 2. **Offline transcode to ASTC** at packaging time, plus a compressed-texture upload path
    in `engine` (which does not exist today). Best quality per byte and Quest-native, but
    it is real renderer work.
@@ -616,7 +636,8 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
-| 1 | Mount `.kpf` archives + accept the 25AE layout (loose `data/res/**`, `motiondb.bin` under `res/mschema/`, `shock2.gam`/`motiondb.bin` via asset paths not `File::open`) | Point straight at an unmodified 25AE install; **both** installs supported. Removes the repack scaffolding this spike used. | S — `ZipAssetPath` already handles stored ZIPs, and mount-first resolution is now in place |
+| 1 | Finish 25AE mounting: route `shock2.gam` through the asset paths. Blocked on `dark::properties::get()` being instantiated at `BufReader<File>` and its `PropertyDefinition`s being shared with mission loading, so the whole chain has to become generic over the reader. Until then a 25AE install needs `shock2.gam` extracted next to the KPFs. | Boot straight from an unmodified install with no manual step | M — a reader-generics refactor, not plumbing |
+| 1b | Honour the `.mtl` scale directives, then lift the `fam` carve-out in `mod_layer_may_override` | The terrain texture upgrade (currently withheld: taking the higher-res textures without `terrain_scale` tiles the world wrong) | M |
 | 2 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
 | 3 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
 | 4 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |
