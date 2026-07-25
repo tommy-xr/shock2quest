@@ -129,6 +129,25 @@ launch, since fixes rebuild the binary) resumes with `POST /v1/load
 only) and manual `transitionLevel`+`teleport` do not. Each iteration starts at
 the frontier and pushes further.
 
+**Rebase the campaign branch on `main` every iteration**, before the replay
+build. A campaign runs for many hours while `main` keeps moving, and a stale
+`fix_branch` makes the loop hunt ghosts: in the Engineering campaign a session
+hit a hard crash entering eng1 (`asset_cache` unwrapping `None` on a missing
+model, via an alert security camera's model swap), reported it as a Critical
+blocker, and burned the rest of the session on it — the fix had already landed
+upstream in #576. A stale branch also silently re-tests bugs that are already
+gone, and makes every fix PR conflict later. So each iteration:
+
+```
+git fetch origin && git merge origin/main   # or rebase; resolve, then re-run tests
+RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime
+cargo test -p shock2vr
+```
+
+If a session reports a crash or a hard blocker, **check whether it reproduces on
+current `main` before filing** — "already fixed upstream" is a real and common
+outcome, and filing it anyway wastes a reviewer's time.
+
 ## Report (aggregate, self-contained)
 
 Each `playtest` emits a `data.json` next to its screenshots. Render a session (or
