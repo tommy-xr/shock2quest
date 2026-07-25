@@ -412,6 +412,10 @@ pub enum Link {
     Replicator,
     SwitchLink,
     MissSpang,
+    /// From a melee AI to the weapon archetype it strikes with (its pipe,
+    /// claw, spike). The weapon carries the `StimSource` links that decide
+    /// what a connecting swing does to the victim.
+    Weapon,
     /// From a projectile archetype to a victim archetype class; the payload is
     /// the template id of the spang (impact effect, e.g. a blood or sparks
     /// particle group) to spawn when that projectile hits a descendant of the
@@ -986,6 +990,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$AIPatrol", |_| Link::AIPatrol),
         define_link("L$Clip", |_| Link::Clip),
         define_link("L$Miss Span", |_| Link::MissSpang),
+        define_link("L$Weapon", |_| Link::Weapon),
         //define_link("L$TPath", |_| Link::TPath),
         //define_link("L$TPathNext", |_| Link::TPath),
     ];
