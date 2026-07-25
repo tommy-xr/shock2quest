@@ -24,6 +24,7 @@ import type { Vec3 } from "../src/types.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const ONCE_ROUTER = 878; // power restoration fires this, which fires the trap
+const UNLOCK_TRAP = 1213; // the trap itself, for the off-edge (re-lock) check
 const GRAV_LIFT_BUTTON = 1787;
 const GRAV_LIFT = 1856;
 const UNLOCKED_TWIN_BUTTON = 1871; // control: never locked
@@ -158,5 +159,19 @@ test(
       true,
       "a still-locked button must stay locked across save/load too",
     );
+
+    // The mirror edge: an off-edge at the trap (what rec2's inverter delivers
+    // to its unlock trap during the dining ambush) locks the button again.
+    const trap = await only(game, UNLOCK_TRAP);
+    await game.entities.sendMessage(trap.id, { type: "TurnOff" });
+    await game.step({ frames: 10 });
+
+    const relocked = await press(game, GRAV_LIFT_BUTTON);
+    assert.equal(
+      relocked.refused,
+      true,
+      "turning the unlock trap off should lock its buttons again",
+    );
+    assert.equal(relocked.liftMoved, false, "a re-locked button must refuse");
   },
 );

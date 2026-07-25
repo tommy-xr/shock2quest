@@ -4,47 +4,30 @@ use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script, script_util::get_all_switch_links};
 
-/// Dark's in-world lock traps (`TrapLock` / `TrapUnlock`).
+/// Dark's in-world lock trap (`TrapUnlock`).
 ///
-/// When the trap is triggered it sets the lock state of every object it
-/// controls through its SwitchLinks - `TrapUnlock` clears the lock,
-/// `TrapLock` sets it. This is the mechanism the missions use to hand out
-/// buttons and doors that have no key: e.g. eng1's "Unlock Trap" is fired by
-/// a Once Router and unlocks the elevator/grav-lift call buttons, which are
-/// authored `PropLocked(true)` with no `PropKeyDst` and are otherwise
-/// permanently refused by `script_util::is_entity_locked`.
+/// The trap sets the lock state of every object it controls through its
+/// SwitchLinks: `TurnOn` unlocks them, `TurnOff` locks them again. This is how
+/// the missions hand out buttons that have no key - eng1's "Unlock Trap" is
+/// fired by a Once Router when main power comes back and unlocks the
+/// elevator / grav-lift call buttons, which are authored `PropLocked(true)`
+/// with no `PropKeyDst` and are otherwise permanently refused by
+/// `script_util::is_entity_locked`. Both edges are authored: rec2 drives its
+/// unlock trap from a button (unlock) *and* from an inverter on the dining
+/// ambush (re-lock), a lock/unlock cycle on the same card slot.
 ///
 /// The lock lives in Dark's own `P$Locked` property (via `Effect::SetLocked`),
 /// so it is the same state every lock check already reads and mission
 /// save/load persists it with the rest of the registered properties.
-///
-/// Only the trigger (`TurnOn`) acts; `TurnOff` is ignored, matching the
-/// trigger-only traps already here (`TrapSlayer`, `TrapQBSet`). The missions
-/// convert an off-edge into a trigger themselves - `TrapInverter` and the
-/// on/off filters exist for exactly that - so a trap acting on both edges
-/// would make those relays meaningless. Shipped data does route an off-edge
-/// into an unlock trap (rec2's Inverter 760 also feeds Unlock Trap 148, which
-/// a plain button drives directly too), and reading that as "re-lock" would
-/// risk sealing a progression button; ignoring it can only ever leave
-/// something unlocked that the original re-locked, which cannot soft-lock a
-/// player.
-pub struct TrapLock {
-    locked: bool,
-}
+pub struct TrapUnlock {}
 
-impl TrapLock {
-    /// `TrapLock`: triggering locks the linked objects.
-    pub fn lock() -> TrapLock {
-        TrapLock { locked: true }
-    }
-
-    /// `TrapUnlock`: triggering unlocks the linked objects.
-    pub fn unlock() -> TrapLock {
-        TrapLock { locked: false }
+impl TrapUnlock {
+    pub fn new() -> TrapUnlock {
+        TrapUnlock {}
     }
 }
 
-impl Script for TrapLock {
+impl Script for TrapUnlock {
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -52,18 +35,21 @@ impl Script for TrapLock {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
-        match msg {
-            MessagePayload::TurnOn { from: _ } => Effect::combine(
-                get_all_switch_links(world, entity_id)
-                    .into_iter()
-                    .map(|target| Effect::SetLocked {
-                        entity_id: target,
-                        locked: self.locked,
-                    })
-                    .collect(),
-            ),
-            _ => Effect::NoEffect,
-        }
+        let locked = match msg {
+            MessagePayload::TurnOn { from: _ } => false,
+            MessagePayload::TurnOff { from: _ } => true,
+            _ => return Effect::NoEffect,
+        };
+
+        Effect::combine(
+            get_all_switch_links(world, entity_id)
+                .into_iter()
+                .map(|target| Effect::SetLocked {
+                    entity_id: target,
+                    locked,
+                })
+                .collect(),
+        )
     }
 }
 
@@ -77,8 +63,8 @@ mod tests {
 
     /// Resolve the trap the way the game does - by its authored script name -
     /// so the registry wiring is under test alongside the behavior.
-    fn authored_script(name: &str) -> Box<dyn Script> {
-        ScriptWorld::create_script(name.to_owned())
+    fn authored_trap() -> Box<dyn Script> {
+        ScriptWorld::create_script("TrapUnlock".to_owned())
     }
 
     /// An eng1-style call button: `PropLocked(true)` with no `PropKeyDst`, so
@@ -100,9 +86,11 @@ mod tests {
         })
     }
 
-    /// Apply what the trap emitted, exactly as `Mission::handle_effects` does:
-    /// the shared flatten, then the shared `SetLocked` application.
-    fn apply(world: &mut World, effect: Effect) {
+    /// Deliver a message to the trap and apply what it emitted, exactly as
+    /// `Mission::handle_effects` does: the shared flatten, then the shared
+    /// `SetLocked` application.
+    fn trigger(world: &mut World, trap: EntityId, msg: MessagePayload) {
+        let effect = authored_trap().handle_message(trap, world, &PhysicsWorld::new(), &msg);
         for effect in Effect::flatten(vec![effect]) {
             if let Effect::SetLocked { entity_id, locked } = effect {
                 set_entity_locked(world, entity_id, locked);
@@ -111,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn triggering_an_unlock_trap_unlocks_every_button_it_controls() {
+    fn turning_the_trap_on_unlocks_every_button_it_controls() {
         let mut world = World::new();
         world.add_unique(QuestInfo::new());
         let first = keyless_locked_button(&mut world);
@@ -122,13 +110,7 @@ mod tests {
         assert!(is_entity_locked(&world, first));
         assert!(is_entity_locked(&world, second));
 
-        let effect = authored_script("TrapUnlock").handle_message(
-            trap,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TurnOn { from: trap },
-        );
-        apply(&mut world, effect);
+        trigger(&mut world, trap, MessagePayload::TurnOn { from: trap });
 
         assert!(!is_entity_locked(&world, first));
         assert!(!is_entity_locked(&world, second));
@@ -138,22 +120,30 @@ mod tests {
         );
     }
 
+    /// The mirror edge, authored in rec2: an inverter delivers `TurnOff` and
+    /// the card slot locks again.
     #[test]
-    fn triggering_a_lock_trap_locks_the_button_it_controls() {
+    fn turning_the_trap_off_locks_the_button_again() {
         let mut world = World::new();
         world.add_unique(QuestInfo::new());
-        let button = world.add_entity(PropLocked(false));
+        let button = keyless_locked_button(&mut world);
         let trap = trap_with_switch_links(&mut world, &[button]);
 
+        trigger(&mut world, trap, MessagePayload::TurnOn { from: trap });
         assert!(!is_entity_locked(&world, button));
 
-        let effect = authored_script("TrapLock").handle_message(
-            trap,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TurnOn { from: trap },
-        );
-        apply(&mut world, effect);
+        trigger(&mut world, trap, MessagePayload::TurnOff { from: trap });
+        assert!(is_entity_locked(&world, button));
+    }
+
+    #[test]
+    fn a_message_that_is_not_a_switch_edge_leaves_the_lock_alone() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let button = keyless_locked_button(&mut world);
+        let trap = trap_with_switch_links(&mut world, &[button]);
+
+        trigger(&mut world, trap, MessagePayload::Frob);
 
         assert!(is_entity_locked(&world, button));
     }
@@ -172,13 +162,7 @@ mod tests {
         let still_locked = keyless_locked_button(&mut world);
         let trap = trap_with_switch_links(&mut world, &[button]);
 
-        let effect = authored_script("TrapUnlock").handle_message(
-            trap,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TurnOn { from: trap },
-        );
-        apply(&mut world, effect);
+        trigger(&mut world, trap, MessagePayload::TurnOn { from: trap });
 
         let (all_properties, _, _) = dark::properties::get::<File>();
         let mut save = EntitySaveData::empty();
@@ -197,23 +181,5 @@ mod tests {
             "the unlock must survive save/load"
         );
         assert!(is_entity_locked(&loaded, old_to_new[&still_locked]));
-    }
-
-    #[test]
-    fn an_untriggered_unlock_trap_leaves_its_target_locked() {
-        let mut world = World::new();
-        world.add_unique(QuestInfo::new());
-        let button = keyless_locked_button(&mut world);
-        let trap = trap_with_switch_links(&mut world, &[button]);
-
-        let effect = authored_script("TrapUnlock").handle_message(
-            trap,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TurnOff { from: trap },
-        );
-        apply(&mut world, effect);
-
-        assert!(is_entity_locked(&world, button));
     }
 }
