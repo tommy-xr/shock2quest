@@ -12,7 +12,7 @@ use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3, vec3};
 use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
-    control::{CharacterLength, KinematicCharacterController},
+    control::{CharacterLength, EffectiveCharacterMovement, KinematicCharacterController},
     na,
     na::UnitQuaternion,
     prelude::*,
@@ -206,15 +206,102 @@ fn try_step_up(
     Some(Vector::y() * lift + dir * forward)
 }
 
+/// Downward translation (world units) applied to the player capsule per
+/// movement frame, honoring the body's gravity scale.
+fn player_gravity_step(character_body: &RigidBody) -> Real {
+    -0.5 / SCALE_FACTOR * character_body.gravity_scale()
+}
+
+/// One frame of player locomotion: the character controller's walk pass, the
+/// gravity pass (with ground snapping and the resting lift), and the stair
+/// step-up probe. Shared by real player movement ([`PhysicsWorld::move_player`])
+/// and the validated debug move ([`PhysicsWorld::move_player_validated`]) so
+/// both traverse exactly the same geometry.
+///
+/// Every translation returned comes from a collision-checked cast (the
+/// controller's own shape-cast solver, or `try_step_up`'s probe casts), so the
+/// result can never pass through geometry.
+///
+/// `climb` is the ladder redirect vector when the player grips a climbable
+/// surface: it replaces both the walk input and the gravity pass.
+fn step_player_movement(
+    controller: &KinematicCharacterController,
+    queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    dt: Real,
+    gravity: Real,
+    climb: Option<Vector<Real>>,
+) -> EffectiveCharacterMovement {
+    // Walk and gravity run as separate passes - NOT the old up-bump hack
+    // (there is no artificial upward movement): a combined walk+gravity cast
+    // points into the floor the player rests on, which degenerates into
+    // zero-progress resting contacts (see `PLAYER_REST_LIFT`). While gripping a
+    // ladder the climb vector replaces both passes.
+    let (walk, apply_gravity) = match climb {
+        Some(climb) => (climb, false),
+        None => (desired, true),
+    };
+    let mut mvt = controller.move_shape(dt, queries, shape, pos, walk, |_c| ());
+    if apply_gravity {
+        let after_walk = Translation::from(mvt.translation) * pos;
+        let fall = controller.move_shape(
+            dt,
+            queries,
+            shape,
+            &after_walk,
+            Vector::y() * gravity,
+            |_c| (),
+        );
+        mvt.translation += fall.translation;
+        mvt.grounded = fall.grounded;
+        if mvt.grounded {
+            mvt.translation += Vector::y() * (PLAYER_REST_LIFT / SCALE_FACTOR);
+        }
+    }
+    // Stairs: if grounded walking was blocked, probe for a step and hop onto
+    // it. (Grounded-only: an airborne player pressed against a wall must not
+    // ratchet up ledges.)
+    if climb.is_none() && mvt.grounded {
+        if let Some(step) = try_step_up(
+            queries,
+            shape,
+            &(Translation::from(mvt.translation) * pos),
+            desired,
+            mvt.translation,
+        ) {
+            mvt.translation += step;
+        }
+    }
+    mvt
+}
+
 /// Maximum distance (world units) a single validated player move may advance.
 /// A request for a farther target is clamped to this, so an automated tester
 /// navigates in short, collision-checked hops instead of one long teleport.
 pub const MAX_PLAYER_MOVE_DISTANCE: f32 = 5.0;
 
-/// Skin margin (world units) subtracted from the shape-cast time-of-impact so
-/// the player stops just short of the geometry it hit rather than flush against
-/// (or slightly inside) it.
-const PLAYER_MOVE_SKIN_MARGIN: f32 = 0.1;
+/// Distance (world units) a single substep of a validated move attempts: the
+/// player's per-frame walk displacement (25 SS2 ft/s at the 60 Hz fixed step -
+/// see the walk vector built in `mission_core`). A validated move is walked as
+/// a sequence of these rather than cast in one go, because the stair probe hops
+/// one ledge per call; matching the real per-frame distance also makes gravity
+/// (applied once per substep, as it is once per frame) fall at the real rate.
+const PLAYER_MOVE_SUBSTEP: f32 = 25.0 / SCALE_FACTOR / 60.0;
+
+/// Fraction of a substep's attempted distance that still counts as progress.
+/// Below it the player is genuinely stopped (a wall, a closed door) and the
+/// move ends; above it, walking / slope handling / the step-up probe is still
+/// carrying the player toward the target.
+const PLAYER_MOVE_PROGRESS_FRACTION: f32 = 0.25;
+
+/// How close to the requested distance a validated move must get to count as
+/// having arrived (world units). Also the tolerance for reporting `blocked`,
+/// and what keeps the loop from grinding on an ever-shrinking remainder (the
+/// final attempt shrinks to whatever is left, so its minimum progress shrinks
+/// with it).
+const PLAYER_MOVE_ARRIVAL_EPSILON: f32 = 0.02;
 
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
@@ -360,21 +447,24 @@ pub struct RayCastResult {
     // entity_id
 }
 
-/// Result of a bounded, shape-cast-validated player move (see
+/// Result of a bounded, collision-validated player move (see
 /// [`PhysicsWorld::move_player_validated`]).
 #[derive(Clone, Debug)]
 pub struct MoveResult {
-    /// Whether the player position actually changed.
+    /// Whether the player's position changed (a blocked move can still settle
+    /// the player under gravity).
     pub moved: bool,
-    /// Whether the shape cast hit geometry before the full clamped distance,
-    /// stopping the move short of the target.
+    /// Whether the player failed to cover the requested distance - stopped by
+    /// geometry (a wall or a closed door; stairs and ramps are walked over).
     pub blocked: bool,
     /// The player's new world position after the move.
     pub new_position: Vector3<f32>,
-    /// How far the player actually advanced (world units).
+    /// How far the player advanced *toward the target* (world units), measured
+    /// along the horizontal walk direction; the vertical result of gravity and
+    /// stair steps is not counted.
     pub distance_moved: f32,
-    /// The distance the move was allowed to attempt this call: `min(target
-    /// distance, MAX_PLAYER_MOVE_DISTANCE)`.
+    /// The distance the move was allowed to attempt this call: `min(horizontal
+    /// target distance, MAX_PLAYER_MOVE_DISTANCE)`.
     pub requested_distance: f32,
 }
 
@@ -781,13 +871,30 @@ impl PhysicsWorld {
 
     /// Move the player toward `target`, but bounded and collision-validated.
     ///
-    /// The displacement `target - current` is clamped to at most
-    /// [`MAX_PLAYER_MOVE_DISTANCE`], then the player's character-controller
-    /// collider is shape-cast along that direction. If it hits geometry before
-    /// the clamped distance, the player stops just short of the contact
-    /// (time-of-impact minus [`PLAYER_MOVE_SKIN_MARGIN`], clamped >= 0) and the
-    /// result is marked `blocked`. Unlike `set_player_translation`, this can
-    /// never move the player through a wall or out of bounds.
+    /// This *walks*: the horizontal displacement toward `target` is clamped to
+    /// [`MAX_PLAYER_MOVE_DISTANCE`] and covered in [`PLAYER_MOVE_SUBSTEP`]-sized
+    /// increments through [`step_player_movement`] - the same character
+    /// controller, gravity/ground-snapping and stair step-up path real player
+    /// movement uses, fed the same horizontal walk vector. So it traverses
+    /// whatever the player can actually walk over (stairs, ramps, small ledges)
+    /// instead of reporting the first riser as a wall (issue #559), and the
+    /// vertical result is whatever walking produces - the requested `y` only
+    /// picks a direction to walk in, it is never moved along.
+    ///
+    /// Safety is unchanged: every applied translation comes from the
+    /// controller's shape-cast solver or the step probe's collision-checked
+    /// casts, so - unlike `set_player_translation` - this can never move the
+    /// player through a wall or out of bounds.
+    ///
+    /// `blocked` means the player did not cover the requested distance: either
+    /// a substep made less than [`PLAYER_MOVE_PROGRESS_FRACTION`] of its attempt
+    /// (a wall, a closed door) or the move ran out of substeps still short of
+    /// the target. A purely vertical request has nothing to walk toward and is
+    /// a no-op.
+    ///
+    /// Ladders are not climbed (the move never grips a climbable surface), so
+    /// issuing one on a ladder lets the player fall - exactly as walking
+    /// without pushing into the ladder does.
     pub fn move_player_validated(
         &mut self,
         target: Vector3<f32>,
@@ -795,11 +902,15 @@ impl PhysicsWorld {
     ) -> MoveResult {
         let current = self.get_player_translation(player_handle);
         let delta = target - current;
-        let dist = delta.magnitude();
+        // Walking is horizontal: the vertical component of the request is
+        // dropped, exactly like the walk vector the game feeds `move_player`.
+        // Gravity, ground snapping and the stair probe decide `y`.
+        let delta_h = vec3(delta.x, 0.0, delta.z);
+        let dist = delta_h.magnitude();
 
-        // Degenerate request (zero or non-finite): nothing to do. Guard before
-        // computing `requested_distance` so a NaN target doesn't report a
-        // bogus clamp value (`NaN.min(5.0) == 5.0`).
+        // Degenerate request (zero, purely vertical, or non-finite): nothing to
+        // walk toward. Guard before computing `requested_distance` so a NaN
+        // target doesn't report a bogus clamp value (`NaN.min(5.0) == 5.0`).
         if !dist.is_finite() || dist == 0.0 {
             return MoveResult {
                 moved: false,
@@ -812,7 +923,6 @@ impl PhysicsWorld {
 
         // Distance we are allowed to attempt this call.
         let requested_distance = dist.min(MAX_PLAYER_MOVE_DISTANCE);
-        let dir = delta / dist; // normalized direction
 
         // Snapshot the character shape + pose (cheap Arc clone) before building
         // the query pipeline, which borrows the body/collider sets. Mirrors the
@@ -829,7 +939,8 @@ impl PhysicsWorld {
         let character_body = &self.rigid_body_set[player_handle.character_handle];
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let character_shape = character_collider.shared_shape().clone();
-        let character_pos = *character_body.position();
+        let mut pos = *character_body.position();
+        let gravity = player_gravity_step(character_body);
 
         // Same collision filter the real player movement uses: collide with the
         // collidable groups, ignore the player's own body and all sensors.
@@ -842,25 +953,11 @@ impl PhysicsWorld {
             .exclude_rigid_body(player_handle.character_handle)
             .exclude_sensors();
 
-        // Shape-cast the character collider along the (normalized) direction.
-        // With a unit velocity the time-of-impact is a distance in world units,
-        // mirroring how `ray_cast2` treats `max_toi` as a distance.
-        //
-        // `stop_at_penetration: false` so a start that is already touching /
-        // slightly penetrating geometry (e.g. after a raw `/v1/player/teleport`
-        // dropped the player against a wall) doesn't return `toi == 0` and pin
-        // the player as permanently `blocked` - a move *away* from the contact
-        // (separating velocity) is then discarded at t=0 and proceeds normally,
-        // while a move *into* it still blocks.
-        let shape_vel = vector![dir.x, dir.y, dir.z];
-        let options = rapier3d::parry::query::ShapeCastOptions {
-            max_time_of_impact: requested_distance,
-            target_distance: 0.0,
-            stop_at_penetration: false,
-            compute_impact_geometry_on_penetration: true,
-        };
-
-        let allowed_distance = {
+        let dt = self.integration_parameters.dt;
+        // Normalized horizontal walk direction.
+        let walk_dir = vector![delta_h.x / dist, 0.0, delta_h.z / dist];
+        let mut distance_moved = 0.0;
+        {
             let queries = self.broad_phase.as_query_pipeline(
                 self.narrow_phase.query_dispatcher(),
                 &self.rigid_body_set,
@@ -868,34 +965,61 @@ impl PhysicsWorld {
                 filter,
             );
 
-            match queries.cast_shape(
-                &character_pos,
-                &shape_vel,
-                character_shape.as_ref(),
-                options,
-            ) {
-                Some((_handle, hit)) => Some(
-                    (hit.time_of_impact - PLAYER_MOVE_SKIN_MARGIN).clamp(0.0, requested_distance),
-                ),
-                None => None,
+            // Walk toward the target one substep at a time. The iteration bound
+            // is the worst case a *progressing* move can need (every substep
+            // scraping by at the progress fraction, plus a few for the
+            // shrinking final attempt); running it out leaves `distance_moved`
+            // short of the request, which is reported as `blocked` below rather
+            // than passing for success.
+            let max_substeps = (requested_distance
+                / (PLAYER_MOVE_SUBSTEP * PLAYER_MOVE_PROGRESS_FRACTION))
+                .ceil() as usize
+                + 8;
+            for _ in 0..max_substeps {
+                let remaining = requested_distance - distance_moved;
+                if remaining <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                    break;
+                }
+                let attempt = remaining.min(PLAYER_MOVE_SUBSTEP);
+                let mvt = step_player_movement(
+                    &player_handle.controller,
+                    &queries,
+                    character_shape.as_ref(),
+                    &pos,
+                    walk_dir * attempt,
+                    dt,
+                    gravity,
+                    // No ladder redirect: a validated move walks, it doesn't climb.
+                    None,
+                );
+                // Progress is measured along the HORIZONTAL walk direction, so
+                // the vertical give-and-take of gravity and step-up neither
+                // counts as distance toward the target nor masks a stall (a
+                // player pinned against a wall while falling must still read as
+                // blocked).
+                let progress = mvt.translation.dot(&walk_dir);
+                pos = Translation::from(mvt.translation) * pos;
+                distance_moved += progress.max(0.0);
+                if progress < attempt * PLAYER_MOVE_PROGRESS_FRACTION {
+                    break;
+                }
             }
-        };
+        }
 
-        let (distance_moved, blocked) = match allowed_distance {
-            Some(d) => (d, true),
-            None => (requested_distance, false),
-        };
+        let new_position = nvec_to_cgmath(pos.translation.vector);
 
-        // When `distance_moved == 0`, `current + dir * 0` is exactly `current`.
-        let new_position = current + dir * distance_moved;
-
-        if distance_moved > 0.0 {
+        // `moved` tracks whether the body was actually written (callers mirror
+        // the new position into `PlayerInfo` on it), which is not the same as
+        // having advanced toward the target: a blocked move can still settle
+        // the player under gravity.
+        let moved = new_position != current;
+        if moved {
             self.set_player_translation(new_position, player_handle);
         }
 
         MoveResult {
-            moved: distance_moved > 0.0,
-            blocked,
+            moved,
+            blocked: distance_moved + PLAYER_MOVE_ARRIVAL_EPSILON < requested_distance,
             new_position,
             distance_moved,
             requested_distance,
@@ -1487,8 +1611,7 @@ impl PhysicsWorld {
         let character_shape = character_collider.shared_shape().clone();
         let character_pos = *character_collider.position();
 
-        let mut gravity = -0.5 / SCALE_FACTOR;
-        gravity *= self.rigid_body_set[player_handle.character_handle].gravity_scale();
+        let gravity = player_gravity_step(&self.rigid_body_set[player_handle.character_handle]);
 
         // Filter shared by both movement passes: only collide with the
         // collidable groups as the player, ignore the player body and sensors.
@@ -1567,55 +1690,16 @@ impl PhysicsWorld {
                 &self.collider_set,
                 movement_filter,
             );
-            // Walk and gravity run as separate passes - NOT the old up-bump
-            // hack (there is no artificial upward movement): a combined
-            // walk+gravity cast points into the floor the player rests on,
-            // which degenerates into zero-progress resting contacts (see
-            // `PLAYER_REST_LIFT`). While gripping a ladder the climb vector
-            // replaces both passes.
-            let (walk, apply_gravity) = match climb_movement {
-                Some(climb) => (climb, false),
-                None => (desired_movement, true),
-            };
-            let mut mvt = player_handle.controller.move_shape(
-                self.integration_parameters.dt,
+            step_player_movement(
+                &player_handle.controller,
                 &queries,
                 character_shape.as_ref(),
                 &character_pos,
-                walk,
-                |_c| (),
-            );
-            if apply_gravity {
-                let after_walk = Translation::from(mvt.translation) * character_pos;
-                let fall = player_handle.controller.move_shape(
-                    self.integration_parameters.dt,
-                    &queries,
-                    character_shape.as_ref(),
-                    &after_walk,
-                    Vector::y() * gravity,
-                    |_c| (),
-                );
-                mvt.translation += fall.translation;
-                mvt.grounded = fall.grounded;
-                if mvt.grounded {
-                    mvt.translation += Vector::y() * (PLAYER_REST_LIFT / SCALE_FACTOR);
-                }
-            }
-            // Stairs: if grounded walking was blocked, probe for a step and
-            // hop onto it. (Grounded-only: an airborne player pressed against
-            // a wall must not ratchet up ledges.)
-            if climb_movement.is_none() && mvt.grounded {
-                if let Some(step) = try_step_up(
-                    &queries,
-                    character_shape.as_ref(),
-                    &(Translation::from(mvt.translation) * character_pos),
-                    desired_movement,
-                    mvt.translation,
-                ) {
-                    mvt.translation += step;
-                }
-            }
-            mvt
+                desired_movement,
+                self.integration_parameters.dt,
+                gravity,
+                climb_movement,
+            )
         });
 
         let mut collision_events = Vec::new();
@@ -2909,6 +2993,159 @@ mod tests {
         assert!(
             walked > 3.0,
             "walking on a rotated platform should progress ~6 units, moved {walked}"
+        );
+    }
+
+    /// A validated move (`/v1/player/move`, the automation navigation
+    /// primitive) must traverse whatever real walking traverses: it steps up
+    /// onto a stair-sized riser, while a full-height wall still reports
+    /// `blocked` and stops the player in front of it.
+    /// (Negative-first: with the old single shape-cast implementation the
+    /// riser produced a time-of-impact of ~0, so the call returned
+    /// `blocked: true, distance_moved: 0` on walkable ground - issue #559.)
+    #[test]
+    fn validated_move_steps_up_stairs_but_not_walls() {
+        // Walk +x into an obstacle `obstacle_height` tall using validated
+        // moves only; report (x advanced, y gained, any call reported blocked).
+        let run = |obstacle_height: f32| -> (f32, f32, bool) {
+            let mut world = PhysicsWorld::new();
+            // Floor top at y=0 (parentless trimesh, like level geometry).
+            let floor_verts = vec![
+                point![-100.0, 0.0, -100.0],
+                point![100.0, 0.0, -100.0],
+                point![100.0, 0.0, 100.0],
+                point![-100.0, 0.0, 100.0],
+            ];
+            let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+            world.add_collider(
+                EntityId::from_inner(1000).unwrap(),
+                ColliderBuilder::trimesh(floor_verts, floor_tris)
+                    .expect("floor trimesh")
+                    .build(),
+            );
+            let mut player =
+                world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+            // An obstacle ahead of the player (x from -5 to -1) whose top sits
+            // at `obstacle_height`.
+            world.add_kinematic(
+                EntityId::from_inner(2001).unwrap(),
+                vec3(-3.0, obstacle_height / 2.0, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(4.0, obstacle_height, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            // Settle onto the floor, then advance with validated moves alone -
+            // no `update`, so only `move_player_validated` moves the player.
+            for _ in 0..30 {
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+            let start = world.get_player_translation(&player);
+            let mut blocked_any = false;
+            let mut max_y = start.y;
+            for _ in 0..4 {
+                let current = world.get_player_translation(&player);
+                let result =
+                    world.move_player_validated(current + vec3(1.0, 0.0, 0.0), &mut player);
+                blocked_any |= result.blocked;
+                max_y = max_y.max(result.new_position.y);
+            }
+            let end = world.get_player_translation(&player);
+            (end.x - start.x, max_y - start.y, blocked_any)
+        };
+
+        // 1.5 SS2 ft (0.6 wu) - a typical stair riser: walkable, so validated
+        // moves must climb it and cross the platform.
+        let (riser_x, riser_y, riser_blocked) = run(0.6);
+        assert!(
+            riser_x > 3.0,
+            "a validated move should walk over a 1.5 ft riser, advanced {riser_x}"
+        );
+        assert!(
+            riser_y > 0.4,
+            "a validated move over a riser should gain its height, rose {riser_y}"
+        );
+        assert!(
+            !riser_blocked,
+            "walkable ground must not report blocked (issue #559)"
+        );
+
+        // A full-height wall: the safety property - the player stops in front
+        // of it (the capsule's own radius is the only advance) and never
+        // passes through.
+        let (wall_x, _, wall_blocked) = run(10.0);
+        assert!(
+            wall_blocked,
+            "a solid wall must still report blocked, advanced {wall_x}"
+        );
+        assert!(
+            wall_x < 0.8,
+            "a validated move must not pass into a wall, advanced {wall_x}"
+        );
+    }
+
+    /// A player FALLING beside a wall, asked to move into it toward a target
+    /// below them, must still report `blocked` and gain no ground: falling is
+    /// not progress. (Negative-first: when the move walked along the full 3D
+    /// direction to the target and measured progress along it, the gravity
+    /// translation projected onto that downward-tilted direction and passed the
+    /// progress threshold on its own - a walled player reported
+    /// `blocked: false` with several units of "distance moved".)
+    #[test]
+    fn validated_move_into_wall_while_falling_reports_blocked() {
+        let mut world = PhysicsWorld::new();
+        // A tall wall spanning x from -5 to -1, over a bottomless drop (no
+        // floor), so the player keeps falling for the whole move.
+        world.add_kinematic(
+            EntityId::from_inner(2001).unwrap(),
+            vec3(-3.0, 0.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 200.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        // The player in mid-air right against the wall's face.
+        let mut player =
+            world.create_player(vec3(-5.5, 5.0, 0.0), EntityId::from_inner(2000).unwrap());
+
+        // A few frames so the wall collider enters the broad-phase BVH the
+        // movement queries run against (colliders are only inserted on a step).
+        for _ in 0..5 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        let mut blocked_all = true;
+        let mut reported_distance = 0.0;
+        for _ in 0..4 {
+            // A steeply DOWNWARD target: the only walkable direction toward it
+            // is +x (into the wall), and the drop is what the old 3D progress
+            // metric mistook for progress toward the target.
+            let result = world.move_player_validated(vec3(3.0, -20.0, 0.0), &mut player);
+            blocked_all &= result.blocked;
+            reported_distance += result.distance_moved;
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            blocked_all,
+            "moving into a wall while falling must report blocked"
+        );
+        assert!(
+            reported_distance < 0.4,
+            "falling must not be reported as distance toward the target, reported {reported_distance}"
+        );
+        assert!(
+            end.x - start.x < 0.4,
+            "a falling player must not gain ground against a wall, advanced {}",
+            end.x - start.x
+        );
+        assert!(
+            end.y < start.y,
+            "the player should still fall while blocked, y went {} -> {}",
+            start.y,
+            end.y
         );
     }
 }
