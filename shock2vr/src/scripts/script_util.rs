@@ -471,6 +471,30 @@ fn collect_contained_items(
     });
 }
 
+/// The `SetQuestBit` effect for an entity's authored quest-bit pair
+/// (`PropQuestBitName` + `PropQuestBitValue`, defaulting to `COMPLETE` when no
+/// value is authored). `None` when the entity carries no quest-bit name.
+/// Shared by every trap that applies a quest bit as part of its action.
+pub fn set_quest_bit_effect(world: &World, entity_id: EntityId) -> Option<Effect> {
+    use dark::properties::{PropQuestBitName, PropQuestBitValue, QuestBitValue};
+
+    let v_qbname = world.borrow::<View<PropQuestBitName>>().unwrap();
+    let v_qbval = world.borrow::<View<PropQuestBitValue>>().unwrap();
+
+    let quest_bit_value = v_qbval
+        .get(entity_id)
+        .map(|v| v.0)
+        .unwrap_or(QuestBitValue::COMPLETE);
+
+    v_qbname
+        .get(entity_id)
+        .ok()
+        .map(|qb_name| Effect::SetQuestBit {
+            quest_bit_name: qb_name.0.to_owned(),
+            quest_bit_value,
+        })
+}
+
 pub fn get_all_switch_links(world: &World, producing_entity_id: EntityId) -> Vec<EntityId> {
     let links = world.borrow::<View<Links>>().unwrap();
     let mut linked_entities = Vec::new();

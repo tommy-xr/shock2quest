@@ -1,9 +1,8 @@
-use dark::properties::{PropQuestBitName, PropQuestBitValue, QuestBitValue};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{Effect, MessagePayload, Script};
+use super::{Effect, MessagePayload, Script, script_util::set_quest_bit_effect};
 
 pub struct TrapQBSet {}
 impl TrapQBSet {
@@ -21,23 +20,9 @@ impl Script for TrapQBSet {
     ) -> Effect {
         match msg {
             MessagePayload::TurnOn { from: _ } => {
-                let v_qbname = world.borrow::<View<PropQuestBitName>>().unwrap();
-                let v_qbval = world.borrow::<View<PropQuestBitValue>>().unwrap();
-
-                let check_qbval = v_qbval
-                    .get(entity_id)
-                    .map(|v| v.0)
-                    .unwrap_or(QuestBitValue::COMPLETE);
-
-                if let Ok(qb_name) = &v_qbname.get(entity_id) {
+                if let Some(quest_bit_effect) = set_quest_bit_effect(world, entity_id) {
                     Effect::Combined {
-                        effects: vec![
-                            Effect::SetQuestBit {
-                                quest_bit_name: qb_name.0.to_owned(),
-                                quest_bit_value: check_qbval,
-                            },
-                            Effect::DestroyEntity { entity_id },
-                        ],
+                        effects: vec![quest_bit_effect, Effect::DestroyEntity { entity_id }],
                     }
                 } else {
                     Effect::NoEffect
