@@ -147,6 +147,11 @@ const PROBE_SKIN: f32 = PLAYER_CONTACT_OFFSET / 2.0;
 /// "walked straight into a wall" into a full `forward`-sized sideways hop onto
 /// whatever happens to sit beside the player.
 ///
+/// Keep this WELL BELOW 0.28: the station.mis repro that motivated the
+/// deflection (input `normalize(-1.38, 0, 0.4)` against the x-facing west
+/// wall) has a tangential fraction of ~0.278, so raising the threshold to
+/// there or beyond silently reinstates issue #499.
+///
 /// Note the resulting step can still deviate a long way from the raw input
 /// (at the threshold, ~78 degrees) - that is inherent to sliding along a wall,
 /// and matches what the character controller's own movement does with the same
@@ -256,7 +261,23 @@ fn try_step_up(
         if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.72 {
             return None;
         }
-        Some(Vector::y() * lift + d * forward)
+        // The clearance sweeps above ran NARROWED, which is what lets them
+        // ignore surfaces the player is merely resting against - but it also
+        // means they would miss a surface that the real, full-width capsule
+        // would clip by up to `PROBE_SKIN` at the landing pose. Check the
+        // final pose at full width so the hop still lands the player in a
+        // genuinely valid pose, preserving the invariant that every applied
+        // translation comes from a collision-checked query (see
+        // `step_player_movement`).
+        let step = Vector::y() * lift + d * forward;
+        if queries
+            .intersect_shape(Translation::from(step) * pos, shape)
+            .next()
+            .is_some()
+        {
+            return None;
+        }
+        Some(step)
     };
 
     // Straight ahead: if nothing blocks the lifted path, the landing decides.
@@ -3392,7 +3413,7 @@ mod tests {
     }
 
     /// The station.mis service-hall ledge, as REAL collision triangles lifted
-    /// straight out of the shipped mission (78 of them, the geometry within
+    /// straight out of the shipped mission (123 of them, the geometry within
     /// ~2 units of the blocked pose). Checked in so the regression runs on CI,
     /// where the game data is absent - `player_climbs_station_service_hall_ledge`
     /// covers the same ground against the live mission when data IS present.
