@@ -771,10 +771,9 @@ impl Script for AnimatedMonsterAI {
 
         let delta = time.elapsed.as_secs_f32();
 
-        // Monster FOV is 60 degrees half-angle (matches FovDebugConfig::monster())
         // Monster rotation is set directly via Effect::SetRotation, so pose.rotation
         // already contains the heading. Pass Deg(0.0) to avoid applying it twice.
-        const MONSTER_FOV_HALF_ANGLE: f32 = 60.0;
+        use super::ai_util::MONSTER_FOV_HALF_ANGLE;
         // A pinned alertness (DebugForceChase) acts as permanent sight of
         // the player: no decay, and the last-known position tracks them live
         let is_visible = self.alertness_pinned
@@ -1317,6 +1316,13 @@ impl Script for AnimatedMonsterAI {
                         return Effect::NoEffect;
                     }
                     fire_ranged_projectile(world, entity_id)
+                } else if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) {
+                    // The swing reached its authored contact frame - resolve
+                    // the hit through the attacker's melee weapon archetype.
+                    if self.is_dead || is_killed(entity_id, world) {
+                        return Effect::NoEffect;
+                    }
+                    super::ai_util::melee_contact_attack(world, entity_id, physics)
                 // } else if motion_flags.contains(MotionFlags::END) {
                 //     Effect::QueueAnimationBySchema {
                 //         entity_id,

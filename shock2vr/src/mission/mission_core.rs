@@ -500,6 +500,9 @@ impl MissionCore {
         world.add_unique(
             crate::mission::reload::GlobalProjectileClips::from_entity_info(&entity_info_rc),
         );
+        world.add_unique(
+            crate::mission::stim_response::GlobalContactStims::from_entity_info(&entity_info_rc),
+        );
         // Reuse the obj-icons already hydrated into the template metadata above
         // (keyed by template id) rather than rescanning every template.
         let template_obj_icons: HashMap<i32, String> = template_name_to_template_id
@@ -668,6 +671,18 @@ impl MissionCore {
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
+        // Give the player the links `The Player` archetype authors - chiefly
+        // its receptrons (inherited from `Human Vulnerability`), which are what
+        // decide how hard an incoming stim hits. Without them the player is
+        // inert to every act/react damage source in the gamesys.
+        entity_creator::initialize_links_for_entity(
+            THE_PLAYER_TEMPLATE_ID,
+            player_entity,
+            &entity_info_rc,
+            &template_to_entity_id,
+            &mut world,
+        );
+
         // Start background music
         initialize_background_music(&abstract_mission.song_params, asset_cache, audio_context);
 
@@ -702,6 +717,13 @@ impl MissionCore {
         let mut id_to_physics = HashMap::new();
         let mut id_to_bitmap = HashMap::new();
         let mut script_world = ScriptWorld::new();
+        // The player has no `P$Scripts` in the gamesys, so give it its damage
+        // handler explicitly - otherwise Damage messages sent to the player
+        // are dropped and nothing can hurt it.
+        script_world.add_entity2(
+            player_entity,
+            Box::new(crate::scripts::player_script::PlayerScript),
+        );
 
         let world_entity_id = world.add_entity(RuntimePropDoNotSerialize {});
         if let Some(collider) = abstract_mission.physics_geometry {
