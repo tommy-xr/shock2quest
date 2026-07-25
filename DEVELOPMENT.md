@@ -25,7 +25,32 @@
 
 ### 2. Provide data files
 
+Either copy the files into the repo, or point the engine at an existing copy.
+
+**Option A — copy into `Data/`**
+
 - Copy local game files (\*.mis, res folder) into the `shock2quest/Data` folder
+
+**Option B — set `DARK_ASSET_PATH`**
+
+Point the engine at game files that live outside the repo (handy when sharing
+one copy of the data across several clones):
+
+```bash
+export DARK_ASSET_PATH=/path/to/your/shock2/data
+```
+
+**Either way, the data directory must contain at least one _sentinel_ file** —
+`shock2.gam`, `res/obj.crf`, `res/mesh.crf`, or `motiondb.bin`. This is how the
+engine recognizes a directory as game data.
+
+> **Gotcha:** if `DARK_ASSET_PATH` is set but contains no sentinel, it does *not*
+> fail. It logs a warning and falls back to searching `./Data`, `../Data`,
+> `../../Data`, `.` — which typically surfaces later as a confusing
+> `shock2.gam not found`, even though the variable looks correctly set. If you
+> hit that, check the sentinels before anything else.
+
+Resolution order lives in `shock2vr/src/paths.rs`.
 
 ### 2b. Enable git hooks (recommended)
 
