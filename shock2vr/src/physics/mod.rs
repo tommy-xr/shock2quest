@@ -122,6 +122,37 @@ fn climb_redirect(desired: Vector<Real>, toward_ladder: Vector<Real>) -> Option<
     Some(desired_h - toward_ladder * into + Vector::y() * vertical * CLIMB_SPEED_SCALE)
 }
 
+/// How much (SS2 ft) the step probe's clearance sweeps shrink the player
+/// capsule's RADIUS. The player comes to rest `PLAYER_CONTACT_OFFSET` from
+/// whatever it touches, so a full-width sweep travelling PARALLEL to a nearby
+/// surface - straight up the riser face it stands against, or forward past the
+/// wall beside it - reports that surface as a grazing hit at toi ~ 0 and the
+/// probe aborts on an obstruction that isn't in its way. That is what rejected
+/// an otherwise legal 1.5 ft step onto the station.mis service-hall ledge and
+/// blocked the route out of the Station training level (issue #499).
+///
+/// Only the radius shrinks - the capsule's HEIGHT is preserved, so these stay
+/// genuine swept tests and a shelf crossed part-way up the lift still blocks.
+/// Half the resting gap is the margin: it clears a player sitting at the
+/// nominal offset, and tolerates up to `PROBE_SKIN` of penetration beyond it
+/// before a graze can register again. Widening it further would start hiding
+/// real geometry alongside the player, so it is deliberately small.
+const PROBE_SKIN: f32 = PLAYER_CONTACT_OFFSET / 2.0;
+
+/// How much of the input must survive projection onto a blocking wall before
+/// the step probe follows the slide. `dir` is a unit vector, so this is the
+/// tangential fraction: 0.2 rejects an input within ~11 degrees of head-on
+/// into the wall, where the sideways component is incidental rather than
+/// intended. Without the floor, normalizing a near-zero tangent would turn
+/// "walked straight into a wall" into a full `forward`-sized sideways hop onto
+/// whatever happens to sit beside the player.
+///
+/// Note the resulting step can still deviate a long way from the raw input
+/// (at the threshold, ~78 degrees) - that is inherent to sliding along a wall,
+/// and matches what the character controller's own movement does with the same
+/// input; the guard is against deflecting on noise, not against large angles.
+const MIN_SLIDE_FRACTION: f32 = 0.2;
+
 /// Step-up probe (the original engine's stair-climbing approach: probe up,
 /// forward, then down from the blocked position). Called when the player's
 /// horizontal movement was mostly blocked; returns the extra translation that
@@ -165,10 +196,10 @@ fn try_step_up(
     // the tread: the capsule radius, the gap to the riser (which can exceed
     // the contact offset when the walk stalled early), and margin on top.
     let forward = PLAYER_RADIUS / SCALE_FACTOR + 4.0 * contact_offset;
-    // `target_distance` counts lateral grazes (e.g. the riser edge the player
-    // is pressed against) as immediate hits, so the clearance casts (up,
-    // forward) use 0; only the landing cast keeps the contact offset so the
-    // player comes to rest at the normal gap above the tread.
+    // Full-width cast, used for the LANDING sweep: the tread height it
+    // measures depends on the real capsule bottom, and its `target_distance`
+    // is the contact offset so the player comes to rest at the normal gap
+    // above the tread.
     let cast = |from: &Isometry<Real>, dir: Vector<Real>, max_dist: f32, target: f32| {
         queries.cast_shape(
             from,
@@ -182,28 +213,87 @@ fn try_step_up(
             },
         )
     };
+    // Clearance sweeps (up, forward) use a slightly narrower capsule so that
+    // surfaces the player is merely resting against don't read as
+    // obstructions - see `PROBE_SKIN` for why, and why only the radius shrinks.
+    let narrowed = shape.as_capsule().map(|c| {
+        Capsule::new(
+            c.segment.a,
+            c.segment.b,
+            c.radius - PROBE_SKIN / SCALE_FACTOR,
+        )
+    });
+    let narrow_shape: &dyn Shape = narrowed.as_ref().map_or(shape, |c| c as &dyn Shape);
+    let cast_narrow = |from: &Isometry<Real>, dir: Vector<Real>, max_dist: f32| {
+        queries.cast_shape(
+            from,
+            &dir,
+            narrow_shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: max_dist,
+                target_distance: 0.0,
+                stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true,
+            },
+        )
+    };
 
     // 1) Headroom directly above.
-    if cast(pos, Vector::y(), step_height, 0.0).is_some() {
-        return None;
-    }
-    // 2) Forward clearance at the lifted height.
     let lifted = Translation::from(Vector::y() * step_height) * pos;
-    if cast(&lifted, dir, forward, 0.0).is_some() {
+    if cast_narrow(pos, Vector::y(), step_height).is_some() {
         return None;
     }
-    // 3) Drop onto the tread.
-    let planted = Translation::from(dir * forward) * lifted;
-    let (_, hit) = cast(&planted, -Vector::y(), step_height, contact_offset)?;
-    let lift = step_height - hit.time_of_impact;
-    // Too small to matter (the rounded capsule bottom slides over it anyway),
-    // or a downward/steep landing normal (not a tread). The threshold sits
-    // just above cos(45 deg) so the probe can't hop up slopes the controller's
-    // slope limit (default 45 deg) refuses to walk.
-    if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.72 {
+    // 2) Forward clearance at the lifted height, and 3) drop onto the tread.
+    //    `land` assumes the forward path for `d` is already known clear.
+    let land = |d: Vector<Real>| -> Option<Vector<Real>> {
+        let planted = Translation::from(d * forward) * lifted;
+        let (_, hit) = cast(&planted, -Vector::y(), step_height, contact_offset)?;
+        let lift = step_height - hit.time_of_impact;
+        // Too small to matter (the rounded capsule bottom slides over it
+        // anyway), or a downward/steep landing normal (not a tread). The
+        // threshold sits just above cos(45 deg) so the probe can't hop up
+        // slopes the controller's slope limit (default 45 deg) refuses to walk.
+        if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.72 {
+            return None;
+        }
+        Some(Vector::y() * lift + d * forward)
+    };
+
+    // Straight ahead: if nothing blocks the lifted path, the landing decides.
+    let Some((_, wall)) = cast_narrow(&lifted, dir, forward) else {
+        return land(dir);
+    };
+    // Blocked by a WALL: the player walking into it would slide along it, so
+    // probe the slide direction too - mirroring what the character
+    // controller's own movement does. Without this, a diagonal push into a
+    // corner whose forward face is a wall but whose side is a steppable ledge
+    // never steps at all: on the station.mis service hall, pushing northwest
+    // wedges the player against the west wall instead of climbing the ledge to
+    // the north (issue #499). Only a mostly-vertical face deflects; a steep
+    // slope or tread is the straight path's business, handled above.
+    if wall.normal1.y.abs() > 0.72 {
         return None;
     }
-    Some(Vector::y() * lift + dir * forward)
+    let n_h = vector![wall.normal1.x, 0.0, wall.normal1.z];
+    let n_norm = n_h.norm();
+    if n_norm < 1.0e-3 {
+        return None;
+    }
+    // Project the input onto the wall face (n must be unit for the rejection
+    // to be correct). `dir` is a unit vector, so `slide_norm` is exactly the
+    // tangential fraction of the input - require a real sideways intent
+    // before hopping sideways.
+    let n = n_h / n_norm;
+    let slide = dir - n * dir.dot(&n);
+    let slide_norm = slide.norm();
+    if slide_norm < MIN_SLIDE_FRACTION {
+        return None;
+    }
+    let slide_dir = slide / slide_norm;
+    if cast_narrow(&lifted, slide_dir, forward).is_some() {
+        return None;
+    }
+    land(slide_dir)
 }
 
 /// Downward translation (world units) applied to the player capsule per
@@ -3146,6 +3236,337 @@ mod tests {
             "the player should still fall while blocked, y went {} -> {}",
             start.y,
             end.y
+        );
+    }
+
+    /// A low ceiling must still veto a step-up. The issue #499 fix narrows the
+    /// capsule used for the headroom sweep so surfaces beside the player stop
+    /// masking it; this guards that the sweep still rejects a real ceiling
+    /// (its height is deliberately not narrowed).
+    #[test]
+    fn player_does_not_step_up_under_low_ceiling() {
+        // Height gained walking +x into a 0.6 riser, with a ceiling `gap`
+        // above the player's head (or none at all).
+        let run = |ceiling: Option<f32>| -> f32 {
+            let mut world = PhysicsWorld::new();
+            let floor_verts = vec![
+                point![-100.0, 0.0, -100.0],
+                point![100.0, 0.0, -100.0],
+                point![100.0, 0.0, 100.0],
+                point![-100.0, 0.0, 100.0],
+            ];
+            let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+            world.add_collider(
+                EntityId::from_inner(1000).unwrap(),
+                ColliderBuilder::trimesh(floor_verts, floor_tris)
+                    .expect("floor trimesh")
+                    .build(),
+            );
+            let mut player =
+                world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+            world.add_kinematic(
+                EntityId::from_inner(2001).unwrap(),
+                vec3(-3.0, 0.3, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(4.0, 0.6, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            if let Some(y) = ceiling {
+                world.add_kinematic(
+                    EntityId::from_inner(2002).unwrap(),
+                    vec3(-3.0, y, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(4.0, 0.4, 4.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            }
+            for _ in 0..30 {
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+            let start = world.get_player_translation(&player);
+            let mut max_y = start.y;
+            for _ in 0..240 {
+                world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+                max_y = max_y.max(world.get_player_translation(&player).y);
+            }
+            max_y - start.y
+        };
+
+        // Sanity: with open sky above, the 0.6 riser is climbed.
+        let open = run(None);
+        assert!(
+            open > 0.5,
+            "a 1.5 ft riser should be stepped up, rose {open}"
+        );
+        // A ceiling slab just above the riser leaves nowhere to stand.
+        let capped = run(Some(1.5));
+        assert!(
+            capped < 0.1,
+            "a step under a low ceiling must be refused, rose {capped}"
+        );
+    }
+
+    // ---- mission-derived regression (issue #499) ----
+
+    /// Load a real mission's level geometry, headlessly and GL-free. Returns
+    /// `None` when the game data is not present (the repo ships a placeholder
+    /// `Data/`), so this is a no-op on CI but a real check locally.
+    fn try_load_level(mission: &str) -> Option<dark::mission::SystemShock2Level> {
+        use crate::zip_asset_path::ZipAssetPath;
+        use engine::assets::asset_paths::AssetPath;
+        use std::fs::File;
+        use std::io::BufReader;
+
+        let mission_path = crate::resource_path(mission);
+        if !std::path::Path::new(&mission_path).exists() {
+            eprintln!("skipping: {mission} not found (no game data)");
+            return None;
+        }
+        let asset_paths = AssetPath::combine(vec![
+            AssetPath::folder(crate::resource_path("res/mesh")),
+            AssetPath::folder(crate::resource_path("res/obj")),
+            ZipAssetPath::new(crate::resource_path("res/obj.crf")),
+            ZipAssetPath::new(crate::resource_path("res/bitmap.crf")),
+            ZipAssetPath::new(crate::resource_path("res/fam.crf")),
+            AssetPath::folder("".to_owned()),
+        ]);
+        let base_path = crate::paths::data_root().to_string_lossy().into_owned();
+        let (properties, links, links_with_data) = dark::properties::get();
+        let mut game_reader = BufReader::new(File::open(crate::resource_path("shock2.gam")).ok()?);
+        let gamesys = dark::gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
+        let mut reader = BufReader::new(File::open(&mission_path).ok()?);
+        Some(dark::mission::read(
+            asset_paths.as_ref(),
+            &base_path,
+            &mut reader,
+            &gamesys,
+            &links,
+            &links_with_data,
+            &properties,
+        ))
+    }
+
+    /// The station.mis service-hall ledge that blocked the Earth -> Station
+    /// campaign (issue #499). The player stands in the pocket below the ledge
+    /// and pushes northwest along the authored AIPATH route
+    /// `(13.38,6.40) -> (13.38,6.60) -> (12.80,6.70) -> (12.00,6.80)`; the
+    /// route crosses a 1.5 ft riser, well inside the 2 ft step height.
+    ///
+    /// (Negative-first: before the fix the player wedges at `(13.16,-3.80,6.44)`
+    /// forever - the exact coordinate reported in the issue - because the
+    /// headroom cast reports the riser face it is pressed against as an
+    /// immediate hit and the forward cast aims straight into the west wall.)
+    ///
+    /// This runs against REAL mission geometry on purpose: two earlier
+    /// attempts at this bug went green on synthetic cuboid fixtures that did
+    /// not reproduce the contact at all.
+    #[test]
+    fn player_climbs_station_service_hall_ledge() {
+        let Some(level) = try_load_level("station.mis") else {
+            return;
+        };
+        let mut world = PhysicsWorld::new();
+        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        let mut player =
+            world.create_player(vec3(13.38, -3.8, 6.4), EntityId::from_inner(2).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        // Northwest, toward the authored post-ramp waypoint (12.0, 6.8).
+        let dir = vec3(-1.38f32, 0.0, 0.4).normalize() * (25.0 / 60.0 / dark::SCALE_FACTOR);
+        for _ in 0..120 {
+            world.update(dir, &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.y - start.y > 0.5,
+            "should climb the ~1.5 ft service-hall riser, rose {} (ended {:?})",
+            end.y - start.y,
+            end
+        );
+    }
+
+    /// The station.mis service-hall ledge, as REAL collision triangles lifted
+    /// straight out of the shipped mission (78 of them, the geometry within
+    /// ~2 units of the blocked pose). Checked in so the regression runs on CI,
+    /// where the game data is absent - `player_climbs_station_service_hall_ledge`
+    /// covers the same ground against the live mission when data IS present.
+    ///
+    /// This is a real-geometry fixture on purpose. Two earlier attempts at
+    /// issue #499 were rejected because hand-built cuboid fixtures went green
+    /// without ever reproducing the contact that actually blocked the player.
+    #[rustfmt::skip]
+    const STATION_LEDGE_TRIS: &[[[f32; 3]; 3]] = &[
+    [[12.8000, 0.8000, 9.6000], [12.8000, 0.8000, 6.4000], [12.8000, -2.4000, 9.6000]],
+    [[12.8000, 0.8000, 6.4000], [12.8000, -0.8000, 6.4000], [12.8000, -2.4000, 9.6000]],
+    [[12.8000, -0.8000, 6.4000], [12.8000, -2.4000, 6.4000], [12.8000, -2.4000, 9.6000]],
+    [[12.8000, -2.4000, 6.4000], [12.8000, -2.4000, 6.6000], [12.8000, -2.4000, 9.6000]],
+    [[12.8000, -2.4000, 6.6000], [12.8000, -2.4000, 9.4000], [12.8000, -2.4000, 9.6000]],
+    [[12.8000, -4.8000, 9.6000], [12.8000, -2.4000, 9.6000], [12.8000, -4.8000, 9.4000]],
+    [[12.8000, -2.4000, 9.6000], [12.8000, -2.4000, 9.4000], [12.8000, -4.8000, 9.4000]],
+    [[12.8000, -2.4000, 9.4000], [12.8000, -4.0000, 9.4000], [12.8000, -4.8000, 9.4000]],
+    [[12.8000, -4.0000, 9.4000], [12.8000, -4.2000, 9.4000], [12.8000, -4.8000, 9.4000]],
+    [[24.0000, -4.8000, 9.4000], [24.0000, -4.8000, 9.6000], [12.8000, -4.8000, 9.4000]],
+    [[24.0000, -4.8000, 9.6000], [14.4000, -4.8000, 9.6000], [12.8000, -4.8000, 9.4000]],
+    [[14.4000, -4.8000, 9.6000], [12.8000, -4.8000, 9.6000], [12.8000, -4.8000, 9.4000]],
+    [[8.0000, -2.4000, 6.6000], [12.4000, -2.4000, 6.6000], [8.0000, -4.2000, 6.6000]],
+    [[12.4000, -2.4000, 6.6000], [12.4000, -4.0000, 6.6000], [8.0000, -4.2000, 6.6000]],
+    [[12.4000, -4.0000, 6.6000], [12.4000, -4.2000, 6.6000], [8.0000, -4.2000, 6.6000]],
+    [[8.0000, -2.4000, 6.6000], [8.0000, -2.4000, 9.4000], [12.4000, -2.4000, 6.6000]],
+    [[8.0000, -2.4000, 9.4000], [12.4000, -2.4000, 9.4000], [12.4000, -2.4000, 6.6000]],
+    [[12.4000, -2.4000, 9.4000], [12.4000, -2.4000, 9.0000], [12.4000, -2.4000, 6.6000]],
+    [[12.4000, -2.4000, 9.0000], [12.4000, -2.4000, 7.0000], [12.4000, -2.4000, 6.6000]],
+    [[8.0000, -2.4000, 9.4000], [8.0000, -4.2000, 9.4000], [12.4000, -2.4000, 9.4000]],
+    [[8.0000, -4.2000, 9.4000], [12.4000, -4.2000, 9.4000], [12.4000, -2.4000, 9.4000]],
+    [[12.4000, -4.2000, 9.4000], [12.4000, -4.0000, 9.4000], [12.4000, -2.4000, 9.4000]],
+    [[12.4000, -2.4000, 6.6000], [12.4000, -2.4000, 7.0000], [12.4000, -4.0000, 6.6000]],
+    [[12.4000, -2.4000, 7.0000], [12.4000, -4.0000, 7.0000], [12.4000, -4.0000, 6.6000]],
+    [[12.4000, -4.0000, 9.4000], [12.4000, -4.0000, 9.0000], [12.4000, -2.4000, 9.4000]],
+    [[12.4000, -4.0000, 9.0000], [12.4000, -2.4000, 9.0000], [12.4000, -2.4000, 9.4000]],
+    [[12.4000, -4.2000, 9.2000], [8.0000, -4.2000, 9.2000], [12.4000, -4.2000, 6.8000]],
+    [[8.0000, -4.2000, 9.2000], [8.0000, -4.2000, 6.8000], [12.4000, -4.2000, 6.8000]],
+    [[12.8000, -2.4000, 9.4000], [12.8000, -2.4000, 6.6000], [12.4000, -2.4000, 9.0000]],
+    [[12.8000, -2.4000, 6.6000], [12.4000, -2.4000, 7.0000], [12.4000, -2.4000, 9.0000]],
+    [[12.4000, -4.0000, 7.0000], [12.4000, -2.4000, 7.0000], [12.8000, -4.0000, 6.6000]],
+    [[12.4000, -2.4000, 7.0000], [12.8000, -2.4000, 6.6000], [12.8000, -4.0000, 6.6000]],
+    [[12.8000, -2.4000, 6.6000], [12.8000, -2.9000, 6.6000], [12.8000, -4.0000, 6.6000]],
+    [[12.8000, -4.0000, 9.4000], [12.8000, -2.4000, 9.4000], [12.4000, -4.0000, 9.0000]],
+    [[12.8000, -2.4000, 9.4000], [12.4000, -2.4000, 9.0000], [12.4000, -4.0000, 9.0000]],
+    [[12.4000, -4.2000, 6.8000], [24.0000, -4.2000, 6.8000], [12.4000, -4.2000, 9.2000]],
+    [[24.0000, -4.2000, 6.8000], [24.0000, -4.2000, 9.2000], [12.4000, -4.2000, 9.2000]],
+    [[12.4000, -4.0000, 7.0000], [12.8000, -4.0000, 6.6000], [12.4000, -4.0000, 6.6000]],
+    [[12.8000, -4.0000, 6.6000], [12.8000, -4.2000, 6.6000], [12.4000, -4.0000, 6.6000]],
+    [[12.8000, -4.2000, 6.6000], [12.4000, -4.2000, 6.6000], [12.4000, -4.0000, 6.6000]],
+    [[12.4000, -4.0000, 9.0000], [12.4000, -4.0000, 9.4000], [12.8000, -4.0000, 9.4000]],
+    [[12.4000, -4.0000, 9.4000], [12.4000, -4.2000, 9.4000], [12.8000, -4.0000, 9.4000]],
+    [[12.4000, -4.2000, 9.4000], [12.8000, -4.2000, 9.4000], [12.8000, -4.0000, 9.4000]],
+    [[8.0000, -4.4000, 9.2000], [8.0000, -4.2000, 9.2000], [24.0000, -4.4000, 9.2000]],
+    [[8.0000, -4.2000, 9.2000], [12.4000, -4.2000, 9.2000], [24.0000, -4.4000, 9.2000]],
+    [[12.4000, -4.2000, 9.2000], [24.0000, -4.2000, 9.2000], [24.0000, -4.4000, 9.2000]],
+    [[12.8000, -4.8000, 9.4000], [12.8000, -4.2000, 9.4000], [8.0000, -4.8000, 9.4000]],
+    [[12.8000, -4.2000, 9.4000], [12.4000, -4.2000, 9.4000], [8.0000, -4.8000, 9.4000]],
+    [[12.4000, -4.2000, 9.4000], [8.0000, -4.2000, 9.4000], [8.0000, -4.8000, 9.4000]],
+    [[12.8000, -4.8000, 9.4000], [8.0000, -4.8000, 9.4000], [12.8000, -4.8000, 9.2000]],
+    [[8.0000, -4.8000, 9.4000], [8.0000, -4.8000, 9.2000], [12.8000, -4.8000, 9.2000]],
+    [[12.8000, -4.8000, 9.4000], [12.8000, -4.8000, 9.2000], [24.0000, -4.8000, 9.4000]],
+    [[12.8000, -4.8000, 9.2000], [24.0000, -4.8000, 9.2000], [24.0000, -4.8000, 9.4000]],
+    [[19.8000, -4.4000, 9.0000], [19.8000, -4.8000, 9.0000], [13.9000, -4.4000, 9.0000]],
+    [[19.8000, -4.8000, 9.0000], [13.9000, -4.8000, 9.0000], [13.9000, -4.4000, 9.0000]],
+    [[13.9000, -4.4000, 9.0000], [13.9000, -4.8000, 9.0000], [8.0000, -4.4000, 9.0000]],
+    [[13.9000, -4.8000, 9.0000], [12.8000, -4.8000, 9.0000], [8.0000, -4.4000, 9.0000]],
+    [[12.8000, -4.8000, 9.0000], [8.0000, -4.8000, 9.0000], [8.0000, -4.4000, 9.0000]],
+    [[24.0000, -4.4000, 9.2000], [24.0000, -4.4000, 9.0000], [8.0000, -4.4000, 9.2000]],
+    [[24.0000, -4.4000, 9.0000], [19.8000, -4.4000, 9.0000], [8.0000, -4.4000, 9.2000]],
+    [[19.8000, -4.4000, 9.0000], [13.9000, -4.4000, 9.0000], [8.0000, -4.4000, 9.2000]],
+    [[13.9000, -4.4000, 9.0000], [8.0000, -4.4000, 9.0000], [8.0000, -4.4000, 9.2000]],
+    [[8.0000, -4.8000, 9.2000], [8.0000, -4.8000, 9.0000], [12.8000, -4.8000, 9.2000]],
+    [[8.0000, -4.8000, 9.0000], [12.8000, -4.8000, 9.0000], [12.8000, -4.8000, 9.2000]],
+    [[12.8000, -4.8000, 9.2000], [12.8000, -4.8000, 9.0000], [24.0000, -4.8000, 9.2000]],
+    [[12.8000, -4.8000, 9.0000], [13.9000, -4.8000, 9.0000], [24.0000, -4.8000, 9.2000]],
+    [[13.9000, -4.8000, 9.0000], [19.8000, -4.8000, 9.0000], [24.0000, -4.8000, 9.2000]],
+    [[12.2000, -4.8000, 7.0000], [12.2000, -4.4000, 7.0000], [8.0000, -4.8000, 7.0000]],
+    [[12.2000, -4.4000, 7.0000], [8.0000, -4.4000, 7.0000], [8.0000, -4.8000, 7.0000]],
+    [[18.1000, -4.4000, 7.0000], [12.2000, -4.4000, 7.0000], [18.1000, -4.8000, 7.0000]],
+    [[12.2000, -4.4000, 7.0000], [12.2000, -4.8000, 7.0000], [18.1000, -4.8000, 7.0000]],
+    [[12.2000, -4.8000, 7.0000], [12.8000, -4.8000, 7.0000], [18.1000, -4.8000, 7.0000]],
+    [[18.1000, -4.8000, 7.0000], [12.8000, -4.8000, 7.0000], [24.0000, -4.8000, 7.0000]],
+    [[12.8000, -4.8000, 7.0000], [12.8000, -4.8000, 6.8000], [24.0000, -4.8000, 7.0000]],
+    [[12.8000, -4.8000, 6.8000], [24.0000, -4.8000, 6.8000], [24.0000, -4.8000, 7.0000]],
+    [[8.0000, -4.4000, 7.0000], [12.2000, -4.4000, 7.0000], [8.0000, -4.4000, 6.8000]],
+    [[12.2000, -4.4000, 7.0000], [18.1000, -4.4000, 7.0000], [8.0000, -4.4000, 6.8000]],
+    [[18.1000, -4.4000, 7.0000], [24.0000, -4.4000, 7.0000], [8.0000, -4.4000, 6.8000]],
+    [[24.0000, -4.4000, 7.0000], [24.0000, -4.4000, 6.8000], [8.0000, -4.4000, 6.8000]],
+    [[12.8000, -4.8000, 7.0000], [12.2000, -4.8000, 7.0000], [12.8000, -4.8000, 6.8000]],
+    [[12.2000, -4.8000, 7.0000], [8.0000, -4.8000, 7.0000], [12.8000, -4.8000, 6.8000]],
+    [[8.0000, -4.8000, 7.0000], [8.0000, -4.8000, 6.8000], [12.8000, -4.8000, 6.8000]],
+    [[12.8000, -4.8000, 6.8000], [12.8000, -4.8000, 6.6000], [24.0000, -4.8000, 6.8000]],
+    [[12.8000, -4.8000, 6.6000], [22.1000, -4.8000, 6.6000], [24.0000, -4.8000, 6.8000]],
+    [[24.0000, -4.4000, 6.8000], [24.0000, -4.2000, 6.8000], [8.0000, -4.4000, 6.8000]],
+    [[24.0000, -4.2000, 6.8000], [12.4000, -4.2000, 6.8000], [8.0000, -4.4000, 6.8000]],
+    [[12.4000, -4.2000, 6.8000], [8.0000, -4.2000, 6.8000], [8.0000, -4.4000, 6.8000]],
+    [[12.8000, -4.8000, 6.8000], [8.0000, -4.8000, 6.8000], [12.8000, -4.8000, 6.6000]],
+    [[8.0000, -4.8000, 6.8000], [8.0000, -4.8000, 6.6000], [12.8000, -4.8000, 6.6000]],
+    [[8.0000, -4.8000, 6.6000], [8.0000, -4.2000, 6.6000], [12.8000, -4.8000, 6.6000]],
+    [[8.0000, -4.2000, 6.6000], [12.4000, -4.2000, 6.6000], [12.8000, -4.8000, 6.6000]],
+    [[12.4000, -4.2000, 6.6000], [12.8000, -4.2000, 6.6000], [12.8000, -4.8000, 6.6000]],
+    [[12.8000, -2.9000, 6.6000], [12.8000, -2.4000, 6.6000], [12.8000, -2.9000, 6.4000]],
+    [[12.8000, -2.4000, 6.6000], [12.8000, -2.4000, 6.4000], [12.8000, -2.9000, 6.4000]],
+    [[22.1000, -4.8000, 6.6000], [12.8000, -4.8000, 6.6000], [22.1000, -4.8000, 6.4000]],
+    [[12.8000, -4.8000, 6.6000], [12.8000, -4.8000, 6.4000], [22.1000, -4.8000, 6.4000]],
+    [[12.8000, -4.8000, 6.4000], [14.6000, -4.8000, 6.4000], [22.1000, -4.8000, 6.4000]],
+    [[14.6000, -4.8000, 6.4000], [15.0000, -4.8000, 6.4000], [22.1000, -4.8000, 6.4000]],
+    [[15.0000, -4.8000, 6.4000], [19.0000, -4.8000, 6.4000], [22.1000, -4.8000, 6.4000]],
+    [[12.8000, -2.9000, 6.4000], [12.8000, -4.4000, 6.4000], [12.8000, -2.9000, 6.6000]],
+    [[12.8000, -4.4000, 6.4000], [12.8000, -4.8000, 6.4000], [12.8000, -2.9000, 6.6000]],
+    [[12.8000, -4.8000, 6.4000], [12.8000, -4.8000, 6.6000], [12.8000, -2.9000, 6.6000]],
+    [[12.8000, -4.8000, 6.6000], [12.8000, -4.2000, 6.6000], [12.8000, -2.9000, 6.6000]],
+    [[12.8000, -4.2000, 6.6000], [12.8000, -4.0000, 6.6000], [12.8000, -2.9000, 6.6000]],
+    [[11.0000, -4.8000, 6.4000], [7.6000, -4.8000, 6.4000], [11.0000, -4.8000, 3.2000]],
+    [[7.6000, -4.8000, 6.4000], [7.6000, -4.8000, 6.2461], [11.0000, -4.8000, 3.2000]],
+    [[7.6000, -4.8000, 6.2461], [10.3958, -4.8000, 3.4503], [11.0000, -4.8000, 3.2000]],
+    [[7.6000, -4.8000, 6.4000], [11.0000, -4.8000, 6.4000], [7.6000, 1.6000, 6.4000]],
+    [[11.0000, -4.8000, 6.4000], [11.0000, -4.4000, 6.4000], [7.6000, 1.6000, 6.4000]],
+    [[11.0000, -4.4000, 6.4000], [11.0000, -0.8000, 6.4000], [7.6000, 1.6000, 6.4000]],
+    [[11.0000, -4.4000, 6.4000], [12.8000, -4.4000, 6.4000], [11.0000, -0.8000, 6.4000]],
+    [[12.8000, -4.4000, 6.4000], [12.8000, -2.9000, 6.4000], [11.0000, -0.8000, 6.4000]],
+    [[12.8000, -2.9000, 6.4000], [12.8000, -2.4000, 6.4000], [11.0000, -0.8000, 6.4000]],
+    [[12.8000, -2.4000, 6.4000], [12.8000, -0.8000, 6.4000], [11.0000, -0.8000, 6.4000]],
+    [[11.0000, -4.8000, 3.2000], [14.6000, -4.8000, 3.2000], [11.0000, -4.8000, 6.4000]],
+    [[14.6000, -4.8000, 3.2000], [14.6000, -4.8000, 6.4000], [11.0000, -4.8000, 6.4000]],
+    [[14.6000, -4.8000, 6.4000], [12.8000, -4.8000, 6.4000], [11.0000, -4.8000, 6.4000]],
+    [[11.0000, -4.4000, 6.4000], [11.0000, -4.8000, 6.4000], [12.8000, -4.4000, 6.4000]],
+    [[11.0000, -4.8000, 6.4000], [12.8000, -4.8000, 6.4000], [12.8000, -4.4000, 6.4000]],
+    [[15.0000, -4.8000, 6.4000], [14.6000, -4.8000, 6.4000], [15.0000, -4.8000, 3.2000]],
+    [[14.6000, -4.8000, 6.4000], [14.6000, -4.8000, 3.2000], [15.0000, -4.8000, 3.2000]],
+    [[15.0000, -4.8000, 6.4000], [15.0000, -4.8000, 3.2000], [19.0000, -4.8000, 6.4000]],
+    [[15.0000, -4.8000, 3.2000], [18.6000, -4.8000, 3.2000], [19.0000, -4.8000, 6.4000]],
+    ];
+
+    /// Walking northwest into the service-hall ledge must climb it, exactly as
+    /// on the real mission. (Negative-first: before the fix the player wedges
+    /// at the issue's reported `(13.16, -3.80, 6.44)` - the upward headroom
+    /// sweep reports the riser face it rests against as an immediate grazing
+    /// hit, and the forward cast aims into the west wall instead of the ledge.)
+    #[test]
+    fn player_climbs_extracted_station_ledge() {
+        let mut world = PhysicsWorld::new();
+        let mut verts = Vec::new();
+        let mut tris = Vec::new();
+        for t in STATION_LEDGE_TRIS {
+            let base = verts.len() as u32;
+            for v in t {
+                verts.push(point![v[0], v[1], v[2]]);
+            }
+            tris.push([base, base + 1, base + 2]);
+        }
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(verts, tris)
+                .expect("ledge trimesh")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(13.38, -3.8, 6.4), EntityId::from_inner(2).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        // Northwest, toward the authored post-ramp waypoint (12.0, 6.8).
+        let dir = vec3(-1.38f32, 0.0, 0.4).normalize() * (25.0 / 60.0 / dark::SCALE_FACTOR);
+        for _ in 0..120 {
+            world.update(dir, &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.y - start.y > 0.5,
+            "should climb the ~1.5 ft service-hall riser, rose {} (ended {:?})",
+            end.y - start.y,
+            end
         );
     }
 }
