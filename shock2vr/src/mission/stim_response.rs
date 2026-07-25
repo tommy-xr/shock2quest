@@ -44,7 +44,10 @@ impl GlobalContactStims {
                     }
                     // A child archetype re-authoring the same stim replaces the
                     // inherited intensity rather than stacking with it.
-                    match stims.iter_mut().find(|(stim, _)| *stim == link.to_template_id) {
+                    match stims
+                        .iter_mut()
+                        .find(|(stim, _)| *stim == link.to_template_id)
+                    {
                         Some(existing) => existing.1 = options.intensity,
                         None => stims.push((link.to_template_id, options.intensity)),
                     }
@@ -157,8 +160,8 @@ pub fn resolve_stim_damage(
 
 #[cfg(test)]
 mod tests {
-    use dark::properties::{StimSourceOptions, TemplateLinks, ToLink, ToTemplateLink};
     use super::*;
+    use dark::properties::{StimSourceOptions, TemplateLinks, ToLink, ToTemplateLink};
 
     const HIGH_EXPLOSIVE: i32 = -376;
     const EMP: i32 = -374;
@@ -277,7 +280,10 @@ mod tests {
     const VENOM: i32 = -387;
     const LEAD_PIPE: i32 = -365; // the pipe hybrid's melee weapon
 
-    fn entity_info_with_links(template_id: i32, links: Vec<ToTemplateLink>) -> SystemShock2EntityInfo {
+    fn entity_info_with_links(
+        template_id: i32,
+        links: Vec<ToTemplateLink>,
+    ) -> SystemShock2EntityInfo {
         let mut entity_info = SystemShock2EntityInfo::empty();
         entity_info.entity_to_properties.insert(template_id, vec![]);
         entity_info
@@ -286,7 +292,11 @@ mod tests {
         entity_info
     }
 
-    fn stim_source(to_template_id: i32, intensity: f32, propagator: StimPropagator) -> ToTemplateLink {
+    fn stim_source(
+        to_template_id: i32,
+        intensity: f32,
+        propagator: StimPropagator,
+    ) -> ToTemplateLink {
         ToTemplateLink {
             to_template_id,
             link: Link::StimSource(StimSourceOptions {
@@ -339,8 +349,10 @@ mod tests {
         // `Human Vulnerability` - so a connecting pipe swing costs 10 hit points.
         let mut table = HashMap::new();
         table.insert(LEAD_PIPE, vec![(WEAPON_BASH, 10.0)]);
-        let (world, victim) =
-            world_with_victim(GlobalContactStims(table), vec![(WEAPON_BASH, damage(16, 1.0))]);
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(table),
+            vec![(WEAPON_BASH, damage(16, 1.0))],
+        );
 
         assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 10.0);
     }
