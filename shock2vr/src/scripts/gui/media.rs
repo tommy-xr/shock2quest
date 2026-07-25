@@ -13,11 +13,15 @@
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropLog;
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor};
+use crate::quest_info::QuestInfo;
 use crate::runtime_props::RuntimePropLogData;
-use crate::scripts::{Effect, MessagePayload, script_util::send_to_all_switch_links};
+use crate::scripts::{
+    Effect, MessagePayload,
+    script_util::{send_to_all_switch_links, set_quest_bit_effect},
+};
 
 const PANEL_W: f32 = 188.0;
 const PANEL_H: f32 = 296.0;
@@ -104,6 +108,29 @@ fn readable_log(world: &World, entity_id: EntityId) -> Option<(u32, u32)> {
         Ok(log) if log.deck > 0 && log.log > 0 && log.log != LOG_UNSET => Some((log.deck, log.log)),
         _ => None,
     }
+}
+
+/// Whether applying `effect` would move an objective *backwards*
+/// (`COMPLETE` -> `INCOMPLETE`). `Effect::SetQuestBit` overwrites, and the disc
+/// survives for re-reading, so its authored value must never undo progress the
+/// player has already made. Gating on log collection instead would be wrong
+/// twice over: distinct discs can grant the same bit (eng1's `Note_1_6` is
+/// authored on two logs), and a log collected before logs granted quest bits at
+/// all would then never hand out its objective. `QuestBitValue` is ordered
+/// `UNKNOWN(0) < INCOMPLETE(1) < COMPLETE(2)`, and discs do author `COMPLETE`
+/// (ops4's `Note_4_1`), so this must compare values rather than test for unset.
+fn is_downgrade(world: &World, effect: &Effect) -> bool {
+    let Effect::SetQuestBit {
+        quest_bit_name,
+        quest_bit_value,
+    } = effect
+    else {
+        return false;
+    };
+    world
+        .borrow::<UniqueView<QuestInfo>>()
+        .map(|quests| quests.read_quest_bit_value(quest_bit_name).bits() > quest_bit_value.bits())
+        .unwrap_or(false)
 }
 
 fn transcript_line_count(world: &World, entity_id: EntityId) -> usize {
@@ -241,7 +268,7 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         // keep that one-shot contract by firing the links only on the frob that
         // first collects the log (replaying audio / reopening is fine).
         let already_collected = world
-            .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+            .borrow::<UniqueView<QuestInfo>>()
             .map(|q| q.has_collected_log(deck, log))
             .unwrap_or(false);
         let switchlinks = if already_collected {
@@ -249,7 +276,13 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         } else {
             send_to_all_switch_links(world, entity_id, MessagePayload::TurnOn { from: entity_id })
         };
-        Effect::combine(vec![collect, audio, switchlinks])
+        // The disc also carries the objective it hands out
+        // (PropQuestBitName/PropQuestBitValue) - some logs are the sole grantor
+        // of an objective, with no links to relay through.
+        let quest_bit = set_quest_bit_effect(world, entity_id)
+            .filter(|effect| !is_downgrade(world, effect))
+            .unwrap_or(Effect::NoEffect);
+        Effect::combine(vec![collect, audio, switchlinks, quest_bit])
     }
 
     /// A disc with no readable log (unset `PropLog` sentinel) must not open an
@@ -271,10 +304,26 @@ mod tests {
     use super::*;
     use crate::gui::GuiScript;
     use crate::physics::PhysicsWorld;
+    use crate::quest_info::QuestInfo;
     use crate::scripts::Script;
     use crate::time::Time;
     use crate::vr_config::Handedness;
     use cgmath::point2;
+    use dark::properties::{PropQuestBitName, PropQuestBitValue, QuestBitValue};
+
+    /// The `(name, value)` quest bits a (possibly combined) effect sets.
+    fn quest_bits(effect: Effect) -> Vec<(String, QuestBitValue)> {
+        Effect::flatten(vec![effect])
+            .into_iter()
+            .filter_map(|e| match e {
+                Effect::SetQuestBit {
+                    quest_bit_name,
+                    quest_bit_value,
+                } => Some((quest_bit_name, quest_bit_value)),
+                _ => None,
+            })
+            .collect()
+    }
 
     /// Whether a (possibly combined) effect includes opening the panel.
     fn opens_panel(effect: Effect) -> bool {
@@ -398,6 +447,74 @@ mod tests {
                 .map(String::as_str),
             Some("l1"),
             "reopening must reset the scroll position"
+        );
+    }
+
+    /// A log disc carrying `PropQuestBitName`/`PropQuestBitValue` grants that
+    /// objective on the frob that first collects it. Some logs (e.g. ops3's
+    /// Bronson log -> `Note_4_6`) have no links at all, so the quest-bit pair on
+    /// the disc is the objective's only grantor.
+    #[test]
+    fn frobbing_a_log_grants_its_authored_objective() {
+        let mut world = World::new();
+        let disc = world.add_entity((
+            PropLog {
+                deck: 4,
+                email: 33,
+                log: 7,
+                note: 0,
+                video: 0,
+            },
+            PropQuestBitName("Note_4_6".to_owned()),
+            PropQuestBitValue(QuestBitValue::INCOMPLETE),
+        ));
+        let gui = MediaGui;
+        assert_eq!(
+            quest_bits(gui.on_frob(disc, &world)),
+            vec![("Note_4_6".to_owned(), QuestBitValue::INCOMPLETE)]
+        );
+    }
+
+    /// ...but the disc survives for re-reading, and `SetQuestBit` overwrites, so
+    /// an authored INCOMPLETE must never knock an objective the player has since
+    /// COMPLETEd back to incomplete (the hazard `TrapEmail` hit in #558). The
+    /// gate compares values rather than "has this log been collected": distinct
+    /// discs can grant the same bit, and discs do author COMPLETE.
+    #[test]
+    fn a_log_never_downgrades_an_objective_the_player_completed() {
+        let disc_with_bit = |value: QuestBitValue, already: QuestBitValue| {
+            let mut world = World::new();
+            let disc = world.add_entity((
+                PropLog {
+                    deck: 4,
+                    email: 33,
+                    log: 7,
+                    note: 0,
+                    video: 0,
+                },
+                PropQuestBitName("Note_4_6".to_owned()),
+                PropQuestBitValue(value),
+            ));
+            let mut quest_info = QuestInfo::new();
+            quest_info.collect_log(4, 7);
+            quest_info.set_quest_bit_value("Note_4_6", already);
+            world.add_unique(quest_info);
+            quest_bits(MediaGui.on_frob(disc, &world))
+        };
+
+        assert!(
+            disc_with_bit(QuestBitValue::INCOMPLETE, QuestBitValue::COMPLETE).is_empty(),
+            "re-reading must not knock a completed objective back to incomplete"
+        );
+        // A disc authoring COMPLETE still completes an active objective, and
+        // re-applying the same value is harmless - only downgrades are dropped.
+        assert_eq!(
+            disc_with_bit(QuestBitValue::COMPLETE, QuestBitValue::INCOMPLETE),
+            vec![("Note_4_6".to_owned(), QuestBitValue::COMPLETE)]
+        );
+        assert_eq!(
+            disc_with_bit(QuestBitValue::INCOMPLETE, QuestBitValue::INCOMPLETE),
+            vec![("Note_4_6".to_owned(), QuestBitValue::INCOMPLETE)]
         );
     }
 
