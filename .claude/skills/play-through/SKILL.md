@@ -101,6 +101,23 @@ fix agent follows the repo's incremental, review, and negative-first-test
 discipline, opens a PR `Fixes #n`, and re-validates. Non-blockers: log them,
 keep playing past them.
 
+**Opening the PR is not the finish line — the fix agent watches it land green:**
+- `cargo fmt --check --all`. `format` is a separate, fast-failing CI job, and it
+  fails on changes that compile and test perfectly.
+- **Restack before finishing.** Fix agents branch off whatever `main` was when
+  they spawned; on a long run `main` moves underneath them (it may even have
+  refactored the very function being fixed). `git fetch origin && git rebase
+  origin/main`, resolve, then **re-run the tests** — a conflict resolution can
+  silently drop a test or revert half a hunk.
+- **Read `gh pr checks <N>`** after pushing, and fix what's red. A PR is done
+  when CI is green, not when the push succeeds.
+- **Widen the build check when touching shared types.** AGENTS.md's
+  `-p shock2vr -p desktop_runtime -p debug_runtime` skips `tools/`, which CI
+  builds — so a new variant on a `dark` enum breaks `dark_query`'s exhaustive
+  matches with a clean local check. For enum/trait changes, check every
+  non-Android package (`dark_viewer`, `dark_query`, `debug_command`,
+  `hitbox_analyzer`, `bench` too).
+
 ## 5. Replay & frontier
 
 Track the **frontier**: the furthest state reached. The robust, faithful way to
