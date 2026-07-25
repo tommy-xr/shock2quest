@@ -31,6 +31,8 @@ mod obj_consume_button;
 mod once_room;
 mod once_router;
 mod psi_amp_script;
+mod psi_kit;
+mod reduce_psi;
 mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
@@ -91,6 +93,8 @@ use self::gui::{
 };
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::psi_amp_script::PsiAmpScript;
+use self::psi_kit::PsiKitScript;
+use self::reduce_psi::ReducePsi;
 use self::trap_signal::TrapSignal;
 use self::{
     base_button::BaseButton,
@@ -659,7 +663,7 @@ impl ScriptWorld {
             ])),
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(UnimplementedScript::new(&script_name)),
-            "psikitscript" => Box::new(UnimplementedScript::new(&script_name)),
+            "psikitscript" => Box::new(PsiKitScript::new()),
             "computer" => Box::new(UnimplementedScript::new(&script_name)),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => Box::new(UnimplementedScript::new(&script_name)),
@@ -753,7 +757,7 @@ impl ScriptWorld {
             "chemical" => Box::new(NoopScript::new()),
             "chooseservice" => Box::new(ChooseServiceScript::new()),
             "infocomputer" => Box::new(UnimplementedScript::new(&script_name)),
-            "reducepsi" => Box::new(UnimplementedScript::new(&script_name)),
+            "reducepsi" => Box::new(ReducePsi::new()),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
             "researchablescript" => Box::new(UnimplementedScript::new(&script_name)),
             "setupinitialdebrief" => {

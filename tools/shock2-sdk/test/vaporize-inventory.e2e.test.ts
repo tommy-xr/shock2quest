@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement } from "../src/types.js";
+import { aimAtWorldPoint } from "./helpers/aim.js";
+import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
 // Earth training gives the player temporary supplies which must not escape the
@@ -72,37 +74,6 @@ async function squeeze(game: GameServer): Promise<void> {
   await game.step({ frames: 2 });
 }
 
-type Quat = [number, number, number, number];
-
-function multiplyQuat(a: Quat, b: Quat): Quat {
-  const [ax, ay, az, aw] = a;
-  const [bx, by, bz, bw] = b;
-  return [
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw,
-    aw * bw - ax * bx - ay * by - az * bz,
-  ];
-}
-
-function lookQuat(direction: [number, number, number]): Quat {
-  const length = Math.hypot(...direction);
-  const [bx, by, bz] = direction.map((v) => v / length) as [
-    number,
-    number,
-    number,
-  ];
-  // Shortest-arc quaternion from flat controller local forward (0,0,-1)
-  // to the desired world direction.
-  const dot = -bz;
-  if (dot < -0.999999) {
-    return [0, 1, 0, 0];
-  }
-  const q: Quat = [by, -bx, 0, 1 + dot];
-  const qLength = Math.hypot(...q);
-  return q.map((v) => v / qLength) as Quat;
-}
-
 /**
  * Stand near an entity, compose a world-space look with the authored player
  * pawn rotation, and squeeze. Teleport is only spatial setup; acquisition
@@ -127,15 +98,7 @@ async function frobNormally(
   ];
   for (const stand of stands) {
     await teleportVerified(game, stand);
-    const player = await game.player.position();
-    const pawn = (await game.info()).player.rotation;
-    const eyeY = player.y + 1.6;
-    const dx = tx - player.x;
-    const dz = tz - player.z;
-    const desiredWorldLook = lookQuat([dx, aimY - eyeY, dz]);
-    const inversePawn: Quat = [-pawn[0], -pawn[1], -pawn[2], pawn[3]];
-    const head = multiplyQuat(inversePawn, desiredWorldLook);
-    await game.input.set("head.rotation", head);
+    await aimAtWorldPoint(game, [tx, aimY, tz]);
     await game.step({ frames: 3 });
     await squeeze(game);
     if (await didInteract()) {
@@ -193,60 +156,6 @@ async function acquireBasicItemsNormally(
   return { chemId: chem.entity_id! };
 }
 
-async function crossRealExit(
-  game: GameServer,
-  tripwireTemplate: number,
-  destinationTemplate: number,
-): Promise<void> {
-  const tripwire = await exactlyOne(game, tripwireTemplate, "training exit tripwire");
-  const destination = await exactlyOne(
-    game,
-    destinationTemplate,
-    "training exit teleport destination",
-  );
-  const [x, y, z] = tripwire.position;
-
-  const [dx, , dz] = destination.position;
-  // Training rooms wall off different faces of their exit sensors. Try each
-  // cardinal approach, starting just outside the sensor and entering through a
-  // bounded collision-valid move. Rapier's real SensorBeginIntersect then
-  // drives the tripwire SwitchLink.
-  const approaches = [
-    { x, y: y + 0.5, z: z - 4 },
-    { x: x - 4, y: y + 0.5, z },
-    { x: x + 4, y: y + 0.5, z },
-    { x, y: y + 0.5, z: z + 4 },
-  ];
-  for (const start of approaches) {
-    // Read the immediate paused position before any frame can generate a
-    // sensor event, then prove that the setup itself did not teleport us.
-    await game.player.teleport(start);
-    const beforeMove = await game.player.position();
-    assert.ok(
-      Math.hypot(beforeMove.x - dx, beforeMove.z - dz) >= 3,
-      "spatial setup must not teleport through the exit",
-    );
-    await game.step({ frames: 3 });
-    const afterSetup = await game.player.position();
-    assert.ok(
-      Math.hypot(afterSetup.x - dx, afterSetup.z - dz) >= 3,
-      "spatial setup must remain outside the exit sensor",
-    );
-    const moved = await game.player.moveTo({ x, y: y + 0.5, z });
-    await game.step({ frames: 12 });
-    const arrived = await game.player.position();
-    if (moved.moved && Math.hypot(arrived.x - dx, arrived.z - dz) < 3) {
-      return;
-    }
-  }
-
-  const arrived = await game.player.position();
-  assert.fail(
-    `tripwire ${tripwireTemplate} should fire its authored teleport to ${destinationTemplate}; ` +
-      `destination=${JSON.stringify(destination.position)} actual=${JSON.stringify(arrived)}`,
-  );
-}
-
 test(
   "earth Basic exit vaporizes supplies acquired through normal interactions",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -276,7 +185,7 @@ test(
       "Chem #1 should ride the cursor before crossing the exit",
     );
 
-    await crossRealExit(game, BASIC_EXIT_TRIPWIRE, BASIC_EXIT_DESTINATION);
+    await crossEarthTrainingTripwire(game, BASIC_EXIT_TRIPWIRE, BASIC_EXIT_DESTINATION);
 
     const inventory = await game.player.inventory();
     assert.equal(
@@ -319,7 +228,7 @@ for (const advanced of ADVANCED_EXITS) {
       await game.player.give(juice.id);
       assert.equal((await game.player.inventory()).count, 1);
 
-      await crossRealExit(game, advanced.tripwire, advanced.destination);
+      await crossEarthTrainingTripwire(game, advanced.tripwire, advanced.destination);
       assert.equal(
         (await game.player.inventory()).count,
         0,
@@ -349,7 +258,7 @@ test(
     // before saving.
     const juice = await exactlyOne(game, BASIC_JUICE, "control Juice bottle");
     await game.player.give(juice.id);
-    await crossRealExit(
+    await crossEarthTrainingTripwire(
       game,
       TECHNICAL_EXIT_TRIPWIRE,
       TECHNICAL_EXIT_DESTINATION,
