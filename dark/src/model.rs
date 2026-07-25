@@ -225,15 +225,27 @@ impl Model {
             ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
 
         // Swap the rendered geometry for the high-detail chunk when we have one.
-        // Hitboxes stay derived from the original mesh, so this is purely visual
-        // and gameplay (damage locations, ragdoll fitting) is untouched.
+        // Hitboxes stay derived from the original mesh, so damage locations and
+        // ragdoll *physics* fitting are untouched. Ragdoll *rendering* is not
+        // automatic: it poses `clone_scene_objects()` from physics rather than
+        // from an `AnimationPlayer`, so it reads `bind_matrices()` and folds the
+        // same product in - see `RagDoll::renderables`.
         let mut bind = None;
         if let Some(pmnm) = pmnm {
-            let replacement =
-                ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, &skeleton, asset_cache);
+            let replacement = ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, asset_cache);
             if !replacement.is_empty() {
-                scene_objects = replacement;
-                bind = Some(Rc::new(ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton)));
+                let matrices = Rc::new(ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton));
+                // Bake the rest palette so an un-animated draw is correct too,
+                // not just the animated paths.
+                let rest = build_palette(&skeleton.get_transforms(), &skeleton, Some(&matrices));
+                scene_objects = replacement
+                    .into_iter()
+                    .map(|mut o| {
+                        o.set_skinning_palette(rest);
+                        o
+                    })
+                    .collect();
+                bind = Some(matrices);
             }
         }
         let hit_box_shapes = fit_hit_box_shapes(&ai_mesh, &skeleton);
@@ -292,6 +304,18 @@ impl Model {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.to_scene_objects(),
             InnerModel::Static(static_model) => static_model.to_scene_objects(),
+        }
+    }
+
+    /// The per-joint bind-pose undo for a `PMNM` mesh, if this model uses one.
+    ///
+    /// Anything that poses `clone_scene_objects()` itself - the ragdoll, which
+    /// drives joints from physics rather than from an `AnimationPlayer` - must
+    /// fold this in, or a bind-space mesh renders exploded.
+    pub fn bind_matrices(&self) -> Option<Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.bind.clone(),
+            InnerModel::Static(_) => None,
         }
     }
 

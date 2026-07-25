@@ -746,13 +746,11 @@ mod tests {
 /// Build scene objects from an appended `PMNM` high-detail chunk, in its authored
 /// rest pose.
 ///
-/// Opt-in via `SS2_PMNM_MESHES=1`. Skeleton binding is unsolved (see
-/// `ss2_bin_pmnm`), so these render unskinned and therefore do NOT animate -
-/// this exists to prove the geometry and the upgraded `ND-*` textures parse and
-/// render, ahead of solving the joint mapping.
+/// Opt-in via `SS2_PMNM_MESHES=1`. The vertices are skinned to the same skeleton
+/// the original mesh uses, so these animate normally; the caller supplies the
+/// bind-pose undo via [`pmnm_bind_matrices`].
 pub fn pmnm_to_scene_objects(
     mesh: &crate::ss2_bin_pmnm::PmnmMesh,
-    skeleton: &Skeleton,
     asset_cache: &mut AssetCache,
 ) -> Vec<SceneObject> {
     let mut scene_objects = Vec::new();
@@ -773,12 +771,13 @@ pub fn pmnm_to_scene_objects(
 
         let diffuse: Rc<dyn TextureTrait> = texture;
         let material = RefCell::new(engine::scene::SkinnedMaterial::create(diffuse, 0.0, 0.0));
-        let mut scene_object = engine::scene::scene_object::SceneObject::create(material, geometry);
-        scene_object.set_skinning_palette(Skeleton::expand_skinning_palette(
-            &skeleton.get_transforms(),
-            skeleton,
+        // No palette is baked here: `expand_skinning_palette` assumes joint-local
+        // vertices and would double-apply each joint's rest transform to a
+        // bind-space mesh. `Model::from_ai_bin` bakes the correct rest palette
+        // once it has the bind matrices.
+        scene_objects.push(engine::scene::scene_object::SceneObject::create(
+            material, geometry,
         ));
-        scene_objects.push(scene_object);
     }
     scene_objects
 }
@@ -788,10 +787,15 @@ pub fn pmnm_to_scene_objects(
 ///
 /// Two pieces: the inverse of the joint's rest global transform, and a 90-degree
 /// yaw. The yaw is needed because `ss2_skeleton::create` puts
-/// `from_angle_y(Deg(90))` on the root torso bone, while the PMNM pivots are
+/// `from_angle_y(Deg(90))` on **every torso bone**, while the PMNM pivots are
 /// authored without it - matching a pivot against its joint's rest position is
 /// exact only after that rotation (52 of the 66 shipped chunks land at exactly
 /// zero residual).
+///
+/// A single global correction is therefore exact only for single-torso rigs,
+/// which is the likely explanation for the residual outliers on `grunt_s` and
+/// `fembot`; a per-torso correction would be the principled fix if those turn
+/// out to matter visually.
 pub fn pmnm_bind_matrices(skeleton: &Skeleton) -> [Matrix4<f32>; MAX_JOINTS] {
     let correction = Matrix4::from_angle_y(cgmath::Deg(90.0));
     let mut out = skeleton.bind_inverse_transforms();

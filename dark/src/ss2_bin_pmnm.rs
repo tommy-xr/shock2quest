@@ -16,16 +16,20 @@
 //! vertex is a modern interleaved skinned vertex in **model space** with four
 //! bone indices and four weights.
 //!
-//! Skeleton binding is NOT solved: the joint records carry only a position, and
-//! a chunk's joint count differs from the original mesh's, so how these pivots
-//! map onto the `.cal` skeleton that drives animation is still unknown. Callers
-//! can therefore render the geometry in its authored rest pose, but cannot
-//! animate it yet.
+//! Skeleton binding is solved: a joint pivot's *index* is the `.cal` skeleton's
+//! joint id, and the pivots are authored without the 90-degree yaw that
+//! `ss2_skeleton::create` puts on every torso bone. See
+//! `ss2_bin_ai_loader::pmnm_bind_matrices`, and
+//! `tools/asset_probe/src/bin/pmnm_joints.rs` for the residual check.
 
 use cgmath::{Vector2, Vector3, vec2, vec3};
 use tracing::trace;
 
 use crate::SCALE_FACTOR;
+
+/// A bone index addresses the renderer's skinning palette, so a chunk claiming
+/// more joints than it holds cannot be skinned.
+const MAX_JOINTS: usize = engine::scene::MAX_SKINNED_JOINTS;
 
 const MAGIC: &[u8; 4] = b"PMNM";
 const HEADER_LEN: usize = 60;
@@ -124,19 +128,41 @@ pub fn read(buf: &[u8], base: usize) -> Option<PmnmMesh> {
         *slot = u32_at(buf, base + 32 + i * 4)? as usize;
     }
 
+    // Bound the chunk against the real buffer BEFORE any stride arithmetic.
+    // Every count and offset here comes from the file, so without this a header
+    // claiming huge counts either overflows the `usize` products below (a panic
+    // in debug builds, which would break this function's "returns None on
+    // anything malformed" contract) or reaches a `Vec::with_capacity` sized in
+    // gigabytes. Anchoring on the last section's end bounds all of them.
+    let chunk_end = base
+        .checked_add(offsets[6])?
+        .checked_add(INDEX_STRIDE.checked_mul(morph_vertices)?)?;
+    if chunk_end > buf.len() {
+        trace!(
+            "PMNM chunk at {base} claims {chunk_end} bytes, buffer is {}",
+            buf.len()
+        );
+        return None;
+    }
+
     // Structural checks, each of which holds for all 66 shipped chunks. A
     // mismatch means we are not looking at the layout we validated.
+    // NB: the ascending-offsets test must precede every subtraction below.
     if offsets[0] != HEADER_LEN
         || num_vertices == 0
         || num_indices == 0
         || num_indices % 3 != 0
+        || num_joints > MAX_JOINTS
         || offsets.windows(2).any(|w| w[0] > w[1])
-        || offsets[1] - offsets[0] != MATERIAL_STRIDE * num_materials
-        || offsets[2] - offsets[1] != JOINT_STRIDE * num_joints
-        || offsets[3] - offsets[2] != VERTEX_STRIDE * num_vertices
-        || offsets[4] - offsets[3] != MORPH_TARGET_STRIDE * morph_targets
-        || offsets[5] - offsets[4] != MORPH_DELTA_STRIDE * morph_targets * morph_vertices
-        || offsets[6] - offsets[5] != INDEX_STRIDE * num_indices
+        || offsets[1] - offsets[0] != MATERIAL_STRIDE.checked_mul(num_materials)?
+        || offsets[2] - offsets[1] != JOINT_STRIDE.checked_mul(num_joints)?
+        || offsets[3] - offsets[2] != VERTEX_STRIDE.checked_mul(num_vertices)?
+        || offsets[4] - offsets[3] != MORPH_TARGET_STRIDE.checked_mul(morph_targets)?
+        || offsets[5] - offsets[4]
+            != MORPH_DELTA_STRIDE
+                .checked_mul(morph_targets)?
+                .checked_mul(morph_vertices)?
+        || offsets[6] - offsets[5] != INDEX_STRIDE.checked_mul(num_indices)?
     {
         trace!("PMNM chunk at {base} does not match the expected layout");
         return None;
@@ -149,8 +175,9 @@ pub fn read(buf: &[u8], base: usize) -> Option<PmnmMesh> {
         let end = raw.iter().position(|c| *c == 0).unwrap_or(raw.len());
         let index_start = u32_at(buf, at + 48)? as usize;
         let index_count = u32_at(buf, at + 52)? as usize;
-        // A range that escapes the index buffer would slice out of bounds later.
-        if index_start + index_count > num_indices {
+        // A range that escapes the index buffer would slice out of bounds later;
+        // a partial triangle would leave GL silently dropping the tail.
+        if index_count % 3 != 0 || index_start.saturating_add(index_count) > num_indices {
             trace!(
                 "PMNM material {i} index range {index_start}+{index_count} exceeds {num_indices}"
             );
@@ -176,6 +203,14 @@ pub fn read(buf: &[u8], base: usize) -> Option<PmnmMesh> {
         let normal = vec3_at(buf, at + 20)?;
         let idx = buf.get(at + 32..at + 36)?;
         let wts = buf.get(at + 36..at + 40)?;
+        // A bone index goes straight to the shader as an index into the skinning
+        // palette. Out of range it would silently address the wrong joint (the
+        // palette's upper half mirrors the lower) or read out of bounds, so
+        // reject it here - the vanilla LGMM path guards the same thing.
+        if idx.iter().any(|b| *b as usize >= num_joints) {
+            trace!("PMNM vertex {i} references a bone index beyond {num_joints} joints");
+            return None;
+        }
         vertices.push(PmnmVertex {
             position,
             uv,
@@ -247,18 +282,6 @@ impl PmnmMesh {
         })
     }
 
-    /// Expand into unskinned vertex runs, one per material, in the mesh's
-    /// authored rest pose.
-    pub fn to_static_vertices(
-        &self,
-    ) -> Vec<(String, Vec<engine::scene::VertexPositionTextureNormal>)> {
-        self.per_material(|v| engine::scene::VertexPositionTextureNormal {
-            position: v.position,
-            uv: v.uv,
-            normal: v.normal,
-        })
-    }
-
     /// Each material paired with the vertices of **its own slice** of the index
     /// buffer, mapped through `f`.
     ///
@@ -271,10 +294,11 @@ impl PmnmMesh {
             .iter()
             .filter(|m| m.index_count > 0)
             .map(|m| {
+                // `read` range-checks every index, so indexing directly is safe -
+                // and silently dropping one would shift the whole triangle list.
                 let verts = self.indices[m.index_start..m.index_start + m.index_count]
                     .iter()
-                    .filter_map(|i| self.vertices.get(*i as usize))
-                    .map(&f)
+                    .map(|i| f(&self.vertices[*i as usize]))
                     .collect();
                 (m.name.clone(), verts)
             })
@@ -513,13 +537,30 @@ mod tests {
         assert!((v.bone_weights[0] - 193.0 / 255.0).abs() < 1e-6);
     }
 
+    /// A header claiming counts far larger than the file must return `None`, not
+    /// panic on `usize` overflow or try to allocate gigabytes.
     #[test]
-    fn static_expansion_produces_three_vertices_per_triangle() {
-        let buf = synth();
-        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
-        let runs = mesh.to_static_vertices();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].0, "ND-test0.psd");
-        assert_eq!(runs[0].1.len(), 3);
+    fn rejects_a_header_whose_counts_exceed_the_buffer() {
+        let mut buf = synth();
+        let base = find_chunk(&buf).unwrap();
+        // num_vertices large enough that `40 * n` alone would size a huge Vec.
+        buf[base + 16..base + 20].copy_from_slice(&107_000_000u32.to_le_bytes());
+        assert!(read(&buf, base).is_none());
+
+        // Morph counts big enough to overflow `32 * targets * vertices`.
+        let mut buf = synth();
+        buf[base + 24..base + 28].copy_from_slice(&u32::MAX.to_le_bytes());
+        buf[base + 28..base + 32].copy_from_slice(&268_435_446u32.to_le_bytes());
+        assert!(read(&buf, base).is_none());
+    }
+
+    #[test]
+    fn rejects_a_bone_index_beyond_the_joint_count() {
+        let mut buf = synth();
+        let base = find_chunk(&buf).unwrap();
+        let v0 = base + HEADER_LEN + MATERIAL_STRIDE + JOINT_STRIDE;
+        // synth has 1 joint, so index 5 is out of range.
+        buf[v0 + 32] = 5;
+        assert!(read(&buf, base).is_none());
     }
 }
