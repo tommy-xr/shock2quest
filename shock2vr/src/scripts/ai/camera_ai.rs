@@ -1,7 +1,7 @@
 use cgmath::{Deg, Quaternion, Rotation3};
 use dark::properties::{
-    AIAlertLevel, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay, PropAICamera, PropAIDevice,
-    PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
+    AIAlertLevel, InternalPropOriginalModelName, PropAIAlertCap, PropAIAlertness, PropAIAwareDelay,
+    PropAICamera, PropAIDevice, PropModelName, PropPosition, PropSpeechVoice, PropVoiceIndex,
 };
 use num_traits::ToPrimitive;
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -288,11 +288,7 @@ impl CameraAI {
             .cloned()
             .unwrap_or(default_aware_delay);
 
-        let base_model = v_model_name
-            .get(entity_id)
-            .ok()
-            .map(|m| m.0.clone())
-            .unwrap_or_else(|| "camgrn".to_string());
+        let current_model = v_model_name.get(entity_id).ok().map(|m| m.0.clone());
 
         let initial_alertness = v_alertness
             .get(entity_id)
@@ -319,6 +315,24 @@ impl CameraAI {
                 entity_id
             );
         }
+
+        // The alert models are derived from the camera's *authored* model, not
+        // from whatever model it is currently showing: a camera saved while
+        // alert carries the alert model in its `PropModelName`, and re-deriving
+        // from that would produce nonexistent models on load. The authored name
+        // is recorded at entity creation and persisted with the save, so it
+        // survives the round trip.
+        let original_model = world
+            .borrow::<View<InternalPropOriginalModelName>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|m| m.0.clone()));
+
+        let base_model = original_model
+            // No authored model recorded (e.g. a camera created outside the
+            // normal entity path): fall back to the live model, mapped back to
+            // its idle variant so an alert model cannot compound.
+            .or_else(|| current_model.map(|model| idle_model(&model)))
+            .unwrap_or_else(|| "camgrn".to_string());
 
         // Use the shared AlertnessTimings
         let timings = AlertnessTimings::from_aware_delay(&aware_delay);
@@ -565,10 +579,7 @@ fn move_towards_angle(current: f32, target: f32, max_delta: f32) -> f32 {
 }
 
 fn derive_models(base_model: &str) -> CameraModels {
-    let (stem, ext) = base_model
-        .rsplit_once('.')
-        .map(|(stem, ext)| (stem.to_string(), Some(ext.to_string())))
-        .unwrap_or_else(|| (base_model.to_string(), None));
+    let (stem, ext) = split_model_name(base_model);
 
     let lower_stem = stem.to_ascii_lowercase();
     let (yellow_stem, red_stem) = if lower_stem.ends_with("grn") {
@@ -596,6 +607,38 @@ fn derive_models(base_model: &str) -> CameraModels {
     }
 }
 
+fn split_model_name(model_name: &str) -> (String, Option<String>) {
+    model_name
+        .rsplit_once('.')
+        .map(|(stem, ext)| (stem.to_string(), Some(ext.to_string())))
+        .unwrap_or_else(|| (model_name.to_string(), None))
+}
+
+/// Map a camera's alert model back to the idle model it was derived from,
+/// inverting the suffix scheme `derive_models` applies (the shipped cameras use
+/// `camgrn`/`camyel`/`camred`). A model that is already an idle model is
+/// returned unchanged, so deriving from the result is idempotent. Only used on
+/// the fallback path, where the model in hand may be an alert one.
+fn idle_model(model_name: &str) -> String {
+    let (stem, ext) = split_model_name(model_name);
+    let lower = stem.to_ascii_lowercase();
+
+    let idle_stem = if lower.ends_with("_yel") || lower.ends_with("_red") {
+        // `{stem}_yel` / `{stem}_red` - the fallback scheme for models with no
+        // recognized color suffix.
+        stem[..stem.len() - 4].to_string()
+    } else if lower.ends_with("yel") || lower.ends_with("red") {
+        format!("{}grn", &stem[..stem.len() - 3])
+    } else {
+        stem
+    };
+
+    match ext {
+        Some(ext) => format!("{idle_stem}.{ext}"),
+        None => idle_stem,
+    }
+}
+
 fn level_to_u32(level: AIAlertLevel) -> u32 {
     level.to_u32().unwrap_or(0)
 }
@@ -608,5 +651,63 @@ impl CameraModels {
             // Low and Lowest both show green - camera is in "safe" state
             AIAlertLevel::Low | AIAlertLevel::Lowest => &self.green,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn models(base: &str) -> (String, String, String) {
+        let m = derive_models(base);
+        (m.green, m.yellow, m.red)
+    }
+
+    #[test]
+    fn derives_alert_models_from_the_idle_model() {
+        assert_eq!(
+            models("camgrn"),
+            (
+                "camgrn".to_string(),
+                "camyel".to_string(),
+                "camred".to_string()
+            )
+        );
+    }
+
+    // A camera saved while alert comes back with its alert model in
+    // `PropModelName`; deriving from that must not compound (which produced the
+    // nonexistent `camred_red` and panicked the load). Where the fallback path
+    // has only that model to go on, `idle_model` makes the derivation
+    // idempotent.
+    #[test]
+    fn deriving_from_an_alert_model_matches_deriving_from_the_idle_model() {
+        let base = models("camgrn");
+        assert_eq!(
+            models(&idle_model(&base.1)),
+            base,
+            "deriving from the yellow model"
+        );
+        assert_eq!(
+            models(&idle_model(&base.2)),
+            base,
+            "deriving from the red model"
+        );
+    }
+
+    #[test]
+    fn idle_models_and_extensions_survive_the_round_trip() {
+        // An idle model is left alone...
+        assert_eq!(idle_model("camgrn"), "camgrn");
+        assert_eq!(idle_model("camgrn.bin"), "camgrn.bin");
+
+        // ...and the extension is preserved through the inverse.
+        let with_ext = models("camgrn.bin");
+        assert_eq!(models(&idle_model(&with_ext.2)), with_ext);
+
+        // The `_yel`/`_red` fallback scheme inverts too.
+        let fallback = models("securitycam");
+        assert_eq!(models(&idle_model(&fallback.1)), fallback);
+        assert_eq!(models(&idle_model(&fallback.2)), fallback);
     }
 }

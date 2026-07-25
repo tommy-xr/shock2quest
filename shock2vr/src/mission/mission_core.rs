@@ -3409,8 +3409,16 @@ impl MissionCore {
                         //drop(scene_obj);
 
                         let _ext_name = model_name.clone();
-                        let orig_model =
-                            asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
+                        // A missing model must never take down the frame (or a
+                        // load): keep the current model and complain loudly.
+                        let Some(orig_model) =
+                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
+                        else {
+                            tracing::error!(
+                                "ChangeModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current model"
+                            );
+                            continue;
+                        };
 
                         let orig_model_ref = orig_model.as_ref();
 
@@ -3430,8 +3438,16 @@ impl MissionCore {
                 } => {
                     if let Some(model) = self.id_to_model.get(&entity_id) {
                         let xform = model.get_transform();
-                        let donor_model =
-                            asset_cache.get(&MODELS_IMPORTER, &format!("{model_name}.BIN"));
+                        // Same hazard as ChangeModel above: a missing donor
+                        // model must not panic the frame.
+                        let Some(donor_model) =
+                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
+                        else {
+                            tracing::error!(
+                                "SetVhotsFromModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current vhots"
+                            );
+                            continue;
+                        };
                         let vhots = Model::transform(donor_model.as_ref(), xform).vhots();
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
                     }
