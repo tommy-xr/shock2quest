@@ -886,15 +886,53 @@ pub fn create_physics_representation(
             .unwrap();
         let immobile = v_immobile.get(entity_id).is_ok();
 
+        // Climbable surfaces (ladders: PropPhysAttr.climbable != 0) carry an
+        // extra marker membership so player movement can detect contact.
+        // Simplifications: `climbable` is plausibly a per-face bitmask in
+        // the original engine (27 = the four vertical sides on ladders) -
+        // any non-zero value marks the whole collider climbable here. And
+        // only this (non-frobbable) creation branch checks it: all known
+        // ladders are plain terrain objects; a frobbable climbable would
+        // need the same treatment in the branch above.
+        let is_climbable = v_phys_attr
+            .get(entity_id)
+            .map(|pa| pa.climbable != 0)
+            .unwrap_or(false);
+
         // `P$PhysDims` is optional: an author who never opened the physics
-        // dimensions dialog leaves the object with only a physics *type*. The
-        // original engine then falls back to the model's bounding box - the
-        // shipped data proves it, because every ladder that *does* carry
-        // authored dimensions carries exactly the model bbox (e.g. eng1's
-        // `Ladder 16'` #945: size (1.65, 6.40, 0.14) == ladder.bin's bounds).
-        // Without this fallback the object silently got no collider at all, so
-        // most ladders were neither solid nor climbable (issue #589).
+        // dimensions dialog leaves the object with only a physics *type*, and
+        // the object then got no collider at all - which is why most ladders
+        // were neither solid nor climbable (issue #589). The original engine
+        // falls back to the model's bounds, and the shipped data proves it:
+        // every ladder that *does* carry authored dimensions carries exactly
+        // its model's bbox (e.g. eng1's `Ladder 16'` #945: size
+        // (1.65, 6.40, 0.14) == ladder.bin's bounds, offset zero == its
+        // bbox center).
+        //
+        // Deliberately limited to *climbable* objects. The same fallback
+        // applied to every dimension-less physics object turns ~187 further
+        // props solid across the shipped missions (hydro2 pipe runs, station
+        // windows and crates, bar stools) - plausibly also faithful, but a
+        // separate change with its own traversal testing, not a silent
+        // side effect of a ladder fix.
         let maybe_dimensions = v_dimensions.get(entity_id).ok();
+        let model_bounds = if maybe_dimensions.is_none() && is_climbable {
+            // Raw model bounds - deliberately NOT `abs_dimensions`, whose
+            // minimum-size clamp would make a fallback ladder 41% thicker
+            // than the authored ladder standing next to it. Degenerate sizes
+            // are already guarded by `sanitize_collider_size`.
+            maybe_model
+                .as_ref()
+                .and_then(|model| model.bounding_box())
+                .map(|bbox| {
+                    (
+                        bbox.max - bbox.min,
+                        bbox.min.to_vec() + (bbox.max - bbox.min) / 2.0,
+                    )
+                })
+        } else {
+            None
+        };
         if let (Ok(pos), Ok(phys_type)) = (v_pos.get(entity_id), v_phys_type.get(entity_id)) {
             let qrotation = pos.rotation;
 
@@ -927,11 +965,13 @@ pub fn create_physics_representation(
                 // scale_factor *= 1.2;
             }
 
-            // Without authored dimensions, fall back to the model bounds
-            // (`abs_dimensions`, already clamped to a minimum size above).
-            let unscaled_size = maybe_dimensions
-                .map(|dimensions| dimensions.size)
-                .unwrap_or(abs_dimensions);
+            // No authored dimensions and no usable model bounds: nothing to
+            // build a collider from, so behave as before (no physics).
+            let unscaled_size = match (maybe_dimensions, model_bounds) {
+                (Some(dimensions), _) => dimensions.size,
+                (None, Some((size, _))) => size,
+                (None, None) => return None,
+            };
             let size = vec3(
                 unscaled_size.x.abs() * scale_factor.x.abs(),
                 unscaled_size.y.abs() * scale_factor.y.abs(),
@@ -943,10 +983,10 @@ pub fn create_physics_representation(
                 (PhysicsModelType::SPHERE, Some(dimensions)) => {
                     PhysicsShape::Sphere(dimensions.radius0.abs().max(dimensions.radius1.abs()))
                 }
-                // A sphere with no authored dimensions has no authored radius
-                // either, and the model's bounding *sphere* would swallow the
-                // whole object (a 16' ladder becomes an 8' ball). The bounding
-                // box is the only geometry we have, so use it.
+                // The leaf ladder templates say SPHERE where their parent says
+                // OBB, but carry no radius to go with it (and a bounding
+                // sphere would swallow the room: a 16' ladder becomes an 8'
+                // ball). The bounding box is the only geometry we have.
                 (PhysicsModelType::SPHERE, None) => PhysicsShape::Cuboid(size),
                 _ => {
                     warn!("unhandled physics type: {:?}", phys_type);
@@ -954,29 +994,26 @@ pub fn create_physics_representation(
                 }
             };
 
-            // Climbable surfaces (ladders: PropPhysAttr.climbable != 0) carry an
-            // extra marker membership so player movement can detect contact.
-            // Simplifications: `climbable` is plausibly a per-face bitmask in
-            // the original engine (27 = the four vertical sides on ladders) -
-            // any non-zero value marks the whole collider climbable here. And
-            // only this (non-frobbable) creation branch checks it: all known
-            // ladders are plain terrain objects; a frobbable climbable would
-            // need the same treatment in the branch above.
-            let is_climbable = v_phys_attr
-                .get(entity_id)
-                .map(|pa| pa.climbable != 0)
-                .unwrap_or(false);
             let group = if is_climbable {
                 CollisionGroup::climbable_entity()
             } else {
                 CollisionGroup::entity()
             };
 
-            let offset = maybe_dimensions
-                .map(|dimensions| dimensions.offset0)
-                .unwrap_or(Vector3::zero());
+            let offset = match (maybe_dimensions, model_bounds) {
+                (Some(dimensions), _) => dimensions.offset0,
+                (None, Some((_, center))) => center,
+                (None, None) => Vector3::zero(),
+            };
 
-            let rigid_body_handle = if !immobile && phys_type.phys_type == PhysicsModelType::SPHERE
+            // Only an object with authored dimensions takes the dynamic path.
+            // A dimension-less SPHERE has no authored radius, so a dynamic
+            // body would be a model-box-shaped prop falling under gravity -
+            // the fallback exists to make static geometry solid, not to
+            // animate it.
+            let rigid_body_handle = if !immobile
+                && maybe_dimensions.is_some()
+                && phys_type.phys_type == PhysicsModelType::SPHERE
             {
                 physics_log!(DEBUG, "Creating dynamic hitbox entity");
                 physics.add_dynamic(
@@ -1035,12 +1072,13 @@ impl Default for CreateEntityOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::InnerSpace;
     use collision::Aabb3;
     use dark::properties::{Links, ToLink};
 
     /// A ladder-shaped entity: climbable terrain with a physics type but - like
     /// most shipped ladders - no `P$PhysDims` at all.
-    fn add_ladder(world: &mut World, phys_type: PhysicsModelType) -> EntityId {
+    fn add_ladder(world: &mut World, phys_type: PhysicsModelType, climbable: u32) -> EntityId {
         world.add_entity((
             PropPosition {
                 position: vec3(0.0, 0.0, 0.0),
@@ -1062,8 +1100,7 @@ mod tests {
                 cog: Vector3::zero(),
                 rotation_axes: 7,
                 rest_axes: 63,
-                // The shipped ladder value: the four vertical sides.
-                climbable: 27,
+                climbable,
                 edge_trigger: false,
             },
             PropImmobile(true),
@@ -1082,6 +1119,8 @@ mod tests {
         )
     }
 
+    const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
+
     /// A climbable entity with no `PropPhysDimensions` still gets a collider,
     /// sized from the model bounds and tagged climbable (issue #589 - 24 of
     /// eng1's 30 ladders had no collider at all, so they were neither solid nor
@@ -1097,29 +1136,71 @@ mod tests {
         ] {
             let mut world = World::new();
             let mut physics = PhysicsWorld::new();
-            let entity_id = add_ladder(&mut world, phys_type);
+            let entity_id = add_ladder(&mut world, phys_type, 27);
             let model = ladder_model();
 
             let handle =
                 create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
                     .expect("climbable entity without dimensions should still get a collider");
 
+            // The full model bounds, unclamped: an authored ladder standing
+            // next to a fallback one must have the same solidity.
             let size = physics
                 .cuboid_full_size(handle)
                 .expect("collider should be a box matching the model bounds");
             assert!(
-                (size.y - 6.4).abs() < 0.01,
-                "collider should be as tall as the model ({size:?})"
+                (size - LADDER_SIZE).magnitude() < 0.01,
+                "collider should match the model bounds {LADDER_SIZE:?}, got {size:?}"
             );
 
             let bodies = physics.debug_list_bodies();
             assert_eq!(bodies.len(), 1, "expected exactly one body in the world");
+            assert_eq!(
+                bodies[0].body_type, "kinematic",
+                "a dimension-less ladder must not become a falling dynamic prop"
+            );
             let groups = &bodies[0].collision_groups;
             assert!(
                 groups.iter().any(|g| g == "climbable"),
                 "ladder collider should be climbable, got {groups:?}"
             );
         }
+    }
+
+    /// The fallback is scoped to climbable objects: a non-climbable entity with
+    /// no `PropPhysDimensions` keeps the old behavior (no collider), so the
+    /// ladder fix does not silently turn set dressing solid.
+    #[test]
+    fn non_climbable_without_dimensions_still_gets_no_collider() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_ladder(&mut world, PhysicsModelType::ORIENTED_BOUNDING_BOX, 0);
+        let model = ladder_model();
+
+        assert!(
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .is_none(),
+            "non-climbable entities must keep their previous (collider-less) behavior"
+        );
+    }
+
+    /// A non-immobile climbable object with no dimensions must not become a
+    /// dynamic body: there is no authored radius for the SPHERE path, so the
+    /// fallback builds static geometry, never a gravity-driven prop.
+    #[test]
+    fn dimensionless_sphere_never_becomes_dynamic() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_ladder(&mut world, PhysicsModelType::SPHERE, 27);
+        world.remove::<(PropImmobile,)>(entity_id);
+        let model = ladder_model();
+
+        create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+            .expect("climbable entity without dimensions should still get a collider");
+
+        let bodies = physics.debug_list_bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].body_type, "kinematic");
     }
 
     fn contains_link(to: EntityId) -> ToLink {
