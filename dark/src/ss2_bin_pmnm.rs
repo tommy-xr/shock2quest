@@ -204,6 +204,45 @@ impl PmnmMesh {
         self.indices.len() / 3
     }
 
+    /// Expand the triangle list into skinned vertex runs.
+    ///
+    /// A pivot index is the `.cal` skeleton's joint id directly - verified across
+    /// all 66 shipped chunks, 52 of them to exactly zero residual, by comparing
+    /// each pivot against that joint's rest-pose world position (see
+    /// `tools/asset_probe/src/bin/pmnm_joints.rs`). So the bone indices need no
+    /// remapping; positions are bind-pose model space, which the caller undoes
+    /// with the joint's inverse rest transform.
+    pub fn to_skinned_vertices(
+        &self,
+    ) -> Vec<(
+        String,
+        Vec<engine::scene::VertexPositionTextureSkinnedNormal>,
+    )> {
+        let Some(material) = self.materials.first() else {
+            return vec![];
+        };
+
+        let vertices = self
+            .indices
+            .iter()
+            .filter_map(|i| self.vertices.get(*i as usize))
+            .map(|v| {
+                // Weights are authored as bytes summing to 255.
+                let total = v.bone_weights.iter().map(|w| *w as f32).sum::<f32>();
+                let scale = if total > 0.0 { 1.0 / total } else { 0.0 };
+                engine::scene::VertexPositionTextureSkinnedNormal {
+                    position: v.position,
+                    uv: v.uv,
+                    normal: v.normal,
+                    bone_indices: v.bone_indices.map(|b| b as u32),
+                    bone_weights: v.bone_weights.map(|w| w as f32 * scale),
+                }
+            })
+            .collect();
+
+        vec![(material.name.clone(), vertices)]
+    }
+
     /// Expand the triangle list into the per-material vertex runs the renderer
     /// consumes, in the mesh's authored rest pose (no skinning applied).
     ///
@@ -369,6 +408,39 @@ mod tests {
     fn absent_marker_yields_none() {
         assert!(find_chunk(&[0u8; 64]).is_none());
         assert!(find_chunk(&[]).is_none());
+    }
+
+    #[test]
+    fn skinned_expansion_normalizes_weights_and_keeps_bone_indices() {
+        let buf = synth();
+        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
+        let runs = mesh.to_skinned_vertices();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].0, "ND-test.psd");
+        assert_eq!(runs[0].1.len(), 3);
+        let v = &runs[0].1[0];
+        // Authored weights are bytes summing to 255; the renderer wants 0..1.
+        assert_eq!(v.bone_weights, [1.0, 0.0, 0.0, 0.0]);
+        // A pivot index IS the skeleton joint id, so indices pass through as-is.
+        assert_eq!(v.bone_indices, [0, 0, 0, 0]);
+    }
+
+    /// A two-bone blend must come out summing to 1.0, not 255.
+    #[test]
+    fn skinned_expansion_handles_a_blended_vertex() {
+        let mut buf = synth();
+        let base = find_chunk(&buf).unwrap();
+        let v0 = base + HEADER_LEN + MATERIAL_STRIDE + JOINT_STRIDE;
+        buf[v0 + 32..v0 + 36].copy_from_slice(&[0, 0, 0, 0]);
+        buf[v0 + 36..v0 + 40].copy_from_slice(&[193, 62, 0, 0]);
+        let mesh = read(&buf, find_chunk(&buf).unwrap()).unwrap();
+        let v = &mesh.to_skinned_vertices()[0].1[0];
+        let sum: f32 = v.bone_weights.iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "weights should sum to 1, got {sum}"
+        );
+        assert!((v.bone_weights[0] - 193.0 / 255.0).abs() < 1e-6);
     }
 
     #[test]

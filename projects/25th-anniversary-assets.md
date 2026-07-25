@@ -490,10 +490,10 @@ motion system animates is still unknown; likely nearest-pivot matching or an imp
 ordering. Static rendering (or a fixed-pose arm/weapon) needs nothing further; **animated
 creatures need that mapping solved.**
 
-### Static-pose path — implemented, opt-in
+### Implemented, opt-in
 
 `dark/src/ss2_bin_pmnm.rs` parses the chunk and `ss2_bin_ai_loader::pmnm_to_scene_objects`
-renders it unskinned, in its authored rest pose. Enable with `SS2_PMNM_MESHES=1` (an env var
+renders it, skinned to the existing skeleton. Enable with `SS2_PMNM_MESHES=1` (an env var
 rather than an `--experimental` flag because model loading lives in `dark`, which has no
 access to `shock2vr`'s options — the same reason `SS2_DEBUG_NORMALS` works this way).
 
@@ -516,16 +516,49 @@ present-but-unparseable chunk is a probe failure); `debug_hitbox` renders the pi
 2 488-triangle chunk with `ND-ogp.psd` resolving to `txt16/nd-ogp.dds`; and the mesh is
 upright, correctly scaled, and aligned with the hitbox skeleton.
 
-The visible trade-off today is exactly the expected one — high-detail geometry and the
-upgraded texture, but a T-pose instead of the animated pose:
-
 | `SS2_PMNM_MESHES` unset | `SS2_PMNM_MESHES=1` |
 | --- | --- |
-| original mesh, correctly posed, muddy texture | 8.6x the triangles + upgraded DDS, rest pose |
+| original mesh, muddy texture | **8.6x the triangles + upgraded DDS, correctly posed and animating** |
 
-So this is a **proof step, not a shippable creature path** — an unskinned creature is worse
-in play than a posed low-poly one. It de-risks the parser and the texture plumbing so the
-remaining work is purely the joint mapping.
+### Skeleton binding — solved
+
+The joint mapping turned out to be **the identity**: a PMNM pivot index *is* the `.cal`
+skeleton's joint id. The only complication is a rigid rotation.
+
+`ss2_skeleton::create` puts `Matrix4::from_angle_y(Deg(90.0))` on the root torso bone, so
+the skeleton's rest pose carries a 90° yaw that the PMNM pivots are authored without. Undo
+that (`(x, y, z) → (-z, y, x)`) and compare each pivot with its joint's rest-pose world
+position:
+
+| residual under identity mapping + yaw | meshes |
+| --- | --- |
+| **exactly 0.00000** (min = median = mean = max) | **52 of 66** |
+| median 0, mean under 0.01 | 12 |
+| median 0, one joint off by ~0.07–1.0 | 2 (`grunt_s`, `fembot`) |
+
+`tools/asset_probe/src/bin/pmnm_joints.rs` is the tool that established this — point it at a
+mesh and its `.cal` and it reports per-pivot residuals plus a verdict.
+
+So skinning needs no remapping, only the bind-pose undo that a model-space mesh always
+needs:
+
+```
+world = Σ wⱼ · poseⱼ · bind_inverseⱼ · yaw · v
+```
+
+`Skeleton::bind_inverse_transforms()` supplies the per-joint inverse rest transform (vanilla
+LGMM never needed it, because its vertices are already joint-local), and
+`ss2_bin_ai_loader::pmnm_bind_matrices` folds in the yaw. `AnimatedModel` carries the result
+in an `Option`, so the vanilla path is untouched: when `bind` is `None` the palette is built
+exactly as before, via `expand_skinning_palette`. The stretchy "parent frame" slots that
+function adds are a vanilla-LGMM concept, so a bind-space mesh takes the plain per-joint
+product instead.
+
+Verified in the running game: with `SS2_PMNM_MESHES=1` the pipe hybrid now renders **posed,
+not T-posed**, and cycling `DebugHitboxCyclePose` gives a silhouette indistinguishable from
+the vanilla mesh at the same pose index — same stance, same capsule fit — with the
+high-detail geometry and upgraded texture. That is the check that matters: a wrong mapping
+or a missed yaw produces an obviously mangled or rotated mesh, not a subtly wrong one.
 
 ### What this means for the flat vs VR weapon strategy
 
@@ -564,6 +597,7 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | Change | Unlocks |
 | --- | --- |
 | Parser/decoder fixes 1–6 in §3a + the transparency convention | Mod stack loads and renders |
+| `PMNM` chunk parsing + skeleton binding (§4b) | The high-detail creature and first-person-arm meshes, animating, with their upgraded textures |
 | Mount-first, `txt16/`-qualified texture resolution (`AbstractAssetPath::resolve_first` + `dark::util::resolve_texture_name`) | Upgraded encodings actually win; stops props vanishing |
 | DDS decoder (BC1/2/3/7 + uncompressed) in `engine::dds` | The ~3 262 upgraded textures — the actual visual upgrade |
 
@@ -572,7 +606,7 @@ Ordered by value-per-unit-effort. Each step is independently shippable and verif
 | # | Change | Unlocks | Effort |
 | --- | --- | --- | --- |
 | 1 | Mount `.kpf` archives + accept the 25AE layout (loose `data/res/**`, `motiondb.bin` under `res/mschema/`, `shock2.gam`/`motiondb.bin` via asset paths not `File::open`) | Point straight at an unmodified 25AE install; **both** installs supported. Removes the repack scaffolding this spike used. | S — `ZipAssetPath` already handles stored ZIPs, and mount-first resolution is now in place |
-| 2 | **Solve PMNM skeleton binding** — map the chunk's joint pivots onto the `.cal` skeleton so the high-detail meshes animate (the parser and static path already landed, see §4b) | Turns the PMNM path from a proof into the shippable creature + VR-arm upgrade | M — the format is mapped; this is the one remaining unknown |
+| 2 | Multi-material PMNM draw splitting — the material's index range is in its 56-byte record but not yet decoded, so every triangle is attributed to the first material (exact for the 35 single-material chunks, approximate for the other 31) | Correct textures on multi-material creatures, which is what stands between the PMNM path and shipping it on by default | S–M |
 | 3 | Android max-dimension cap in the DDS decode path | Bounded texture memory on Quest (see §4a) | S |
 | 4 | Minimal `.mtl` subset: `texture`, `terrain_scale`/`ui_scale`, `uv_clamp`, `uv_mod`, `ani_frames`/`ani_rate`, `blend` | Correct scale/tiling/animation for upgraded textures | M |
 | 5 | Optional: `illum_map`, incidence rim pass | The Nightdive "shine" look | M |

@@ -211,6 +211,7 @@ dependencies = [
 name = "asset_probe"
 version = "0.1.0"
 dependencies = [
+ "cgmath",
  "clap",
  "dark",
  "engine",

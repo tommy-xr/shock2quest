@@ -12,3 +12,4 @@ dark = { path = "../../dark" }
 engine = { path = "../../engine" }
 clap = { version = "4.5.4", features = ["derive"] }
 walkdir = "2"
+cgmath = "0.18"
