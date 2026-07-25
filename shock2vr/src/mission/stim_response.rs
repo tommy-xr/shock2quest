@@ -157,6 +157,7 @@ pub fn resolve_stim_damage(
 
 #[cfg(test)]
 mod tests {
+    use dark::properties::{StimSourceOptions, TemplateLinks, ToLink, ToTemplateLink};
     use super::*;
 
     const HIGH_EXPLOSIVE: i32 = -376;
@@ -267,5 +268,106 @@ mod tests {
             resolve_stim_damage(&receiver, HIGH_EXPLOSIVE, 100.0),
             Some(7.0)
         );
+    }
+
+    // --- Contact stims: the authored source of AI melee damage -------------
+
+    // Real shock2.gam ids, so the numbers below are the shipped ones.
+    const WEAPON_BASH: i32 = -3058;
+    const VENOM: i32 = -387;
+    const LEAD_PIPE: i32 = -365; // the pipe hybrid's melee weapon
+
+    fn entity_info_with_links(template_id: i32, links: Vec<ToTemplateLink>) -> SystemShock2EntityInfo {
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        entity_info.entity_to_properties.insert(template_id, vec![]);
+        entity_info
+            .template_to_links
+            .insert(template_id, TemplateLinks { to_links: links });
+        entity_info
+    }
+
+    fn stim_source(to_template_id: i32, intensity: f32, propagator: StimPropagator) -> ToTemplateLink {
+        ToTemplateLink {
+            to_template_id,
+            link: Link::StimSource(StimSourceOptions {
+                intensity,
+                propagator,
+            }),
+        }
+    }
+
+    #[test]
+    fn only_contact_stims_are_collected() {
+        // `Lead Pipe` emits WeaponBash at 10 on contact (shock2.gam). A radius
+        // stim is an explosion-style emitter, not a swing landing.
+        let entity_info = entity_info_with_links(
+            LEAD_PIPE,
+            vec![
+                stim_source(WEAPON_BASH, 10.0, StimPropagator::Contact),
+                stim_source(VENOM, 3.0, StimPropagator::Radius { radius: 5.0 }),
+            ],
+        );
+
+        let stims = GlobalContactStims::from_entity_info(&entity_info);
+
+        assert_eq!(stims.0.get(&LEAD_PIPE), Some(&vec![(WEAPON_BASH, 10.0)]));
+    }
+
+    fn world_with_victim(
+        stims: GlobalContactStims,
+        receptrons: Vec<(i32, ReceptronOptions)>,
+    ) -> (World, EntityId) {
+        let mut world = World::new();
+        world.add_unique(stims);
+        let victim = world.add_entity(Links {
+            to_links: receptrons
+                .into_iter()
+                .map(|(to_template_id, options)| ToLink {
+                    to_template_id,
+                    to_entity_id: None,
+                    link: Link::Receptron(options),
+                })
+                .collect(),
+        });
+        (world, victim)
+    }
+
+    #[test]
+    fn a_melee_weapon_damages_a_victim_through_its_own_receptrons() {
+        // The whole authored chain: `Lead Pipe` emits WeaponBash at 10, and the
+        // player inherits a x1 WeaponBash damage receptron from
+        // `Human Vulnerability` - so a connecting pipe swing costs 10 hit points.
+        let mut table = HashMap::new();
+        table.insert(LEAD_PIPE, vec![(WEAPON_BASH, 10.0)]);
+        let (world, victim) =
+            world_with_victim(GlobalContactStims(table), vec![(WEAPON_BASH, damage(16, 1.0))]);
+
+        assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 10.0);
+    }
+
+    #[test]
+    fn a_victim_with_no_receptron_for_the_stim_is_unharmed() {
+        // Type effectiveness still applies: a swing whose stim the victim has
+        // no response to does nothing (a robot has no WeaponBash receptron).
+        let mut table = HashMap::new();
+        table.insert(LEAD_PIPE, vec![(WEAPON_BASH, 10.0)]);
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(table),
+            vec![(HIGH_EXPLOSIVE, damage(33, 4.0))],
+        );
+
+        assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 0.0);
+    }
+
+    #[test]
+    fn an_emitter_with_no_contact_stims_deals_nothing() {
+        // An inert object (no melee weapon archetype behind it) cannot hurt
+        // anyone, even at point-blank range.
+        let (world, victim) = world_with_victim(
+            GlobalContactStims(HashMap::new()),
+            vec![(WEAPON_BASH, damage(16, 1.0))],
+        );
+
+        assert_eq!(contact_stim_damage(&world, LEAD_PIPE, victim), 0.0);
     }
 }
