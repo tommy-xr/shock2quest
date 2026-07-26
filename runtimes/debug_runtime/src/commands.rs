@@ -583,6 +583,16 @@ pub struct EntityDetailResult {
     pub properties: Vec<PropertyInfo>,
     pub outgoing_links: Vec<LinkInfo>,
     pub incoming_links: Vec<LinkInfo>,
+    pub aim_points: Vec<AimPointInfo>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AimPointInfo {
+    pub proxy_entity_id: i32,
+    pub body_id: u32,
+    pub joint_id: u32,
+    pub classification: String,
+    pub position: [f32; 3],
 }
 
 /// Property information
