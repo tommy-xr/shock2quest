@@ -729,6 +729,41 @@ does first-mount-wins layering, which is exactly KEX's `mod_path` semantics.
 A reasonable stopping point is steps 1–3: run directly off a stock 25AE install, get the
 model/motion upgrades and the PNG texture upgrades, and defer DDS until we decide about Quest.
 
+## 5a. End-to-end validation on both asset sets
+
+The SDK e2e suite (136 tests) was run against a classic install, a 25AE install with only
+the base archive, and a 25AE install with the full mod stack. The base-only run is the
+load-bearing one: that data is **byte-identical to classic**, so any difference there had to
+be our mounting rather than the mods.
+
+| asset set | result |
+| --- | --- |
+| classic (`res/*.crf`) | **136 / 136** |
+| 25AE base only (`sshock2.kpf`) | **136 / 136** |
+| 25AE + full mod stack | **133 / 136** |
+
+It found two real bugs, both invisible on a classic install:
+
+- **Every level transition 404'd on a 25AE install.** The debug runtime's
+  `transition-level` endpoint validated the mission with a filesystem stat, but on 25AE the
+  missions are inside `sshock2.kpf`. One cause, seven failing tests.
+- **String tables could resolve to the wrong language.** `with_prefix` collapsed basenames
+  for every family, but 28 of the 80 string files exist more than once (`strings/foo.str`,
+  `strings/German/foo.str`, plus an `rcs/` set). Latent and silent — nothing crashes, the
+  wrong table simply wins.
+
+The three remaining full-stack failures are all accounted for and none is a defect:
+
+- `monster-death` and `ragdoll-death` are **pre-existing flaky physics assertions** — both
+  fail intermittently on a *classic* install too (verified: one run failed `ragdoll-death`
+  at `vx=0.83`, the next passed 4/4).
+- `elevator-panel` asserts the exact vanilla floor label. **SCP renames it**:
+  `ElevLevel1` is `"Engineering (1)"` in the original data and `"1: Engineering"` in SCP.
+  The MFD is working and showing SCP's label; the test encodes the original text.
+
+That last one is worth keeping in mind generally: SCP exists to change gameplay data, so a
+test asserting exact original strings or values will legitimately differ on the modded path.
+
 ## 6. Verification performed
 
 - CRC32 manifest diff, 25AE vs pristine classic `.crf` archives (10 594 files).
