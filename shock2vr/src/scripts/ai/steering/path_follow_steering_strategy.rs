@@ -352,22 +352,24 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // AROUND the obstacle; without this the fresh route is
                 // identical and the stall/retreat/re-path cycle grinds
                 // against the obstacle forever (issue #481). Skipped when a
-                // living creature is crowding us: those jams clear on their
-                // own (retreat + separation), and a 30s exclusion would
-                // over-react. The probe steps just past the waypoint in the
-                // XZ plane at the WAYPOINT's height (an edge-inset waypoint
-                // then resolves to the cell beyond the crossing; keeping Y
-                // fixed avoids blacklisting a stacked floor's cell).
-                // Occupancy, not the summed separation vector - symmetric
-                // neighbors cancel the bias to zero while still crowding
+                // living creature is in the way AHEAD (directional occupancy
+                // - a neighbor behind us can't be the blocker): those jams
+                // clear on their own (retreat + separation), and a 30s
+                // exclusion would over-react. The probe steps just past the
+                // waypoint in the XZ plane at the WAYPOINT's height (an
+                // edge-inset waypoint then resolves to the cell beyond the
+                // crossing; keeping Y fixed avoids blacklisting a stacked
+                // floor's cell).
+                let toward = waypoint - position;
+                let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
                 let crowded = ai_util::has_living_creature_within(
                     world,
                     entity_id,
                     position,
                     SEPARATION_RADIUS,
+                    Some(toward),
                 );
-                let toward = waypoint - position;
-                let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
+                let mut reported = false;
                 if !crowded && toward_len > 1e-3 {
                     let step = BLOCKED_PROBE_DISTANCE / toward_len;
                     let probe = Vector3::new(
@@ -387,11 +389,26 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                                 to,
                                 time.total.as_secs_f32(),
                             );
+                            reported = true;
                         }
                     }
                 }
-                // Back out toward the previous waypoint (or straight back
-                // when the route began here), then re-path from clear ground
+                if reported {
+                    // The excluded crossing guarantees the next route is
+                    // DIFFERENT, so re-path immediately from where we stand
+                    // - the blind back-out exists to keep an identical
+                    // re-path from re-wedging, which no longer applies. This
+                    // keeps a blocked cycle at ~stall length instead of
+                    // stall + retreat (long enough to read as a freeze).
+                    self.clear_path();
+                    self.repath_cooldown = 0.0;
+                    return Some((Steering::from_current(_current_heading), Effect::NoEffect));
+                }
+                // Unreported stall (crowd jam ahead, or the blockage is
+                // inside our own cell): back out toward the previous
+                // waypoint (or straight back when the route began here),
+                // then re-path from clear ground - jittered so mutually
+                // blocking AIs unstick on different frames
                 let retreat = self
                     .path
                     .get(self.next_waypoint.saturating_sub(1))
