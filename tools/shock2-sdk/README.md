@@ -49,11 +49,16 @@ await game.input.trigger("PathfindingTestCycle");
 // Continuous input channels
 await game.input.set("right_hand.trigger_value", 1.0);
 
-// Aim at a live creature hitbox through the production camera/weapon path.
+// Aim through the production camera/weapon/interaction path. Creatures select
+// a classified live hitbox; doors/buttons select their nearest visible surface.
 // Prefer this over hand-composing head.rotation: raw head controls are
 // pawn-local, so mission spawns and loaded saves can rotate their world result.
 const aim = await game.player.aimAt(target, { hitbox: "torso" });
 // aim reports the selected owner/proxy/body/joint/world point and any fallback.
+// Use { hitbox: "center" } only when you deliberately want the entity origin.
+await game.input.set("right_hand.squeeze_value", 1); // frob highlighted target
+await game.step({ frames: 2 });
+await game.input.set("right_hand.squeeze_value", 0);
 
 // Verify state instead of scraping logs
 const status = await game.pathfindingTest.status();
