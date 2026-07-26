@@ -1655,8 +1655,8 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 ///   **Pitch is POSITIVE DOWN** - `+60` looks at the floor, `-60` at the ceiling
 ///   - matching the desktop runtime, where mouse-down increments pitch. The same
 ///   rotation drives movement, so on a ladder `+pitch` descends and `-pitch`
-///   ascends; assuming the opposite is what made issue #603 read as "descent is
-///   broken".
+///   ascends - a test that pitches `-60` to "look down" at a ladder climbs UP,
+///   which is how issue #603's repro was written.
 /// - `{left,right}_hand.trigger`    : number in [0, 1] (alias `trigger_value`)
 /// - `{left,right}_hand.squeeze`    : number in [0, 1] (alias `squeeze_value`)
 /// - `{left,right}_hand.a`          : number in [0, 1] (alias `a_value`)
