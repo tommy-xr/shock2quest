@@ -68,15 +68,24 @@ pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
     }
 }
 
-/// Whether a translating door is nearer its closed endpoint than its open
-/// one (i.e. worth opening). `None` for entities that aren't translating
-/// doors.
+/// Whether a translating door is closed (i.e. worth opening): normally that
+/// means it is nearer its closed endpoint than its open one, but a door with
+/// no travel - whose endpoints coincide, so position says nothing - answers
+/// from its authored state. `None` for entities that aren't translating doors.
 pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
     use cgmath::InnerSpace;
     let v_door = world
         .borrow::<View<dark::properties::PropTranslatingDoor>>()
         .unwrap();
     let door = v_door.get(entity_id).ok()?;
+    // A door with no travel can never leave its authored pose, and both
+    // endpoints sit on top of each other - the distance test below is
+    // degenerate there (equal distances always read as "closed"). Answer from
+    // the authored state instead, so a permanently open doorway isn't
+    // reported shut (#602).
+    if !door.has_travel() {
+        return Some(!door.is_permanently_open());
+    }
     // StdDoor drives the live transform via SetPosition each frame.
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let current = v_transform
@@ -749,11 +758,67 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 
 #[cfg(test)]
 mod tests {
-    use super::{debit_player_nanites, plan_stack_payment};
+    use super::{debit_player_nanites, door_is_closed, plan_stack_payment};
     use crate::mission::PlayerInfo;
-    use cgmath::{Quaternion, vec3};
-    use dark::properties::{Link, Links, PropObjIcon, PropStackCount, ToLink, WrappedEntityId};
-    use shipyard::{Get, View, World};
+    use crate::runtime_props::RuntimePropTransform;
+    use cgmath::{Matrix4, Quaternion, Vector3, vec3};
+    use dark::properties::{
+        Link, Links, PropObjIcon, PropStackCount, PropTranslatingDoor, ToLink, WrappedEntityId,
+    };
+    use shipyard::{EntityId, Get, View, World};
+
+    fn door_world(
+        closed: Vector3<f32>,
+        open: Vector3<f32>,
+        state: i32,
+        at: Vector3<f32>,
+    ) -> (World, EntityId) {
+        let mut world = World::new();
+        let entity_id = world.add_entity((
+            PropTranslatingDoor {
+                door_type: 1,
+                closed: 0.0,
+                open: 0.0,
+                speed: 0.0,
+                axis: 0,
+                state,
+                base_closed_location: closed,
+                base_open_location: open,
+                base_location: closed,
+            },
+            RuntimePropTransform(Matrix4::from_translation(at)),
+        ));
+        (world, entity_id)
+    }
+
+    #[test]
+    fn a_zero_travel_door_authored_open_is_not_reported_closed() {
+        // hydro2's survey-lab doors: open and closed endpoints coincide, so
+        // the distance comparison is degenerate and must not decide (#602).
+        let at = vec3(18.0, -0.4, 41.8);
+        let (world, door) = door_world(at, at, 1, at);
+
+        assert_eq!(door_is_closed(&world, door), Some(false));
+    }
+
+    #[test]
+    fn a_zero_travel_door_authored_closed_is_still_reported_closed() {
+        let at = vec3(18.0, -0.4, 41.8);
+        let (world, door) = door_world(at, at, 0, at);
+
+        assert_eq!(door_is_closed(&world, door), Some(true));
+    }
+
+    #[test]
+    fn a_normal_door_is_reported_from_its_live_position() {
+        let closed = vec3(10.3, -0.4, 42.0);
+        let open = vec3(10.3, -0.4, 44.3);
+        let (closed_world, at_closed) = door_world(closed, open, 0, closed);
+        let (open_world, at_open) = door_world(closed, open, 0, open);
+
+        assert_eq!(door_is_closed(&closed_world, at_closed), Some(true));
+        assert_eq!(door_is_closed(&open_world, at_open), Some(false));
+    }
 
     #[test]
     fn stack_payment_is_atomic_when_total_is_insufficient() {

@@ -23,8 +23,8 @@ use dark::{
         PropClassTag, PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo,
         PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName,
         PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTripFlags, RenderType,
-        StimPropagator, StimSourceOptions, TemplateLinks, WrappedEntityId,
+        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTranslatingDoor, PropTripFlags,
+        RenderType, StimPropagator, StimSourceOptions, TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info,
 };
@@ -691,6 +691,20 @@ pub fn create_physics_representation(
     maybe_model: &Option<&Model>,
     entity_id: EntityId,
 ) -> Option<RigidBodyHandle> {
+    // A door the authors left permanently open (no travel between its open and
+    // closed endpoints, authored open) has nowhere to retract to: a collider
+    // for it is a slab welded across the doorway that nothing can ever move,
+    // sealing the rooms behind it (#602). Give it no collision at all.
+    let is_permanently_open_door = world
+        .borrow::<View<PropTranslatingDoor>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|door| door.is_permanently_open())
+        .unwrap_or(false);
+    if is_permanently_open_door {
+        return None;
+    }
+
     let (
         v_pos,
         v_phys_attr,
@@ -1214,6 +1228,89 @@ mod tests {
     fn has_refs_of(world: &World, entity: EntityId) -> Option<bool> {
         let v = world.borrow::<View<PropHasRefs>>().unwrap();
         v.get(entity).ok().map(|p| p.0)
+    }
+
+    /// A translating door as the retail data authors it: a thin oriented box
+    /// at `at`, travelling from `closed` to `open`.
+    fn add_door(
+        world: &mut World,
+        at: Vector3<f32>,
+        closed: Vector3<f32>,
+        open: Vector3<f32>,
+        state: i32,
+    ) -> EntityId {
+        world.add_entity((
+            PropPosition {
+                position: at,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: 0.0,
+                radius1: 0.0,
+                offset0: Vector3::zero(),
+                offset1: Vector3::zero(),
+                size: vec3(2.4, 3.2, 0.2),
+                unk1: 0,
+                unk2: 0,
+            },
+            dark::properties::PropTranslatingDoor {
+                door_type: 1,
+                closed: 0.0,
+                open: 0.0,
+                speed: 0.0,
+                axis: 0,
+                state,
+                base_closed_location: closed,
+                base_open_location: open,
+                base_location: closed,
+            },
+        ))
+    }
+
+    #[test]
+    fn a_permanently_open_door_gets_no_collider() {
+        // hydro2 obj 135: open == closed and authored open, so it can never
+        // move aside - a collider there seals the doorway forever (#602).
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let at = vec3(18.0, -0.4, 41.8);
+        let door = add_door(&mut world, at, at, at, 1);
+
+        assert_eq!(
+            create_physics_representation(&mut world, &mut physics, &None, door),
+            None
+        );
+    }
+
+    #[test]
+    fn an_ordinary_door_still_gets_a_collider() {
+        // hydro2 obj 529, the control: real travel, so it blocks while closed.
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let closed = vec3(10.3, -0.4, 42.0);
+        let open = vec3(10.3, -0.4, 44.3);
+        let door = add_door(&mut world, closed, closed, open, 0);
+
+        assert!(create_physics_representation(&mut world, &mut physics, &None, door).is_some());
+    }
+
+    #[test]
+    fn a_zero_travel_door_authored_closed_still_gets_a_collider() {
+        // e.g. medsci1's space shields: no travel, authored closed - they stay
+        // solid walls.
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let at = vec3(-15.5, 1.4, 61.0);
+        let door = add_door(&mut world, at, at, at, 0);
+
+        assert!(create_physics_representation(&mut world, &mut physics, &None, door).is_some());
     }
 
     #[test]
