@@ -49,10 +49,16 @@ sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 the script directly and is fine for diagnosis, but it does **not** prove a player
 could do it. To frob the way a player does, in flat mode (the default):
 
-1. **Aim** — the target must be under the crosshair. The flat path raycasts from
-   the camera (`FlatInteraction` passes `head_rotation` through), so turn with
-   `{left_hand.thumbstick:[turn,0]}` / set `head.rotation`, and confirm with
-   `GET /v1/info` or a screenshot that the thing is actually centered.
+1. **Aim** — the target must be under the crosshair. With the preferred SDK,
+   call `game.player.aimAt(entity, {hitbox:"torso"})` (`head`, `limb`,
+   `center`, and `nearest` are also available). It selects a live classified
+   creature damage proxy, reports the chosen owner/body/joint/world point and
+   any fallback, and accounts for pawn rotation restored from a save while
+   still driving the production camera and `FlatInteraction` ray. Raw `head.look` and
+   `head.rotation` are **pawn-local**, not world-space; do not use an identity
+   quaternion as a world-facing direction. If using raw HTTP, turn with
+   `{left_hand.thumbstick:[turn,0]}` and confirm the highlighted entity via
+   `GET /v1/info` or a screenshot before squeezing.
 2. **Squeeze** — the use button is **`right_hand.squeeze_value`**, on a *rising
    edge*: set it `>0.5`, `step`, then back to `0.0`, `step`.
    **`trigger_value` fires the wielded weapon — it does NOT frob.**
