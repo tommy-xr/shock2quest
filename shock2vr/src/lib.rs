@@ -800,7 +800,29 @@ impl Game {
         self.active_game_scene.as_debuggable_mut()
     }
 
+    /// Resolve the high-detail (`PMNM`) mesh setting from the experimental flags,
+    /// falling back to the platform default.
+    ///
+    /// Two explicit flags rather than one, because the default differs per
+    /// platform: `high_detail_meshes` forces it on (for measuring on Quest, where
+    /// it is off by default), `no_high_detail_meshes` forces it off (to rule it
+    /// out on desktop, where it is on).
+    fn resolve_high_detail_meshes(features: &HashSet<String>) -> bool {
+        if features.contains("no_high_detail_meshes") {
+            false
+        } else if features.contains("high_detail_meshes") {
+            true
+        } else {
+            dark::high_detail::default_enabled()
+        }
+    }
+
     pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> Game {
+        // Must happen before any model is loaded.
+        let high_detail = Self::resolve_high_detail_meshes(&options.experimental_features);
+        dark::high_detail::set_enabled(high_detail);
+        info!("high-detail (PMNM) meshes: {high_detail}");
+
         // A 25th Anniversary install keeps everything inside KPF archives, so it
         // needs a different mount list from a classic install's loose `.crf`s.
         let asset_paths = if is_25th_anniversary_install() {
@@ -1383,5 +1405,45 @@ impl Game {
             .unwrap_or_else(|| name.to_owned());
         trace!("resolved sound schema {} to {}", name, ret);
         ret
+    }
+}
+
+#[cfg(test)]
+mod high_detail_flag_tests {
+    use super::*;
+
+    fn features(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn defaults_to_the_platform_default_when_unspecified() {
+        assert_eq!(
+            Game::resolve_high_detail_meshes(&features(&[])),
+            dark::high_detail::default_enabled()
+        );
+    }
+
+    #[test]
+    fn opt_out_flag_disables_it() {
+        assert!(!Game::resolve_high_detail_meshes(&features(&[
+            "no_high_detail_meshes"
+        ])));
+    }
+
+    #[test]
+    fn opt_in_flag_enables_it() {
+        assert!(Game::resolve_high_detail_meshes(&features(&[
+            "high_detail_meshes"
+        ])));
+    }
+
+    /// Opting out is the safer outcome, so it wins a contradiction.
+    #[test]
+    fn opt_out_beats_opt_in() {
+        assert!(!Game::resolve_high_detail_meshes(&features(&[
+            "high_detail_meshes",
+            "no_high_detail_meshes"
+        ])));
     }
 }
