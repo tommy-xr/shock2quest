@@ -489,7 +489,8 @@ impl MissionCore {
 
         // Create a map of template name (ie 'HE Explosion' to the template id).
         // This is important for creating entities based on template name
-        let template_name_to_template_id = create_template_name_map(game_entity_info);
+        let (template_name_to_template_id, unique_gamesys_template_names) =
+            create_template_name_map(game_entity_info);
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
@@ -613,8 +614,8 @@ impl MissionCore {
             } else {
                 Box::new(VrInteraction::new())
             };
-        let (left_hand_entity, right_hand_entity, maybe_inventory_entity) =
-            held_item_save_data.instantiate(&mut world);
+        let (left_hand_entity, right_hand_entity, maybe_inventory_entity) = held_item_save_data
+            .instantiate_with_legacy_template_names(&mut world, &unique_gamesys_template_names);
 
         // Instantiate inventory
         // TODO: This should be move into the held_item_save_data
@@ -5090,7 +5091,9 @@ impl MissionCore {
     }
 }
 
-fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, EntityMetadata> {
+fn create_template_name_map(
+    game_entity_info: &Gamesys,
+) -> (HashMap<String, EntityMetadata>, HashMap<String, i32>) {
     let mut gamesys_world = World::new();
     game_entity_info.entity_info.initialize_world_with_entities(
         &mut gamesys_world,
@@ -5099,6 +5102,7 @@ fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, Entit
     );
 
     let mut name_to_template_id = HashMap::new();
+    let mut template_ids_by_exact_name: HashMap<String, Vec<i32>> = HashMap::new();
 
     gamesys_world.run(
         |v_sym_name: View<dark::properties::PropSymName>,
@@ -5121,11 +5125,21 @@ fn create_template_name_map(game_entity_info: &Gamesys) -> HashMap<String, Entit
                         obj_short_name: v_obj_short_name.get(entity_id).map(|p| p.0.clone()).ok(),
                     },
                 );
+                if template_id.template_id < 0 {
+                    template_ids_by_exact_name
+                        .entry(sym_name.0.clone())
+                        .or_default()
+                        .push(template_id.template_id);
+                }
             }
         },
     );
 
-    name_to_template_id
+    let unique_template_names = template_ids_by_exact_name
+        .into_iter()
+        .filter_map(|(name, ids)| (ids.len() == 1).then_some((name, ids[0])))
+        .collect();
+    (name_to_template_id, unique_template_names)
 }
 
 /// Create a map of template IDs to their class tag data for script access

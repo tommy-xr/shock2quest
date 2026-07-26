@@ -382,6 +382,70 @@ mod tests {
     }
 
     #[test]
+    fn reload_migrates_legacy_carried_clip_from_unique_saved_sym_name() {
+        use crate::save_load::{EntitySaveData, backfill_legacy_canonical_template_ids};
+
+        const SOURCE_SMALL_CLIP_OBJECT: i32 = 1496;
+        const DESTINATION_PELLET_BOX: i32 = -42;
+
+        let mut fixture = Fixture::new(0, 0);
+        fixture
+            .world
+            .add_unique(GlobalTemplateHierarchy(HashMap::from([
+                (SMALL_STD_CLIP, vec![STD_CLIP]),
+                (SOURCE_SMALL_CLIP_OBJECT, vec![DESTINATION_PELLET_BOX]),
+            ])));
+
+        let old_clip = EntityId::new_from_index_and_gen(1496, 0);
+        let mut legacy = EntitySaveData::empty();
+        legacy.all_entities.push(old_clip.inner());
+        legacy.properties.insert(
+            "__P$InternalTemplateId".to_owned(),
+            HashMap::from([(
+                old_clip.inner(),
+                serde_json::json!({"template_id": SOURCE_SMALL_CLIP_OBJECT}),
+            )]),
+        );
+        legacy.properties.insert(
+            "P$SymName".to_owned(),
+            HashMap::from([(old_clip.inner(), serde_json::json!("Small Standard Clip"))]),
+        );
+        legacy.properties.insert(
+            "P$StackCoun".to_owned(),
+            HashMap::from([(old_clip.inner(), serde_json::json!(6))]),
+        );
+        assert!(legacy.canonical_template_ids.is_empty());
+
+        backfill_legacy_canonical_template_ids(
+            &mut legacy,
+            &HashMap::from([
+                ("Pistol".to_owned(), PISTOL),
+                ("Small Standard Clip".to_owned(), SMALL_STD_CLIP),
+            ]),
+        );
+        let (_, remapped) = legacy.instantiate(&mut fixture.world);
+        let reserve = remapped[&old_clip];
+        let mut links = fixture.world.borrow::<ViewMut<Links>>().unwrap();
+        (&mut links)
+            .get(fixture.inventory)
+            .unwrap()
+            .to_links
+            .push(ToLink {
+                link: Link::Contains(0),
+                to_entity_id: Some(WrappedEntityId(reserve)),
+                to_template_id: SOURCE_SMALL_CLIP_OBJECT,
+            });
+        drop(links);
+
+        let outcome = load_from_reserve(&fixture.world, fixture.weapon, 12);
+
+        assert_eq!(fixture.ammo(), 6);
+        assert_eq!(fixture.rounds(reserve), 0);
+        assert_eq!(outcome.rounds_loaded, 6);
+        assert_eq!(outcome.depleted_items, vec![reserve]);
+    }
+
+    #[test]
     fn reload_accepts_every_authored_assault_standard_clip_target() {
         let mut fixture = Fixture::new(0, 0);
         fixture.set_standard_projectile(ASSAULT_STD_PROJECTILE);
