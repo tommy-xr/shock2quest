@@ -29,6 +29,10 @@ pub struct PathQueryRequest {
     pub start: Vector3<f32>,
     pub goal: Vector3<f32>,
     pub movement_bits: MovementBits,
+    /// Mission time (seconds) at submit, for expiring the entity's
+    /// steering-reported blocked cells (see
+    /// `PathfindingService::report_blocked_cell`)
+    pub now_seconds: f32,
 }
 
 /// The computed route (or lack of one) for an entity's latest request
@@ -70,14 +74,24 @@ impl AsyncPathfinding {
             .spawn(move || {
                 while let Ok(request) = rx.recv() {
                     let mut outcome = AiPathOutcome::Full;
+                    // Cells this AI's steering reported as physically
+                    // blocked (stall mid-route) are excluded, so the
+                    // post-stall re-path routes around the obstacle
+                    let avoid = service.blocked_cells(request.entity, request.now_seconds);
                     let path = service
-                        .find_path(request.start, request.goal, request.movement_bits)
+                        .find_path_avoiding(
+                            request.start,
+                            request.goal,
+                            request.movement_bits,
+                            &avoid,
+                        )
                         .or_else(|| {
                             outcome = AiPathOutcome::Partial;
-                            service.find_path_toward(
+                            service.find_path_toward_avoiding(
                                 request.start,
                                 request.goal,
                                 request.movement_bits,
+                                &avoid,
                             )
                         });
                     let waypoints = match path {
@@ -185,6 +199,7 @@ mod tests {
             start: cgmath::vec3(1.0, 0.0, 1.0),
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
         }));
         let response = wait_for_result(&async_pf, 7).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Full);
@@ -210,6 +225,7 @@ mod tests {
             start: cgmath::vec3(5.0, 0.0, 1.0),
             goal: cgmath::vec3(500.0, 0.0, 500.0),
             movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
         }));
         let response = wait_for_result(&async_pf, 9).expect("worker must respond");
         assert_ne!(response.outcome, AiPathOutcome::Full);

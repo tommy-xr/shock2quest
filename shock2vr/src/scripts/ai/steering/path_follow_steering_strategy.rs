@@ -279,6 +279,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         start: position,
                         goal,
                         movement_bits: MovementBits::WALK,
+                        now_seconds: time.total.as_secs_f32(),
                     });
                 }
                 // Budget exhausted: defer to a later frame, cooldown untouched
@@ -338,6 +339,29 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         } else {
             self.stall_seconds += time.elapsed.as_secs_f32();
             if self.stall_seconds >= STALL_SECONDS {
+                // Remember the cell we could not approach (TTL'd, per AI):
+                // the mesh says the link is walkable but something physical
+                // - a prop on the route, geometry the mesh doesn't model -
+                // stopped us. Excluding it from this AI's next queries makes
+                // the post-stall re-path route AROUND the obstacle; without
+                // this the fresh route is identical and the stall/retreat/
+                // re-path cycle grinds against the obstacle forever
+                // (issue #481). Probe just past the waypoint along the
+                // approach so an edge-inset waypoint resolves to the cell
+                // BEYOND the crossing, not the one we're standing in.
+                let toward = waypoint - position;
+                let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
+                let probe = if toward_len > 1e-3 {
+                    waypoint + toward * (WAYPOINT_ADVANCE_DISTANCE / toward_len)
+                } else {
+                    waypoint
+                };
+                if let Some(cell) = service
+                    .cell_from_position(probe)
+                    .or_else(|| service.cell_from_position(waypoint))
+                {
+                    service.report_blocked_cell(entity_id.inner(), cell, time.total.as_secs_f32());
+                }
                 // Back out toward the previous waypoint (or straight back
                 // when the route began here), then re-path from clear ground
                 let retreat = self
