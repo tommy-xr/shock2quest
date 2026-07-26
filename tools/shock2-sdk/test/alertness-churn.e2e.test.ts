@@ -74,7 +74,7 @@ test(
     // window (fresh routes, fresh positions) count as frozen.
     const sampleWindow = async (
       suspects: { id: number; name: string }[],
-    ): Promise<string[]> => {
+    ): Promise<{ id: number; diagnostic: string }[]> => {
       const before = new Map<number, [number, number, number]>();
       for (const h of suspects) {
         before.set(h.id, (await game.entities.detail(h.id)).position);
@@ -88,7 +88,7 @@ test(
       for (const h of hybrids) {
         positions.set(h.id, (await game.entities.detail(h.id)).position);
       }
-      const frozen: string[] = [];
+      const frozen: { id: number; diagnostic: string }[] = [];
       for (const h of suspects) {
         const p = positions.get(h.id)!;
         const moved = dist3(p, before.get(h.id)!);
@@ -108,26 +108,26 @@ test(
         const routeEnd = route.waypoints[route.waypoints.length - 1];
         const remaining = distXZ(p, routeEnd);
         if (remaining > 3.0 && moved < 0.3) {
-          frozen.push(
-            `${h.id} at [${p.map((v) => v.toFixed(1)).join(", ")}]: ${remaining.toFixed(1)} XZ from its route end, moved ${moved.toFixed(2)} in 5s (${route.outcome} route, ${route.waypoints.length} wps)`,
-          );
+          frozen.push({
+            id: h.id,
+            diagnostic: `${h.id} at [${p.map((v) => v.toFixed(1)).join(", ")}]: ${remaining.toFixed(1)} XZ from its route end, moved ${moved.toFixed(2)} in 5s (${route.outcome} route, ${route.waypoints.length} wps)`,
+          });
         }
       }
       return frozen;
     };
 
     const suspects = await sampleWindow(hybrids);
-    let frozen: string[] = [];
+    let frozen: { id: number; diagnostic: string }[] = [];
     if (suspects.length > 0) {
-      const suspectIds = new Set(
-        suspects.map((s) => Number(s.split(" ")[0])),
-      );
+      const suspectIds = new Set(suspects.map((s) => s.id));
       frozen = await sampleWindow(hybrids.filter((h) => suspectIds.has(h.id)));
     }
+    const diagnostics = frozen.map((f) => f.diagnostic);
     assert.deepEqual(
-      frozen,
+      diagnostics,
       [],
-      `AIs frozen mid-route after alertness churn (persisted across two 5s windows):\n  ${frozen.join("\n  ")}`,
+      `AIs frozen mid-route after alertness churn (persisted across two 5s windows):\n  ${diagnostics.join("\n  ")}`,
     );
   },
 );

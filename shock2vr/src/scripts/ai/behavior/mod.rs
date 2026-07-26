@@ -28,7 +28,9 @@ use shipyard::{EntityId, World};
 
 use crate::{
     physics::PhysicsWorld,
-    scripts::ai::ai_util::{chase_target_distance, has_line_of_fire, has_ranged_weapon},
+    scripts::ai::ai_util::{
+        chase_target, chase_target_distance, has_line_of_fire, has_ranged_weapon,
+    },
 };
 
 /// The attack behavior for the current distance to the player, or None when
@@ -41,6 +43,12 @@ pub fn attack_behavior_for_distance(
     physics: &PhysicsWorld,
     entity_id: EntityId,
 ) -> Option<Box<RefCell<dyn Behavior>>> {
+    // Distance and line of fire both gate against the AI's KNOWN target
+    // (the last-known position when awareness is published, the player's
+    // true position otherwise) - the same point chase steering faces and
+    // the FIRE flag shoots toward, so the ray can't approve a shot the AI
+    // isn't actually taking.
+    let target = chase_target(world, entity_id)?;
     let distance = chase_target_distance(world, entity_id)?;
     let melee_attack_distance = 8.0 / SCALE_FACTOR;
     let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
@@ -56,7 +64,7 @@ pub fn attack_behavior_for_distance(
     if distance > ranged_min_attack_distance
         && distance < ranged_max_attack_distance
         && has_ranged_weapon(world, entity_id)
-        && has_line_of_fire(entity_id, world, physics)
+        && has_line_of_fire(entity_id, world, physics, target)
     {
         Some(Box::new(RefCell::new(RangedAttackBehavior)))
     } else if distance < melee_attack_distance {

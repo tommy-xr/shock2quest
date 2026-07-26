@@ -608,8 +608,9 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     false
 }
 
-/// Whether `from_entity` has a clear line of FIRE to the player - the
-/// occlusion gate for standing ranged attacks. Unlike `is_player_visible`
+/// Whether `from_entity` has a clear line of FIRE to `target` (its known
+/// aim point - see `chase_target`) - the occlusion gate for standing
+/// ranged attacks. Unlike `is_player_visible`
 /// (sight: WORLD geometry only), this also tests door and prop colliders,
 /// because projectiles collide with those - an AI allowed to stop and
 /// shoot through a closed door or a crate stands rooted firing into it
@@ -618,19 +619,23 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
 /// allies wander off on their own, and refusing to stand behind one would
 /// flap the chase/attack transition every time the ally shifts (holding
 /// fire while an ally blocks the shot is #614).
-pub fn has_line_of_fire(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+pub fn has_line_of_fire(
+    from_entity: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    target: Vector3<f32>,
+) -> bool {
     if is_player_psi_invisible(world) {
         return false;
     }
 
-    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
     let Ok(ent_pos) = v_current_pos.get(from_entity) else {
         return false;
     };
     let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
-    let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
+    let end_point = point3(0.0, 0.0, 0.0) + target;
     let direction = (end_point - start_point).normalize();
     let distance = (end_point - start_point).magnitude();
     let result = physics.ray_cast2(
