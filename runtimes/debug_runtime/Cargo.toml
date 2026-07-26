@@ -29,6 +29,9 @@ anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 image = "0.24"
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 # FFmpeg is disabled on Windows due to build complexity
 [target.'cfg(not(windows))'.dependencies]
 shock2vr = { path = "../../shock2vr" }

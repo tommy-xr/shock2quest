@@ -260,6 +260,8 @@ async fn start_http_server(
     listener: tokio::net::TcpListener,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
 ) -> anyhow::Result<()> {
+    let signal_command_tx = command_tx.clone();
+
     // Create the router with health endpoint
     let app = Router::new()
         .route("/v1/health", get(health_check))
@@ -372,7 +374,7 @@ async fn start_http_server(
 
     // Start the server with graceful shutdown
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(signal_command_tx))
         .await?;
 
     Ok(())
@@ -3381,7 +3383,7 @@ async fn get_recent_audio() -> Json<Value> {
 }
 
 /// Wait for shutdown signal (Ctrl+C)
-async fn shutdown_signal() {
+async fn shutdown_signal(command_tx: mpsc::UnboundedSender<RuntimeCommand>) {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -3406,5 +3408,30 @@ async fn shutdown_signal() {
         _ = terminate => {
             info!("Received SIGTERM, shutting down gracefully...");
         },
+    }
+
+    request_game_loop_shutdown(&command_tx);
+}
+
+fn request_game_loop_shutdown(command_tx: &mpsc::UnboundedSender<RuntimeCommand>) {
+    if command_tx.send(RuntimeCommand::Shutdown).is_err() {
+        info!("Game loop already stopped while handling shutdown signal");
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[test]
+    fn process_signal_requests_game_loop_shutdown() {
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+
+        request_game_loop_shutdown(&command_tx);
+
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(RuntimeCommand::Shutdown)
+        ));
     }
 }
