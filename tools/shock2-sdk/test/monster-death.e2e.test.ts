@@ -95,7 +95,21 @@ test(
 
     // The corpse must stay dead: the alertness escalate (1.5s) and decay (3s)
     // windows both elapse several times over while the player stands in view.
-    const deadPos = (await game.entities.detail(monster.id)).position;
+    // Wait for the body to actually come to rest before taking the baseline,
+    // rather than assuming the fixed 240-frame window above covered it. The
+    // death clip's root motion (and the settle that follows) does not take a
+    // constant time, so a fixed wait left part of the settle inside the "did it
+    // wander?" measurement below - which is what made this test flaky, drifting
+    // 0.55-0.75 units against a 0.5 threshold. What the assertion is about is
+    // the corpse WANDERING, not how far it slid while coming to rest.
+    let deadPos = (await game.entities.detail(monster.id)).position;
+    for (let i = 0; i < 60; i++) {
+      await game.step({ frames: 10 });
+      const next = (await game.entities.detail(monster.id)).position;
+      const moved = Math.hypot(next[0] - deadPos[0], next[2] - deadPos[2]);
+      deadPos = next;
+      if (moved < 0.01) break;
+    }
     for (let i = 0; i < 5; i++) {
       await game.step({ frames: 120 });
       detail = await game.entities.detail(monster.id);
