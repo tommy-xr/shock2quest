@@ -74,10 +74,10 @@ impl AsyncPathfinding {
             .spawn(move || {
                 while let Ok(request) = rx.recv() {
                     let mut outcome = AiPathOutcome::Full;
-                    // Crossings this AI's steering reported as physically
-                    // blocked (stall mid-route) are excluded, so the
-                    // post-stall re-path routes around the obstacle
-                    let avoid = service.blocked_links(request.entity, request.now_seconds);
+                    // Crossings ANY AI's steering reported as physically
+                    // blocked (stall mid-route) are excluded, so re-paths -
+                    // including fresh arrivals' - route around the obstacle
+                    let avoid = service.blocked_links(request.now_seconds);
                     let path = service
                         .find_path_avoiding(
                             request.start,
@@ -237,16 +237,17 @@ mod tests {
     }
 
     #[test]
-    fn worker_applies_the_entitys_blocked_links() {
-        // Cell 0 -> goal in cell 2, but this entity reported the 1 -> 2
-        // crossing blocked: the worker must return a PARTIAL route ending
-        // at cell 1 instead of the full route through the obstacle.
+    fn worker_applies_blocked_links() {
+        // Cell 0 -> goal in cell 2, but an AI reported the 1 -> 2 crossing
+        // blocked: the worker must return a PARTIAL route ending at cell 1
+        // instead of the full route through the obstacle - for EVERY AI,
+        // not just the reporter.
         let service = Arc::new(PathfindingService::new(Arc::new(
             crate::pathfinding::tests::three_cell_db(
                 dark::mission::path_database::PathCellFlags::empty(),
             ),
         )));
-        service.report_blocked_link(11, 1, 2, 0.0);
+        service.report_blocked_link(1, 2, 0.0);
         let async_pf = AsyncPathfinding::spawn(service.clone());
         assert!(async_pf.submit(PathQueryRequest {
             entity: 11,
@@ -263,7 +264,7 @@ mod tests {
             "partial route must end at cell 1's center, before the blockage"
         );
 
-        // Another entity is unaffected by 11's report
+        // The exclusion is shared: another entity's query avoids it too
         assert!(async_pf.submit(PathQueryRequest {
             entity: 12,
             start: cgmath::vec3(1.0, 0.0, 1.0),
@@ -272,6 +273,6 @@ mod tests {
             now_seconds: 1.0,
         }));
         let response = wait_for_result(&async_pf, 12).expect("worker must respond");
-        assert_eq!(response.outcome, AiPathOutcome::Full);
+        assert_eq!(response.outcome, AiPathOutcome::Partial);
     }
 }

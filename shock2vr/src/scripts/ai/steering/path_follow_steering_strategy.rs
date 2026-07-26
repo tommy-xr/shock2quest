@@ -429,12 +429,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         .or_else(|| service.cell_from_position(waypoint));
                     if let (Some(from), Some(to)) = (from, to) {
                         if from != to {
-                            service.report_blocked_link(
-                                entity_id.inner(),
-                                from,
-                                to,
-                                time.total.as_secs_f32(),
-                            );
+                            service.report_blocked_link(from, to, time.total.as_secs_f32());
                         }
                     }
                 }
