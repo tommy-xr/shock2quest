@@ -4,6 +4,7 @@ export {
   CommandError,
   EntitiesApi,
   Game,
+  headRotationForWorldPoint,
   InputApi,
   PathfindingTestApi,
   PlayerApi,

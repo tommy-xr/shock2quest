@@ -20,10 +20,9 @@ use super::{get_entity_creature, hit_box_script::HitBoxScript};
 
 #[derive(Component)]
 pub struct RuntimePropHitBox {
-    #[allow(dead_code)]
     pub parent_entity_id: EntityId,
-    #[allow(dead_code)]
     pub hit_box_type: HitBoxType,
+    pub joint_id: JointId,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +110,7 @@ impl HitBoxManager {
                             RuntimePropHitBox {
                                 parent_entity_id,
                                 hit_box_type: hitbox_type.clone(),
+                                joint_id: *joint_id,
                             },
                         );
 

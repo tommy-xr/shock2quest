@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement } from "../src/types.js";
-import { aimAtWorldPoint } from "./helpers/aim.js";
 import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
 import { clickUiElement } from "./helpers/ui.js";
@@ -79,7 +78,20 @@ async function aimAtEntity(game: GameServer, target: EntitySummary): Promise<voi
   const [tx, ty, tz] = (await game.entities.detail(target.id)).position;
   await game.player.teleport({ x: tx - 4, y: ty, z: tz });
   await game.step({ frames: 5 });
-  await aimAtWorldPoint(game, [tx, ty + 1, tz]);
+  await game.input.set("left_hand.thumbstick", [0.75, 0]);
+  await game.step({ frames: 20 });
+  await game.input.set("left_hand.thumbstick", [0, 0]);
+  await game.save("world-aim-rotated");
+  await game.load("world-aim-rotated");
+  const pawn = (await game.info()).player.rotation;
+  assert.ok(
+    Math.abs(pawn[1]) > 0.01 || Math.abs(pawn[3] - 1) > 0.01,
+    `regression requires a non-identity save-restored pawn rotation: ${pawn}`,
+  );
+  const aim = await game.player.aimAt(target, { hitbox: "torso" });
+  assert.equal(aim.entity_id, target.id);
+  assert.equal(aim.classification, "torso");
+  assert.equal(aim.fallback_used, false);
   await game.step({ frames: 3 });
 }
 
