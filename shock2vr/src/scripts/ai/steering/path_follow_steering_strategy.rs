@@ -72,6 +72,14 @@ const DISPLACEMENT_STALL_DISTANCE: f32 = 1.0 / SCALE_FACTOR;
 /// AI pinned behind a scripted NPC beside a desk). Slightly longer than
 /// STALL_SECONDS so the progress check stays the common path.
 const DISPLACEMENT_STALL_SECONDS: f32 = 4.0;
+/// Physical unstick, last resort: after TWO consecutive stalls with no
+/// displacement between them - the body is PINNED (e.g. overlapping a
+/// scripted NPC's capsule beside furniture; steering, retreats and
+/// re-paths all command motion the solver cancels) - nudge the body this
+/// far (2 Dark feet, about one body radius) toward the retreat point to
+/// break the equilibrium. A rare small pop beats a monster frozen forever
+/// (issue #481's terminal pocket).
+const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
 /// How far past the stalled waypoint (XZ) to probe for the cell on the far
 /// side of the crossing when reporting a blocked link - just enough to step
 /// off the shared edge without skipping a narrow destination cell (0.5
@@ -107,6 +115,10 @@ pub struct PathFollowSteeringStrategy {
     /// Displacement watchdog: where the AI was when the anchor was set, and
     /// how long ago (see DISPLACEMENT_STALL_SECONDS)
     displacement_anchor: Option<(Vector3<f32>, f32)>,
+    /// Where the previous stall fired - a new stall from (nearly) the same
+    /// spot means retreat + re-path freed nothing and the body is pinned
+    /// (see UNSTICK_NUDGE_DISTANCE)
+    last_stall_position: Option<Vector3<f32>>,
 }
 
 impl PathFollowSteeringStrategy {
@@ -134,6 +146,7 @@ impl PathFollowSteeringStrategy {
             stall_seconds: 0.0,
             recovery: None,
             displacement_anchor: None,
+            last_stall_position: None,
         }
     }
 
@@ -366,6 +379,9 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         let displaced_stall = match self.displacement_anchor {
             Some((anchor, _)) if xz_distance(position, anchor) >= DISPLACEMENT_STALL_DISTANCE => {
                 self.displacement_anchor = Some((position, 0.0));
+                // Real movement: the next stall (if any) is a fresh incident,
+                // not a continuation of a pinned body
+                self.last_stall_position = None;
                 false
             }
             Some((anchor, age)) => {
@@ -439,13 +455,44 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         let (_, forward) = ai_util::get_position_and_forward(world, entity_id);
                         position - forward * 2.0
                     });
+                // Pinned-body unstick (last resort): the previous stall
+                // fired from (nearly) this same spot, so its retreat and
+                // re-path freed nothing - physically nudge toward the
+                // retreat point (known-walkable route ground) to break the
+                // solver equilibrium
+                let pinned = self
+                    .last_stall_position
+                    .map(|prev| xz_distance(position, prev) < DISPLACEMENT_STALL_DISTANCE)
+                    .unwrap_or(false);
+                self.last_stall_position = Some(position);
+                let unstick_effect = if pinned {
+                    let dir = retreat - position;
+                    let len = (dir.x * dir.x + dir.z * dir.z).sqrt();
+                    if len > 1e-3 {
+                        let step = UNSTICK_NUDGE_DISTANCE.min(len);
+                        let nudged = Vector3::new(
+                            position.x + dir.x / len * step,
+                            position.y,
+                            position.z + dir.z / len * step,
+                        );
+                        Effect::SetPositionRotation {
+                            entity_id,
+                            position: nudged,
+                            rotation: crate::util::get_rotation_from_transform(world, entity_id),
+                        }
+                    } else {
+                        Effect::NoEffect
+                    }
+                } else {
+                    Effect::NoEffect
+                };
                 let jitter = rand::thread_rng().gen_range(0.8..1.6);
                 self.recovery = Some((STALL_RECOVERY_SECONDS * jitter, retreat));
                 self.clear_path();
                 self.repath_cooldown = STALL_RECOVERY_SECONDS * jitter;
                 return Some((
                     Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(retreat)),
-                    Effect::NoEffect,
+                    unstick_effect,
                 ));
             }
         }
