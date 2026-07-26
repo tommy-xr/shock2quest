@@ -61,49 +61,73 @@ test(
     //   crowd-separation equilibrium (separation holds neighbors apart at
     //   roughly its 2.4-unit radius); such pairs are crowd dynamics, not a
     //   navigation freeze (see #487 / the furniture-route issue).
-    const before = new Map<number, [number, number, number]>();
-    for (const h of hybrids) {
-      const d = await game.entities.detail(h.id);
-      before.set(h.id, d.position);
-    }
-    await game.step({ frames: 300 }); // 5s observation window
-
-    const routes = new Map(
-      (await game.pathfinding.aiPaths()).map((e) => [e.entity_id, e] as const),
-    );
-    const positions = new Map<number, [number, number, number]>();
-    for (const h of hybrids) {
-      positions.set(h.id, (await game.entities.detail(h.id)).position);
-    }
-    const frozen: string[] = [];
-    for (const h of hybrids) {
-      const p = positions.get(h.id)!;
-      const moved = dist3(p, before.get(h.id)!);
-      const route = routes.get(h.id);
-      if (!route || route.outcome === "Failed" || route.waypoints.length === 0) continue;
-      if (dist3(p, playerPos) < 6.0) continue; // arrived / engaging
-      // medsci1's sealed surgery ward (far north): its guards spawn penned
-      // among surgical beds/scanner panels under shield membranes the engine
-      // can't open - a content quirk no navigation fix addresses (see the
-      // #489 PR for screenshots). The ward is unreachable from the play
-      // space, so excluding it costs no pursuit coverage.
-      if (p[2] > 55.0) continue;
-      const jammed = hybrids.some(
-        (o) => o.id !== h.id && dist3(positions.get(o.id)!, p) < 2.5,
-      );
-      if (jammed) continue; // mutual crowd jam - tracked separately
-      const routeEnd = route.waypoints[route.waypoints.length - 1];
-      const remaining = distXZ(p, routeEnd);
-      if (remaining > 3.0 && moved < 0.3) {
-        frozen.push(
-          `${h.id} at [${p.map((v) => v.toFixed(1)).join(", ")}]: ${remaining.toFixed(1)} XZ from its route end, moved ${moved.toFixed(2)} in 5s (${route.outcome} route, ${route.waypoints.length} wps)`,
-        );
+    //
+    // The signature must PERSIST across two consecutive 5s windows. #481
+    // defines the freeze as zero movement over 30+ seconds, indefinitely -
+    // and every diagnosed real freeze measures 0.00-0.15 per window forever
+    // (corpse ghost-routes, the med-bed grind loop, stand-and-shoot). But a
+    // single window can also catch a LEGITIMATE stall-recovery cycle
+    // mid-flight (3s stall + jittered back-out + re-path around the
+    // reported blockage - measured 0.26-0.29 in 5s at medsci1's desk/chair
+    // chokepoint) which resolves in the next few seconds. One window flags
+    // suspects; only those still failing the full filter over the SECOND
+    // window (fresh routes, fresh positions) count as frozen.
+    const sampleWindow = async (
+      suspects: { id: number; name: string }[],
+    ): Promise<string[]> => {
+      const before = new Map<number, [number, number, number]>();
+      for (const h of suspects) {
+        before.set(h.id, (await game.entities.detail(h.id)).position);
       }
+      await game.step({ frames: 300 }); // 5s observation window
+
+      const routes = new Map(
+        (await game.pathfinding.aiPaths()).map((e) => [e.entity_id, e] as const),
+      );
+      const positions = new Map<number, [number, number, number]>();
+      for (const h of hybrids) {
+        positions.set(h.id, (await game.entities.detail(h.id)).position);
+      }
+      const frozen: string[] = [];
+      for (const h of suspects) {
+        const p = positions.get(h.id)!;
+        const moved = dist3(p, before.get(h.id)!);
+        const route = routes.get(h.id);
+        if (!route || route.outcome === "Failed" || route.waypoints.length === 0) continue;
+        if (dist3(p, playerPos) < 6.0) continue; // arrived / engaging
+        // medsci1's sealed surgery ward (far north): its guards spawn penned
+        // among surgical beds/scanner panels under shield membranes the engine
+        // can't open - a content quirk no navigation fix addresses (see the
+        // #489 PR for screenshots). The ward is unreachable from the play
+        // space, so excluding it costs no pursuit coverage.
+        if (p[2] > 55.0) continue;
+        const jammed = hybrids.some(
+          (o) => o.id !== h.id && dist3(positions.get(o.id)!, p) < 2.5,
+        );
+        if (jammed) continue; // mutual crowd jam - tracked separately
+        const routeEnd = route.waypoints[route.waypoints.length - 1];
+        const remaining = distXZ(p, routeEnd);
+        if (remaining > 3.0 && moved < 0.3) {
+          frozen.push(
+            `${h.id} at [${p.map((v) => v.toFixed(1)).join(", ")}]: ${remaining.toFixed(1)} XZ from its route end, moved ${moved.toFixed(2)} in 5s (${route.outcome} route, ${route.waypoints.length} wps)`,
+          );
+        }
+      }
+      return frozen;
+    };
+
+    const suspects = await sampleWindow(hybrids);
+    let frozen: string[] = [];
+    if (suspects.length > 0) {
+      const suspectIds = new Set(
+        suspects.map((s) => Number(s.split(" ")[0])),
+      );
+      frozen = await sampleWindow(hybrids.filter((h) => suspectIds.has(h.id)));
     }
     assert.deepEqual(
       frozen,
       [],
-      `AIs frozen mid-route after alertness churn:\n  ${frozen.join("\n  ")}`,
+      `AIs frozen mid-route after alertness churn (persisted across two 5s windows):\n  ${frozen.join("\n  ")}`,
     );
   },
 );
