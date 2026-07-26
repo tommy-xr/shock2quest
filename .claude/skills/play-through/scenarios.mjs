@@ -5,6 +5,9 @@
 //
 //   node scenarios.mjs list          print all scenarios and tweaks with ids
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
 export const SCENARIOS = [
   {
     id: "earth-to-medsci",
@@ -21,8 +24,8 @@ export const SCENARIOS = [
   {
     id: "hydroponics",
     name: "Hydroponics",
-    missions: ["hydro1", "hydro2", "hydro3"],
-    goal: "Start from the elevator, get and research the Toxin-A vials, and apply them to the environmental regulators.",
+    missions: ["hydro2", "hydro1", "hydro3"],
+    goal: "Start from the elevator (hydro2 is the elevator hub), get and research the Toxin-A vials, and apply them to the environmental regulators.",
   },
   {
     id: "operations",
@@ -156,6 +159,10 @@ export const TWEAKS = [
 
 // Asset set to launch with: exported as DARK_ASSET_PATH for every runtime the
 // campaign starts. Paths are the two install locations used on our machines.
+// A set is only eligible for the random draw when it's actually loadable
+// (data_root's sentinel `shock2.gam` exists there) — e.g. the 25th Anniversary
+// install ships packed .kpf archives the engine can't read yet, so until it's
+// unpacked it can only be forced (assets=25th), never rolled.
 export const ASSET_SETS = [
   {
     id: "legacy",
@@ -169,6 +176,8 @@ export const ASSET_SETS = [
   },
 ];
 
+export const assetSetUsable = (a) => existsSync(join(a.path, "shock2.gam"));
+
 // Deterministic PRNG (mulberry32) so a roll is reproducible from its seed.
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -181,7 +190,9 @@ function mulberry32(seed) {
 }
 
 // Roll a campaign: random scenario + tweak + asset set, seeded. Any of the
-// three can be forced by id.
+// three can be forced by id. The RNG stream is drawn identically whether or
+// not picks are forced, so `seed=N` alone always reproduces the same random
+// draws regardless of which overrides were combined with it.
 export function roll({ seed, scenarioId, tweakId, assetsId } = {}) {
   const s = seed ?? Math.floor(Math.random() * 2 ** 31);
   const rng = mulberry32(s);
@@ -190,16 +201,18 @@ export function roll({ seed, scenarioId, tweakId, assetsId } = {}) {
     if (!hit) throw new Error(`unknown ${label} '${id}' (see: node scenarios.mjs list)`);
     return hit;
   };
-  const scenario = scenarioId
-    ? byId(SCENARIOS, scenarioId, "scenario")
-    : SCENARIOS[Math.floor(rng() * SCENARIOS.length)];
-  const tweak = tweakId
-    ? byId(TWEAKS, tweakId, "tweak")
-    : TWEAKS[Math.floor(rng() * TWEAKS.length)];
-  const assets = assetsId
-    ? byId(ASSET_SETS, assetsId, "assets")
-    : ASSET_SETS[Math.floor(rng() * ASSET_SETS.length)];
-  return { seed: s, scenario, tweak, assets };
+  const draw = (table) => table[Math.floor(rng() * table.length)];
+  const rolledScenario = draw(SCENARIOS);
+  const rolledTweak = draw(TWEAKS);
+  const usableSets = ASSET_SETS.filter(assetSetUsable);
+  const rolledAssets = draw(usableSets.length ? usableSets : ASSET_SETS);
+  const scenario = scenarioId ? byId(SCENARIOS, scenarioId, "scenario") : rolledScenario;
+  const tweak = tweakId ? byId(TWEAKS, tweakId, "tweak") : rolledTweak;
+  const assets = assetsId ? byId(ASSET_SETS, assetsId, "assets") : rolledAssets;
+  const warnings = [];
+  if (!assetSetUsable(assets))
+    warnings.push(`asset set '${assets.id}' has no shock2.gam at ${assets.path} — the engine cannot load it as-is (packed/missing install?)`);
+  return { seed: s, scenario, tweak, assets, warnings };
 }
 
 if (process.argv[1]?.endsWith("scenarios.mjs")) {
@@ -210,7 +223,7 @@ if (process.argv[1]?.endsWith("scenarios.mjs")) {
     console.log("Tweaks:");
     for (const t of TWEAKS) console.log(`  ${t.id.padEnd(22)} ${t.instructions}`);
     console.log("Asset sets:");
-    for (const a of ASSET_SETS) console.log(`  ${a.id.padEnd(22)} ${a.name} (DARK_ASSET_PATH=${a.path})`);
+    for (const a of ASSET_SETS) console.log(`  ${a.id.padEnd(22)} ${a.name} (DARK_ASSET_PATH=${a.path})${assetSetUsable(a) ? "" : " [NOT USABLE: no shock2.gam — force-only, excluded from random draw]"}`);
   } else if (cmd) {
     console.error("usage: node scenarios.mjs list");
     process.exit(1);

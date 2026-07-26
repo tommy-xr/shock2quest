@@ -26,6 +26,7 @@ import { roll } from "./scenarios.mjs";
 const FILE = process.env.PT_STATE || "/tmp/claude/playthrough/state.json";
 const load = () => (existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : null);
 const save = (s) => { mkdirSync(dirname(FILE), { recursive: true }); writeFileSync(FILE, JSON.stringify(s, null, 2) + "\n"); };
+const baseState = (order, fixBranch) => ({ iteration: 0, mission_order: order, fix_branch: fixBranch, frontier: null, blockers: [], history: [] });
 
 const [cmd, ...args] = process.argv.slice(2);
 const rest = args; // command-specific positional args (after the command)
@@ -53,7 +54,7 @@ switch (cmd) {
     }
     const order = (rest.find((a) => a.startsWith("order="))?.slice(6) || "earth,station,medsci1,medsci2,eng1,eng2,hydro1,hydro2,hydro3,ops1,ops2,ops3,ops4,rec1,rec2,rec3,command1,command2,rick1,rick2,rick3,many,shodan").split(",");
     const fixBranch = rest.find((a) => a.startsWith("fixBranch="))?.slice(10) || "playthrough-fixes";
-    save({ iteration: 0, mission_order: order, fix_branch: fixBranch, frontier: null, blockers: [], history: [] });
+    save(baseState(order, fixBranch));
     console.log(`initialized ${FILE} (${order.length} missions, fix branch '${fixBranch}')`);
     break;
   }
@@ -63,15 +64,25 @@ switch (cmd) {
     // Idempotent like init — only rolls when no ledger exists (--force resets).
     if (existsSync(FILE) && !args.includes("--force")) {
       const s = load();
-      console.log(`ledger already exists at ${FILE} (iteration ${s.iteration}) — kept its roll. Use --force to re-roll.`);
-      if (s.scenario) console.log(`scenario: ${s.scenario.name} · tweak: ${s.tweak?.name} · assets: ${s.assets?.name}`);
+      if (s.scenario) {
+        console.log(`ledger already exists at ${FILE} (iteration ${s.iteration}) — kept its roll. Use --force to re-roll.`);
+        console.log(`scenario: ${s.scenario.name} · tweak: ${s.tweak?.name} · assets: ${s.assets?.name}`);
+      } else {
+        console.log(`WARNING: ledger at ${FILE} (iteration ${s.iteration}) predates campaign randomization — it has NO scenario/tweak/assets roll.`);
+        console.log(`Kept as-is (a mid-campaign re-roll would strand its frontier). Finish or abandon it, then 'roll --force' to start a rolled campaign.`);
+      }
       break;
     }
     const kv = (k) => rest.find((a) => a.startsWith(`${k}=`))?.slice(k.length + 1);
+    const rawSeed = kv("seed");
+    if (rawSeed !== undefined && !Number.isFinite(Number(rawSeed))) {
+      console.error(`invalid seed '${rawSeed}' — must be a number`);
+      process.exit(1);
+    }
     let picked;
     try {
       picked = roll({
-        seed: kv("seed") ? Number(kv("seed")) : undefined,
+        seed: rawSeed !== undefined ? Number(rawSeed) : undefined,
         scenarioId: kv("scenario"),
         tweakId: kv("tweak"),
         assetsId: kv("assets"),
@@ -82,18 +93,14 @@ switch (cmd) {
     }
     const fixBranch = kv("fixBranch") || "playthrough-fixes";
     save({
-      iteration: 0,
-      mission_order: picked.scenario.missions,
-      fix_branch: fixBranch,
-      frontier: null,
-      blockers: [],
-      history: [],
+      ...baseState(picked.scenario.missions, fixBranch),
       seed: picked.seed,
       scenario: { id: picked.scenario.id, name: picked.scenario.name, goal: picked.scenario.goal },
       tweak: picked.tweak,
       assets: picked.assets,
     });
     console.log(`rolled campaign (seed ${picked.seed}) -> ${FILE}`);
+    for (const w of picked.warnings) console.log(`  WARNING: ${w}`);
     console.log(`  scenario: ${picked.scenario.name} [${picked.scenario.id}] — ${picked.scenario.missions.join(", ")}`);
     console.log(`  goal:     ${picked.scenario.goal}`);
     console.log(`  tweak:    ${picked.tweak.name} [${picked.tweak.id}] — ${picked.tweak.instructions}`);

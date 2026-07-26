@@ -80,7 +80,9 @@ Classify each validated finding two ways:
     feature, and it must be **faithful**, not a shim.
 
 **Blockers first** (they gate progress). File a GitHub issue (domain + kind,
-mission, repro: exact levers + step count, expected vs actual, the screenshot).
+mission, repro: exact levers + step count, expected vs actual, the screenshot,
+and — in a rolled campaign — the campaign configuration: scenario, tweak,
+asset set, seed; same on the fix PR).
 
 **Fixing a feature gap — faithfulness is required:**
 - The fix agent must **investigate the original System Shock 2 behavior AND the
@@ -186,7 +188,11 @@ them in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
    electronic/organic/heavy weapons), OSA (psi tiers 1–5), AI/pathfinding
    stress, or a detailed test run.
 3. **Asset set** — legacy assets or the 25th Anniversary assets; the pick is the
-   `DARK_ASSET_PATH` every runtime in the campaign must be launched with.
+   `DARK_ASSET_PATH` every runtime in the campaign must be launched with. Only
+   sets that are actually loadable (`shock2.gam` present at the path) enter the
+   random draw; an unusable set can still be forced with `assets=<id>` and the
+   roll prints a warning (e.g. the 25th Anniversary install is packed `.kpf`
+   until it's unpacked / the engine learns to read it).
 
 ```
 node .agents/skills/play-through/playthrough-state.mjs roll              # random campaign (idempotent)
@@ -204,7 +210,23 @@ iteration — **feed the tweak instructions and campaign goal into every
 `playtest` prompt**, and treat a tweak's verifications as first-class findings
 (a broken psi power under an OSA tweak is a real finding even if the mission
 could be finished without it). Every roll prints its `seed`, so any campaign
-can be reproduced exactly.
+can be reproduced exactly (the RNG stream is identical whether or not picks
+were forced alongside the seed).
+
+**Tweak setup gaps.** Most scenarios start mid-game with a fresh character, so
+a class tweak (Marine/Navy/OSA) may require gear, skills, or psi tiers the
+start state doesn't have. Provisioning the loadout is then the **first job of
+iteration 0** — use the debug runtime's legitimate levers (spawn/give,
+career-relevant items found in the level) to establish it. If the tooling
+can't provision what the tweak needs, record that as a **tooling/setup gap**
+(and satisfy as much of the tweak as is reachable) — do NOT file "X is broken"
+game bugs for things the character was never given.
+
+**Record the roll everywhere it matters:** every issue filed and every fix PR
+opened during a campaign must state the rolled configuration — scenario, tweak,
+asset set, and seed (e.g. `campaign: hydroponics · melee-only · legacy · seed
+42`) — so a reader can tell whether a finding is specific to a playstyle or
+asset set, and can reproduce the campaign that surfaced it.
 
 ## Autonomous mode (`--auto`)
 
