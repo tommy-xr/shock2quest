@@ -620,6 +620,19 @@ pub fn initialize_entity_with_props(
     ancestors.push(template_id);
 
     world.add_component(entity_id, PropTemplateId { template_id });
+    // A concrete object's positive ID belongs to this mission only. Preserve
+    // its nearest gamesys archetype separately so carried objects retain a
+    // stable class identity in later missions whose positive IDs may collide.
+    let canonical_template_id = ancestors
+        .iter()
+        .rev()
+        .copied()
+        .find(|ancestor| *ancestor < 0)
+        .unwrap_or(template_id);
+    world.add_component(
+        entity_id,
+        RuntimePropCanonicalTemplateId(canonical_template_id),
+    );
 
     for parent_id in ancestors {
         let maybe_parent_props = entity_info.entity_to_properties.get(&parent_id);

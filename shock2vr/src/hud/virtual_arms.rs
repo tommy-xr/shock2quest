@@ -157,12 +157,7 @@ pub(crate) fn get_wielded_psi_power(world: &World) -> Option<(String, i32)> {
 
     // Is the wielded weapon the psi amp? Resolved via its template's class
     // tags, the same mechanism as `get_wielded_ammo_type`.
-    let template_id = world
-        .borrow::<View<dark::properties::PropTemplateId>>()
-        .ok()?
-        .get(weapon)
-        .ok()?
-        .template_id;
+    let template_id = crate::scripts::script_util::entity_class_template_id(world, weapon)?;
     let class_tags = world
         .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateClassTags>>()
         .ok()?;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use dark::{
-    properties::{Link, Links, PropGunState, PropStackCount, PropTemplateId},
+    properties::{Link, Links, PropGunState, PropStackCount},
     ss2_entity_info::{self, SystemShock2EntityInfo},
 };
 use shipyard::{EntityId, Get, Unique, UniqueView, View, ViewMut, World};
@@ -105,8 +105,7 @@ pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) 
     };
 
     let matching_reserve: Vec<EntityId> = {
-        let Ok((templates, stacks, hierarchy)) = world.borrow::<(
-            View<PropTemplateId>,
+        let Ok((stacks, hierarchy)) = world.borrow::<(
             View<PropStackCount>,
             UniqueView<crate::mission::GlobalTemplateHierarchy>,
         )>() else {
@@ -115,11 +114,13 @@ pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) 
         reserve_items
             .into_iter()
             .filter(|item| {
-                let Ok(template) = templates.get(*item) else {
+                let Some(class_template_id) =
+                    crate::scripts::script_util::entity_class_template_id(world, *item)
+                else {
                     return false;
                 };
                 let compatible = compatible_clip_templates.iter().any(|clip_template| {
-                    hierarchy.is_or_descends_from(template.template_id, *clip_template)
+                    hierarchy.is_or_descends_from(class_template_id, *clip_template)
                 });
                 compatible && stacks.get(*item).is_ok_and(|stack| stack.0 > 0)
             })
@@ -162,7 +163,7 @@ mod tests {
     use super::*;
     use crate::{
         mission::{GlobalTemplateHierarchy, PlayerInfo},
-        runtime_props::RuntimePropSelectedAmmo,
+        runtime_props::{RuntimePropCanonicalTemplateId, RuntimePropSelectedAmmo},
     };
     use cgmath::{Quaternion, Vector3};
     use dark::properties::{
@@ -268,6 +269,32 @@ mod tests {
             item
         }
 
+        fn reserve_with_canonical_template(
+            &mut self,
+            concrete_template_id: i32,
+            canonical_template_id: i32,
+            rounds: i32,
+        ) -> EntityId {
+            let item = self.world.add_entity((
+                PropTemplateId {
+                    template_id: concrete_template_id,
+                },
+                RuntimePropCanonicalTemplateId(canonical_template_id),
+                PropStackCount(rounds),
+            ));
+            let mut links = self.world.borrow::<ViewMut<Links>>().unwrap();
+            (&mut links)
+                .get(self.inventory)
+                .unwrap()
+                .to_links
+                .push(ToLink {
+                    link: Link::Contains(0),
+                    to_entity_id: Some(WrappedEntityId(item)),
+                    to_template_id: concrete_template_id,
+                });
+            item
+        }
+
         fn set_standard_projectile(&mut self, template_id: i32) {
             let mut links = self.world.borrow::<ViewMut<Links>>().unwrap();
             let weapon_links = (&mut links).get(self.weapon).unwrap();
@@ -326,6 +353,32 @@ mod tests {
         assert_eq!(fixture.rounds(second), 0);
         assert_eq!(outcome.rounds_loaded, 12);
         assert_eq!(outcome.depleted_items, vec![first, second]);
+    }
+
+    #[test]
+    fn reload_uses_preserved_archetype_when_concrete_id_collides_across_missions() {
+        const SOURCE_SMALL_CLIP_OBJECT: i32 = 1496;
+        const DESTINATION_PELLET_BOX: i32 = -42;
+
+        let mut fixture = Fixture::new(0, 0);
+        // The destination reuses positive object 1496 for an unrelated pellet
+        // box. The carried source object retains 1496 as its concrete identity,
+        // while its stable eng1 archetype provenance remains Small Std Clip.
+        fixture
+            .world
+            .add_unique(GlobalTemplateHierarchy(HashMap::from([
+                (SMALL_STD_CLIP, vec![STD_CLIP]),
+                (SOURCE_SMALL_CLIP_OBJECT, vec![DESTINATION_PELLET_BOX]),
+            ])));
+        let reserve =
+            fixture.reserve_with_canonical_template(SOURCE_SMALL_CLIP_OBJECT, SMALL_STD_CLIP, 6);
+
+        let outcome = load_from_reserve(&fixture.world, fixture.weapon, 12);
+
+        assert_eq!(fixture.ammo(), 6);
+        assert_eq!(fixture.rounds(reserve), 0);
+        assert_eq!(outcome.rounds_loaded, 6);
+        assert_eq!(outcome.depleted_items, vec![reserve]);
     }
 
     #[test]
