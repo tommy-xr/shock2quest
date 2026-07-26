@@ -977,11 +977,17 @@ fn process_command(
                 game.save_game(file.clone())
             }));
             let result = match outcome {
-                Ok(mission) => commands::SaveLoadResult {
+                Ok(Ok(mission)) => commands::SaveLoadResult {
                     success: true,
                     message: format!("Saved '{}' ({})", file, mission),
                     file,
                     mission,
+                },
+                Ok(Err(error)) => commands::SaveLoadResult {
+                    success: false,
+                    message: error,
+                    file,
+                    mission: String::new(),
                 },
                 Err(_) => {
                     tracing::error!("Save of '{}' panicked (caught to keep runtime alive)", file);

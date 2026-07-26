@@ -98,6 +98,12 @@ pub trait GameScene {
         false
     }
 
+    /// Collision-valid standing position to serialize for the player. Mission
+    /// scenes override this while transient locomotion compresses the collider.
+    fn player_save_position(&self) -> Option<Vector3<f32>> {
+        None
+    }
+
     /// Get lighting information for VR enhancement
     fn get_hand_spotlights(&self, options: &GameOptions) -> Vec<SpotLight>;
 

@@ -1159,6 +1159,7 @@ impl MissionCore {
         let new_rotation = player.rotation * additional_rotation;
 
         let dir = new_rotation * input_context.head.rotation;
+        let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let move_thumbstick_value = input_context.right_hand.thumbstick;
         let forward = dir.rotate_vector(cgmath::vec3(
             -delta_time * move_thumbstick_value.x * 25. / dark::SCALE_FACTOR,
@@ -1190,8 +1191,9 @@ impl MissionCore {
                 .set_player_crouch(input_context.crouch, &mut self.player_handle);
             profile!(
                 "shock2.update.physics",
-                self.physics.update(
+                self.physics.update_with_facing(
                     forward + cgmath::vec3(0.0, up_value, 0.0),
+                    facing,
                     &mut self.player_handle,
                 )
             )
@@ -4969,6 +4971,11 @@ impl MissionCore {
     /// for lack of headroom, so this can lag the crouch input).
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
+    }
+
+    pub fn player_save_position(&self) -> Option<Vector3<f32>> {
+        self.physics
+            .get_player_save_translation(&self.player_handle)
     }
 
     /// Re-apply a crouch recorded in save data. The save stores the

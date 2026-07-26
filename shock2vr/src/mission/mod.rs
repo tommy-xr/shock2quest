@@ -251,6 +251,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
+    fn player_save_position(&self) -> Option<Vector3<f32>> {
+        self.mission_core.player_save_position()
+    }
+
     fn world(&self) -> &World {
         &self.mission_core.world
     }

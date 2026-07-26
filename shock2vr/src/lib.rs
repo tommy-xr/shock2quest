@@ -758,16 +758,15 @@ impl Game {
     /// serialization an in-game quicksave performs (`GlobalEffect::Save`) -
     /// active mission, player position/rotation, quest bits, held items, and
     /// exact current/maximum player vitals.
-    /// Returns the scene name that was saved so the caller can report it.
-    pub fn save_game(&mut self, file: String) -> String {
+    /// Returns the scene name that was saved so the caller can report it, or
+    /// an error when transient locomotion has no collision-valid standing pose.
+    pub fn save_game(&mut self, file: String) -> Result<String, String> {
         let path = save_file_path(&file);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        self.handle_global_effect(GlobalEffect::Save {
-            file_name: path.to_string_lossy().into_owned(),
-        });
-        self.scene_name().to_string()
+        self.save_to_file(path.to_string_lossy().into_owned())?;
+        Ok(self.scene_name().to_string())
     }
 
     /// Load a previously-saved game from `<data_root>/saves/<file>.sav`,
@@ -1115,8 +1114,13 @@ impl Game {
         }
     }
 
-    fn save_to_file(&self, file_name: String) {
-        let save_data = self.build_save_data();
+    fn save_to_file(&self, file_name: String) -> Result<(), String> {
+        let Some(save_data) = self.build_save_data() else {
+            return Err(format!(
+                "Unable to save '{}': no collision-valid standing player pose is currently available",
+                file_name
+            ));
+        };
         let mut zip_file = OpenOptions::new()
             .write(true)
             .create(true)
@@ -1124,6 +1128,7 @@ impl Game {
             .open(file_name)
             .unwrap();
         save_data.write(&mut zip_file);
+        Ok(())
     }
 
     fn load_from_file(&mut self, file_name: String) -> io::Result<()> {
@@ -1164,31 +1169,38 @@ impl Game {
         )
     }
 
-    fn build_save_data(&self) -> SaveData {
-        let mut level_data = self.mission_to_save_data.clone();
-
-        let (save_data, held_items) = save_load::to_save_data(self.active_game_scene.world());
-
-        level_data.insert(self.active_game_scene.scene_name().to_string(), save_data);
-
+    /// Player transform with the center normalized to a collision-valid
+    /// standing pose. Both persistent saves and debug reloads recreate a
+    /// standing capsule, so neither may use a transient compressed mantle pose.
+    /// `None` defers the operation when a live blocker has occupied the
+    /// mantle's cached recovery pose.
+    fn player_standing_transform(&self) -> Option<(Vector3<f32>, Quaternion<f32>)> {
+        let safe_position = self.active_game_scene.player_save_position()?;
         let (position, rotation) = {
             let player_info = self
                 .active_game_scene
                 .world()
                 .borrow::<UniqueView<PlayerInfo>>()
                 .unwrap();
-            (player_info.pos, player_info.rotation)
+            (safe_position, player_info.rotation)
         };
-
-        // Normalize the saved center to standing height (see GlobalData): the
-        // live position of a crouched player is the LOWERED collider center,
-        // and load always creates a standing capsule first.
-        let is_crouched = self.active_game_scene.player_is_crouched();
-        let position = if is_crouched {
+        let position = if self.active_game_scene.player_is_crouched() {
             position + vec3(0.0, physics::player_crouch_center_shift(), 0.0)
         } else {
             position
         };
+        Some((position, rotation))
+    }
+
+    fn build_save_data(&self) -> Option<SaveData> {
+        let mut level_data = self.mission_to_save_data.clone();
+
+        let (save_data, held_items) = save_load::to_save_data(self.active_game_scene.world());
+
+        level_data.insert(self.active_game_scene.scene_name().to_string(), save_data);
+
+        let is_crouched = self.active_game_scene.player_is_crouched();
+        let (position, rotation) = self.player_standing_transform()?;
 
         let quest_info = self
             .active_game_scene
@@ -1207,15 +1219,19 @@ impl Game {
             is_crouched,
         };
 
-        SaveData {
+        Some(SaveData {
             global_data,
             level_data,
-        }
+        })
     }
 
     fn handle_global_effect(&mut self, global_effect: GlobalEffect) {
         match global_effect {
-            GlobalEffect::Save { file_name } => self.save_to_file(file_name),
+            GlobalEffect::Save { file_name } => {
+                if let Err(error) = self.save_to_file(file_name) {
+                    warn!("{error}");
+                }
+            }
             GlobalEffect::Load { file_name } => {
                 if let Err(error) = self.load_from_file(file_name.clone()) {
                     warn!("Unable to load save '{}': {}", file_name, error);
@@ -1249,21 +1265,11 @@ impl Game {
                 }
             }
             GlobalEffect::TestReload => {
-                let (position, rotation) = {
-                    let player_info = self
-                        .active_game_scene
-                        .world()
-                        .borrow::<UniqueView<PlayerInfo>>()
-                        .unwrap();
-                    (player_info.pos, player_info.rotation)
-                };
-                // As with saves, respawn a crouched player at the
-                // standing-equivalent center (the reload creates a standing
-                // capsule; held crouch input re-applies on the next step).
-                let position = if self.active_game_scene.player_is_crouched() {
-                    position + vec3(0.0, physics::player_crouch_center_shift(), 0.0)
-                } else {
-                    position
+                let Some((position, rotation)) = self.player_standing_transform() else {
+                    warn!(
+                        "Unable to reload level: no collision-valid standing player pose is currently available"
+                    );
+                    return;
                 };
                 let level_name = self.active_game_scene.scene_name().to_string();
                 let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
