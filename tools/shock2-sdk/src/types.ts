@@ -142,6 +142,7 @@ export type AimClassification =
   | "head"
   | "torso"
   | "limb"
+  | "surface"
   | "center"
   | "nearest";
 
@@ -151,7 +152,7 @@ export interface AimResult {
   body_id: number | null;
   joint_id: number | null;
   requested: AimClassification;
-  classification: string;
+  classification: AimPoint["classification"] | "surface" | "center";
   world_point: Vec3;
   head_rotation: Quat;
   fallback_used: boolean;
