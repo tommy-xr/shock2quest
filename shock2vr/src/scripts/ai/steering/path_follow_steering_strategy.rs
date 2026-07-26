@@ -358,7 +358,14 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // XZ plane at the WAYPOINT's height (an edge-inset waypoint
                 // then resolves to the cell beyond the crossing; keeping Y
                 // fixed avoids blacklisting a stacked floor's cell).
-                let crowded = separation.x * separation.x + separation.z * separation.z > 1e-6;
+                // Occupancy, not the summed separation vector - symmetric
+                // neighbors cancel the bias to zero while still crowding
+                let crowded = ai_util::has_living_creature_within(
+                    world,
+                    entity_id,
+                    position,
+                    SEPARATION_RADIUS,
+                );
                 let toward = waypoint - position;
                 let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
                 if !crowded && toward_len > 1e-3 {

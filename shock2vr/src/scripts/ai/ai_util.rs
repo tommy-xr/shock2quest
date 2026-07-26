@@ -491,6 +491,45 @@ pub fn separation_bias(
     bias
 }
 
+/// Whether any OTHER living creature stands within `radius` (XZ, same
+/// floor) of `position` - the occupancy check behind the stall-report
+/// crowd gate. A separate boolean rather than `separation_bias != 0`:
+/// symmetric neighbors cancel the summed bias vector to zero while very
+/// much still crowding the AI.
+pub fn has_living_creature_within(
+    world: &World,
+    entity_id: EntityId,
+    position: Vector3<f32>,
+    radius: f32,
+) -> bool {
+    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
+    for (other_id, (_, xform)) in (&v_creature, &v_transform).iter().with_id() {
+        if other_id == entity_id {
+            continue;
+        }
+        // Corpses don't crowd (they're ragdolls on the floor)
+        if v_hit_points
+            .get(other_id)
+            .map(|hp| hp.hit_points <= 0)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let other = xform.0.transform_point(point3(0.0, 0.0, 0.0));
+        if (position.y - other.y).abs() > 2.0 {
+            continue; // different floor
+        }
+        let dx = position.x - other.x;
+        let dz = position.z - other.z;
+        if (dx * dx + dz * dz).sqrt() < radius {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
 
@@ -606,6 +645,55 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     };
 
     false
+}
+
+/// Whether `from_entity` has a clear line of FIRE to the player - the
+/// occlusion gate for standing ranged attacks. Unlike `is_player_visible`
+/// (sight: WORLD geometry only), this also tests door and prop colliders,
+/// because projectiles collide with those - an AI allowed to stop and
+/// shoot through a closed door or a crate stands rooted firing into it
+/// for as long as its target stays known (issue #481's stand-and-shoot
+/// freeze). A living creature as the first hit still counts as clear:
+/// allies wander off on their own, and refusing to stand behind one would
+/// flap the chase/attack transition every time the ally shifts (holding
+/// fire while an ally blocks the shot is #614).
+pub fn has_line_of_fire(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
+    if is_player_psi_invisible(world) {
+        return false;
+    }
+
+    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
+
+    let Ok(ent_pos) = v_current_pos.get(from_entity) else {
+        return false;
+    };
+    let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+    let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
+    let direction = (end_point - start_point).normalize();
+    let distance = (end_point - start_point).magnitude();
+    let result = physics.ray_cast2(
+        start_point,
+        direction,
+        distance,
+        InternalCollisionGroups::WORLD
+            | InternalCollisionGroups::ENTITY
+            | InternalCollisionGroups::SELECTABLE,
+        Some(from_entity),
+        true,
+    );
+    match result {
+        None => true,
+        Some(hit) => hit
+            .maybe_entity_id
+            .map(|id| {
+                world
+                    .borrow::<View<PropCreature>>()
+                    .map(|v| v.contains(id))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+    }
 }
 
 /// Check if the player is visible from an entity within a field of view
@@ -759,5 +847,37 @@ mod separation_tests {
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
         );
+    }
+
+    #[test]
+    fn occupancy_sees_symmetric_neighbors_the_bias_cancels() {
+        // The stall-report crowd gate must not be fooled by neighbors on
+        // opposite sides: their separation bias sums to zero (above) while
+        // the AI is very much crowded.
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(-1.0, 0.0, 0.0), 10);
+        assert!(has_living_creature_within(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            2.4
+        ));
+    }
+
+    #[test]
+    fn occupancy_ignores_corpses_far_neighbors_and_other_floors() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 0); // corpse
+        spawn_creature(&mut world, vec3(10.0, 0.0, 0.0), 10); // out of radius
+        spawn_creature(&mut world, vec3(1.0, 5.0, 0.0), 10); // floor above
+        assert!(!has_living_creature_within(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            2.4
+        ));
     }
 }

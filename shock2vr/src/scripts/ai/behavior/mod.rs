@@ -28,7 +28,7 @@ use shipyard::{EntityId, World};
 
 use crate::{
     physics::PhysicsWorld,
-    scripts::ai::ai_util::{chase_target_distance, has_ranged_weapon, is_player_visible},
+    scripts::ai::ai_util::{chase_target_distance, has_line_of_fire, has_ranged_weapon},
 };
 
 /// The attack behavior for the current distance to the player, or None when
@@ -56,7 +56,7 @@ pub fn attack_behavior_for_distance(
     if distance > ranged_min_attack_distance
         && distance < ranged_max_attack_distance
         && has_ranged_weapon(world, entity_id)
-        && is_player_visible(entity_id, world, physics)
+        && has_line_of_fire(entity_id, world, physics)
     {
         Some(Box::new(RefCell::new(RangedAttackBehavior)))
     } else if distance < melee_attack_distance {
