@@ -26,7 +26,12 @@ use std::cell::RefCell;
 use dark::SCALE_FACTOR;
 use shipyard::{EntityId, World};
 
-use crate::scripts::ai::ai_util::{chase_target_distance, has_ranged_weapon};
+use crate::{
+    physics::PhysicsWorld,
+    scripts::ai::ai_util::{
+        chase_target, chase_target_distance, has_line_of_fire, has_ranged_weapon,
+    },
+};
 
 /// The attack behavior for the current distance to the player, or None when
 /// out of attack range (the caller should chase to close the distance).
@@ -35,8 +40,15 @@ use crate::scripts::ai::ai_util::{chase_target_distance, has_ranged_weapon};
 /// the two mechanisms can't disagree.
 pub fn attack_behavior_for_distance(
     world: &World,
+    physics: &PhysicsWorld,
     entity_id: EntityId,
 ) -> Option<Box<RefCell<dyn Behavior>>> {
+    // Distance and line of fire both gate against the AI's KNOWN target
+    // (the last-known position when awareness is published, the player's
+    // true position otherwise) - the same point chase steering faces and
+    // the FIRE flag shoots toward, so the ray can't approve a shot the AI
+    // isn't actually taking.
+    let target = chase_target(world, entity_id)?;
     let distance = chase_target_distance(world, entity_id)?;
     let melee_attack_distance = 8.0 / SCALE_FACTOR;
     let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
@@ -44,9 +56,15 @@ pub fn attack_behavior_for_distance(
 
     // Only ranged-armed AIs stop to shoot; melee AIs must keep chasing or
     // they stall at mid-range bouncing between chase and ranged-attack.
+    // Stopping also requires an actual line of fire: a target that is
+    // KNOWN but occluded (heard through a wall, straight-line close on
+    // another floor) must be chased, or the AI stands rooted firing into
+    // geometry for as long as its alertness holds - permanently under a
+    // pinned alert (issue #481's stand-and-shoot freeze).
     if distance > ranged_min_attack_distance
         && distance < ranged_max_attack_distance
         && has_ranged_weapon(world, entity_id)
+        && has_line_of_fire(entity_id, world, physics, target)
     {
         Some(Box::new(RefCell::new(RangedAttackBehavior)))
     } else if distance < melee_attack_distance {

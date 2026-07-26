@@ -61,6 +61,30 @@ const STALL_SECONDS: f32 = 3.0;
 const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
+/// Displacement watchdog: with an active waypoint, failing to move this far
+/// (XZ, 1 Dark foot) ...
+const DISPLACEMENT_STALL_DISTANCE: f32 = 1.0 / SCALE_FACTOR;
+/// ...within this long also counts as a stall. Micro-sliding around a
+/// blocking capsule (another creature, a prop corner) can keep improving
+/// the waypoint distance by more than the epsilon, resetting the progress
+/// check forever while the body stays effectively in place - net
+/// displacement is the ground truth (issue #481's last freeze pocket, an
+/// AI pinned behind a scripted NPC beside a desk). Slightly longer than
+/// STALL_SECONDS so the progress check stays the common path.
+const DISPLACEMENT_STALL_SECONDS: f32 = 4.0;
+/// Physical unstick, last resort: after TWO consecutive stalls with no
+/// displacement between them - the body is PINNED (e.g. overlapping a
+/// scripted NPC's capsule beside furniture; steering, retreats and
+/// re-paths all command motion the solver cancels) - nudge the body this
+/// far (2 Dark feet, about one body radius) toward the retreat point to
+/// break the equilibrium. A rare small pop beats a monster frozen forever
+/// (issue #481's terminal pocket).
+const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
+/// How far past the stalled waypoint (XZ) to probe for the cell on the far
+/// side of the crossing when reporting a blocked link - just enough to step
+/// off the shared edge without skipping a narrow destination cell (0.5
+/// Dark feet)
+const BLOCKED_PROBE_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
 /// Crowd separation: repel from living creatures within this radius (6 Dark
 /// feet - about two body widths)
 const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
@@ -88,6 +112,13 @@ pub struct PathFollowSteeringStrategy {
     stall_seconds: f32,
     /// Active stall recovery: seconds left, and the point to back out toward
     recovery: Option<(f32, Vector3<f32>)>,
+    /// Displacement watchdog: where the AI was when the anchor was set, and
+    /// how long ago (see DISPLACEMENT_STALL_SECONDS)
+    displacement_anchor: Option<(Vector3<f32>, f32)>,
+    /// Where the previous stall fired - a new stall from (nearly) the same
+    /// spot means retreat + re-path freed nothing and the body is pinned
+    /// (see UNSTICK_NUDGE_DISTANCE)
+    last_stall_position: Option<Vector3<f32>>,
 }
 
 impl PathFollowSteeringStrategy {
@@ -114,6 +145,8 @@ impl PathFollowSteeringStrategy {
             stall_best: f32::INFINITY,
             stall_seconds: 0.0,
             recovery: None,
+            displacement_anchor: None,
+            last_stall_position: None,
         }
     }
 
@@ -128,6 +161,7 @@ impl PathFollowSteeringStrategy {
         self.stall_waypoint = usize::MAX;
         self.stall_best = f32::INFINITY;
         self.stall_seconds = 0.0;
+        self.displacement_anchor = None;
     }
 }
 
@@ -279,6 +313,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         start: position,
                         goal,
                         movement_bits: MovementBits::WALK,
+                        now_seconds: time.total.as_secs_f32(),
                     });
                 }
                 // Budget exhausted: defer to a later frame, cooldown untouched
@@ -337,9 +372,75 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             self.stall_seconds = 0.0;
         } else {
             self.stall_seconds += time.elapsed.as_secs_f32();
-            if self.stall_seconds >= STALL_SECONDS {
-                // Back out toward the previous waypoint (or straight back
-                // when the route began here), then re-path from clear ground
+        }
+        // Displacement watchdog: micro-sliding around a blocking capsule can
+        // reset the waypoint-progress check above forever while the body
+        // stays put - fall back to net displacement
+        let displaced_stall = match self.displacement_anchor {
+            Some((anchor, _)) if xz_distance(position, anchor) >= DISPLACEMENT_STALL_DISTANCE => {
+                self.displacement_anchor = Some((position, 0.0));
+                // Real movement: the next stall (if any) is a fresh incident,
+                // not a continuation of a pinned body
+                self.last_stall_position = None;
+                false
+            }
+            Some((anchor, age)) => {
+                let age = age + time.elapsed.as_secs_f32();
+                self.displacement_anchor = Some((anchor, age));
+                age >= DISPLACEMENT_STALL_SECONDS
+            }
+            None => {
+                self.displacement_anchor = Some((position, 0.0));
+                false
+            }
+        };
+        {
+            if self.stall_seconds >= STALL_SECONDS || displaced_stall {
+                // Remember the crossing we could not traverse (TTL'd, per
+                // AI): the mesh says the link is walkable but something
+                // physical - a prop on the route, geometry the mesh doesn't
+                // model - stopped us. Excluding that directed link from this
+                // AI's next queries makes the post-stall re-path route
+                // AROUND the obstacle; without this the fresh route is
+                // identical and the stall/retreat/re-path cycle grinds
+                // against the obstacle forever (issue #481). Reported even
+                // when another creature is nearby: a "living blocker" can be
+                // a scripted, stationary NPC (medsci1's FemaleMedsci crawl
+                // scene) that never wanders off - suppressing the report for
+                // it turned the retreat loop back into a permanent freeze
+                // (measured). Mutual AI jams simply mark the contested
+                // crossing on both sides and route apart; the TTL reopens it.
+                // The probe steps just past the waypoint in the XZ plane at
+                // the WAYPOINT's height (an edge-inset waypoint then
+                // resolves to the cell beyond the crossing; keeping Y fixed
+                // avoids blacklisting a stacked floor's cell).
+                let toward = waypoint - position;
+                let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
+                if toward_len > 1e-3 {
+                    let step = BLOCKED_PROBE_DISTANCE / toward_len;
+                    let probe = Vector3::new(
+                        waypoint.x + toward.x * step,
+                        waypoint.y,
+                        waypoint.z + toward.z * step,
+                    );
+                    let from = service.cell_from_position(position);
+                    let to = service
+                        .cell_from_position(probe)
+                        .or_else(|| service.cell_from_position(waypoint));
+                    if let (Some(from), Some(to)) = (from, to) {
+                        if from != to {
+                            service.report_blocked_link(from, to, time.total.as_secs_f32());
+                        }
+                    }
+                }
+                // ALWAYS back out toward the previous waypoint before
+                // re-pathing, reported or not: the retreat both disengages
+                // the body from whatever it wedged on (an AI boxed among
+                // furniture that only re-paths in place never physically
+                // frees itself - measured as a hard zero-movement freeze
+                // when an immediate-re-path variant was tried) and staggers
+                // mutually blocking AIs (jittered). The excluded crossing
+                // then makes the fresh route different as well.
                 let retreat = self
                     .path
                     .get(self.next_waypoint.saturating_sub(1))
@@ -349,13 +450,44 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         let (_, forward) = ai_util::get_position_and_forward(world, entity_id);
                         position - forward * 2.0
                     });
+                // Pinned-body unstick (last resort): the previous stall
+                // fired from (nearly) this same spot, so its retreat and
+                // re-path freed nothing - physically nudge toward the
+                // retreat point (known-walkable route ground) to break the
+                // solver equilibrium
+                let pinned = self
+                    .last_stall_position
+                    .map(|prev| xz_distance(position, prev) < DISPLACEMENT_STALL_DISTANCE)
+                    .unwrap_or(false);
+                self.last_stall_position = Some(position);
+                let unstick_effect = if pinned {
+                    let dir = retreat - position;
+                    let len = (dir.x * dir.x + dir.z * dir.z).sqrt();
+                    if len > 1e-3 {
+                        let step = UNSTICK_NUDGE_DISTANCE.min(len);
+                        let nudged = Vector3::new(
+                            position.x + dir.x / len * step,
+                            position.y,
+                            position.z + dir.z / len * step,
+                        );
+                        Effect::SetPositionRotation {
+                            entity_id,
+                            position: nudged,
+                            rotation: crate::util::get_rotation_from_transform(world, entity_id),
+                        }
+                    } else {
+                        Effect::NoEffect
+                    }
+                } else {
+                    Effect::NoEffect
+                };
                 let jitter = rand::thread_rng().gen_range(0.8..1.6);
                 self.recovery = Some((STALL_RECOVERY_SECONDS * jitter, retreat));
                 self.clear_path();
                 self.repath_cooldown = STALL_RECOVERY_SECONDS * jitter;
                 return Some((
                     Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(retreat)),
-                    Effect::NoEffect,
+                    unstick_effect,
                 ));
             }
         }

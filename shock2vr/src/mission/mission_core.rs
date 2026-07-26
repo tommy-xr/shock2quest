@@ -1035,13 +1035,26 @@ impl MissionCore {
         }
 
         // Drop AI path records (and their debug visuals) for entities that
-        // no longer exist, so dead AIs don't ghost in GET /v1/ai/paths
+        // no longer exist OR are dead, so they don't ghost in
+        // GET /v1/ai/paths. A killed monster keeps its entity (the corpse),
+        // so liveness alone isn't enough: without the hit-point check a
+        // corpse advertises its pre-death route - frozen mid-route, forever
+        // - to tooling and tests (issue #481's dominant "frozen AI" class).
         if time.elapsed.as_secs_f32() > 0.0 {
             if let Some(service) = &self.pathfinding_service {
-                if let Ok(entities) = self.world.borrow::<shipyard::EntitiesView>() {
+                if let (Ok(entities), Ok(v_hit_points)) = (
+                    self.world.borrow::<shipyard::EntitiesView>(),
+                    self.world.borrow::<View<PropHitPoints>>(),
+                ) {
                     service.prune_ai_paths(|inner| {
                         shipyard::EntityId::from_inner(inner)
-                            .map(|id| entities.is_alive(id))
+                            .map(|id| {
+                                entities.is_alive(id)
+                                    && v_hit_points
+                                        .get(id)
+                                        .map(|hp| hp.hit_points > 0)
+                                        .unwrap_or(true)
+                            })
                             .unwrap_or(false)
                     });
                 }

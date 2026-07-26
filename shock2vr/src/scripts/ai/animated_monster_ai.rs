@@ -244,7 +244,7 @@ impl AnimatedMonsterAI {
                 // distance (ChaseBehavior::next_behavior escalates back to
                 // an attack on arrival via the same shared helper). Without
                 // the range check, a far-away High AI stood still swinging.
-                attack_behavior_for_distance(world, entity_id)
+                attack_behavior_for_distance(world, _physics, entity_id)
                     .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
         }

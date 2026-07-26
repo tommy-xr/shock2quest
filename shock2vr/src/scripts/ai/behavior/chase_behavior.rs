@@ -75,10 +75,10 @@ impl Behavior for ChaseBehavior {
     fn next_behavior(
         &mut self,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         entity_id: EntityId,
     ) -> NextBehavior {
-        match super::attack_behavior_for_distance(world, entity_id) {
+        match super::attack_behavior_for_distance(world, physics, entity_id) {
             Some(behavior) => NextBehavior::Next(behavior),
             None => NextBehavior::Stay,
         }

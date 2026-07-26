@@ -47,6 +47,16 @@ const BRIDGE_BUCKET: f32 = 12.0 / SCALE_FACTOR;
 /// prefer clear floor, but allow squeezing past baked furniture
 const BLOCKING_CELL_COST_PENALTY: u32 = 4;
 
+/// How long a steering-reported blocked crossing stays excluded from an
+/// AI's path queries. Long enough that the re-path (and several after it)
+/// route around the obstacle instead of reproducing the blocked route;
+/// short enough that a transient blocker (a shoved crate) is retried
+/// within a minute.
+const BLOCKED_LINK_TTL_SECONDS: f32 = 30.0;
+/// Cap on remembered blocked crossings (new reports dropped while full of
+/// live entries) - bounds memory; entries expire on their TTL.
+const MAX_BLOCKED_LINKS: usize = 64;
+
 /// Per-frame cap on AI-initiated pathfind queries. A slot now covers the
 /// full fallback chain (A* + stressed retry + partial-route Dijkstra when
 /// the goal is unreachable), benched at ~0.5ms p95 / ~3ms worst per slot on
@@ -170,6 +180,19 @@ pub struct PathfindingService {
     ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
     /// Live steering state per AI (what it is actually following right now)
     ai_steering: std::sync::Mutex<HashMap<u64, AiSteeringDebug>>,
+    /// Cell crossings some AI's steering failed to traverse (a stall fired
+    /// mid-route): obstacles the mesh doesn't model, e.g. a physical prop
+    /// or a scripted stationary NPC sitting on a walkable link. Entries map
+    /// `(from_cell, to_cell) -> expiry in mission seconds`. SHARED across
+    /// AIs: the blockage is a physical fact about the world, and per-AI
+    /// memory let a capture pocket re-trap every fresh arrival while each
+    /// separately re-learned it (measured at medsci1's FemaleMedsci
+    /// pocket). All AI path queries skip unexpired crossings, so after the
+    /// first capture the re-paths - everyone's - route around the obstacle
+    /// (issue #481's grind loop). Directed-link granularity (not whole
+    /// cells) so one blocked doorway can't seal every other entrance into
+    /// a large cell.
+    blocked_links: std::sync::Mutex<HashMap<(u32, u32), f32>>,
     /// Mission object ids of doors that are currently locked AND closed -
     /// A* refuses links into their below-door cells (the runtime door gate;
     /// closed-but-openable doors stay pathable and are opened on arrival).
@@ -241,6 +264,7 @@ impl PathfindingService {
             relaxed: bridge_islands,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
             ai_steering: std::sync::Mutex::new(HashMap::new()),
+            blocked_links: std::sync::Mutex::new(HashMap::new()),
             locked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
             queries: AtomicU64::new(0),
             stressed_retries: AtomicU64::new(0),
@@ -261,12 +285,44 @@ impl PathfindingService {
         self.bridge_links.len()
     }
 
-    /// Drop AI path records whose entity no longer satisfies `keep`
-    /// (e.g. it despawned), so introspection doesn't report ghosts
+    /// Drop AI path and steering records whose entity no longer satisfies
+    /// `keep` (it despawned, or died - a corpse keeps its entity), so
+    /// introspection doesn't report ghosts. Blocked crossings are world
+    /// facts, not per-entity records - they expire on their own TTL.
     pub fn prune_ai_paths(&self, keep: impl Fn(u64) -> bool) {
         if let Ok(mut paths) = self.ai_paths.lock() {
             paths.retain(|&entity, _| keep(entity));
         }
+        if let Ok(mut steering) = self.ai_steering.lock() {
+            steering.retain(|&entity, _| keep(entity));
+        }
+    }
+
+    /// Remember that an AI could not physically traverse the crossing
+    /// `from_cell -> to_cell` (its steering stalled mid-route): the
+    /// crossing is excluded from ALL AI path queries until the entry
+    /// expires, so re-paths route around the obstacle - including for
+    /// fresh arrivals that haven't hit it yet.
+    pub fn report_blocked_link(&self, from_cell: u32, to_cell: u32, now_seconds: f32) {
+        let Ok(mut blocked) = self.blocked_links.lock() else {
+            return;
+        };
+        blocked.retain(|_, &mut expiry| expiry > now_seconds);
+        if blocked.len() >= MAX_BLOCKED_LINKS && !blocked.contains_key(&(from_cell, to_cell)) {
+            return; // full of live entries - drop rather than grow unbounded
+        }
+        blocked.insert((from_cell, to_cell), now_seconds + BLOCKED_LINK_TTL_SECONDS);
+    }
+
+    /// The `(from_cell, to_cell)` crossings currently excluded from AI path
+    /// queries (unexpired steering-reported blockages). Expired entries are
+    /// dropped.
+    pub fn blocked_links(&self, now_seconds: f32) -> std::collections::HashSet<(u32, u32)> {
+        let Ok(mut blocked) = self.blocked_links.lock() else {
+            return std::collections::HashSet::new();
+        };
+        blocked.retain(|_, &mut expiry| expiry > now_seconds);
+        blocked.keys().copied().collect()
     }
 
     /// Record the latest path an AI computed (key: EntityId::inner())
@@ -392,8 +448,27 @@ impl PathfindingService {
         goal: Vector3<f32>,
         movement_bits: MovementBits,
     ) -> Option<Vec<Vector3<f32>>> {
+        self.find_path_avoiding(
+            start,
+            goal,
+            movement_bits,
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    /// `find_path` with a set of directed cell crossings to treat as
+    /// impassable - steering-reported blockages (see `report_blocked_link`),
+    /// so an AI's re-path after a stall routes around the obstacle it just
+    /// hit.
+    pub fn find_path_avoiding(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+        avoid: &std::collections::HashSet<(u32, u32)>,
+    ) -> Option<Vec<Vector3<f32>>> {
         self.queries.fetch_add(1, Ordering::Relaxed);
-        if let Some(path) = self.find_path_with_bits(start, goal, movement_bits) {
+        if let Some(path) = self.find_path_with_bits(start, goal, movement_bits, avoid) {
             return Some(path);
         }
         // Second pass: a failed pathfind is retried with the stressed
@@ -404,7 +479,7 @@ impl PathfindingService {
         {
             self.stressed_retries.fetch_add(1, Ordering::Relaxed);
             if let Some(path) =
-                self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED)
+                self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED, avoid)
             {
                 return Some(path);
             }
@@ -425,9 +500,27 @@ impl PathfindingService {
         goal: Vector3<f32>,
         movement_bits: MovementBits,
     ) -> Option<Vec<Vector3<f32>>> {
+        self.find_path_toward_avoiding(
+            start,
+            goal,
+            movement_bits,
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    /// `find_path_toward` with steering-reported blocked crossings excluded
+    /// (see `find_path_avoiding`) - the partial route then ends BEFORE the
+    /// obstacle instead of running through it.
+    pub fn find_path_toward_avoiding(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+        avoid: &std::collections::HashSet<(u32, u32)>,
+    ) -> Option<Vec<Vector3<f32>>> {
         let start_cell = self.cell_from_position(start)?;
         let reachable = pathfinding::directed::dijkstra::dijkstra_all(&start_cell, |&cell| {
-            self.get_successors(cell, movement_bits)
+            self.get_successors(cell, movement_bits, avoid)
         });
 
         let distance_to_goal = |cell: u32| -> f32 {
@@ -464,6 +557,7 @@ impl PathfindingService {
         start: Vector3<f32>,
         goal: Vector3<f32>,
         movement_bits: MovementBits,
+        avoid: &std::collections::HashSet<(u32, u32)>,
     ) -> Option<Vec<Vector3<f32>>> {
         // Find start and goal cells
         let start_cell_id = self.cell_from_position(start)?;
@@ -472,7 +566,7 @@ impl PathfindingService {
         // Use pathfinding crate for A* algorithm
         let result = pathfinding::directed::astar::astar(
             &start_cell_id,
-            |&cell_id| self.get_successors(cell_id, movement_bits),
+            |&cell_id| self.get_successors(cell_id, movement_bits, avoid),
             |&cell_id| self.heuristic(cell_id, goal_cell_id),
             |&cell_id| cell_id == goal_cell_id,
         )?;
@@ -564,7 +658,7 @@ impl PathfindingService {
 
         // Find all reachable cells using Dijkstra's algorithm
         let reachable = pathfinding::directed::dijkstra::dijkstra_all(&start_cell_id, |&cell_id| {
-            self.get_successors(cell_id, movement_bits)
+            self.get_successors(cell_id, movement_bits, &std::collections::HashSet::new())
         });
 
         // Find the reachable cell closest to the goal
@@ -646,14 +740,25 @@ impl PathfindingService {
 
     /// Get the successors of a cell for A* pathfinding
     ///
-    /// Returns a list of (target_cell_id, cost) pairs for cells reachable from the given cell.
-    fn get_successors(&self, cell_id: u32, movement_bits: MovementBits) -> Vec<(u32, u32)> {
+    /// Returns a list of (target_cell_id, cost) pairs for cells reachable
+    /// from the given cell. `avoid` holds steering-reported blocked
+    /// crossings (physical obstacles the mesh doesn't model) - those
+    /// directed links are skipped.
+    fn get_successors(
+        &self,
+        cell_id: u32,
+        movement_bits: MovementBits,
+        avoid: &std::collections::HashSet<(u32, u32)>,
+    ) -> Vec<(u32, u32)> {
         let Some(link_indices) = self.links_by_cell.get(cell_id as usize) else {
             return Vec::new();
         };
         link_indices
             .iter()
-            .filter(|&&idx| self.can_use_link(idx, movement_bits))
+            .filter(|&&idx| {
+                !avoid.contains(&(cell_id, self.link_at(idx).to_cell))
+                    && self.can_use_link(idx, movement_bits)
+            })
             .map(|&idx| {
                 let link = self.link_at(idx);
                 let mut cost = (link.cost as u32).max(1);
@@ -1466,6 +1571,96 @@ pub(crate) mod tests {
         assert!(!budget.try_acquire(), "budget must exhaust");
         budget.reset();
         assert!(budget.try_acquire(), "reset must refill the budget");
+    }
+
+    #[test]
+    fn reported_blocked_link_excludes_that_crossing_from_queries() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        // Without a report the route crosses 0 -> 1 -> 2 normally
+        assert!(service.find_path(start, goal, MovementBits::WALK).is_some());
+
+        // A stall reported against the 0 -> 1 crossing severs the only
+        // route: the full search fails and the partial fallback reports no
+        // progress possible (the AI parks instead of grinding into the
+        // obstacle - issue #481). The exclusion is SHARED - the blockage is
+        // a physical fact, and it must protect fresh arrivals too.
+        service.report_blocked_link(0, 1, 0.0);
+        let avoid = service.blocked_links(1.0);
+        assert!(avoid.contains(&(0, 1)));
+        assert!(
+            service
+                .find_path_avoiding(start, goal, MovementBits::WALK, &avoid)
+                .is_none()
+        );
+        assert!(
+            service
+                .find_path_toward_avoiding(start, goal, MovementBits::WALK, &avoid)
+                .is_none()
+        );
+
+        // Only that DIRECTED crossing is excluded - a route already past it
+        // (start in cell 1) still enters cell 2
+        assert!(
+            service
+                .find_path_avoiding(vec3(3.0, 0.0, 1.0), goal, MovementBits::WALK, &avoid)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn blocked_links_expire_after_their_ttl() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        service.report_blocked_link(0, 1, 100.0);
+        assert!(
+            service
+                .blocked_links(100.0 + BLOCKED_LINK_TTL_SECONDS - 1.0)
+                .contains(&(0, 1))
+        );
+        let expired = service.blocked_links(100.0 + BLOCKED_LINK_TTL_SECONDS + 1.0);
+        assert!(expired.is_empty(), "entries must expire: {expired:?}");
+        // The route is usable again once the entry expired
+        assert!(
+            service
+                .find_path_avoiding(
+                    vec3(1.0, 0.0, 1.0),
+                    vec3(5.0, 0.0, 1.0),
+                    MovementBits::WALK,
+                    &expired
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn prune_drops_steering_with_the_path_record() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        service.record_ai_path(
+            7,
+            AiPathRecord {
+                goal: vec3(5.0, 0.0, 1.0),
+                waypoints: vec![vec3(1.0, 0.0, 1.0)],
+                outcome: AiPathOutcome::Full,
+            },
+        );
+        service.record_ai_steering(
+            7,
+            AiSteeringDebug {
+                next_waypoint: 0,
+                path_len: 1,
+                target: None,
+                stall_seconds: 0.0,
+            },
+        );
+        service.report_blocked_link(0, 1, 0.0);
+
+        // Entity 7 died (or despawned): its per-AI records go with it, but
+        // reported blockages are world facts and stay until their TTL
+        service.prune_ai_paths(|entity| entity != 7);
+        assert!(service.ai_paths().is_empty());
+        assert!(service.ai_steering(7).is_none());
+        assert!(service.blocked_links(0.0).contains(&(0, 1)));
     }
 
     #[test]

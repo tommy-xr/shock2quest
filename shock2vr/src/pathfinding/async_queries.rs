@@ -29,6 +29,10 @@ pub struct PathQueryRequest {
     pub start: Vector3<f32>,
     pub goal: Vector3<f32>,
     pub movement_bits: MovementBits,
+    /// Mission time (seconds) at submit, for expiring the entity's
+    /// steering-reported blocked crossings (see
+    /// `PathfindingService::report_blocked_link`)
+    pub now_seconds: f32,
 }
 
 /// The computed route (or lack of one) for an entity's latest request
@@ -70,14 +74,24 @@ impl AsyncPathfinding {
             .spawn(move || {
                 while let Ok(request) = rx.recv() {
                     let mut outcome = AiPathOutcome::Full;
+                    // Crossings ANY AI's steering reported as physically
+                    // blocked (stall mid-route) are excluded, so re-paths -
+                    // including fresh arrivals' - route around the obstacle
+                    let avoid = service.blocked_links(request.now_seconds);
                     let path = service
-                        .find_path(request.start, request.goal, request.movement_bits)
+                        .find_path_avoiding(
+                            request.start,
+                            request.goal,
+                            request.movement_bits,
+                            &avoid,
+                        )
                         .or_else(|| {
                             outcome = AiPathOutcome::Partial;
-                            service.find_path_toward(
+                            service.find_path_toward_avoiding(
                                 request.start,
                                 request.goal,
                                 request.movement_bits,
+                                &avoid,
                             )
                         });
                     let waypoints = match path {
@@ -185,6 +199,7 @@ mod tests {
             start: cgmath::vec3(1.0, 0.0, 1.0),
             goal: cgmath::vec3(5.0, 0.0, 1.0),
             movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
         }));
         let response = wait_for_result(&async_pf, 7).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Full);
@@ -210,6 +225,7 @@ mod tests {
             start: cgmath::vec3(5.0, 0.0, 1.0),
             goal: cgmath::vec3(500.0, 0.0, 500.0),
             movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
         }));
         let response = wait_for_result(&async_pf, 9).expect("worker must respond");
         assert_ne!(response.outcome, AiPathOutcome::Full);
@@ -218,5 +234,45 @@ mod tests {
             service.ai_paths().iter().any(|(entity, _)| *entity == 9),
             "worker must record the attempt for GET /v1/ai/paths"
         );
+    }
+
+    #[test]
+    fn worker_applies_blocked_links() {
+        // Cell 0 -> goal in cell 2, but an AI reported the 1 -> 2 crossing
+        // blocked: the worker must return a PARTIAL route ending at cell 1
+        // instead of the full route through the obstacle - for EVERY AI,
+        // not just the reporter.
+        let service = Arc::new(PathfindingService::new(Arc::new(
+            crate::pathfinding::tests::three_cell_db(
+                dark::mission::path_database::PathCellFlags::empty(),
+            ),
+        )));
+        service.report_blocked_link(1, 2, 0.0);
+        let async_pf = AsyncPathfinding::spawn(service.clone());
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 11,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(5.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 1.0,
+        }));
+        let response = wait_for_result(&async_pf, 11).expect("worker must respond");
+        assert_eq!(response.outcome, AiPathOutcome::Partial);
+        assert_eq!(
+            *response.waypoints.last().unwrap(),
+            cgmath::vec3(3.0, 0.0, 1.0),
+            "partial route must end at cell 1's center, before the blockage"
+        );
+
+        // The exclusion is shared: another entity's query avoids it too
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 12,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(5.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 1.0,
+        }));
+        let response = wait_for_result(&async_pf, 12).expect("worker must respond");
+        assert_eq!(response.outcome, AiPathOutcome::Partial);
     }
 }
