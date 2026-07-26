@@ -127,6 +127,21 @@ fn main() {
                 res.iter().sum::<f32>() / res.len() as f32,
                 res[res.len() - 1]
             );
+            // Per-pivot, so an outlier can be weighed against whether any vertex
+            // actually skins to that joint - an unused pivot being off is cosmetic.
+            for (i, p) in pmnm.joint_pivots.iter().enumerate() {
+                if let Some(sp) = by_id.get(&(i as u32)) {
+                    let rotated = vec3(-sp.z, sp.y, sp.x);
+                    let d = (rotated - p).map(|c| c * c);
+                    let dist = (d.x + d.y + d.z).sqrt();
+                    if dist > 0.001 {
+                        println!(
+                            "    pivot {i:>2}: residual {dist:.4}   vertices skinned to it: {}",
+                            used.get(&(i as u8)).copied().unwrap_or(0)
+                        );
+                    }
+                }
+            }
             println!(
                 "  verdict: {}",
                 if res[res.len() - 1] < 0.02 {
