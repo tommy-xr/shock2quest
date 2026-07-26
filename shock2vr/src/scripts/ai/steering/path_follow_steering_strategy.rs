@@ -369,7 +369,6 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     SEPARATION_RADIUS,
                     Some(toward),
                 );
-                let mut reported = false;
                 if !crowded && toward_len > 1e-3 {
                     let step = BLOCKED_PROBE_DISTANCE / toward_len;
                     let probe = Vector3::new(
@@ -389,26 +388,17 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                                 to,
                                 time.total.as_secs_f32(),
                             );
-                            reported = true;
                         }
                     }
                 }
-                if reported {
-                    // The excluded crossing guarantees the next route is
-                    // DIFFERENT, so re-path immediately from where we stand
-                    // - the blind back-out exists to keep an identical
-                    // re-path from re-wedging, which no longer applies. This
-                    // keeps a blocked cycle at ~stall length instead of
-                    // stall + retreat (long enough to read as a freeze).
-                    self.clear_path();
-                    self.repath_cooldown = 0.0;
-                    return Some((Steering::from_current(_current_heading), Effect::NoEffect));
-                }
-                // Unreported stall (crowd jam ahead, or the blockage is
-                // inside our own cell): back out toward the previous
-                // waypoint (or straight back when the route began here),
-                // then re-path from clear ground - jittered so mutually
-                // blocking AIs unstick on different frames
+                // ALWAYS back out toward the previous waypoint before
+                // re-pathing, reported or not: the retreat both disengages
+                // the body from whatever it wedged on (an AI boxed among
+                // furniture that only re-paths in place never physically
+                // frees itself - measured as a hard zero-movement freeze
+                // when an immediate-re-path variant was tried) and staggers
+                // mutually blocking AIs (jittered). The excluded crossing
+                // then makes the fresh route different as well.
                 let retreat = self
                     .path
                     .get(self.next_waypoint.saturating_sub(1))
