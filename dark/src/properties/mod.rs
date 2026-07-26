@@ -91,7 +91,7 @@ use std::{
 };
 
 use crate::{SCALE_FACTOR, ss2_common::*};
-use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rotation3, Vector3, vec3};
 use shipyard::{
     Component, EntityId, Get, IntoIter, IntoWithId, TupleAddComponent, View, ViewMut, World,
 };
@@ -937,6 +937,23 @@ impl PropTranslatingDoor {
             // closing / opening / halted / unknown: as authored
             _ => self.base_location,
         }
+    }
+
+    /// Whether the two endpoints differ, i.e. the door has somewhere to go.
+    /// A door authored with `closed == open` has none: it can never move, so
+    /// its open/closed state can't be read back from its position (speed is
+    /// irrelevant - there is nowhere to travel to).
+    pub fn has_travel(&self) -> bool {
+        let travel = self.base_open_location - self.base_closed_location;
+        travel.magnitude2() > 1e-6
+    }
+
+    /// A doorway the level authors left permanently open: no travel, and an
+    /// authored state of open. The retail data has 10 of these (hydro2's
+    /// survey-lab doors and the hydro airlock pairs); nothing can ever move
+    /// them, so treating them as closed seals the rooms behind them (#602).
+    pub fn is_permanently_open(&self) -> bool {
+        !self.has_travel() && self.state == 1
     }
 }
 
