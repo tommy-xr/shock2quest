@@ -351,25 +351,20 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // AI's next queries makes the post-stall re-path route
                 // AROUND the obstacle; without this the fresh route is
                 // identical and the stall/retreat/re-path cycle grinds
-                // against the obstacle forever (issue #481). Skipped when a
-                // living creature is in the way AHEAD (directional occupancy
-                // - a neighbor behind us can't be the blocker): those jams
-                // clear on their own (retreat + separation), and a 30s
-                // exclusion would over-react. The probe steps just past the
-                // waypoint in the XZ plane at the WAYPOINT's height (an
-                // edge-inset waypoint then resolves to the cell beyond the
-                // crossing; keeping Y fixed avoids blacklisting a stacked
-                // floor's cell).
+                // against the obstacle forever (issue #481). Reported even
+                // when another creature is nearby: a "living blocker" can be
+                // a scripted, stationary NPC (medsci1's FemaleMedsci crawl
+                // scene) that never wanders off - suppressing the report for
+                // it turned the retreat loop back into a permanent freeze
+                // (measured). Mutual AI jams simply mark the contested
+                // crossing on both sides and route apart; the TTL reopens it.
+                // The probe steps just past the waypoint in the XZ plane at
+                // the WAYPOINT's height (an edge-inset waypoint then
+                // resolves to the cell beyond the crossing; keeping Y fixed
+                // avoids blacklisting a stacked floor's cell).
                 let toward = waypoint - position;
                 let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
-                let crowded = ai_util::has_living_creature_within(
-                    world,
-                    entity_id,
-                    position,
-                    SEPARATION_RADIUS,
-                    Some(toward),
-                );
-                if !crowded && toward_len > 1e-3 {
+                if toward_len > 1e-3 {
                     let step = BLOCKED_PROBE_DISTANCE / toward_len;
                     let probe = Vector3::new(
                         waypoint.x + toward.x * step,

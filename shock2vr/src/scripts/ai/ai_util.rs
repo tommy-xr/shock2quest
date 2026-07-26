@@ -491,56 +491,6 @@ pub fn separation_bias(
     bias
 }
 
-/// Whether any OTHER living creature stands within `radius` (XZ, same
-/// floor) of `position` - the occupancy check behind the stall-report
-/// crowd gate. A separate boolean rather than `separation_bias != 0`:
-/// symmetric neighbors cancel the summed bias vector to zero while very
-/// much still crowding the AI. When `toward` is given (an XZ direction),
-/// only neighbors on that side count - a creature BEHIND a stalled AI
-/// cannot be what is blocking its way forward, and suppressing the
-/// blocked-crossing report for it would leave a genuine prop blockage
-/// unreported.
-pub fn has_living_creature_within(
-    world: &World,
-    entity_id: EntityId,
-    position: Vector3<f32>,
-    radius: f32,
-    toward: Option<Vector3<f32>>,
-) -> bool {
-    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
-    for (other_id, (_, xform)) in (&v_creature, &v_transform).iter().with_id() {
-        if other_id == entity_id {
-            continue;
-        }
-        // Corpses don't crowd (they're ragdolls on the floor)
-        if v_hit_points
-            .get(other_id)
-            .map(|hp| hp.hit_points <= 0)
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let other = xform.0.transform_point(point3(0.0, 0.0, 0.0));
-        if (position.y - other.y).abs() > 2.0 {
-            continue; // different floor
-        }
-        let dx = other.x - position.x;
-        let dz = other.z - position.z;
-        if (dx * dx + dz * dz).sqrt() >= radius {
-            continue;
-        }
-        if let Some(toward) = toward {
-            if dx * toward.x + dz * toward.z <= 0.0 {
-                continue; // behind (or exactly abeam) - not in the way
-            }
-        }
-        return true;
-    }
-    false
-}
-
 pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     let v_prop_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
 
@@ -858,55 +808,5 @@ mod separation_tests {
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
         );
-    }
-
-    #[test]
-    fn occupancy_sees_symmetric_neighbors_the_bias_cancels() {
-        // The stall-report crowd gate must not be fooled by neighbors on
-        // opposite sides: their separation bias sums to zero (above) while
-        // the AI is very much crowded.
-        let mut world = World::new();
-        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
-        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
-        spawn_creature(&mut world, vec3(-1.0, 0.0, 0.0), 10);
-        assert!(has_living_creature_within(
-            &world,
-            me,
-            vec3(0.0, 0.0, 0.0),
-            2.4,
-            None
-        ));
-        // Directional: only the neighbor AHEAD counts. Toward +x there is
-        // one; toward +z there is none.
-        assert!(has_living_creature_within(
-            &world,
-            me,
-            vec3(0.0, 0.0, 0.0),
-            2.4,
-            Some(vec3(1.0, 0.0, 0.0))
-        ));
-        assert!(!has_living_creature_within(
-            &world,
-            me,
-            vec3(0.0, 0.0, 0.0),
-            2.4,
-            Some(vec3(0.0, 0.0, 1.0))
-        ));
-    }
-
-    #[test]
-    fn occupancy_ignores_corpses_far_neighbors_and_other_floors() {
-        let mut world = World::new();
-        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
-        spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 0); // corpse
-        spawn_creature(&mut world, vec3(10.0, 0.0, 0.0), 10); // out of radius
-        spawn_creature(&mut world, vec3(1.0, 5.0, 0.0), 10); // floor above
-        assert!(!has_living_creature_within(
-            &world,
-            me,
-            vec3(0.0, 0.0, 0.0),
-            2.4,
-            None
-        ));
     }
 }
