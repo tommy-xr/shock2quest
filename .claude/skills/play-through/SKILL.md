@@ -187,12 +187,12 @@ them in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
    camera-alarm verification, Navy (hack/repair/modify), Marine (standard/
    electronic/organic/heavy weapons), OSA (psi tiers 1–5), AI/pathfinding
    stress, or a detailed test run.
-3. **Asset set** — legacy assets or the 25th Anniversary assets; the pick is the
+3. **Asset set** — legacy assets or the 25th Anniversary assets (loaded
+   directly from the stock `.kpf` install since #557); the pick is the
    `DARK_ASSET_PATH` every runtime in the campaign must be launched with. Only
-   sets that are actually loadable (`shock2.gam` present at the path) enter the
-   random draw; an unusable set can still be forced with `assets=<id>` and the
-   roll prints a warning (e.g. the 25th Anniversary install is packed `.kpf`
-   until it's unpacked / the engine learns to read it).
+   sets where a data-root sentinel exists (`shock2.gam` / `sshock2.kpf` / ...,
+   same list as `paths::data_root()`) enter the random draw; a missing install
+   can still be forced with `assets=<id>` and the roll prints a warning.
 
 ```
 node .agents/skills/play-through/playthrough-state.mjs roll              # random campaign (idempotent)

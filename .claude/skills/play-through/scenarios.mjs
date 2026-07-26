@@ -159,10 +159,11 @@ export const TWEAKS = [
 
 // Asset set to launch with: exported as DARK_ASSET_PATH for every runtime the
 // campaign starts. Paths are the two install locations used on our machines.
-// A set is only eligible for the random draw when it's actually loadable
-// (data_root's sentinel `shock2.gam` exists there) — e.g. the 25th Anniversary
-// install ships packed .kpf archives the engine can't read yet, so until it's
-// unpacked it can only be forced (assets=25th), never rolled.
+// A set is only eligible for the random draw when a data-root sentinel exists
+// there — the same sentinel list as `shock2vr::paths::data_root()`: loose
+// classic data (`shock2.gam`, ...) or a 25th Anniversary install
+// (`sshock2.kpf`, supported since #557). A set with no sentinel (missing or
+// broken install) can still be forced (assets=<id>), never rolled.
 export const ASSET_SETS = [
   {
     id: "legacy",
@@ -176,7 +177,8 @@ export const ASSET_SETS = [
   },
 ];
 
-export const assetSetUsable = (a) => existsSync(join(a.path, "shock2.gam"));
+const DATA_ROOT_SENTINELS = ["shock2.gam", "res/obj.crf", "res/mesh.crf", "motiondb.bin", "sshock2.kpf"];
+export const assetSetUsable = (a) => DATA_ROOT_SENTINELS.some((f) => existsSync(join(a.path, f)));
 
 // Deterministic PRNG (mulberry32) so a roll is reproducible from its seed.
 function mulberry32(seed) {
@@ -211,7 +213,7 @@ export function roll({ seed, scenarioId, tweakId, assetsId } = {}) {
   const assets = assetsId ? byId(ASSET_SETS, assetsId, "assets") : rolledAssets;
   const warnings = [];
   if (!assetSetUsable(assets))
-    warnings.push(`asset set '${assets.id}' has no shock2.gam at ${assets.path} — the engine cannot load it as-is (packed/missing install?)`);
+    warnings.push(`asset set '${assets.id}' has no data-root sentinel (shock2.gam / sshock2.kpf / ...) at ${assets.path} — the engine cannot load it (missing install?)`);
   return { seed: s, scenario, tweak, assets, warnings };
 }
 
@@ -223,7 +225,7 @@ if (process.argv[1]?.endsWith("scenarios.mjs")) {
     console.log("Tweaks:");
     for (const t of TWEAKS) console.log(`  ${t.id.padEnd(22)} ${t.instructions}`);
     console.log("Asset sets:");
-    for (const a of ASSET_SETS) console.log(`  ${a.id.padEnd(22)} ${a.name} (DARK_ASSET_PATH=${a.path})${assetSetUsable(a) ? "" : " [NOT USABLE: no shock2.gam — force-only, excluded from random draw]"}`);
+    for (const a of ASSET_SETS) console.log(`  ${a.id.padEnd(22)} ${a.name} (DARK_ASSET_PATH=${a.path})${assetSetUsable(a) ? "" : " [NOT USABLE: no data-root sentinel — force-only, excluded from random draw]"}`);
   } else if (cmd) {
     console.error("usage: node scenarios.mjs list");
     process.exit(1);
