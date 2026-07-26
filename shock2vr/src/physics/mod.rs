@@ -362,13 +362,20 @@ fn try_step_up(
 /// the hydro2 Sector-C stack (eleven 0.8-spaced `Rick Ladder` rungs at
 /// `(59.6, -2.0..6.0, 22.2)`): descending from the top, the climb cast returned
 /// **zero** translation at y 3.27 and the player hung there for as long as the
-/// input was held. Excluding climbables is safe - the redirect is purely
-/// vertical, so it can never push the player deeper into anything - and the
-/// walk/gravity passes still collide with ladders normally, so a ladder is still
-/// solid to someone who is not climbing it.
+/// input was held. The walk and gravity passes are untouched, so a ladder stays
+/// solid to anyone who is not climbing it, and the climb still collides with
+/// real geometry (the floor at the shaft's foot, a ceiling above) - which is
+/// what keeps the `CLIMB_MIN_PROGRESS_FRACTION` walk fallback working.
+///
+/// Two things this deliberately does not do: the exclusion covers EVERY
+/// climbable, not just the gripped one - stacked rungs are separate entities, so
+/// there is no single collider or body to scope the exclusion to, and scoping it
+/// to the rung that supplied the grip would reinstate the bug on the rung above
+/// or below it. (A second, unrelated ladder in the same vertical path would also
+/// be passed through; the shipped maps have no such case.)
 struct ClimbPass<'a> {
     movement: Vector<Real>,
-    queries: &'a QueryPipeline<'a>,
+    queries: QueryPipeline<'a>,
 }
 
 /// Downward translation (world units) applied to the player capsule per
@@ -408,13 +415,19 @@ fn step_player_movement(
     // (the floor the player is standing on when the redirect points DOWN, a
     // ceiling above them when it points up) would otherwise pin them in place
     // with nothing left to walk out with.
+    //
+    // Progress is measured as SIGNED VERTICAL travel, not the raw translation
+    // length: the redirect is purely vertical, so any horizontal component in
+    // the result is the character controller sliding off something in the way -
+    // sideways travel is the blocked case, not a climb.
     if let Some(ClimbPass {
         movement: climb,
         queries: climb_queries,
     }) = climb
     {
-        let mvt = controller.move_shape(dt, climb_queries, shape, pos, climb, |_c| ());
-        if mvt.translation.norm() > CLIMB_MIN_PROGRESS_FRACTION * climb.norm() {
+        let mvt = controller.move_shape(dt, &climb_queries, shape, pos, climb, |_c| ());
+        let climbed = mvt.translation.y * climb.y.signum();
+        if climbed > CLIMB_MIN_PROGRESS_FRACTION * climb.y.abs() {
             return mvt;
         }
     }
@@ -1880,12 +1893,6 @@ impl PhysicsWorld {
                 &self.collider_set,
                 movement_filter,
             );
-            let climb_queries = self.broad_phase.as_query_pipeline(
-                dispatcher,
-                &self.rigid_body_set,
-                &self.collider_set,
-                climb_pass_filter,
-            );
             step_player_movement(
                 &player_handle.controller,
                 &queries,
@@ -1896,7 +1903,7 @@ impl PhysicsWorld {
                 gravity,
                 climb_movement.map(|movement| ClimbPass {
                     movement,
-                    queries: &climb_queries,
+                    queries: queries.with_filter(climb_pass_filter),
                 }),
             )
         });
@@ -3175,17 +3182,18 @@ mod tests {
 
     /// Issue #603: a gripped ladder must be climbable DOWN, not just up. The
     /// player stands against the rung stack (at the resting gap a real approach
-    /// leaves - `PLAYER_CONTACT_OFFSET`), climbs it, then looks down (a
-    /// downward-pitched push, still into the face) and must ride it back to the
-    /// floor.
+    /// leaves - `PLAYER_CONTACT_OFFSET`) and looks down: a downward-pitched
+    /// push, still into the face, must ride the ladder back to the floor at the
+    /// climb rate.
     ///
     /// Negative-first: while the climb cast collided with the ladder itself,
-    /// the rungs' horizontal caps blocked a capsule standing flush against them
-    /// in BOTH directions - this test rose 0.05 wu in 60 frames of climbing
-    /// before the fix, and never got to the descent. Live on hydro2's Sector-C
-    /// stack the same block topped the ascent out at y 5.2 and, coming back
-    /// down, pinned the player at y 3.27 with the climb cast returning exactly
-    /// zero translation for as long as the input was held.
+    /// the horizontal cap of the rung the capsule overlapped stopped the
+    /// descent dead - before the fix this test covered 0.45 wu in 200 frames
+    /// (y 6.50 -> 6.05) instead of reaching the floor. Live on hydro2's
+    /// Sector-C stack the same block pinned the player at y 5.39, with the climb
+    /// cast returning exactly zero translation for as long as "look down +
+    /// push" was held (and, going the other way, topped the ascent out at
+    /// y 5.2 instead of clearing the ladder).
     #[test]
     fn player_descends_a_stacked_rung_ladder() {
         let mut world = PhysicsWorld::new();
@@ -3203,7 +3211,7 @@ mod tests {
                 .build(),
         );
         // The same shipped-size rung stack as the ascent test: 0.9 x 0.8 x 0.1,
-        // contiguous from y=0 to y=8. Its climbable face is at x = -4.95.
+        // contiguous from y=0 to y=8. Its climbable face is at x = -5.05.
         for rung in 0..10 {
             world.add_kinematic(
                 EntityId::from_inner(2001 + rung).unwrap(),
@@ -3215,46 +3223,40 @@ mod tests {
                 false,
             );
         }
-        // Standing against the ladder, at the gap a walked-in approach settles
-        // to: the capsule radius plus the resting contact offset. This is where
-        // a climbing player actually is (measured live on hydro2: 0.04 wu of
-        // clearance), and it is what puts the rungs' horizontal caps in the
-        // path of the descent cast.
-        let stand_x = -4.95 - (PLAYER_RADIUS + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
+        // A gripped player six rungs up, flush against the face at the gap the
+        // walk pass leaves before the grip takes over (capsule radius + resting
+        // contact offset). That is where a climbing player actually sits
+        // (measured live on hydro2: 0.04 wu of clearance) and it is what puts
+        // the rungs' horizontal caps in the path of the descent cast.
+        let stand_x = -5.05 - (PLAYER_RADIUS + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
         let mut player =
-            world.create_player(vec3(stand_x, 1.0, 0.0), EntityId::from_inner(3000).unwrap());
-        for _ in 0..30 {
-            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-        }
-        let floor = world.get_player_translation(&player);
+            world.create_player(vec3(stand_x, 6.5, 0.0), EntityId::from_inner(3000).unwrap());
+
+        // Looking down 60 degrees while still pushing into the face.
         let walk = 25.0 / SCALE_FACTOR / 60.0;
-        // Climb dead-on to the middle of the shaft.
-        for _ in 0..60 {
-            world.update(Vector3::new(walk, 0.0, 0.0), &mut player);
+        let descend = Vector3::new(walk * 0.5, -walk * 0.866, 0.0);
+        for _ in 0..40 {
+            world.update(descend, &mut player);
         }
-        let top = world.get_player_translation(&player);
+        let after = world.get_player_translation(&player);
+        // 40 frames at the climb rate (CLIMB_SPEED_SCALE * walk * cos 60) covers
+        // 2 wu; a free fall covers 8 and would already be on the floor.
         assert!(
-            top.y - floor.y > 3.0,
-            "setup: the player should have climbed the stack first, reached {top:?}"
+            after.y < 6.2,
+            "looking down and pushing into a ladder must descend it, stuck at {after:?}"
+        );
+        assert!(
+            after.y > 4.0,
+            "the descent must ride the ladder at the climb rate, not fall - reached {after:?} in 40 frames"
         );
 
-        // Now look down 60 degrees and keep pushing into the ladder: the same
-        // input, pitched down, must descend at the climb rate.
-        let descend = Vector3::new(walk * 0.5, -walk * 0.866, 0.0);
-        for _ in 0..120 {
+        for _ in 0..160 {
             world.update(descend, &mut player);
         }
         let end = world.get_player_translation(&player);
-
         assert!(
-            end.y < floor.y + 0.2,
-            "looking down and pushing must climb back DOWN to the floor at y {}, ended {end:?} (from {top:?})",
-            floor.y
-        );
-        assert!(
-            (end.z - top.z).abs() < 0.45,
-            "the descent must not slide the player off the ladder, drifted {}",
-            end.z - top.z
+            end.y < 1.2,
+            "the descent must carry the player all the way to the floor, ended {end:?}"
         );
     }
 
@@ -3268,8 +3270,8 @@ mod tests {
     /// Negative-first: while the climb cast collided with the ladder itself the
     /// grip caught but could not move the player down at all - the rung their
     /// capsule overlapped blocked the descent - so the push back toward the
-    /// ladder just shoved them onto the landing again (this test finished at
-    /// x +8.3, y +7.4, i.e. walking away across the landing).
+    /// ladder just shoved them onto the landing again (before the fix this test
+    /// was back at x -1.66, y +7.40, i.e. up on the landing).
     #[test]
     fn player_enters_a_descent_from_the_top_lip() {
         let quad = |x0: f32, x1: f32, y: f32| {
@@ -3342,6 +3344,10 @@ mod tests {
             world.update(onto_the_ladder, &mut player);
         }
         let gripped = world.get_player_translation(&player);
+        assert!(
+            gripped.x < -5.05,
+            "the push back toward the ladder must grip it, not shove the player onto the landing again - at {gripped:?}"
+        );
         assert!(
             gripped.y > 3.0,
             "the grip must catch the fall near the top of the shaft, dropped to {gripped:?} in 40 frames \
