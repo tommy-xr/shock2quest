@@ -2433,13 +2433,15 @@ async fn transition_level(
     } else {
         format!("{}.mis", level)
     };
-    let resolved = shock2vr::resource_path(&level_file);
-    if !std::path::Path::new(&resolved).exists() {
+    // Not a filesystem check: on a 25AE install the missions live inside
+    // `sshock2.kpf`, so statting the data root would 404 every real mission.
+    if !shock2vr::mission_exists(&level_file) {
         return Err((
             StatusCode::NOT_FOUND,
             format!(
-                "mission '{}' not found (looked at {})",
-                level_file, resolved
+                "mission '{}' not found in {}",
+                level_file,
+                shock2vr::resource_path("")
             ),
         ));
     }

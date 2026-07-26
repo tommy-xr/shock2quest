@@ -159,6 +159,24 @@ fn mod_layer_may_override(family: &str, archive: &str) -> bool {
     }
 }
 
+/// Mount one resource family, matching the options its `.crf` counterpart uses.
+///
+/// `strings` must not collapse basenames (translated tables share them), and
+/// `iface` additionally registers an `iface/`-qualified key because it collides
+/// with `obj`/`bitmap` on seven names. Getting these wrong is silent: the wrong
+/// string table or the wrong texture simply resolves first.
+fn mount_family(
+    archive: String,
+    prefix: &str,
+    family: &str,
+) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
+    match family {
+        "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
+        "iface" => ZipAssetPath::with_prefix_opts(archive, prefix, true, Some("iface")),
+        _ => ZipAssetPath::with_prefix(archive, prefix),
+    }
+}
+
 fn build_25th_anniversary_mounts(
     bundle_storage: Arc<dyn Storage>,
 ) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
@@ -171,13 +189,14 @@ fn build_25th_anniversary_mounts(
             }
             let path = resource_path(archive);
             if Path::new(&path).exists() {
-                mounts.push(ZipAssetPath::with_prefix(path, &format!("{family}/")));
+                mounts.push(mount_family(path, &format!("{family}/"), family));
             }
         }
         // The base archive keeps the original `data/res/<family>/` layout.
-        mounts.push(ZipAssetPath::with_prefix(
+        mounts.push(mount_family(
             resource_path("sshock2.kpf"),
             &format!("data/res/{family}/"),
+            family,
         ));
     }
 
@@ -195,6 +214,34 @@ fn build_25th_anniversary_mounts(
     mounts.push(BundleAssetPath::new("".to_owned(), bundle_storage));
     mounts.push(AssetPath::folder("".to_owned()));
     mounts
+}
+
+/// Whether a mission file is available to load, in whichever layout is in use.
+///
+/// A classic install has the `.mis` on disk; a 25AE install has it inside
+/// `sshock2.kpf` under `data/`. Callers that want to validate a mission name
+/// before asking the game to load it (the debug runtime's `transition-level`
+/// endpoint, for one) must not just stat the filesystem.
+pub fn mission_exists(mission_file: &str) -> bool {
+    if Path::new(&resource_path(mission_file)).exists() {
+        return true;
+    }
+    if !is_25th_anniversary_install() {
+        return false;
+    }
+    let wanted = format!("data/{}", mission_file.to_ascii_lowercase());
+    let Ok(file) = std::fs::File::open(resource_path("sshock2.kpf")) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
+        return false;
+    };
+    (0..archive.len()).any(|i| {
+        archive
+            .by_index(i)
+            .map(|e| e.name().to_ascii_lowercase() == wanted)
+            .unwrap_or(false)
+    })
 }
 
 pub fn resource_path(str: &str) -> String {
