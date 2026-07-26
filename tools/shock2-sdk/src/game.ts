@@ -109,7 +109,10 @@ export class PlayerApi {
     const distance = (point: Vec3) =>
       Math.hypot(point[0] - eye[0], point[1] - eye[1], point[2] - eye[2]);
 
-    let candidates = detail.aim_points;
+    // Entity detail is a versioned runtime capability. Older runtimes (and a
+    // stale binary encountered by the campaign) omit aim_points entirely;
+    // aiming must remain usable and report its center fallback, not crash.
+    let candidates = detail.aim_points ?? [];
     if (requested === "head" || requested === "torso") {
       candidates = candidates.filter((point) => point.classification === requested);
     } else if (requested === "limb") {

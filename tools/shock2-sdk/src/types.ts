@@ -123,7 +123,11 @@ export interface EntityDetailResult {
   properties: PropertyInfo[];
   outgoing_links: LinkInfo[];
   incoming_links: LinkInfo[];
-  aim_points: AimPoint[];
+  /**
+   * Live classified creature hitboxes. Optional for compatibility with debug
+   * runtimes predating the aim-point capability.
+   */
+  aim_points?: AimPoint[];
 }
 
 export interface AimPoint {
