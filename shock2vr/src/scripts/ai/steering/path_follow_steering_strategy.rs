@@ -61,6 +61,17 @@ const STALL_SECONDS: f32 = 3.0;
 const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
+/// Displacement watchdog: with an active waypoint, failing to move this far
+/// (XZ, 1 Dark foot) ...
+const DISPLACEMENT_STALL_DISTANCE: f32 = 1.0 / SCALE_FACTOR;
+/// ...within this long also counts as a stall. Micro-sliding around a
+/// blocking capsule (another creature, a prop corner) can keep improving
+/// the waypoint distance by more than the epsilon, resetting the progress
+/// check forever while the body stays effectively in place - net
+/// displacement is the ground truth (issue #481's last freeze pocket, an
+/// AI pinned behind a scripted NPC beside a desk). Slightly longer than
+/// STALL_SECONDS so the progress check stays the common path.
+const DISPLACEMENT_STALL_SECONDS: f32 = 4.0;
 /// How far past the stalled waypoint (XZ) to probe for the cell on the far
 /// side of the crossing when reporting a blocked link - just enough to step
 /// off the shared edge without skipping a narrow destination cell (0.5
@@ -93,6 +104,9 @@ pub struct PathFollowSteeringStrategy {
     stall_seconds: f32,
     /// Active stall recovery: seconds left, and the point to back out toward
     recovery: Option<(f32, Vector3<f32>)>,
+    /// Displacement watchdog: where the AI was when the anchor was set, and
+    /// how long ago (see DISPLACEMENT_STALL_SECONDS)
+    displacement_anchor: Option<(Vector3<f32>, f32)>,
 }
 
 impl PathFollowSteeringStrategy {
@@ -119,6 +133,7 @@ impl PathFollowSteeringStrategy {
             stall_best: f32::INFINITY,
             stall_seconds: 0.0,
             recovery: None,
+            displacement_anchor: None,
         }
     }
 
@@ -133,6 +148,7 @@ impl PathFollowSteeringStrategy {
         self.stall_waypoint = usize::MAX;
         self.stall_best = f32::INFINITY;
         self.stall_seconds = 0.0;
+        self.displacement_anchor = None;
     }
 }
 
@@ -343,7 +359,27 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             self.stall_seconds = 0.0;
         } else {
             self.stall_seconds += time.elapsed.as_secs_f32();
-            if self.stall_seconds >= STALL_SECONDS {
+        }
+        // Displacement watchdog: micro-sliding around a blocking capsule can
+        // reset the waypoint-progress check above forever while the body
+        // stays put - fall back to net displacement
+        let displaced_stall = match self.displacement_anchor {
+            Some((anchor, _)) if xz_distance(position, anchor) >= DISPLACEMENT_STALL_DISTANCE => {
+                self.displacement_anchor = Some((position, 0.0));
+                false
+            }
+            Some((anchor, age)) => {
+                let age = age + time.elapsed.as_secs_f32();
+                self.displacement_anchor = Some((anchor, age));
+                age >= DISPLACEMENT_STALL_SECONDS
+            }
+            None => {
+                self.displacement_anchor = Some((position, 0.0));
+                false
+            }
+        };
+        {
+            if self.stall_seconds >= STALL_SECONDS || displaced_stall {
                 // Remember the crossing we could not traverse (TTL'd, per
                 // AI): the mesh says the link is walkable but something
                 // physical - a prop on the route, geometry the mesh doesn't
