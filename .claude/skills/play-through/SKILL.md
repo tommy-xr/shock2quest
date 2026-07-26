@@ -168,6 +168,44 @@ Optionally record a **video** of a session — capture frames at a cadence durin
 play and stitch with the **`video-capture`** skill (60Hz sim / 4 = real-time
 15fps). Local artifact.
 
+## Campaign randomization (`roll`)
+
+**Every new campaign starts with a roll.** Instead of always marching
+earth→shodan, the campaign randomizer picks three independent axes and persists
+them in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
+
+1. **Mission-sequence scenario** — one of eight slices of the game, each with
+   its own mission order and goal: `earth-to-medsci` (training → station →
+   medsci1/2), `engineering` (power to the elevator), `hydroponics` (Toxin-A →
+   regulators), `operations` (ops2 elevator → cutscene → sim unit overrides),
+   `recreation` (painting codes → transmitter), `command`, `rickenbacker`
+   (destroy the eggs), `shodan` (end sequence + boss AI).
+2. **Special tweak** — a playstyle/verification constraint for every session in
+   the campaign: none, melee-only, loot-everything, cutscene/research/regen/
+   camera-alarm verification, Navy (hack/repair/modify), Marine (standard/
+   electronic/organic/heavy weapons), OSA (psi tiers 1–5), AI/pathfinding
+   stress, or a detailed test run.
+3. **Asset set** — legacy assets or the 25th Anniversary assets; the pick is the
+   `DARK_ASSET_PATH` every runtime in the campaign must be launched with.
+
+```
+node .agents/skills/play-through/playthrough-state.mjs roll              # random campaign (idempotent)
+node .agents/skills/play-through/playthrough-state.mjs roll seed=42      # reproducible roll
+node .agents/skills/play-through/playthrough-state.mjs roll --force scenario=hydroponics tweak=melee-only assets=legacy
+node .agents/skills/play-through/scenarios.mjs list                      # browse all ids
+```
+
+**The roll happens once per campaign and then sticks**: like `init`, `roll` is
+idempotent — re-invoking the skill mid-campaign keeps the existing roll, so the
+frontier, scenario, tweak, and assets stay consistent across iterations
+(`--force` starts a fresh campaign with a new roll). `show` re-surfaces the
+goal, the tweak instructions, and the `DARK_ASSET_PATH` in its NEXT line every
+iteration — **feed the tweak instructions and campaign goal into every
+`playtest` prompt**, and treat a tweak's verifications as first-class findings
+(a broken psi power under an OSA tweak is a real finding even if the mission
+could be finished without it). Every roll prints its `seed`, so any campaign
+can be reproduced exactly.
+
 ## Autonomous mode (`--auto`)
 
 Invoke the `play-through` skill with `--auto` using the host agent's skill syntax.
@@ -177,30 +215,34 @@ run** — no setup step. State persists in that ledger so it resumes at the
 frontier and marches forward instead of re-treading:
 
 ```
-node .agents/skills/play-through/playthrough-state.mjs init      # idempotent; --auto calls it (--force resets)
+node .agents/skills/play-through/playthrough-state.mjs roll      # idempotent; --auto calls it (--force re-rolls)
 node .agents/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
 #   blocker add <level> <bug|feature-gap> <issue#> <desc...>   ·  blocker set <issue#> <status> [pr#]
 #   advance <level> <saveName> <x,y,z> [note...]               (sets frontier, bumps iteration)
 ```
 
-The ledger holds: `frontier` (the game **save** to `/v1/load` from), the
+The ledger holds: the campaign **roll** (`scenario` + `tweak` + `assets`, with
+its `seed`), `frontier` (the game **save** to `/v1/load` from), the
 `blockers` ledger (issue → PR → status), and `fix_branch` — the running branch
 that **stacks each fix** so the campaign plays *past* an already-fixed-but-
 unmerged blocker.
 
-**Clear & start a new campaign:** `playthrough-state.mjs init --force` (wipes the
-ledger back to iteration 0). For a *truly* clean slate also recreate the
+**Clear & start a new campaign:** `playthrough-state.mjs roll --force` (wipes
+the ledger back to iteration 0 with a fresh scenario/tweak/assets roll; plain
+`init --force` still exists for a fixed, non-randomized order). For a *truly* clean slate also recreate the
 `fix_branch` off current `main` and delete stale frontier saves (`<data_root>/
 saves/frontier*.sav`) — otherwise the fresh campaign just launches mission 0 with
 no frontier to load, which is harmless.
 
 **Each `--auto` iteration** (do exactly one; a host loop may repeat it):
-1. `playthrough-state.mjs init` (idempotent — creates the ledger on the first
-   iteration, keeps it after), then `show` → read the frontier + NEXT action.
+1. `playthrough-state.mjs roll` (idempotent — rolls scenario + tweak + assets
+   and creates the ledger on the first iteration, keeps the roll after), then
+   `show` → read the frontier + NEXT action (goal, tweak, `DARK_ASSET_PATH`).
 2. **Resume:** build the runtime from the **`fix_branch`** (so accrued fixes are
-   in), launch it, and `POST /v1/load {file: frontier.save}` — or launch the first
-   mission fresh at iteration 0.
-3. **Playtest** from here toward the goal (the `playtest` primitive) → `data.json`.
+   in), launch it **with the campaign's `DARK_ASSET_PATH`**, and `POST /v1/load
+   {file: frontier.save}` — or launch the first mission fresh at iteration 0.
+3. **Playtest** from here toward the goal (the `playtest` primitive), passing the
+   campaign goal + the tweak instructions into the playtest prompt → `data.json`.
 4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.
 5. **Triage** the blocker (bug vs **feature-gap** — §3-4; feature-gaps get a
    *faithful*, non-shim fix).
