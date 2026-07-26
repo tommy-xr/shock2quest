@@ -1,6 +1,4 @@
 pub mod entity_creator;
-use std::{fs::File, io::BufReader};
-
 use tracing::info;
 pub mod entity_populator;
 pub mod flat_ui_host;
@@ -57,12 +55,15 @@ impl Mission {
         global_context: &GlobalContext,
     ) -> dark::mission::SystemShock2Level {
         info!("starting level load");
-        let f = File::open(resource_path(mission)).unwrap();
-        let mut reader = BufReader::new(f);
+        // Through the asset paths, not `File::open`: on a 25AE install the
+        // missions live inside `sshock2.kpf`.
+        let reader = asset_paths
+            .get_reader(base_path.to_owned(), mission.to_ascii_lowercase())
+            .unwrap_or_else(|| panic!("mission {mission} not found in the mounted data"));
         dark::mission::read(
             asset_paths,
             base_path,
-            &mut reader,
+            &mut *reader.borrow_mut(),
             &global_context.gamesys,
             &global_context.links,
             &global_context.links_with_data,

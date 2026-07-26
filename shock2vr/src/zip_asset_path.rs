@@ -33,6 +33,77 @@ impl ZipAssetPath {
         Self::build(zip_path, true, Some(namespace))
     }
 
+    /// Mount only the entries under `prefix`, keyed by the path *relative to*
+    /// it (plus the bare basename).
+    ///
+    /// A `.crf` holds one resource family at its root, so `obj.crf` yields keys
+    /// like `txt16/foo.pcx`. The 25th Anniversary Edition packs every family into
+    /// one KPF instead (`data/res/obj/txt16/foo.pcx` in the base archive,
+    /// `obj/txt16/foo.dds` in a mod layer), so a whole-archive mount would never
+    /// produce those keys. Mounting per family with the prefix stripped makes a
+    /// KPF behave exactly like the `.crf` it replaces - which is what lets the
+    /// same family-ordered mount list serve both installs.
+    pub fn with_prefix(zip_path: String, prefix: &str) -> Box<ZipAssetPath> {
+        Self::with_prefix_opts(zip_path, prefix, true, None)
+    }
+
+    /// [`with_prefix`](Self::with_prefix) with the same knobs the `.crf` mounts
+    /// use, because a family's mount options have to match whichever archive it
+    /// comes from.
+    ///
+    /// `collapse_paths` must be **false** for `strings`: 28 of the 80 string
+    /// basenames exist more than once (English at `strings/foo.str`, German at
+    /// `strings/German/foo.str`, plus an `rcs/` set), so collapsing lets a
+    /// translated table win by archive order. The classic mount disables it for
+    /// exactly this reason and the KPF mount has to as well.
+    pub fn with_prefix_opts(
+        zip_path: String,
+        prefix: &str,
+        collapse_paths: bool,
+        namespace: Option<&str>,
+    ) -> Box<ZipAssetPath> {
+        let file = File::open(&zip_path)
+            .unwrap_or_else(|e| panic!("failed to open archive {zip_path}: {e}"));
+        let mut archive = zip::ZipArchive::new(BufReader::new(file)).unwrap();
+        let prefix = prefix.to_ascii_lowercase();
+        let mut asset_to_path = HashMap::new();
+        for i in 0..archive.len() {
+            let file = archive.by_index(i).unwrap();
+            if file.name().ends_with('/') {
+                continue;
+            }
+            let Some(outpath) = file.enclosed_name() else {
+                continue;
+            };
+            let full = outpath.to_str().unwrap_or_default().to_string();
+            let lower = full.to_ascii_lowercase();
+            // Archives are inconsistent about case (patch_ext uses `OBJ/`), so
+            // match the prefix case-insensitively.
+            let Some(relative) = lower.strip_prefix(&prefix) else {
+                continue;
+            };
+            if relative.is_empty() {
+                continue;
+            }
+            asset_to_path.insert(relative.to_owned(), full.clone());
+            let base = relative.rsplit('/').next().unwrap_or(relative);
+            if collapse_paths {
+                asset_to_path
+                    .entry(base.to_owned())
+                    .or_insert_with(|| full.clone());
+            }
+            if let Some(namespace) = namespace {
+                asset_to_path
+                    .entry(format!("{namespace}/{base}"))
+                    .or_insert(full);
+            }
+        }
+        Box::new(ZipAssetPath {
+            archive: Mutex::new(archive),
+            asset_to_path,
+        })
+    }
+
     fn build(zip_path: String, collapse_paths: bool, namespace: Option<&str>) -> Box<ZipAssetPath> {
         let file = File::open(zip_path).unwrap();
         let reader = BufReader::new(file);

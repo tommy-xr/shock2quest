@@ -341,7 +341,8 @@ Use with `dark_query`: `cargo dq entities earth.mis --limit 10`
 
 This table lists the most commonly used levels; `Data/` contains the full set (23 `.mis` files including `hydro2/3`, `ops2-4`, `rec2/3`, `command2`, `rick1-3`, `many`, `shodan`). The SDK smoke test `tools/shock2-sdk/test/missions.e2e.test.ts` verifies all of them load.
 
-**Known issue**: `shodan.mis` currently crashes on load (AIPATH parser, [#267](https://github.com/tommy-xr/shock2quest/issues/267)).
+All 23 missions currently load, including `shodan.mis` (the AIPATH parser EOF crash was fixed
+in [#267](https://github.com/tommy-xr/shock2quest/issues/267)).
 
 ### File Format Investigation
 

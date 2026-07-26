@@ -21,6 +21,24 @@ pub trait AbstractAssetPath: Sync + Send {
         base_path: String,
         asset_name: String,
     ) -> Option<RefCell<Box<dyn ReadableAndSeekable>>>;
+
+    /// Pick the first of `candidates` that exists, resolving **mount-first**:
+    /// the highest-priority mount that has *any* candidate wins, and only then
+    /// does candidate order break the tie within that mount.
+    ///
+    /// This is what lets a mod layer's upgraded encoding of a texture win over
+    /// the original. Testing each candidate independently with `exists` would
+    /// instead let a low-priority mount's early-ordered candidate beat a
+    /// high-priority mount's later-ordered one.
+    ///
+    /// The default (a leaf mount) is simply first-match; `MultipleAssetPaths`
+    /// overrides it to do the per-mount pass.
+    fn resolve_first(&self, base_path: String, candidates: &[String]) -> Option<String> {
+        candidates
+            .iter()
+            .find(|candidate| self.exists(base_path.clone(), (*candidate).to_string()))
+            .cloned()
+    }
 }
 
 struct MultipleAssetPaths {
@@ -53,6 +71,17 @@ impl AbstractAssetPath for MultipleAssetPaths {
             let reader = asset_path.get_reader(base_path.to_owned(), asset_name.to_owned());
             if reader.is_some() {
                 return reader;
+            }
+        }
+        None
+    }
+
+    fn resolve_first(&self, base_path: String, candidates: &[String]) -> Option<String> {
+        // Mounts are the outer loop: a later candidate in a higher-priority mount
+        // beats an earlier candidate in a lower-priority one.
+        for asset_path in &self.asset_paths {
+            if let Some(found) = asset_path.resolve_first(base_path.clone(), candidates) {
+                return Some(found);
             }
         }
         None
@@ -101,5 +130,89 @@ impl AssetPath {
 
     pub fn folder(folder_name: String) -> Box<dyn AbstractAssetPath> {
         Box::new(AssetPath { folder_name })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mount that simply owns a fixed set of names.
+    struct FakeMount(Vec<&'static str>);
+
+    impl AbstractAssetPath for FakeMount {
+        fn exists(&self, _base_path: String, asset_name: String) -> bool {
+            self.0.iter().any(|n| *n == asset_name)
+        }
+
+        fn get_reader(
+            &self,
+            _base_path: String,
+            _asset_name: String,
+        ) -> Option<RefCell<Box<dyn ReadableAndSeekable>>> {
+            None
+        }
+    }
+
+    fn candidates(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    /// The upgraded encoding lives in the higher-priority mount and must win,
+    /// even though the original is an earlier-listed candidate.
+    #[test]
+    fn resolve_first_prefers_the_higher_priority_mount() {
+        let paths = AssetPath::combine(vec![
+            Box::new(FakeMount(vec!["txt16/foo.dds"])),
+            Box::new(FakeMount(vec!["txt16/foo.pcx"])),
+        ]);
+        assert_eq!(
+            paths.resolve_first(
+                String::new(),
+                &candidates(&["txt16/foo.pcx", "txt16/foo.dds"])
+            ),
+            Some("txt16/foo.dds".to_owned())
+        );
+    }
+
+    /// Within a single mount, candidate order decides.
+    #[test]
+    fn resolve_first_uses_candidate_order_inside_one_mount() {
+        let paths = AssetPath::combine(vec![Box::new(FakeMount(vec![
+            "txt16/foo.dds",
+            "txt16/foo.pcx",
+        ]))]);
+        assert_eq!(
+            paths.resolve_first(
+                String::new(),
+                &candidates(&["txt16/foo.dds", "txt16/foo.pcx"])
+            ),
+            Some("txt16/foo.dds".to_owned())
+        );
+    }
+
+    /// A lower-priority mount is still consulted when the higher one has nothing.
+    #[test]
+    fn resolve_first_falls_through_to_a_lower_mount() {
+        let paths = AssetPath::combine(vec![
+            Box::new(FakeMount(vec!["txt16/other.dds"])),
+            Box::new(FakeMount(vec!["txt16/foo.pcx"])),
+        ]);
+        assert_eq!(
+            paths.resolve_first(
+                String::new(),
+                &candidates(&["txt16/foo.dds", "txt16/foo.pcx"])
+            ),
+            Some("txt16/foo.pcx".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_first_returns_none_when_nothing_matches() {
+        let paths = AssetPath::combine(vec![Box::new(FakeMount(vec!["txt16/other.pcx"]))]);
+        assert_eq!(
+            paths.resolve_first(String::new(), &candidates(&["txt16/foo.pcx"])),
+            None
+        );
     }
 }

@@ -7,7 +7,7 @@ use std::{
 };
 
 use cgmath::prelude::*;
-use cgmath::{Point3, Vector2, Vector3};
+use cgmath::{Matrix4, Point3, Vector2, Vector3};
 use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -471,7 +471,12 @@ pub fn to_scene_objects(
         let geometry: Rc<Box<dyn engine::scene::Geometry>> =
             Rc::new(Box::new(engine::scene::mesh::create(vertices)));
 
-        let texture = asset_cache.get(&TEXTURE_IMPORTER, &material_name).clone();
+        // Allow a mod layer to supply this texture under a different extension. If
+        // nothing resolves we fall back to the literal name so the failure surfaces
+        // exactly as it did before.
+        let resolved = crate::util::resolve_texture_name(asset_cache, &material_name)
+            .unwrap_or_else(|| material_name.clone());
+        let texture = asset_cache.get(&TEXTURE_IMPORTER, &resolved).clone();
         let diffuse_texture: Rc<dyn TextureTrait> = {
             let mut animation_frames =
                 load_multiple_textures_for_model(asset_cache, &material_name);
@@ -736,4 +741,79 @@ mod tests {
             );
         }
     }
+}
+
+/// Build scene objects from an appended `PMNM` high-detail chunk, in its authored
+/// rest pose.
+///
+/// Opt-in via `SS2_PMNM_MESHES=1`. The vertices are skinned to the same skeleton
+/// the original mesh uses, so these animate normally; the caller supplies the
+/// bind-pose undo via [`pmnm_bind_matrices`].
+pub fn pmnm_to_scene_objects(
+    mesh: &crate::ss2_bin_pmnm::PmnmMesh,
+    asset_cache: &mut AssetCache,
+) -> Vec<SceneObject> {
+    let mut scene_objects = Vec::new();
+    for (material_name, vertices) in mesh.to_skinned_vertices() {
+        if vertices.is_empty() {
+            continue;
+        }
+        let geometry: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+
+        // PMNM material names carry their authoring extension (`ND-rumbler.psd`);
+        // the shipped texture is `ND-rumbler.dds`, which the resolver finds by stem.
+        let Some(texture) = crate::util::load_texture_with_fallback(asset_cache, &material_name)
+        else {
+            warn!("no texture for PMNM material \"{material_name}\"; dropping it");
+            continue;
+        };
+
+        let diffuse: Rc<dyn TextureTrait> = texture;
+        let material = RefCell::new(engine::scene::SkinnedMaterial::create(diffuse, 0.0, 0.0));
+        // No palette is baked here: `expand_skinning_palette` assumes joint-local
+        // vertices and would double-apply each joint's rest transform to a
+        // bind-space mesh. `Model::from_ai_bin` bakes the correct rest palette
+        // once it has the bind matrices.
+        scene_objects.push(engine::scene::scene_object::SceneObject::create(
+            material, geometry,
+        ));
+    }
+    scene_objects
+}
+
+/// Per-joint matrix that takes a `PMNM` vertex from bind-pose model space into
+/// the joint's local frame, so `pose[j] * bind[j] * v` skins correctly.
+///
+/// Two pieces: the inverse of the joint's rest global transform, and a 90-degree
+/// yaw. The yaw is needed because `ss2_skeleton::create` puts
+/// `from_angle_y(Deg(90))` on **every torso bone**, while the PMNM pivots are
+/// authored without it - matching a pivot against its joint's rest position is
+/// exact only after that rotation (52 of the 66 shipped chunks land at exactly
+/// zero residual).
+///
+/// A single global correction is therefore exact only for single-torso rigs,
+/// which is the likely explanation for the residual outliers on `grunt_s` and
+/// `fembot`; a per-torso correction would be the principled fix if those turn
+/// out to matter visually.
+pub fn pmnm_bind_matrices(skeleton: &Skeleton) -> [Matrix4<f32>; MAX_JOINTS] {
+    let correction = Matrix4::from_angle_y(cgmath::Deg(90.0));
+    let mut out = skeleton.bind_inverse_transforms();
+    for m in out.iter_mut() {
+        *m = *m * correction;
+    }
+    out
+}
+
+/// Whether the high-detail `PMNM` path is enabled.
+///
+/// An env var rather than the `--experimental` flag list because model loading
+/// lives in `dark`, which has no access to `shock2vr`'s options (the same reason
+/// `SS2_DEBUG_NORMALS` works this way).
+pub fn pmnm_enabled() -> bool {
+    // Not `is_some()`: that would make `SS2_PMNM_MESHES=0` *enable* the path.
+    matches!(
+        std::env::var("SS2_PMNM_MESHES").as_deref(),
+        Ok("1" | "true" | "yes")
+    )
 }

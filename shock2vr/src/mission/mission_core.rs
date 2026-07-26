@@ -1,11 +1,11 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs::File,
-    io::BufReader,
     rc::Rc,
     sync::Arc,
     time::{Duration, SystemTime},
 };
+
+use engine::assets::asset_paths::ReadableAndSeekable;
 
 use cgmath::{EuclideanSpace, Zero};
 use cgmath::{
@@ -103,7 +103,6 @@ use crate::{
 };
 
 use crate::mission::entity_creator::{CreateEntityOptions, EntityCreationInfo};
-pub use crate::resource_path;
 
 /// `The Player` gamesys template - carries the player archetype data
 /// (starting hit points, psi pool, base stats, vulnerabilities, ...).
@@ -395,7 +394,11 @@ pub struct MissionCore {
 }
 
 pub struct GlobalContext {
-    pub properties: Vec<Box<dyn PropertyDefinition<BufReader<File>>>>,
+    /// Typed to the asset-path layer's boxed reader rather than `BufReader<File>`,
+    /// because `dark::mission::read` ties the property definitions to the reader
+    /// type - and on a 25AE install the gamesys and missions come out of a KPF,
+    /// not off disk.
+    pub properties: Vec<Box<dyn PropertyDefinition<Box<dyn ReadableAndSeekable>>>>,
     pub links: Vec<Box<dyn LinkDefinition>>,
     pub links_with_data: Vec<Box<dyn LinkDefinitionWithData>>,
     pub gamesys: Gamesys,

@@ -4,7 +4,12 @@ import { test } from "node:test";
 import path from "node:path";
 
 import { GameServer } from "../src/index.js";
-import { dataRoot, pcxSize, readCrfEntry } from "./helpers/crf.js";
+import {
+  dataRoot,
+  hasLooseCrfArchives,
+  pcxSize,
+  readCrfEntry,
+} from "./helpers/crf.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end test for the flat-mode audio-log/email reader MFD + persistent
@@ -120,15 +125,19 @@ test(
       "reader must not use the ambiguous plain log.pcx name (it resolves to obj.crf's 64x64 model texture)",
     );
     // And the art that key maps to is the 188x296 MFD frame - read the PCX
-    // header straight out of the shipped archive.
-    const backdrop = pcxSize(
-      readCrfEntry(path.join(dataRoot(), "res", "iface.crf"), "LOG.PCX"),
-    );
-    assert.deepEqual(
-      backdrop,
-      { width: 188, height: 296 },
-      "iface.crf's LOG.PCX (what iface/log.pcx resolves to) should be the 188x296 MFD frame",
-    );
+    // header straight out of the shipped archive. Only possible on a classic
+    // install: a 25th Anniversary install has no loose `.crf` to read, though
+    // the `iface/log.pcx` assertion above still proves the mount resolves.
+    if (hasLooseCrfArchives()) {
+      const backdrop = pcxSize(
+        readCrfEntry(path.join(dataRoot(), "res", "iface.crf"), "LOG.PCX"),
+      );
+      assert.deepEqual(
+        backdrop,
+        { width: 188, height: 296 },
+        "iface.crf's LOG.PCX (what iface/log.pcx resolves to) should be the 188x296 MFD frame",
+      );
+    }
     assert.ok(
       textures.includes("amanpour.pcx"),
       "reader should draw the sender portrait from book.crf",

@@ -111,6 +111,24 @@ impl Skeleton {
         palette
     }
 
+    /// Per-joint inverse of the **rest-pose** global transform.
+    ///
+    /// Vanilla LGMM stores vertices already in joint-local space, so nothing
+    /// needed this. A `PMNM` chunk stores them in bind-pose model space, so
+    /// skinning has to undo the bind first: `pose[j] * bind_inverse[j] * v`.
+    /// Call this on the un-animated skeleton.
+    pub fn bind_inverse_transforms(&self) -> [Matrix4<f32>; MAX_SKINNED_JOINTS] {
+        let mut out = [Matrix4::identity(); MAX_SKINNED_JOINTS];
+        for (joint_id, global) in self.global_transforms.iter() {
+            let j = *joint_id as usize;
+            if j >= MAX_SKINNED_JOINTS {
+                continue;
+            }
+            out[j] = global.invert().unwrap_or_else(Matrix4::identity);
+        }
+        out
+    }
+
     pub fn global_transform(&self, joint_id: &JointId) -> Matrix4<f32> {
         let _joint_offset = *joint_id as f32;
 
