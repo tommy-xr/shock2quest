@@ -99,6 +99,15 @@ obstruction, not a step. Only the horizontal direction of the target is used;
 gravity decides the vertical, so aim at where you want to *stand*, not at a
 point in the air.
 
+**Ladders are not walked, they're climbed** — `/v1/player/move` never grips one.
+Aim the head with `{"head.look":[yaw_deg,pitch_deg]}` and hold
+`right_hand.thumbstick:[0,1]` (push *into* the ladder). **Pitch is positive
+DOWN**: `+60` looks at the floor and descends, `-60` looks at the ceiling and
+ascends — the same rotation drives the camera and the movement, so a negative
+pitch climbs *up* no matter what you meant. To enter a descent from the top of a
+shaft, step off the lip and then push back *toward* the ladder while looking
+down; the grip catches within a step's worth of falling.
+
 **Doors block the shapecast** — you can't move through a closed one. The pattern:
 move up to the door → it trips the tripwire (or `Frob` it) → `step` and wait for
 it to open (re-screenshot) → then `move` through. That's genuine door-by-door
