@@ -1,5 +1,6 @@
 export { HttpClient, HttpError } from "./client.js";
 export {
+  AimOcclusionError,
   AudioApi,
   CommandError,
   EntitiesApi,

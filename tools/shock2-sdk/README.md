@@ -53,8 +53,18 @@ await game.input.set("right_hand.trigger_value", 1.0);
 // a classified live hitbox; doors/buttons select their nearest visible surface.
 // Prefer this over hand-composing head.rotation: raw head controls are
 // pawn-local, so mission spawns and loaded saves can rotate their world result.
-const aim = await game.player.aimAt(target, { hitbox: "torso" });
-// aim reports the selected owner/proxy/body/joint/world point and any fallback.
+const aim = await game.player.aimAt(target, {
+  hitbox: "torso",
+  visibility: "required",
+});
+// aim reports the selected owner/proxy/body/joint/world point and view LOS.
+// If every matching proxy is blocked it throws AimOcclusionError, whose
+// structured result identifies the blocker. `fallback_used` only describes
+// hitbox classification; it never means the target is visible.
+//
+// Visibility is checked from the flat camera eye (`origin: "view"`). It does
+// not guarantee that the offset weapon muzzle is clear, so step and verify the
+// shot/target state instead of treating a successful aim as proof of damage.
 // Use { hitbox: "center" } only when you deliberately want the entity origin.
 await game.input.set("right_hand.squeeze_value", 1); // frob highlighted target
 await game.step({ frames: 2 });

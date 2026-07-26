@@ -146,6 +146,32 @@ export type AimClassification =
   | "center"
   | "nearest";
 
+export interface AimOptions {
+  hitbox?: AimClassification;
+  eyeHeight?: number;
+  /**
+   * `required` verifies line of sight from the flat camera eye and rejects an
+   * occluded target. It does not claim clearance from the weapon muzzle.
+   */
+  visibility?: "unchecked" | "required";
+}
+
+export interface AimVisibilityBlocker {
+  entity_id: number | null;
+  entity_name: string | null;
+  body_id: number | null;
+  collision_group: string | null;
+  hit_point: Vec3 | null;
+  distance: number | null;
+}
+
+export interface AimVisibility {
+  state: "unchecked" | "visible" | "blocked";
+  origin: "view";
+  target_distance: number;
+  blocker: AimVisibilityBlocker | null;
+}
+
 export interface AimResult {
   entity_id: number;
   proxy_entity_id: number | null;
@@ -156,6 +182,8 @@ export interface AimResult {
   world_point: Vec3;
   head_rotation: Quat;
   fallback_used: boolean;
+  /** Classification fallback and visibility are independent. */
+  visibility: AimVisibility;
 }
 
 /** A clip queued behind the currently-playing head clip. */
@@ -219,6 +247,7 @@ export interface RayCastRequest {
   end: Vec3;
   collision_groups?: string[];
   max_distance?: number;
+  ignore_sensors?: boolean;
 }
 
 export interface RayCastResult {
@@ -228,6 +257,8 @@ export interface RayCastResult {
   distance: number | null;
   entity_id: number | null;
   entity_name: string | null;
+  /** Optional when connected to runtimes predating blocker-body reporting. */
+  body_id?: number | null;
   collision_group: string | null;
   is_sensor: boolean;
 }

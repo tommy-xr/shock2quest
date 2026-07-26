@@ -859,6 +859,7 @@ fn process_command(
                     groups: request
                         .collision_groups
                         .unwrap_or_else(|| vec!["entity".to_string(), "level".to_string()]),
+                    ignore_sensors: request.ignore_sensors.unwrap_or(false),
                 };
 
                 // Perform the raycast
@@ -872,6 +873,7 @@ fn process_command(
                     distance: hit.distance,
                     entity_id: hit.entity_id,
                     entity_name: hit.entity_name,
+                    body_id: hit.body_id,
                     collision_group: hit.collision_group,
                     is_sensor: hit.is_sensor,
                 }
@@ -884,6 +886,7 @@ fn process_command(
                     distance: None,
                     entity_id: None,
                     entity_name: None,
+                    body_id: None,
                     collision_group: None,
                     is_sensor: false,
                 }
@@ -2783,6 +2786,7 @@ async fn perform_raycast(
             distance: None,
             entity_id: None,
             entity_name: None,
+            body_id: None,
             collision_group: None,
             is_sensor: false,
         });
@@ -2800,6 +2804,7 @@ async fn perform_raycast(
                 distance: None,
                 entity_id: None,
                 entity_name: None,
+                body_id: None,
                 collision_group: None,
                 is_sensor: false,
             })

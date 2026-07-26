@@ -72,10 +72,15 @@ test(
     );
     assert.ok(classifications.has("limb"), "restored creature should expose limb proxies");
 
-    const aim = await game.player.aimAt(restoredMonster, { hitbox: "torso" });
+    const aim = await game.player.aimAt(restoredMonster, {
+      hitbox: "torso",
+      visibility: "required",
+    });
     assert.equal(aim.entity_id, restoredMonster.id);
     assert.equal(aim.classification, "torso");
     assert.equal(aim.fallback_used, false);
+    assert.equal(aim.visibility.state, "visible");
+    assert.equal(aim.visibility.origin, "view");
     await game.step({ frames: 2 });
 
     await game.input.set("right_hand.trigger_value", 1);
