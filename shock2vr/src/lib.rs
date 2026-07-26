@@ -70,7 +70,8 @@ pub fn player_eye_height_for(crouched: bool) -> f32 {
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
+    io,
     path::Path,
     rc::Rc,
     sync::Arc,
@@ -107,6 +108,11 @@ use crate::{
     scripts::Effect,
 };
 use zip_asset_path::ZipAssetPath;
+
+fn read_save_file(path: &Path) -> io::Result<SaveData> {
+    let mut file = File::open(path)?;
+    Ok(SaveData::read(&mut file))
+}
 
 /// Whether `data_root` is a 25th Anniversary Edition install rather than a
 /// classic one. The remaster ships its data inside `sshock2.kpf`; a classic
@@ -768,14 +774,11 @@ impl Game {
     /// restoring the active mission, player position/rotation, quest bits, held
     /// items, and exact current/maximum player vitals. The switch is synchronous
     /// (no loading-screen deferral), so the returned scene name already reflects
-    /// the restored mission. The caller must ensure the file exists - the load
-    /// path panics on a missing file.
-    pub fn load_game(&mut self, file: String) -> String {
+    /// the restored mission. A missing save leaves the active game unchanged.
+    pub fn load_game(&mut self, file: String) -> io::Result<String> {
         let path = save_file_path(&file);
-        self.handle_global_effect(GlobalEffect::Load {
-            file_name: path.to_string_lossy().into_owned(),
-        });
-        self.scene_name().to_string()
+        self.load_from_file(path.to_string_lossy().into_owned())?;
+        Ok(self.scene_name().to_string())
     }
 
     /// Get access to the debug scene interface if available
@@ -1123,9 +1126,8 @@ impl Game {
         save_data.write(&mut zip_file);
     }
 
-    fn load_from_file(&mut self, file_name: String) {
-        let mut file = OpenOptions::new().read(true).open(file_name).unwrap();
-        let save_data = SaveData::read(&mut file);
+    fn load_from_file(&mut self, file_name: String) -> io::Result<()> {
+        let save_data = read_save_file(Path::new(&file_name))?;
         let was_crouched = save_data.global_data.is_crouched;
         let (mut mission, level_map) = Self::load_from_save_data(
             save_data,
@@ -1143,6 +1145,7 @@ impl Game {
         }
         self.active_game_scene = Box::new(mission);
         self.mission_to_save_data = level_map;
+        Ok(())
     }
 
     fn load_from_save_data(
@@ -1213,7 +1216,11 @@ impl Game {
     fn handle_global_effect(&mut self, global_effect: GlobalEffect) {
         match global_effect {
             GlobalEffect::Save { file_name } => self.save_to_file(file_name),
-            GlobalEffect::Load { file_name } => self.load_from_file(file_name),
+            GlobalEffect::Load { file_name } => {
+                if let Err(error) = self.load_from_file(file_name.clone()) {
+                    warn!("Unable to load save '{}': {}", file_name, error);
+                }
+            }
             GlobalEffect::TransitionLevel {
                 level_file,
                 loc,
@@ -1409,8 +1416,9 @@ impl Game {
 }
 
 #[cfg(test)]
-mod high_detail_flag_tests {
+mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn features(list: &[&str]) -> HashSet<String> {
         list.iter().map(|s| s.to_string()).collect()
@@ -1445,5 +1453,18 @@ mod high_detail_flag_tests {
             "high_detail_meshes",
             "no_high_detail_meshes"
         ])));
+    }
+
+    #[test]
+    fn missing_save_file_returns_an_error_instead_of_panicking() {
+        let missing = std::env::temp_dir().join(PathBuf::from(format!(
+            "shock2vr-missing-save-{}-{}.sav",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        )));
+
+        let result = read_save_file(&missing);
+
+        assert!(result.is_err());
     }
 }
