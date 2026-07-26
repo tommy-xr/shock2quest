@@ -1007,12 +1007,21 @@ fn process_command(
                 game.load_game(file.clone())
             }));
             let result = match outcome {
-                Ok(mission) => commands::SaveLoadResult {
+                Ok(Ok(mission)) => commands::SaveLoadResult {
                     success: true,
                     message: format!("Loaded '{}' ({})", file, mission),
                     file,
                     mission,
                 },
+                Ok(Err(error)) => {
+                    tracing::error!("Failed to load '{}': {}", file, error);
+                    commands::SaveLoadResult {
+                        success: false,
+                        message: format!("Failed to load '{}': {}", file, error),
+                        file,
+                        mission: String::new(),
+                    }
+                }
                 Err(_) => {
                     tracing::error!("Load of '{}' panicked (caught to keep runtime alive)", file);
                     commands::SaveLoadResult {
