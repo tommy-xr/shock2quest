@@ -5,7 +5,9 @@ use engine::game_log;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, World};
 
-use crate::runtime_props::{RuntimePropDeathPose, RuntimePropSelectedAmmo};
+use crate::runtime_props::{
+    RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropSelectedAmmo,
+};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct EntitySaveData {
@@ -26,6 +28,10 @@ pub struct EntitySaveData {
     /// the Dark property registry.
     #[serde(default)]
     pub selected_ammo: HashMap<u64 /* entity id */, usize>,
+    /// Stable gamesys archetype for entities whose `PropTemplateId` is a
+    /// positive, mission-local object ID.
+    #[serde(default)]
+    pub canonical_template_ids: HashMap<u64 /* entity id */, i32>,
 }
 
 impl EntitySaveData {
@@ -37,6 +43,7 @@ impl EntitySaveData {
             links: HashMap::new(),
             death_poses: HashMap::new(),
             selected_ammo: HashMap::new(),
+            canonical_template_ids: HashMap::new(),
         }
     }
     pub fn instantiate(
@@ -90,6 +97,15 @@ impl EntitySaveData {
             let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
                 world.add_component(*new_entity_id, RuntimePropSelectedAmmo(*selected_ammo));
+            }
+        }
+        for (old_entity_id, canonical_template_id) in &self.canonical_template_ids {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(
+                    *new_entity_id,
+                    RuntimePropCanonicalTemplateId(*canonical_template_id),
+                );
             }
         }
         (template_to_entity_id, old_entity_id_to_new_entity_id)
@@ -164,5 +180,24 @@ mod tests {
         .unwrap();
 
         assert!(data.selected_ammo.is_empty());
+        assert!(data.canonical_template_ids.is_empty());
+    }
+
+    #[test]
+    fn instantiate_restores_canonical_template_on_the_remapped_entity() {
+        let old_entity = EntityId::new_from_index_and_gen(9, 2);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(old_entity.inner());
+        data.canonical_template_ids
+            .insert(old_entity.inner(), -1358);
+        let mut world = World::new();
+
+        let (_, entity_map) = data.instantiate(&mut world);
+
+        let new_entity = entity_map[&old_entity];
+        let canonical = world
+            .borrow::<View<RuntimePropCanonicalTemplateId>>()
+            .unwrap();
+        assert_eq!(canonical.get(new_entity).unwrap().0, -1358);
     }
 }
