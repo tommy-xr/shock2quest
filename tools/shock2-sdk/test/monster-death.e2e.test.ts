@@ -102,14 +102,21 @@ test(
     // wander?" measurement below - which is what made this test flaky, drifting
     // 0.55-0.75 units against a 0.5 threshold. What the assertion is about is
     // the corpse WANDERING, not how far it slid while coming to rest.
-    let deadPos = (await game.entities.detail(monster.id)).position;
+    // Rest is a physics fact, so ask the body rather than inferring it from
+    // position samples: a single quiet 10-frame window also occurs during a
+    // momentary pause mid-settle, and taking the baseline there left the rest
+    // of the slide inside the measurement below (observed drifting 0.74 against
+    // a 0.5 threshold). Rapier's sleep state is the signal the settle actually
+    // finished. If it never sleeps, fall through and let the assertion report
+    // the real motion rather than masking it.
     for (let i = 0; i < 60; i++) {
+      const [body] = (await game.physics.bodies({ entityId: monster.id })).bodies;
+      if (body?.is_sleeping || (body && Math.hypot(...body.velocity) < 0.01)) {
+        break;
+      }
       await game.step({ frames: 10 });
-      const next = (await game.entities.detail(monster.id)).position;
-      const moved = Math.hypot(next[0] - deadPos[0], next[2] - deadPos[2]);
-      deadPos = next;
-      if (moved < 0.01) break;
     }
+    const deadPos = (await game.entities.detail(monster.id)).position;
     for (let i = 0; i < 5; i++) {
       await game.step({ frames: 120 });
       detail = await game.entities.detail(monster.id);
