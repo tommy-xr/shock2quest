@@ -79,5 +79,150 @@ test("aimAt gracefully falls back when a connected runtime omits aim_points", as
   assert.equal(aim.classification, "center");
   assert.equal(aim.fallback_used, true);
   assert.deepEqual(aim.world_point, detail.position);
-  assert.equal(writes[0]?.path, "/v1/control/input");
+  assert.equal(writes.at(-1)?.path, "/v1/control/input");
+});
+
+test("aimAt uses a visible non-creature selectable surface before its center", async () => {
+  const detail = {
+    entity_id: 470,
+    name: "Airlock Door",
+    template_id: 470,
+    position: [30, -7, 18],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [30, -8.6, 13],
+      rotation: [0, 0, 0, 1],
+    },
+  } as FrameSnapshot;
+  const writes: Array<{ path: string; body: unknown }> = [];
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/470") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string, body: unknown) => {
+      writes.push({ path, body });
+      if (path === "/v1/physics/raycast") {
+        return {
+          hit: true,
+          hit_point: [30, -7, 17.25],
+          hit_normal: [0, 0, -1],
+          distance: 4.25,
+          entity_id: 470,
+          entity_name: "Airlock Door",
+          collision_group: "selectable",
+          is_sensor: false,
+        };
+      }
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  const aim = await player.aimAt(470);
+
+  assert.equal(aim.classification, "surface");
+  assert.deepEqual(aim.world_point, [30, -7, 17.25]);
+  assert.equal(aim.fallback_used, true);
+  assert.equal(writes[0]?.path, "/v1/physics/raycast");
+  assert.deepEqual(
+    (writes[0]?.body as { collision_groups: string[] }).collision_groups,
+    ["entity", "selectable", "world", "ui", "raycast"],
+  );
+  assert.equal(writes[1]?.path, "/v1/control/input");
+});
+
+test("aimAt reports center fallback when another entity occludes the target surface", async () => {
+  const detail = {
+    entity_id: 185,
+    name: "Level Transition",
+    template_id: 185,
+    position: [31.5, -7.9, 17.8],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [32.34, -8.596, 13.49],
+      rotation: [0, 0, 0, 1],
+    },
+  } as FrameSnapshot;
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/185") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string) => {
+      if (path === "/v1/physics/raycast") {
+        return {
+          hit: true,
+          hit_point: [31.8, -7.8, 15.2],
+          hit_normal: [0, 0, -1],
+          distance: 1.8,
+          entity_id: 470,
+          entity_name: "Airlock Door",
+          collision_group: "entity",
+          is_sensor: false,
+        };
+      }
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  const aim = await player.aimAt(185);
+
+  assert.equal(aim.classification, "center");
+  assert.deepEqual(aim.world_point, detail.position);
+  assert.equal(aim.fallback_used, true);
+});
+
+test("aimAt center remains an explicit origin target without a surface query", async () => {
+  const detail = {
+    entity_id: 470,
+    name: "Airlock Door",
+    template_id: 470,
+    position: [30, -7, 18],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [30, -8.6, 13],
+      rotation: [0, 0, 0, 1],
+    },
+  } as FrameSnapshot;
+  const writes: string[] = [];
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/470") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string) => {
+      writes.push(path);
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  const aim = await player.aimAt(470, { hitbox: "center" });
+
+  assert.equal(aim.classification, "center");
+  assert.equal(aim.fallback_used, false);
+  assert.deepEqual(writes, ["/v1/control/input"]);
 });

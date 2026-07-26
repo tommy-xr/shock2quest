@@ -85,8 +85,11 @@ export class PlayerApi {
   /**
    * Aim the production flat camera, interaction ray, and weapon at an entity.
    *
-   * Creature targets use their live classified damage proxies. Other entities,
-   * or unavailable classifications, gracefully fall back to the entity center.
+   * Creature targets use their live classified damage proxies. Other entities
+   * first use the nearest visible selectable surface on the center ray.
+   * Occluded targets and unavailable classifications gracefully fall back to
+   * the entity center. Request `center` to aim at the origin explicitly.
+   *
    * This accounts for authored and save-restored pawn rotation; raw
    * `head.look` / `head.rotation` are pawn-local.
    */
@@ -120,12 +123,23 @@ export class PlayerApi {
         (point) =>
           point.classification === "limb" || point.classification === "extremity",
       );
-    } else if (requested === "center") {
+    } else if (requested === "center" || requested === "surface") {
       candidates = [];
     }
     candidates.sort((a, b) => distance(a.position) - distance(b.position));
     const selected = candidates[0];
-    const worldPoint = selected?.position ?? detail.position;
+    let surfacePoint: Vec3 | undefined;
+    if (selected === undefined && requested !== "center") {
+      const surface = await this.client.post<RayCastResult>("/v1/physics/raycast", {
+        start: eye,
+        end: detail.position,
+        collision_groups: ["entity", "selectable", "world", "ui", "raycast"],
+      });
+      if (surface?.entity_id === entityId && surface.hit_point !== null) {
+        surfacePoint = surface.hit_point;
+      }
+    }
+    const worldPoint = selected?.position ?? surfacePoint ?? detail.position;
     const headRotation = headRotationForWorldPoint(
       snapshot.player.position,
       snapshot.player.rotation,
@@ -142,10 +156,13 @@ export class PlayerApi {
       body_id: selected?.body_id ?? null,
       joint_id: selected?.joint_id ?? null,
       requested,
-      classification: selected?.classification ?? "center",
+      classification: selected?.classification ?? (surfacePoint ? "surface" : "center"),
       world_point: worldPoint,
       head_rotation: headRotation,
-      fallback_used: selected === undefined && requested !== "center",
+      fallback_used:
+        selected === undefined &&
+        requested !== "center" &&
+        (requested !== "surface" || surfacePoint === undefined),
     };
   }
 
