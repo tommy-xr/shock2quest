@@ -7,7 +7,11 @@ import { inflateRawSync } from "node:zlib";
 // pulling in a zip dependency.
 
 /** Resolve the game data root the way the runtime does: DARK_ASSET_PATH, else
- * the repo's Data/ folder relative to the SDK cwd. */
+ * the repo's Data/ folder relative to the SDK cwd.
+ *
+ * A classic install has a `res/` directory of `.crf` archives; a 25th
+ * Anniversary install keeps everything inside `sshock2.kpf` instead, so both
+ * sentinels count. */
 export function dataRoot(): string {
   const candidates = [
     process.env.DARK_ASSET_PATH,
@@ -15,11 +19,21 @@ export function dataRoot(): string {
     path.resolve(process.cwd(), "Data"),
   ].filter((p): p is string => !!p);
   for (const c of candidates) {
-    if (existsSync(path.join(c, "res"))) return c;
+    if (existsSync(path.join(c, "res")) || existsSync(path.join(c, "sshock2.kpf")))
+      return c;
   }
   throw new Error(
     `game data root not found (tried: ${candidates.join(", ")}) - set DARK_ASSET_PATH`,
   );
+}
+
+/** Whether the resolved data root keeps its resources in loose `.crf` archives.
+ *
+ * Assertions that read a `.crf` straight off disk can only run on that layout -
+ * on a 25th Anniversary install the same resources live inside KPF archives, so
+ * such assertions should be skipped rather than failed. */
+export function hasLooseCrfArchives(): boolean {
+  return existsSync(path.join(dataRoot(), "res", "iface.crf"));
 }
 
 /** Extract one entry (case-insensitive name match) from a .crf/zip archive. */

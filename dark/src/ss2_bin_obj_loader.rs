@@ -17,10 +17,10 @@ use engine::{
 };
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
+use tracing::{trace, warn};
 
 use crate::{
     SCALE_FACTOR,
-    importers::TEXTURE_IMPORTER,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
         self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_packed_normal,
@@ -52,7 +52,13 @@ pub struct Vhot {
 impl Vhot {
     pub fn read<T: Read + Seek>(reader: &mut T) -> Vhot {
         let vhot_type_num = read_u32(reader);
-        let vhot_type = VhotType::from_u32(vhot_type_num).unwrap();
+        // Vhot ids outside the set we model are harmless - nothing reads the type
+        // today - so treat them as Unknown rather than refusing the whole model.
+        // (SCP's escpod.bin uses ids 10 and 11.)
+        let vhot_type = VhotType::from_u32(vhot_type_num).unwrap_or_else(|| {
+            trace!("unrecognized vhot type {vhot_type_num}, treating as Unknown");
+            VhotType::Unknown
+        });
 
         let point = read_point3(reader) / SCALE_FACTOR;
         Vhot { vhot_type, point }
@@ -140,6 +146,7 @@ pub fn to_scene_objects(
         .into_iter()
         .filter_map(|(slot, verts)| {
             if verts.is_empty() {
+                warn!("no vertices produced for mesh slot {slot}; dropping it");
                 return None;
             }
 
@@ -151,9 +158,12 @@ pub fn to_scene_objects(
                 tex_path = "soft12 .pcx".to_owned();
             }
 
-            let maybe_texture = asset_cache.get_opt(&TEXTURE_IMPORTER, &tex_path);
+            let maybe_texture = crate::util::load_texture_with_fallback(asset_cache, &tex_path);
 
             if maybe_texture.is_none() {
+                // Dropping the slot here makes part (or all) of a prop silently
+                // vanish from the world, so it is worth surfacing.
+                warn!("no texture for material \"{tex_path}\"; dropping mesh slot {slot}");
                 return None;
             }
 
@@ -495,7 +505,10 @@ fn read_polygon<T: Read>(
         uvs = read_array_u16(reader, num_verts as u32);
     }
 
-    if version == 4 {
+    // v4 and later carry one trailing byte per polygon. (The 25th Anniversary
+    // Edition ships 13 LGMD v6 props; they use the same 1-byte tail as v4, so a
+    // `== 4` test here silently misaligns the whole polygon stream.)
+    if version >= 4 {
         let _unknown = read_u8(reader);
     }
 
@@ -608,23 +621,51 @@ fn read_extended_materials<T: Read + Seek>(
     reader: &mut T,
     version: u32,
 ) {
-    assert!(version > 3 && header.size_mat_extra >= 8);
+    // LGMD v3 has no extended-material chunk at all, so absence is legal rather
+    // than a bug - the `if` below already handles it. (SCP ships a v3 SHOVEL.BIN.)
     if version > 3 && header.size_mat_extra >= 8 {
         reader
             .seek(SeekFrom::Start((header.offset_mat_extra) as u64))
             .unwrap();
-        let remaining_size = (header.size_mat_extra - 8) as usize;
+        // `size_mat_extra` is the stride of ONE material's extra record, not the
+        // size of the whole chunk: each material contributes transparency +
+        // emissivity followed by `size_mat_extra - 8` bytes we don't model. Most
+        // of Dark's own art uses a stride of exactly 8, but SHTUP and SCP ship
+        // hundreds of models with a stride of 16 - reading those as one contiguous
+        // block gives every material after the first a garbage transparency, which
+        // renders the whole object invisible.
+        let per_material_padding = (header.size_mat_extra - 8) as usize;
 
-        let len = materials.len();
-        for i in 0..len {
-            let transparency = read_single(reader);
-            let emissivity = read_single(reader);
-            materials[i].transparency = transparency;
-            materials[i].emissivity = emissivity;
+        for material in materials.iter_mut() {
+            material.transparency = read_single(reader);
+            material.emissivity = read_single(reader);
+            if per_material_padding > 0 {
+                let _unk = read_bytes(reader, per_material_padding);
+            }
         }
 
-        if remaining_size > 0 {
-            let _unk = read_bytes(reader, remaining_size);
+        normalize_transparency_convention(materials);
+    }
+}
+
+/// Dark stores this field as *transparency* (0.0 = opaque). Models re-exported by
+/// the 25th Anniversary Edition mod layers (Nightdive, SHTUP, SCP) write 1.0 into
+/// the opaque slot instead, which reads as "completely invisible" under Dark's
+/// convention - the reason those props disappear from the world.
+///
+/// Only the opaque value was remapped: fractional transparencies survive the
+/// re-export unchanged. Comparing every re-exported model against its vanilla
+/// counterpart, clamping 1.0 to 0.0 reproduces the original values for 529 of
+/// them and is never worse than inverting the whole model, which corrupts the 20
+/// that mix 1.0 with a real transparency (`shutscrn.bin` is `[1.0, 0.9, 0.4]`
+/// against vanilla's `0.9` and `0.4`; inverting would yield `0.1` and `0.6`).
+///
+/// Safe for the original game data, which never stores 1.0 in this field -
+/// checked across all 1434 models that carry an extended-material chunk.
+fn normalize_transparency_convention(materials: &mut [SystemShock2MeshMaterial]) {
+    for material in materials.iter_mut() {
+        if (material.transparency - 1.0).abs() < f32::EPSILON {
+            material.transparency = 0.0;
         }
     }
 }
@@ -842,4 +883,131 @@ fn convert_skinned_vertices_to_static_vertices(
     }
 
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn material(name: &str) -> SystemShock2MeshMaterial {
+        SystemShock2MeshMaterial {
+            name: name.to_owned(),
+            material_type: 0,
+            slot_num: 0,
+            ipal_index: 0,
+            color: vec4(0.0, 0.0, 0.0, 0.0),
+            handle: 0,
+            uv_scale: 0.0,
+            transparency: 0.0,
+            emissivity: 0.0,
+        }
+    }
+
+    /// Header with just the fields `read_extended_materials` reads.
+    fn header_with_mat_extra(size_mat_extra: u32) -> ObjBinHeader {
+        ObjBinHeader {
+            bbox_min: point3(0.0, 0.0, 0.0),
+            bbox_max: point3(0.0, 0.0, 0.0),
+            obj_name: String::new(),
+            num_mats: 0,
+            num_objs: 0,
+            num_polygons: 0,
+            num_verts: 0,
+            num_vhots: 0,
+            offset_mats: 0,
+            offset_mat_extra: 0,
+            offset_objs: 0,
+            mat_flags: 0,
+            size_mat_extra,
+            offset_polygons: 0,
+            offset_verts: 0,
+            offset_vhots: 0,
+            offset_uvs: 0,
+            offset_lights: 0,
+            offset_normals: 0,
+        }
+    }
+
+    fn extra_chunk(records: &[(f32, f32)], stride: usize) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for (trans, illum) in records {
+            buf.extend_from_slice(&trans.to_le_bytes());
+            buf.extend_from_slice(&illum.to_le_bytes());
+            buf.extend(std::iter::repeat(0u8).take(stride - 8));
+        }
+        buf
+    }
+
+    #[test]
+    fn extended_materials_stride_of_8_reads_every_material() {
+        let mut materials = vec![material("a"), material("b")];
+        let buf = extra_chunk(&[(0.25, 0.5), (0.75, 0.0)], 8);
+        read_extended_materials(
+            &header_with_mat_extra(8),
+            &mut materials,
+            &mut Cursor::new(buf),
+            4,
+        );
+        assert_eq!(materials[0].transparency, 0.25);
+        assert_eq!(materials[0].emissivity, 0.5);
+        assert_eq!(materials[1].transparency, 0.75);
+    }
+
+    /// SHTUP and SCP ship models with a 16-byte extra record. Treating the chunk
+    /// as one contiguous block of 8-byte records misaligns every material after
+    /// the first, which is what made those props render invisible.
+    #[test]
+    fn extended_materials_honors_a_stride_larger_than_8() {
+        let mut materials = vec![material("a"), material("b"), material("c")];
+        let buf = extra_chunk(&[(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)], 16);
+        read_extended_materials(
+            &header_with_mat_extra(16),
+            &mut materials,
+            &mut Cursor::new(buf),
+            4,
+        );
+        assert_eq!(materials[0].transparency, 0.1);
+        assert_eq!(materials[1].transparency, 0.3);
+        assert_eq!(materials[2].transparency, 0.5);
+        assert_eq!(materials[2].emissivity, 0.6);
+    }
+
+    #[test]
+    fn transparency_left_alone_for_original_dark_models() {
+        // Dark's own art never stores 1.0; 0.0 means opaque and must stay 0.0.
+        let mut materials = vec![material("a"), material("b")];
+        materials[0].transparency = 0.0;
+        materials[1].transparency = 0.9;
+        normalize_transparency_convention(&mut materials);
+        assert_eq!(materials[0].transparency, 0.0);
+        assert_eq!(materials[1].transparency, 0.9);
+    }
+
+    #[test]
+    fn transparency_of_one_becomes_opaque() {
+        // 1.0 is the re-exported models' "opaque"; without this they render
+        // fully invisible.
+        let mut materials = vec![material("frame"), material("glass")];
+        materials[0].transparency = 1.0;
+        materials[1].transparency = 0.5;
+        normalize_transparency_convention(&mut materials);
+        assert_eq!(materials[0].transparency, 0.0);
+        assert_eq!(materials[1].transparency, 0.5);
+    }
+
+    /// Only the opaque value was remapped by the re-export, so a real
+    /// transparency sitting alongside a 1.0 must survive untouched. Inverting the
+    /// whole model instead would turn 0.9 into 0.1 (`shutscrn.bin` and 19 others).
+    #[test]
+    fn transparency_preserves_real_values_alongside_an_opaque_material() {
+        let mut materials = vec![material("a"), material("b"), material("c")];
+        materials[0].transparency = 1.0;
+        materials[1].transparency = 0.9;
+        materials[2].transparency = 0.4;
+        normalize_transparency_convention(&mut materials);
+        assert_eq!(materials[0].transparency, 0.0);
+        assert_eq!(materials[1].transparency, 0.9);
+        assert_eq!(materials[2].transparency, 0.4);
+    }
 }

@@ -13,6 +13,7 @@ pub mod name_map;
 pub mod ss2_bin_ai_loader;
 pub mod ss2_bin_header;
 pub mod ss2_bin_obj_loader;
+pub mod ss2_bin_pmnm;
 pub mod ss2_cal_loader;
 pub mod ss2_chunk_file_reader;
 pub mod ss2_common;

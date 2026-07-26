@@ -1,3 +1,4 @@
+use std::io::{Read, Seek};
 use std::{path::PathBuf, rc::Rc};
 
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
@@ -17,7 +18,13 @@ use super::skeleton_importer::SKELETON_IMPORTER;
 // Model importer
 
 pub enum SystemShockContentModel {
-    Mesh(SystemShock2AIMesh, Rc<Skeleton>),
+    /// The optional third field is the 25AE high-detail `PMNM` chunk appended to
+    /// the file, when present and enabled.
+    Mesh(
+        SystemShock2AIMesh,
+        Rc<Skeleton>,
+        Option<crate::ss2_bin_pmnm::PmnmMesh>,
+    ),
     Obj(SystemShock2ObjectMesh),
 }
 
@@ -37,7 +44,27 @@ fn load_model(
             pathbuf.set_extension("cal");
             let cal_path = pathbuf.to_string_lossy();
             let skeleton = _assets.get(&SKELETON_IMPORTER, &cal_path);
-            SystemShockContentModel::Mesh(ss2_bin_ai_loader::read(reader, &common_header), skeleton)
+            let ai_mesh = ss2_bin_ai_loader::read(reader, &common_header);
+
+            // The high-detail chunk is appended past the LGMM data, so it needs
+            // the whole file rather than the streaming reader. The reader is
+            // sitting at the end of the LGMM data now, which is where the scan
+            // should start - searching from 0 would also search the vertex and
+            // index bytes.
+            let pmnm = if ss2_bin_ai_loader::pmnm_enabled() {
+                let lgmm_end = reader.stream_position().unwrap_or(0) as usize;
+                let mut buf = Vec::new();
+                reader
+                    .seek(std::io::SeekFrom::Start(0))
+                    .and_then(|_| reader.read_to_end(&mut buf))
+                    .ok()
+                    .and_then(|_| crate::ss2_bin_pmnm::find_chunk(&buf, lgmm_end))
+                    .and_then(|base| crate::ss2_bin_pmnm::read(&buf, base))
+            } else {
+                None
+            };
+
+            SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm)
         }
     }
 }
@@ -49,8 +76,8 @@ fn process_model(
 ) -> Model {
     match mesh {
         SystemShockContentModel::Obj(obj) => Model::from_obj_bin(obj, asset_cache),
-        SystemShockContentModel::Mesh(mesh, skeleton) => {
-            Model::from_ai_bin(mesh, skeleton, asset_cache)
+        SystemShockContentModel::Mesh(mesh, skeleton, pmnm) => {
+            Model::from_ai_bin(mesh, skeleton, pmnm, asset_cache)
         }
     }
 }

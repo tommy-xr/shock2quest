@@ -70,8 +70,8 @@ pub fn player_eye_height_for(crouched: bool) -> f32 {
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::{File, OpenOptions},
-    io::BufReader,
+    fs::OpenOptions,
+    path::Path,
     rc::Rc,
     sync::Arc,
     thread,
@@ -107,6 +107,142 @@ use crate::{
     scripts::Effect,
 };
 use zip_asset_path::ZipAssetPath;
+
+/// Whether `data_root` is a 25th Anniversary Edition install rather than a
+/// classic one. The remaster ships its data inside `sshock2.kpf`; a classic
+/// install has loose `.crf` archives instead.
+pub fn is_25th_anniversary_install() -> bool {
+    Path::new(&resource_path("sshock2.kpf")).exists()
+}
+
+/// Resource families, in the order a lookup should consult them.
+///
+/// This is the same precedence the classic `.crf` mount list uses: `obj` first
+/// so a model material resolves to a model texture, `iface` and friends after.
+const RESOURCE_FAMILIES: &[&str] = &[
+    "obj", "bitmap", "book", "fam", "iface", "intrface", "mesh", "motions", "objicon", "snd",
+    "snd2", "song", "strings",
+];
+
+/// The 25AE mod stack, highest priority first, exactly as
+/// `base.kpf:defaults/cam_mod.ini` declares it.
+///
+/// `sshock2ee` (the Nightdive layer) is deliberately excluded for `strings`:
+/// 41 of its 42 string tables are `$`-token stubs that KEX resolves through
+/// `localization/loc_english.txt`, which we do not implement - honouring them
+/// renders raw keys like `$PSI6` in place of real text.
+const MOD_ARCHIVES: &[&str] = &[
+    "mods/sshock2ee.kpf",
+    "mods/400.kpf",
+    "mods/shtup.kpf",
+    "mods/scp.kpf",
+    "mods/patch_ext.kpf",
+];
+
+/// Whether a mod layer is allowed to override this resource family.
+///
+/// Two deliberate carve-outs, both of which would otherwise be *regressions* on
+/// the modded path rather than upgrades:
+///
+/// - `strings` from the Nightdive layer: 41 of its 42 tables are `$`-token stubs
+///   that KEX resolves through `localization/loc_english.txt`, which we do not
+///   implement, so honouring them renders raw keys like `$PSI6`.
+/// - `fam` (terrain) from any layer: the upgraded terrain textures are
+///   higher-resolution than the originals and carry `terrain_scale` in their
+///   `.mtl`, which we do not read yet. Taking the texture without the scale
+///   tiles the world wrong. Lift this once the `.mtl` scale subset lands.
+fn mod_layer_may_override(family: &str, archive: &str) -> bool {
+    match family {
+        "strings" => !archive.contains("sshock2ee"),
+        "fam" => false,
+        _ => true,
+    }
+}
+
+/// Mount one resource family, matching the options its `.crf` counterpart uses.
+///
+/// `strings` must not collapse basenames (translated tables share them), and
+/// `iface` additionally registers an `iface/`-qualified key because it collides
+/// with `obj`/`bitmap` on seven names. Getting these wrong is silent: the wrong
+/// string table or the wrong texture simply resolves first.
+fn mount_family(
+    archive: String,
+    prefix: &str,
+    family: &str,
+) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
+    match family {
+        "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
+        "iface" => ZipAssetPath::with_prefix_opts(archive, prefix, true, Some("iface")),
+        _ => ZipAssetPath::with_prefix(archive, prefix),
+    }
+}
+
+fn build_25th_anniversary_mounts(
+    bundle_storage: Arc<dyn Storage>,
+) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
+    let mut mounts: Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> = Vec::new();
+
+    for family in RESOURCE_FAMILIES {
+        for archive in MOD_ARCHIVES {
+            if !mod_layer_may_override(family, archive) {
+                continue;
+            }
+            let path = resource_path(archive);
+            if Path::new(&path).exists() {
+                mounts.push(mount_family(path, &format!("{family}/"), family));
+            }
+        }
+        // The base archive keeps the original `data/res/<family>/` layout.
+        mounts.push(mount_family(
+            resource_path("sshock2.kpf"),
+            &format!("data/res/{family}/"),
+            family,
+        ));
+    }
+
+    // `motiondb.bin` moved from the data root to `res/mschema/`, and the
+    // missions + gamesys live under `data/`.
+    mounts.push(ZipAssetPath::with_prefix(
+        resource_path("sshock2.kpf"),
+        "data/res/mschema/",
+    ));
+    mounts.push(ZipAssetPath::with_prefix(
+        resource_path("sshock2.kpf"),
+        "data/",
+    ));
+
+    mounts.push(BundleAssetPath::new("".to_owned(), bundle_storage));
+    mounts.push(AssetPath::folder("".to_owned()));
+    mounts
+}
+
+/// Whether a mission file is available to load, in whichever layout is in use.
+///
+/// A classic install has the `.mis` on disk; a 25AE install has it inside
+/// `sshock2.kpf` under `data/`. Callers that want to validate a mission name
+/// before asking the game to load it (the debug runtime's `transition-level`
+/// endpoint, for one) must not just stat the filesystem.
+pub fn mission_exists(mission_file: &str) -> bool {
+    if Path::new(&resource_path(mission_file)).exists() {
+        return true;
+    }
+    if !is_25th_anniversary_install() {
+        return false;
+    }
+    let wanted = format!("data/{}", mission_file.to_ascii_lowercase());
+    let Ok(file) = std::fs::File::open(resource_path("sshock2.kpf")) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
+        return false;
+    };
+    (0..archive.len()).any(|i| {
+        archive
+            .by_index(i)
+            .map(|e| e.name().to_ascii_lowercase() == wanted)
+            .unwrap_or(false)
+    })
+}
 
 pub fn resource_path(str: &str) -> String {
     paths::data_root().join(str).to_string_lossy().into_owned()
@@ -665,66 +801,73 @@ impl Game {
     }
 
     pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> Game {
-        let asset_paths = AssetPath::combine(vec![
-            AssetPath::folder(resource_path("res/mesh")),
-            // AssetPath::folder(resource_path("res/mesh/txt16")),
-            AssetPath::folder(resource_path("res/obj")),
-            // AssetPath::folder(resource_path("res/obj/txt16")),
-            ZipAssetPath::new(resource_path("res/obj.crf")),
-            ZipAssetPath::new(resource_path("res/bitmap.crf")),
-            // Log/email sender portraits + deck icons (the reader panel art).
-            ZipAssetPath::new(resource_path("res/book.crf")),
-            ZipAssetPath::new(resource_path("res/fam.crf")),
-            // Also mounted under the "iface/" namespace: iface.crf shares seven
-            // basenames with the obj/bitmap mounts above (access/block/log/
-            // plant1/repair/stats.pcx + palette1.pal), and first-mount-wins
-            // means those plain names must keep resolving to the model
-            // textures. GUI code that wants the interface art requests the
-            // archive-qualified "iface/<name>" key instead.
-            ZipAssetPath::with_namespace(resource_path("res/iface.crf"), "iface"),
-            ZipAssetPath::new(resource_path("res/intrface.crf")),
-            ZipAssetPath::new(resource_path("res/mesh.crf")),
-            ZipAssetPath::new(resource_path("res/motions.crf")),
-            ZipAssetPath::new(resource_path("res/objicon.crf")),
-            ZipAssetPath::new(resource_path("res/snd.crf")),
-            ZipAssetPath::new(resource_path("res/snd2.crf")),
-            ZipAssetPath::new(resource_path("res/song.crf")),
-            ZipAssetPath::new2(resource_path("res/strings.crf"), false),
-            // Bundle assets
-            BundleAssetPath::new("".to_owned(), bundle_storage),
-            // Textures
-            // AssetPath::folder("res/bitmap".to_owned()),
-            // AssetPath::folder("res/bitmap/txt16".to_owned()),
-            //AssetPath::folder("res/fam".to_owned()),
-            // Models
-            // AssetPath::folder("res/mesh/txt16".to_owned()),
-            // AssetPath::folder("res/obj".to_owned()),
-            // AssetPath::folder("res/mesh".to_owned()),
-            // Animations
-            //AssetPath::folder("res/motions".to_owned()),
-            // Motion db
-            AssetPath::folder("".to_owned()),
-            // Audio
-            // AssetPath::folder("res/snd".to_owned()),
-            // AssetPath::folder("res/snd/amb".to_owned()),
-            // AssetPath::folder("res/snd/Assassin".to_owned()),
-            // AssetPath::folder("res/snd/BBetty".to_owned()),
-            // AssetPath::folder("res/snd/Devices".to_owned()),
-            // AssetPath::folder("res/snd/GRUB".to_owned()),
-            // AssetPath::folder("res/snd/HITS".to_owned()),
-            // AssetPath::folder("res/snd/MaintBot/english".to_owned()),
-            // AssetPath::folder("res/snd/Midwife/english".to_owned()),
-            // AssetPath::folder("res/snd/OGRUNT/english".to_owned()),
-            // AssetPath::folder("res/snd/Overlord/english".to_owned()),
-            // AssetPath::folder("res/snd/SONGS".to_owned()),
-            // AssetPath::folder("res/snd/TurrCam".to_owned()),
-            // AssetPath::folder("res/snd/Weapons".to_owned()),
-            // AssetPath::folder("res/snd2/vBriefs/ENGLISH".to_owned()),
-            // AssetPath::folder("res/snd2/vCs/ENGLISH".to_owned()),
-            // AssetPath::folder("res/snd2/vEmails/english".to_owned()),
-            // AssetPath::folder("res/snd2/vLogs/english".to_owned()),
-            // AssetPath::folder("res/snd2/vTriggers/english".to_owned()),
-        ]);
+        // A 25th Anniversary install keeps everything inside KPF archives, so it
+        // needs a different mount list from a classic install's loose `.crf`s.
+        let asset_paths = if is_25th_anniversary_install() {
+            info!("25th Anniversary Edition install detected; mounting KPF archives");
+            AssetPath::combine(build_25th_anniversary_mounts(bundle_storage.clone()))
+        } else {
+            AssetPath::combine(vec![
+                AssetPath::folder(resource_path("res/mesh")),
+                // AssetPath::folder(resource_path("res/mesh/txt16")),
+                AssetPath::folder(resource_path("res/obj")),
+                // AssetPath::folder(resource_path("res/obj/txt16")),
+                ZipAssetPath::new(resource_path("res/obj.crf")),
+                ZipAssetPath::new(resource_path("res/bitmap.crf")),
+                // Log/email sender portraits + deck icons (the reader panel art).
+                ZipAssetPath::new(resource_path("res/book.crf")),
+                ZipAssetPath::new(resource_path("res/fam.crf")),
+                // Also mounted under the "iface/" namespace: iface.crf shares seven
+                // basenames with the obj/bitmap mounts above (access/block/log/
+                // plant1/repair/stats.pcx + palette1.pal), and first-mount-wins
+                // means those plain names must keep resolving to the model
+                // textures. GUI code that wants the interface art requests the
+                // archive-qualified "iface/<name>" key instead.
+                ZipAssetPath::with_namespace(resource_path("res/iface.crf"), "iface"),
+                ZipAssetPath::new(resource_path("res/intrface.crf")),
+                ZipAssetPath::new(resource_path("res/mesh.crf")),
+                ZipAssetPath::new(resource_path("res/motions.crf")),
+                ZipAssetPath::new(resource_path("res/objicon.crf")),
+                ZipAssetPath::new(resource_path("res/snd.crf")),
+                ZipAssetPath::new(resource_path("res/snd2.crf")),
+                ZipAssetPath::new(resource_path("res/song.crf")),
+                ZipAssetPath::new2(resource_path("res/strings.crf"), false),
+                // Bundle assets
+                BundleAssetPath::new("".to_owned(), bundle_storage),
+                // Textures
+                // AssetPath::folder("res/bitmap".to_owned()),
+                // AssetPath::folder("res/bitmap/txt16".to_owned()),
+                //AssetPath::folder("res/fam".to_owned()),
+                // Models
+                // AssetPath::folder("res/mesh/txt16".to_owned()),
+                // AssetPath::folder("res/obj".to_owned()),
+                // AssetPath::folder("res/mesh".to_owned()),
+                // Animations
+                //AssetPath::folder("res/motions".to_owned()),
+                // Motion db
+                AssetPath::folder("".to_owned()),
+                // Audio
+                // AssetPath::folder("res/snd".to_owned()),
+                // AssetPath::folder("res/snd/amb".to_owned()),
+                // AssetPath::folder("res/snd/Assassin".to_owned()),
+                // AssetPath::folder("res/snd/BBetty".to_owned()),
+                // AssetPath::folder("res/snd/Devices".to_owned()),
+                // AssetPath::folder("res/snd/GRUB".to_owned()),
+                // AssetPath::folder("res/snd/HITS".to_owned()),
+                // AssetPath::folder("res/snd/MaintBot/english".to_owned()),
+                // AssetPath::folder("res/snd/Midwife/english".to_owned()),
+                // AssetPath::folder("res/snd/OGRUNT/english".to_owned()),
+                // AssetPath::folder("res/snd/Overlord/english".to_owned()),
+                // AssetPath::folder("res/snd/SONGS".to_owned()),
+                // AssetPath::folder("res/snd/TurrCam".to_owned()),
+                // AssetPath::folder("res/snd/Weapons".to_owned()),
+                // AssetPath::folder("res/snd2/vBriefs/ENGLISH".to_owned()),
+                // AssetPath::folder("res/snd2/vCs/ENGLISH".to_owned()),
+                // AssetPath::folder("res/snd2/vEmails/english".to_owned()),
+                // AssetPath::folder("res/snd2/vLogs/english".to_owned()),
+                // AssetPath::folder("res/snd2/vTriggers/english".to_owned()),
+            ])
+        };
         // Global items
         let base_path = paths::data_root().to_string_lossy().into_owned();
         let mut asset_cache = AssetCache::new(base_path, asset_paths);
@@ -735,8 +878,11 @@ impl Game {
 
         let (properties, links, links_with_data) = dark::properties::get();
 
-        let game_file = File::open(resource_path("shock2.gam")).unwrap();
-        let mut game_reader = BufReader::new(game_file);
+        // Through the asset paths, like the missions and motiondb: on a 25AE
+        // install the gamesys lives inside `sshock2.kpf`.
+        let game_reader = asset_cache
+            .get_raw_reader("shock2.gam")
+            .expect("shock2.gam should be present in the mounted data");
 
         let _strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
 
@@ -746,11 +892,18 @@ impl Game {
         // let header = ss2_bin_header::read(&mut atek_reader);
         // let obj = ss2_bin_obj_loader::read(&mut atek_reader, &header);
 
-        let gamesys = gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
+        let gamesys = gamesys::read(
+            &mut *game_reader.borrow_mut(),
+            &links,
+            &links_with_data,
+            &properties,
+        );
 
-        let motiondb_file = File::open(resource_path("motiondb.bin")).unwrap();
-        let mut motiondb_reader = BufReader::new(motiondb_file);
-        let motiondb = MotionDB::read(&mut motiondb_reader);
+        // Likewise: 25AE moves this to `data/res/mschema/motiondb.bin`.
+        let motiondb_reader = asset_cache
+            .get_raw_reader("motiondb.bin")
+            .expect("motiondb.bin should be present in the mounted data");
+        let motiondb = MotionDB::read(&mut *motiondb_reader.borrow_mut());
 
         let mut audio_context = AudioContext::new();
 

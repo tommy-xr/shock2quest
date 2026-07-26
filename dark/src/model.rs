@@ -9,7 +9,10 @@ use crate::{
 };
 use cgmath::{Matrix4, SquareMatrix, Vector2};
 use collision::Aabb3;
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, SceneObject},
+};
 
 #[derive(Clone)]
 pub struct StaticModel {
@@ -52,6 +55,33 @@ pub struct AnimatedModel {
     hit_boxes: Rc<HashMap<u32, Aabb3<f32>>>,
     hit_box_shapes: Rc<HashMap<u32, HitBoxShape>>,
     vhots: Vec<Vhot>,
+    /// Set only for a `PMNM` mesh, whose vertices are in bind-pose model space
+    /// rather than joint-local space. Holds `bind_inverse[j] * bind_correction`,
+    /// so the posed palette becomes `pose[j] * bind[j]`.
+    bind: Option<Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>>,
+}
+
+/// Build the render palette, undoing the bind pose first when the geometry needs
+/// it. `expand_skinning_palette`'s stretchy parent frames are a vanilla-LGMM
+/// concept, so a bind-space mesh takes the plain per-joint product.
+fn build_palette(
+    pose: &[Matrix4<f32>; MAX_SKINNED_JOINTS],
+    skeleton: &Skeleton,
+    bind: Option<&Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>>,
+) -> [Matrix4<f32>; SKINNING_PALETTE_SIZE] {
+    match bind {
+        None => Skeleton::expand_skinning_palette(pose, skeleton),
+        Some(bind) => {
+            let mut combined = [Matrix4::identity(); MAX_SKINNED_JOINTS];
+            for j in 0..MAX_SKINNED_JOINTS {
+                combined[j] = pose[j] * bind[j];
+            }
+            let mut palette = [Matrix4::identity(); SKINNING_PALETTE_SIZE];
+            palette[..MAX_SKINNED_JOINTS].copy_from_slice(&combined);
+            palette[MAX_SKINNED_JOINTS..].copy_from_slice(&combined);
+            palette
+        }
+    }
 }
 
 impl AnimatedModel {
@@ -61,7 +91,7 @@ impl AnimatedModel {
 
     fn to_animated_scene_objects(&self, player: &AnimationPlayer) -> Vec<SceneObject> {
         let pose = player.get_transforms(&self.skeleton);
-        let palette = Skeleton::expand_skinning_palette(&pose, &self.skeleton);
+        let palette = build_palette(&pose, &self.skeleton, self.bind.as_ref());
 
         self.scene_objects
             .iter()
@@ -85,9 +115,10 @@ impl AnimatedModel {
             }),
             &rpds::HashTrieMap::new(),
         );
-        let new_data = Skeleton::expand_skinning_palette(
+        let new_data = build_palette(
             &animated_skeleton.get_transforms(),
             &animated_skeleton,
+            self.bind.as_ref(),
         );
 
         let new_scene_objects = self
@@ -107,6 +138,7 @@ impl AnimatedModel {
             hit_boxes: self.hit_boxes.clone(),
             hit_box_shapes: self.hit_box_shapes.clone(),
             vhots: self.vhots.clone(),
+            bind: self.bind.clone(),
         }
     }
 
@@ -128,6 +160,7 @@ impl AnimatedModel {
             hit_boxes: model.hit_boxes.clone(),
             hit_box_shapes: model.hit_box_shapes.clone(),
             vhots: model.vhots.clone(),
+            bind: model.bind.clone(),
         }
     }
 
@@ -167,6 +200,7 @@ impl Model {
                     hit_boxes: Rc::new(hit_boxes),
                     hit_box_shapes: Rc::new(HashMap::new()),
                     vhots: static_mesh.vhots.clone(),
+                    bind: None,
                 }),
             }
         } else {
@@ -184,10 +218,45 @@ impl Model {
     pub fn from_ai_bin(
         ai_mesh: SystemShock2AIMesh,
         skeleton: Rc<Skeleton>,
+        pmnm: Option<crate::ss2_bin_pmnm::PmnmMesh>,
         asset_cache: &mut AssetCache,
     ) -> Model {
-        let (scene_objects, hit_boxes) =
-            ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
+        // Render the high-detail chunk when we have one, and in that case skip
+        // building the original mesh's scene objects entirely - they would be
+        // discarded, and building them uploads a vertex buffer and decodes every
+        // original texture per creature. Hitboxes still come from the original
+        // mesh, so damage locations and ragdoll *physics* fitting are untouched.
+        // Ragdoll *rendering* is not automatic: it poses `clone_scene_objects()`
+        // from physics rather than from an `AnimationPlayer`, so it reads
+        // `bind_matrices()` and folds the same product in - see
+        // `RagDoll::renderables`.
+        let high_detail = pmnm.and_then(|pmnm| {
+            let objects = ss2_bin_ai_loader::pmnm_to_scene_objects(&pmnm, asset_cache);
+            (!objects.is_empty()).then_some(objects)
+        });
+
+        let (scene_objects, hit_boxes, bind) = match high_detail {
+            None => {
+                let (objects, hit_boxes) =
+                    ss2_bin_ai_loader::to_scene_objects(&ai_mesh, &skeleton, asset_cache);
+                (objects, hit_boxes, None)
+            }
+            Some(objects) => {
+                let (_, hit_boxes) = ss2_bin_ai_loader::to_vertices(&ai_mesh, &skeleton);
+                let matrices = Rc::new(ss2_bin_ai_loader::pmnm_bind_matrices(&skeleton));
+                // Bake the rest palette so an un-animated draw is correct too,
+                // not just the animated paths.
+                let rest = build_palette(&skeleton.get_transforms(), &skeleton, Some(&matrices));
+                let objects = objects
+                    .into_iter()
+                    .map(|mut o| {
+                        o.set_skinning_palette(rest);
+                        o
+                    })
+                    .collect();
+                (objects, hit_boxes, Some(matrices))
+            }
+        };
         let hit_box_shapes = fit_hit_box_shapes(&ai_mesh, &skeleton);
         Model {
             transform: Matrix4::identity(),
@@ -198,6 +267,7 @@ impl Model {
                 hit_boxes: Rc::new(hit_boxes),
                 hit_box_shapes: Rc::new(hit_box_shapes),
                 vhots: vec![],
+                bind,
             }),
         }
     }
@@ -222,6 +292,7 @@ impl Model {
                     hit_boxes: Rc::new(hit_boxes),
                     hit_box_shapes: Rc::new(HashMap::new()),
                     vhots: vec![],
+                    bind: None,
                 }),
             }
         } else {
@@ -242,6 +313,18 @@ impl Model {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.to_scene_objects(),
             InnerModel::Static(static_model) => static_model.to_scene_objects(),
+        }
+    }
+
+    /// The per-joint bind-pose undo for a `PMNM` mesh, if this model uses one.
+    ///
+    /// Anything that poses `clone_scene_objects()` itself - the ragdoll, which
+    /// drives joints from physics rather than from an `AnimationPlayer` - must
+    /// fold this in, or a bind-space mesh renders exploded.
+    pub fn bind_matrices(&self) -> Option<Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.bind.clone(),
+            InnerModel::Static(_) => None,
         }
     }
 

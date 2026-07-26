@@ -25,12 +25,35 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // The five floor labels ElevatorGui reads from MISC.STR (deck 1..5). Med / Sci
 // (deck 2) is the current floor in medsci1 - lit + inert, never a button.
-const ENGINEERING = "Engineering (1)";
-const OPERATIONS = "Operations (4)";
+//
+// Matched on deck name + number rather than the exact string, because the label
+// text is data and mods rewrite it: `ElevLevel1` is "Engineering (1)" in the
+// original MISC.STR and "1: Engineering" in SCP's. What this test is actually
+// about is that the floor is labeled from MISC.STR at all, and which deck it
+// points at - not one release's phrasing.
+type Floor = { name: RegExp; deck: number; describe: string };
+const ENGINEERING: Floor = {
+  name: /engineering/i,
+  deck: 1,
+  describe: "Engineering (deck 1)",
+};
+const OPERATIONS: Floor = {
+  name: /operations/i,
+  deck: 4,
+  describe: "Operations (deck 4)",
+};
+const MED_SCI: Floor = {
+  name: /med\s*\/?\s*sci/i,
+  deck: 2,
+  describe: "Med / Sci (deck 2)",
+};
 
-const floorButton = (state: UiState, label: string): UiElement | undefined =>
+const labelsFloor = (label: string | null | undefined, floor: Floor): boolean =>
+  !!label && floor.name.test(label) && label.includes(String(floor.deck));
+
+const floorButton = (state: UiState, floor: Floor): UiElement | undefined =>
   state.active_panel?.elements.find(
-    (e) => e.kind === "button" && e.label === label,
+    (e) => e.kind === "button" && labelsFloor(e.label, floor),
   );
 
 test(
@@ -86,16 +109,16 @@ test(
     // --- Floor buttons must be semantically labeled (THE fix; negative on main) ---
     assert.ok(
       floorButton(opened, ENGINEERING),
-      `panel should expose a floor button labeled "${ENGINEERING}" (on main labels are null)`,
+      `panel should expose a floor button labeling ${ENGINEERING.describe} (on main labels are null)`,
     );
     assert.ok(
       floorButton(opened, OPERATIONS),
-      `panel should expose a floor button labeled "${OPERATIONS}"`,
+      `panel should expose a floor button labeling ${OPERATIONS.describe}`,
     );
     // The current deck (Med / Sci, deck 2) is lit + inert - never a clickable
     // button.
     assert.ok(
-      !floorButton(opened, "Med / Sci (2)"),
+      !floorButton(opened, MED_SCI),
       "the current floor should be inert (not a clickable button)",
     );
     await game.screenshot("elevator-panel-open.png");

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
 use dark::hit_box::HitBoxShape;
@@ -92,6 +93,9 @@ pub struct RagDoll {
     joint_to_body: HashMap<u32, RigidBodyHandle>,
     bone_frame_offsets: HashMap<u32, Matrix4<f32>>,
     latest_global_transforms: [Matrix4<f32>; 40],
+    /// Set when the rendered mesh is a 25AE `PMNM` chunk, whose vertices are in
+    /// bind-pose model space rather than joint-local space.
+    bind: Option<Rc<[Matrix4<f32>; 40]>>,
     scene_objects: Vec<SceneObject>,
     /// Directly jointed body pairs (parent/child), excluded from the
     /// non-adjacent-overlap metric since they are meant to overlap at the joint.
@@ -112,8 +116,10 @@ impl RagDoll {
         scene_objects: Vec<SceneObject>,
         joint_pairs: Vec<(RigidBodyHandle, RigidBodyHandle)>,
         spawn_positions: HashMap<RigidBodyHandle, Vector3<f32>>,
+        bind: Option<Rc<[Matrix4<f32>; 40]>>,
     ) -> Self {
         Self {
+            bind,
             physics_bodies,
             joint_handles,
             joint_to_body,
@@ -246,12 +252,25 @@ impl RagDoll {
     }
 
     fn renderables(&self) -> Vec<SceneObject> {
+        // `set_skinning_data` feeds the physics-driven joint transforms straight
+        // to the shader, which is right for joint-local vertices. A bind-space
+        // mesh needs its bind undone first, exactly as the animated path does.
+        let posed = match &self.bind {
+            None => self.latest_global_transforms,
+            Some(bind) => {
+                let mut out = self.latest_global_transforms;
+                for (j, m) in out.iter_mut().enumerate() {
+                    *m = *m * bind[j];
+                }
+                out
+            }
+        };
         self.scene_objects
             .iter()
             .map(|obj| {
                 let mut clone = obj.clone();
                 clone.set_transform(Matrix4::identity());
-                clone.set_skinning_data(self.latest_global_transforms);
+                clone.set_skinning_data(posed);
                 clone
             })
             .collect()
@@ -587,6 +606,7 @@ impl RagDollManager {
             model.clone_scene_objects(),
             joint_pairs,
             spawn_positions,
+            model.bind_matrices(),
         );
         self.ragdolls.insert(entity_id, ragdoll);
         true
