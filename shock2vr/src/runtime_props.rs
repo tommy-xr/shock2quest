@@ -175,6 +175,17 @@ impl RuntimePropReloading {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropSelectedAmmo(pub usize);
 
+/// Stable gamesys archetype identity for an entity.
+///
+/// `PropTemplateId` intentionally retains a concrete level object's positive
+/// mission ID. Those IDs are only meaningful within their source mission and
+/// may alias unrelated objects after the entity is carried to another level.
+/// Class-based gameplay uses this canonical (nearest negative) archetype
+/// instead. `EntitySaveData` explicitly persists it across transitions and
+/// save/load.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimePropCanonicalTemplateId(pub i32);
+
 /// Which phase the psi amp's hold-to-overload meter is in. `Charging` fills
 /// the bar; `Overloaded`/`Burnout` are brief result flashes after release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

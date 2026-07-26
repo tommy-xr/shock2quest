@@ -20,7 +20,10 @@ use crate::{
     creature::RuntimePropHitBox,
     gui::GuiPropProxyEntity,
     mission::{GlobalTemplateIdMap, PlayerInfo},
-    runtime_props::{RuntimePropDeathPose, RuntimePropDoNotSerialize, RuntimePropSelectedAmmo},
+    runtime_props::{
+        RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
+        RuntimePropSelectedAmmo,
+    },
     scripts::script_util,
     util::partition_map,
 };
@@ -95,6 +98,9 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
 
     let v_links = world.borrow::<View<Links>>().unwrap();
     let v_selected_ammo = world.borrow::<View<RuntimePropSelectedAmmo>>().unwrap();
+    let v_canonical_templates = world
+        .borrow::<View<RuntimePropCanonicalTemplateId>>()
+        .unwrap();
     let v_entities = world.borrow::<EntitiesView>().unwrap();
 
     let (all_properties, _, _) = dark::properties::get::<File>();
@@ -165,6 +171,16 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
     let (held_selected_ammo, world_selected_ammo) = partition_map(raw_selected_ammo, |entity_id| {
         held_entities.contains(entity_id)
     });
+    let raw_canonical_templates: HashMap<u64, i32> = v_canonical_templates
+        .iter()
+        .with_id()
+        .filter(|(entity_id, _)| !entities_to_filter.contains(&entity_id.inner()))
+        .map(|(entity_id, canonical)| (entity_id.inner(), canonical.0))
+        .collect();
+    let (held_canonical_templates, world_canonical_templates) =
+        partition_map(raw_canonical_templates, |entity_id| {
+            held_entities.contains(entity_id)
+        });
 
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
@@ -173,6 +189,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         all_entities: all_world_entities,
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
+        canonical_template_ids: world_canonical_templates,
     };
 
     let held_entity_data = EntitySaveData {
@@ -182,6 +199,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         properties: held_serialized_properties,
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
+        canonical_template_ids: held_canonical_templates,
     };
 
     let held_metadata = HeldItemSaveData {

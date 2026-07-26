@@ -19,6 +19,22 @@ use std::collections::HashMap;
 
 use super::{Effect, Message, MessagePayload};
 
+/// Stable class identity for hierarchy/tag lookups. Concrete objects retain a
+/// positive mission-local `PropTemplateId`, while carried objects preserve
+/// their source gamesys archetype separately across level transitions.
+pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Option<i32> {
+    world
+        .borrow::<View<crate::runtime_props::RuntimePropCanonicalTemplateId>>()
+        .ok()
+        .and_then(|canonical| canonical.get(entity).ok().map(|id| id.0))
+        .or_else(|| {
+            world
+                .borrow::<View<PropTemplateId>>()
+                .ok()
+                .and_then(|templates| templates.get(entity).ok().map(|id| id.template_id))
+        })
+}
+
 pub fn is_message_turnon_or_turnoff(msg: &MessagePayload) -> bool {
     match msg {
         MessagePayload::TurnOn { from: _ } => true,
@@ -196,10 +212,7 @@ pub fn choose_impact_spang(world: &World, projectile: EntityId, victim: EntityId
 /// authored for this victim's class.
 fn choose_hit_spang(world: &World, projectile: EntityId, victim: EntityId) -> Option<i32> {
     let victim = resolve_proxy_entity(world, victim);
-    let victim_template = world
-        .borrow::<View<PropTemplateId>>()
-        .ok()
-        .and_then(|v| v.get(victim).ok().map(|t| t.template_id))?;
+    let victim_template = entity_class_template_id(world, victim)?;
     let hierarchy = world.borrow::<UniqueView<GlobalTemplateHierarchy>>().ok()?;
     get_all_links_with_template(world, projectile, |link| {
         if let Link::HitSpang(spang_template) = link {
