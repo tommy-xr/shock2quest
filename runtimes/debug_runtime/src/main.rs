@@ -1335,6 +1335,17 @@ fn process_command(
                                 target_name: l.target_name,
                             })
                             .collect(),
+                        aim_points: detail
+                            .aim_points
+                            .into_iter()
+                            .map(|point| AimPointInfo {
+                                proxy_entity_id: point.proxy_entity_id,
+                                body_id: point.body_id,
+                                joint_id: point.joint_id,
+                                classification: point.classification,
+                                position: point.position,
+                            })
+                            .collect(),
                     })
             } else {
                 None
