@@ -177,6 +177,13 @@ impl Script for StdDoor {
         let v_trans_door = world.borrow::<View<PropTranslatingDoor>>().unwrap();
 
         if let Ok(trans_door) = v_trans_door.get(entity_id) {
+            // A permanently open doorway has no collider and no travel, so it
+            // can't be frobbed and none of the retail ones are switch-linked -
+            // but keep the invariant explicit: nothing may "close" an opening
+            // that has nowhere to move to (it would only replay door sounds).
+            if trans_door.is_permanently_open() {
+                return Effect::NoEffect;
+            }
             match msg {
                 MessagePayload::Frob => {
                     // The original StdDoor toggles on player FrobWorldEnd. A
@@ -263,6 +270,46 @@ mod tests {
         let mut door = StdDoor::new();
         door.initialize(entity_id, world);
         door
+    }
+
+    /// A doorway authored permanently open: no travel, state open (#602).
+    fn permanently_open_world() -> (World, EntityId) {
+        let mut world = World::new();
+        let at = vec3(18.0, -0.4, 41.8);
+        let entity_id = world.add_entity((
+            PropTranslatingDoor {
+                door_type: 1,
+                closed: 0.0,
+                open: 0.0,
+                speed: 0.0,
+                axis: 0,
+                state: 1,
+                base_closed_location: at,
+                base_open_location: at,
+                base_location: at,
+            },
+            PropClassTag::from_string("doortype scidoor"),
+            RuntimePropTransform(Matrix4::from_translation(at)),
+        ));
+        world.add_unique(QuestInfo::new());
+        (world, entity_id)
+    }
+
+    #[test]
+    fn a_permanently_open_door_ignores_frob_and_turn_off() {
+        let (world, entity_id) = permanently_open_world();
+        let physics = PhysicsWorld::new();
+        let mut door = initialized_door(entity_id, &world);
+
+        for msg in [
+            MessagePayload::Frob,
+            MessagePayload::TurnOff { from: entity_id },
+            MessagePayload::TurnOn { from: entity_id },
+        ] {
+            let effect = door.handle_message(entity_id, &world, &physics, &msg);
+            assert!(matches!(effect, Effect::NoEffect));
+            assert!(!door.is_moving);
+        }
     }
 
     #[test]
