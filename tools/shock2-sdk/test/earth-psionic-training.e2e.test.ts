@@ -74,7 +74,11 @@ async function useBooster(game: GameServer, boosterId: number): Promise<void> {
   );
 }
 
-async function aimAtEntity(game: GameServer, target: EntitySummary): Promise<void> {
+/** Returns the target's live handle, which a load can renumber. */
+async function aimAtEntity(
+  game: GameServer,
+  target: EntitySummary,
+): Promise<EntitySummary> {
   const [tx, ty, tz] = (await game.entities.detail(target.id)).position;
   await game.player.teleport({ x: tx - 4, y: ty, z: tz });
   await game.step({ frames: 5 });
@@ -88,11 +92,21 @@ async function aimAtEntity(game: GameServer, target: EntitySummary): Promise<voi
     Math.abs(pawn[1]) > 0.01 || Math.abs(pawn[3] - 1) > 0.01,
     `regression requires a non-identity save-restored pawn rotation: ${pawn}`,
   );
-  const aim = await game.player.aimAt(target, { hitbox: "torso" });
-  assert.equal(aim.entity_id, target.id);
+  // Loading re-instantiates the world, so a runtime entity id captured before
+  // the save can name a different object afterwards - runtime ids are not a
+  // stable identity (AGENTS.md), only the template id is. Aiming at the stale
+  // number silently aimed at whatever inherited it: the "target" reported an
+  // empty aim_point list hundreds of units away, so the aim fell back to
+  // 'center' and the shot missed. Re-resolve through the template instead, and
+  // hand the live handle back so the caller's damage check follows the same
+  // object.
+  const live = await exactlyOne(game, target.template_id, "Training Droid");
+  const aim = await game.player.aimAt(live, { hitbox: "torso" });
+  assert.equal(aim.entity_id, live.id);
   assert.equal(aim.classification, "torso");
   assert.equal(aim.fallback_used, false);
   await game.step({ frames: 3 });
+  return live;
 }
 
 function hitPoints(detail: Awaited<ReturnType<GameServer["entities"]["detail"]>>): number {
@@ -154,7 +168,7 @@ test(
     const droid = await exactlyOne(game, TRAINING_DROID, "Training Droid");
     const droidHpBefore = hitPoints(await game.entities.detail(droid.id));
     const psiBeforeCast = psiPoints(await game.info());
-    await aimAtEntity(game, droid);
+    const liveDroid = await aimAtEntity(game, droid);
     await fireOnce(game);
     await game.step({ frames: 60 });
     assert.equal(
@@ -163,7 +177,7 @@ test(
       "normal tier-one Cryokinesis cast should spend one psi",
     );
     assert.ok(
-      hitPoints(await game.entities.detail(droid.id)) < droidHpBefore,
+      hitPoints(await game.entities.detail(liveDroid.id)) < droidHpBefore,
       "normal Cryokinesis projectile should damage the real Training Droid",
     );
 
