@@ -35,7 +35,6 @@ test(
     assert.ok(monster, "SpawnDebugMonster should create a live target");
 
     const initial = await game.entities.detail(monster.id);
-    assert.ok(initial.aim_points?.some((point) => point.classification === "torso"));
 
     await game.input.set("left_hand.thumbstick", [0.75, 0]);
     await game.step({ frames: 20 });
@@ -44,9 +43,37 @@ test(
     await game.load("world-aim-e2e");
     const pawn = (await game.info()).player.rotation;
     assert.ok(Math.abs(pawn[1]) > 0.01 || Math.abs(pawn[3] - 1) > 0.01);
+    const restoredMonster = (
+      await game.entities.list({ filter: "OG-Pipe", limit: 50 })
+    ).entities
+      .filter((entity) => entity.template_id === monster.template_id)
+      .sort(
+        (a, b) =>
+          Math.hypot(
+            a.position[0] - initial.position[0],
+            a.position[1] - initial.position[1],
+            a.position[2] - initial.position[2],
+          ) -
+          Math.hypot(
+            b.position[0] - initial.position[0],
+            b.position[1] - initial.position[1],
+            b.position[2] - initial.position[2],
+          ),
+      )[0];
+    assert.ok(restoredMonster, "saved spawned creature should be rediscovered after load");
+    const restored = await game.entities.detail(restoredMonster.id);
+    const classifications = new Set(
+      restored.aim_points?.map((point) => point.classification),
+    );
+    assert.ok(classifications.has("head"), "restored creature should expose a head proxy");
+    assert.ok(
+      classifications.has("torso"),
+      "restored creature should expose a torso proxy",
+    );
+    assert.ok(classifications.has("limb"), "restored creature should expose limb proxies");
 
-    const aim = await game.player.aimAt(monster, { hitbox: "torso" });
-    assert.equal(aim.entity_id, monster.id);
+    const aim = await game.player.aimAt(restoredMonster, { hitbox: "torso" });
+    assert.equal(aim.entity_id, restoredMonster.id);
     assert.equal(aim.classification, "torso");
     assert.equal(aim.fallback_used, false);
     await game.step({ frames: 2 });
@@ -55,6 +82,8 @@ test(
     await game.step({ frames: 3 });
     await game.input.set("right_hand.trigger_value", 0);
     await game.step({ frames: 90 });
-    assert.ok(hitPoints(await game.entities.detail(monster.id)) < hitPoints(initial));
+    assert.ok(
+      hitPoints(await game.entities.detail(restoredMonster.id)) < hitPoints(restored),
+    );
   },
 );
