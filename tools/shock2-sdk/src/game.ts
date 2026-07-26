@@ -30,6 +30,9 @@ import type {
   TransitionsResult,
   WaitForOptions,
   AiPathEntry,
+  AimClassification,
+  AimResult,
+  Vec3,
 } from "./types.js";
 
 /** Error thrown when the game reports a command failed (success: false). */
@@ -77,6 +80,70 @@ export class PlayerApi {
    */
   async moveTo(target: Position): Promise<MoveResult> {
     return this.client.post<MoveResult>("/v1/player/move", target);
+  }
+
+  /**
+   * Aim the production flat camera, interaction ray, and weapon at an entity.
+   *
+   * Creature targets use their live classified damage proxies. Other entities,
+   * or unavailable classifications, gracefully fall back to the entity center.
+   * This accounts for authored and save-restored pawn rotation; raw
+   * `head.look` / `head.rotation` are pawn-local.
+   */
+  async aimAt(
+    entity: number | Pick<EntitySummary, "id">,
+    options?: { hitbox?: AimClassification; eyeHeight?: number },
+  ): Promise<AimResult> {
+    const entityId = typeof entity === "number" ? entity : entity.id;
+    const requested = options?.hitbox ?? "torso";
+    const [detail, snapshot] = await Promise.all([
+      this.client.get<EntityDetailResult>(`/v1/entities/${entityId}`),
+      this.client.get<FrameSnapshot>("/v1/info"),
+    ]);
+    const eyeHeight = options?.eyeHeight ?? 1.6;
+    const eye: Vec3 = [
+      snapshot.player.position[0],
+      snapshot.player.position[1] + eyeHeight,
+      snapshot.player.position[2],
+    ];
+    const distance = (point: Vec3) =>
+      Math.hypot(point[0] - eye[0], point[1] - eye[1], point[2] - eye[2]);
+
+    let candidates = detail.aim_points;
+    if (requested === "head" || requested === "torso") {
+      candidates = candidates.filter((point) => point.classification === requested);
+    } else if (requested === "limb") {
+      candidates = candidates.filter(
+        (point) =>
+          point.classification === "limb" || point.classification === "extremity",
+      );
+    } else if (requested === "center") {
+      candidates = [];
+    }
+    candidates.sort((a, b) => distance(a.position) - distance(b.position));
+    const selected = candidates[0];
+    const worldPoint = selected?.position ?? detail.position;
+    const headRotation = headRotationForWorldPoint(
+      snapshot.player.position,
+      snapshot.player.rotation,
+      worldPoint,
+      eyeHeight,
+    );
+    await this.client.post("/v1/control/input", {
+      channel: "head.rotation",
+      value: headRotation,
+    });
+    return {
+      entity_id: entityId,
+      proxy_entity_id: selected?.proxy_entity_id ?? null,
+      body_id: selected?.body_id ?? null,
+      joint_id: selected?.joint_id ?? null,
+      requested,
+      classification: selected?.classification ?? "center",
+      world_point: worldPoint,
+      head_rotation: headRotation,
+      fallback_used: selected === undefined && requested !== "center",
+    };
   }
 
   /** The items the player is carrying (backpack + hand-held), for verifying pickups. */
@@ -178,6 +245,77 @@ export class InputApi {
   async set(channel: string, value: unknown): Promise<void> {
     await this.client.post("/v1/control/input", { channel, value });
   }
+
+  /**
+   * Point the production flat-mode camera/interaction ray at a world position.
+   *
+   * Unlike the low-level `head.look` and `head.rotation` channels, this method
+   * accounts for the player's authored or save-restored body rotation. The
+   * resulting head rotation still flows through the normal camera,
+   * FlatInteraction, and weapon paths; this is aiming, not a debug hit shim.
+   *
+   * `eyeHeight` defaults to the flat player's standing eye height. Pass a
+   * different value when deliberately testing crouched aiming.
+   */
+  async lookAtWorldPoint(target: Vec3, options?: { eyeHeight?: number }): Promise<void> {
+    const [{ position }, snapshot] = await Promise.all([
+      this.client.get<{ position: Vec3 }>("/v1/player/position"),
+      this.client.get<FrameSnapshot>("/v1/info"),
+    ]);
+    const eyeHeight = options?.eyeHeight ?? 1.6;
+    const localHeadRotation = headRotationForWorldPoint(
+      position,
+      snapshot.player.rotation,
+      target,
+      eyeHeight,
+    );
+    await this.set("head.rotation", localHeadRotation);
+  }
+}
+
+type Quat = [number, number, number, number];
+
+function multiplyQuat(a: Quat, b: Quat): Quat {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}
+
+function lookQuat(direction: Vec3): Quat {
+  const length = Math.hypot(...direction);
+  if (length === 0) throw new Error("look-at target must differ from the player's eye position");
+  const [bx, by, bz] = direction.map((value) => value / length) as Vec3;
+  const dot = -bz;
+  if (dot < -0.999999) return [0, 1, 0, 0];
+  const quaternion: Quat = [by, -bx, 0, 1 + dot];
+  const quaternionLength = Math.hypot(...quaternion);
+  return quaternion.map((value) => value / quaternionLength) as Quat;
+}
+
+/** Pure look-at transform, exported so callers can verify/control custom rigs. */
+export function headRotationForWorldPoint(
+  playerPosition: Vec3,
+  playerRotation: Quat,
+  target: Vec3,
+  eyeHeight = 1.6,
+): Quat {
+  const worldLook = lookQuat([
+    target[0] - playerPosition[0],
+    target[1] - (playerPosition[1] + eyeHeight),
+    target[2] - playerPosition[2],
+  ]);
+  const inversePawn: Quat = [
+    -playerRotation[0],
+    -playerRotation[1],
+    -playerRotation[2],
+    playerRotation[3],
+  ];
+  return multiplyQuat(inversePawn, worldLook);
 }
 
 /** Physics rigid-body inspection (positions, velocities). */

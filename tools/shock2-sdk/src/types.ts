@@ -123,6 +123,34 @@ export interface EntityDetailResult {
   properties: PropertyInfo[];
   outgoing_links: LinkInfo[];
   incoming_links: LinkInfo[];
+  aim_points: AimPoint[];
+}
+
+export interface AimPoint {
+  proxy_entity_id: number;
+  body_id: number;
+  joint_id: number;
+  classification: "head" | "torso" | "limb" | "extremity" | "no_damage";
+  position: Vec3;
+}
+
+export type AimClassification =
+  | "head"
+  | "torso"
+  | "limb"
+  | "center"
+  | "nearest";
+
+export interface AimResult {
+  entity_id: number;
+  proxy_entity_id: number | null;
+  body_id: number | null;
+  joint_id: number | null;
+  requested: AimClassification;
+  classification: string;
+  world_point: Vec3;
+  head_rotation: Quat;
+  fallback_used: boolean;
 }
 
 /** A clip queued behind the currently-playing head clip. */

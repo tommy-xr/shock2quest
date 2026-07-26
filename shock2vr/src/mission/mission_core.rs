@@ -5617,8 +5617,38 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
-        use crate::game_scene::{DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo};
+        use crate::game_scene::{
+            DebugAimPoint, DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo,
+        };
         use shipyard::*;
+
+        let aim_points = self
+            .world
+            .run(|hitboxes: View<crate::creature::RuntimePropHitBox>| {
+                hitboxes
+                    .iter()
+                    .with_id()
+                    .filter(|(_, hitbox)| hitbox.parent_entity_id == id)
+                    .filter_map(|(proxy_id, hitbox)| {
+                        let handle = *self.id_to_physics.get(&proxy_id)?;
+                        let body = self.physics.debug_body_detail(handle.into_raw_parts().0)?;
+                        Some(DebugAimPoint {
+                            proxy_entity_id: proxy_id.inner() as i32,
+                            body_id: body.body_id,
+                            joint_id: hitbox.joint_id,
+                            classification: match hitbox.hit_box_type {
+                                crate::creature::HitBoxType::Head => "head",
+                                crate::creature::HitBoxType::Body => "torso",
+                                crate::creature::HitBoxType::Limb => "limb",
+                                crate::creature::HitBoxType::Extremity => "extremity",
+                                crate::creature::HitBoxType::NoDamage => "no_damage",
+                            }
+                            .to_string(),
+                            position: body.position,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            });
 
         // Looked up outside the main run: the closure below is at shipyard's
         // view-count limit.
@@ -5823,6 +5853,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties,
                     outgoing_links,
                     incoming_links,
+                    aim_points: aim_points.clone(),
                 })
             },
         )
