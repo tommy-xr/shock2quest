@@ -180,6 +180,16 @@ pub struct DebugEntityDetail {
     pub properties: Vec<DebugPropertyInfo>,
     pub outgoing_links: Vec<DebugLinkInfo>,
     pub incoming_links: Vec<DebugLinkInfo>,
+    pub aim_points: Vec<DebugAimPoint>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugAimPoint {
+    pub proxy_entity_id: i32,
+    pub body_id: u32,
+    pub joint_id: u32,
+    pub classification: String,
+    pub position: [f32; 3],
 }
 
 /// Property information for debug display
