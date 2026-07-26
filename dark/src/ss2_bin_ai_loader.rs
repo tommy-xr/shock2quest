@@ -805,15 +805,7 @@ pub fn pmnm_bind_matrices(skeleton: &Skeleton) -> [Matrix4<f32>; MAX_JOINTS] {
     out
 }
 
-/// Whether the high-detail `PMNM` path is enabled.
-///
-/// An env var rather than the `--experimental` flag list because model loading
-/// lives in `dark`, which has no access to `shock2vr`'s options (the same reason
-/// `SS2_DEBUG_NORMALS` works this way).
+/// Whether the high-detail `PMNM` path is enabled. See [`crate::high_detail`].
 pub fn pmnm_enabled() -> bool {
-    // Not `is_some()`: that would make `SS2_PMNM_MESHES=0` *enable* the path.
-    matches!(
-        std::env::var("SS2_PMNM_MESHES").as_deref(),
-        Ok("1" | "true" | "yes")
-    )
+    crate::high_detail::enabled()
 }
