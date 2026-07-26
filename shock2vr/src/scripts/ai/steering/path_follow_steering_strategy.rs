@@ -61,6 +61,11 @@ const STALL_SECONDS: f32 = 3.0;
 const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
+/// How far past the stalled waypoint (XZ) to probe for the cell on the far
+/// side of the crossing when reporting a blocked link - just enough to step
+/// off the shared edge without skipping a narrow destination cell (0.5
+/// Dark feet)
+const BLOCKED_PROBE_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
 /// Crowd separation: repel from living creatures within this radius (6 Dark
 /// feet - about two body widths)
 const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
@@ -339,28 +344,44 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         } else {
             self.stall_seconds += time.elapsed.as_secs_f32();
             if self.stall_seconds >= STALL_SECONDS {
-                // Remember the cell we could not approach (TTL'd, per AI):
-                // the mesh says the link is walkable but something physical
-                // - a prop on the route, geometry the mesh doesn't model -
-                // stopped us. Excluding it from this AI's next queries makes
-                // the post-stall re-path route AROUND the obstacle; without
-                // this the fresh route is identical and the stall/retreat/
-                // re-path cycle grinds against the obstacle forever
-                // (issue #481). Probe just past the waypoint along the
-                // approach so an edge-inset waypoint resolves to the cell
-                // BEYOND the crossing, not the one we're standing in.
+                // Remember the crossing we could not traverse (TTL'd, per
+                // AI): the mesh says the link is walkable but something
+                // physical - a prop on the route, geometry the mesh doesn't
+                // model - stopped us. Excluding that directed link from this
+                // AI's next queries makes the post-stall re-path route
+                // AROUND the obstacle; without this the fresh route is
+                // identical and the stall/retreat/re-path cycle grinds
+                // against the obstacle forever (issue #481). Skipped when a
+                // living creature is crowding us: those jams clear on their
+                // own (retreat + separation), and a 30s exclusion would
+                // over-react. The probe steps just past the waypoint in the
+                // XZ plane at the WAYPOINT's height (an edge-inset waypoint
+                // then resolves to the cell beyond the crossing; keeping Y
+                // fixed avoids blacklisting a stacked floor's cell).
+                let crowded = separation.x * separation.x + separation.z * separation.z > 1e-6;
                 let toward = waypoint - position;
                 let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
-                let probe = if toward_len > 1e-3 {
-                    waypoint + toward * (WAYPOINT_ADVANCE_DISTANCE / toward_len)
-                } else {
-                    waypoint
-                };
-                if let Some(cell) = service
-                    .cell_from_position(probe)
-                    .or_else(|| service.cell_from_position(waypoint))
-                {
-                    service.report_blocked_cell(entity_id.inner(), cell, time.total.as_secs_f32());
+                if !crowded && toward_len > 1e-3 {
+                    let step = BLOCKED_PROBE_DISTANCE / toward_len;
+                    let probe = Vector3::new(
+                        waypoint.x + toward.x * step,
+                        waypoint.y,
+                        waypoint.z + toward.z * step,
+                    );
+                    let from = service.cell_from_position(position);
+                    let to = service
+                        .cell_from_position(probe)
+                        .or_else(|| service.cell_from_position(waypoint));
+                    if let (Some(from), Some(to)) = (from, to) {
+                        if from != to {
+                            service.report_blocked_link(
+                                entity_id.inner(),
+                                from,
+                                to,
+                                time.total.as_secs_f32(),
+                            );
+                        }
+                    }
                 }
                 // Back out toward the previous waypoint (or straight back
                 // when the route began here), then re-path from clear ground
