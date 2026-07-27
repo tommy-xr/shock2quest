@@ -20,6 +20,9 @@ the same workflow and engine reference.
 - Follow existing patterns and conventions in the codebase
 - Run tests after each change (if available)
 - Use descriptive commit messages that explain the "why"
+- Commit messages and PR titles use Conventional Commit style: `type(scope): summary`
+  (e.g. `fix(physics): mantle over ladder tops`, `feat(play-through): ...`,
+  `docs:`, `test:`, `refactor:`). Scope is optional; the type prefix is not.
 
 ### 3. Visual Changes
 
