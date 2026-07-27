@@ -107,7 +107,12 @@ impl Script for BaseElevator {
         time: &Time,
     ) -> Effect {
         let dir = self.desired_position - self.current_position;
-        if dir.magnitude2() > 0.001 {
+        let step = time.elapsed.as_secs_f32() * self.speed;
+        // Complete once within one frame-step of the target - stepping by
+        // a fixed amount can otherwise overshoot and oscillate around a
+        // small distance threshold forever, so the elevator never finishes
+        // and can never be dispatched again.
+        if dir.magnitude() > step.max(0.001) {
             let normalized = dir.normalize();
 
             trace!(
@@ -116,18 +121,25 @@ impl Script for BaseElevator {
             );
 
             self.is_moving = true;
-            self.current_position += normalized * time.elapsed.as_secs_f32() * self.speed;
+            self.current_position += normalized * step;
             Effect::SetPosition {
                 entity_id,
                 position: self.current_position,
             }
         } else if self.is_moving {
+            // Land exactly on the node rather than a step short of it.
+            self.current_position = self.desired_position;
+            // Captured before move_to_next_target() retargets desired_position.
+            let position = self.current_position;
             if self.is_dontstop_elevator {
                 self.move_to_next_target(world);
             } else {
                 self.is_moving = false;
             }
-            Effect::NoEffect
+            Effect::SetPosition {
+                entity_id,
+                position,
+            }
         } else {
             Effect::NoEffect
         }
@@ -163,6 +175,157 @@ impl Script for BaseElevator {
             // }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use cgmath::{Quaternion, vec3};
+    use dark::properties::{Links, ToLink, WrappedEntityId};
+
+    use super::*;
+
+    fn frame() -> Time {
+        Time {
+            elapsed: Duration::from_secs_f32(1.0 / 60.0),
+            total: Duration::from_secs_f32(1.0 / 60.0),
+        }
+    }
+
+    fn position_at(x: f32) -> PropPosition {
+        PropPosition {
+            position: Vector3::new(x, 0.0, 0.0),
+            cell: 0,
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        }
+    }
+
+    /// A two-stop elevator - like a tram between its terminals: the entity sits
+    /// on the first node, which TPaths to the second at `speed`.
+    fn two_stop_world(start_x: f32, end_x: f32, speed: f32) -> (World, EntityId) {
+        let mut world = World::new();
+        let end_node = world.add_entity((position_at(end_x), Links::empty()));
+        let start_node = world.add_entity((
+            position_at(start_x),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(end_node)),
+                    link: Link::TPath(TPathData { speed }),
+                }],
+            },
+        ));
+        let elevator = world.add_entity((
+            position_at(start_x),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(start_node)),
+                    link: Link::TPathInit,
+                }],
+            },
+        ));
+        (world, elevator)
+    }
+
+    /// Steps until the elevator stops, returning the effect of the frame it
+    /// arrived on.
+    fn run_until_stopped(
+        elevator: &mut BaseElevator,
+        entity_id: EntityId,
+        world: &World,
+        physics: &PhysicsWorld,
+        max_frames: u32,
+    ) -> Effect {
+        for _ in 0..max_frames {
+            let effect = elevator.update(entity_id, world, physics, &frame());
+            if !elevator.is_moving {
+                return effect;
+            }
+        }
+        panic!(
+            "elevator never stopped: at {:?}, target {:?}",
+            elevator.current_position, elevator.desired_position
+        );
+    }
+
+    /// The command1 tram (speed 12): 193.100 wu at 0.2 wu/frame is 965.5 steps,
+    /// so the residual lands on the worst-case midpoint of a step (#653).
+    #[test]
+    fn a_fast_elevator_arrives_at_its_node_and_can_be_dispatched_again() {
+        let (world, entity_id) = two_stop_world(-377.53342, -184.43343, 12.0);
+        let physics = PhysicsWorld::new();
+        let mut elevator = BaseElevator::new();
+        elevator.initialize(entity_id, &world);
+
+        let turn_on = MessagePayload::TurnOn { from: entity_id };
+        let effect = elevator.handle_message(entity_id, &world, &physics, &turn_on);
+        assert!(matches!(effect, Effect::PlaySound { .. }));
+        assert!(elevator.is_moving);
+
+        let arrival = run_until_stopped(&mut elevator, entity_id, &world, &physics, 2000);
+
+        assert_eq!(elevator.current_position, vec3(-184.43343, 0.0, 0.0));
+        assert!(matches!(
+            arrival,
+            Effect::SetPosition { position, .. } if position == vec3(-184.43343, 0.0, 0.0)
+        ));
+
+        // The user-visible symptom: a jammed elevator can never be recalled.
+        let effect = elevator.handle_message(entity_id, &world, &physics, &turn_on);
+        assert!(matches!(effect, Effect::PlaySound { .. }));
+        assert!(elevator.is_moving);
+        assert_eq!(elevator.desired_position, vec3(-377.53342, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_slow_elevator_still_arrives_exactly_on_its_node() {
+        let (world, entity_id) = two_stop_world(0.0, 4.0, 2.4);
+        let physics = PhysicsWorld::new();
+        let mut elevator = BaseElevator::new();
+        elevator.initialize(entity_id, &world);
+
+        elevator.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+        run_until_stopped(&mut elevator, entity_id, &world, &physics, 2000);
+
+        assert_eq!(elevator.current_position, vec3(4.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_continuous_elevator_retargets_the_next_node_on_arrival() {
+        let (world, entity_id) = two_stop_world(-377.53342, -184.43343, 12.0);
+        let physics = PhysicsWorld::new();
+        let mut elevator = BaseElevator::continuous();
+        elevator.initialize(entity_id, &world);
+
+        elevator.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+
+        let mut arrival = None;
+        for _ in 0..2000 {
+            let effect = elevator.update(entity_id, &world, &physics, &frame());
+            if elevator.desired_position == vec3(-377.53342, 0.0, 0.0) {
+                arrival = Some(effect);
+                break;
+            }
+        }
+        // It reports the node it reached, not the one it just retargeted.
+        assert!(matches!(
+            arrival,
+            Some(Effect::SetPosition { position, .. }) if position == vec3(-184.43343, 0.0, 0.0)
+        ));
+        assert!(elevator.is_moving);
     }
 }
 
