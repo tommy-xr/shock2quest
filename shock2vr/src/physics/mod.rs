@@ -1318,6 +1318,14 @@ pub struct PlayerHandle {
     top_out: Option<ClimbTopOut>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct KinematicAttachment {
+    parent: RigidBodyHandle,
+    /// Dark's PhysAttach offset is world-space translation, not a transform
+    /// composed with the parent's rotation.
+    offset: Vector<Real>,
+}
+
 impl PlayerHandle {
     /// Whether the player collider is currently the crouched capsule. This is
     /// the *actual* state (stand-up can be refused for lack of headroom), not
@@ -1343,6 +1351,11 @@ pub struct PhysicsWorld {
     rigid_bodies_with_forces: Vec<RigidBodyHandle>,
 
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
+
+    // Dark PhysAttach links rigidly drive a kinematic child's translation
+    // from its parent's next translation plus an authored world-space offset.
+    // Keyed by child because Dark permits at most one physical parent.
+    kinematic_attachments: HashMap<RigidBodyHandle, KinematicAttachment>,
 
     // TODO:
     // physics_hooks: Box<dyn PhysicsHooks>,
@@ -2171,6 +2184,81 @@ impl PhysicsWorld {
         *handle
     }
 
+    /// Attach one kinematic entity to another using Dark's PhysAttach
+    /// translation semantics (`child = parent + offset`). Returns false when
+    /// either entity has no kinematic body.
+    pub fn attach_kinematic(
+        &mut self,
+        child_entity: EntityId,
+        parent_entity: EntityId,
+        offset: Vector3<f32>,
+    ) -> bool {
+        let (Some(&child), Some(&parent)) = (
+            self.entity_id_to_body.get(&child_entity),
+            self.entity_id_to_body.get(&parent_entity),
+        ) else {
+            return false;
+        };
+        if !self.rigid_body_set[child].is_kinematic() || !self.rigid_body_set[parent].is_kinematic()
+        {
+            return false;
+        }
+
+        self.kinematic_attachments.insert(
+            child,
+            KinematicAttachment {
+                parent,
+                offset: vec_to_nvec(offset),
+            },
+        );
+        true
+    }
+
+    fn attachment_target_translation(
+        &self,
+        child: RigidBodyHandle,
+        visiting: &mut HashSet<RigidBodyHandle>,
+    ) -> Option<Vector<Real>> {
+        let attachment = self.kinematic_attachments.get(&child)?;
+        if !visiting.insert(child) {
+            tracing::warn!(
+                "[physics] cyclic kinematic attachment involving body {:?}; leaving it in place",
+                child
+            );
+            return None;
+        }
+
+        let parent_translation = if self.kinematic_attachments.contains_key(&attachment.parent) {
+            self.attachment_target_translation(attachment.parent, visiting)?
+        } else {
+            self.rigid_body_set
+                .get(attachment.parent)?
+                .next_position()
+                .translation
+                .vector
+        };
+        visiting.remove(&child);
+        Some(parent_translation + attachment.offset)
+    }
+
+    fn update_kinematic_attachments(&mut self) {
+        let targets = self
+            .kinematic_attachments
+            .keys()
+            .copied()
+            .filter_map(|child| {
+                self.attachment_target_translation(child, &mut HashSet::new())
+                    .map(|target| (child, target))
+            })
+            .collect::<Vec<_>>();
+
+        for (child, target) in targets {
+            if let Some(body) = self.rigid_body_set.get_mut(child) {
+                body.set_next_kinematic_translation(target);
+            }
+        }
+    }
+
     pub fn remove(&mut self, entity_id: EntityId) {
         let entity_as_int = entity_id.inner() as u128;
         let mut bodies_to_remove = Vec::new();
@@ -2179,6 +2267,9 @@ impl PhysicsWorld {
                 bodies_to_remove.push(handle);
             }
         }
+        self.kinematic_attachments.retain(|child, attachment| {
+            !bodies_to_remove.contains(child) && !bodies_to_remove.contains(&attachment.parent)
+        });
         for handle in bodies_to_remove {
             self.rigid_body_set.remove(
                 handle,
@@ -2376,6 +2467,7 @@ impl PhysicsWorld {
             // physics_hooks: Box::new(physics_hooks),
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
+            kinematic_attachments: HashMap::new(),
 
             debug_pipeline,
 
@@ -2523,6 +2615,12 @@ impl PhysicsWorld {
         facing: Vector3<f32>,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        // Queue every PhysAttach child at its parent's same next-frame target
+        // before Rapier derives kinematic velocities. Moving-terrain assemblies
+        // (tram floor + walls/buttons) therefore advance as one physical body,
+        // matching Dark's source->destination attachment flow.
+        self.update_kinematic_attachments();
+
         // Attribute any non-finite body state to its entity before the step
         // consumes it (see report_nonfinite_rigid_body_state) - by the time
         // parry panics, the culprit is already named in the log.
@@ -4839,6 +4937,89 @@ mod tests {
         assert!(
             walked > 3.0,
             "walking on a rotated platform should progress ~6 units, moved {walked}"
+        );
+    }
+
+    /// A stationary player supported by a moving kinematic body must inherit
+    /// that body's displacement. This is the generic moving-terrain behavior
+    /// used by authored lifts and trams: every PhysAttach collision part moves
+    /// with the support, and the passenger remains aboard without supplying
+    /// locomotion input.
+    #[test]
+    fn stationary_player_is_carried_by_moving_kinematic_support() {
+        use cgmath::Rotation3;
+
+        let run = |attach_front_wall: bool| {
+            let mut world = PhysicsWorld::new();
+            let support_id = EntityId::from_inner(1001).unwrap();
+            let wall_id = EntityId::from_inner(1002).unwrap();
+            let support = world.add_kinematic(
+                support_id,
+                vec3(0.0, 1.0, 0.0),
+                Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Deg(90.0)),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(4.0, 0.4, 10.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            // A thin front wall crossing the direction of travel, like
+            // command1's Tram Front. Left stationary it blocks the passenger
+            // at its contact boundary while the floor moves out underneath.
+            let wall = world.add_kinematic(
+                wall_id,
+                vec3(4.0, 2.6, 0.0),
+                Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Deg(90.0)),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(3.0, 3.2, 0.4),
+                CollisionGroup::entity(),
+                false,
+            );
+            if attach_front_wall {
+                assert!(world.attach_kinematic(wall_id, support_id, vec3(4.0, 1.6, 0.0)));
+            }
+            let mut player =
+                world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2000).unwrap());
+
+            for _ in 0..30 {
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+            let player_start = world.get_player_translation(&player);
+            let support_start = world.get_position(support).unwrap();
+            let wall_start = world.get_position(wall).unwrap();
+
+            for frame in 1..=60 {
+                world.set_translation(support, support_start + vec3(frame as f32 * 0.2, 0.0, 0.0));
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+
+            let player_end = world.get_player_translation(&player);
+            let support_end = world.get_position(support).unwrap();
+            let wall_end = world.get_position(wall).unwrap();
+            (
+                player_end.x - player_start.x,
+                support_end.x - support_start.x,
+                wall_end.x - wall_start.x,
+            )
+        };
+
+        let (blocked_player, _, stationary_wall) = run(false);
+        assert!(
+            blocked_player < 4.0 && stationary_wall.abs() < 0.01,
+            "without PhysAttach propagation the wall should strand the passenger: player {blocked_player}, wall {stationary_wall}"
+        );
+
+        let (player_displacement, support_displacement, wall_displacement) = run(true);
+        assert!(
+            support_displacement > 11.9,
+            "test support should move twelve units, moved {support_displacement}"
+        );
+        assert!(
+            (wall_displacement - support_displacement).abs() < 0.01,
+            "attached wall must match support displacement: wall {wall_displacement}, support {support_displacement}"
+        );
+        assert!(
+            player_displacement > 10.0 && (player_displacement - support_displacement).abs() < 1.5,
+            "stationary passenger should remain aboard the moving support: player {player_displacement}, support {support_displacement}"
         );
     }
 

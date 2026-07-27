@@ -216,6 +216,57 @@ fn eng1_patrol_data_parses() {
 }
 
 #[test]
+fn command1_tram_physical_attachments_parse() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let info = load_mission_entity_info(&data, "command1.mis");
+
+    let mut attachments = info
+        .template_to_links
+        .iter()
+        .flat_map(|(source, links)| {
+            links
+                .to_links
+                .iter()
+                .filter_map(move |link| match link.link {
+                    Link::PhysAttach(options) => {
+                        Some((*source, link.to_template_id, options.offset))
+                    }
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+    attachments.sort_by_key(|(source, _, _)| *source);
+
+    assert_eq!(
+        attachments
+            .iter()
+            .map(|(source, _, _)| *source)
+            .collect::<Vec<_>>(),
+        vec![146, 152, 153, 155, 156, 199],
+        "command1 tram should have five collision parts and its button physically attached"
+    );
+    assert!(
+        attachments
+            .iter()
+            .all(|(_, destination, _)| *destination == 137),
+        "every tram child should attach to root object 137"
+    );
+    let front = attachments
+        .iter()
+        .find(|(source, _, _)| *source == 152)
+        .expect("Tram Front attachment should parse");
+    assert_eq!(front.2, cgmath::vec3(4.0, -0.2, -0.075));
+    assert!(
+        !info.unparsed_links.contains_key("L$PhysAttac")
+            && !info.unparsed_link_data.contains_key("LD$PhysAtta"),
+        "the physical attachment relation and its payload must both be typed"
+    );
+}
+
+#[test]
 fn medsci1_deaf_metaproperty_delivers_hearing_component() {
     let Some(data) = data_root() else {
         eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
