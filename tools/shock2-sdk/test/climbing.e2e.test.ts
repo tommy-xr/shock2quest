@@ -380,8 +380,23 @@ test(
       const beyondLip =
         position.x > ladder.x && position.z > ladder.z + 0.35;
       if (frames === 1 && beyondLip && horizontalDistance > 0.075) {
-        regularWalkResumed = true;
-        ordinaryWalkStart = previous;
+        const nearbySupport = await game.raycast({
+          start: [previous.x, previous.y, previous.z],
+          end: [previous.x, previous.y - 3, previous.z],
+          collision_groups: ["world", "entity", "selectable"],
+          ignore_sensors: true,
+        });
+        if (
+          nearbySupport.hit &&
+          nearbySupport.distance !== null &&
+          nearbySupport.distance > 0.5 &&
+          nearbySupport.distance < 1.25 &&
+          nearbySupport.hit_normal !== null &&
+          nearbySupport.hit_normal[1] > 0.5
+        ) {
+          regularWalkResumed = true;
+          ordinaryWalkStart = previous;
+        }
       }
       if (regularWalkResumed) {
         break;
@@ -399,9 +414,9 @@ test(
         `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`,
     );
 
-    // The first ordinary-speed frame begins from the expanded standing pose.
-    // Verify that pose has real production support, then release input and
-    // require it to settle there instead of accepting a horizontal free fall.
+    // The first supported horizontal frame marks contact with the upper deck
+    // after the bounded descent. Verify that pose has real production support,
+    // then release input and require a stable ordinary recovery.
     const support = await game.raycast({
       start: [
         ordinaryWalkStart.x,
@@ -410,15 +425,20 @@ test(
       ],
       end: [
         ordinaryWalkStart.x,
-        ordinaryWalkStart.y - 20,
+        ordinaryWalkStart.y - 3,
         ordinaryWalkStart.z,
       ],
-      collision_groups: ["all"],
+      collision_groups: ["world", "entity", "selectable"],
       ignore_sensors: true,
     });
-    assert.equal(
-      support.hit,
-      true,
+    assert.ok(
+      support.hit &&
+        support.distance !== null &&
+        support.distance > 0.5 &&
+        support.distance < 1.25 &&
+        support.hit_normal !== null &&
+        support.hit_normal[1] > 0.5 &&
+        support.collision_group !== "player",
       `the restored standing pose must have collision-valid support; ` +
         `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
         `support=${JSON.stringify(support)}`,
@@ -427,6 +447,12 @@ test(
     const landed = await game.player.position();
     await game.step({ frames: 60 });
     const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
     assert.ok(
       stable.x > ladder.x &&
         stable.z > ladder.z + 0.35 &&
@@ -436,12 +462,84 @@ test(
         Math.hypot(
           stable.x - ordinaryWalkStart.x,
           stable.z - ordinaryWalkStart.z,
-        ) < 0.5,
+        ) < 1.0 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2.0 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5 &&
+        stableSupport.collision_group !== "player",
       `the completed continuous top-out must settle on the supported deck; ` +
         `ladder=(${ladder.x.toFixed(2)}, ${ladderTop.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
         `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
         `landed=(${landed.x.toFixed(2)}, ${landed.y.toFixed(2)}, ${landed.z.toFixed(2)}), ` +
-        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)})`,
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `stable-support=${JSON.stringify(stableSupport)}`,
+    );
+
+    // Prove the supported pose is the usable upper room. Reorient and walk
+    // first along +Z past the ladder opening, then +X into the room using only
+    // ordinary production locomotion.
+    await game.input.lookAtWorldPoint([
+      stable.x,
+      stable.y + 1.6,
+      ladder.z + 4,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let deckSide = stable;
+    for (let elapsed = 0; elapsed < 60; elapsed += 2) {
+      await game.step({ frames: 2 });
+      deckSide = await game.player.position();
+      if (deckSide.z > stable.z + 0.75) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 30 });
+
+    await game.input.lookAtWorldPoint([
+      deckSide.x + 8,
+      deckSide.y + 1.6,
+      deckSide.z,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let advanced = deckSide;
+    for (let elapsed = 0; elapsed < 120; elapsed += 5) {
+      await game.step({ frames: 5 });
+      advanced = await game.player.position();
+      if (advanced.x > deckSide.x + 1.5) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const recovered = await game.player.position();
+    const recoveredSupport = await game.raycast({
+      start: [recovered.x, recovered.y, recovered.z],
+      end: [recovered.x, recovered.y - 3, recovered.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      deckSide.z > stable.z + 0.5 &&
+        recovered.x > ladder.x + 3 &&
+        recovered.z > ladder.z + 1 &&
+        recovered.x > deckSide.x + 1 &&
+        recovered.y > ladderTop - 1.5 &&
+        recovered.y < ladderTop + 0.2 &&
+        recoveredSupport.hit &&
+        recoveredSupport.distance !== null &&
+        recoveredSupport.distance > 0.5 &&
+        recoveredSupport.distance < 2.0 &&
+        recoveredSupport.hit_normal !== null &&
+        recoveredSupport.hit_normal[1] > 0.5 &&
+        recoveredSupport.collision_group !== "player",
+      `the continuous top-out must permit ordinary recovery into the upper room; ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `deck-side=(${deckSide.x.toFixed(2)}, ${deckSide.y.toFixed(2)}, ${deckSide.z.toFixed(2)}), ` +
+        `recovered=(${recovered.x.toFixed(2)}, ${recovered.y.toFixed(2)}, ${recovered.z.toFixed(2)}), ` +
+        `recovered-support=${JSON.stringify(recoveredSupport)}`,
     );
   },
 );
