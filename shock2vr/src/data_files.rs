@@ -12,7 +12,7 @@
 //! `File::open`ing the data root and failing on a 25AE install.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -51,7 +51,9 @@ pub fn data_file_mounts(data_root: &Path) -> Vec<Box<dyn AbstractAssetPath>> {
     ]
 }
 
-/// Every mission file available in `data_root`, lowercased and sorted.
+/// Every mission file available in `data_root`, sorted, with the spelling that
+/// opens it: a loose file keeps its on-disk case (which is what a case-sensitive
+/// filesystem needs), an archived one its lowercased archive name.
 ///
 /// A classic install has them loose at the data root; a 25AE install has them
 /// inside `sshock2.kpf` under `data/`, so a caller that only reads the directory
@@ -59,19 +61,22 @@ pub fn data_file_mounts(data_root: &Path) -> Vec<Box<dyn AbstractAssetPath>> {
 /// is how a "run against every mission" tool silently ends up running against
 /// nothing.
 pub fn mission_names(data_root: &Path) -> Vec<String> {
-    let mut names: BTreeSet<String> = loose_mission_names(data_root);
-    names.extend(archived_mission_names(data_root));
-    names.into_iter().collect()
+    // Keyed by lowercased name so the same mission present in both layouts is
+    // listed once, with the loose spelling winning.
+    let mut names: BTreeMap<String, String> = archived_mission_names(data_root);
+    names.extend(loose_mission_names(data_root));
+    names.into_values().collect()
 }
 
-fn loose_mission_names(data_root: &Path) -> BTreeSet<String> {
+fn loose_mission_names(data_root: &Path) -> BTreeMap<String, String> {
     let Ok(entries) = std::fs::read_dir(data_root) else {
-        return BTreeSet::new();
+        return BTreeMap::new();
     };
     entries
         .filter_map(|entry| entry.ok())
-        .map(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase())
-        .filter(|name| name.ends_with(".mis"))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.to_ascii_lowercase().ends_with(".mis"))
+        .map(|name| (name.to_ascii_lowercase(), name))
         .collect()
 }
 
@@ -79,15 +84,15 @@ fn loose_mission_names(data_root: &Path) -> BTreeSet<String> {
 /// classic install, and for an archive that cannot be opened - the caller
 /// reports "no missions" either way, and the mount layer gives the real error
 /// when something then tries to *read* a mission.
-fn archived_mission_names(data_root: &Path) -> BTreeSet<String> {
+fn archived_mission_names(data_root: &Path) -> BTreeMap<String, String> {
     if !is_25th_anniversary_install(data_root) {
-        return BTreeSet::new();
+        return BTreeMap::new();
     }
     let Ok(file) = std::fs::File::open(data_root.join(BASE_ARCHIVE)) else {
-        return BTreeSet::new();
+        return BTreeMap::new();
     };
     let Ok(archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
-        return BTreeSet::new();
+        return BTreeMap::new();
     };
     archive
         .file_names()
@@ -95,7 +100,8 @@ fn archived_mission_names(data_root: &Path) -> BTreeSet<String> {
             let lower = name.to_ascii_lowercase();
             let relative = lower.strip_prefix(ARCHIVE_DATA_PREFIX)?;
             // Only the missions themselves, not anything nested deeper.
-            (relative.ends_with(".mis") && !relative.contains('/')).then(|| relative.to_owned())
+            (relative.ends_with(".mis") && !relative.contains('/'))
+                .then(|| (relative.to_owned(), relative.to_owned()))
         })
         .collect()
 }
@@ -112,7 +118,8 @@ pub fn asset_paths(data_root: &Path) -> Box<dyn AbstractAssetPath> {
 }
 
 /// Open a raw data file by name (`shock2.gam`, `medsci1.mis`, `motiondb.bin`)
-/// from the resolved data root, in whichever layout is present.
+/// from the resolved data root, in whichever layout is present. `None` means
+/// "no mount has that name" - the cause of a filesystem error is not reported.
 ///
 /// The mounts are built once per process because indexing a 25AE archive is not
 /// free and callers like `cargo bn path bench --all` read every mission through
@@ -120,12 +127,14 @@ pub fn asset_paths(data_root: &Path) -> Box<dyn AbstractAssetPath> {
 pub fn open_data_file(name: &str) -> Option<Box<dyn ReadableAndSeekable>> {
     static PATHS: OnceLock<Box<dyn AbstractAssetPath>> = OnceLock::new();
     let data_root = crate::paths::data_root();
-    PATHS
-        .get_or_init(|| asset_paths(data_root))
-        .get_reader(
-            data_root.to_string_lossy().into_owned(),
-            name.to_ascii_lowercase(),
-        )
+    let paths = PATHS.get_or_init(|| asset_paths(data_root));
+    let base_path = data_root.to_string_lossy().into_owned();
+    // Archive keys are lowercased, but the loose-file mount resolves a name
+    // byte-for-byte, so an on-disk `Earth.mis` only opens under its own
+    // spelling on a case-sensitive filesystem.
+    paths
+        .get_reader(base_path.clone(), name.to_ascii_lowercase())
+        .or_else(|| paths.get_reader(base_path, name.to_owned()))
         .map(RefCell::into_inner)
 }
 
@@ -224,16 +233,18 @@ mod tests {
         );
     }
 
+    /// A loose mission keeps its on-disk spelling: that is the only name that
+    /// opens it on a case-sensitive filesystem.
     #[test]
     fn classic_install_lists_loose_missions() {
         let dir = TempDir::new("classic-missions");
-        std::fs::write(dir.path().join("earth.mis"), b"mission").unwrap();
+        std::fs::write(dir.path().join("Earth.MIS"), b"mission").unwrap();
         std::fs::write(dir.path().join("medsci1.mis"), b"mission").unwrap();
         std::fs::write(dir.path().join("shock2.gam"), b"gamesys").unwrap();
 
         assert_eq!(
             mission_names(dir.path()),
-            vec!["earth.mis".to_owned(), "medsci1.mis".to_owned()]
+            vec!["Earth.MIS".to_owned(), "medsci1.mis".to_owned()]
         );
     }
 

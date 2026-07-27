@@ -640,11 +640,11 @@ fn handle_maps_command(mission: &str) -> Result<()> {
 
     // The map rectangles live in the *interface resource family*, which a
     // classic install keeps in `res/intrface.crf` and a 25th Anniversary one
-    // inside `sshock2.kpf` (possibly overridden by a mod layer). Mount the
-    // game's own family list rather than a single archive so both resolve.
+    // inside `sshock2.kpf` (possibly overridden by a mod layer). Mount that
+    // family the way the game does rather than one hardcoded archive.
     let mut asset_cache = engine::assets::asset_cache::AssetCache::new(
         data_path.clone(),
-        shock2vr::tool_asset_paths(),
+        shock2vr::resource_family_paths("intrface"),
     );
 
     match dark::map::MapChunkData::load_from_mission(&mut asset_cache, mission) {
