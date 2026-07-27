@@ -184,6 +184,10 @@ export interface AimResult {
   fallback_used: boolean;
   /** Classification fallback and visibility are independent. */
   visibility: AimVisibility;
+  /** Production-equivalent interaction-ray hit used to choose the aim point. */
+  interaction_target_id: number | null;
+  /** Whether that interaction ray selected the requested runtime entity. */
+  target_confirmed: boolean;
 }
 
 /** A clip queued behind the currently-playing head clip. */

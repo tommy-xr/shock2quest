@@ -100,9 +100,9 @@ export class PlayerApi {
    * Aim the production flat camera, interaction ray, and weapon at an entity.
    *
    * Creature targets use their live classified damage proxies. Other entities
-   * first use the nearest visible selectable surface on the center ray.
-   * Occluded targets and unavailable classifications gracefully fall back to
-   * the entity center. Request `center` to aim at the origin explicitly.
+   * first use the nearest visible selectable surface on the center ray,
+   * including explicit `center` requests. Occluded targets and unavailable
+   * classifications gracefully fall back to the authored entity position.
    *
    * This accounts for authored and save-restored pawn rotation; raw
    * `head.look` / `head.rotation` are pawn-local.
@@ -202,7 +202,11 @@ export class PlayerApi {
       selected ??= candidates[0];
     }
 
+    // An explicit `center` on a classified creature keeps authored-center
+    // semantics; ordinary objects resolve `center` to their visible surface.
+    const explicitCreatureCenter = requested === "center" && aimPoints.length > 0;
     let surfacePoint: Vec3 | undefined;
+    let interactionTargetId: number | null = null;
     if (candidates.length === 0) {
       if (options?.visibility === "required") {
         const check = await checkViewVisibility(detail.position);
@@ -215,12 +219,15 @@ export class PlayerApi {
         ) {
           surfacePoint = check.hit.hit_point;
         }
-      } else if (requested !== "center") {
+      } else if (!explicitCreatureCenter) {
         const surface = await this.client.post<RayCastResult>("/v1/physics/raycast", {
           start: eye,
           end: detail.position,
           collision_groups: ["entity", "selectable", "world", "ui", "raycast"],
+          // Match the production interaction ray, which ignores trigger sensors.
+          ignore_sensors: true,
         });
+        interactionTargetId = surface?.entity_id ?? null;
         if (surface?.entity_id === entityId && surface.hit_point !== null) {
           surfacePoint = surface.hit_point;
         }
@@ -245,14 +252,18 @@ export class PlayerApi {
       head_rotation: headRotation,
       fallback_used:
         selected === undefined &&
-        requested !== "center" &&
-        (requested !== "surface" || surfacePoint === undefined),
+        !explicitCreatureCenter &&
+        (requested === "center"
+          ? surfacePoint === undefined
+          : requested !== "surface" || surfacePoint === undefined),
       visibility: visibility ?? {
         state: "unchecked",
         origin: "view",
         target_distance: distance(worldPoint),
         blocker: null,
       },
+      interaction_target_id: interactionTargetId,
+      target_confirmed: interactionTargetId === entityId,
     };
     if (result.visibility.state === "blocked") {
       throw new AimOcclusionError(result);

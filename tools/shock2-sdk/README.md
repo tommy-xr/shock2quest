@@ -57,15 +57,19 @@ const aim = await game.player.aimAt(target, {
   hitbox: "torso",
   visibility: "required",
 });
-// aim reports the selected owner/proxy/body/joint/world point and view LOS.
-// If every matching proxy is blocked it throws AimOcclusionError, whose
+// aim reports the selected owner/proxy/body/joint/world point, view LOS, and
+// whether the production-equivalent interaction ray confirmed the requested
+// target. If every matching proxy is blocked it throws AimOcclusionError, whose
 // structured result identifies the blocker. `fallback_used` only describes
 // hitbox classification; it never means the target is visible.
 //
 // Visibility is checked from the flat camera eye (`origin: "view"`). It does
 // not guarantee that the offset weapon muzzle is clear, so step and verify the
 // shot/target state instead of treating a successful aim as proof of damage.
-// Use { hitbox: "center" } only when you deliberately want the entity origin.
+//
+// For ordinary objects, { hitbox: "center" } means the visible selectable
+// surface on the center ray; the authored position is only a fallback. It still
+// means the authored center for a classified creature.
 await game.input.set("right_hand.squeeze_value", 1); // frob highlighted target
 await game.step({ frames: 2 });
 await game.input.set("right_hand.squeeze_value", 0);
