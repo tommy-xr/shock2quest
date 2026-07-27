@@ -360,7 +360,7 @@ test(
 
     let previous = base;
     let position = base;
-    let ordinaryWalkFrames = 0;
+    let regularWalkResumed = false;
     let ordinaryWalkStart = base;
     let fineSampling = false;
     for (let elapsed = 0; elapsed < 1_050; ) {
@@ -380,26 +380,18 @@ test(
       const beyondLip =
         position.x > ladder.x && position.z > ladder.z + 0.35;
       if (frames === 1 && beyondLip && horizontalDistance > 0.075) {
-        if (ordinaryWalkFrames === 0) {
-          ordinaryWalkStart = previous;
-        }
-        ordinaryWalkFrames += 1;
-      } else {
-        ordinaryWalkFrames = 0;
+        regularWalkResumed = true;
+        ordinaryWalkStart = previous;
       }
-      if (ordinaryWalkFrames >= 20) {
+      if (regularWalkResumed) {
         break;
       }
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
     assert.ok(
-      ordinaryWalkFrames >= 20 &&
-        Math.hypot(
-          position.x - ordinaryWalkStart.x,
-          position.z - ordinaryWalkStart.z,
-        ) > 1.5,
-      `one continuous diagonal heading must sustain ordinary walking past the lip; ` +
+      regularWalkResumed,
+      `one continuous diagonal heading must restore ordinary walking past the lip; ` +
         `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
         `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
         `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
@@ -407,23 +399,49 @@ test(
         `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`,
     );
 
-    // This exact 63° reproduction heads through the authored opening beside
-    // the rail, rather than toward the supported landing used by the preceding
-    // staged-heading test. Prove that geometry explicitly: a stable landing is
-    // impossible on this ray, so completion is the sustained ordinary
-    // horizontal locomotion above, not an arbitrary first "cleared" pose.
+    // The first ordinary-speed frame begins from the expanded standing pose.
+    // Verify that pose has real production support, then release input and
+    // require it to settle there instead of accepting a horizontal free fall.
     const support = await game.raycast({
-      start: [position.x, position.y, position.z],
-      end: [position.x, position.y - 20, position.z],
-      collision_groups: ["world"],
+      start: [
+        ordinaryWalkStart.x,
+        ordinaryWalkStart.y,
+        ordinaryWalkStart.z,
+      ],
+      end: [
+        ordinaryWalkStart.x,
+        ordinaryWalkStart.y - 20,
+        ordinaryWalkStart.z,
+      ],
+      collision_groups: ["all"],
       ignore_sensors: true,
     });
     assert.equal(
       support.hit,
-      false,
-      `the exact continuous route should cross the open shaft, not a hidden support; ` +
-        `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}), ` +
+      true,
+      `the restored standing pose must have collision-valid support; ` +
+        `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
         `support=${JSON.stringify(support)}`,
+    );
+    await game.step({ frames: 120 });
+    const landed = await game.player.position();
+    await game.step({ frames: 60 });
+    const stable = await game.player.position();
+    assert.ok(
+      stable.x > ladder.x &&
+        stable.z > ladder.z + 0.35 &&
+        stable.y > ladderTop - 1.5 &&
+        stable.y < ladderTop + 0.2 &&
+        Math.abs(stable.y - landed.y) < 0.1 &&
+        Math.hypot(
+          stable.x - ordinaryWalkStart.x,
+          stable.z - ordinaryWalkStart.z,
+        ) < 0.5,
+      `the completed continuous top-out must settle on the supported deck; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladderTop.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
+        `landed=(${landed.x.toFixed(2)}, ${landed.y.toFixed(2)}, ${landed.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)})`,
     );
   },
 );
