@@ -1,7 +1,7 @@
 // Campaign randomization tables for the play-through skill: the mission-sequence
-// scenarios and the special-tweak playstyles a campaign can roll. Consumed by
-// `playthrough-state.mjs roll` (which persists the pick in the ledger) — run
-// directly only to browse the tables:
+// scenarios and the bonus-objective / special-tweak playstyles a campaign can
+// roll. Consumed by `playthrough-state.mjs roll` (which persists the pick in the
+// ledger) — run directly only to browse the tables:
 //
 //   node scenarios.mjs list          print all scenarios and tweaks with ids
 
@@ -74,6 +74,26 @@ export const TWEAKS = [
     id: "loot-everything",
     name: "Loot everything",
     instructions: "Grab and loot everything possible: search every corpse and container, pick up every item, and report anything that can't be grabbed or looted.",
+  },
+  {
+    id: "hack-everything",
+    name: "Hack everything hackable",
+    instructions: "Find and hack every hackable object in each mission, not just those on the shortest route; verify each successful hack changes the object's behavior as expected and report anything the game identifies as hackable that cannot be hacked.",
+  },
+  {
+    id: "repair-everything",
+    name: "Repair everything repairable",
+    instructions: "Find and repair every repairable object in each mission, not just those on the shortest route; verify each repair restores the expected function and report anything the game identifies as repairable that cannot be repaired.",
+  },
+  {
+    id: "buy-every-replicator",
+    name: "Buy from every replicator",
+    instructions: "Find every replicator in each mission and buy at least one item from each; verify the transaction consumes the expected nanites and dispenses the selected item, including hacked inventory where available.",
+  },
+  {
+    id: "verify-os-upgraders",
+    name: "Verify OS upgraders",
+    instructions: "Find and use every OS Upgrade Unit in each mission; choose different upgrades where possible, verify each grants the selected upgrade and follows the expected one-use behavior, and report any missing or incorrect upgrade effect.",
   },
   {
     id: "verify-cutscenes",
@@ -222,7 +242,7 @@ if (process.argv[1]?.endsWith("scenarios.mjs")) {
   if (cmd === "list") {
     console.log("Scenarios:");
     for (const s of SCENARIOS) console.log(`  ${s.id.padEnd(18)} ${s.missions.join(",").padEnd(28)} ${s.goal}`);
-    console.log("Tweaks:");
+    console.log("Bonus objectives / tweaks:");
     for (const t of TWEAKS) console.log(`  ${t.id.padEnd(22)} ${t.instructions}`);
     console.log("Asset sets:");
     for (const a of ASSET_SETS) console.log(`  ${a.id.padEnd(22)} ${a.name} (DARK_ASSET_PATH=${a.path})${assetSetUsable(a) ? "" : " [NOT USABLE: no data-root sentinel — force-only, excluded from random draw]"}`);
