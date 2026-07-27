@@ -86,3 +86,46 @@ test(
     );
   },
 );
+
+test(
+  "ops4: aimAt center selects the offset-pivot button and production squeeze opens its doors",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "ops4.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8127),
+    });
+    await game.step({ frames: 2 });
+
+    const buttons = await game.entities.byTemplate(334);
+    assert.equal(buttons.length, 1, "expected the offset-pivot door button");
+    const [leftDoor] = await game.entities.byTemplate(331);
+    const [rightDoor] = await game.entities.byTemplate(332);
+    assert.ok(leftDoor && rightDoor, "expected both linked Ops doors");
+    await game.player.teleport({ x: 53.5, y: -9.796, z: -60.8 });
+
+    const aim = await game.player.aimAt(buttons[0], { hitbox: "center" });
+    assert.equal(aim.classification, "surface");
+    assert.equal(aim.entity_id, buttons[0].id);
+    assert.equal(aim.interaction_target_id, buttons[0].id);
+    assert.equal(aim.target_confirmed, true);
+
+    await game.input.set("right_hand.squeeze_value", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze_value", 0);
+    await game.step({ frames: 120 });
+
+    const [openedLeft, openedRight] = await Promise.all([
+      game.entities.detail(leftDoor.id),
+      game.entities.detail(rightDoor.id),
+    ]);
+    assert.ok(
+      Math.abs(openedLeft.position[0] - leftDoor.position[0]) > 1,
+      "left linked door should translate open",
+    );
+    assert.ok(
+      Math.abs(openedRight.position[0] - rightDoor.position[0]) > 1,
+      "right linked door should translate open",
+    );
+  },
+);

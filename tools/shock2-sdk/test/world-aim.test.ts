@@ -193,7 +193,7 @@ test("aimAt reports center fallback when another entity occludes the target surf
   assert.equal(aim.fallback_used, true);
 });
 
-test("aimAt center remains an explicit origin target without a surface query", async () => {
+test("aimAt center uses and confirms an ordinary entity's selectable surface", async () => {
   const detail = {
     entity_id: 470,
     name: "Airlock Door",
@@ -212,24 +212,44 @@ test("aimAt center remains an explicit origin target without a surface query", a
       rotation: [0, 0, 0, 1],
     },
   } as FrameSnapshot;
-  const writes: string[] = [];
+  const writes: Array<{ path: string; body: unknown }> = [];
   const client = {
     get: async (path: string) => {
       if (path === "/v1/entities/470") return detail;
       if (path === "/v1/info") return snapshot;
       throw new Error(`unexpected GET ${path}`);
     },
-    post: async (path: string) => {
-      writes.push(path);
+    post: async (path: string, body: unknown) => {
+      writes.push({ path, body });
+      if (path === "/v1/physics/raycast") {
+        return {
+          hit: true,
+          hit_point: [30, -7, 17.25],
+          hit_normal: [0, 0, -1],
+          distance: 4.25,
+          entity_id: 470,
+          entity_name: "Airlock Door",
+          collision_group: "selectable",
+          is_sensor: false,
+        };
+      }
     },
   };
   const player = new PlayerApi(client as unknown as HttpClient);
 
   const aim = await player.aimAt(470, { hitbox: "center" });
 
-  assert.equal(aim.classification, "center");
+  assert.equal(aim.classification, "surface");
   assert.equal(aim.fallback_used, false);
-  assert.deepEqual(writes, ["/v1/control/input"]);
+  assert.deepEqual(aim.world_point, [30, -7, 17.25]);
+  assert.equal(aim.interaction_target_id, 470);
+  assert.equal(aim.target_confirmed, true);
+  assert.equal(writes[0]?.path, "/v1/physics/raycast");
+  assert.equal(
+    (writes[0]?.body as { ignore_sensors?: boolean }).ignore_sensors,
+    true,
+  );
+  assert.equal(writes[1]?.path, "/v1/control/input");
 });
 
 test("aimAt visibility required skips an occluded classified proxy", async () => {
