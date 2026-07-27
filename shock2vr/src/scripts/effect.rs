@@ -441,6 +441,15 @@ pub enum Effect {
         locked: bool,
     },
 
+    /// Persistently set Dark's `P$TransDoor` motion fields (`state` and
+    /// `base_location`) on one live object - emitted by `scripts::std_door` so
+    /// door motion survives saves.
+    SetTranslatingDoorState {
+        entity_id: EntityId,
+        state: i32,
+        base_location: Vector3<f32>,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },

@@ -1,7 +1,7 @@
 use cgmath::{InnerSpace, Vector3, Zero};
 use dark::properties::PropTranslatingDoor;
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, ViewMut, World};
+use shipyard::{EntityId, Get, View, World};
 use tracing::trace;
 
 use crate::{physics::PhysicsWorld, time::Time};
@@ -33,17 +33,13 @@ impl StdDoor {
             < (self.desired_position - trans_door.base_closed_location).magnitude2()
     }
 
-    fn persist_motion(
-        &self,
-        entity_id: EntityId,
-        world: &World,
-        state: i32,
-        position: Vector3<f32>,
-    ) {
-        let mut doors = world.borrow::<ViewMut<PropTranslatingDoor>>().unwrap();
-        if let Ok(door) = (&mut doors).get(entity_id) {
-            door.state = state;
-            door.base_location = position;
+    /// Door motion is persisted through the effect pipeline (applied by
+    /// `mission_core`) rather than written here - scripts stay pure.
+    fn persist_motion(entity_id: EntityId, state: i32, position: Vector3<f32>) -> Effect {
+        Effect::SetTranslatingDoorState {
+            entity_id,
+            state,
+            base_location: position,
         }
     }
 
@@ -59,14 +55,18 @@ impl StdDoor {
 
         self.desired_position = trans_door.base_open_location;
         self.is_moving = true;
-        self.persist_motion(entity_id, world, 3, self.current_position);
-        play_environmental_sound(
-            world,
-            entity_id,
-            "statechange",
-            vec![("openstate", "opening"), ("oldopenstate", "closed")],
-            self.audio_handle.clone(),
-        )
+        Effect::Combined {
+            effects: vec![
+                Self::persist_motion(entity_id, 3, self.current_position),
+                play_environmental_sound(
+                    world,
+                    entity_id,
+                    "statechange",
+                    vec![("openstate", "opening"), ("oldopenstate", "closed")],
+                    self.audio_handle.clone(),
+                ),
+            ],
+        }
     }
 
     fn close(
@@ -77,14 +77,18 @@ impl StdDoor {
     ) -> Effect {
         self.desired_position = trans_door.base_closed_location;
         self.is_moving = true;
-        self.persist_motion(entity_id, world, 2, self.current_position);
-        play_environmental_sound(
-            world,
-            entity_id,
-            "statechange",
-            vec![("openstate", "closing"), ("oldopenstate", "open")],
-            self.audio_handle.clone(),
-        )
+        Effect::Combined {
+            effects: vec![
+                Self::persist_motion(entity_id, 2, self.current_position),
+                play_environmental_sound(
+                    world,
+                    entity_id,
+                    "statechange",
+                    vec![("openstate", "closing"), ("oldopenstate", "open")],
+                    self.audio_handle.clone(),
+                ),
+            ],
+        }
     }
 }
 impl Script for StdDoor {
@@ -151,19 +155,22 @@ impl Script for StdDoor {
                 );
 
                 self.current_position += normalized * step;
-                self.persist_motion(
-                    entity_id,
-                    world,
-                    if self.target_is_open(&trans_door) {
-                        3
-                    } else {
-                        2
-                    },
-                    self.current_position,
-                );
-                Effect::SetPosition {
-                    entity_id,
-                    position: self.current_position,
+                Effect::Combined {
+                    effects: vec![
+                        Effect::SetPosition {
+                            entity_id,
+                            position: self.current_position,
+                        },
+                        Self::persist_motion(
+                            entity_id,
+                            if self.target_is_open(&trans_door) {
+                                3
+                            } else {
+                                2
+                            },
+                            self.current_position,
+                        ),
+                    ],
                 }
             } else if self.is_moving {
                 self.is_moving = false;
@@ -173,12 +180,6 @@ impl Script for StdDoor {
                 let reached_open =
                     (self.desired_position - trans_door.base_open_location).magnitude2() < 0.001;
                 self.current_position = self.desired_position;
-                self.persist_motion(
-                    entity_id,
-                    world,
-                    if reached_open { 1 } else { 0 },
-                    self.desired_position,
-                );
                 let state_signal = Effect::Send {
                     msg: Message {
                         to: entity_id,
@@ -197,6 +198,11 @@ impl Script for StdDoor {
                             entity_id,
                             position: self.desired_position,
                         },
+                        Self::persist_motion(
+                            entity_id,
+                            if reached_open { 1 } else { 0 },
+                            self.desired_position,
+                        ),
                         play_environmental_sound(
                             world,
                             entity_id,
@@ -442,19 +448,63 @@ mod tests {
         }
     }
 
+    /// Stand-in for `mission_core`'s `Effect::SetTranslatingDoorState` handler -
+    /// the script only emits the effect, the world write happens here.
+    fn apply(world: &World, effect: Effect) {
+        for effect in Effect::flatten(vec![effect]) {
+            if let Effect::SetTranslatingDoorState {
+                entity_id,
+                state,
+                base_location,
+            } = effect
+            {
+                let mut doors = world
+                    .borrow::<shipyard::ViewMut<PropTranslatingDoor>>()
+                    .unwrap();
+                if let Ok(door) = (&mut doors).get(entity_id) {
+                    door.state = state;
+                    door.base_location = base_location;
+                }
+            }
+        }
+    }
+
     #[test]
     fn settled_open_endpoint_is_persisted_in_door_property() {
         let (world, entity_id) = test_world(false, false);
         let physics = PhysicsWorld::new();
         let mut door = initialized_door(entity_id, &world);
 
-        door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
-        door.update(entity_id, &world, &physics, &step(1.0));
+        let effect = door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
+        apply(&world, effect);
+        let effect = door.update(entity_id, &world, &physics, &step(1.0));
+        apply(&world, effect);
 
         let doors = world.borrow::<View<PropTranslatingDoor>>().unwrap();
         let saved = doors.get(entity_id).unwrap();
         assert_eq!(saved.state, 1);
         assert_eq!(saved.base_location, saved.base_open_location);
+    }
+
+    #[test]
+    fn frob_emits_the_opening_state_as_an_effect() {
+        let (world, entity_id) = test_world(false, false);
+        let physics = PhysicsWorld::new();
+        let mut door = initialized_door(entity_id, &world);
+
+        let effect = door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
+
+        let persisted = Effect::flatten(vec![effect])
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::SetTranslatingDoorState {
+                    entity_id: id,
+                    state,
+                    base_location,
+                } if id == entity_id => Some((state, base_location)),
+                _ => None,
+            });
+        assert_eq!(persisted, Some((3, vec3(1.0, 2.0, 3.0))));
     }
 
     #[test]
@@ -490,8 +540,10 @@ mod tests {
         let physics = PhysicsWorld::new();
         let mut door = initialized_door(entity_id, &world);
 
-        door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
-        door.update(entity_id, &world, &physics, &step(1.0));
+        let effect = door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
+        apply(&world, effect);
+        let effect = door.update(entity_id, &world, &physics, &step(1.0));
+        apply(&world, effect);
 
         let doors = world.borrow::<View<PropTranslatingDoor>>().unwrap();
         let saved = doors.get(entity_id).unwrap();
