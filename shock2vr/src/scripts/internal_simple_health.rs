@@ -3,7 +3,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
 
-use super::{Effect, MessagePayload, Script};
+use super::{Effect, Message, MessagePayload, Script};
 
 // Script to handle simple health behavior for non-creature entities that carry
 // a `PropHitPoints` (e.g. breakable crates, canisters, computer panels).
@@ -45,9 +45,14 @@ impl Script for InternalSimpleHealth {
                         entity_id,
                         delta: -damage,
                     },
-                    // Hit points exhausted (or, defensively, no pool to draw
-                    // from): the entity dies.
-                    _ => Effect::SlayEntity { entity_id },
+                    // Route death through the script queue before teardown so
+                    // authored death triggers (TriggerDestroy) can react.
+                    _ => Effect::Send {
+                        msg: Message {
+                            to: entity_id,
+                            payload: MessagePayload::Slay,
+                        },
+                    },
                 }
             }
             _ => Effect::NoEffect,
@@ -95,36 +100,37 @@ mod tests {
         }
     }
 
+    fn assert_requests_slay(effect: Effect, entity_id: EntityId) {
+        match effect {
+            Effect::Send { msg } => {
+                assert_eq!(msg.to, entity_id);
+                assert!(matches!(msg.payload, MessagePayload::Slay));
+            }
+            other => panic!("expected queued Slay message, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn damage_meeting_hit_points_slays() {
+    fn damage_meeting_hit_points_requests_slay() {
         let (world, entity_id) = world_with_hit_points(1);
 
-        match damage(&world, entity_id, 1.0) {
-            Effect::SlayEntity { entity_id: id } => assert_eq!(id, entity_id),
-            other => panic!("expected SlayEntity, got {:?}", other),
-        }
+        assert_requests_slay(damage(&world, entity_id, 1.0), entity_id);
     }
 
     #[test]
-    fn damage_exceeding_hit_points_slays() {
+    fn damage_exceeding_hit_points_requests_slay() {
         let (world, entity_id) = world_with_hit_points(5);
 
-        match damage(&world, entity_id, 6.0) {
-            Effect::SlayEntity { entity_id: id } => assert_eq!(id, entity_id),
-            other => panic!("expected SlayEntity, got {:?}", other),
-        }
+        assert_requests_slay(damage(&world, entity_id, 6.0), entity_id);
     }
 
     #[test]
-    fn entity_without_hit_points_is_slain() {
+    fn entity_without_hit_points_requests_slay() {
         use dark::properties::PropMaxHitPoints;
         let mut world = World::new();
         // An entity that has *some* component but no PropHitPoints pool.
         let entity_id = world.add_entity((PropMaxHitPoints { hit_points: 10 },));
 
-        match damage(&world, entity_id, 1.0) {
-            Effect::SlayEntity { entity_id: id } => assert_eq!(id, entity_id),
-            other => panic!("expected SlayEntity, got {:?}", other),
-        }
+        assert_requests_slay(damage(&world, entity_id, 1.0), entity_id);
     }
 }
