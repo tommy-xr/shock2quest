@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import type { EntitySummary } from "../src/index.js";
 
 // End-to-end test for flat (desktop-style) ladder climbing.
 //
@@ -15,6 +16,20 @@ import { GameServer } from "../src/index.js";
 // presses the player against the ladder collider (y stays at floor height), so
 // the ascent assertion fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
+
+type LadderColumn = { x: number; z: number; ys: number[] };
+
+function groupLadderColumns(rungs: EntitySummary[]): LadderColumn[] {
+  const columns = new Map<string, LadderColumn>();
+  for (const rung of rungs) {
+    const [x, y, z] = rung.position;
+    const key = `${Math.round(x)},${Math.round(z)}`;
+    const column = columns.get(key) ?? { x, z, ys: [] };
+    column.ys.push(y);
+    columns.set(key, column);
+  }
+  return [...columns.values()];
+}
 
 test(
   "flat climbing: pushing into a ladder ascends it",
@@ -36,16 +51,8 @@ test(
       .entities;
     assert.ok(rungs.length > 0, "medsci1 should contain Rick Ladder entities");
 
-    const columns = new Map<string, { x: number; z: number; ys: number[] }>();
-    for (const rung of rungs) {
-      const [x, y, z] = rung.position;
-      const key = `${Math.round(x)},${Math.round(z)}`;
-      const col = columns.get(key) ?? { x, z, ys: [] };
-      col.ys.push(y);
-      columns.set(key, col);
-    }
-    const ladder = [...columns.values()].reduce((best, col) => {
-      const d = (c: { x: number; z: number }) =>
+    const ladder = groupLadderColumns(rungs).reduce((best, col) => {
+      const d = (c: LadderColumn) =>
         Math.hypot(c.x - -17.5, c.z - 14.5);
       return d(col) < d(best) ? col : best;
     });
@@ -79,6 +86,226 @@ test(
       `pressing into the ladder should climb it (started y=${before.y.toFixed(2)}, ` +
         `ended y=${after.y.toFixed(2)}, ascent=${ascent.toFixed(2)}; ` +
         "without climbing the ladder collider just blocks the player)",
+    );
+  },
+);
+
+// Issue #626: rick1's opening ladder extends above the upper-deck landing.
+// Vertical-only climbing reaches the cap at about (20.4, 19.2, 2.0), but
+// ordinary collision then keeps the standing capsule on the shaft side. This
+// regression holds the same forward input through the transition and requires
+// the production movement path to finish on the upper deck.
+test(
+  "flat climbing: forward input tops out onto rick1's opening deck",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "rick1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids change every launch. Group the authored rung entities into
+    // columns, keep full-height stacks, then pick the one nearest the fresh
+    // arrival-room spawn.
+    const rungs = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities;
+    assert.ok(rungs.length > 0, "rick1 should contain Rick Ladder 16 entities");
+
+    const spawn = await game.player.position();
+    const fullHeightColumns = groupLadderColumns(rungs).filter(
+      (col) => Math.max(...col.ys) - Math.min(...col.ys) > 15,
+    );
+    assert.ok(
+      fullHeightColumns.length > 0,
+      "rick1 should contain a full-height ladder stack",
+    );
+    const ladder = fullHeightColumns.reduce((best, col) => {
+      const distance = (candidate: LadderColumn) =>
+        Math.hypot(candidate.x - spawn.x, candidate.z - spawn.z);
+      return distance(col) < distance(best) ? col : best;
+    });
+    const ladderBottom = Math.min(...ladder.ys);
+    const ladderTop = Math.max(...ladder.ys);
+
+    // Stage on the arrival-room floor facing slightly toward the deck side of
+    // the ladder. The climb and top-out themselves use only ordinary
+    // locomotion; no direct relocation or entity message occurs during them.
+    await game.player.teleport({
+      x: ladder.x - 1,
+      y: ladderBottom - 2.2,
+      z: ladder.z - 0.4,
+    });
+    await game.step({ frames: 30 });
+    await game.input.lookAtWorldPoint([
+      ladder.x + 8,
+      ladderTop + 2,
+      ladder.z + 1,
+    ]);
+
+    // Climb with the slight +Z heading, stopping with a full one-frame margin
+    // below the top-out range. (Dead-straight input stalls on lower ship
+    // geometry at y ~= 7.7.)
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let beforeTopOut = await game.player.position();
+    for (let elapsed = 0; elapsed < 720; ) {
+      const frames = beforeTopOut.y < ladderTop - 3 ? 30 : 1;
+      await game.step({ frames });
+      elapsed += frames;
+      beforeTopOut = await game.player.position();
+      if (beforeTopOut.y >= ladderTop - 2.6) {
+        break;
+      }
+    }
+    assert.ok(
+      beforeTopOut.y >= ladderTop - 2.6 && beforeTopOut.y < ladderTop - 2.4,
+      `forward input should reach the pre-top-out approach; ended at y=${beforeTopOut.y.toFixed(2)}`,
+    );
+
+    // Aim diagonally +Z BEFORE the top-out can be planned. The z=2.4 level wall
+    // is genuinely solid along that route: the ordered transition must rise
+    // while remaining on its near side, then cross only after clearing it.
+    const topOutTarget = {
+      x: ladder.x + 8,
+      z: ladder.z + 4,
+    };
+    await game.input.lookAtWorldPoint([
+      topOutTarget.x,
+      ladderTop + 2,
+      topOutTarget.z,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    const topOutLength = Math.hypot(
+      topOutTarget.x - beforeTopOut.x,
+      topOutTarget.z - beforeTopOut.z,
+    );
+    const topOutDirection = {
+      x: (topOutTarget.x - beforeTopOut.x) / topOutLength,
+      z: (topOutTarget.z - beforeTopOut.z) / topOutLength,
+    };
+    let lastBeforeForward = beforeTopOut;
+    let firstForward = beforeTopOut;
+    for (let elapsed = 0; elapsed < 360; elapsed += 1) {
+      const previous = firstForward;
+      await game.step({ frames: 1 });
+      firstForward = await game.player.position();
+      const forwardDelta =
+        (firstForward.x - previous.x) * topOutDirection.x +
+        (firstForward.z - previous.z) * topOutDirection.z;
+      if (forwardDelta > 0.001) {
+        lastBeforeForward = previous;
+        break;
+      }
+    }
+    assert.ok(
+      lastBeforeForward.z < ladder.z - 0.3 &&
+        lastBeforeForward.y > ladderTop,
+      `the top-out must reach clearance height on the near side before its first forward crossing step; ` +
+        `approach=(${beforeTopOut.y.toFixed(2)}, ${beforeTopOut.z.toFixed(2)}), ` +
+        `last-before-forward=(${lastBeforeForward.y.toFixed(2)}, ${lastBeforeForward.z.toFixed(2)}), ` +
+        `first-forward=(${firstForward.y.toFixed(2)}, ${firstForward.z.toFixed(2)})`,
+    );
+
+    // Keep the same ordinary forward input held. The scripted rise must clear
+    // the wall before the crossing, then fully expand and restore ordinary
+    // walking beyond the ladder's geometry-derived exit. Scripted mantle
+    // substeps are capped at 0.067 world units/frame; the first >0.1 projected
+    // frame therefore proves the standing capsule and regular locomotion were
+    // restored before input release.
+    const cap = lastBeforeForward;
+    let cleared = firstForward;
+    let previousHeld = firstForward;
+    let regularWalkResumed = false;
+    for (let elapsed = 0; elapsed < 360; elapsed += 1) {
+      await game.step({ frames: 1 });
+      cleared = await game.player.position();
+      const forwardDelta =
+        (cleared.x - previousHeld.x) * topOutDirection.x +
+        (cleared.z - previousHeld.z) * topOutDirection.z;
+      const beyondLip =
+        cleared.x > ladder.x + 1 &&
+        cleared.z > ladder.z + 0.35;
+      regularWalkResumed = beyondLip && forwardDelta > 0.1;
+      previousHeld = cleared;
+      if (regularWalkResumed) {
+        break;
+      }
+    }
+    assert.ok(
+      regularWalkResumed,
+      `the held forward input must complete the standing top-out before release; ` +
+        `ended=(${cleared.x.toFixed(2)}, ${cleared.y.toFixed(2)}, ${cleared.z.toFixed(2)})`,
+    );
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 120 });
+    const landed = await game.player.position();
+    await game.step({ frames: 60 });
+    const stable = await game.player.position();
+
+    assert.ok(
+      stable.x > ladder.x + 1 &&
+        stable.z > ladder.z + 0.35 &&
+        stable.y > ladderTop - 1.5 &&
+        stable.y < ladderTop + 0.2 &&
+        Math.abs(stable.y - landed.y) < 0.1,
+      `diagonal forward input should top out onto the lower deck beyond the rail; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `cap=(${cap.x.toFixed(2)}, ${cap.y.toFixed(2)}, ${cap.z.toFixed(2)}), ` +
+        `cleared=(${cleared.x.toFixed(2)}, ${cleared.y.toFixed(2)}, ${cleared.z.toFixed(2)}), ` +
+        `landed=(${landed.x.toFixed(2)}, ${landed.y.toFixed(2)}, ${landed.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)})`,
+    );
+
+    // Prove the result is a usable deck, not another stable rail perch: walk
+    // farther toward the first egg's +Z side, then turn +X and advance into the
+    // room using only ordinary locomotion.
+    await game.input.lookAtWorldPoint([
+      stable.x,
+      stable.y + 1.6,
+      ladder.z + 4,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let deckSide = stable;
+    for (let elapsed = 0; elapsed < 60; elapsed += 2) {
+      await game.step({ frames: 2 });
+      deckSide = await game.player.position();
+      if (deckSide.z > stable.z + 0.75) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 30 });
+
+    await game.input.lookAtWorldPoint([
+      deckSide.x + 8,
+      deckSide.y + 1.6,
+      deckSide.z,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let advanced = deckSide;
+    for (let elapsed = 0; elapsed < 120; elapsed += 5) {
+      await game.step({ frames: 5 });
+      advanced = await game.player.position();
+      if (advanced.x > deckSide.x + 1.5) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const final = await game.player.position();
+
+    assert.ok(
+      final.x > ladder.x + 3 &&
+        final.z > ladder.z + 1 &&
+        deckSide.z > stable.z + 0.5 &&
+        final.x > deckSide.x + 1 &&
+        final.y > ladderTop - 1.5 &&
+        final.y < ladderTop + 0.2,
+      `the top-out landing should support ordinary onward deck movement; ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `deckSide=(${deckSide.x.toFixed(2)}, ${deckSide.y.toFixed(2)}, ${deckSide.z.toFixed(2)}), ` +
+        `ended=(${final.x.toFixed(2)}, ${final.y.toFixed(2)}, ${final.z.toFixed(2)})`,
     );
   },
 );

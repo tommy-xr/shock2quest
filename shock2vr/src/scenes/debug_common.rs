@@ -264,6 +264,10 @@ impl GameScene for DebugScene {
         self.core.player_is_crouched()
     }
 
+    fn player_save_position(&self) -> Option<Vector3<f32>> {
+        self.core.player_save_position()
+    }
+
     fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {
         Some(&self.core)
     }
@@ -478,6 +482,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
+    }
+
+    fn player_save_position(&self) -> Option<Vector3<f32>> {
+        self.core.player_save_position()
     }
 
     fn as_debuggable(&self) -> Option<&dyn crate::game_scene::DebuggableScene> {
