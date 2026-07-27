@@ -101,9 +101,11 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 /// genuinely on it - never while they are airborne above it.
 const SUPPORT_PROBE_DISTANCE: f32 = 0.1;
 
-/// How horizontal a probed surface must be to count as support. Matches the
-/// slope test the ground pass itself uses: a wall is never something you ride.
-const SUPPORT_MIN_GROUND_NORMAL: f32 = 0.5;
+/// How horizontal a probed surface must be to count as support: the same
+/// walkable-ground threshold the mantle probe uses (~44 degrees, just inside
+/// the controller's default 45-degree slide angle). A surface the player would
+/// slide down is not one they ride, and a wall never is.
+const SUPPORT_MIN_GROUND_NORMAL: f32 = CLIMB_TOP_OUT_MIN_GROUND_NORMAL;
 
 /// Horizontal reach (world units) for ladder detection: the player grips a
 /// climbable surface when their collider, inflated by this much radially,
@@ -501,34 +503,46 @@ fn player_movement_filter(character_handle: RigidBodyHandle) -> QueryFilter<'sta
 /// Probing for the *surface underfoot* - rather than taking any contact - is
 /// what keeps a wall or a door sliding past the player from dragging them
 /// along with it.
+///
+/// The cast only sees kinematic-bodied colliders, because it is looking for
+/// something that can move, and asking for the nearest collider of any kind
+/// would let an immobile one mask it: a tram deck parked flush with its station
+/// floor is exactly that geometry, and a rider would lose their support to the
+/// platform underneath at the moment of departure.
 fn detect_support(
     queries: &QueryPipeline,
-    colliders: &ColliderSet,
     bodies: &RigidBodySet,
     shape: &dyn Shape,
     pos: &Isometry<Real>,
 ) -> Option<PlayerSupport> {
-    let (handle, hit) = queries.cast_shape(
-        pos,
-        &-Vector::y(),
-        shape,
-        rapier3d::parry::query::ShapeCastOptions {
-            max_time_of_impact: SUPPORT_PROBE_DISTANCE,
-            target_distance: 0.0,
-            stop_at_penetration: false,
-            compute_impact_geometry_on_penetration: true,
-        },
-    )?;
+    let is_kinematic = |_handle: ColliderHandle, collider: &Collider| {
+        collider
+            .parent()
+            .and_then(|parent| bodies.get(parent))
+            .is_some_and(RigidBody::is_kinematic)
+    };
+    let (handle, hit) = queries
+        .with_filter(queries.filter.predicate(&is_kinematic))
+        .cast_shape(
+            pos,
+            &-Vector::y(),
+            shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: SUPPORT_PROBE_DISTANCE,
+                target_distance: 0.0,
+                stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true,
+            },
+        )?;
     // `normal1` is the normal on the world collider (the pipeline is shape 1
     // of the cast), the same one the controller's own floor/wall test reads.
     if hit.normal1.y < SUPPORT_MIN_GROUND_NORMAL {
         return None;
     }
-    let body = colliders.get(handle)?.parent()?;
-    let rigid_body = bodies.get(body)?;
-    rigid_body.is_kinematic().then(|| PlayerSupport {
+    let body = queries.colliders.get(handle)?.parent()?;
+    Some(PlayerSupport {
         body,
-        translation: *rigid_body.translation(),
+        translation: *bodies.get(body)?.translation(),
     })
 }
 
@@ -1815,10 +1829,6 @@ impl PhysicsWorld {
         player_handle: &mut PlayerHandle,
     ) {
         player_handle.top_out = None;
-        // Whatever the player was riding, they are no longer standing on it at
-        // the old spot - a stale support would carry them by a platform's next
-        // step from clear across the level. The next movement frame re-probes.
-        player_handle.support = None;
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let player_height = if player_handle.is_crouched {
             PLAYER_CROUCH_HEIGHT
@@ -1834,7 +1844,13 @@ impl PhysicsWorld {
             .get_mut(player_handle.character_handle)
             .unwrap();
         character_body.enable_ccd(true);
-        character_body.set_translation(vec_to_nvec(position), true)
+        character_body.set_translation(vec_to_nvec(position), true);
+        // Whatever the player was riding, they are not standing on it here.
+        // Re-probe now rather than just forgetting: a stale support would carry
+        // them by a platform's next step from clear across the level, and an
+        // absent one would drop the first frame of a ride they land in the
+        // middle of (a teleport, or a save restored onto a moving deck).
+        self.refresh_player_support(player_handle);
     }
 
     /// The character body's current translation, without stepping the
@@ -2091,13 +2107,11 @@ impl PhysicsWorld {
         // without advancing toward the target.
         let walked = new_position != current;
         let moved = rewound_top_out || walked;
+        // `set_player_translation` re-probes the support, so a hop that walked
+        // the player onto (or off) moving terrain is accounted for.
         if walked {
             self.set_player_translation(new_position, player_handle);
         }
-        // The hop can have walked the player onto (or off) moving terrain, so
-        // re-probe what they are standing on before the next frame carries
-        // them by its displacement.
-        self.refresh_player_support(player_handle);
 
         MoveResult {
             moved,
@@ -2794,7 +2808,6 @@ impl PhysicsWorld {
         let queries = self.player_movement_queries(dispatcher, filter);
         player_handle.support = detect_support(
             &queries,
-            &self.collider_set,
             &self.rigid_body_set,
             character_shape.as_ref(),
             &character_pos,
@@ -3073,7 +3086,6 @@ impl PhysicsWorld {
                 let queries = self.player_movement_queries(dispatcher, movement_filter);
                 detect_support(
                     &queries,
-                    &self.collider_set,
                     &self.rigid_body_set,
                     character_shape.as_ref(),
                     &(Translation::from(mvt.translation) * character_pos),
