@@ -11,14 +11,20 @@
 //! no bundle storage) resolve exactly the same files the game does, instead of
 //! `File::open`ing the data root and failing on a 25AE install.
 
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::OnceLock;
 
-use engine::assets::asset_paths::{AbstractAssetPath, AssetPath};
+use engine::assets::asset_paths::{AbstractAssetPath, AssetPath, ReadableAndSeekable};
 
 use crate::zip_asset_path::ZipAssetPath;
 
 /// The single archive a 25th Anniversary Edition install ships its data in.
 const BASE_ARCHIVE: &str = "sshock2.kpf";
+
+/// Where that archive keeps the gamesys and the missions.
+const ARCHIVE_DATA_PREFIX: &str = "data/";
 
 /// Whether `data_root` is a 25th Anniversary Edition install rather than a
 /// classic one. The remaster ships its data inside `sshock2.kpf`; a classic
@@ -41,8 +47,57 @@ pub fn data_file_mounts(data_root: &Path) -> Vec<Box<dyn AbstractAssetPath>> {
         // `motiondb.bin` moved from the data root to `res/mschema/`, and the
         // missions + gamesys live under `data/`.
         ZipAssetPath::with_prefix(archive.clone(), "data/res/mschema/"),
-        ZipAssetPath::with_prefix(archive, "data/"),
+        ZipAssetPath::with_prefix(archive, ARCHIVE_DATA_PREFIX),
     ]
+}
+
+/// Every mission file available in `data_root`, lowercased and sorted.
+///
+/// A classic install has them loose at the data root; a 25AE install has them
+/// inside `sshock2.kpf` under `data/`, so a caller that only reads the directory
+/// sees *no* missions at all there - an empty list rather than an error, which
+/// is how a "run against every mission" tool silently ends up running against
+/// nothing.
+pub fn mission_names(data_root: &Path) -> Vec<String> {
+    let mut names: BTreeSet<String> = loose_mission_names(data_root);
+    names.extend(archived_mission_names(data_root));
+    names.into_iter().collect()
+}
+
+fn loose_mission_names(data_root: &Path) -> BTreeSet<String> {
+    let Ok(entries) = std::fs::read_dir(data_root) else {
+        return BTreeSet::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().to_ascii_lowercase())
+        .filter(|name| name.ends_with(".mis"))
+        .collect()
+}
+
+/// The `.mis` entries directly under the archive's `data/` folder. Empty for a
+/// classic install, and for an archive that cannot be opened - the caller
+/// reports "no missions" either way, and the mount layer gives the real error
+/// when something then tries to *read* a mission.
+fn archived_mission_names(data_root: &Path) -> BTreeSet<String> {
+    if !is_25th_anniversary_install(data_root) {
+        return BTreeSet::new();
+    }
+    let Ok(file) = std::fs::File::open(data_root.join(BASE_ARCHIVE)) else {
+        return BTreeSet::new();
+    };
+    let Ok(archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
+        return BTreeSet::new();
+    };
+    archive
+        .file_names()
+        .filter_map(|name| {
+            let lower = name.to_ascii_lowercase();
+            let relative = lower.strip_prefix(ARCHIVE_DATA_PREFIX)?;
+            // Only the missions themselves, not anything nested deeper.
+            (relative.ends_with(".mis") && !relative.contains('/')).then(|| relative.to_owned())
+        })
+        .collect()
 }
 
 /// An asset-path layer that resolves only the raw data files - no textures,
@@ -54,6 +109,24 @@ pub fn asset_paths(data_root: &Path) -> Box<dyn AbstractAssetPath> {
     let mut mounts = data_file_mounts(data_root);
     mounts.push(AssetPath::folder(String::new()));
     AssetPath::combine(mounts)
+}
+
+/// Open a raw data file by name (`shock2.gam`, `medsci1.mis`, `motiondb.bin`)
+/// from the resolved data root, in whichever layout is present.
+///
+/// The mounts are built once per process because indexing a 25AE archive is not
+/// free and callers like `cargo bn path bench --all` read every mission through
+/// here.
+pub fn open_data_file(name: &str) -> Option<Box<dyn ReadableAndSeekable>> {
+    static PATHS: OnceLock<Box<dyn AbstractAssetPath>> = OnceLock::new();
+    let data_root = crate::paths::data_root();
+    PATHS
+        .get_or_init(|| asset_paths(data_root))
+        .get_reader(
+            data_root.to_string_lossy().into_owned(),
+            name.to_ascii_lowercase(),
+        )
+        .map(RefCell::into_inner)
 }
 
 #[cfg(test)]
@@ -148,6 +221,42 @@ mod tests {
         assert_eq!(
             read(dir.path(), "motiondb.bin").as_deref(),
             Some(&b"archived motiondb"[..])
+        );
+    }
+
+    #[test]
+    fn classic_install_lists_loose_missions() {
+        let dir = TempDir::new("classic-missions");
+        std::fs::write(dir.path().join("earth.mis"), b"mission").unwrap();
+        std::fs::write(dir.path().join("medsci1.mis"), b"mission").unwrap();
+        std::fs::write(dir.path().join("shock2.gam"), b"gamesys").unwrap();
+
+        assert_eq!(
+            mission_names(dir.path()),
+            vec!["earth.mis".to_owned(), "medsci1.mis".to_owned()]
+        );
+    }
+
+    /// A 25AE install has no loose `.mis` at all, so reading the directory finds
+    /// nothing - the missions have to be enumerated out of the archive.
+    #[test]
+    fn anniversary_install_lists_missions_from_the_archive() {
+        let dir = TempDir::new("25th-missions");
+        write_archive(
+            dir.path(),
+            &[
+                ("data/medsci1.mis", b"mission"),
+                ("data/earth.mis", b"mission"),
+                ("data/shock2.gam", b"gamesys"),
+                // Not a mission at the data root - must not be listed.
+                ("data/res/mschema/motiondb.bin", b"motiondb"),
+                ("data/saves/quick.mis", b"nested"),
+            ],
+        );
+
+        assert_eq!(
+            mission_names(dir.path()),
+            vec!["earth.mis".to_owned(), "medsci1.mis".to_owned()]
         );
     }
 

@@ -6,8 +6,6 @@ use dark::font::Font;
 use engine::assets::asset_cache::AssetCache;
 use engine::materials::ScreenSpaceMaterial;
 use engine::scene::{Scene, SceneObject};
-use std::fs::File;
-use std::io::BufReader;
 use std::time::Duration;
 
 pub struct FontViewerScene {
@@ -20,14 +18,17 @@ pub struct FontViewerScene {
 }
 
 impl FontViewerScene {
+    /// Load a font through the game's asset paths, so a name resolves the same
+    /// way the game resolves it: out of the interface archive (`MAINAA.FON`) on
+    /// either install layout, or from a loose path under the data root.
     pub fn from_file(
         font_file_path: String,
-        resource_path_fn: fn(&str) -> String,
+        asset_cache: &AssetCache,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Load font
-        let font_file = File::open(resource_path_fn(&font_file_path))?;
-        let mut font_reader = BufReader::new(font_file);
-        let font = Font::read(&mut font_reader);
+        let font_reader = asset_cache
+            .get_raw_reader(&font_file_path)
+            .ok_or_else(|| format!("Could not find font {font_file_path} in the game data"))?;
+        let font = Font::read(&mut *font_reader.borrow_mut());
 
         Ok(FontViewerScene {
             font_file_path,

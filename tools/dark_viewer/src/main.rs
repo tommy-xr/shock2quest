@@ -84,13 +84,6 @@ struct Cli {
     debug_hitboxes: bool,
 }
 
-fn resolve_data_path(resource: &str) -> String {
-    paths::data_root()
-        .join(resource)
-        .to_string_lossy()
-        .into_owned()
-}
-
 fn normalize_clip_name(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -222,7 +215,6 @@ fn create_scene(
     animation_flag_provided: bool,
     scale: f32,
     asset_cache: &mut engine::assets::asset_cache::AssetCache,
-    data_resolver: fn(&str) -> String,
     debug_skeletons: bool,
     debug_hit_boxes: bool,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
@@ -254,7 +246,7 @@ fn create_scene(
             Ok(Box::new(scene))
         }
     } else if lower.ends_with(".fon") {
-        let scene = FontViewerScene::from_file(filename.to_string(), data_resolver)?;
+        let scene = FontViewerScene::from_file(filename.to_string(), asset_cache)?;
         Ok(Box::new(scene))
     } else if lower.ends_with(".glb") {
         if animation_flag_provided {
@@ -372,7 +364,6 @@ pub fn main() {
             animation_flag_provided,
             cli.scale,
             &mut game.asset_cache,
-            resolve_data_path,
             debug_skeletons,
             debug_hit_boxes,
         ) {
@@ -388,7 +379,6 @@ pub fn main() {
         animation_flag_provided,
         cli.scale,
         &mut game.asset_cache,
-        resolve_data_path,
         debug_skeletons,
         debug_hit_boxes,
     ) {
