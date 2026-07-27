@@ -74,15 +74,17 @@ e.g. a ragdoll falling — erratic.) `/v1/physics/joints` reports each impulse
 joint's anchor separation + applied impulse (bone-labeled) for ragdoll
 constraint diagnostics.
 
-### Phase 5: Game Commands 🔴 NOT STARTED
+### Phase 5: Game Commands 🟡 PARTIAL
 
-| Task                                          | Status         |
-| --------------------------------------------- | -------------- |
-| Game command endpoint (`/v1/control/command`) | ❌ Placeholder |
-| Spawn command                                 | ❌             |
-| Save/load commands                            | ❌             |
-| Level transition                              | ❌             |
-| God mode, noclip                              | ❌             |
+Dedicated typed endpoints rather than one stringly-typed command dispatcher -
+the `/v1/control/command` placeholder was removed as dead API surface.
+
+| Task                                                  | Status |
+| ----------------------------------------------------- | ------ |
+| Debug provisioning (`/v1/player/spawn-item`, `/v1/player/stats`) | ✅     |
+| Save/load commands (`/v1/save`, `/v1/load`)           | ✅     |
+| Level transition (`/v1/control/transition-level`)     | ✅     |
+| God mode, noclip                                      | ❌     |
 
 ### Phase 6: TypeScript API ✅ COMPLETE
 
@@ -226,7 +228,8 @@ GET  /v1/physics/bodies   - List physics bodies
 GET  /v1/physics/bodies/{id} - Physics body details
 GET  /v1/control/input    - Get input state
 POST /v1/control/input    - Set input channel
-POST /v1/control/command  - Execute game command (placeholder)
+POST /v1/player/spawn-item - Provision an item template into the inventory
+POST /v1/player/stats     - Provision skills/stats/psi tier/cyber modules
 POST /v1/screenshot       - Capture screenshot
 ```
 

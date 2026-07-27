@@ -384,6 +384,22 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.give_item(entity_id)
     }
 
+    fn spawn_item_for_player(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template: &crate::game_scene::DebugItemTemplate,
+    ) -> Result<crate::game_scene::DebugSpawnedItem, String> {
+        self.mission_core
+            .spawn_item_for_player(asset_cache, template)
+    }
+
+    fn set_player_stats(
+        &mut self,
+        request: &crate::game_scene::DebugPlayerStatsRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        self.mission_core.set_player_stats(request)
+    }
+
     fn list_transitions(&self) -> Vec<crate::game_scene::DebugTransition> {
         self.mission_core.list_transitions()
     }
