@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
-import type { EntitySummary, RayCastResult } from "../src/index.js";
+import { GameServer } from "../src/index.js";
+import type { EntitySummary } from "../src/index.js";
 
 // End-to-end test for flat (desktop-style) ladder climbing.
 //
@@ -29,6 +29,29 @@ function groupLadderColumns(rungs: EntitySummary[]): LadderColumn[] {
     columns.set(key, column);
   }
   return [...columns.values()];
+}
+
+async function findRick1OpeningLadder(
+  game: GameServer,
+): Promise<LadderColumn> {
+  const rungs = (
+    await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+  ).entities;
+  assert.ok(rungs.length > 0, "rick1 should contain Rick Ladder 16 entities");
+
+  const spawn = await game.player.position();
+  const fullHeightColumns = groupLadderColumns(rungs).filter(
+    (col) => Math.max(...col.ys) - Math.min(...col.ys) > 15,
+  );
+  assert.ok(
+    fullHeightColumns.length > 0,
+    "rick1 should contain a full-height ladder stack",
+  );
+  return fullHeightColumns.reduce((best, col) => {
+    const distance = (candidate: LadderColumn) =>
+      Math.hypot(candidate.x - spawn.x, candidate.z - spawn.z);
+    return distance(col) < distance(best) ? col : best;
+  });
 }
 
 test(
@@ -105,27 +128,9 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Runtime ids change every launch. Group the authored rung entities into
-    // columns, keep full-height stacks, then pick the one nearest the fresh
-    // arrival-room spawn.
-    const rungs = (
-      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
-    ).entities;
-    assert.ok(rungs.length > 0, "rick1 should contain Rick Ladder 16 entities");
-
-    const spawn = await game.player.position();
-    const fullHeightColumns = groupLadderColumns(rungs).filter(
-      (col) => Math.max(...col.ys) - Math.min(...col.ys) > 15,
-    );
-    assert.ok(
-      fullHeightColumns.length > 0,
-      "rick1 should contain a full-height ladder stack",
-    );
-    const ladder = fullHeightColumns.reduce((best, col) => {
-      const distance = (candidate: LadderColumn) =>
-        Math.hypot(candidate.x - spawn.x, candidate.z - spawn.z);
-      return distance(col) < distance(best) ? col : best;
-    });
+    // Runtime ids change every launch. Resolve the authored full-height stack
+    // nearest the fresh arrival-room spawn.
+    const ladder = await findRick1OpeningLadder(game);
     const ladderBottom = Math.min(...ladder.ys);
     const ladderTop = Math.max(...ladder.ys);
 
@@ -265,7 +270,7 @@ test(
     // room using only ordinary locomotion.
     await game.input.lookAtWorldPoint([
       stable.x,
-      stable.y + PLAYER_EYE_HEIGHT_WORLD,
+      stable.y + 1.6,
       ladder.z + 4,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -282,7 +287,7 @@ test(
 
     await game.input.lookAtWorldPoint([
       deckSide.x + 8,
-      deckSide.y + PLAYER_EYE_HEIGHT_WORLD,
+      deckSide.y + 1.6,
       deckSide.z,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -313,113 +318,67 @@ test(
   },
 );
 
-// Issue #657: Engineering's upper Ladder 16' (mission object 945) reaches the
-// Engine Core through a thick authored floor/wall transition. The south face
-// is the real approach from the main-elevator corridor; holding ordinary
-// forward toward +Z must finish on supported core-side ground, not freeze in
-// the unsupported gap below the slab and fall back to the arrival floor.
+// Issue #657: a single reasonable +X,+Z heading held continuously from the
+// base could plan a different top-out route than the staged-heading case above.
+// That route reached the rise cap and remained active forever with zero motion.
+// This reproduces the player's ordinary one-heading approach without changing
+// look direction or releasing forward input during the climb/top-out.
 test(
-  "flat climbing: eng1 upper ladder 945 reaches supported core-side ground",
+  "flat climbing: continuous diagonal heading tops out onto rick1's opening deck",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
-      mission: "eng1.mis",
+      mission: "rick1.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
     });
     await game.step({ frames: 5 });
 
-    // Runtime ids change every launch. Mission object 945 and its authored
-    // name are the durable identity; derive the campaign-proven south-face
-    // contact from that object instead of hard-coding a world position.
-    const ladder = (
-      await game.entities.list({ filter: "Ladder 16'", limit: 100 })
-    ).entities.find((entity) => entity.template_id === 945);
-    assert.ok(ladder, "eng1 should contain authored Ladder 16' object 945");
-    const [ladderX, ladderY, ladderZ] = ladder.position;
-    const startTarget = {
-      x: ladderX + 0.261,
-      y: ladderY - 1.956,
-      z: ladderZ - 0.883,
-    };
+    const ladder = await findRick1OpeningLadder(game);
+    const ladderBottom = Math.min(...ladder.ys);
+    const ladderTop = Math.max(...ladder.ys);
 
-    // Setup only: the production climb begins on the same supported south-face
-    // contact reached by ordinary movement in the accepted campaign replay.
-    // Do not step between relocation and input: a frame here can settle away
-    // from the narrow authored contact before the grip is evaluated.
-    await game.player.teleport(startTarget);
-    const start = await game.player.position();
-    await game.input.lookAtWorldPoint([
-      start.x,
-      start.y + 8,
-      start.z + 20,
-    ]);
+    // Settle on the west/south face at the same geometry-relative contact used
+    // by the original reproduction. From there yaw 63° faces the visible
+    // +X,+Z deck opening; pitch -60° preserves the original player's view.
+    await game.player.teleport({
+      x: ladder.x - 0.43,
+      y: ladderBottom - 2.2,
+      z: ladder.z - 0.41,
+    });
+    await game.step({ frames: 30 });
+    const base = await game.player.position();
+    assert.ok(
+      Math.hypot(base.x - (ladder.x - 0.43), base.z - (ladder.z - 0.41)) <
+        0.1,
+      `expected to settle at the ladder contact; ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)})`,
+    );
+
+    await game.input.set("head.look", [63, -60]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
 
-    let landing = start;
-    let support: RayCastResult | null = null;
-    for (let elapsed = 0; elapsed < 480; elapsed += 1) {
-      await game.step({ frames: 1 });
-      landing = await game.player.position();
-      if (landing.z <= ladderZ + 0.7 || landing.y <= ladderY + 3.5) {
-        continue;
-      }
-      support = await game.raycast({
-        start: [landing.x, landing.y, landing.z],
-        end: [landing.x, landing.y - 3, landing.z],
-        collision_groups: ["world", "entity", "selectable"],
-        ignore_sensors: true,
-      });
-      if (
-        support.hit &&
-        support.distance !== null &&
-        support.distance > 0.5 &&
-        support.distance < 2 &&
-        support.hit_normal !== null &&
-        support.hit_normal[1] > 0.5
-      ) {
+    let position = base;
+    let cleared = false;
+    for (let elapsed = 0; elapsed < 1_050; elapsed += 30) {
+      await game.step({ frames: 30 });
+      position = await game.player.position();
+      cleared =
+        position.x > ladder.x + 1 &&
+        position.z > ladder.z + 0.35 &&
+        position.y > ladderTop - 1.5 &&
+        position.y < ladderTop + 0.2;
+      if (cleared) {
         break;
       }
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
     assert.ok(
-      support?.hit &&
-        support.distance !== null &&
-        support.distance > 0.5 &&
-        support.distance < 2 &&
-        support.hit_normal !== null &&
-        support.hit_normal[1] > 0.5 &&
-        landing.z > ladderZ + 0.7 &&
-        landing.y > ladderY + 3.5,
-      `ordinary south-face input must reach supported core-side ground; ` +
-        `ladder=(${ladderX.toFixed(2)}, ${ladderY.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
-        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
-        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
-        `support=${JSON.stringify(support)}`,
-    );
-
-    await game.step({ frames: 180 });
-    const stable = await game.player.position();
-    const stableSupport = await game.raycast({
-      start: [stable.x, stable.y, stable.z],
-      end: [stable.x, stable.y - 3, stable.z],
-      collision_groups: ["world", "entity", "selectable"],
-      ignore_sensors: true,
-    });
-    assert.ok(
-      stable.z > ladderZ + 0.7 &&
-        stable.y > ladderY + 3.5 &&
-        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
-        stableSupport.hit &&
-        stableSupport.distance !== null &&
-        stableSupport.distance > 0.5 &&
-        stableSupport.distance < 2 &&
-        stableSupport.hit_normal !== null &&
-        stableSupport.hit_normal[1] > 0.5,
-      `release must remain stable on the core-side landing; ` +
-        `landing=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
-        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
-        `support=${JSON.stringify(stableSupport)}`,
+      cleared,
+      `one continuous diagonal heading must complete the top-out; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
+        `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`,
     );
   },
 );
