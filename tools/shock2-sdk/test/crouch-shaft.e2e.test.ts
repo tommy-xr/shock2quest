@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { join } from "node:path";
 
@@ -27,15 +27,17 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async (t) => {
     // This test has to QuickSave (it exercises the crouch save/load edge),
-    // which writes save1.sav into the repo root. Remove it afterwards so the
-    // suite stays order-independent: quickload-missing requires a worktree
-    // with no session quicksave, and glob order runs it after this file. A
-    // quicksave that predates the test is left alone.
+    // which writes save1.sav into the repo root. Put that file back exactly as
+    // it was found, so the suite stays order-independent - quickload-missing
+    // requires a worktree with no session quicksave and glob order runs it
+    // after this file - and so a developer's own quicksave survives a test run
+    // rather than being silently replaced by a MedSci air duct.
     const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
     const quicksave = join(repoRoot, "save1.sav");
-    const preexisting = existsSync(quicksave);
+    const saved = existsSync(quicksave) ? readFileSync(quicksave) : null;
     t.after(() => {
-      if (!preexisting) rmSync(quicksave, { force: true });
+      if (saved === null) rmSync(quicksave, { force: true });
+      else writeFileSync(quicksave, saved);
     });
 
     await using game = await GameServer.launch({
