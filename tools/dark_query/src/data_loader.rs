@@ -5,9 +5,39 @@ use dark::{
     ss2_chunk_file_reader,
     ss2_entity_info::{self, SystemShock2EntityInfo, merge_with_gamesys},
 };
-use shock2vr::paths;
-use std::{fs::File, io::BufReader};
+use engine::assets::asset_paths::{AbstractAssetPath, ReadableAndSeekable};
+use shock2vr::{data_files, paths};
+use std::cell::RefCell;
+use std::sync::OnceLock;
 use tracing::info;
+
+/// The data-file mounts, built once per process: indexing a 25th Anniversary
+/// archive is not free, and both the gamesys and the mission go through here.
+fn data_file_paths() -> &'static dyn AbstractAssetPath {
+    static PATHS: OnceLock<Box<dyn AbstractAssetPath>> = OnceLock::new();
+    &**PATHS.get_or_init(|| data_files::asset_paths(paths::data_root()))
+}
+
+/// Open a raw data file (the gamesys, a mission, `motiondb.bin`) through the
+/// same asset-path layer the game uses, so a 25th Anniversary install - where
+/// nothing is loose on disk and everything lives inside `sshock2.kpf` - works
+/// just like a classic one.
+pub fn open_data_file(name: &str) -> Result<Box<dyn ReadableAndSeekable>> {
+    let data_root = paths::data_root();
+    data_file_paths()
+        .get_reader(
+            data_root.to_string_lossy().into_owned(),
+            name.to_ascii_lowercase(),
+        )
+        .map(RefCell::into_inner)
+        .with_context(|| {
+            format!(
+                "{name} not found in the game data at {} - set DARK_ASSET_PATH to your \
+                 System Shock 2 install if that is the wrong directory",
+                data_root.display()
+            )
+        })
+}
 
 /// Load the full gamesys (shock2.gam) including speech DB and sound schema
 pub fn load_gamesys() -> Result<gamesys::Gamesys> {
@@ -15,19 +45,7 @@ pub fn load_gamesys() -> Result<gamesys::Gamesys> {
 
     let (properties, links, links_with_data) = get();
 
-    // Load shock2.gam file
-    let data_root = paths::data_root();
-    let gam_path = data_root.join("shock2.gam");
-    if !gam_path.exists() {
-        return Err(anyhow::anyhow!(
-            "shock2.gam not found. Checked these directories: {}",
-            paths::search_roots().join(", ")
-        ));
-    }
-
-    let game_file =
-        File::open(&gam_path).with_context(|| format!("Failed to open {}", gam_path.display()))?;
-    let mut game_reader = BufReader::new(game_file);
+    let mut game_reader = open_data_file("shock2.gam")?;
 
     let gamesys = gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
 
@@ -53,21 +71,10 @@ pub fn load_gamesys_with_mission(mission_name: &str) -> Result<SystemShock2Entit
     );
 
     let gamesys = load_gamesys()?;
-    let data_root = paths::data_root();
     let (properties, links, links_with_data) = get();
 
     // Load mission file
-    let mission_path = data_root.join(mission_name);
-    if !mission_path.exists() {
-        return Err(anyhow::anyhow!(
-            "Mission file {} not found.",
-            mission_path.display()
-        ));
-    }
-
-    let mission_file = File::open(&mission_path)
-        .with_context(|| format!("Failed to open {}", mission_path.display()))?;
-    let mut mission_reader = BufReader::new(mission_file);
+    let mut mission_reader = open_data_file(mission_name)?;
 
     // Read mission table of contents to get entity data chunks
     let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(&mut mission_reader);

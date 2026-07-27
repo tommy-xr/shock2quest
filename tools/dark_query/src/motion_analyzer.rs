@@ -2,10 +2,9 @@ use anyhow::Result;
 use dark::motion::{MotionDB, MotionQuery, MotionQueryItem, MotionQuerySelectionStrategy};
 use shock2vr::paths;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
 use tracing::info;
+
+use crate::data_loader::open_data_file;
 
 pub struct MotionAnalyzer {
     motion_db: MotionDB,
@@ -15,11 +14,7 @@ pub struct MotionAnalyzer {
 impl MotionAnalyzer {
     pub fn new() -> Result<Self> {
         // Load motion database
-        let motiondb_path = find_motiondb_file()?;
-        info!("Loading motion database from: {}", motiondb_path.display());
-
-        let motiondb_file = File::open(motiondb_path)?;
-        let mut motiondb_reader = BufReader::new(motiondb_file);
+        let mut motiondb_reader = open_data_file("motiondb.bin")?;
         let motion_db = MotionDB::read(&mut motiondb_reader);
 
         // Create creature name mapping based on ActorType enum
@@ -203,9 +198,7 @@ impl MotionAnalyzer {
         // The per-frame root-y stream lives in the clip file (res/motions/
         // <name>_.mc), not the motion database - print its curve when the
         // unpacked file is available
-        let mc_path = paths::data_root().join(format!("res/motions/{}_.mc", name));
-        if let Ok(file) = File::open(&mc_path) {
-            let mut reader = BufReader::new(file);
+        if let Ok(mut reader) = open_data_file(&format!("res/motions/{}_.mc", name)) {
             let clip = dark::motion::MotionClip::read(&mut reader, mps);
             let ys: Vec<f32> = clip.root_transforms.iter().map(|m| m.w.y).collect();
             if !ys.is_empty() {
@@ -245,8 +238,9 @@ impl MotionAnalyzer {
             }
         } else {
             println!(
-                "  root y:       (no unpacked clip at {})",
-                mc_path.display()
+                "  root y:       (no clip res/motions/{}_.mc in the game data at {})",
+                name,
+                paths::data_root().display()
             );
         }
         Ok(())
@@ -311,20 +305,4 @@ fn parse_tags(tags: &[String]) -> Result<Vec<MotionQueryItem>> {
     }
 
     Ok(motion_query_items)
-}
-
-fn find_motiondb_file() -> Result<std::path::PathBuf> {
-    // Try common locations for motiondb.bin
-    let data_motiondb_path = paths::data_root().join("motiondb.bin");
-    let possible_paths = ["motiondb.bin", &data_motiondb_path.to_string_lossy()];
-
-    for path in &possible_paths {
-        if Path::new(path).exists() {
-            return Ok(Path::new(path).to_path_buf());
-        }
-    }
-
-    anyhow::bail!(
-        "Could not find motiondb.bin. Please run from project root or ensure motiondb.bin is in the current directory or Data/ subdirectory."
-    );
 }

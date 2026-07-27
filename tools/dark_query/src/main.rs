@@ -641,6 +641,16 @@ fn handle_maps_command(mission: &str) -> Result<()> {
 
     // Production runtime ONLY has intrface.crf - no fallback to folders
     let intrface_crf_path = data_root.join("res/intrface.crf");
+    if !intrface_crf_path.exists() {
+        // A 25th Anniversary install keeps the interface family inside
+        // `sshock2.kpf`, which needs the renderer's family mounts, not the
+        // data-file ones this tool uses elsewhere. Fail with a message rather
+        // than panicking inside the archive reader.
+        anyhow::bail!(
+            "{} not found - `maps` needs a classic install with loose .crf archives",
+            intrface_crf_path.display()
+        );
+    }
 
     println!(
         "Using intrface.crf archive: {}",
@@ -815,19 +825,10 @@ fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::Syste
 }
 
 fn handle_aipath_command(mission: &str, limit: Option<usize>) -> Result<()> {
-    use std::fs::File;
-
     info!("Loading AIPATH data from {}...", mission);
 
     // Load the mission file
-    let data_root = shock2vr::paths::data_root();
-    let mission_path = data_root.join(mission);
-
-    if !mission_path.exists() {
-        anyhow::bail!("Mission file not found: {}", mission_path.display());
-    }
-
-    let mut file = File::open(&mission_path)?;
+    let mut file = data_loader::open_data_file(mission)?;
 
     // Parse AIPATH chunk directly
     let table_of_contents = dark::ss2_chunk_file_reader::read_table_of_contents(&mut file);
