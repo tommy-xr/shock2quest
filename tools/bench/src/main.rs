@@ -110,11 +110,20 @@ fn main() -> Result<()> {
 fn run_path_command(command: PathCommand) -> Result<()> {
     match command {
         PathCommand::Stats { mission, all } => {
+            let mut reported = 0;
             for mission in resolve_missions(mission, all)? {
                 match load_path_database(&mission) {
-                    Ok(db) => print_stats(&mission, db),
+                    Ok(db) => {
+                        print_stats(&mission, db);
+                        reported += 1;
+                    }
                     Err(e) => println!("{mission}: {e}"),
                 }
+            }
+            // Same reason as `bench` below: a run that reported on nothing must
+            // not look like a clean one.
+            if reported == 0 {
+                return Err(anyhow!("no mission could be read"));
             }
         }
         PathCommand::Bench {
