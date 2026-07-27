@@ -319,10 +319,11 @@ test(
 );
 
 // Issue #657: a single reasonable +X,+Z heading held continuously from the
-// base could plan a different top-out route than the staged-heading case above.
-// That route reached the rise cap and remained active forever with zero motion.
-// This reproduces the player's ordinary one-heading approach without changing
-// look direction or releasing forward input during the climb/top-out.
+// base approached the ladder on a path whose climb was blocked 3.1 feet below
+// the authored column top. The shorter top-out gate never opened, so no mantle
+// was planned and the gripped climb remained frozen forever. This reproduces
+// the player's ordinary one-heading approach without changing look direction
+// or releasing forward input during the climb/top-out.
 test(
   "flat climbing: continuous diagonal heading tops out onto rick1's opening deck",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -357,28 +358,72 @@ test(
     await game.input.set("head.look", [63, -60]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
 
+    let previous = base;
     let position = base;
-    let cleared = false;
-    for (let elapsed = 0; elapsed < 1_050; elapsed += 30) {
-      await game.step({ frames: 30 });
+    let ordinaryWalkFrames = 0;
+    let ordinaryWalkStart = base;
+    let fineSampling = false;
+    for (let elapsed = 0; elapsed < 1_050; ) {
+      // Climb quickly to the approach, then sample each frame so the test can
+      // distinguish the scripted mantle's <=0.067-unit substeps from ordinary
+      // locomotion after the standing capsule has been restored.
+      fineSampling ||= position.y >= ladderTop - 3;
+      const frames = fineSampling ? 1 : 30;
+      await game.step({ frames });
+      elapsed += frames;
+      previous = position;
       position = await game.player.position();
-      cleared =
-        position.x > ladder.x + 1 &&
-        position.z > ladder.z + 0.35 &&
-        position.y > ladderTop - 1.5 &&
-        position.y < ladderTop + 0.2;
-      if (cleared) {
+      const horizontalDistance = Math.hypot(
+        position.x - previous.x,
+        position.z - previous.z,
+      );
+      const beyondLip =
+        position.x > ladder.x && position.z > ladder.z + 0.35;
+      if (frames === 1 && beyondLip && horizontalDistance > 0.075) {
+        if (ordinaryWalkFrames === 0) {
+          ordinaryWalkStart = previous;
+        }
+        ordinaryWalkFrames += 1;
+      } else {
+        ordinaryWalkFrames = 0;
+      }
+      if (ordinaryWalkFrames >= 20) {
         break;
       }
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
     assert.ok(
-      cleared,
-      `one continuous diagonal heading must complete the top-out; ` +
+      ordinaryWalkFrames >= 20 &&
+        Math.hypot(
+          position.x - ordinaryWalkStart.x,
+          position.z - ordinaryWalkStart.z,
+        ) > 1.5,
+      `one continuous diagonal heading must sustain ordinary walking past the lip; ` +
         `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
         `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
+        `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
+        `previous=(${previous.x.toFixed(2)}, ${previous.y.toFixed(2)}, ${previous.z.toFixed(2)}), ` +
         `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`,
+    );
+
+    // This exact 63° reproduction heads through the authored opening beside
+    // the rail, rather than toward the supported landing used by the preceding
+    // staged-heading test. Prove that geometry explicitly: a stable landing is
+    // impossible on this ray, so completion is the sustained ordinary
+    // horizontal locomotion above, not an arbitrary first "cleared" pose.
+    const support = await game.raycast({
+      start: [position.x, position.y, position.z],
+      end: [position.x, position.y - 20, position.z],
+      collision_groups: ["world"],
+      ignore_sensors: true,
+    });
+    assert.equal(
+      support.hit,
+      false,
+      `the exact continuous route should cross the open shaft, not a hidden support; ` +
+        `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(support)}`,
     );
   },
 );
