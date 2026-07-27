@@ -6399,6 +6399,16 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .template_id
             }
         };
+        // Gamesys templates only (the negative id space). Positive ids address
+        // *this mission's* authored objects, and duplicating one would hand the
+        // player a second copy of a unique quest item (a keycard, a log) - a way
+        // to fake progress rather than to provision a loadout.
+        if template_id >= 0 {
+            return Err(format!(
+                "template id {} is a mission object; provisioning takes gamesys templates (negative ids)",
+                template_id
+            ));
+        }
         if !self
             .entity_info
             .entity_to_properties
@@ -6431,7 +6441,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         // leaves nothing behind.
         if let Err(e) = self.give_item(entity_id) {
             self.destroy_entity(entity_id);
-            return Err(e);
+            // Report the template, not the entity: the instance is gone, and the
+            // caller never saw its id.
+            return Err(format!(
+                "template {} is not a pickup item ({})",
+                template_id, e
+            ));
         }
 
         let name = self
@@ -6451,7 +6466,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         request: &crate::game_scene::DebugPlayerStatsRequest,
     ) -> Result<crate::player_stats::PlayerStats, String> {
         use crate::player_stats::{Skill, Stat};
-        use crate::scripts::gui::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP, apply_purchase};
+        use crate::scripts::gui::{
+            PSI_TIER_CAP, SKILL_CAP, STAT_CAP, TrainerTarget, apply_purchase,
+        };
 
         let mut quests = self
             .world
@@ -6537,7 +6554,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             check("psi_tier", target, stats.psi_tier, PSI_TIER_CAP)?;
         }
         if let Some(target) = request.cyber_modules {
-            check("cyber_modules", target, stats.cyber_modules, i32::MAX)?;
+            // No cap on the currency, so only the "raises only" half applies.
+            if target < stats.cyber_modules {
+                return Err(format!(
+                    "cannot lower cyber_modules from {} to {} (provisioning only raises)",
+                    stats.cyber_modules, target
+                ));
+            }
         }
 
         // Apply through the same `PlayerStats` mutations a trainer purchase
@@ -6558,15 +6581,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         }
         if let Some(target) = request.psi_tier {
             // Tiers unlock sequentially, exactly as the psi trainer sells them.
-            while stats.psi_tier < target {
-                apply_purchase(
-                    stats,
-                    crate::scripts::gui::TrainerTarget::PsiTier(stats.psi_tier + 1),
-                );
+            for tier in (stats.psi_tier + 1)..=target {
+                apply_purchase(stats, TrainerTarget::PsiTier(tier));
             }
         }
         if let Some(target) = request.cyber_modules {
-            stats.award_cyber_modules(target - stats.cyber_modules);
+            stats.award_cyber_modules(target.saturating_sub(stats.cyber_modules));
         }
 
         let result = stats.clone();

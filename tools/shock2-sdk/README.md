@@ -51,6 +51,10 @@ await game.player.setStats({
   psi_tier: 2,
   cyber_modules: 20,
 });
+// NB: the sheet is persistent storage, but only some of it drives gameplay
+// today (Hack + cyber_affinity gate hacking; the weapon proficiencies and psi
+// tier are not yet wired to any derived effect). Provisioning them establishes
+// the character, not a behavior change.
 
 // Entities
 const doors = await game.entities.list({ filter: "*Door*", limit: 10 });

@@ -370,8 +370,8 @@ pub struct DebugInventoryItem {
 
 /// Which template a debug spawn should instantiate. Templates are the only
 /// stable identity across runs (runtime entity ids are not), so provisioning
-/// addresses them either by id (the negative `PropTemplateId` space, or a
-/// positive mission-object id) or by gamesys template name.
+/// addresses them either by gamesys template id (the negative `PropTemplateId`
+/// space) or by gamesys template name.
 #[derive(Debug, Clone)]
 pub enum DebugItemTemplate {
     Id(i32),
@@ -394,6 +394,7 @@ pub struct DebugSpawnedItem {
 /// Provisioning only ever raises - a target below the current level is an
 /// error, so a request can never silently un-train a character.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DebugPlayerStatsRequest {
     pub strength: Option<i32>,
     pub endurance: Option<i32>,
@@ -410,6 +411,7 @@ pub struct DebugPlayerStatsRequest {
 /// Target skill levels, mirroring `player.stats.skills`. Named fields (rather
 /// than a map) keep the shape identical to the read side.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DebugSkillLevelsRequest {
     pub standard_weapons: Option<i32>,
     pub energy_weapons: Option<i32>,

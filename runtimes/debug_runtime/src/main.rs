@@ -2739,6 +2739,7 @@ async fn give_item(
 /// Addressed by template, the only identity stable across runs: either the
 /// gamesys template name ("Shotgun") or the template id (-19). Exactly one.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpawnItemRequest {
     template: Option<String>,
     template_id: Option<i32>,

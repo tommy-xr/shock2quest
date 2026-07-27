@@ -123,16 +123,41 @@ test(
       /status 400|no template named/,
       "an unknown template name is rejected",
     );
-    const entitiesBefore = (await game.entities.list({ limit: 500 })).entities.length;
+    // Count by name, not by a truncated listing: `limit` truncates server-side,
+    // so a total-count comparison would pass no matter what leaked.
+    const gruntCount = async () =>
+      (await game.entities.list({ filter: "*OG-Pipe*", limit: 500 })).entities.length;
+    const gruntsBefore = await gruntCount();
     await assert.rejects(
       game.player.spawnItem(GRUNT_TEMPLATE),
       /status 400|not a pickup/,
       "a creature template is not provisionable",
     );
     assert.equal(
-      (await game.entities.list({ limit: 500 })).entities.length,
-      entitiesBefore,
+      await gruntCount(),
+      gruntsBefore,
       "a refused spawn must leave nothing behind in the world",
+    );
+
+    // Mission objects (positive ids) are refused: duplicating one would hand
+    // the player a second copy of a unique quest item.
+    const missionObject = (await game.entities.list({ limit: 50 })).entities.find(
+      (e) => e.template_id > 0,
+    );
+    assert.ok(missionObject, "expected a mission object in command1");
+    await assert.rejects(
+      game.player.spawnItem(missionObject.template_id),
+      /status 400|mission object/,
+      "provisioning takes gamesys templates, not mission objects",
+    );
+
+    // A misspelled field is a 400, not a silent no-op that would make the
+    // playtest think the character was provisioned when it wasn't.
+    await assert.rejects(
+      // @ts-expect-error - deliberately misspelled field
+      game.player.setStats({ stength: 5 }),
+      /status 400|unknown field/,
+      "an unknown stat field is rejected",
     );
 
     await assert.rejects(
