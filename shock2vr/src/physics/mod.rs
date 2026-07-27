@@ -726,6 +726,7 @@ pub struct PhysicsWorld {
 
     // Sensor Intersection List
     player_sensor_intersections: HashSet<EntityId>,
+    player_support: Option<RigidBodyHandle>,
 
     // Entities already reported by report_nonfinite_rigid_body_state, so a
     // body fed bad state every frame (e.g. NaN animation joints driving a
@@ -1617,6 +1618,7 @@ impl PhysicsWorld {
             debug_pipeline,
 
             player_sensor_intersections: HashSet::new(),
+            player_support: None,
 
             reported_nonfinite_entities: HashSet::new(),
 
@@ -1751,6 +1753,7 @@ impl PhysicsWorld {
         // consumes it (see report_nonfinite_rigid_body_state) - by the time
         // parry panics, the culprit is already named in the log.
         self.report_nonfinite_rigid_body_state();
+        self.schedule_player_support_carry(player_handle);
 
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
@@ -1782,6 +1785,101 @@ impl PhysicsWorld {
 
         // Output result
         (translation, collision_events)
+    }
+
+    /// Pending translation of the position-based kinematic body directly
+    /// supporting the player. Rapier moves such terrain during `step`, but its
+    /// manually-controlled character is moved afterward and does not inherit
+    /// the terrain velocity automatically.
+    fn schedule_player_support_carry(&mut self, player_handle: &PlayerHandle) {
+        let player_body = &self.rigid_body_set[player_handle.character_handle];
+        let Some(player_collider_handle) = player_body.colliders().first() else {
+            return;
+        };
+        let player_collider = &self.collider_set[*player_collider_handle];
+        let retained_drop = self
+            .player_support
+            .and_then(|handle| self.rigid_body_set.get(handle))
+            .map(|support| {
+                (support.position().translation.y - support.next_position().translation.y).max(0.0)
+            })
+            .unwrap_or(0.0);
+        let is_kinematic = |_handle, collider: &Collider| {
+            collider
+                .parent()
+                .is_some_and(|parent| self.rigid_body_set[parent].is_kinematic())
+        };
+        let support_filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                Default::default(),
+            ))
+            .exclude_rigid_body(player_handle.character_handle)
+            .exclude_sensors()
+            .predicate(&is_kinematic);
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            support_filter,
+        );
+        let hit = queries.cast_shape(
+            player_collider.position(),
+            &-Vector::y(),
+            player_collider.shape(),
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + retained_drop,
+                target_distance: 0.0,
+                stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true,
+            },
+        );
+        let Some((support_collider_handle, _)) = hit else {
+            self.player_support = None;
+            return;
+        };
+        let Some(support_handle) = self.collider_set[support_collider_handle].parent() else {
+            self.player_support = None;
+            return;
+        };
+        self.player_support = Some(support_handle);
+        let support = &self.rigid_body_set[support_handle];
+        let displacement =
+            support.next_position().translation.vector - support.position().translation.vector;
+        if displacement.norm_squared() <= 1.0e-12 {
+            return;
+        }
+
+        let player_body = &self.rigid_body_set[player_handle.character_handle];
+        let player_collider = &self.collider_set[player_body.colliders()[0]];
+        let shape = player_collider.shared_shape().clone();
+        let pose = *player_body.position();
+        let carry_filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                Default::default(),
+            ))
+            .exclude_rigid_body(player_handle.character_handle)
+            .exclude_rigid_body(support_handle)
+            .exclude_sensors();
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            carry_filter,
+        );
+        let carry = player_handle.controller.move_shape(
+            self.integration_parameters.dt,
+            &queries,
+            shape.as_ref(),
+            &pose,
+            displacement,
+            |_collision| (),
+        );
+        self.rigid_body_set[player_handle.character_handle]
+            .set_next_kinematic_translation(pose.translation.vector + carry.translation);
     }
 
     fn move_player(
@@ -3528,6 +3626,50 @@ mod tests {
         assert!(
             walked > 3.0,
             "walking on a rotated platform should progress ~6 units, moved {walked}"
+        );
+    }
+
+    /// A player standing still on moving terrain must inherit the terrain's
+    /// displacement. Ops4's Lift 1 descends 4.86 world units; without rider
+    /// carry the platform leaves the player suspended at the upper stop.
+    #[test]
+    fn moving_kinematic_platform_carries_supported_player() {
+        let mut world = PhysicsWorld::new();
+        let platform_id = EntityId::from_inner(1001).unwrap();
+        let platform = world.add_kinematic(
+            platform_id,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.8, 0.4, 4.8),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 2.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..60 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let player_start = world.get_player_translation(&player);
+        let platform_start = world.get_position(platform).unwrap();
+
+        let mut max_separation = 0.0_f32;
+        for frame in 1..=24 {
+            world.set_translation(
+                platform,
+                platform_start - vec3(0.0, frame as f32 * 0.21, 0.0),
+            );
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            let player_delta = world.get_player_translation(&player).y - player_start.y;
+            let platform_delta = world.get_position(platform).unwrap().y - platform_start.y;
+            max_separation = max_separation.max((player_delta - platform_delta).abs());
+        }
+
+        let player_delta = world.get_player_translation(&player).y - player_start.y;
+        let platform_delta = world.get_position(platform).unwrap().y - platform_start.y;
+        assert!(
+            max_separation < 0.1,
+            "supported rider must follow every platform step: max separation {max_separation}, final player delta {player_delta}, platform delta {platform_delta}"
         );
     }
 
