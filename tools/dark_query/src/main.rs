@@ -594,6 +594,7 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::MissSpang => "MissSpang".to_string(),
         dark::properties::Link::HitSpang(_) => "HitSpang".to_string(),
         dark::properties::Link::ParticleAttachement(_) => "ParticleAttachement".to_string(),
+        dark::properties::Link::PhysAttach(opts) => format!("PhysAttach({:?})", opts),
         dark::properties::Link::TPathInit => "TPathInit".to_string(),
         dark::properties::Link::TPath(_) => "TPath".to_string(),
         dark::properties::Link::AIPatrol => "AIPatrol".to_string(),

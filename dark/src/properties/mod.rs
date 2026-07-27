@@ -369,6 +369,23 @@ pub struct PropPhysDimensions {
     pub unk2: u32,
 }
 
+/// `P$MovingTer` - marks a physical object as authored moving terrain.
+/// Dark stores both the current active state and its previous state.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropMovingTerrain {
+    pub active: bool,
+    pub previous_active: bool,
+}
+
+impl PropMovingTerrain {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropMovingTerrain {
+        PropMovingTerrain {
+            active: read_bool(reader),
+            previous_active: read_bool(reader),
+        }
+    }
+}
+
 // TODO: Is there a player prop
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropLocalPlayer {}
@@ -427,6 +444,10 @@ pub enum Link {
     /// psi bolt visuals); on a concrete (mission-placed) particle entity it
     /// names the object to follow.
     ParticleAttachement(ParticleAttachOptions),
+    /// Rigid physics attachment from the source object to the destination
+    /// object. Dark drives the source from the destination's motion plus the
+    /// authored world-space offset (tram wall/floor assemblies, lifts).
+    PhysAttach(PhysAttachOptions),
     TPathInit,
     TPath(TPathData),
     /// From a patrol-point object to the next patrol point on its route. An AI
@@ -565,6 +586,19 @@ pub struct ParticleAttachOptions {
     pub vhot: i32,
     pub joint: i32,
     pub submodel: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PhysAttachOptions {
+    pub offset: Vector3<f32>,
+}
+
+impl PhysAttachOptions {
+    pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> PhysAttachOptions {
+        PhysAttachOptions {
+            offset: read_vec3(reader) / SCALE_FACTOR,
+        }
+    }
 }
 
 impl ParticleAttachOptions {
@@ -1038,6 +1072,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "LD$Particle",
             ParticleAttachOptions::read,
             Link::ParticleAttachement,
+        ),
+        define_link_with_data(
+            "L$PhysAttac",
+            "LD$PhysAtta",
+            PhysAttachOptions::read,
+            Link::PhysAttach,
         ),
         define_link_with_data(
             "L$AIProject",
@@ -1514,6 +1554,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$PhysType",
             PropPhysType::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$MovingTer",
+            PropMovingTerrain::read,
             identity,
             accumulator::latest,
         ),
@@ -2162,6 +2208,34 @@ mod tests {
     fn read_stim_source(payload: Vec<u8>) -> StimSourceOptions {
         let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(payload));
         StimSourceOptions::read(&mut cursor, 108)
+    }
+
+    #[test]
+    fn phys_attach_offset_uses_world_axes_and_scale() {
+        // command1 Tram Front -> Tram stores the Dark-space vector
+        // (-10, -0.1875, -0.5), which read_vec3 maps to world
+        // (10, -0.5, -0.1875) before the global 2.5 scale.
+        let mut bytes = Vec::new();
+        for value in [-10.0f32, -0.1875, -0.5] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(bytes));
+        let options = PhysAttachOptions::read(&mut cursor, 12);
+
+        assert_eq!(options.offset, vec3(4.0, -0.2, -0.075));
+    }
+
+    #[test]
+    fn moving_terrain_reads_active_and_previous_state() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let mut cursor = Cursor::new(bytes);
+
+        let property = PropMovingTerrain::read(&mut cursor, 8);
+
+        assert!(property.active);
+        assert!(!property.previous_active);
     }
 
     #[test]

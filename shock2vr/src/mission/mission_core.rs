@@ -823,20 +823,26 @@ impl MissionCore {
         // Mission-placed particle entities follow the object their concrete
         // ParticleAttachement link names (steam rides its machinery): bolt
         // them with RuntimePropAttachment, preserving the authored relative
-        // pose.
+        // pose. Physical attachments are registered directly with Rapier
+        // below; their bodies then feed the normal physics-to-render sync.
         {
             let mut attachments: Vec<(EntityId, EntityId, Matrix4<f32>)> = Vec::new();
+            let mut physical_attachments: Vec<(EntityId, EntityId, Vector3<f32>)> = Vec::new();
             {
                 let v_links = world.borrow::<View<Links>>().unwrap();
                 let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
                 for (id, links) in v_links.iter().with_id() {
                     for link in &links.to_links {
-                        if !matches!(link.link, dark::properties::Link::ParticleAttachement(_)) {
-                            continue;
-                        }
                         let Some(parent) = link.to_entity_id else {
                             continue;
                         };
+                        if let dark::properties::Link::PhysAttach(options) = &link.link {
+                            physical_attachments.push((id, parent.0, options.offset));
+                            continue;
+                        }
+                        if !matches!(link.link, dark::properties::Link::ParticleAttachement(_)) {
+                            continue;
+                        }
                         let (Ok(child_xform), Ok(parent_xform)) =
                             (v_transform.get(id), v_transform.get(parent.0))
                         else {
@@ -856,6 +862,14 @@ impl MissionCore {
                         local_transform,
                     },
                 );
+            }
+            for (child, parent, offset) in physical_attachments {
+                if !physics.attach_kinematic(child, parent, offset) {
+                    warn!(
+                        "ignoring PhysAttach {:?} -> {:?}: both objects need kinematic physics bodies",
+                        child, parent
+                    );
+                }
             }
         }
 
