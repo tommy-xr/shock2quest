@@ -1250,6 +1250,53 @@ pub enum CollisionEvent {
     },
 }
 
+/// Predicate selecting *only* sensor colliders - the volumes the player's
+/// ENTER/EXIT tracking is built from. Shared by the per-frame poll in
+/// [`PhysicsWorld::move_player`] and the swept poll in
+/// [`PhysicsWorld::move_player_validated`] so both observe the same set.
+fn is_sensor_collider(_handle: ColliderHandle, collider: &Collider) -> bool {
+    collider.is_sensor()
+}
+
+/// Entity ids of every sensor volume overlapping `shape` at `pos`. Callers pass
+/// a sensor-filtered pipeline so the broad phase does the narrowing; the
+/// `is_sensor` check keeps the result correct for any pipeline.
+fn sensors_overlapping(
+    queries: &QueryPipeline,
+    pos: &Isometry<Real>,
+    shape: &dyn Shape,
+) -> HashSet<EntityId> {
+    queries
+        .intersect_shape(*pos, shape)
+        .filter(|(_handle, collider)| collider.is_sensor())
+        .filter_map(|(_handle, collider)| EntityId::from_inner(collider.user_data as u64))
+        .collect()
+}
+
+/// ENTER/EXIT events for a change in the set of sensors containing the player.
+/// EXIT events come first, matching the order the per-frame diff has always
+/// emitted them in.
+fn sensor_transition_events(
+    previous: &HashSet<EntityId>,
+    current: &HashSet<EntityId>,
+    player_id: EntityId,
+) -> Vec<CollisionEvent> {
+    let mut events = Vec::new();
+    for expired in previous.difference(current) {
+        events.push(CollisionEvent::EndIntersect {
+            sensor_id: *expired,
+            entity_id: player_id,
+        });
+    }
+    for entered in current.difference(previous) {
+        events.push(CollisionEvent::BeginIntersect {
+            sensor_id: *entered,
+            entity_id: player_id,
+        });
+    }
+    events
+}
+
 #[derive(Debug)]
 pub enum PhysicsShape {
     Capsule { height: f32, radius: f32 },
@@ -1306,6 +1353,20 @@ pub struct PhysicsWorld {
 
     // Sensor Intersection List
     player_sensor_intersections: HashSet<EntityId>,
+
+    // Sensor ENTER/EXIT edges observed along a swept `move_player_validated`
+    // hop, in traversal order. The per-frame poll in `move_player` only samples
+    // the pose at the start of each frame, so a hop that crosses a volume
+    // between two frames would otherwise leave no trace; these are queued here
+    // and drained by the next frame's poll ahead of its own diff.
+    //
+    // A hop covers up to a walking second in one call, so a volume crossed
+    // whole reports its ENTER and EXIT in the same drained batch (walking
+    // spreads the pair over the frames it spends inside). That is the same
+    // compression the hop already applies to the player's position. Queued
+    // edges are only delivered by a stepped frame, so moving while the sim is
+    // paused accumulates them until it resumes.
+    pending_player_sensor_events: Vec<CollisionEvent>,
 
     // Entities already reported by report_nonfinite_rigid_body_state, so a
     // body fed bad state every frame (e.g. NaN animation joints driving a
@@ -1789,6 +1850,7 @@ impl PhysicsWorld {
         let character_shape = character_collider.shared_shape().clone();
         let mut pos = *character_body.position();
         let gravity = player_gravity_step(character_body);
+        let player_id = EntityId::from_inner(character_body.user_data as u64);
 
         // Same collision filter the real player movement uses: collide with the
         // collidable groups, ignore the player's own body and all sensors.
@@ -1805,6 +1867,13 @@ impl PhysicsWorld {
         // Normalized horizontal walk direction.
         let walk_dir = vector![delta_h.x / dist, 0.0, delta_h.z / dist];
         let mut distance_moved = 0.0;
+        // Sensor volumes the player occupies, carried across the sweep. The hop
+        // is committed as one jump, so without polling per substep any volume
+        // entered and left between the endpoints would never be observed (#654).
+        // Substeps are the same size real walking covers in one frame, so this
+        // samples the swept path at exactly the fidelity thumbstick walking does.
+        let mut occupied_sensors = self.player_sensor_intersections.clone();
+        let mut swept_sensor_events = Vec::new();
         {
             let queries = self.broad_phase.as_query_pipeline(
                 self.narrow_phase.query_dispatcher(),
@@ -1812,6 +1881,27 @@ impl PhysicsWorld {
                 &self.collider_set,
                 filter,
             );
+            // Sensors are excluded from `filter` (they must never block the
+            // move); observing them is a separate query over the same pipeline.
+            let sensor_queries =
+                queries.with_filter(QueryFilter::new().predicate(&is_sensor_collider));
+            let observe_sensors =
+                |pos: &Isometry<Real>,
+                 occupied: &mut HashSet<EntityId>,
+                 events: &mut Vec<CollisionEvent>| {
+                    if let Some(player_id) = player_id {
+                        let current =
+                            sensors_overlapping(&sensor_queries, pos, character_shape.as_ref());
+                        events.extend(sensor_transition_events(occupied, &current, player_id));
+                        *occupied = current;
+                    }
+                };
+
+            // Sample the starting pose first: the cached occupancy was taken at
+            // the last stepped frame, and a direct relocation since then (a
+            // teleport with no frame in between) can have moved the player into
+            // or out of a volume the cache has not seen yet.
+            observe_sensors(&pos, &mut occupied_sensors, &mut swept_sensor_events);
 
             // Walk toward the target one substep at a time. The iteration bound
             // is the worst case a *progressing* move can need (every substep
@@ -1849,11 +1939,20 @@ impl PhysicsWorld {
                 let progress = mvt.translation.dot(&walk_dir);
                 pos = Translation::from(mvt.translation) * pos;
                 distance_moved += progress.max(0.0);
+                observe_sensors(&pos, &mut occupied_sensors, &mut swept_sensor_events);
                 if progress < attempt * PLAYER_MOVE_PROGRESS_FRACTION {
                     break;
                 }
             }
         }
+
+        // Hand the traversed edges to the next frame's poll, and leave it the
+        // occupancy at the final pose so it does not re-fire what was already
+        // reported here (or miss an EXIT for something left mid-hop). Both are
+        // unchanged when there is no player entity to attribute edges to.
+        self.player_sensor_intersections = occupied_sensors;
+        self.pending_player_sensor_events
+            .append(&mut swept_sensor_events);
 
         let new_position = nvec_to_cgmath(pos.translation.vector);
 
@@ -2281,6 +2380,7 @@ impl PhysicsWorld {
             debug_pipeline,
 
             player_sensor_intersections: HashSet::new(),
+            pending_player_sensor_events: Vec::new(),
 
             reported_nonfinite_entities: HashSet::new(),
 
@@ -2659,59 +2759,30 @@ impl PhysicsWorld {
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
 
-        let mut collision_events = Vec::new();
-        let mut current_sensor_intersections = HashSet::new();
-        profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
+        // Edges already observed along a swept `move_player_validated` hop come
+        // first: they happened before this frame's pose. They also leave
+        // `player_sensor_intersections` at the hop's final occupancy, so the
+        // diff below sees no change for anything they already reported.
+        let mut collision_events = std::mem::take(&mut self.pending_player_sensor_events);
+        let current_sensor_intersections = profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
             // Only consider sensor colliders for player/sensor intersections.
-            let sensor_filter = QueryFilter::new()
-                .predicate(&|_collider_handle: ColliderHandle, _c: &Collider| _c.is_sensor());
+            let sensor_filter = QueryFilter::new().predicate(&is_sensor_collider);
             let queries = self.broad_phase.as_query_pipeline(
                 dispatcher,
                 &self.rigid_body_set,
                 &self.collider_set,
                 sensor_filter,
             );
-            for (handle, collider) in
-                queries.intersect_shape(original_position, character_shape.as_ref())
-            {
-                if collider.is_sensor() {
-                    if let (Some(_entity1_id), Some(entity2_id)) = (
-                        EntityId::from_inner(character_user_data as u64),
-                        EntityId::from_inner(collider.user_data as u64),
-                    ) {
-                        current_sensor_intersections.insert(entity2_id);
-                    }
-                }
-                let _ = handle;
-            }
+            sensors_overlapping(&queries, &original_position, character_shape.as_ref())
         });
 
         let player_id = EntityId::from_inner(character_user_data as u64).unwrap();
 
-        let new_collisions: HashSet<EntityId> = current_sensor_intersections
-            .difference(&self.player_sensor_intersections)
-            .cloned()
-            .collect::<HashSet<EntityId>>();
-
-        let no_longer_collisions: HashSet<EntityId> = self
-            .player_sensor_intersections
-            .difference(&current_sensor_intersections)
-            .cloned()
-            .collect();
-
-        for expired_collision in no_longer_collisions {
-            collision_events.push(CollisionEvent::EndIntersect {
-                sensor_id: expired_collision,
-                entity_id: player_id,
-            });
-        }
-
-        for new_collision in new_collisions {
-            collision_events.push(CollisionEvent::BeginIntersect {
-                sensor_id: new_collision,
-                entity_id: player_id,
-            });
-        }
+        collision_events.extend(sensor_transition_events(
+            &self.player_sensor_intersections,
+            &current_sensor_intersections,
+            player_id,
+        ));
 
         self.player_sensor_intersections = current_sensor_intersections;
 
@@ -4768,6 +4839,171 @@ mod tests {
         assert!(
             walked > 3.0,
             "walking on a rotated platform should progress ~6 units, moved {walked}"
+        );
+    }
+
+    #[test]
+    fn sensor_transitions_report_exits_before_entries() {
+        let player_id = EntityId::from_inner(1).unwrap();
+        let left = EntityId::from_inner(2).unwrap();
+        let entered = EntityId::from_inner(3).unwrap();
+        let previous = HashSet::from([left]);
+        let current = HashSet::from([entered]);
+
+        let events = sensor_transition_events(&previous, &current, player_id);
+
+        assert_eq!(events.len(), 2, "one exit and one entry: {events:?}");
+        assert!(
+            matches!(events[0], CollisionEvent::EndIntersect { sensor_id, .. } if sensor_id == left),
+            "the exit must be reported first: {events:?}"
+        );
+        assert!(
+            matches!(events[1], CollisionEvent::BeginIntersect { sensor_id, .. } if sensor_id == entered),
+            "the entry must follow the exit: {events:?}"
+        );
+        assert!(
+            sensor_transition_events(&previous, &previous, player_id).is_empty(),
+            "unchanged occupancy is not an edge"
+        );
+    }
+
+    /// A validated move (`/v1/player/move`, the automation navigation
+    /// primitive) must fire the sensors it crosses, like walking does.
+    /// (Negative-first: the hop was committed as one atomic translation and
+    /// sensors were only polled once per frame, so a volume entered and left
+    /// between two frames fired nothing at all - automated playtests walked
+    /// straight through tripwires, issue #654.)
+    #[test]
+    fn validated_move_fires_sensors_crossed_along_the_hop() {
+        let sensor_id = EntityId::from_inner(3000).unwrap();
+        // Settle the player at x=-2, hop toward `target_x` through a thin
+        // sensor slab standing at x=0, then take one frame; report the sensor
+        // events that frame delivered.
+        let run = |target_x: f32| -> Vec<CollisionEvent> {
+            let mut world = PhysicsWorld::new();
+            let floor_verts = vec![
+                point![-100.0, 0.0, -100.0],
+                point![100.0, 0.0, -100.0],
+                point![100.0, 0.0, 100.0],
+                point![-100.0, 0.0, 100.0],
+            ];
+            let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+            world.add_collider(
+                EntityId::from_inner(1000).unwrap(),
+                ColliderBuilder::trimesh(floor_verts, floor_tris)
+                    .expect("floor trimesh")
+                    .build(),
+            );
+            world.add_collider(
+                sensor_id,
+                ColliderBuilder::cuboid(0.15, 2.0, 4.0)
+                    .translation(vector![0.0, 1.0, 0.0])
+                    .sensor(true)
+                    .build(),
+            );
+            let mut player =
+                world.create_player(vec3(-2.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+            for _ in 0..30 {
+                world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            }
+            let current = world.get_player_translation(&player);
+            world.move_player_validated(vec3(target_x, current.y, current.z), &mut player);
+            let (_, events) = world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            // The hop is the only thing that moved: a second idle frame must
+            // not replay anything the hop already reported.
+            let (_, extra) = world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            assert!(
+                extra.is_empty(),
+                "a stationary follow-up frame must not re-fire: {extra:?}"
+            );
+            events
+        };
+
+        // Passing through: enter then exit, in traversal order.
+        let crossed = run(2.0);
+        assert_eq!(
+            crossed.len(),
+            2,
+            "crossing a sensor must fire enter then exit: {crossed:?}"
+        );
+        assert!(
+            matches!(crossed[0], CollisionEvent::BeginIntersect { sensor_id: id, .. } if id == sensor_id),
+            "the crossing must enter first: {crossed:?}"
+        );
+        assert!(
+            matches!(crossed[1], CollisionEvent::EndIntersect { sensor_id: id, .. } if id == sensor_id),
+            "the crossing must then exit: {crossed:?}"
+        );
+
+        // Ending inside: exactly one enter, and no duplicate from the
+        // per-frame poll that used to be the only thing reporting it.
+        let ended_inside = run(0.0);
+        assert_eq!(
+            ended_inside.len(),
+            1,
+            "a hop ending inside a sensor fires one enter: {ended_inside:?}"
+        );
+        assert!(
+            matches!(ended_inside[0], CollisionEvent::BeginIntersect { sensor_id: id, .. } if id == sensor_id),
+            "a hop ending inside a sensor must enter it: {ended_inside:?}"
+        );
+    }
+
+    /// The cached occupancy is only as fresh as the last stepped frame, so a
+    /// teleport with no frame in between can leave the player standing in a
+    /// volume the cache has never seen. The sweep therefore samples its own
+    /// starting pose before walking; without that, a hop whose first substep
+    /// already leaves the volume reports neither the entry nor the exit.
+    #[test]
+    fn validated_move_reports_a_volume_the_player_was_teleported_into() {
+        let sensor_id = EntityId::from_inner(3000).unwrap();
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, floor_tris)
+                .expect("floor trimesh")
+                .build(),
+        );
+        world.add_collider(
+            sensor_id,
+            ColliderBuilder::cuboid(0.15, 2.0, 4.0)
+                .translation(vector![0.0, 1.0, 0.0])
+                .sensor(true)
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(-2.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        // Land just inside the far edge of the slab (the overlap band reaches
+        // 0.47 with the capsule's radius), so the very first walk substep
+        // already carries the player out of it.
+        let settled = world.get_player_translation(&player);
+        world.set_player_translation(vec3(0.4, settled.y, settled.z), &mut player);
+        world.move_player_validated(vec3(2.0, settled.y, settled.z), &mut player);
+        let (_, events) = world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        assert_eq!(
+            events.len(),
+            2,
+            "the teleported-into volume must report entry then exit: {events:?}"
+        );
+        assert!(
+            matches!(events[0], CollisionEvent::BeginIntersect { sensor_id: id, .. } if id == sensor_id),
+            "the entry established by the teleport must be reported: {events:?}"
+        );
+        assert!(
+            matches!(events[1], CollisionEvent::EndIntersect { sensor_id: id, .. } if id == sensor_id),
+            "walking out of it must then report the exit: {events:?}"
         );
     }
 
