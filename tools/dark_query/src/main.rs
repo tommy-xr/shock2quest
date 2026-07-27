@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use shock2vr::zip_asset_path::ZipAssetPath;
 use tracing::info;
 
 mod data_loader;
@@ -639,26 +638,14 @@ fn handle_maps_command(mission: &str) -> Result<()> {
     let data_root = shock2vr::paths::data_root();
     let data_path = data_root.to_string_lossy().to_string();
 
-    // Production runtime ONLY has intrface.crf - no fallback to folders
-    let intrface_crf_path = data_root.join("res/intrface.crf");
-    if !intrface_crf_path.exists() {
-        // A 25th Anniversary install keeps the interface family inside
-        // `sshock2.kpf`, which needs the renderer's family mounts, not the
-        // data-file ones this tool uses elsewhere. Fail with a message rather
-        // than panicking inside the archive reader.
-        anyhow::bail!(
-            "{} not found - `maps` needs a classic install with loose .crf archives",
-            intrface_crf_path.display()
-        );
-    }
-
-    println!(
-        "Using intrface.crf archive: {}",
-        intrface_crf_path.display()
+    // The map rectangles live in the *interface resource family*, which a
+    // classic install keeps in `res/intrface.crf` and a 25th Anniversary one
+    // inside `sshock2.kpf` (possibly overridden by a mod layer). Mount that
+    // family the way the game does rather than one hardcoded archive.
+    let mut asset_cache = engine::assets::asset_cache::AssetCache::new(
+        data_path.clone(),
+        shock2vr::resource_family_paths("intrface"),
     );
-    let asset_path = ZipAssetPath::new(intrface_crf_path.to_string_lossy().to_string());
-    let mut asset_cache =
-        engine::assets::asset_cache::AssetCache::new(data_path.clone(), asset_path);
 
     match dark::map::MapChunkData::load_from_mission(&mut asset_cache, mission) {
         Ok(map_data) => {

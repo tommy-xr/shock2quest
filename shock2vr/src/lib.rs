@@ -184,27 +184,62 @@ fn mount_family(
     }
 }
 
+/// The 25AE mounts for one resource family, highest priority first: every mod
+/// layer allowed to override it, then the base archive.
+fn anniversary_family_mounts(
+    family: &str,
+) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
+    let mut mounts: Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> = Vec::new();
+    for archive in MOD_ARCHIVES {
+        if !mod_layer_may_override(family, archive) {
+            continue;
+        }
+        let path = resource_path(archive);
+        if Path::new(&path).exists() {
+            mounts.push(mount_family(path, &format!("{family}/"), family));
+        }
+    }
+    // The base archive keeps the original `data/res/<family>/` layout.
+    mounts.push(mount_family(
+        resource_path("sshock2.kpf"),
+        &format!("data/res/{family}/"),
+        family,
+    ));
+    mounts
+}
+
+/// The mounts for a *single* resource family, for a CLI tool that needs one
+/// family's files without a renderer - `dq maps` reads the map rectangles out
+/// of `intrface`, which a classic install keeps in `res/intrface.crf` and a
+/// 25AE one inside the KPF layers.
+///
+/// Same archives, same precedence the game resolves that family through. A
+/// missing archive contributes no mount, so a lookup comes back empty instead
+/// of panicking inside the archive reader.
+pub fn resource_family_paths(
+    family: &str,
+) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
+    let mounts = if is_25th_anniversary_install() {
+        anniversary_family_mounts(family)
+    } else {
+        // A `.crf` holds one family at its root, so it needs no prefix.
+        let archive = resource_path(&format!("res/{family}.crf"));
+        if Path::new(&archive).exists() {
+            vec![mount_family(archive, "", family)]
+        } else {
+            Vec::new()
+        }
+    };
+    AssetPath::combine(mounts)
+}
+
 fn build_25th_anniversary_mounts(
     bundle_storage: Arc<dyn Storage>,
 ) -> Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> {
     let mut mounts: Vec<Box<dyn engine::assets::asset_paths::AbstractAssetPath>> = Vec::new();
 
     for family in RESOURCE_FAMILIES {
-        for archive in MOD_ARCHIVES {
-            if !mod_layer_may_override(family, archive) {
-                continue;
-            }
-            let path = resource_path(archive);
-            if Path::new(&path).exists() {
-                mounts.push(mount_family(path, &format!("{family}/"), family));
-            }
-        }
-        // The base archive keeps the original `data/res/<family>/` layout.
-        mounts.push(mount_family(
-            resource_path("sshock2.kpf"),
-            &format!("data/res/{family}/"),
-            family,
-        ));
+        mounts.extend(anniversary_family_mounts(family));
     }
 
     // The gamesys, missions and motiondb - shared with the CLI tools, which
@@ -226,22 +261,9 @@ pub fn mission_exists(mission_file: &str) -> bool {
     if Path::new(&resource_path(mission_file)).exists() {
         return true;
     }
-    if !is_25th_anniversary_install() {
-        return false;
-    }
-    let wanted = format!("data/{}", mission_file.to_ascii_lowercase());
-    let Ok(file) = std::fs::File::open(resource_path("sshock2.kpf")) else {
-        return false;
-    };
-    let Ok(mut archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
-        return false;
-    };
-    (0..archive.len()).any(|i| {
-        archive
-            .by_index(i)
-            .map(|e| e.name().to_ascii_lowercase() == wanted)
-            .unwrap_or(false)
-    })
+    data_files::mission_names(paths::data_root())
+        .iter()
+        .any(|mission| mission.eq_ignore_ascii_case(mission_file))
 }
 
 pub fn resource_path(str: &str) -> String {

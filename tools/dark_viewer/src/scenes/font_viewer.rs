@@ -6,8 +6,10 @@ use dark::font::Font;
 use engine::assets::asset_cache::AssetCache;
 use engine::materials::ScreenSpaceMaterial;
 use engine::scene::{Scene, SceneObject};
+use shock2vr::paths;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::PathBuf;
 use std::time::Duration;
 
 pub struct FontViewerScene {
@@ -20,14 +22,30 @@ pub struct FontViewerScene {
 }
 
 impl FontViewerScene {
+    /// Load a font from a path on disk - as given, or under the data root, both
+    /// of which the old `data_root().join(..)` resolution accepted - and
+    /// otherwise through the game's asset paths, so a bare `MAINAA.FON`
+    /// resolves the way the game resolves it: out of the interface archive on
+    /// either install layout.
     pub fn from_file(
         font_file_path: String,
-        resource_path_fn: fn(&str) -> String,
+        asset_cache: &AssetCache,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Load font
-        let font_file = File::open(resource_path_fn(&font_file_path))?;
-        let mut font_reader = BufReader::new(font_file);
-        let font = Font::read(&mut font_reader);
+        let on_disk = [
+            PathBuf::from(&font_file_path),
+            paths::data_root().join(&font_file_path),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file());
+
+        let font = if let Some(path) = on_disk {
+            Font::read(&mut BufReader::new(File::open(path)?))
+        } else {
+            let reader = asset_cache
+                .get_raw_reader(&font_file_path)
+                .ok_or_else(|| format!("Could not find font {font_file_path} in the game data"))?;
+            Font::read(&mut *reader.borrow_mut())
+        };
 
         Ok(FontViewerScene {
             font_file_path,

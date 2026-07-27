@@ -13,8 +13,6 @@
 //!   cargo bn path show medsci1.mis --from " -10,0,5" --to "20,0,30"
 //!   cargo bn path cell medsci1.mis --at "20,0,30"
 
-use std::fs::File;
-use std::io::BufReader;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -27,7 +25,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
 use shock2vr::pathfinding::PathfindingService;
-use shock2vr::paths;
+use shock2vr::{data_files, paths};
 
 #[derive(Parser)]
 #[command(name = "bench", about = "Benchmark and inspect engine subsystems")]
@@ -112,11 +110,20 @@ fn main() -> Result<()> {
 fn run_path_command(command: PathCommand) -> Result<()> {
     match command {
         PathCommand::Stats { mission, all } => {
+            let mut reported = 0;
             for mission in resolve_missions(mission, all)? {
                 match load_path_database(&mission) {
-                    Ok(db) => print_stats(&mission, db),
+                    Ok(db) => {
+                        print_stats(&mission, db);
+                        reported += 1;
+                    }
                     Err(e) => println!("{mission}: {e}"),
                 }
+            }
+            // Same reason as `bench` below: a run that reported on nothing must
+            // not look like a clean one.
+            if reported == 0 {
+                return Err(anyhow!("no mission could be read"));
             }
         }
         PathCommand::Bench {
@@ -137,6 +144,11 @@ fn run_path_command(command: PathCommand) -> Result<()> {
                         }
                     }
                 }
+            }
+            // A run where every mission failed would otherwise print an empty
+            // table (or `[]`) and exit 0 - a benchmark of nothing looks clean.
+            if reports.is_empty() {
+                return Err(anyhow!("no mission produced a benchmark report"));
             }
             if json {
                 println!("{}", serde_json::to_string_pretty(&reports)?);
@@ -239,12 +251,16 @@ fn dump_component_at(db: PathDatabase, at: Vector3<f32>) {
 
 fn resolve_missions(mission: Option<String>, all: bool) -> Result<Vec<String>> {
     if all {
-        let mut missions: Vec<String> = std::fs::read_dir(paths::data_root())?
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|name| name.ends_with(".mis"))
-            .collect();
-        missions.sort();
+        let data_root = paths::data_root();
+        let missions = data_files::mission_names(data_root);
+        // Benchmarking nothing at all would otherwise look like a clean run.
+        if missions.is_empty() {
+            return Err(anyhow!(
+                "no .mis files found in the game data at {} - set DARK_ASSET_PATH to your \
+                 System Shock 2 install if that is the wrong directory",
+                data_root.display()
+            ));
+        }
         Ok(missions)
     } else {
         mission
@@ -254,9 +270,14 @@ fn resolve_missions(mission: Option<String>, all: bool) -> Result<Vec<String>> {
 }
 
 fn load_path_database(mission: &str) -> Result<PathDatabase> {
-    let path = paths::data_root().join(mission);
-    let file = File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut reader = BufReader::new(file);
+    // Through the asset-path layer rather than the filesystem: a 25th
+    // Anniversary install keeps every mission inside `sshock2.kpf`.
+    let mut reader = data_files::open_data_file(mission).with_context(|| {
+        format!(
+            "failed to open {mission} in the game data at {}",
+            paths::data_root().display()
+        )
+    })?;
     let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
     PathDatabase::read(&toc, &mut reader)
         .ok_or_else(|| anyhow!("no usable AIPATH data (missing chunk or unsupported version)"))
