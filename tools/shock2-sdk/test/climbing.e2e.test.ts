@@ -320,10 +320,10 @@ test(
 
 // Issue #657: a single reasonable +X,+Z heading held continuously from the
 // base approached the ladder on a path whose climb was blocked 3.1 feet below
-// the authored column top. The shorter top-out gate never opened, so no mantle
-// was planned and the gripped climb remained frozen forever. This reproduces
-// the player's ordinary one-heading approach without changing look direction
-// or releasing forward input during the climb/top-out.
+// the authored column top. The original shorter top-out gate never planned a
+// mantle; after moving-terrain support landed, the same route could instead
+// leave scripted climbing through unsupported ordinary movement. Reproduce the
+// player's one-heading approach and require a controlled, supported release.
 test(
   "flat climbing: continuous diagonal heading tops out onto rick1's opening deck",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -363,6 +363,14 @@ test(
     let regularWalkResumed = false;
     let ordinaryWalkStart = base;
     let fineSampling = false;
+    let maxDownwardDelta = 0;
+    let maxDropStart = base;
+    let maxDropEnd = base;
+    let unsupportedOrdinaryFrame = false;
+    let unsupportedOrdinaryStart = base;
+    let unsupportedOrdinaryEnd = base;
+    let unsupportedOrdinaryDistance = 0;
+    let unsupportedOrdinarySupport = "";
     for (let elapsed = 0; elapsed < 1_050; ) {
       // Climb quickly to the approach, then sample each frame so the test can
       // distinguish the scripted mantle's <=0.067-unit substeps from ordinary
@@ -373,6 +381,12 @@ test(
       elapsed += frames;
       previous = position;
       position = await game.player.position();
+      const downwardDelta = previous.y - position.y;
+      if (frames === 1 && downwardDelta > maxDownwardDelta) {
+        maxDownwardDelta = downwardDelta;
+        maxDropStart = previous;
+        maxDropEnd = position;
+      }
       const horizontalDistance = Math.hypot(
         position.x - previous.x,
         position.z - previous.z,
@@ -386,16 +400,22 @@ test(
           collision_groups: ["world", "entity", "selectable"],
           ignore_sensors: true,
         });
-        if (
+        const hasNearbySupport =
           nearbySupport.hit &&
           nearbySupport.distance !== null &&
           nearbySupport.distance > 0.5 &&
           nearbySupport.distance < 1.25 &&
           nearbySupport.hit_normal !== null &&
-          nearbySupport.hit_normal[1] > 0.5
-        ) {
+          nearbySupport.hit_normal[1] > 0.5;
+        if (hasNearbySupport) {
           regularWalkResumed = true;
           ordinaryWalkStart = previous;
+        } else if (!unsupportedOrdinaryFrame) {
+          unsupportedOrdinaryFrame = true;
+          unsupportedOrdinaryStart = previous;
+          unsupportedOrdinaryEnd = position;
+          unsupportedOrdinaryDistance = horizontalDistance;
+          unsupportedOrdinarySupport = JSON.stringify(nearbySupport);
         }
       }
       if (regularWalkResumed) {
@@ -404,6 +424,17 @@ test(
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
+    assert.ok(
+      !unsupportedOrdinaryFrame,
+      `ordinary-speed movement beyond the lip must begin only from a supported standing pose; ` +
+        `horizontal=${unsupportedOrdinaryDistance.toFixed(4)}, ` +
+        `from=(${unsupportedOrdinaryStart.x.toFixed(2)}, ${unsupportedOrdinaryStart.y.toFixed(2)}, ${unsupportedOrdinaryStart.z.toFixed(2)}), ` +
+        `to=(${unsupportedOrdinaryEnd.x.toFixed(2)}, ${unsupportedOrdinaryEnd.y.toFixed(2)}, ${unsupportedOrdinaryEnd.z.toFixed(2)}), ` +
+        `support=${unsupportedOrdinarySupport}, ` +
+        `max-downward-delta=${maxDownwardDelta.toFixed(4)} ` +
+        `from=(${maxDropStart.x.toFixed(2)}, ${maxDropStart.y.toFixed(2)}, ${maxDropStart.z.toFixed(2)}) ` +
+        `to=(${maxDropEnd.x.toFixed(2)}, ${maxDropEnd.y.toFixed(2)}, ${maxDropEnd.z.toFixed(2)})`,
+    );
     assert.ok(
       regularWalkResumed,
       `one continuous diagonal heading must restore ordinary walking past the lip; ` +
