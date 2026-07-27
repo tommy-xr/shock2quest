@@ -48,9 +48,8 @@ pub fn data_file_mounts(data_root: &Path) -> Vec<Box<dyn AbstractAssetPath>> {
 /// An asset-path layer that resolves only the raw data files - no textures,
 /// sounds or bundle storage, so a CLI tool can build it without a renderer.
 ///
-/// Use `data_root` as the base path when reading through it (that is what the
-/// loose-file mount resolves against), e.g.
-/// `AssetCache::new(data_root.to_string_lossy().into_owned(), asset_paths(data_root))`.
+/// Pass `data_root` as the `base_path` argument of `exists`/`get_reader`: that
+/// is what the loose-file mount resolves names against.
 pub fn asset_paths(data_root: &Path) -> Box<dyn AbstractAssetPath> {
     let mut mounts = data_file_mounts(data_root);
     mounts.push(AssetPath::folder(String::new()));

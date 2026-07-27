@@ -1,5 +1,6 @@
 use anyhow::Result;
 use dark::motion::{MotionDB, MotionQuery, MotionQueryItem, MotionQuerySelectionStrategy};
+use shock2vr::paths;
 use std::collections::HashMap;
 use tracing::info;
 
@@ -13,8 +14,8 @@ pub struct MotionAnalyzer {
 impl MotionAnalyzer {
     pub fn new() -> Result<Self> {
         // Load motion database
-        let motiondb_reader = open_data_file("motiondb.bin")?;
-        let motion_db = MotionDB::read(&mut *motiondb_reader.borrow_mut());
+        let mut motiondb_reader = open_data_file("motiondb.bin")?;
+        let motion_db = MotionDB::read(&mut motiondb_reader);
 
         // Create creature name mapping based on ActorType enum
         let mut creature_name_to_id = HashMap::new();
@@ -197,8 +198,8 @@ impl MotionAnalyzer {
         // The per-frame root-y stream lives in the clip file (res/motions/
         // <name>_.mc), not the motion database - print its curve when the
         // unpacked file is available
-        if let Ok(reader) = open_data_file(&format!("res/motions/{}_.mc", name)) {
-            let clip = dark::motion::MotionClip::read(&mut *reader.borrow_mut(), mps);
+        if let Ok(mut reader) = open_data_file(&format!("res/motions/{}_.mc", name)) {
+            let clip = dark::motion::MotionClip::read(&mut reader, mps);
             let ys: Vec<f32> = clip.root_transforms.iter().map(|m| m.w.y).collect();
             if !ys.is_empty() {
                 let n = ys.len();
@@ -237,8 +238,9 @@ impl MotionAnalyzer {
             }
         } else {
             println!(
-                "  root y:       (no clip res/motions/{}_.mc in the data)",
-                name
+                "  root y:       (no clip res/motions/{}_.mc in the game data at {})",
+                name,
+                paths::data_root().display()
             );
         }
         Ok(())

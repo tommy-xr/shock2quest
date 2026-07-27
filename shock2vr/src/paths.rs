@@ -14,11 +14,6 @@ pub fn data_root() -> &'static Path {
     Path::new("/sdcard/shock2quest")
 }
 
-#[cfg(target_os = "android")]
-pub fn search_roots() -> &'static [&'static str] {
-    &["/sdcard/shock2quest"]
-}
-
 #[cfg(not(target_os = "android"))]
 static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
@@ -40,11 +35,6 @@ const SENTINELS: &[&str] = &[
 #[cfg(not(target_os = "android"))]
 pub fn data_root() -> &'static Path {
     DATA_ROOT.get_or_init(resolve_desktop_data_root).as_path()
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn search_roots() -> &'static [&'static str] {
-    DESKTOP_CANDIDATES
 }
 
 #[cfg(not(target_os = "android"))]

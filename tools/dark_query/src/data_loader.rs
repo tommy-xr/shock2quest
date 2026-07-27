@@ -22,13 +22,14 @@ fn data_file_paths() -> &'static dyn AbstractAssetPath {
 /// same asset-path layer the game uses, so a 25th Anniversary install - where
 /// nothing is loose on disk and everything lives inside `sshock2.kpf` - works
 /// just like a classic one.
-pub fn open_data_file(name: &str) -> Result<RefCell<Box<dyn ReadableAndSeekable>>> {
+pub fn open_data_file(name: &str) -> Result<Box<dyn ReadableAndSeekable>> {
     let data_root = paths::data_root();
     data_file_paths()
         .get_reader(
             data_root.to_string_lossy().into_owned(),
             name.to_ascii_lowercase(),
         )
+        .map(RefCell::into_inner)
         .with_context(|| {
             format!(
                 "{name} not found in the game data at {} - set DARK_ASSET_PATH to your \
@@ -44,14 +45,9 @@ pub fn load_gamesys() -> Result<gamesys::Gamesys> {
 
     let (properties, links, links_with_data) = get();
 
-    let game_reader = open_data_file("shock2.gam")?;
+    let mut game_reader = open_data_file("shock2.gam")?;
 
-    let gamesys = gamesys::read(
-        &mut *game_reader.borrow_mut(),
-        &links,
-        &links_with_data,
-        &properties,
-    );
+    let gamesys = gamesys::read(&mut game_reader, &links, &links_with_data, &properties);
 
     info!(
         "Loaded {} entities from gamesys",
@@ -78,11 +74,10 @@ pub fn load_gamesys_with_mission(mission_name: &str) -> Result<SystemShock2Entit
     let (properties, links, links_with_data) = get();
 
     // Load mission file
-    let mission_reader = open_data_file(mission_name)?;
-    let mut mission_reader = mission_reader.borrow_mut();
+    let mut mission_reader = open_data_file(mission_name)?;
 
     // Read mission table of contents to get entity data chunks
-    let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(&mut *mission_reader);
+    let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(&mut mission_reader);
 
     // Extract entity info directly without asset loading
     let mission_entity_info = ss2_entity_info::new(
@@ -90,7 +85,7 @@ pub fn load_gamesys_with_mission(mission_name: &str) -> Result<SystemShock2Entit
         &links,
         &links_with_data,
         &properties,
-        &mut *mission_reader,
+        &mut mission_reader,
     );
 
     // Merge gamesys + mission data
