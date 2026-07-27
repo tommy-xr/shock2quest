@@ -51,8 +51,8 @@ pub enum TrainerMode {
 }
 
 /// Stats cap at 6 (start 1); skills cap at 6 (start 0); psi tiers cap at 5.
-const STAT_CAP: i32 = 6;
-const SKILL_CAP: i32 = 6;
+pub const STAT_CAP: i32 = 6;
+pub const SKILL_CAP: i32 = 6;
 pub const PSI_TIER_CAP: i32 = 5;
 
 /// The cost of buying `target`'s next level given the player's current sheet,

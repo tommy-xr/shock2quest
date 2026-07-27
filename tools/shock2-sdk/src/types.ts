@@ -472,6 +472,32 @@ export interface PlayerInventoryResult {
   count: number;
 }
 
+/** An item provisioned into the backpack by `POST /v1/player/spawn-item`. */
+export interface SpawnedItem {
+  /** Runtime entity id of the fresh item (same id space as /v1/entities). */
+  entity_id: number;
+  /** The template it was instantiated from - stable across runs. */
+  template_id: number;
+  name: string | null;
+}
+
+/** Debug provisioning target for the character sheet (`POST /v1/player/stats`).
+ * Mirrors the read-side `player.stats` shape; every field is optional and names
+ * the level to establish (not a delta). Provisioning only raises: a target
+ * below the current level is rejected with a 400. */
+export interface PlayerStatsRequest {
+  strength?: number;
+  endurance?: number;
+  agility?: number;
+  psionic_ability?: number;
+  cyber_affinity?: number;
+  skills?: Partial<SkillLevels>;
+  /** Highest psi tier unlocked (0..=5, granted sequentially). */
+  psi_tier?: number;
+  /** Target cyber-module balance (the upgrade currency). */
+  cyber_modules?: number;
+}
+
 /**
  * One drawn element of the active flat-mode MFD panel. `label` gives
  * clickable elements a semantic identity (keypad digits "0"-"9", "clear",

@@ -293,6 +293,8 @@ async fn start_http_server(
         .route("/v1/player/inventory", get(get_player_inventory))
         .route("/v1/transitions", get(list_transitions))
         .route("/v1/player/give", axum::routing::post(give_item))
+        .route("/v1/player/spawn-item", axum::routing::post(spawn_item))
+        .route("/v1/player/stats", axum::routing::post(set_player_stats))
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
@@ -305,7 +307,6 @@ async fn start_http_server(
         .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
-        .route("/v1/control/command", axum::routing::post(run_game_command))
         .route(
             "/v1/pathfinding-test",
             axum::routing::post(pathfinding_test).get(pathfinding_test_status),
@@ -356,10 +357,15 @@ async fn start_http_server(
     info!("  POST /v1/quests/:name     - Set a quest bit {{value: unknown|incomplete|complete}}");
     info!("  GET  /v1/player/inventory - Snapshot the player's carried items");
     info!("  POST /v1/player/give      - Put an existing entity in the inventory {{entity_id}}");
+    info!(
+        "  POST /v1/player/spawn-item - Provision a fresh item into the inventory {{template|template_id}}"
+    );
+    info!(
+        "  POST /v1/player/stats     - Provision the character sheet {{skills, stats, psi_tier, cyber_modules}}"
+    );
     info!("  POST /v1/physics/raycast  - Perform physics raycast for collision testing");
     info!("  GET  /v1/control/input    - Retrieve controller/input state");
     info!("  POST /v1/control/input    - Update controller/input channels");
-    info!("  POST /v1/control/command  - Execute gameplay commands (save, spawn, etc.)");
     info!(
         "  POST /v1/input/action     - Trigger a discrete input action (e.g. PathfindingTestCycle)"
     );
@@ -1183,15 +1189,21 @@ fn process_command(
                 }
             }
         }
-        RuntimeCommand::RunGameCommand(_command, _args, reply) => {
-            // TODO: Implement game command execution
-            let result = CommandResult {
-                success: false,
-                message: "Game commands not yet implemented".to_string(),
-                data: None,
+        RuntimeCommand::SpawnItem { template, reply } => {
+            // Goes through `Game` (not the debuggable scene directly) because
+            // instantiating the item needs the game-owned asset cache.
+            let result = game.debug_spawn_item(&template);
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send spawn-item result - receiver dropped");
+            }
+        }
+        RuntimeCommand::SetPlayerStats { request, reply } => {
+            let result = match game.debug_scene_mut() {
+                Some(scene) => scene.set_player_stats(&request),
+                None => Err("no debuggable scene available".to_string()),
             };
-            if let Err(_) = reply.send(result) {
-                tracing::warn!("Failed to send command result - receiver dropped");
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send set-player-stats result - receiver dropped");
             }
         }
         RuntimeCommand::PathfindingTest(action, reply) => {
@@ -2321,14 +2333,6 @@ struct PositionResponse {
     position: [f32; 3],
 }
 
-/// Request payload for executing a gameplay command
-#[derive(serde::Deserialize)]
-struct GameCommandRequest {
-    command: String,
-    #[serde(default)]
-    args: Vec<String>,
-}
-
 /// Request payload for pathfinding test command
 #[derive(serde::Deserialize)]
 struct PathfindingTestRequest {
@@ -2726,6 +2730,84 @@ async fn give_item(
         Ok(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
         Err(_) => {
             tracing::error!("Failed to receive give-item result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// Request body for provisioning a fresh item into the player's inventory.
+/// Addressed by template, the only identity stable across runs: either the
+/// gamesys template name ("Shotgun") or the template id (-19). Exactly one.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpawnItemRequest {
+    template: Option<String>,
+    template_id: Option<i32>,
+}
+
+/// HTTP handler for debug provisioning of an item: instantiate a template and
+/// put it in the player's backpack, as if it had been picked up. Only genuine
+/// pickup items are accepted (the same rule `/v1/player/give` applies).
+async fn spawn_item(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<SpawnItemRequest>,
+) -> Result<Json<shock2vr::game_scene::DebugSpawnedItem>, (StatusCode, String)> {
+    use shock2vr::game_scene::DebugItemTemplate;
+    let template = match (request.template, request.template_id) {
+        (Some(name), None) => DebugItemTemplate::Name(name),
+        (None, Some(id)) => DebugItemTemplate::Id(id),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "provide exactly one of 'template' (name) or 'template_id'".to_string(),
+            ));
+        }
+    };
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::SpawnItem {
+            template,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send SpawnItem command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(Ok(item)) => Ok(Json(item)),
+        Ok(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
+        Err(_) => {
+            tracing::error!("Failed to receive spawn-item result - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler for debug provisioning of the character sheet. The body mirrors
+/// the read-side `player.stats` shape from `/v1/info`; every field is optional
+/// and names the level to establish. Responds with the resulting sheet.
+async fn set_player_stats(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<shock2vr::game_scene::DebugPlayerStatsRequest>,
+) -> Result<Json<shock2vr::player_stats::PlayerStats>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::SetPlayerStats {
+            request,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send SetPlayerStats command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+    match reply_rx.await {
+        Ok(Ok(stats)) => Ok(Json(stats)),
+        Ok(Err(e)) => Err((StatusCode::BAD_REQUEST, e)),
+        Err(_) => {
+            tracing::error!("Failed to receive set-player-stats result - sender dropped");
             Err(game_loop_unavailable())
         }
     }
@@ -3208,34 +3290,6 @@ async fn set_input_channel(
         // the previous silent success.
         Ok(Err(msg)) => Err((StatusCode::BAD_REQUEST, msg)),
         Err(_) => Err(game_loop_unavailable()),
-    }
-}
-
-/// HTTP endpoint handler: Execute a gameplay command via the runtime
-async fn run_game_command(
-    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    LenientJson(request): LenientJson<GameCommandRequest>,
-) -> Result<Json<CommandResult>, StatusCode> {
-    let (reply_tx, reply_rx) = oneshot::channel();
-
-    if command_tx
-        .send(RuntimeCommand::RunGameCommand(
-            request.command,
-            request.args,
-            reply_tx,
-        ))
-        .is_err()
-    {
-        tracing::error!("Failed to send RunGameCommand - game loop receiver dropped");
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
-    match reply_rx.await {
-        Ok(result) => Ok(Json(result)),
-        Err(_) => {
-            tracing::error!("Failed to receive RunGameCommand result - sender dropped");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
     }
 }
 

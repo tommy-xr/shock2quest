@@ -93,11 +93,20 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<Result<(), String>>,
     },
 
+    /// Provision a fresh item from a template into the player's inventory.
+    SpawnItem {
+        template: shock2vr::game_scene::DebugItemTemplate,
+        reply: oneshot::Sender<Result<shock2vr::game_scene::DebugSpawnedItem, String>>,
+    },
+
+    /// Provision the player's character sheet (stats/skills/psi tier/modules).
+    SetPlayerStats {
+        request: shock2vr::game_scene::DebugPlayerStatsRequest,
+        reply: oneshot::Sender<Result<shock2vr::player_stats::PlayerStats, String>>,
+    },
+
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
-
-    /// Execute a game command (spawn, save, etc.)
-    RunGameCommand(String, Vec<String>, oneshot::Sender<CommandResult>),
 
     /// Pathfinding test command (set_start, set_goal, reset)
     PathfindingTest(String, oneshot::Sender<CommandResult>),

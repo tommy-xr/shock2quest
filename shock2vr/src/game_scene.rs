@@ -368,6 +368,62 @@ pub struct DebugInventoryItem {
     pub location: String,
 }
 
+/// Which template a debug spawn should instantiate. Templates are the only
+/// stable identity across runs (runtime entity ids are not), so provisioning
+/// addresses them either by gamesys template id (the negative `PropTemplateId`
+/// space) or by gamesys template name.
+#[derive(Debug, Clone)]
+pub enum DebugItemTemplate {
+    Id(i32),
+    Name(String),
+}
+
+/// The item a debug spawn provisioned into the player's backpack.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugSpawnedItem {
+    /// Runtime entity id of the fresh item (same id space as `/v1/entities`).
+    pub entity_id: i32,
+    /// The template it was instantiated from (stable across runs).
+    pub template_id: i32,
+    pub name: Option<String>,
+}
+
+/// Debug provisioning target for the player's character sheet. Mirrors the
+/// read-side `player.stats` shape (`GET /v1/info`); every field is optional and
+/// names the *level to establish*, not a delta. Omitted fields are untouched.
+/// Provisioning only ever raises - a target below the current level is an
+/// error, so a request can never silently un-train a character.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DebugPlayerStatsRequest {
+    pub strength: Option<i32>,
+    pub endurance: Option<i32>,
+    pub agility: Option<i32>,
+    pub psionic_ability: Option<i32>,
+    pub cyber_affinity: Option<i32>,
+    #[serde(default)]
+    pub skills: DebugSkillLevelsRequest,
+    pub psi_tier: Option<i32>,
+    /// Target cyber-module balance (the upgrade currency).
+    pub cyber_modules: Option<i32>,
+}
+
+/// Target skill levels, mirroring `player.stats.skills`. Named fields (rather
+/// than a map) keep the shape identical to the read side.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DebugSkillLevelsRequest {
+    pub standard_weapons: Option<i32>,
+    pub energy_weapons: Option<i32>,
+    pub heavy_weapons: Option<i32>,
+    pub exotic_weapons: Option<i32>,
+    pub hack: Option<i32>,
+    pub repair: Option<i32>,
+    pub modify: Option<i32>,
+    pub maintenance: Option<i32>,
+    pub research: Option<i32>,
+}
+
 /// Snapshot of the flat-mode UI state for debug introspection (`GET /v1/ui`).
 /// `mode` is "shooter" (mouse-look, no cursor) or "use" (cursor-driven
 /// metagame UI, the original game's Tab mode). `active_panel` is the
@@ -688,6 +744,32 @@ pub trait DebuggableScene {
     /// unsupported.
     fn give_item(&mut self, _entity_id: EntityId) -> Result<(), String> {
         Err("scene does not support giving items".to_string())
+    }
+
+    /// Debug provisioning: instantiate `template` and put the fresh item into
+    /// the player's backpack, exactly as [`give_item`](Self::give_item) does for
+    /// an item already in the world - so only genuine pickup items can be
+    /// provisioned. Takes the asset cache because instantiation loads the
+    /// item's model/textures. Default: unsupported.
+    fn spawn_item_for_player(
+        &mut self,
+        _asset_cache: &mut AssetCache,
+        _template: &DebugItemTemplate,
+    ) -> Result<DebugSpawnedItem, String> {
+        Err("scene does not support spawning items".to_string())
+    }
+
+    /// Debug provisioning: raise the player's character sheet (stats, skills,
+    /// psi tier, cyber modules) to the requested levels, through the same
+    /// `PlayerStats` mutations a trainer purchase performs - free of charge,
+    /// since this establishes a starting loadout rather than playing the
+    /// economy. Validated as a whole: on any invalid target nothing is applied.
+    /// Returns the resulting sheet. Default: unsupported.
+    fn set_player_stats(
+        &mut self,
+        _request: &DebugPlayerStatsRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        Err("scene does not support a character sheet".to_string())
     }
 
     /// Level-transition triggers in this scene (where each leads + its position),

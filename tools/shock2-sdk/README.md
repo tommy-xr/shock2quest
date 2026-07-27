@@ -34,6 +34,28 @@ await game.step({ duration: "1s" });
 const pos = await game.player.position();
 await game.player.teleport({ x: pos.x + 5, y: pos.y, z: pos.z });
 
+// Debug provisioning: establish a starting loadout a scenario doesn't hand you
+// (e.g. a "Marine" playstyle in a mid-game level). Items are addressed by
+// template - name or the stable template id - and land in the backpack exactly
+// as a pickup does; only genuine pickup items are accepted. Wield one by
+// double-clicking it in the use-mode inventory strip.
+const shotgun = await game.player.spawnItem("Shotgun");
+await game.player.spawnItem(-18); // Assault Rifle, by stable template id
+
+// The character sheet, mirroring the read side (`(await game.info()).player.stats`).
+// Every field is optional and names the level to establish; provisioning only
+// raises (a lower target, or one above the cap, throws 400).
+await game.player.setStats({
+  strength: 3,
+  skills: { standard_weapons: 4 },
+  psi_tier: 2,
+  cyber_modules: 20,
+});
+// NB: the sheet is persistent storage, but only some of it drives gameplay
+// today (Hack + cyber_affinity gate hacking; the weapon proficiencies and psi
+// tier are not yet wired to any derived effect). Provisioning them establishes
+// the character, not a behavior change.
+
 // Entities
 const doors = await game.entities.list({ filter: "*Door*", limit: 10 });
 const detail = await game.entities.detail(doors.entities[0].id);

@@ -27,6 +27,9 @@ import type {
   RecentAudioResult,
   UiState,
   PlayerInventoryResult,
+  PlayerStats,
+  PlayerStatsRequest,
+  SpawnedItem,
   TransitionsResult,
   WaitForOptions,
   AiPathEntry,
@@ -290,6 +293,35 @@ export class PlayerApi {
     return this.client.post<CommandResult>("/v1/player/give", {
       entity_id: entityId,
     });
+  }
+
+  /**
+   * Debug provisioning: instantiate an item template and put it straight into
+   * the player's backpack, as if it had been picked up. Address it by gamesys
+   * template name (`"Shotgun"`, case-insensitive) or by template id (`-19`) -
+   * templates are the only identity stable across runs.
+   *
+   * Only genuine pickup items are accepted; a creature or door template throws
+   * (400) and nothing is left in the world. Wielding a provisioned weapon is a
+   * separate step (double-click it in the use-mode inventory strip).
+   */
+  async spawnItem(template: string | number): Promise<SpawnedItem> {
+    return this.client.post<SpawnedItem>(
+      "/v1/player/spawn-item",
+      typeof template === "number" ? { template_id: template } : { template },
+    );
+  }
+
+  /**
+   * Debug provisioning: raise the character sheet to the requested levels
+   * (stats, skills, psi tier, cyber modules) through the same `PlayerStats`
+   * mutations a trainer purchase performs, free of charge. Every field is
+   * optional and names the level to establish; omitted fields are untouched.
+   * Only raises - a target below the current level throws (400), as does one
+   * above the cap (stats/skills 6, psi tier 5). Returns the resulting sheet.
+   */
+  async setStats(request: PlayerStatsRequest): Promise<PlayerStats> {
+    return this.client.post<PlayerStats>("/v1/player/stats", request);
   }
 }
 

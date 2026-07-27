@@ -796,6 +796,22 @@ impl Game {
         self.active_game_scene.as_debuggable_mut()
     }
 
+    /// Debug provisioning: instantiate an item template straight into the
+    /// player's backpack (see
+    /// [`DebuggableScene::spawn_item_for_player`](game_scene::DebuggableScene::spawn_item_for_player)).
+    /// Lives on `Game` rather than being reachable through `debug_scene_mut`
+    /// because entity creation also needs the game-owned `AssetCache`.
+    pub fn debug_spawn_item(
+        &mut self,
+        template: &game_scene::DebugItemTemplate,
+    ) -> Result<game_scene::DebugSpawnedItem, String> {
+        let asset_cache = &mut self.asset_cache;
+        self.active_game_scene
+            .as_debuggable_mut()
+            .ok_or_else(|| "no debuggable scene available".to_string())?
+            .spawn_item_for_player(asset_cache, template)
+    }
+
     /// Resolve the high-detail (`PMNM`) mesh setting from the experimental flags,
     /// falling back to the platform default.
     ///

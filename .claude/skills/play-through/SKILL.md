@@ -222,11 +222,32 @@ RNG stream is identical whether or not picks were forced alongside the seed).
 a class tweak (Marine/Navy/OSA) may require gear, skills, or psi tiers the start
 state doesn't have. Bonus objectives may similarly require hacking/repair skill,
 tools, or nanites. Provisioning those prerequisites is then the **first job of
-iteration 0** — use the debug runtime's legitimate levers (spawn/give,
-career-relevant items found in the level) to establish them. If the tooling
-can't provision what the tweak needs, record that as a **tooling/setup gap**
-(and satisfy as much of the tweak as is reachable) — do NOT file "X is broken"
-game bugs for capabilities or resources the character was never given.
+iteration 0** — use the debug runtime's **provisioning levers** to establish them:
+
+```ts
+await game.player.spawnItem("Shotgun");        // by template name...
+await game.player.spawnItem(-18);              // ...or stable template id (Assault Rifle)
+await game.player.setStats({                   // free "training" (no module cost)
+  skills: { standard_weapons: 4, hack: 4 },
+  strength: 3,
+  psi_tier: 2,
+  cyber_modules: 20,
+});
+```
+
+(`POST /v1/player/spawn-item` / `POST /v1/player/stats`; also
+`game.player.give(entityId)` for an item the level already contains.) Spawned
+items land in the backpack like any pickup — wield a weapon by double-clicking
+it in the use-mode inventory strip. Provisioning only *raises* the sheet, only
+accepts genuine pickup items, and only takes **gamesys** templates (negative
+ids), so it can't duplicate a level's unique quest items: it is a starting
+state, not a way to skip gameplay. Note the sheet is storage for most fields —
+only Hack + cyber_affinity currently drive anything (hacking difficulty), so
+"trained standard_weapons" does not yet change how a gun behaves; don't read
+that as a bug. If the tooling still can't provision what a tweak or bonus
+objective needs, record that as a **tooling/setup gap** (and satisfy as much of
+it as is reachable) — do NOT file "X is broken" game bugs for capabilities or
+resources the character was never given.
 
 **Record the roll everywhere it matters:** every issue filed and every fix PR
 opened during a campaign must state the rolled configuration — scenario, tweak,

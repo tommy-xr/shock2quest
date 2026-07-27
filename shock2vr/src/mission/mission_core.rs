@@ -6383,6 +6383,217 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         }
     }
 
+    fn spawn_item_for_player(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template: &crate::game_scene::DebugItemTemplate,
+    ) -> Result<crate::game_scene::DebugSpawnedItem, String> {
+        use crate::game_scene::{DebugItemTemplate, DebugSpawnedItem};
+
+        let template_id = match template {
+            DebugItemTemplate::Id(id) => *id,
+            DebugItemTemplate::Name(name) => {
+                self.template_name_to_template_id
+                    .get(&name.to_ascii_lowercase())
+                    .ok_or_else(|| format!("no template named '{}'", name))?
+                    .template_id
+            }
+        };
+        // Gamesys templates only (the negative id space). Positive ids address
+        // *this mission's* authored objects, and duplicating one would hand the
+        // player a second copy of a unique quest item (a keycard, a log) - a way
+        // to fake progress rather than to provision a loadout.
+        if template_id >= 0 {
+            return Err(format!(
+                "template id {} is a mission object; provisioning takes gamesys templates (negative ids)",
+                template_id
+            ));
+        }
+        if !self
+            .entity_info
+            .entity_to_properties
+            .contains_key(&template_id)
+        {
+            return Err(format!("unknown template id {}", template_id));
+        }
+
+        // Spawn at the player's position: containment immediately makes the
+        // item non-physical, so the spawn point is never observed - it just has
+        // to be somewhere valid for instantiation.
+        let (position, rotation) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            (vec3_to_point3(player.pos), player.rotation)
+        };
+        let info = self.create_entity_with_position(
+            asset_cache,
+            template_id,
+            position,
+            rotation,
+            Matrix4::identity(),
+            CreateEntityOptions::default(),
+        );
+        let entity_id = info.entity_id;
+
+        // Route the fresh entity through the very same pickup path as an item
+        // found in the world, so provisioning inherits its eligibility rule:
+        // only genuine pickup items land in the backpack. A creature or door
+        // template is rejected here - and destroyed again, so a refused request
+        // leaves nothing behind.
+        if let Err(e) = self.give_item(entity_id) {
+            self.destroy_entity(entity_id);
+            // Report the template, not the entity: the instance is gone, and the
+            // caller never saw its id.
+            return Err(format!(
+                "template {} is not a pickup item ({})",
+                template_id, e
+            ));
+        }
+
+        let name = self
+            .world
+            .borrow::<View<dark::properties::PropSymName>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|s| s.0.clone()));
+        Ok(DebugSpawnedItem {
+            entity_id: entity_id.inner() as i32,
+            template_id,
+            name,
+        })
+    }
+
+    fn set_player_stats(
+        &mut self,
+        request: &crate::game_scene::DebugPlayerStatsRequest,
+    ) -> Result<crate::player_stats::PlayerStats, String> {
+        use crate::player_stats::{Skill, Stat};
+        use crate::scripts::gui::{
+            PSI_TIER_CAP, SKILL_CAP, STAT_CAP, TrainerTarget, apply_purchase,
+        };
+
+        let mut quests = self
+            .world
+            .borrow::<UniqueViewMut<QuestInfo>>()
+            .map_err(|_| "scene has no quest info".to_string())?;
+        let stats = quests.player_stats_mut();
+
+        let stat_targets = [
+            (Stat::Strength, request.strength, "strength"),
+            (Stat::Endurance, request.endurance, "endurance"),
+            (Stat::Agility, request.agility, "agility"),
+            (
+                Stat::PsionicAbility,
+                request.psionic_ability,
+                "psionic_ability",
+            ),
+            (
+                Stat::CyberAffinity,
+                request.cyber_affinity,
+                "cyber_affinity",
+            ),
+        ];
+        let skill_targets = [
+            (
+                Skill::StandardWeapons,
+                request.skills.standard_weapons,
+                "standard_weapons",
+            ),
+            (
+                Skill::EnergyWeapons,
+                request.skills.energy_weapons,
+                "energy_weapons",
+            ),
+            (
+                Skill::HeavyWeapons,
+                request.skills.heavy_weapons,
+                "heavy_weapons",
+            ),
+            (
+                Skill::ExoticWeapons,
+                request.skills.exotic_weapons,
+                "exotic_weapons",
+            ),
+            (Skill::Hack, request.skills.hack, "hack"),
+            (Skill::Repair, request.skills.repair, "repair"),
+            (Skill::Modify, request.skills.modify, "modify"),
+            (
+                Skill::Maintenance,
+                request.skills.maintenance,
+                "maintenance",
+            ),
+            (Skill::Research, request.skills.research, "research"),
+        ];
+
+        // Validate everything before mutating anything, so a rejected request
+        // never leaves the character sheet half-provisioned.
+        let check = |field: &str, target: i32, current: i32, cap: i32| -> Result<(), String> {
+            if target < current {
+                return Err(format!(
+                    "cannot lower {} from {} to {} (provisioning only raises)",
+                    field, current, target
+                ));
+            }
+            if target > cap {
+                return Err(format!(
+                    "{} maxes out at {} (asked for {})",
+                    field, cap, target
+                ));
+            }
+            Ok(())
+        };
+        for (stat, target, field) in stat_targets {
+            if let Some(target) = target {
+                check(field, target, stats.stat_level(stat), STAT_CAP)?;
+            }
+        }
+        for (skill, target, field) in skill_targets {
+            if let Some(target) = target {
+                check(field, target, stats.skill_level(skill), SKILL_CAP)?;
+            }
+        }
+        if let Some(target) = request.psi_tier {
+            check("psi_tier", target, stats.psi_tier, PSI_TIER_CAP)?;
+        }
+        if let Some(target) = request.cyber_modules {
+            // No cap on the currency, so only the "raises only" half applies.
+            if target < stats.cyber_modules {
+                return Err(format!(
+                    "cannot lower cyber_modules from {} to {} (provisioning only raises)",
+                    stats.cyber_modules, target
+                ));
+            }
+        }
+
+        // Apply through the same `PlayerStats` mutations a trainer purchase
+        // performs, one level at a time - just without the module cost.
+        for (stat, target, _) in stat_targets {
+            if let Some(target) = target {
+                while stats.stat_level(stat) < target {
+                    stats.raise_stat(stat);
+                }
+            }
+        }
+        for (skill, target, _) in skill_targets {
+            if let Some(target) = target {
+                while stats.skill_level(skill) < target {
+                    stats.raise_skill(skill);
+                }
+            }
+        }
+        if let Some(target) = request.psi_tier {
+            // Tiers unlock sequentially, exactly as the psi trainer sells them.
+            for tier in (stats.psi_tier + 1)..=target {
+                apply_purchase(stats, TrainerTarget::PsiTier(tier));
+            }
+        }
+        if let Some(target) = request.cyber_modules {
+            stats.award_cyber_modules(target.saturating_sub(stats.cyber_modules));
+        }
+
+        let result = stats.clone();
+        info!("Debug provisioning set player stats: {:?}", result);
+        Ok(result)
+    }
+
     fn list_transitions(&self) -> Vec<crate::game_scene::DebugTransition> {
         use dark::properties::{PropDestLevel, PropDestLoc, PropPosition, PropSymName};
         use shipyard::Get;
