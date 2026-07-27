@@ -62,6 +62,7 @@ mod trap_trip_level;
 mod trap_tweq;
 mod trap_unlock;
 mod trigger_collide;
+mod trigger_destroy;
 mod trigger_multi;
 mod tweq_depressable;
 mod tweqable;
@@ -147,6 +148,7 @@ use self::{
     trap_tweq::TrapTweq,
     trap_unlock::TrapUnlock,
     trigger_collide::TriggerCollide,
+    trigger_destroy::TriggerDestroy,
     trigger_multi::TriggerMulti,
     tweq_depressable::TweqDepressable,
     tweqable::Tweqable,
@@ -674,7 +676,7 @@ impl ScriptWorld {
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => Box::new(UnimplementedScript::new(&script_name)),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),
-            "triggerdestroy" => Box::new(NoopScript::new()),
+            "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines
             "psitrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Psi))),
@@ -877,6 +879,27 @@ impl ScriptWorld {
         let mut ret = Vec::new();
         for eff in flattened_effects {
             match eff {
+                Effect::Send { msg } if matches!(msg.payload, MessagePayload::Slay) => {
+                    let entity_id = msg.to;
+                    let mut slay_effects = Vec::new();
+                    if let Some(scripts) = self.entity_to_scripts.get_mut(&entity_id) {
+                        for script in scripts {
+                            slay_effects.push(script.handle_message(
+                                entity_id,
+                                world,
+                                physics,
+                                &MessagePayload::Slay,
+                            ));
+                        }
+                    }
+                    for slay_effect in Effect::flatten(slay_effects) {
+                        match slay_effect {
+                            Effect::Send { msg } => self.message_queue.push(msg),
+                            other => ret.push(other),
+                        }
+                    }
+                    ret.push(Effect::SlayEntity { entity_id });
+                }
                 Effect::Send { msg } => self.message_queue.push(msg),
                 _ => ret.push(eff),
             }
