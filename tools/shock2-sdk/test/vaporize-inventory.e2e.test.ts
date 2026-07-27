@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement } from "../src/types.js";
-import { aimAtWorldPoint } from "./helpers/aim.js";
 import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { teleportVerified } from "./helpers/teleport.js";
 
@@ -98,7 +97,7 @@ async function frobNormally(
   ];
   for (const stand of stands) {
     await teleportVerified(game, stand);
-    await aimAtWorldPoint(game, [tx, aimY, tz]);
+    await game.input.lookAtWorldPoint([tx, aimY, tz]);
     await game.step({ frames: 3 });
     await squeeze(game);
     if (await didInteract()) {
