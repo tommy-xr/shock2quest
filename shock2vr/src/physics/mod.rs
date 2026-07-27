@@ -55,6 +55,19 @@ pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
 }
 
+/// The player's standing collision capsule, in world units.
+fn standing_player_capsule() -> Capsule {
+    Capsule::new_y(
+        (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
+        PLAYER_RADIUS / SCALE_FACTOR,
+    )
+}
+
+/// [`standing_player_capsule`] as a collider shape.
+fn standing_player_shared_shape() -> SharedShape {
+    SharedShape::new(standing_player_capsule())
+}
+
 /// Gap (SS2 ft) the character controller keeps between the player collider
 /// and world geometry (`KinematicCharacterController::offset`).
 const PLAYER_CONTACT_OFFSET: f32 = 0.1;
@@ -637,14 +650,13 @@ fn plan_climb_top_out(
         return None;
     }
     let direction = direction_h / direction_norm;
-    let capsule_half_segment = (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR;
     let head_offset = (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
     let raised = head + Vector::y() * CLIMB_TOP_OUT_UP;
     let probe_ahead = raised + direction * CLIMB_TOP_OUT_PROBE_FORWARD;
     let route_forward = minimum_clear_forward.max(CLIMB_TOP_OUT_PROBE_FORWARD);
     let route_ahead = raised + direction * route_forward;
-    let standing = Capsule::new_y(capsule_half_segment, PLAYER_RADIUS / SCALE_FACTOR);
+    let standing = standing_player_capsule();
     let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
     let up_ray = Ray::new(Point::from(head), Vector::y());
     // BreakClimb's jump-through remains valid when the mantle search meets a
@@ -691,148 +703,146 @@ fn plan_climb_top_out(
                 .max(floor.y + (1.02 * PLAYER_RADIUS + 1.0) / SCALE_FACTOR)
         })
         .unwrap_or(head.y);
-    let maximum_cross_y = minimum_cross_y.max(raised.y);
-    let waypoints_for_height = |cross_y| {
-        // A full sphere can sit under an overhanging lip even when the head
-        // point above it is clear. Dark's recovery searches backward/up within
-        // four authored feet. Use the same bound and choose the first
-        // contact-offset step whose full-radius vertical sweep is clear.
-        let rise_start =
-            climb_top_out_recovery_start(scripted_queries, head, direction, cross_y, &compressed)?;
-        let cross_start = vector![rise_start.x, cross_y, rise_start.z];
-        let probe_cross_end = vector![probe_ahead.x, cross_y, probe_ahead.z];
-        let cross_end = vector![route_ahead.x, cross_y, route_ahead.z];
-        let final_sphere = cross_end + direction * CLIMB_TOP_OUT_ADVANCE;
-        // Parry treats balls and boxes wholly inside a closed trimesh as
-        // intersecting its volume. A tiny non-degenerate capsule uses the same
-        // triangle-surface query as the player while remaining point-scale.
-        let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
-        if !shape_sweep_is_clear(probe_queries, head, rise_start, &compressed) {
-            return None;
-        }
-        // The continuous capsule must compress before rising through the local
-        // lip that Dark's sparse body can straddle. Validate the recovered
-        // vertical centerline against all terrain: it may cross that same lip
-        // surface, but never an offset ceiling the original upward probe did
-        // not see, and it must leave the one overlap before crossing forward.
-        let recovery_up_ray = Ray::new(Point::from(rise_start), Vector::y());
-        let recovery_up_obstruction = probe_queries
-            .cast_ray(&recovery_up_ray, cross_y - rise_start.y, true)
-            .map(|(_, time_of_impact)| (time_of_impact, rise_start.y + time_of_impact));
-        if recovery_up_obstruction.is_some_and(|(_, obstruction_y)| {
-            up_obstruction.is_none_or(|(_, original_y)| {
-                (obstruction_y - original_y).abs()
-                    > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
-            })
-        }) {
-            return None;
-        }
-        let recovery_obstruction_limit = recovery_up_obstruction
-            .map(|(time_of_impact, _)| time_of_impact + CLIMB_TOP_OUT_RECOVERY_RETREAT)
-            .unwrap_or(0.0);
-        if !shape_route_exits_only_initial_obstruction(
-            probe_queries,
-            &[rise_start, cross_start],
-            &route_probe,
-            recovery_obstruction_limit,
-        ) {
-            return None;
-        }
-        // Validate Dark's sparse-body corridor with a point-scale probe: it may
-        // remain inside the one local lip component while crossing, but must
-        // exit by the end and may never enter a second obstruction.
-        // Recovery may retreat the rise behind `raised`. Validate that entire
-        // offset approach before permitting the one bounded lip overlap below;
-        // otherwise the scripted parentless-terrain exception could cross an
-        // unrelated wall between the recovered rise and Dark's probe endpoint.
-        if shape_intersects(probe_queries, cross_start, &route_probe)
-            || !shape_sweep_is_clear(probe_queries, cross_start, probe_cross_end, &route_probe)
-        {
-            return None;
-        }
-        if mantle_floor.is_none() {
-            let support_ray = Ray::new(Point::from(final_sphere), -Vector::y());
-            let supported = validation_queries
-                .cast_ray_and_get_normal(&support_ray, 2.0 * CLIMB_TOP_OUT_MAX_DROP, true)
-                .is_some_and(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
-            if !supported {
-                return None;
-            }
-        }
-        let final_down_ray = Ray::new(Point::from(final_sphere), -Vector::y());
-        let final_standing = validation_queries
-            .cast_ray_and_get_normal(&final_down_ray, CLIMB_TOP_OUT_FINAL_DROP, true)
-            .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
-            .map(|(_, ground)| {
-                let floor = final_sphere - Vector::y() * ground.time_of_impact;
-                floor
-                    + Vector::y()
-                        * (PLAYER_HEIGHT / 2.0 / SCALE_FACTOR
-                            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
-                            + PLAYER_REST_LIFT / SCALE_FACTOR)
-            })
-            // Some ladder tops open over a drop. Expand at a pose validated
-            // against every collider, then let ordinary gravity find the lower
-            // deck.
-            .unwrap_or(final_sphere - Vector::y() * head_offset);
-        if shape_intersects(validation_queries, final_standing, &standing) {
-            return None;
-        }
-        let initial_obstruction_limit =
-            (cross_end - probe_cross_end).norm() + CLIMB_TOP_OUT_RECOVERY_RETREAT;
-        if !shape_route_exits_only_initial_obstruction(
-            probe_queries,
-            &[probe_cross_end, cross_end, final_sphere, final_standing],
-            &route_probe,
-            initial_obstruction_limit,
-        ) {
-            return None;
-        }
-
-        // Preserve Dark's ordered rise-then-cross states. Scripted casts keep
-        // parented entity blockers live but deliberately permit passage through
-        // parentless immutable level terrain, the narrow Dark jump-through
-        // exception. Final standing fit still uses `validation_queries`.
-        let waypoints = [
-            head,
-            rise_start,
-            cross_start,
-            probe_cross_end,
-            cross_end,
-            final_sphere,
-            final_standing,
-        ];
-        let mut simulated = pos.translation.vector;
-        let mut first_movement = None;
-        for waypoint in waypoints {
-            for _ in 0..512 {
-                if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
-                    break;
-                }
-                let Some(movement) = slide_toward(
-                    controller,
-                    scripted_queries,
-                    &compressed,
-                    simulated,
-                    waypoint,
-                    dt,
-                ) else {
-                    return None;
-                };
-                first_movement.get_or_insert(movement.translation);
-                simulated += movement.translation;
-            }
-            if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
-                return None;
-            }
-        }
-        Some((waypoints, first_movement?))
-    };
     // Dark's rise target is the authored 3.5-foot probe endpoint (or the
-    // mantle floor-derived target when higher). Simulate that one route; the
-    // bounded recovery search above already selects its nearest viable retreat
-    // and avoids multiplying hundreds of controller casts per candidate.
-    let (waypoints, first_step) = waypoints_for_height(maximum_cross_y)?;
+    // mantle floor-derived target when higher). Only that one route is
+    // simulated; the bounded recovery search below already selects its nearest
+    // viable retreat and avoids multiplying hundreds of controller casts per
+    // candidate.
+    let cross_y = minimum_cross_y.max(raised.y);
+    // A full sphere can sit under an overhanging lip even when the head
+    // point above it is clear. Dark's recovery searches backward/up within
+    // four authored feet. Use the same bound and choose the first
+    // contact-offset step whose full-radius vertical sweep is clear.
+    let rise_start =
+        climb_top_out_recovery_start(scripted_queries, head, direction, cross_y, &compressed)?;
+    let cross_start = vector![rise_start.x, cross_y, rise_start.z];
+    let probe_cross_end = vector![probe_ahead.x, cross_y, probe_ahead.z];
+    let cross_end = vector![route_ahead.x, cross_y, route_ahead.z];
+    let final_sphere = cross_end + direction * CLIMB_TOP_OUT_ADVANCE;
+    // Parry treats balls and boxes wholly inside a closed trimesh as
+    // intersecting its volume. A tiny non-degenerate capsule uses the same
+    // triangle-surface query as the player while remaining point-scale.
+    let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+    if !shape_sweep_is_clear(probe_queries, head, rise_start, &compressed) {
+        return None;
+    }
+    // The continuous capsule must compress before rising through the local
+    // lip that Dark's sparse body can straddle. Validate the recovered
+    // vertical centerline against all terrain: it may cross that same lip
+    // surface, but never an offset ceiling the original upward probe did
+    // not see, and it must leave the one overlap before crossing forward.
+    let recovery_up_ray = Ray::new(Point::from(rise_start), Vector::y());
+    let recovery_up_obstruction = probe_queries
+        .cast_ray(&recovery_up_ray, cross_y - rise_start.y, true)
+        .map(|(_, time_of_impact)| (time_of_impact, rise_start.y + time_of_impact));
+    if recovery_up_obstruction.is_some_and(|(_, obstruction_y)| {
+        up_obstruction.is_none_or(|(_, original_y)| {
+            (obstruction_y - original_y).abs()
+                > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
+        })
+    }) {
+        return None;
+    }
+    let recovery_obstruction_limit = recovery_up_obstruction
+        .map(|(time_of_impact, _)| time_of_impact + CLIMB_TOP_OUT_RECOVERY_RETREAT)
+        .unwrap_or(0.0);
+    if !shape_route_exits_only_initial_obstruction(
+        probe_queries,
+        &[rise_start, cross_start],
+        &route_probe,
+        recovery_obstruction_limit,
+    ) {
+        return None;
+    }
+    // Validate Dark's sparse-body corridor with a point-scale probe: it may
+    // remain inside the one local lip component while crossing, but must
+    // exit by the end and may never enter a second obstruction.
+    // Recovery may retreat the rise behind `raised`. Validate that entire
+    // offset approach before permitting the one bounded lip overlap below;
+    // otherwise the scripted parentless-terrain exception could cross an
+    // unrelated wall between the recovered rise and Dark's probe endpoint.
+    if shape_intersects(probe_queries, cross_start, &route_probe)
+        || !shape_sweep_is_clear(probe_queries, cross_start, probe_cross_end, &route_probe)
+    {
+        return None;
+    }
+    if mantle_floor.is_none() {
+        let support_ray = Ray::new(Point::from(final_sphere), -Vector::y());
+        let supported = validation_queries
+            .cast_ray_and_get_normal(&support_ray, 2.0 * CLIMB_TOP_OUT_MAX_DROP, true)
+            .is_some_and(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
+        if !supported {
+            return None;
+        }
+    }
+    let final_down_ray = Ray::new(Point::from(final_sphere), -Vector::y());
+    let final_standing = validation_queries
+        .cast_ray_and_get_normal(&final_down_ray, CLIMB_TOP_OUT_FINAL_DROP, true)
+        .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+        .map(|(_, ground)| {
+            let floor = final_sphere - Vector::y() * ground.time_of_impact;
+            floor
+                + Vector::y()
+                    * (PLAYER_HEIGHT / 2.0 / SCALE_FACTOR
+                        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+                        + PLAYER_REST_LIFT / SCALE_FACTOR)
+        })
+        // Some ladder tops open over a drop. Expand at a pose validated
+        // against every collider, then let ordinary gravity find the lower
+        // deck.
+        .unwrap_or(final_sphere - Vector::y() * head_offset);
+    if shape_intersects(validation_queries, final_standing, &standing) {
+        return None;
+    }
+    let initial_obstruction_limit =
+        (cross_end - probe_cross_end).norm() + CLIMB_TOP_OUT_RECOVERY_RETREAT;
+    if !shape_route_exits_only_initial_obstruction(
+        probe_queries,
+        &[probe_cross_end, cross_end, final_sphere, final_standing],
+        &route_probe,
+        initial_obstruction_limit,
+    ) {
+        return None;
+    }
+
+    // Preserve Dark's ordered rise-then-cross states. Scripted casts keep
+    // parented entity blockers live but deliberately permit passage through
+    // parentless immutable level terrain, the narrow Dark jump-through
+    // exception. Final standing fit still uses `validation_queries`.
+    let waypoints = [
+        head,
+        rise_start,
+        cross_start,
+        probe_cross_end,
+        cross_end,
+        final_sphere,
+        final_standing,
+    ];
+    let mut simulated = pos.translation.vector;
+    let mut first_movement = None;
+    for waypoint in waypoints {
+        for _ in 0..512 {
+            if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                break;
+            }
+            let Some(movement) = slide_toward(
+                controller,
+                scripted_queries,
+                &compressed,
+                simulated,
+                waypoint,
+                dt,
+            ) else {
+                return None;
+            };
+            first_movement.get_or_insert(movement.translation);
+            simulated += movement.translation;
+        }
+        if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
+            return None;
+        }
+    }
+    let first_step = first_movement?;
 
     Some(PlayerMovement {
         movement: scripted_character_movement(first_step),
@@ -858,10 +868,7 @@ fn advance_climb_top_out(
     mut top_out: ClimbTopOut,
     dt: Real,
 ) -> (EffectiveCharacterMovement, Option<ClimbTopOut>) {
-    let standing = Capsule::new_y(
-        (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-        PLAYER_RADIUS / SCALE_FACTOR,
-    );
+    let standing = standing_player_capsule();
     let target = loop {
         let target = if top_out.reversing {
             match top_out.next_waypoint.checked_sub(1) {
@@ -1649,10 +1656,7 @@ impl PhysicsWorld {
         player_handle: &PlayerHandle,
         top_out: ClimbTopOut,
     ) -> bool {
-        let standing = Capsule::new_y(
-            (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-            PLAYER_RADIUS / SCALE_FACTOR,
-        );
+        let standing = standing_player_capsule();
         let filter = QueryFilter::new()
             .groups(InteractionGroups::new(
                 InternalCollisionGroups::PLAYER.bits.into(),
@@ -2218,11 +2222,7 @@ impl PhysicsWorld {
                 .is_some();
 
             if !blocked {
-                let standing = SharedShape::capsule_y(
-                    (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-                    PLAYER_RADIUS / SCALE_FACTOR,
-                );
-                self.collider_set[collider_handle].set_shape(standing);
+                self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
                 let body = &mut self.rigid_body_set[character_handle];
                 let mut translation = *body.translation();
                 translation.y += center_shift;
@@ -2653,10 +2653,7 @@ impl PhysicsWorld {
         if !was_top_out && is_top_out {
             self.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         } else if was_top_out && !is_top_out {
-            self.collider_set[collider_handle].set_shape(SharedShape::capsule_y(
-                (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-                PLAYER_RADIUS / SCALE_FACTOR,
-            ));
+            self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
         }
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
@@ -3571,6 +3568,48 @@ mod tests {
         }
     }
 
+    /// The scene-wide query pipeline the climb/top-out helpers take.
+    fn query_pipeline<'a>(world: &'a PhysicsWorld, filter: QueryFilter<'a>) -> QueryPipeline<'a> {
+        world.broad_phase.as_query_pipeline(
+            world.narrow_phase.query_dispatcher(),
+            &world.rigid_body_set,
+            &world.collider_set,
+            filter,
+        )
+    }
+
+    /// Plan the standard rejection-test mantle: from the origin, facing +X,
+    /// with the scripted casts seeing only parented (entity) colliders.
+    fn plan_top_out_from_origin(world: &PhysicsWorld) -> Option<PlayerMovement> {
+        let validation_queries = query_pipeline(world, QueryFilter::default());
+        let parented_only = QueryFilter::default()
+            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
+        let scripted_queries = validation_queries.with_filter(parented_only);
+        plan_climb_top_out(
+            &KinematicCharacterController::default(),
+            &validation_queries,
+            &validation_queries,
+            &scripted_queries,
+            &Isometry::translation(0.0, 0.0, 0.0),
+            Vector::x(),
+            CLIMB_TOP_OUT_PROBE_FORWARD,
+            1.0 / 60.0,
+        )
+    }
+
+    /// The seven-waypoint route the reversal tests drive by hand.
+    fn test_waypoints() -> [Vector<Real>; 7] {
+        [
+            vector![0.0, 0.0, 0.0],
+            vector![0.0, 0.0, 0.0],
+            vector![2.0, 0.0, 0.0],
+            vector![2.5, 0.0, 0.0],
+            vector![3.0, 0.0, 0.0],
+            vector![4.0, 0.0, 0.0],
+            vector![4.0, -0.64, 0.0],
+        ]
+    }
+
     #[test]
     fn sleeping_dynamic_body_stays_dynamic_and_wakes_on_impulse() {
         let mut world = PhysicsWorld::new();
@@ -3812,12 +3851,7 @@ mod tests {
         );
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
 
-        let queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
-            QueryFilter::default(),
-        );
+        let queries = query_pipeline(&world, QueryFilter::default());
         let head = vector![0.0, 0.0, 0.0];
         let direction = Vector::x();
         let cross_y = 1.4;
@@ -3873,12 +3907,7 @@ mod tests {
         let mut player =
             world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-        let queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
-            QueryFilter::default(),
-        );
+        let queries = query_pipeline(&world, QueryFilter::default());
         let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
 
         assert!(
@@ -3926,25 +3955,7 @@ mod tests {
             world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(4).unwrap());
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
 
-        let validation_queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
-            QueryFilter::default(),
-        );
-        let parented_only = QueryFilter::default()
-            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
-        let scripted_queries = validation_queries.with_filter(parented_only);
-        let movement = plan_climb_top_out(
-            &KinematicCharacterController::default(),
-            &validation_queries,
-            &validation_queries,
-            &scripted_queries,
-            &Isometry::translation(0.0, 0.0, 0.0),
-            Vector::x(),
-            CLIMB_TOP_OUT_PROBE_FORWARD,
-            1.0 / 60.0,
-        );
+        let movement = plan_top_out_from_origin(&world);
 
         let planned_route = movement
             .as_ref()
@@ -3971,25 +3982,7 @@ mod tests {
             world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
 
-        let validation_queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
-            QueryFilter::default(),
-        );
-        let parented_only = QueryFilter::default()
-            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
-        let scripted_queries = validation_queries.with_filter(parented_only);
-        let movement = plan_climb_top_out(
-            &KinematicCharacterController::default(),
-            &validation_queries,
-            &validation_queries,
-            &scripted_queries,
-            &Isometry::translation(0.0, 0.0, 0.0),
-            Vector::x(),
-            CLIMB_TOP_OUT_PROBE_FORWARD,
-            1.0 / 60.0,
-        );
+        let movement = plan_top_out_from_origin(&world);
 
         assert!(
             movement.is_none(),
@@ -4019,25 +4012,7 @@ mod tests {
             world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
 
-        let validation_queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
-            QueryFilter::default(),
-        );
-        let parented_only = QueryFilter::default()
-            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
-        let scripted_queries = validation_queries.with_filter(parented_only);
-        let movement = plan_climb_top_out(
-            &KinematicCharacterController::default(),
-            &validation_queries,
-            &validation_queries,
-            &scripted_queries,
-            &Isometry::translation(0.0, 0.0, 0.0),
-            Vector::x(),
-            CLIMB_TOP_OUT_PROBE_FORWARD,
-            1.0 / 60.0,
-        );
+        let movement = plan_top_out_from_origin(&world);
 
         assert!(
             movement.is_none(),
@@ -4054,26 +4029,13 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let mut pos = Isometry::translation(0.0, 0.0, 0.0);
         let top_out = ClimbTopOut {
-            waypoints: [
-                vector![0.0, 0.0, 0.0],
-                vector![0.0, 0.0, 0.0],
-                vector![2.0, 0.0, 0.0],
-                vector![2.5, 0.0, 0.0],
-                vector![3.0, 0.0, 0.0],
-                vector![4.0, 0.0, 0.0],
-                vector![4.0, -0.64, 0.0],
-            ],
+            waypoints: test_waypoints(),
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
         };
         let first = {
-            let queries = world.broad_phase.as_query_pipeline(
-                world.narrow_phase.query_dispatcher(),
-                &world.rigid_body_set,
-                &world.collider_set,
-                QueryFilter::default(),
-            );
+            let queries = query_pipeline(&world, QueryFilter::default());
             advance_climb_top_out(&controller, &queries, &queries, &pos, top_out, 1.0 / 60.0)
         };
         assert!(first.0.translation.x > 0.0);
@@ -4090,12 +4052,7 @@ mod tests {
             false,
         );
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-        let queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
-            QueryFilter::default(),
-        );
+        let queries = query_pipeline(&world, QueryFilter::default());
         let mut active = first.1.expect("route remains active");
         let mut reversing = None;
         for _ in 0..32 {
@@ -4124,15 +4081,7 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let mut pos = Isometry::translation(0.0, 0.0, 0.0);
         let mut active = ClimbTopOut {
-            waypoints: [
-                vector![0.0, 0.0, 0.0],
-                vector![0.0, 0.0, 0.0],
-                vector![2.0, 0.0, 0.0],
-                vector![2.5, 0.0, 0.0],
-                vector![3.0, 0.0, 0.0],
-                vector![4.0, 0.0, 0.0],
-                vector![4.0, -0.64, 0.0],
-            ],
+            waypoints: test_waypoints(),
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
@@ -4152,12 +4101,7 @@ mod tests {
         let start = pos.translation.vector;
 
         for _ in 0..32 {
-            let queries = world.broad_phase.as_query_pipeline(
-                world.narrow_phase.query_dispatcher(),
-                &world.rigid_body_set,
-                &world.collider_set,
-                QueryFilter::default(),
-            );
+            let queries = query_pipeline(&world, QueryFilter::default());
             let (movement, next) =
                 advance_climb_top_out(&controller, &queries, &queries, &pos, active, 1.0 / 60.0);
             pos.translation.vector += movement.translation;
@@ -4952,14 +4896,9 @@ mod tests {
         });
 
         let result = world.move_player_validated(vec3(f32::NAN, 0.5, 0.0), &mut player);
-        let standing = Capsule::new_y(
-            (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-            PLAYER_RADIUS / SCALE_FACTOR,
-        );
-        let queries = world.broad_phase.as_query_pipeline(
-            world.narrow_phase.query_dispatcher(),
-            &world.rigid_body_set,
-            &world.collider_set,
+        let standing = standing_player_capsule();
+        let queries = query_pipeline(
+            &world,
             QueryFilter::default().exclude_rigid_body(player.character_handle),
         );
 
