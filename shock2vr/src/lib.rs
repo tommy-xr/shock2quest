@@ -12,6 +12,7 @@ pub mod time;
 
 pub mod career;
 mod creature;
+pub mod data_files;
 mod flat_player_controller;
 mod gui;
 mod hand_glove;
@@ -114,11 +115,11 @@ fn read_save_file(path: &Path) -> io::Result<SaveData> {
     Ok(SaveData::read(&mut file))
 }
 
-/// Whether `data_root` is a 25th Anniversary Edition install rather than a
-/// classic one. The remaster ships its data inside `sshock2.kpf`; a classic
-/// install has loose `.crf` archives instead.
+/// Whether the resolved data root is a 25th Anniversary Edition install rather
+/// than a classic one. The remaster ships its data inside `sshock2.kpf`; a
+/// classic install has loose `.crf` archives instead.
 pub fn is_25th_anniversary_install() -> bool {
-    Path::new(&resource_path("sshock2.kpf")).exists()
+    data_files::is_25th_anniversary_install(paths::data_root())
 }
 
 /// Resource families, in the order a lookup should consult them.
@@ -206,16 +207,9 @@ fn build_25th_anniversary_mounts(
         ));
     }
 
-    // `motiondb.bin` moved from the data root to `res/mschema/`, and the
-    // missions + gamesys live under `data/`.
-    mounts.push(ZipAssetPath::with_prefix(
-        resource_path("sshock2.kpf"),
-        "data/res/mschema/",
-    ));
-    mounts.push(ZipAssetPath::with_prefix(
-        resource_path("sshock2.kpf"),
-        "data/",
-    ));
+    // The gamesys, missions and motiondb - shared with the CLI tools, which
+    // need those files without any of the resource families above.
+    mounts.extend(data_files::data_file_mounts(paths::data_root()));
 
     mounts.push(BundleAssetPath::new("".to_owned(), bundle_storage));
     mounts.push(AssetPath::folder("".to_owned()));

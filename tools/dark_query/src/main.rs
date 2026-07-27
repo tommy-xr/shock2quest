@@ -815,25 +815,17 @@ fn show_unparsed_data(entity_id: i32, entity_info: &dark::ss2_entity_info::Syste
 }
 
 fn handle_aipath_command(mission: &str, limit: Option<usize>) -> Result<()> {
-    use std::fs::File;
-
     info!("Loading AIPATH data from {}...", mission);
 
     // Load the mission file
-    let data_root = shock2vr::paths::data_root();
-    let mission_path = data_root.join(mission);
-
-    if !mission_path.exists() {
-        anyhow::bail!("Mission file not found: {}", mission_path.display());
-    }
-
-    let mut file = File::open(&mission_path)?;
+    let reader = data_loader::open_data_file(mission)?;
+    let mut file = reader.borrow_mut();
 
     // Parse AIPATH chunk directly
-    let table_of_contents = dark::ss2_chunk_file_reader::read_table_of_contents(&mut file);
+    let table_of_contents = dark::ss2_chunk_file_reader::read_table_of_contents(&mut *file);
 
     // Parse AIPATH chunk
-    if let Some(path_database) = dark::mission::PathDatabase::read(&table_of_contents, &mut file) {
+    if let Some(path_database) = dark::mission::PathDatabase::read(&table_of_contents, &mut *file) {
         println!("=== AIPATH Database from {} ===", mission);
         println!(
             "Cells: {}, Vertices: {}, Links: {}",
