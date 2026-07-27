@@ -77,6 +77,12 @@ impl PropTweqRotateState {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTweqModelState {
     pub animation_state: TweqAnimationState,
+    /// Current slot in [`PropTweqModelConfig::model_names`].
+    ///
+    /// Dark persists this as the model tweq's `Frame #`. Older shock2quest
+    /// saves did not serialize it, so they resume at the authored first frame.
+    #[serde(default)]
+    pub frame: usize,
 }
 
 impl PropTweqModelState {
@@ -85,9 +91,12 @@ impl PropTweqModelState {
         let animation_state = TweqAnimationState::from_bits(animation_state_bits.into()).unwrap();
         let _misc = read_u16(reader); // misc state, is this used?
         let _time = read_u16(reader); // misc state, is this used?
-        let _frame = read_u16(reader); // misc state, is this used?
+        let frame = read_u16(reader);
 
-        PropTweqModelState { animation_state }
+        PropTweqModelState {
+            animation_state,
+            frame: frame.into(),
+        }
     }
 }
 
@@ -243,5 +252,27 @@ impl PropTweqDeleteConfig {
             halt,
             rate: Duration::from_millis(rate.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::{PropTweqModelState, TweqAnimationState};
+
+    #[test]
+    fn model_state_reads_the_authored_frame_number() {
+        let mut bytes = Cursor::new([
+            0x02, 0x00, // animation state: reverse
+            0x00, 0x00, // misc
+            0x7b, 0x00, // time
+            0x04, 0x00, // frame number
+        ]);
+
+        let state = PropTweqModelState::read(&mut bytes, 8);
+
+        assert!(state.animation_state.contains(TweqAnimationState::REVERSE));
+        assert_eq!(state.frame, 4);
     }
 }
