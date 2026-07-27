@@ -140,15 +140,21 @@ test(
       direction: [1, 0, 0],
     });
 
+    // Poll one frame at a time. Stepping in 30-frame chunks would only tell us
+    // the handoff happened *somewhere* in that window, so the sample below would
+    // land anywhere from 3 to 33 frames after the impulse - and the velocity has
+    // decayed a long way by the far end of that range. That quantisation, not
+    // the physics, is what made this test flaky (~1 run in 5).
     let ragdolls = (await game.physics.ragdolls()).ragdolls;
-    for (let i = 0; i < 30 && ragdolls.length === 0; i++) {
-      await game.step({ frames: 30 });
+    for (let i = 0; i < 900 && ragdolls.length === 0; i++) {
+      await game.step({ frames: 1 });
       ragdolls = (await game.physics.ragdolls()).ragdolls;
     }
     assert.equal(ragdolls.length, 1, "crumple should hand off to a ragdoll");
 
     // Sample body velocities right after the handoff: the struck limb must be
-    // moving along the blow.
+    // moving along the blow. Now a deterministic 3 frames after the first frame
+    // on which the ragdoll existed.
     await game.step({ frames: 3 });
     const bodies = await game.physics.bodies({
       entityId: ragdolls[0].entity_id,

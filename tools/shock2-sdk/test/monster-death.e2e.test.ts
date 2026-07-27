@@ -95,6 +95,21 @@ test(
 
     // The corpse must stay dead: the alertness escalate (1.5s) and decay (3s)
     // windows both elapse several times over while the player stands in view.
+    // Wait for the body to actually come to rest before taking the baseline.
+    // What the assertion below is about is the corpse WANDERING, not how far it
+    // slid while coming to rest, and the settle does not take a constant time -
+    // it finishes anywhere from x=-36.5 to -39.9 across runs - so no fixed frame
+    // count separates the two. Inferring rest from position samples does not
+    // either: a quiet window also occurs during a momentary pause mid-settle,
+    // and a baseline taken there left the remaining slide inside the
+    // measurement (observed 0.74 against a 0.5 threshold). Rest is a physics
+    // fact, so ask the body. If it never sleeps, fall through and let the
+    // assertion report the real motion rather than masking it.
+    for (let i = 0; i < 60; i++) {
+      const [body] = (await game.physics.bodies({ entityId: monster.id })).bodies;
+      if (body?.is_sleeping) break;
+      await game.step({ frames: 10 });
+    }
     const deadPos = (await game.entities.detail(monster.id)).position;
     for (let i = 0; i < 5; i++) {
       await game.step({ frames: 120 });
