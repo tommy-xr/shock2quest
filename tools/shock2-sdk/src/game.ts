@@ -447,15 +447,27 @@ function multiplyQuat(a: Quat, b: Quat): Quat {
   ];
 }
 
+/**
+ * World rotation whose -Z axis points along `direction`, with the horizon kept
+ * level (zero roll) for every direction.
+ *
+ * Built as yaw-then-pitch rather than as a shortest-arc quaternion: the
+ * shortest arc from -Z has no roll control, so directions near world +z came
+ * out rolled up to ~180 degrees - which silently corrupts screenshots and
+ * skews strafing, since locomotion moves along the camera's right axis.
+ */
 function lookQuat(direction: Vec3): Quat {
   const length = Math.hypot(...direction);
   if (length === 0) throw new Error("look-at target must differ from the player's eye position");
-  const [bx, by, bz] = direction.map((value) => value / length) as Vec3;
-  const dot = -bz;
-  if (dot < -0.999999) return [0, 1, 0, 0];
-  const quaternion: Quat = [by, -bx, 0, 1 + dot];
-  const quaternionLength = Math.hypot(...quaternion);
-  return quaternion.map((value) => value / quaternionLength) as Quat;
+  const [dx, dy, dz] = direction.map((value) => value / length) as Vec3;
+  // Straight up/down leaves yaw undefined; pin it to 0 so the result is stable.
+  const horizontal = Math.hypot(dx, dz);
+  const yaw = horizontal === 0 ? 0 : Math.atan2(-dx, -dz);
+  const pitch = Math.atan2(dy, horizontal);
+  const [sy, cy] = [Math.sin(yaw / 2), Math.cos(yaw / 2)];
+  const [sp, cp] = [Math.sin(pitch / 2), Math.cos(pitch / 2)];
+  // yaw about world +Y, then pitch about the yawed +X: no roll by construction.
+  return [cy * sp, sy * cp, -sy * sp, cy * cp];
 }
 
 /** Pure look-at transform, exported so callers can verify/control custom rigs. */

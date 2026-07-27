@@ -10,6 +10,7 @@ import type {
   EntityDetailResult,
   FrameSnapshot,
   RayCastResult,
+  Vec3,
 } from "../src/index.js";
 
 type Quat = [number, number, number, number];
@@ -45,6 +46,82 @@ test("world aim rejects an undefined zero-length direction", () => {
     () => headRotationForWorldPoint([1, 2, 3], [0, 0, 0, 1], [1, 3.6, 3]),
     /target must differ/,
   );
+});
+
+/** Rotate a vector by a quaternion (v + 2 * q_v x (q_v x v + w * v)). */
+function rotateVec(q: Quat, v: Vec3): Vec3 {
+  const [x, y, z, w] = q;
+  const cross = (a: Vec3, b: Vec3): Vec3 => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const qv: Vec3 = [x, y, z];
+  const t = cross(qv, v);
+  const u = cross(qv, [t[0] + w * v[0], t[1] + w * v[1], t[2] + w * v[2]]);
+  return [v[0] + 2 * u[0], v[1] + 2 * u[1], v[2] + 2 * u[2]];
+}
+
+test("world aim keeps the horizon level for every direction, including world +z", () => {
+  const eye: Vec3 = [0, -1.6, 0]; // eye height 1.6 lands the eye at the origin
+  const pitches = [-80, -45, -10, 0, 10, 45, 80];
+  for (let yawDeg = 0; yawDeg < 360; yawDeg += 15) {
+    for (const pitchDeg of pitches) {
+      const yaw = (yawDeg * Math.PI) / 180;
+      const pitch = (pitchDeg * Math.PI) / 180;
+      const direction: Vec3 = [
+        Math.cos(pitch) * Math.sin(yaw),
+        Math.sin(pitch),
+        Math.cos(pitch) * Math.cos(yaw),
+      ];
+      const label = `yaw ${yawDeg} pitch ${pitchDeg}`;
+      const head = headRotationForWorldPoint(eye, [0, 0, 0, 1], [
+        direction[0] * 10,
+        direction[1] * 10,
+        direction[2] * 10,
+      ]);
+
+      // The view still points at the target...
+      const forward = rotateVec(head, [0, 0, -1]);
+      forward.forEach((component, index) => {
+        assert.ok(
+          Math.abs(component - direction[index]) < 1e-9,
+          `${label}: forward ${forward} should match ${direction}`,
+        );
+      });
+
+      // ...with no roll: the camera's right axis stays horizontal and its up
+      // axis stays in the vertical plane, on the same side as world up.
+      const right = rotateVec(head, [1, 0, 0]);
+      assert.ok(
+        Math.abs(right[1]) < 1e-9,
+        `${label}: camera right ${right} must stay horizontal (roll = 0)`,
+      );
+      const up = rotateVec(head, [0, 1, 0]);
+      assert.ok(up[1] > 0, `${label}: camera up ${up} must not be inverted`);
+    }
+  }
+});
+
+test("world aim picks a stable yaw when looking straight up or down", () => {
+  const eye: Vec3 = [0, -1.6, 0];
+  for (const y of [10, -10]) {
+    const head = headRotationForWorldPoint(eye, [0, 0, 0, 1], [0, y, 0]);
+    const forward = rotateVec(head, [0, 0, -1]);
+    assert.ok(Math.abs(forward[1] - Math.sign(y)) < 1e-9, "looks along world y");
+    // Yaw 0 by convention: the camera's right axis stays world +x.
+    const right = rotateVec(head, [1, 0, 0]);
+    assert.ok(Math.abs(right[0] - 1) < 1e-9, `straight ${y > 0 ? "up" : "down"}: right ${right}`);
+  }
+});
+
+test("world aim still honors a near-vertical direction's tiny yaw", () => {
+  const eye: Vec3 = [0, -1.6, 0];
+  const head = headRotationForWorldPoint(eye, [0, 0, 0, 1], [1e-10, 10, 0]);
+  const forward = rotateVec(head, [0, 0, -1]);
+  assert.ok(forward[0] > 0, `tiny +x yaw must survive, got forward ${forward}`);
+  const right = rotateVec(head, [1, 0, 0]);
+  assert.ok(Math.abs(right[1]) < 1e-9, `camera right ${right} must stay horizontal`);
 });
 
 test("aimAt gracefully falls back when a connected runtime omits aim_points", async () => {
