@@ -3739,6 +3739,20 @@ impl MissionCore {
                         locked,
                     );
                 }
+                Effect::SetTranslatingDoorState {
+                    entity_id,
+                    state,
+                    base_location,
+                } => {
+                    let mut v_trans_door = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropTranslatingDoor>>()
+                        .unwrap();
+                    if let Ok(door) = (&mut v_trans_door).get(entity_id) {
+                        door.state = state;
+                        door.base_location = base_location;
+                    }
+                }
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
