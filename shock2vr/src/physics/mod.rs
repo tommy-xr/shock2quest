@@ -93,6 +93,18 @@ const PLAYER_REST_LIFT: f32 = 0.01;
 /// without a jump.
 const PLAYER_STEP_HEIGHT: f32 = 2.0;
 
+/// How far below the player's feet (world units) a surface still counts as the
+/// thing they are *standing on* for support-motion transfer (see
+/// [`PlayerSupport`]). Comfortably clears the controller's contact offset plus
+/// the resting lift the player settles at (~0.044 wu) while staying far short
+/// of a step (0.8 wu), so a platform carries the player only while they are
+/// genuinely on it - never while they are airborne above it.
+const SUPPORT_PROBE_DISTANCE: f32 = 0.1;
+
+/// How horizontal a probed surface must be to count as support. Matches the
+/// slope test the ground pass itself uses: a wall is never something you ride.
+const SUPPORT_MIN_GROUND_NORMAL: f32 = 0.5;
+
 /// Horizontal reach (world units) for ladder detection: the player grips a
 /// climbable surface when their collider, inflated by this much radially,
 /// overlaps it. Standing flush against a ladder leaves a small gap between the
@@ -443,6 +455,81 @@ struct ClimbTopOut {
 struct PlayerMovement {
     movement: EffectiveCharacterMovement,
     top_out: Option<ClimbTopOut>,
+}
+
+/// The moving-terrain body the player is standing on, and where it was the
+/// last time we looked. Its per-frame displacement is handed to the player as
+/// a movement pass, so a rider travels *exactly* with a tram, a lift or an
+/// elevator instead of sliding around on its deck. This replaces the
+/// controller's own contact-based transfer - see
+/// [`PhysicsWorld::player_movement_queries`] for what that got wrong.
+///
+/// Deliberately limited to **kinematic** bodies: those are the script-driven
+/// platforms (`BaseElevator`, doors), whose motion is authored and exact.
+/// Dynamic bodies are excluded - the player's own weight is not simulated
+/// against them, so carrying off a jittering ragdoll limb or a settling crate
+/// would inject that noise straight into the camera.
+///
+/// Translation only. Every moving platform in the shipped data translates:
+/// `BaseElevator` emits `Effect::SetPosition` and never a rotation, and no
+/// authored elevator path turns. Orbiting a rotating support would also have
+/// to turn the player's *facing*, which lives outside physics - so rotational
+/// carry is deliberately deferred rather than half-implemented.
+#[derive(Clone, Copy)]
+struct PlayerSupport {
+    body: RigidBodyHandle,
+    translation: Vector<Real>,
+}
+
+/// Collision filter shared by every player movement cast: collide with the
+/// collidable groups as the player, ignore the player's own body and all
+/// sensors.
+fn player_movement_filter(character_handle: RigidBodyHandle) -> QueryFilter<'static> {
+    QueryFilter::new()
+        .groups(InteractionGroups::new(
+            InternalCollisionGroups::PLAYER.bits.into(),
+            InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            Default::default(),
+        ))
+        .exclude_rigid_body(character_handle)
+        .exclude_sensors()
+}
+
+/// The kinematic body the player is standing on at `pos`, if any: a short
+/// downward shape cast that has to land on a near-horizontal surface.
+///
+/// Probing for the *surface underfoot* - rather than taking any contact - is
+/// what keeps a wall or a door sliding past the player from dragging them
+/// along with it.
+fn detect_support(
+    queries: &QueryPipeline,
+    colliders: &ColliderSet,
+    bodies: &RigidBodySet,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+) -> Option<PlayerSupport> {
+    let (handle, hit) = queries.cast_shape(
+        pos,
+        &-Vector::y(),
+        shape,
+        rapier3d::parry::query::ShapeCastOptions {
+            max_time_of_impact: SUPPORT_PROBE_DISTANCE,
+            target_distance: 0.0,
+            stop_at_penetration: false,
+            compute_impact_geometry_on_penetration: true,
+        },
+    )?;
+    // `normal1` is the normal on the world collider (the pipeline is shape 1
+    // of the cast), the same one the controller's own floor/wall test reads.
+    if hit.normal1.y < SUPPORT_MIN_GROUND_NORMAL {
+        return None;
+    }
+    let body = colliders.get(handle)?.parent()?;
+    let rigid_body = bodies.get(body)?;
+    rigid_body.is_kinematic().then(|| PlayerSupport {
+        body,
+        translation: *rigid_body.translation(),
+    })
 }
 
 /// Distance along a horizontal ray at which it exits a climbable AABB expanded
@@ -950,12 +1037,19 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
 /// [`ClimbPass`]): it replaces both the walk input and the gravity pass - unless
 /// it achieves nothing, in which case the frame walks normally (see
 /// `CLIMB_MIN_PROGRESS_FRACTION`).
+///
+/// `carry` is how far the moving-terrain body underfoot travelled this frame
+/// (see [`PlayerSupport`]); it is applied first, so the player's own input and
+/// gravity are resolved from where the platform has taken them. A player
+/// gripping a ladder is holding the ladder, not riding the floor, so the climb
+/// branch above skips it.
 fn step_player_movement(
     controller: &KinematicCharacterController,
     queries: &QueryPipeline,
     shape: &dyn Shape,
     pos: &Isometry<Real>,
     desired: Vector<Real>,
+    carry: Vector<Real>,
     dt: Real,
     gravity: Real,
     climb: Option<ClimbPass<'_>>,
@@ -1004,6 +1098,19 @@ fn step_player_movement(
             };
         }
     }
+    // Support motion first: the platform underfoot took the player with it
+    // before they got a say. Cast like any other movement rather than
+    // teleported, so a platform driving the player into geometry slides them
+    // along it instead of pushing them through it. Everything below then
+    // resolves the player's own movement from where the platform left them.
+    let carried = if carry != Vector::zeros() {
+        controller
+            .move_shape(dt, queries, shape, pos, carry, |_c| ())
+            .translation
+    } else {
+        Vector::zeros()
+    };
+    let pos = &(Translation::from(carried) * pos);
     // Walk and gravity run as separate passes - NOT the old up-bump hack
     // (there is no artificial upward movement): a combined walk+gravity cast
     // points into the floor the player rests on, which degenerates into
@@ -1037,6 +1144,10 @@ fn step_player_movement(
             mvt.translation += step;
         }
     }
+    // The caller applies one translation from the ORIGINAL pose, so fold the
+    // platform's contribution back in only now that every pass above (which
+    // measures from the carried pose) is done.
+    mvt.translation += carried;
     PlayerMovement {
         movement: mvt,
         top_out: None,
@@ -1316,6 +1427,10 @@ pub struct PlayerHandle {
     // transient locomotion state: direct relocation and crouching cancel it,
     // while save/load uses the last valid standing pose stored with it.
     top_out: Option<ClimbTopOut>,
+    // Moving terrain the player was last seen standing on, and where it was
+    // then. Purely derived per-frame state (re-probed every move), so nothing
+    // needs to save or restore it.
+    support: Option<PlayerSupport>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1347,6 +1462,11 @@ pub struct PhysicsWorld {
     ccd_solver: CCDSolver,
     collider_set: ColliderSet,
     rigid_body_set: RigidBodySet,
+
+    /// Always empty. Substituted for the real body set in the query pipelines
+    /// the *player's* movement casts against - see
+    /// [`PhysicsWorld::player_movement_queries`].
+    no_bodies: RigidBodySet,
 
     rigid_bodies_with_forces: Vec<RigidBodyHandle>,
 
@@ -1695,6 +1815,10 @@ impl PhysicsWorld {
         player_handle: &mut PlayerHandle,
     ) {
         player_handle.top_out = None;
+        // Whatever the player was riding, they are no longer standing on it at
+        // the old spot - a stale support would carry them by a platform's next
+        // step from clear across the level. The next movement frame re-probes.
+        player_handle.support = None;
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let player_height = if player_handle.is_crouched {
             PLAYER_CROUCH_HEIGHT
@@ -1865,16 +1989,7 @@ impl PhysicsWorld {
         let gravity = player_gravity_step(character_body);
         let player_id = EntityId::from_inner(character_body.user_data as u64);
 
-        // Same collision filter the real player movement uses: collide with the
-        // collidable groups, ignore the player's own body and all sensors.
-        let filter = QueryFilter::new()
-            .groups(InteractionGroups::new(
-                InternalCollisionGroups::PLAYER.bits.into(),
-                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
-                Default::default(),
-            ))
-            .exclude_rigid_body(player_handle.character_handle)
-            .exclude_sensors();
+        let filter = player_movement_filter(player_handle.character_handle);
 
         let dt = self.integration_parameters.dt;
         // Normalized horizontal walk direction.
@@ -1888,12 +2003,8 @@ impl PhysicsWorld {
         let mut occupied_sensors = self.player_sensor_intersections.clone();
         let mut swept_sensor_events = Vec::new();
         {
-            let queries = self.broad_phase.as_query_pipeline(
-                self.narrow_phase.query_dispatcher(),
-                &self.rigid_body_set,
-                &self.collider_set,
-                filter,
-            );
+            let queries =
+                self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
             // Sensors are excluded from `filter` (they must never block the
             // move); observing them is a separate query over the same pipeline.
             let sensor_queries =
@@ -1938,6 +2049,10 @@ impl PhysicsWorld {
                     character_shape.as_ref(),
                     &pos,
                     walk_dir * attempt,
+                    // A validated hop happens between frames, so no platform
+                    // has moved since the last one; the support is refreshed
+                    // at the end of the hop instead.
+                    Vector::zeros(),
                     dt,
                     gravity,
                     // No ladder redirect: a validated move walks, it doesn't climb.
@@ -1979,6 +2094,10 @@ impl PhysicsWorld {
         if walked {
             self.set_player_translation(new_position, player_handle);
         }
+        // The hop can have walked the player onto (or off) moving terrain, so
+        // re-probe what they are standing on before the next frame carries
+        // them by its displacement.
+        self.refresh_player_support(player_handle);
 
         MoveResult {
             moved,
@@ -2336,6 +2455,7 @@ impl PhysicsWorld {
             character_handle,
             is_crouched: false,
             top_out: None,
+            support: None,
         }
     }
 
@@ -2462,6 +2582,7 @@ impl PhysicsWorld {
             multibody_joint_set,
             ccd_solver,
             rigid_body_set,
+            no_bodies: RigidBodySet::new(),
             rigid_bodies_with_forces: Vec::new(),
             // TODO:
             // physics_hooks: Box::new(physics_hooks),
@@ -2659,6 +2780,64 @@ impl PhysicsWorld {
         (translation, collision_events)
     }
 
+    /// Re-probe the moving terrain the player is standing on (see
+    /// [`PlayerSupport`]). Needed after a relocation that did not go through a
+    /// movement frame, so the next frame carries them from where they now are.
+    fn refresh_player_support(&mut self, player_handle: &mut PlayerHandle) {
+        let character_body = &self.rigid_body_set[player_handle.character_handle];
+        let character_pos = *character_body.position();
+        let character_shape = self.collider_set[character_body.colliders()[0]]
+            .shared_shape()
+            .clone();
+        let filter = player_movement_filter(player_handle.character_handle);
+        let dispatcher = self.narrow_phase.query_dispatcher();
+        let queries = self.player_movement_queries(dispatcher, filter);
+        player_handle.support = detect_support(
+            &queries,
+            &self.collider_set,
+            &self.rigid_body_set,
+            character_shape.as_ref(),
+            &character_pos,
+        );
+    }
+
+    /// The query pipeline every player movement cast runs against: the real
+    /// broad phase and colliders, but **no rigid bodies**.
+    ///
+    /// Rapier's character controller has its own moving-platform support: for
+    /// every *kinematic* collider the capsule touches, it adds that body's
+    /// `velocity_at_point * dt` to the movement
+    /// (`detect_grounded_status_and_apply_friction`). That is contact-based,
+    /// not support-based - a wall or a door sliding *past* the player drags
+    /// them along with it (measured at 10.6 wu in one second, see
+    /// `player_is_not_dragged_by_a_wall_they_are_only_brushing`) - and it is
+    /// lossy where it does apply, leaking ~10% of the platform's travel per
+    /// second so a rider slides off the back of a long ride. We replace it
+    /// with explicit support tracking ([`PlayerSupport`]), which is exact and
+    /// only ever transfers motion from the surface underfoot.
+    ///
+    /// Emptying `bodies` is what switches the built-in off. The controller
+    /// reads it in exactly two places: that friction lookup, and an autostep
+    /// guard unreachable while `CharacterAutostep::include_dynamic_bodies` is
+    /// true (rapier's default, which we keep). Our filters never consult it
+    /// either - `exclude_rigid_body` compares collider parent handles
+    /// directly, and only the `EXCLUDE_FIXED/KINEMATIC/DYNAMIC` flags would,
+    /// which we never set. So collision itself is completely unaffected.
+    fn player_movement_queries<'a>(
+        &'a self,
+        dispatcher: &'a dyn rapier3d::parry::query::QueryDispatcher,
+        filter: QueryFilter<'a>,
+    ) -> QueryPipeline<'a> {
+        let mut queries = self.broad_phase.as_query_pipeline(
+            dispatcher,
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        queries.bodies = &self.no_bodies;
+        queries
+    }
+
     fn move_player(
         &mut self,
         desired_movement: Vector<Real>,
@@ -2679,16 +2858,7 @@ impl PhysicsWorld {
 
         let gravity = player_gravity_step(&self.rigid_body_set[player_handle.character_handle]);
 
-        // Filter shared by both movement passes: only collide with the
-        // collidable groups as the player, ignore the player body and sensors.
-        let movement_filter = QueryFilter::new()
-            .groups(InteractionGroups::new(
-                InternalCollisionGroups::PLAYER.bits.into(),
-                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
-                Default::default(),
-            ))
-            .exclude_rigid_body(player_handle.character_handle)
-            .exclude_sensors();
+        let movement_filter = player_movement_filter(player_handle.character_handle);
         let dispatcher = self.narrow_phase.query_dispatcher();
 
         // Flat climbing: when the player overlaps a climbable surface (ladder)
@@ -2808,13 +2978,22 @@ impl PhysicsWorld {
         // stays live, while only parentless terrain and climbables are omitted.
         let scripted_top_out_filter = movement_filter.predicate(&parented_non_climbable);
 
+        // How far the moving terrain the player is standing on travelled since
+        // the last time we saw them on it. The physics step above has already
+        // advanced it to this frame's pose, so this is exactly the platform's
+        // displacement for this frame. A support that has been removed simply
+        // stops carrying.
+        let carry = player_handle
+            .support
+            .and_then(|support| {
+                self.rigid_body_set
+                    .get(support.body)
+                    .map(|body| body.translation() - support.translation)
+            })
+            .unwrap_or_else(Vector::zeros);
+
         let player_movement = profile!(scope: "physics", level: TRACE, "physics.move_player", {
-            let queries = self.broad_phase.as_query_pipeline(
-                dispatcher,
-                &self.rigid_body_set,
-                &self.collider_set,
-                movement_filter,
-            );
+            let queries = self.player_movement_queries(dispatcher, movement_filter);
             if let Some(top_out) = player_handle.top_out {
                 let (movement, top_out) = advance_climb_top_out(
                     &player_handle.controller,
@@ -2832,6 +3011,7 @@ impl PhysicsWorld {
                     character_shape.as_ref(),
                     &character_pos,
                     desired_movement,
+                    carry,
                     self.integration_parameters.dt,
                     gravity,
                     climb_movement.map(|(movement, top_out)| ClimbPass {
@@ -2883,6 +3063,23 @@ impl PhysicsWorld {
         ));
 
         self.player_sensor_intersections = current_sensor_intersections;
+
+        // Re-probe the surface underfoot at the pose the player just reached,
+        // so next frame carries them by however far it moves. A scripted
+        // mantle is running on a temporary compressed shape and is not
+        // standing on anything - it rides nothing.
+        player_handle.support = (!scripted_top_out_frame)
+            .then(|| {
+                let queries = self.player_movement_queries(dispatcher, movement_filter);
+                detect_support(
+                    &queries,
+                    &self.collider_set,
+                    &self.rigid_body_set,
+                    character_shape.as_ref(),
+                    &(Translation::from(mvt.translation) * character_pos),
+                )
+            })
+            .flatten();
 
         let character_body = &mut self.rigid_body_set[player_handle.character_handle];
         let pos = character_body.position();
@@ -3764,6 +3961,171 @@ mod tests {
             CLIMB_TOP_OUT_PROBE_FORWARD,
             1.0 / 60.0,
         )
+    }
+
+    /// Half the player capsule's height in world units - the body translation
+    /// sits this far above the surface the player stands on.
+    const PLAYER_HALF_HEIGHT: f32 = PLAYER_HEIGHT / 2.0 / SCALE_FACTOR;
+
+    /// One frame of the tram's authored pace: `command1`'s car covers ~12.2
+    /// world units per second, i.e. ~0.2 per 60 Hz frame.
+    const PLATFORM_STEP: f32 = 0.2;
+
+    /// A world containing a single kinematic platform whose top surface is at
+    /// `y = 0`, with the player standing (settled) on it. This is exactly what
+    /// `entity_creator` builds for moving terrain: a kinematic position-based
+    /// body with a cuboid collider, driven by `set_translation`.
+    fn world_with_kinematic_platform() -> (PhysicsWorld, PlayerHandle, RigidBodyHandle) {
+        let mut world = PhysicsWorld::new();
+        let platform = world.add_kinematic(
+            EntityId::from_inner(2000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2001).unwrap(),
+        );
+        // Settle onto the deck before anything moves.
+        step(&mut world, &mut player, 30);
+        (world, player, platform)
+    }
+
+    /// A player standing on horizontally moving terrain rides it *exactly*.
+    /// The controller's own contact-based transfer leaks about a tenth of the
+    /// platform's travel per second, which walks a rider off the back of a
+    /// command1-length tram ride; support-based transfer does not.
+    #[test]
+    fn player_is_carried_by_a_horizontally_moving_platform() {
+        let (mut world, mut player, platform) = world_with_kinematic_platform();
+        let start = world.get_player_translation(&player);
+
+        for frame in 1..=60 {
+            world.set_translation(platform, vec3(PLATFORM_STEP * frame as f32, -0.5, 0.0));
+            step(&mut world, &mut player, 1);
+        }
+        // One more (stationary) frame: a movement frame writes the player's
+        // *next* kinematic position, so the last one only lands at the next
+        // step.
+        step(&mut world, &mut player, 1);
+
+        let end = world.get_player_translation(&player);
+        let platform_travel = PLATFORM_STEP * 60.0;
+        // The property that matters is that the player does not slide on the
+        // deck: a rider who keeps only 90% of the platform's travel (which is
+        // what rapier's own contact-based transfer leaks - see
+        // `player_movement_queries`) is off the back of a tram car within a
+        // couple of seconds.
+        assert!(
+            (end.x - start.x - platform_travel).abs() < 0.02,
+            "player should ride the platform all {platform_travel} units without \
+             sliding on it: moved {} (from {start:?} to {end:?})",
+            end.x - start.x,
+        );
+        assert!(
+            (end.y - start.y).abs() < 0.1,
+            "player should stay on the deck: y {} -> {}",
+            start.y,
+            end.y,
+        );
+    }
+
+    /// Carry comes from the surface the player is *standing on*: a player in
+    /// the air above a moving platform keeps their own trajectory until they
+    /// land on it.
+    #[test]
+    fn player_is_not_carried_while_airborne_above_a_platform() {
+        let (mut world, mut player, platform) = world_with_kinematic_platform();
+        // Well clear of the deck - far enough that a full second of falling
+        // (0.2 wu per frame) does not reach it.
+        world.set_player_translation(vec3(0.0, PLAYER_HALF_HEIGHT + 15.0, 0.0), &mut player);
+        step(&mut world, &mut player, 1);
+        let start = world.get_player_translation(&player);
+
+        for frame in 1..=60 {
+            world.set_translation(platform, vec3(PLATFORM_STEP * frame as f32, -0.5, 0.0));
+            step(&mut world, &mut player, 1);
+        }
+
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.x - start.x).abs() < 0.02,
+            "an airborne player must not be towed by the platform below them: \
+             moved {} in x",
+            end.x - start.x,
+        );
+        assert!(
+            end.y < start.y - 1.0,
+            "the airborne player should still be falling: y {} -> {}",
+            start.y,
+            end.y,
+        );
+    }
+
+    /// Vertical carry (grav lifts) must keep working: the player rises with the
+    /// deck rather than being left in the air or pushed through it.
+    #[test]
+    fn player_is_carried_by_a_vertically_moving_platform() {
+        let (mut world, mut player, platform) = world_with_kinematic_platform();
+        let start = world.get_player_translation(&player);
+
+        for frame in 1..=60 {
+            world.set_translation(
+                platform,
+                vec3(0.0, -0.5 + PLATFORM_STEP * frame as f32, 0.0),
+            );
+            step(&mut world, &mut player, 1);
+        }
+        // See the horizontal case: the last frame's movement lands next step.
+        step(&mut world, &mut player, 1);
+
+        let end = world.get_player_translation(&player);
+        let platform_travel = PLATFORM_STEP * 60.0;
+        assert!(
+            (end.y - start.y - platform_travel).abs() < 0.02,
+            "player should ride the lift all {platform_travel} units up: moved {} (from {start:?} to {end:?})",
+            end.y - start.y,
+        );
+    }
+
+    /// Carry comes from the surface underfoot, not from any moving thing the
+    /// player touches: a kinematic wall sliding along its own length past a
+    /// player standing on static ground must not drag them with it.
+    #[test]
+    fn player_is_not_dragged_by_a_wall_they_are_only_brushing() {
+        let (mut world, mut player) = world_with_floor();
+        // The shared floor's top surface is at y = 0.
+        world.set_player_translation(vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0), &mut player);
+        // A tall thin wall running along x, just grazing the player's side
+        // (its face sits one contact offset away from the capsule).
+        let wall_z = PLAYER_RADIUS / SCALE_FACTOR + 0.1 + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+        let wall = world.add_kinematic(
+            EntityId::from_inner(2002).unwrap(),
+            vec3(0.0, 1.0, wall_z),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(40.0, 4.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 30);
+        let start = world.get_player_translation(&player);
+
+        for frame in 1..=60 {
+            world.set_translation(wall, vec3(PLATFORM_STEP * frame as f32, 1.0, wall_z));
+            step(&mut world, &mut player, 1);
+        }
+
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.x - start.x).abs() < 0.02,
+            "player must not be dragged along by a wall they only brush: moved {} in x",
+            end.x - start.x,
+        );
     }
 
     /// The seven-waypoint route the reversal tests drive by hand.
