@@ -6605,6 +6605,36 @@ mod tests {
     }
 
     #[test]
+    fn climb_top_out_stays_over_the_nearest_supported_landing() {
+        let mut world = PhysicsWorld::new();
+        // The mantle probe at x=0.64 sees this narrow deck, but the full
+        // body-diameter advance ends at x=1.28 over an open drop.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.5, 0.05, 2.0)
+                .translation(vector![0.6, -0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement =
+            plan_top_out_from_origin(&world).expect("the nearby deck should permit a top-out");
+        let final_sphere = movement.top_out.expect("planned top-out").waypoints[5];
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let support_ray = Ray::new(Point::from(final_sphere), -Vector::y());
+        let supported = queries
+            .cast_ray_and_get_normal(&support_ray, 2.0 * CLIMB_TOP_OUT_MAX_DROP, true)
+            .is_some_and(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
+
+        assert!(
+            supported,
+            "the planned final sphere must stay over the probed deck, got {final_sphere:?}"
+        );
+    }
+
+    #[test]
     fn climb_top_out_reverses_when_a_parented_blocker_appears() {
         let mut world = PhysicsWorld::new();
         let mut player =
