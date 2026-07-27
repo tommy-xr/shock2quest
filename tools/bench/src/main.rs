@@ -136,6 +136,11 @@ fn run_path_command(command: PathCommand) -> Result<()> {
                     }
                 }
             }
+            // A run where every mission failed would otherwise print an empty
+            // table (or `[]`) and exit 0 - a benchmark of nothing looks clean.
+            if reports.is_empty() {
+                return Err(anyhow!("no mission produced a benchmark report"));
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&reports)?);
             } else {

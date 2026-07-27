@@ -258,6 +258,9 @@ fn build_25th_anniversary_mounts(
 /// before asking the game to load it (the debug runtime's `transition-level`
 /// endpoint, for one) must not just stat the filesystem.
 pub fn mission_exists(mission_file: &str) -> bool {
+    if Path::new(&resource_path(mission_file)).exists() {
+        return true;
+    }
     data_files::mission_names(paths::data_root())
         .iter()
         .any(|mission| mission.eq_ignore_ascii_case(mission_file))
