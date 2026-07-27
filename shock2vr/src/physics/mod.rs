@@ -278,15 +278,15 @@ const CLIMB_TOP_OUT_MIN_GROUND_NORMAL: f32 = 0.72;
 const CLIMB_TOP_OUT_RECOVERY_RETREAT: f32 = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
 const CLIMB_TOP_OUT_MAX_RECOVERY_RETREAT: f32 = 4.0 / SCALE_FACTOR;
 
-/// Begin probing only near the highest climbable in the current ladder column.
-/// The expanded column query sees the next segment in stacked ladders, avoiding
-/// a false "top" at every rung seam. Include one scripted substep and the
-/// controller gap: rick1's vertical cast stops with the capsule crown just over
-/// one half-height below the authored top, before the nominal crown-only
-/// threshold can ever become true.
-const CLIMB_TOP_OUT_TOP_REACH: f32 = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-    + CLIMB_TOP_OUT_SUBSTEP
-    + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+/// Begin probing only when the highest climbable in the current ladder column
+/// is within Dark's authored 3.5-foot mantle probe. The expanded column query
+/// sees the next segment in stacked ladders, avoiding a false "top" at every
+/// rung seam. Use the full probe reach here: nearby level geometry can stop the
+/// standing capsule before its crown gets within one body half-height of the
+/// authored ladder top (rick1's diagonal approach stops 3.1 feet below it).
+/// Gating at the shorter body-derived distance leaves the climb redirect active
+/// but permanently blocked before top-out planning is ever attempted.
+const CLIMB_TOP_OUT_TOP_REACH: f32 = CLIMB_TOP_OUT_UP;
 const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
     CLIMB_TOP_OUT_UP + PLAYER_STANDING_HEIGHT / SCALE_FACTOR;
 
