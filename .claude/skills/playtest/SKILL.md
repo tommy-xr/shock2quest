@@ -50,11 +50,18 @@ the script directly and is fine for diagnosis, but it does **not** prove a playe
 could do it. To frob the way a player does, in flat mode (the default):
 
 1. **Aim** — the target must be under the crosshair. With the preferred SDK,
-   call `game.player.aimAt(entity, {hitbox:"torso"})` (`head`, `limb`,
-   `center`, and `nearest` are also available). It selects a live classified
-   creature damage proxy, reports the chosen owner/body/joint/world point and
-   any fallback, and accounts for pawn rotation restored from a save while
-   still driving the production camera and `FlatInteraction` ray. Raw `head.look` and
+   call `game.player.aimAt(entity, {hitbox:"torso", visibility:"required"})`
+   (`head`, `limb`, `center`, and `nearest` are also available). It selects a
+   visible live classified creature damage proxy and throws a structured
+   `AimOcclusionError` (including the blocker entity/body) when every matching
+   point is blocked. `fallback_used` only says whether hitbox classification
+   fell back; it does **not** mean the point is visible. The visibility check is
+   explicitly from the flat camera eye (`origin:"view"`), not the offset weapon
+   muzzle, so after firing step the simulation and verify ammo plus target HP
+   rather than inferring a hit from successful aim alone. The helper reports
+   the chosen owner/body/joint/world point and accounts for pawn rotation
+   restored from a save while still driving the production camera and
+   `FlatInteraction` ray. Raw `head.look` and
    `head.rotation` are **pawn-local**, not world-space; do not use an identity
    quaternion as a world-facing direction. If using raw HTTP, turn with
    `{left_hand.thumbstick:[turn,0]}` and confirm the highlighted entity via

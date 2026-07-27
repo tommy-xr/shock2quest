@@ -231,6 +231,7 @@ pub struct RayCastRequest {
     pub end: [f32; 3],
     pub collision_groups: Option<Vec<String>>,
     pub max_distance: Option<f32>,
+    pub ignore_sensors: Option<bool>,
 }
 
 /// Result of physics raycast
@@ -242,6 +243,7 @@ pub struct RayCastResult {
     pub distance: Option<f32>,
     pub entity_id: Option<i32>,
     pub entity_name: Option<String>,
+    pub body_id: Option<u32>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
 }

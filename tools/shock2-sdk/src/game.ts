@@ -30,8 +30,10 @@ import type {
   TransitionsResult,
   WaitForOptions,
   AiPathEntry,
-  AimClassification,
+  AimOptions,
+  AimPoint,
   AimResult,
+  AimVisibility,
   Vec3,
 } from "./types.js";
 
@@ -40,6 +42,18 @@ export class CommandError extends Error {
   constructor(public readonly result: CommandResult) {
     super(result.message);
     this.name = "CommandError";
+  }
+}
+
+/** Error thrown when `aimAt(..., { visibility: "required" })` is occluded. */
+export class AimOcclusionError extends Error {
+  constructor(public readonly result: AimResult) {
+    const blocker = result.visibility.blocker;
+    const label =
+      blocker?.entity_name ??
+      (blocker?.entity_id === null ? "world geometry" : `entity ${blocker?.entity_id}`);
+    super(`view from camera eye to entity ${result.entity_id} is blocked by ${label}`);
+    this.name = "AimOcclusionError";
   }
 }
 
@@ -95,7 +109,7 @@ export class PlayerApi {
    */
   async aimAt(
     entity: number | Pick<EntitySummary, "id">,
-    options?: { hitbox?: AimClassification; eyeHeight?: number },
+    options?: AimOptions,
   ): Promise<AimResult> {
     const entityId = typeof entity === "number" ? entity : entity.id;
     const requested = options?.hitbox ?? "torso";
@@ -115,7 +129,8 @@ export class PlayerApi {
     // Entity detail is a versioned runtime capability. Older runtimes (and a
     // stale binary encountered by the campaign) omit aim_points entirely;
     // aiming must remain usable and report its center fallback, not crash.
-    let candidates = detail.aim_points ?? [];
+    const aimPoints = detail.aim_points ?? [];
+    let candidates = [...aimPoints];
     if (requested === "head" || requested === "torso") {
       candidates = candidates.filter((point) => point.classification === requested);
     } else if (requested === "limb") {
@@ -127,18 +142,91 @@ export class PlayerApi {
       candidates = [];
     }
     candidates.sort((a, b) => distance(a.position) - distance(b.position));
-    const selected = candidates[0];
-    let surfacePoint: Vec3 | undefined;
-    if (selected === undefined && requested !== "center") {
-      const surface = await this.client.post<RayCastResult>("/v1/physics/raycast", {
+    const targetIds = new Set([
+      entityId,
+      ...aimPoints.map((point) => point.proxy_entity_id),
+    ]);
+    const checkViewVisibility = async (
+      point: Vec3,
+    ): Promise<{ visibility: AimVisibility; hit: RayCastResult }> => {
+      const hit = await this.client.post<RayCastResult>("/v1/physics/raycast", {
         start: eye,
-        end: detail.position,
-        collision_groups: ["entity", "selectable", "world", "ui", "raycast"],
+        end: point,
+        collision_groups: [
+          "entity",
+          "hitbox",
+          "selectable",
+          "world",
+          "ui",
+          "raycast",
+        ],
+        // Match production interaction/projectile rays: enclosing tripwire and
+        // room sensors are not physical visibility blockers.
+        ignore_sensors: true,
       });
-      if (surface?.entity_id === entityId && surface.hit_point !== null) {
-        surfacePoint = surface.hit_point;
+      const visible = !hit.hit || (hit.entity_id !== null && targetIds.has(hit.entity_id));
+      return {
+        hit,
+        visibility: {
+          state: visible ? "visible" : "blocked",
+          origin: "view",
+          target_distance: distance(point),
+          blocker: visible
+            ? null
+            : {
+                entity_id: hit.entity_id,
+                entity_name: hit.entity_name,
+                body_id: hit.body_id ?? null,
+                collision_group: hit.collision_group,
+                hit_point: hit.hit_point,
+                distance: hit.distance,
+              },
+        },
+      };
+    };
+
+    let selected: AimPoint | undefined = candidates[0];
+    let visibility: AimVisibility | undefined;
+    if (options?.visibility === "required" && candidates.length > 0) {
+      selected = undefined;
+      for (const candidate of candidates) {
+        const check = await checkViewVisibility(candidate.position);
+        visibility ??= check.visibility;
+        if (check.visibility.state === "visible") {
+          selected = candidate;
+          visibility = check.visibility;
+          break;
+        }
+      }
+      // Preserve the closest requested-class target in the structured error.
+      selected ??= candidates[0];
+    }
+
+    let surfacePoint: Vec3 | undefined;
+    if (candidates.length === 0) {
+      if (options?.visibility === "required") {
+        const check = await checkViewVisibility(detail.position);
+        visibility = check.visibility;
+        if (
+          check.visibility.state === "visible" &&
+          check.hit.entity_id !== null &&
+          targetIds.has(check.hit.entity_id) &&
+          check.hit.hit_point !== null
+        ) {
+          surfacePoint = check.hit.hit_point;
+        }
+      } else if (requested !== "center") {
+        const surface = await this.client.post<RayCastResult>("/v1/physics/raycast", {
+          start: eye,
+          end: detail.position,
+          collision_groups: ["entity", "selectable", "world", "ui", "raycast"],
+        });
+        if (surface?.entity_id === entityId && surface.hit_point !== null) {
+          surfacePoint = surface.hit_point;
+        }
       }
     }
+
     const worldPoint = selected?.position ?? surfacePoint ?? detail.position;
     const headRotation = headRotationForWorldPoint(
       snapshot.player.position,
@@ -146,11 +234,7 @@ export class PlayerApi {
       worldPoint,
       eyeHeight,
     );
-    await this.client.post("/v1/control/input", {
-      channel: "head.rotation",
-      value: headRotation,
-    });
-    return {
+    const result: AimResult = {
       entity_id: entityId,
       proxy_entity_id: selected?.proxy_entity_id ?? null,
       body_id: selected?.body_id ?? null,
@@ -163,7 +247,21 @@ export class PlayerApi {
         selected === undefined &&
         requested !== "center" &&
         (requested !== "surface" || surfacePoint === undefined),
+      visibility: visibility ?? {
+        state: "unchecked",
+        origin: "view",
+        target_distance: distance(worldPoint),
+        blocker: null,
+      },
     };
+    if (result.visibility.state === "blocked") {
+      throw new AimOcclusionError(result);
+    }
+    await this.client.post("/v1/control/input", {
+      channel: "head.rotation",
+      value: headRotation,
+    });
+    return result;
   }
 
   /** The items the player is carrying (backpack + hand-held), for verifying pickups. */

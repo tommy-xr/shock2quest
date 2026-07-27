@@ -216,6 +216,7 @@ pub struct DebugRayHit {
     pub distance: Option<f32>,
     pub entity_id: Option<i32>,
     pub entity_name: Option<String>,
+    pub body_id: Option<u32>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
 }
@@ -224,11 +225,15 @@ pub struct DebugRayHit {
 #[derive(Debug, Clone)]
 pub struct RaycastMask {
     pub groups: Vec<String>,
+    pub ignore_sensors: bool,
 }
 
 impl RaycastMask {
     pub fn new(groups: Vec<String>) -> Self {
-        Self { groups }
+        Self {
+            groups,
+            ignore_sensors: false,
+        }
     }
 
     pub fn all() -> Self {
@@ -242,6 +247,7 @@ impl RaycastMask {
                 "hitbox".to_string(),
                 "raycast".to_string(),
             ],
+            ignore_sensors: false,
         }
     }
 }

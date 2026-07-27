@@ -5917,7 +5917,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         // Perform raycast using existing physics system
         match self
             .physics
-            .ray_cast3(start, end, collision_groups, None, false)
+            .ray_cast3(start, end, collision_groups, None, mask.ignore_sensors)
         {
             Some(hit) => {
                 let entity_name = hit.maybe_entity_id.and_then(|id| {
@@ -5927,15 +5927,22 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         },
                     )
                 });
+                let body_id = hit
+                    .maybe_rigid_body_handle
+                    .map(|handle| handle.into_raw_parts().0);
+                let collision_group = body_id
+                    .and_then(|id| self.physics.debug_body_detail(id))
+                    .and_then(|detail| detail.collision_groups.into_iter().next());
 
                 DebugRayHit {
                     hit: true,
                     hit_point: Some([hit.hit_point.x, hit.hit_point.y, hit.hit_point.z]),
                     hit_normal: Some([hit.hit_normal.x, hit.hit_normal.y, hit.hit_normal.z]),
-                    distance: Some((end - start).magnitude()),
+                    distance: Some((hit.hit_point - start).magnitude()),
                     entity_id: hit.maybe_entity_id.map(|id| id.inner() as i32),
                     entity_name,
-                    collision_group: None, // TODO: Add collision group info
+                    body_id,
+                    collision_group,
                     is_sensor: hit.is_sensor,
                 }
             }
@@ -5946,6 +5953,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 distance: None,
                 entity_id: None,
                 entity_name: None,
+                body_id: None,
                 collision_group: None,
                 is_sensor: false,
             },

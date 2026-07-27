@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AimOcclusionError,
   headRotationForWorldPoint,
   HttpClient,
   PlayerApi,
 } from "../src/index.js";
-import type { EntityDetailResult, FrameSnapshot } from "../src/index.js";
+import type {
+  EntityDetailResult,
+  FrameSnapshot,
+  RayCastResult,
+} from "../src/index.js";
 
 type Quat = [number, number, number, number];
 
@@ -225,4 +230,181 @@ test("aimAt center remains an explicit origin target without a surface query", a
   assert.equal(aim.classification, "center");
   assert.equal(aim.fallback_used, false);
   assert.deepEqual(writes, ["/v1/control/input"]);
+});
+
+test("aimAt visibility required skips an occluded classified proxy", async () => {
+  const detail = {
+    entity_id: 363,
+    name: "Midwife",
+    template_id: 352,
+    position: [56.7, -14.3, 81.3],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [
+      {
+        proxy_entity_id: 1341,
+        body_id: 814,
+        joint_id: 11,
+        classification: "limb",
+        position: [56.9, -13.5, 81.5],
+      },
+      {
+        proxy_entity_id: 1344,
+        body_id: 815,
+        joint_id: 12,
+        classification: "limb",
+        position: [56.5, -14, 81],
+      },
+    ],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [62, -15.8, 83],
+      rotation: [0, 0, 0, 1],
+    },
+  } as FrameSnapshot;
+  const doorway: RayCastResult = {
+    hit: true,
+    hit_point: [60.1, -14.4, 82.5],
+    hit_normal: [1, 0, 0],
+    distance: 2.1,
+    entity_id: 77,
+    entity_name: "Doorway frame",
+    body_id: 501,
+    collision_group: "world",
+    is_sensor: false,
+  };
+  const visibleProxy: RayCastResult = {
+    hit: true,
+    hit_point: detail.aim_points[1].position,
+    hit_normal: [1, 0, 0],
+    distance: 5.7,
+    entity_id: detail.aim_points[1].proxy_entity_id,
+    entity_name: null,
+    body_id: detail.aim_points[1].body_id,
+    collision_group: "hitbox",
+    is_sensor: false,
+  };
+  const raycasts = [doorway, visibleProxy];
+  const writes: Array<{ path: string; body: unknown }> = [];
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/363") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string, body: unknown) => {
+      writes.push({ path, body });
+      if (path === "/v1/physics/raycast") return raycasts.shift();
+      return undefined;
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  const aim = await player.aimAt(363, {
+    hitbox: "limb",
+    visibility: "required",
+  });
+
+  assert.equal(aim.proxy_entity_id, 1344);
+  assert.equal(aim.fallback_used, false);
+  assert.equal(aim.visibility.state, "visible");
+  assert.equal(aim.visibility.origin, "view");
+  assert.equal(aim.visibility.blocker, null);
+  assert.ok(Math.abs(aim.visibility.target_distance - 5.8558) < 0.001);
+  assert.equal(
+    writes.filter(({ path }) => path === "/v1/physics/raycast").length,
+    2,
+  );
+  assert.equal(
+    (
+      writes.find(({ path }) => path === "/v1/physics/raycast")
+        ?.body as { ignore_sensors: boolean }
+    ).ignore_sensors,
+    true,
+  );
+  assert.equal(writes.at(-1)?.path, "/v1/control/input");
+});
+
+test("aimAt visibility required reports the blocker when every proxy is occluded", async () => {
+  const detail = {
+    entity_id: 363,
+    name: "Midwife",
+    template_id: 352,
+    position: [56.7, -14.3, 81.3],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [
+      {
+        proxy_entity_id: 1343,
+        body_id: 812,
+        joint_id: 9,
+        classification: "head",
+        position: [56.8, -13.2, 81.4],
+      },
+    ],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [62, -15.8, 83],
+      rotation: [0, 0, 0, 1],
+    },
+  } as FrameSnapshot;
+  const doorway: RayCastResult = {
+    hit: true,
+    hit_point: [60.1, -14.4, 82.5],
+    hit_normal: [1, 0, 0],
+    distance: 2.1,
+    entity_id: 77,
+    entity_name: "Doorway frame",
+    body_id: 501,
+    collision_group: "world",
+    is_sensor: false,
+  };
+  const writes: Array<{ path: string; body: unknown }> = [];
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/363") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string, body: unknown) => {
+      writes.push({ path, body });
+      if (path === "/v1/physics/raycast") return doorway;
+      return undefined;
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  await assert.rejects(
+    player.aimAt(363, { hitbox: "head", visibility: "required" }),
+    (error: unknown) => {
+      if (!(error instanceof AimOcclusionError)) return false;
+      assert.equal(error.result.proxy_entity_id, 1343);
+      assert.equal(error.result.visibility.state, "blocked");
+      assert.equal(error.result.visibility.origin, "view");
+      assert.ok(
+        Math.abs(error.result.visibility.target_distance - 5.5317) < 0.001,
+      );
+      assert.deepEqual(error.result.visibility.blocker, {
+        entity_id: 77,
+        entity_name: "Doorway frame",
+        body_id: 501,
+        collision_group: "world",
+        hit_point: [60.1, -14.4, 82.5],
+        distance: 2.1,
+      });
+      return true;
+    },
+  );
+  assert.equal(
+    writes.some(({ path }) => path === "/v1/control/input"),
+    false,
+  );
 });
