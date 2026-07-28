@@ -20,9 +20,31 @@ use crate::ss2_common::read_vec3;
 use super::CellPortal;
 use super::Plane;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellMedium {
+    Solid,
+    Air,
+    Water,
+    Unknown(u8),
+}
+
+impl From<u8> for CellMedium {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Solid,
+            1 => Self::Air,
+            2 => Self::Water,
+            value => Self::Unknown(value),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cell {
     pub idx: u32,
+    pub medium: CellMedium,
+    pub flags: u8,
+    pub flow_group: u8,
     pub center: Vector3<f32>,
     pub radius: f32,
     pub portal_count: u8,
@@ -48,14 +70,14 @@ impl Cell {
         let cell_num_render_polys = reader.read_u8().unwrap();
         let portal_count = reader.read_u8().unwrap();
         let cell_num_planes = reader.read_u8().unwrap();
-        let _cell_medium = reader.read_u8().unwrap();
-        let _cell_flags = reader.read_u8().unwrap();
+        let medium = reader.read_u8().unwrap().into();
+        let flags = reader.read_u8().unwrap();
 
         let _nxn = reader.read_u32::<byteorder::LittleEndian>().unwrap();
         let _poly_map_size = reader.read_u16::<byteorder::LittleEndian>().unwrap();
 
         let cell_num_anim_lights = reader.read_u8().unwrap();
-        let _cell_flow_group = reader.read_u8().unwrap();
+        let flow_group = reader.read_u8().unwrap();
 
         let center = read_vec3(reader) / SCALE_FACTOR;
         let radius = reader.read_f32::<byteorder::LittleEndian>().unwrap() / SCALE_FACTOR;
@@ -112,6 +134,9 @@ impl Cell {
 
         let cell = Cell {
             idx: cell_idx,
+            medium,
+            flags,
+            flow_group,
             portal_count,
             portals,
             center,
@@ -422,5 +447,43 @@ fn read_light_info<T: io::Read>(debug_idx: u32, reader: &mut T) -> LightInfo {
         dynamic_lightmap_pointer,
         animation_flags,
         texture_pack_result: TexturePackResult::DEFAULT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use engine::texture_atlas::TexturePacker;
+
+    use super::{Cell, CellMedium};
+
+    #[test]
+    fn cell_preserves_authored_medium_flags_and_flow_group() {
+        let mut bytes = vec![
+            0,    // vertices
+            0,    // polygons
+            0,    // rendered polygons
+            0,    // portals
+            0,    // planes
+            2,    // water medium
+            0x41, // cell flags
+        ];
+        bytes.extend_from_slice(&0x1122_3344_u32.to_le_bytes());
+        bytes.extend_from_slice(&0x5566_u16.to_le_bytes());
+        bytes.push(0); // animated lights
+        bytes.push(7); // flow group
+        bytes.extend_from_slice(&[0; 12]); // center
+        bytes.extend_from_slice(&0.0_f32.to_le_bytes()); // radius
+        bytes.extend_from_slice(&0_u32.to_le_bytes()); // polygon indices
+        bytes.extend_from_slice(&0_u32.to_le_bytes()); // light index count
+
+        let mut reader = Cursor::new(bytes);
+        let mut packer = TexturePacker::<image::Rgb<u8>>::new_rgb(1, 1);
+        let cell = Cell::read(&mut reader, &mut packer, false, 42, 1);
+
+        assert_eq!(cell.medium, CellMedium::Water);
+        assert_eq!(cell.flags, 0x41);
+        assert_eq!(cell.flow_group, 7);
     }
 }
