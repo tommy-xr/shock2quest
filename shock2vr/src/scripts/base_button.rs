@@ -62,14 +62,83 @@ impl Script for BaseButton {
 
             // In some places (like the computer for the engine room in eng1), invisible buttons are used as proxies -
             // there will be an actual button that sends a 'TurnOn' message to an invisible button. Not sure why
-            // this pattern is used.
-            MessagePayload::TurnOn { from: _ } => send_to_all_switch_links(
-                world,
-                entity_id,
-                MessagePayload::TurnOn { from: entity_id },
-            ),
+            // this pattern is used. A remote press still honors the proxy's lock;
+            // otherwise tripwires can relay through authored locked card slots.
+            MessagePayload::TurnOn { from: _ } if !self.is_locked(entity_id, world) => {
+                send_to_all_switch_links(
+                    world,
+                    entity_id,
+                    MessagePayload::TurnOn { from: entity_id },
+                )
+            }
 
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dark::properties::{Link, Links, PropLocked, ToLink, WrappedEntityId};
+
+    use crate::quest_info::QuestInfo;
+
+    use super::*;
+
+    fn sent_messages(effect: &Effect) -> Vec<(EntityId, MessagePayload)> {
+        match effect {
+            Effect::Send { msg } => vec![(msg.to, msg.payload.clone())],
+            Effect::Combined { effects } => effects.iter().flat_map(sent_messages).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn button_with_switch_link(world: &mut World, target: EntityId, locked: bool) -> EntityId {
+        world.add_entity((
+            PropLocked(locked),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(target)),
+                    link: Link::SwitchLink,
+                }],
+            },
+        ))
+    }
+
+    #[test]
+    fn turn_on_only_relays_when_the_button_is_unlocked() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let target = world.add_entity(());
+        let locked = button_with_switch_link(&mut world, target, true);
+        let unlocked = button_with_switch_link(&mut world, target, false);
+        let physics = PhysicsWorld::new();
+        let mut button = BaseButton::new();
+
+        let locked_effect = button.handle_message(
+            locked,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: locked },
+        );
+        assert!(
+            sent_messages(&locked_effect).is_empty(),
+            "a locked button must not relay a scripted TurnOn"
+        );
+
+        let unlocked_effect = button.handle_message(
+            unlocked,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: unlocked },
+        );
+        assert!(
+            sent_messages(&unlocked_effect)
+                .iter()
+                .any(|(to, payload)| *to == target
+                    && matches!(payload, MessagePayload::TurnOn { from } if *from == unlocked)),
+            "an unlocked proxy button must keep relaying scripted TurnOn"
+        );
     }
 }
