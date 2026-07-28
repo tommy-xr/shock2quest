@@ -512,6 +512,16 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     false
 }
 
+/// Whether taking this world item must go through a script before the physical
+/// transfer. `PropKeySrc` items receive an `internal_keycard` script at runtime
+/// even when their authored world action is only `MOVE`.
+pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropKeySrc>>()
+        .map(|keycards| keycards.get(entity_id).is_ok())
+        .unwrap_or(false)
+}
+
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
 /// a melee arm (`PropLimbModel`). Clicking one in the backpack/strip wields it
 /// (`Effect::GrabEntity`) instead of using it; shared by `ContainerGui` and the
