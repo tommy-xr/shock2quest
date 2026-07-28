@@ -461,6 +461,99 @@ pub struct AnimationInfo<'a> {
     pub cancel_root_motion: bool,
 }
 
+/// Lowest joint depth in a posed skeleton palette.
+///
+/// Only real skeleton joints participate; unused identity slots in the fixed
+/// render palette would otherwise pin the result to zero.
+pub fn lowest_joint_y(
+    skeleton: &Skeleton,
+    transforms: &[Matrix4<f32>; MAX_SKINNED_JOINTS],
+) -> Option<f32> {
+    skeleton
+        .bones
+        .iter()
+        .filter_map(|bone| transforms.get(bone.joint_id as usize))
+        .map(|transform| transform.w.y)
+        .filter(|y| y.is_finite())
+        .reduce(f32::min)
+}
+
+/// Return a death clip whose terminal pose reaches a known floor depth.
+///
+/// The live standing pose provides the creature origin's actual floor
+/// convention. A death clip changes the limb rotations as well as lowering the
+/// root, so its own terminal lowest joint can stop above that depth even when
+/// its CAL bind-pose depth happens to match. Extend the authored descent just
+/// enough to reach the live floor. The correction follows the clip's existing
+/// root-y descent, leaving frame zero unchanged and avoiding a snap when the
+/// crumple starts. Never raise a clip that already reaches below the target.
+pub fn ground_terminal_pose_to_floor(
+    base_skeleton: &Skeleton,
+    animation_clip: &AnimationClip,
+    floor_depth: f32,
+) -> AnimationClip {
+    if base_skeleton.bones.is_empty()
+        || animation_clip.num_frames == 0
+        || animation_clip.root_transforms.is_empty()
+    {
+        return animation_clip.clone();
+    }
+
+    let terminal_skeleton = animate(
+        base_skeleton,
+        Some(AnimationInfo {
+            animation_clip,
+            frame: animation_clip.num_frames - 1,
+            fraction: 0.0,
+            wrap: false,
+            cancel_root_motion: false,
+        }),
+        &immutable::HashTrieMap::new(),
+    );
+    let Some(terminal_floor) =
+        lowest_joint_y(&terminal_skeleton, &terminal_skeleton.get_transforms())
+    else {
+        return animation_clip.clone();
+    };
+    let correction = (floor_depth - terminal_floor).min(0.0);
+
+    if !floor_depth.is_finite() || !correction.is_finite() || correction.abs() <= f32::EPSILON {
+        return animation_clip.clone();
+    }
+
+    let mut grounded = animation_clip.clone();
+    let start_y = grounded.root_transforms[0].w.y;
+    let end_y = grounded.root_transforms.last().unwrap().w.y;
+    let root_travel = end_y - start_y;
+    let last_frame = grounded.root_transforms.len().saturating_sub(1).max(1) as f32;
+    let mut corrections = Vec::with_capacity(grounded.root_transforms.len());
+
+    for (frame, transform) in grounded.root_transforms.iter_mut().enumerate() {
+        let progress = if root_travel.abs() > 1.0e-4 {
+            ((transform.w.y - start_y) / root_travel).clamp(0.0, 1.0)
+        } else {
+            frame as f32 / last_frame
+        };
+        let frame_correction = correction * progress;
+        transform.w.y += frame_correction;
+        corrections.push(frame_correction);
+    }
+    for (position, frame_correction) in grounded
+        .root_positions
+        .iter_mut()
+        .zip(corrections.into_iter())
+    {
+        position.y += frame_correction;
+    }
+
+    grounded.translation.y += correction;
+    let duration = grounded.duration.as_secs_f32();
+    if duration > f32::EPSILON {
+        grounded.sliding_velocity.y = grounded.translation.y / duration;
+    }
+    grounded
+}
+
 pub fn animate(
     base_skeleton: &Skeleton,
     animation_info: Option<AnimationInfo>,
@@ -628,6 +721,62 @@ mod tests {
             name: None,
         };
         (Skeleton::create_from_bones(bones), clip)
+    }
+
+    #[test]
+    fn terminal_pose_is_lowered_to_the_live_floor_depth() {
+        let bones = vec![
+            Bone {
+                joint_id: 0,
+                parent_id: None,
+                local_transform: Matrix4::identity(),
+            },
+            Bone {
+                joint_id: 1,
+                parent_id: Some(0),
+                local_transform: Matrix4::from_translation(Vector3::new(0.0, -1.0, 0.0)),
+            },
+            Bone {
+                joint_id: 2,
+                parent_id: Some(1),
+                local_transform: Matrix4::from_translation(Vector3::new(0.0, -1.0, 0.0)),
+            },
+        ];
+        let skeleton = Skeleton::create_from_bones(bones);
+        let mut clip = test_skeleton_and_clip().1;
+        clip.num_frames = 2;
+        clip.duration = Duration::from_millis(66);
+        clip.root_transforms = vec![
+            Matrix4::identity(),
+            Matrix4::from_translation(Vector3::new(0.0, -0.5, 0.0)),
+        ];
+        clip.root_positions = vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, -0.5, 0.0)];
+        clip.joint_to_frame = HashMap::from([
+            (0, vec![Matrix4::identity(); 2]),
+            (
+                1,
+                vec![Matrix4::identity(), Matrix4::from_angle_z(Deg(180.0))],
+            ),
+            (2, vec![Matrix4::identity(); 2]),
+        ]);
+
+        let live_floor = -2.25;
+        let grounded = ground_terminal_pose_to_floor(&skeleton, &clip, live_floor);
+        let terminal = animate(
+            &skeleton,
+            Some(AnimationInfo {
+                animation_clip: &grounded,
+                frame: 1,
+                fraction: 0.0,
+                wrap: false,
+                cancel_root_motion: false,
+            }),
+            &immutable::HashTrieMap::new(),
+        );
+        let terminal_floor = lowest_joint_y(&terminal, &terminal.get_transforms()).unwrap();
+
+        assert!((terminal_floor - live_floor).abs() < 1.0e-5);
+        assert_eq!(grounded.root_transforms[0], Matrix4::identity());
     }
 
     #[test]

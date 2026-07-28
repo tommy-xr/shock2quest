@@ -140,7 +140,7 @@ mod tests {
         save.all_entities.push(old_entity.inner());
         save.death_poses.insert(
             old_entity.inner(),
-            RuntimePropDeathPose("resolved_death".to_owned()),
+            RuntimePropDeathPose::new("resolved_death".to_owned(), Some(-1.6)),
         );
 
         let mut loaded_world = World::new();
@@ -150,8 +150,31 @@ mod tests {
 
         assert_ne!(new_entity, old_entity);
         let poses = loaded_world.borrow::<View<RuntimePropDeathPose>>().unwrap();
-        assert_eq!(poses.get(new_entity).unwrap().0, "resolved_death");
+        assert_eq!(
+            poses.get(new_entity).unwrap(),
+            &RuntimePropDeathPose::new("resolved_death".to_owned(), Some(-1.6))
+        );
         assert!(poses.get(old_entity).is_err());
+    }
+
+    #[test]
+    fn legacy_death_pose_string_loads_without_a_floor_depth() {
+        let pose: RuntimePropDeathPose = serde_json::from_str(r#""resolved_death""#).unwrap();
+
+        assert_eq!(
+            pose,
+            RuntimePropDeathPose::new("resolved_death".to_owned(), None)
+        );
+    }
+
+    #[test]
+    fn death_pose_round_trip_preserves_the_live_floor_depth() {
+        let pose = RuntimePropDeathPose::new("resolved_death".to_owned(), Some(-1.6));
+
+        let encoded = serde_json::to_string(&pose).unwrap();
+        let decoded: RuntimePropDeathPose = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, pose);
     }
 
     #[test]

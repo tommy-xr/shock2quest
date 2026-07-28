@@ -9,7 +9,7 @@
  */
 use cgmath::{Matrix4, Point3, Vector3};
 use dark::ss2_bin_obj_loader::Vhot;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use shipyard::Component;
 
 // RuntimePropGazeAmount - track how much the player is gazing at a prop
@@ -59,11 +59,50 @@ pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
 /// mission-placed corpse decorations untouched.
 ///
 /// The marker is attached when the random crumple query resolves. A save
-/// taken during that crumple therefore resumes at the already-selected
-/// clip's canonical final pose without replaying events. Saves created before
-/// this marker existed cannot recover which random clip had been selected.
-#[derive(Component, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimePropDeathPose(pub String);
+/// taken during that crumple therefore resumes at the already-selected clip's
+/// canonical final pose without replaying events. `floor_depth` records the
+/// live pose's contact depth so the same grounding correction survives a
+/// save/load; saves from before that field existed retain their raw pose.
+#[derive(Component, Clone, Debug, Serialize, PartialEq)]
+pub struct RuntimePropDeathPose {
+    pub clip_name: String,
+    pub floor_depth: Option<f32>,
+}
+
+impl RuntimePropDeathPose {
+    pub fn new(clip_name: String, floor_depth: Option<f32>) -> Self {
+        Self {
+            clip_name,
+            floor_depth,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimePropDeathPose {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StoredDeathPose {
+            Legacy(String),
+            Current {
+                clip_name: String,
+                #[serde(default)]
+                floor_depth: Option<f32>,
+            },
+        }
+
+        Ok(match StoredDeathPose::deserialize(deserializer)? {
+            StoredDeathPose::Legacy(clip_name) => Self::new(clip_name, None),
+            StoredDeathPose::Current {
+                clip_name,
+                floor_depth,
+            } => Self::new(clip_name, floor_depth),
+        })
+    }
+}
 
 #[derive(Component)]
 pub struct RuntimePropSpawnTimeInSeconds(pub f32);
