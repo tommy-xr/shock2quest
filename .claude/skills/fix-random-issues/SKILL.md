@@ -1,11 +1,12 @@
 ---
 name: fix-random-issues
 description: >-
-  Randomly sample X open GitHub issues from shock2quest and process them
-  sequentially, delegating one issue at a time to an isolated agent that must
-  reproduce or confirm the problem, implement a focused fix, verify it, and open
-  a reviewable PR. Use for requests to fix, sweep, tackle, or work through a
-  bounded number of random open shock2quest issues.
+  Randomly sample X eligible open GitHub issues from shock2quest, excluding
+  issues already addressed by an open PR, and process them sequentially,
+  delegating one issue at a time to an isolated agent that must reproduce or
+  confirm the problem, implement a focused fix, verify it, and open a reviewable
+  PR. Use for requests to fix, sweep, tackle, or work through a bounded number
+  of random open shock2quest issues.
 ---
 
 # Fix random issues
@@ -22,11 +23,18 @@ before starting the next.
   `tommy-xr/shock2quest`. Honor an explicit repository override.
 - Accept an optional seed. Generate and report one when omitted.
 
+Before drawing, exclude an issue when an open PR in the repository declares
+that it closes, fixes, or resolves that issue. These issues are not part of the
+eligible pool and do not consume a sample slot. This check deliberately reads
+the open PR bodies as well as the open issue list, so stacked PRs are recognized
+even when GitHub does not populate their default-branch closing metadata.
+
 Do not silently replace skipped, closed, duplicate, already-fixed, or
 unreproducible selections. Each still consumes one sample slot. This preserves
 the random sample and makes the run produce up to X fixes rather than
-cherry-picking X easy fixes. If fewer than X issues are open, process all of
-them and report the smaller sample.
+cherry-picking X easy fixes. If fewer than X eligible issues remain, process all
+of them and report the smaller sample. If a PR begins addressing a selected
+issue after the sample is frozen, skip it without drawing a replacement.
 
 ## 1. Preflight and freeze the sample
 
@@ -45,20 +53,23 @@ them and report the smaller sample.
 
    Add `--seed <value>` when supplied. `.agents/skills` is the compatibility
    symlink to `.claude/skills`, so this command works for both Claude and Codex.
-5. Keep the emitted repository, seed, and ordered `selected` array as the run
-   ledger. Do not rerun the draw unless the user explicitly requests a new
-   sample.
+5. Keep the emitted repository, seed, `excludedActivePullRequests`, and ordered
+   `selected` array as the run ledger. Do not rerun the draw unless the user
+   explicitly requests a new sample.
 
-The selector samples all open issues without inspecting difficulty, labels, or
-assignees first. Random means random; do not quietly filter the pool.
+The selector samples all eligible open issues without inspecting difficulty,
+labels, or assignees first. The active-PR exclusion above is the only
+pre-sampling filter. Random means random; do not quietly filter the eligible
+pool further.
 
 ## 2. Process the selected issues serially
 
 For each selected issue, in emitted order:
 
 1. Re-read it with `gh issue view`, including its current state, body, comments,
-   labels, and assignees. Skip it if it is no longer open. Check current
-   `origin/main` for an existing fix or superseding PR before editing.
+   labels, and assignees. Skip it if it is no longer open or an open PR now
+   declares that it closes, fixes, or resolves the issue. Check current
+   `origin/main` for an existing fix or superseding merged PR before editing.
 2. Start one issue worker using the host's delegation tool. Prefer a
    host-provided isolated worktree. Otherwise create a unique branch/worktree
    from current `origin/main`, named along the lines of
@@ -72,7 +83,8 @@ For each selected issue, in emitted order:
 5. Record one terminal result:
    - `fixed`: reproduction/confirmation, focused fix, local verification,
      conventional commit, PR containing `Fixes #N`, and green CI.
-   - `skipped`: closed, duplicate, superseded, or already fixed on current main.
+   - `skipped`: closed, duplicate, actively addressed by an open PR, superseded,
+     or already fixed on current main.
    - `not reproduced`: reasonable evidence failed to confirm the report.
    - `blocked`: a concrete product decision, unavailable dependency/hardware,
      unsafe scope, or persistent verification/CI failure prevents completion.
@@ -125,8 +137,9 @@ as incomplete. A PR URL alone is not completion.
 
 ## 3. Report the sweep
 
-Return the repository, seed, requested count, actual sampled count, and a table
-in sampled order with:
+Return the repository, seed, requested count, eligible count, actual sampled
+count, and the issues excluded because of active PRs. Then provide a table in
+sampled order with:
 
 | Issue | Result | Evidence | Commit / PR | Verification |
 |---|---|---|---|---|
