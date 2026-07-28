@@ -34,6 +34,7 @@ mod ui;
 mod util;
 mod virtual_hand;
 mod vr_config;
+pub mod vr_crouch;
 pub mod zip_asset_path;
 
 use scenes::{

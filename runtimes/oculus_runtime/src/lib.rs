@@ -11,6 +11,7 @@ use shock2vr::Game;
 use shock2vr::GameOptions;
 use shock2vr::input_context::InputContext;
 use shock2vr::paths;
+use shock2vr::vr_crouch::VrCrouchDetector;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -460,6 +461,8 @@ fn main() {
     // No discrete actions are mapped for VR controllers yet; this stays empty
     // until an OculusInputMapper is added.
     let mut action_state = shock2vr::input::InputActionState::new();
+    let mut vr_crouch = VrCrouchDetector::default();
+    let mut pending_stage_change_time = None;
 
     let _camera_pos = vec3(0.0, 5.0, 10.0);
 
@@ -501,6 +504,8 @@ fn main() {
                             ready_reported = false;
                             last_update_time = Instant::now();
                             frame_profiler.reset();
+                            vr_crouch.reset();
+                            pending_stage_change_time = None;
 
                             // let available_rates =
                             //     session.enumerate_display_refresh_rates().unwrap();
@@ -524,6 +529,14 @@ fn main() {
                 InstanceLossPending(_) => {
                     break 'main_loop;
                 }
+                ReferenceSpaceChangePending(e)
+                    if e.reference_space_type() == xr::ReferenceSpaceType::STAGE =>
+                {
+                    // The new floor origin applies at change_time, not when
+                    // this event is delivered. Recalibrate on the first frame
+                    // whose tracked poses use that new STAGE definition.
+                    pending_stage_change_time = Some(e.change_time());
+                }
                 EventsLost(e) => {
                     println!("lost {} events", e.lost_event_count());
                 }
@@ -545,6 +558,13 @@ fn main() {
         // predicting locations of controllers, viewpoints, etc.
         let xr_frame_state = frame_wait.wait().unwrap();
 
+        if let Some(change_time) = pending_stage_change_time {
+            if xr_frame_state.predicted_display_time.as_nanos() >= change_time.as_nanos() {
+                vr_crouch.reset();
+                pending_stage_change_time = None;
+            }
+        }
+
         let current = Instant::now();
         let total_time = current - render_time;
         let elapsed_time = current - last_update_time;
@@ -560,6 +580,9 @@ fn main() {
             .locate(&stage, xr_frame_state.predicted_display_time)
             .unwrap();
         let right_aim_location = right_aim_space
+            .locate(&stage, xr_frame_state.predicted_display_time)
+            .unwrap();
+        let head_location = head_space
             .locate(&stage, xr_frame_state.predicted_display_time)
             .unwrap();
 
@@ -649,6 +672,11 @@ fn main() {
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
         input_context.jump = jump_pressed;
+        let tracked_head_position = head_location.location_flags.contains(
+            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
+        );
+        input_context.crouch =
+            vr_crouch.update(tracked_head_position.then_some(head_location.pose.position.y));
         let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
         let update_elapsed = update_started.elapsed();

@@ -19,10 +19,9 @@ pub struct InputContext {
     // scene wants a cursor (e.g. menus).
     pub pointer: Option<Pointer2D>,
 
-    // Flat-runtime crouch request (desktop key / debug-runtime channel). The
-    // *actual* crouch state can lag this: standing up is refused while there
-    // is no headroom. VR leaves this false - physically crouching moves the
-    // HMD instead.
+    // Runtime crouch request (flat key/debug channel, or physical VR head
+    // height). The *actual* crouch state can lag this: standing up is refused
+    // while there is no headroom.
     pub crouch: bool,
 
     // Ordinary locomotion jump request. Runtimes provide this as a held
