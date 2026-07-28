@@ -308,17 +308,18 @@ pub fn create_entity_core(
         processed_scripts.push("internal_keycard".to_owned());
     }
 
-    // `MOVE` is an engine frob action, not an object script. Ordinary goodies
-    // such as Med Patches and armor only inherit that flag, so give them the
-    // internal handler that moves them into the backpack on Frob. Objects that
-    // also request SCRIPT keep their existing authored ownership (notably
-    // FrobQB's circuit-board/quest-item transfer).
+    // `MOVE` is an engine frob action, not an object script. Give every
+    // grabbable world-frob item the internal move handler even when it also
+    // requests SCRIPT: the authored scripts contribute side effects and the
+    // engine still performs the physical transfer. The only exceptions are
+    // paths that explicitly own transfer/consumption themselves (`FrobQB` and
+    // the injected keycard script).
     let needs_frob_move = {
         let v_frob_info = world.borrow::<View<PropFrobInfo>>().unwrap();
         v_frob_info.get(entity_id).is_ok_and(|frob| {
-            !frob.world_action.contains(FrobFlag::SCRIPT)
-                && (frob.world_action.contains(FrobFlag::MOVE)
-                    || frob.world_action.contains(FrobFlag::USE_AMMO))
+            (frob.world_action.contains(FrobFlag::MOVE)
+                || frob.world_action.contains(FrobFlag::USE_AMMO))
+                && !crate::virtual_hand::scripted_world_frob_owns_transfer(world, entity_id)
         })
     };
     if needs_frob_move {
