@@ -10,7 +10,8 @@ description: >-
   fix (PR "Fixes #n"), then REPLAY from the advancing frontier - until a mission
   (then the game) plays through with no new blocker. Aggregates every session into
   a self-contained HTML timeline report. Invoke with a mission (default medsci1)
-  and a goal (default: reach the level's exit), or with `--restart` to discard
+  and a goal (default: reach the level's exit). Use `--auto` to keep iterating to
+  campaign completion, `--auto-once` for one iteration, or `--restart` to discard
   campaign progress while preserving the current roll.
 ---
 
@@ -255,32 +256,41 @@ asset set, and seed (e.g. `campaign: hydroponics · melee-only · legacy · seed
 42`) — so a reader can tell whether a finding is specific to a playstyle or
 asset set, and can reproduce the campaign that surfaced it.
 
-## Autonomous mode (`--auto`)
+## Autonomous modes (`--auto`, `--auto-once`)
 
-Invoke the `play-through` skill with `--auto` using the host agent's skill syntax.
-Run exactly one iteration per invocation; a host automation or loop facility may
-schedule subsequent invocations. It **auto-creates the campaign ledger on first
-run** — no setup step. State persists in that ledger so it resumes at the
-frontier and marches forward instead of re-treading:
+Choose the mode from the user's invocation:
+
+- **`--auto` — persistent:** keep running complete playtest → review → fix →
+  replay iterations in the same invocation. Continue across iteration and
+  mission boundaries until the campaign finishes, the same blocker's fix fails
+  three times, or progress genuinely requires human input.
+- **`--auto-once` — bounded:** run exactly one complete iteration, persist its
+  result, report, and return. A later invocation resumes from the ledger.
+
+Both modes **auto-create the campaign ledger on first run** — no setup step.
+State persists in that ledger so work survives restarts and context compaction,
+resumes at the frontier, and never re-treads solved ground:
 
 ```
-node .agents/skills/play-through/playthrough-state.mjs roll      # idempotent; --auto calls it (--force re-rolls)
+node .agents/skills/play-through/playthrough-state.mjs roll      # idempotent; both autonomous modes call it
 node .agents/skills/play-through/playthrough-state.mjs show      # ledger + the NEXT action
 #   blocker add <level> <bug|feature-gap> <issue#> <desc...>   ·  blocker set <issue#> <status> [pr#]
+#   blocker fail <issue#> [pr#]                                (counts failed fixes; pauses on failure 3)
 #   advance <level> <saveName> <x,y,z> [note...]               (sets frontier, bumps iteration)
+#   complete <finalLevel> [note...]                             (marks the campaign finished)
 ```
 
 The ledger holds: the campaign **roll** (`scenario` + `tweak` + `assets`, with
 its `seed`), `frontier` (the game **save** to `/v1/load` from), the
-`blockers` ledger (issue → PR → status), and `fix_branch` — the running branch
-that **stacks each fix** so the campaign plays *past* an already-fixed-but-
-unmerged blocker.
+`blockers` ledger (issue → PR → status + failed-fix count), terminal campaign
+completion, and `fix_branch` — the running branch that **stacks each fix** so
+the campaign plays *past* an already-fixed-but-unmerged blocker.
 
 **Restart the current roll:** invoke the skill with `--restart`. Before the
 normal iteration, run `playthrough-state.mjs roll --restart` exactly once, then
-`show`. This disregards recorded gameplay progress but respects the current
-roll; subsequent invocations must omit `--restart` so they resume normally. A
-missing ledger is rolled normally.
+`show`. Consume `--restart` once; every later iteration in the same `--auto`
+invocation uses plain idempotent `roll`. This disregards recorded gameplay
+progress but respects the current roll. A missing ledger is rolled normally.
 
 **Clear & start a new campaign:** `playthrough-state.mjs roll --force` (wipes
 the ledger back to iteration 0 with a fresh scenario/tweak/assets roll; plain
@@ -289,7 +299,8 @@ clean slate also recreate the `fix_branch` off current `main` and delete stale
 frontier saves (`<data_root>/saves/frontier*.sav`) — otherwise the fresh
 campaign just launches mission 0 with no frontier to load, which is harmless.
 
-**Each `--auto` iteration** (do exactly one; a host loop may repeat it):
+**Each autonomous iteration:**
+
 1. `playthrough-state.mjs roll` (idempotent — rolls scenario + tweak + assets
    and creates the ledger on the first iteration, keeps the roll after), then
    `show` → read the frontier + NEXT action (goal, tweak, `DARK_ASSET_PATH`).
@@ -305,19 +316,35 @@ campaign just launches mission 0 with no frontier to load, which is harmless.
    **`fix_branch`** (stacked) and opens a PR `Fixes #n`. `blocker add` /
    `blocker set` in the ledger.
 7. **Re-validate:** rebuild `fix_branch`, reload the frontier save, confirm the
-   playtest now gets **past** the blocker.
-8. **Advance:** `POST /v1/save {file:"frontier"}` at the new furthest point;
-   `playthrough-state.mjs advance <level> frontier <x,y,z>`.
+   playtest now gets **past** the blocker. If it does not, run `blocker fail
+   <issue#> [pr#]`. Failures one and two return to triage/fix with the new
+   evidence; failure three is terminal and requires a human.
+8. **Advance:** `POST /v1/save {file:"frontier"}` at the new furthest point and
+   run `playthrough-state.mjs advance <level> frontier <x,y,z>`. If a valid
+   session instead clears the final mission and campaign goal, run
+   `playthrough-state.mjs complete <finalLevel> <note...>`.
 9. Render the session report (+ optional video).
+10. **Continue or return:** with `--auto-once`, report this iteration and return.
+    With `--auto`, run `show` and immediately begin the next iteration unless a
+    terminal condition below has been reached.
 
 **Guardrails (don't skip):**
+
 - **Merge gate is the human.** Fixes open PRs; *you* merge (or CI+`/xreview` gate).
   The `fix_branch` stack lets the campaign progress while PRs await review — the
-  goal is a reviewable stack, not auto-merge.
-- **Max iterations / budget** — stop after N iterations (default ~10) or the turn's
-  token target, and report.
-- **Recurrence = pause.** If a blocker isn't cleared after its fix (step 7 fails),
-  `blocker set <n> failed` and **stop for a human** — don't loop on a bad fix.
+  goal is a reviewable stack, not auto-merge. An open PR awaiting human merge
+  does not stop `--auto`; continue from the stacked fix branch.
+- **Three failed fixes = pause.** Count every distinct fix or revision that
+  fails step 7 with `blocker fail`. Re-triage and revise after failures one and
+  two. On failure three, the ledger marks the blocker failed; stop and give the
+  human the issue, PR, attempts, and evidence.
+- **Human input = pause.** Stop only when progress requires new authority,
+  credentials, external coordination, or a material choice that cannot safely
+  be inferred. Ask the smallest blocking question and preserve the frontier.
+- **Do not stop `--auto` at routine boundaries.** An iteration ending, a report
+  being ready, context compaction, a long-running CI check, or an unmerged green
+  PR is not a terminal condition. Continue until campaign completion, three
+  failed fixes on one blocker, or required human input.
 
 ## Notes
 - Delegate playtest, review, and each fix when supported; otherwise keep the
