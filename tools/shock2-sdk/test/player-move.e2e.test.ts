@@ -19,6 +19,8 @@ import type { Position, Vec3 } from "../src/index.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const toVec = (p: Position): Vec3 => [p.x, p.y, p.z];
+const horizontalDistance = (a: Position, b: Position): number =>
+  Math.hypot(b.x - a.x, b.z - a.z);
 
 test(
   "validated player move: clamps + blocks at walls, advances in open space",
@@ -134,6 +136,70 @@ test(
     assert.ok(
       Math.abs(farMove.distance_moved - 5) < 0.05,
       `far open move should advance ~5u (the cap), got ${farMove.distance_moved}`,
+    );
+  },
+);
+
+test(
+  "validated player move: clears a walkable corner without exceeding its hop",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8107),
+    });
+    await game.step({ frames: 2 });
+
+    // Regression for #599. At this airlock corner, a 210-degree walk spends
+    // two frames scraping along the wall before the capsule clears its end.
+    // Thumbstick locomotion keeps walking and crosses it; the validated move
+    // used to treat the first low-progress frame as a terminal obstruction and
+    // return after only ~0.08u.
+    const corner: Position = { x: 28.36, y: 2.2, z: -65.96 };
+    await game.player.teleport(corner);
+    await game.step({ frames: 3 });
+    const walkStart = await game.player.position();
+    await game.input.set("head.look", [210, 0]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 20 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const walkEnd = await game.player.position();
+    assert.ok(
+      horizontalDistance(walkStart, walkEnd) > 2,
+      "fixture must remain traversable with ordinary thumbstick locomotion",
+    );
+
+    await game.player.teleport(corner);
+    await game.step({ frames: 3 });
+    const moveStart = await game.player.position();
+    const distance = 3;
+    const move = await game.player.moveTo({
+      x: moveStart.x - (Math.sqrt(3) / 2) * distance,
+      y: moveStart.y,
+      z: moveStart.z - 0.5 * distance,
+    });
+    const moveEnd = await game.player.position();
+    assert.ok(
+      horizontalDistance(moveStart, moveEnd) > 2,
+      `validated move should clear the same corner, moved ${horizontalDistance(moveStart, moveEnd)}u`,
+    );
+
+    // A different heading at the same corner used to slide 3.45u while
+    // reporting a 3u request. The primitive is a bounded hop: collision
+    // sliding may alter its route, but must not carry the player outside the
+    // requested horizontal radius.
+    await game.player.teleport(corner);
+    await game.step({ frames: 3 });
+    const boundStart = await game.player.position();
+    const bounded = await game.player.moveTo({
+      x: boundStart.x - 0.5 * distance,
+      y: boundStart.y,
+      z: boundStart.z + (Math.sqrt(3) / 2) * distance,
+    });
+    const boundEnd = await game.player.position();
+    assert.ok(
+      horizontalDistance(boundStart, boundEnd) <= bounded.requested_distance + 0.02,
+      `a ${bounded.requested_distance}u hop moved ${horizontalDistance(boundStart, boundEnd)}u`,
     );
   },
 );

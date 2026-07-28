@@ -1187,6 +1187,13 @@ const PLAYER_MOVE_SUBSTEP: f32 = 25.0 / SCALE_FACTOR / 60.0;
 /// carrying the player toward the target.
 const PLAYER_MOVE_PROGRESS_FRACTION: f32 = 0.25;
 
+/// Consecutive low-progress substeps tolerated before a validated move is
+/// considered blocked. Real locomotion keeps stepping while the capsule
+/// scrapes around a corner; a single sub-threshold frame is therefore not
+/// evidence of a wall. Three frames cover the shipped corner contacts while
+/// keeping a truly stopped move short.
+const PLAYER_MOVE_STALL_SUBSTEPS: usize = 3;
+
 /// How close to the requested distance a validated move must get to count as
 /// having arrived (world units). Also the tolerance for reporting `blocked`,
 /// and what keeps the loop from grinding on an ever-shrinking remainder (the
@@ -1350,9 +1357,9 @@ pub struct MoveResult {
     pub blocked: bool,
     /// The player's new world position after the move.
     pub new_position: Vector3<f32>,
-    /// How far the player advanced *toward the target* (world units), measured
-    /// along the horizontal walk direction; the vertical result of gravity and
-    /// stair steps is not counted.
+    /// How much closer the player got to the bounded horizontal destination
+    /// (world units); the vertical result of gravity and stair steps is not
+    /// counted.
     pub distance_moved: f32,
     /// The distance the move was allowed to attempt this call: `min(horizontal
     /// target distance, MAX_PLAYER_MOVE_DISTANCE)`.
@@ -1921,13 +1928,15 @@ impl PhysicsWorld {
     /// Safety is unchanged: every applied translation comes from the
     /// controller's shape-cast solver or the step probe's collision-checked
     /// casts, so - unlike `set_player_translation` - this can never move the
-    /// player through a wall or out of bounds.
+    /// player through a wall or out of bounds. Collision sliding may alter the
+    /// route, but no result outside the requested horizontal radius is applied.
     ///
     /// `blocked` means the player did not cover the requested distance: either
-    /// a substep made less than [`PLAYER_MOVE_PROGRESS_FRACTION`] of its attempt
-    /// (a wall, a closed door) or the move ran out of substeps still short of
-    /// the target. A purely vertical request has nothing to walk toward and is
-    /// a no-op.
+    /// [`PLAYER_MOVE_STALL_SUBSTEPS`] consecutive substeps made less than
+    /// [`PLAYER_MOVE_PROGRESS_FRACTION`] of their attempts (a wall, a closed
+    /// door), the next solver result would exceed the bounded radius, or the
+    /// move ran out of substeps still short of the target. A purely vertical
+    /// request has nothing to walk toward and is a no-op.
     ///
     /// Ladders are not climbed (the move never grips a climbable surface), so
     /// issuing one on a ladder lets the player fall - exactly as walking
@@ -2008,9 +2017,15 @@ impl PhysicsWorld {
         let filter = player_movement_filter(player_handle.character_handle);
 
         let dt = self.integration_parameters.dt;
-        // Normalized horizontal walk direction.
+        // The bounded destination (which may be short of a farther target).
+        // Keep feeding the controller the same heading real thumbstick
+        // locomotion receives, but measure progress against this destination:
+        // collision sliding can alter the route, so summing only the original
+        // heading's projection overshoots the target and oscillates around it.
+        let start = pos.translation.vector;
         let walk_dir = vector![delta_h.x / dist, 0.0, delta_h.z / dist];
-        let mut distance_moved = 0.0;
+        let destination = start + walk_dir * requested_distance;
+        let mut stalled_substeps = 0;
         // Sensor volumes the player occupies, carried across the sweep. The hop
         // is committed as one jump, so without polling per substep any volume
         // entered and left between the endpoints would never be observed (#654).
@@ -2054,7 +2069,12 @@ impl PhysicsWorld {
                 .ceil() as usize
                 + 8;
             for _ in 0..max_substeps {
-                let remaining = requested_distance - distance_moved;
+                let to_destination = vector![
+                    destination.x - pos.translation.vector.x,
+                    0.0,
+                    destination.z - pos.translation.vector.z
+                ];
+                let remaining = to_destination.norm();
                 if remaining <= PLAYER_MOVE_ARRIVAL_EPSILON {
                     break;
                 }
@@ -2075,17 +2095,36 @@ impl PhysicsWorld {
                     None,
                 )
                 .movement;
-                // Progress is measured along the HORIZONTAL walk direction, so
-                // the vertical give-and-take of gravity and step-up neither
-                // counts as distance toward the target nor masks a stall (a
-                // player pinned against a wall while falling must still read as
-                // blocked).
-                let progress = mvt.translation.dot(&walk_dir);
-                pos = Translation::from(mvt.translation) * pos;
-                distance_moved += progress.max(0.0);
-                observe_sensors(&pos, &mut occupied_sensors, &mut swept_sensor_events);
-                if progress < attempt * PLAYER_MOVE_PROGRESS_FRACTION {
+
+                let candidate = Translation::from(mvt.translation) * pos;
+                let from_start = vector![
+                    candidate.translation.vector.x - start.x,
+                    0.0,
+                    candidate.translation.vector.z - start.z
+                ];
+                // A collision slide may alter the route, but this API promises
+                // a bounded hop. Never commit a solver result outside the
+                // requested horizontal radius.
+                if from_start.norm() > requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON {
                     break;
+                }
+                let after = vector![
+                    destination.x - candidate.translation.vector.x,
+                    0.0,
+                    destination.z - candidate.translation.vector.z
+                ]
+                .norm();
+                let progress = remaining - after;
+                pos = candidate;
+                observe_sensors(&pos, &mut occupied_sensors, &mut swept_sensor_events);
+
+                if progress < attempt * PLAYER_MOVE_PROGRESS_FRACTION {
+                    stalled_substeps += 1;
+                    if stalled_substeps >= PLAYER_MOVE_STALL_SUBSTEPS {
+                        break;
+                    }
+                } else {
+                    stalled_substeps = 0;
                 }
             }
         }
@@ -2113,9 +2152,17 @@ impl PhysicsWorld {
             self.set_player_translation(new_position, player_handle);
         }
 
+        let remaining = vector![
+            destination.x - pos.translation.vector.x,
+            0.0,
+            destination.z - pos.translation.vector.z
+        ]
+        .norm();
+        let distance_moved = (requested_distance - remaining).clamp(0.0, requested_distance);
+
         MoveResult {
             moved,
-            blocked: distance_moved + PLAYER_MOVE_ARRIVAL_EPSILON < requested_distance,
+            blocked: remaining > PLAYER_MOVE_ARRIVAL_EPSILON,
             new_position,
             distance_moved,
             requested_distance,
@@ -5612,8 +5659,12 @@ mod tests {
             let mut max_y = start.y;
             for _ in 0..4 {
                 let current = world.get_player_translation(&player);
+                // Leave enough horizontal budget for the capsule axis to plant
+                // on the tread. A shorter target can end before any valid
+                // standing pose on top of the riser and must remain bounded
+                // rather than overshoot that target.
                 let result =
-                    world.move_player_validated(current + vec3(1.0, 0.0, 0.0), &mut player);
+                    world.move_player_validated(current + vec3(1.5, 0.0, 0.0), &mut player);
                 blocked_any |= result.blocked;
                 max_y = max_y.max(result.new_position.y);
             }
@@ -5625,7 +5676,7 @@ mod tests {
         // moves must climb it and cross the platform.
         let (riser_x, riser_y, riser_blocked) = run(0.6);
         assert!(
-            riser_x > 3.0,
+            riser_x > 5.0,
             "a validated move should walk over a 1.5 ft riser, advanced {riser_x}"
         );
         assert!(
@@ -5648,6 +5699,58 @@ mod tests {
         assert!(
             wall_x < 0.8,
             "a validated move must not pass into a wall, advanced {wall_x}"
+        );
+    }
+
+    /// Sliding along a wall changes the controller's route. Progress projected
+    /// only onto the requested heading can therefore consume the whole request
+    /// while the net translation travels much farther; the hop must remain
+    /// inside its requested horizontal radius (issue #599).
+    #[test]
+    fn validated_move_stays_bounded_while_sliding_along_a_wall() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        // Near face one capsule radius + controller offset to -x; long in z
+        // so the diagonal request can only slide along it, never round an end.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(-1.0, 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(1.28, 4.0, 100.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        let start = world.get_player_translation(&player);
+        let direction = vec3(-0.5, 0.0, -f32::sqrt(3.0) / 2.0);
+        let result = world.move_player_validated(start + direction * 3.0, &mut player);
+        let translated = result.new_position - start;
+
+        assert!(
+            result.blocked,
+            "the wall should keep the target unreachable"
+        );
+        assert!(
+            vec3(translated.x, 0.0, translated.z).magnitude()
+                <= result.requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON,
+            "validated movement must remain inside its requested radius: {result:?}"
         );
     }
 
