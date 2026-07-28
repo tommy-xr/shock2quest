@@ -512,6 +512,20 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     false
 }
 
+/// Whether taking this world item must go through its authored scripts before
+/// the physical transfer. `MOVE | SCRIPT` quest items and keycards use this
+/// route so pickup cannot bypass their quest/access side effects.
+pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropFrobInfo>>()
+        .map(|frob_info| {
+            frob_info
+                .get(entity_id)
+                .is_ok_and(|frob_info| frob_info.world_action.contains(FrobFlag::SCRIPT))
+        })
+        .unwrap_or(false)
+}
+
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
 /// a melee arm (`PropLimbModel`). Clicking one in the backpack/strip wields it
 /// (`Effect::GrabEntity`) instead of using it; shared by `ContainerGui` and the

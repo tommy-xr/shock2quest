@@ -23,7 +23,9 @@ use crate::{
     runtime_props::RuntimePropReloading,
     scripts::{Message, MessagePayload},
     util::resolve_proxy_entity,
-    virtual_hand::{VirtualHandEffect, can_grab_item, is_wieldable_weapon},
+    virtual_hand::{
+        VirtualHandEffect, can_grab_item, is_wieldable_weapon, uses_scripted_world_frob,
+    },
 };
 
 /// Fallback viewmodel framing offset (look space: +x right, +y up, -z forward),
@@ -118,7 +120,9 @@ impl FlatPlayerController {
     /// Apply the original flat pickup split: weapons become the first-person
     /// viewmodel, while ordinary loot goes straight into the backpack.
     fn pick_up(&mut self, world: &World, entity_id: EntityId) -> Vec<VirtualHandEffect> {
-        if is_wieldable_weapon(world, entity_id) {
+        if uses_scripted_world_frob(world, entity_id) {
+            vec![out_message(entity_id, MessagePayload::Frob)]
+        } else if is_wieldable_weapon(world, entity_id) {
             self.wield(entity_id)
         } else {
             vec![VirtualHandEffect::StoreItem { entity_id }]
@@ -287,7 +291,7 @@ fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dark::properties::PropPlayerGun;
+    use dark::properties::{FrobFlag, PropFrobInfo, PropPlayerGun};
 
     fn pistol() -> PropPlayerGun {
         PropPlayerGun {
@@ -342,6 +346,32 @@ mod tests {
                 [VirtualHandEffect::HoldItem { entity_id }] if *entity_id == weapon
             ),
             "weapon pickup should preserve flat auto-wield"
+        );
+    }
+
+    #[test]
+    fn world_use_of_scripted_pickup_dispatches_frob_instead_of_bypassing_it() {
+        let mut world = World::new();
+        let keycard = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::MOVE | FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
+        let mut controller = FlatPlayerController::new();
+
+        let effects = controller.pick_up(&world, keycard);
+
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                }] if *to == keycard
+            ),
+            "a MOVE | SCRIPT pickup must run its authored Frob path"
         );
     }
 }

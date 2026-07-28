@@ -1,4 +1,5 @@
-use shipyard::{EntityId, UniqueView, World};
+use dark::properties::PropKeySrc;
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 
@@ -21,6 +22,19 @@ impl Script for FrobQB {
         match msg {
             MessagePayload::Frob => match set_quest_bit_effect(world, entity_id) {
                 Some(quest_bit_effect) => {
+                    // PropKeySrc entities always receive `internal_keycard`.
+                    // That script owns both access acquisition and the card's
+                    // physical transfer/consumption, so FrobQB must contribute
+                    // only the authored quest bit. Otherwise the two scripts
+                    // would both reparent (or destroy) the same entity.
+                    let is_keycard = world
+                        .borrow::<View<PropKeySrc>>()
+                        .map(|keycards| keycards.get(entity_id).is_ok())
+                        .unwrap_or(false);
+                    if is_keycard {
+                        return quest_bit_effect;
+                    }
+
                     // What happens to the object after the quest bit is awarded
                     // is decided by its `PropFrobInfo`, not by this script: a
                     // pickup item (`world_action` with MOVE/USE_AMMO - the
@@ -146,6 +160,43 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::DestroyEntity { .. })),
             "a take-able object must not be destroyed, got {effects:?}"
+        );
+    }
+
+    #[test]
+    fn keycard_frob_qb_leaves_physical_ownership_to_the_keycard_script() {
+        use dark::properties::{KeyCard, PropKeySrc};
+
+        let (mut world, object, _inventory) = quest_object_world(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        world.add_component(
+            object,
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 32,
+                lock_id: 0,
+            }),
+        );
+
+        let effects = Effect::flatten(vec![FrobQB::new().handle_message(
+            object,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        )]);
+
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::SetQuestBit { quest_bit_name, .. } if quest_bit_name == "Note_1_10"
+            )),
+            "FrobQB must still award the keycard's authored quest bit, got {effects:?}"
+        );
+        assert!(
+            !effects.iter().any(|effect| matches!(
+                effect,
+                Effect::DropEntityInfo { .. } | Effect::DestroyEntity { .. }
+            )),
+            "the internal keycard script must be the sole physical owner, got {effects:?}"
         );
     }
 

@@ -296,18 +296,28 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // feeds an item into a container (drop_entity_into_container).
             // Guarded by the same grabbability check as the debug give
             // lever: reparenting a non-grabbable entity would corrupt it.
-            // Use-only contained objects (notably corpse audio logs) still
-            // need their normal Frob behavior when clicked; they are consumed
-            // or recorded in place rather than moved into the backpack.
+            // Scripted contained objects (including MOVE | SCRIPT keycards)
+            // must run their authored Frob behavior first; their scripts own
+            // any transfer/consumption so quest and access effects cannot be
+            // bypassed. Ordinary MOVE loot keeps the direct transfer.
             ContainerGuiMsg::Take(ent) => {
+                if crate::virtual_hand::uses_scripted_world_frob(world, *ent) {
+                    return (
+                        state.clone(),
+                        Effect::Send {
+                            msg: Message {
+                                payload: MessagePayload::Frob,
+                                to: *ent,
+                            },
+                        },
+                    );
+                }
                 if !crate::virtual_hand::can_grab_item(world, *ent) {
                     let is_use_only = world
                         .borrow::<View<PropFrobInfo>>()
                         .map(|frob| {
-                            frob.get(*ent).is_ok_and(|frob| {
-                                frob.world_action.contains(FrobFlag::SCRIPT)
-                                    || frob.inventory_action.contains(FrobFlag::SCRIPT)
-                            })
+                            frob.get(*ent)
+                                .is_ok_and(|frob| frob.inventory_action.contains(FrobFlag::SCRIPT))
                         })
                         .unwrap_or(false);
                     return if is_use_only {
@@ -354,12 +364,12 @@ mod tests {
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
     /// through.
-    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+    fn loot_world_with_action(world_action: FrobFlag) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let item = world.add_entity((
             PropObjIcon("icn_psi".to_owned()),
             PropFrobInfo {
-                world_action: FrobFlag::MOVE,
+                world_action,
                 inventory_action: FrobFlag::empty(),
                 tool_action: FrobFlag::empty(),
             },
@@ -382,6 +392,10 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, container, item, inventory)
+    }
+
+    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+        loot_world_with_action(FrobFlag::MOVE)
     }
 
     fn input_at(cursor: cgmath::Point2<f32>, pressed: bool) -> GuiInputInfo {
@@ -435,6 +449,33 @@ mod tests {
             }
             other => panic!("Take should transfer via DropEntityInfo, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn loot_container_click_frobs_a_scripted_pickup() {
+        let (world, container, item, _inventory) =
+            loot_world_with_action(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        let gui = ContainerGui::loot_container();
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+
+        assert!(
+            matches!(
+                effect,
+                Effect::Send {
+                    msg: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                } if to == item
+            ),
+            "taking MOVE | SCRIPT loot must run its authored Frob path, got {effect:?}"
+        );
     }
 
     /// Use-only objects can be contained too. Audio logs are the critical
