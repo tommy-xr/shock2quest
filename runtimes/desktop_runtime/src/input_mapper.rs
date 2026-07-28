@@ -36,7 +36,7 @@ impl DesktopInputMapper {
                 action: InputAction::PathfindingTestCycle,
             },
             Binding {
-                key: Key::Space,
+                key: Key::F10,
                 modifier: Modifier::None,
                 action: InputAction::SpawnDebugItem,
             },

@@ -383,6 +383,8 @@ pub struct InputState {
     /// Crouch REQUEST (the `crouch` channel), not the resulting collider
     /// state - standing up is refused while there is no headroom.
     pub crouch: bool,
+    /// Held jump request; in water this continuously swims upward.
+    pub jump: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -414,6 +416,7 @@ impl Default for InputState {
             right_hand: InputHand::default(),
             pointer: None,
             crouch: false,
+            jump: false,
         }
     }
 }

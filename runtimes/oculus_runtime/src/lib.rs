@@ -331,6 +331,9 @@ fn main() {
     let right_thumbstick_action = action_set
         .create_action::<xr::Vector2f>("right_hand_thumbstick", "Right Hand Thumbstick", &[])
         .unwrap();
+    let jump_action = action_set
+        .create_action::<bool>("jump", "Jump / Swim Up", &[])
+        .unwrap();
 
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
@@ -399,6 +402,12 @@ fn main() {
                     &right_thumbstick_action,
                     xr_instance
                         .string_to_path("/user/hand/right/input/thumbstick")
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &jump_action,
+                    xr_instance
+                        .string_to_path("/user/hand/right/input/thumbstick/click")
                         .unwrap(),
                 ),
             ],
@@ -534,6 +543,10 @@ fn main() {
             .state(&session, xr::Path::NULL)
             .unwrap()
             .current_state;
+        let jump = jump_action
+            .state(&session, xr::Path::NULL)
+            .unwrap()
+            .current_state;
 
         let left_trigger_value = left_trigger
             .state(&session, xr::Path::NULL)
@@ -600,6 +613,7 @@ fn main() {
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
+        input_context.jump = jump;
         game.update(&time_context, &input_context, &mut action_state);
 
         // Must be called before any rendering is done!

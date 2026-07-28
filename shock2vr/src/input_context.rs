@@ -24,6 +24,10 @@ pub struct InputContext {
     // is no headroom. VR leaves this false - physically crouching moves the
     // HMD instead.
     pub crouch: bool,
+
+    // Held jump/swim-up request. The physics layer edge-detects dry jumps;
+    // underwater this remains continuous, matching Dark's swim control.
+    pub jump: bool,
 }
 
 impl InputContext {
@@ -35,6 +39,7 @@ impl InputContext {
             right_hand: Hand::default(),
             pointer: None,
             crouch: false,
+            jump: false,
         }
     }
 }

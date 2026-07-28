@@ -1684,6 +1684,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
         left_hand: hand(&input.left_hand),
         right_hand: hand(&input.right_hand),
         crouch: input.crouch,
+        jump: input.jump,
     }
 }
 
@@ -1714,7 +1715,7 @@ fn input_channels_help() -> &'static str {
      {left,right}_hand.thumbstick [x,y], \
      {left,right}_hand.position [x,y,z] (pawn-local), \
      {left,right}_hand.rotation [x,y,z,w], \
-     crouch 0|1 (stand-up refused without headroom); \
+     crouch 0|1 (stand-up refused without headroom), jump 0|1; \
      locomotion: right_hand.thumbstick [strafe, forward] moves the player, \
      left_hand.thumbstick.x turns, left_hand.thumbstick.y flies up/down"
 }
@@ -1857,6 +1858,16 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
         // the player's body y (the collider center drops when crouched).
         "crouch" => {
             input.crouch = match num(channel, value)? {
+                v if v == 0.0 => false,
+                v if v == 1.0 => true,
+                v => {
+                    return Err(format!("channel '{channel}' expects 0 or 1, got {v}"));
+                }
+            };
+            Ok(())
+        }
+        "jump" => {
+            input.jump = match num(channel, value)? {
                 v if v == 0.0 => false,
                 v if v == 1.0 => true,
                 v => {

@@ -1203,11 +1203,22 @@ impl MissionCore {
             // actual state is read back via `player_is_crouched`).
             self.physics
                 .set_player_crouch(input_context.crouch, &mut self.player_handle);
+            let medium = self
+                .spatial_data
+                .as_deref()
+                .and_then(|spatial| spatial.get_cell_from_position(player.pos))
+                .map(|cell| cell.medium)
+                .filter(|medium| *medium == dark::mission::CellMedium::Water)
+                .map_or(crate::physics::PlayerMedium::Air, |_| {
+                    crate::physics::PlayerMedium::Water
+                });
             profile!(
                 "shock2.update.physics",
-                self.physics.update_with_facing(
+                self.physics.update_player_with_facing(
                     forward + cgmath::vec3(0.0, up_value, 0.0),
                     facing,
+                    medium,
+                    input_context.jump,
                     &mut self.player_handle,
                 )
             )
