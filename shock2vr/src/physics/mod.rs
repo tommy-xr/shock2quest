@@ -3036,7 +3036,11 @@ impl PhysicsWorld {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        for geo in &level.all_geometry {
+        for geo in level
+            .all_geometry
+            .iter()
+            .filter(|geo| !geo.is_water_surface())
+        {
             let verts = &geo.verts;
 
             let mut idx = 0;
