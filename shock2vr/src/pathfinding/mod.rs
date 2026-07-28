@@ -193,11 +193,12 @@ pub struct PathfindingService {
     /// cells) so one blocked doorway can't seal every other entrance into
     /// a large cell.
     blocked_links: std::sync::Mutex<HashMap<(u32, u32), f32>>,
-    /// Mission object ids of doors that are currently locked AND closed -
-    /// A* refuses links into their below-door cells (the runtime door gate;
-    /// closed-but-openable doors stay pathable and are opened on arrival).
+    /// Mission object ids of doors that are impassable: locked-and-closed,
+    /// permanently closed, or otherwise inoperable. A* refuses links into
+    /// their below-door cells; closed-but-openable doors stay pathable and
+    /// are opened on arrival.
     /// Synced from live door state by the mission update.
-    locked_doors: std::sync::RwLock<std::collections::HashSet<i32>>,
+    blocked_doors: std::sync::RwLock<std::collections::HashSet<i32>>,
     queries: AtomicU64,
     stressed_retries: AtomicU64,
     no_route: AtomicU64,
@@ -265,18 +266,19 @@ impl PathfindingService {
             ai_paths: std::sync::Mutex::new(HashMap::new()),
             ai_steering: std::sync::Mutex::new(HashMap::new()),
             blocked_links: std::sync::Mutex::new(HashMap::new()),
-            locked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
+            blocked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
             queries: AtomicU64::new(0),
             stressed_retries: AtomicU64::new(0),
             no_route: AtomicU64::new(0),
         }
     }
 
-    /// Replace the set of locked-and-closed doors (mission object ids).
-    /// Their below-door cells become unpathable until unlocked/opened.
-    pub fn set_locked_doors(&self, doors: std::collections::HashSet<i32>) {
-        if let Ok(mut locked) = self.locked_doors.write() {
-            *locked = doors;
+    /// Replace the set of impassable doors (mission object ids). Their
+    /// below-door cells remain unpathable until the next state sync removes
+    /// them.
+    pub fn set_blocked_doors(&self, doors: std::collections::HashSet<i32>) {
+        if let Ok(mut blocked) = self.blocked_doors.write() {
+            *blocked = doors;
         }
     }
 
@@ -703,16 +705,16 @@ impl PathfindingService {
             return false;
         }
 
-        // Door gate: a below-door cell whose door is locked (and closed) is
-        // not traversable - the AI can't follow the player through it.
-        // Closed-but-openable doors stay pathable; the pursuing AI opens
-        // them on arrival.
+        // Door gate: a below-door cell whose door is impassable is not
+        // traversable - the AI can't follow the player through it.
+        // Closed-but-openable doors stay pathable; the pursuing AI opens them
+        // on arrival.
         if dest.flags.contains(PathCellFlags::BELOW_DOOR) {
             if let Some(door) = self.cell_to_door.get(&link.to_cell) {
                 if self
-                    .locked_doors
+                    .blocked_doors
                     .read()
-                    .map(|locked| locked.contains(door))
+                    .map(|blocked| blocked.contains(door))
                     .unwrap_or(false)
                 {
                     return false;
@@ -1324,13 +1326,13 @@ pub(crate) mod tests {
             "unlocked door cell must be pathable"
         );
 
-        service.set_locked_doors([99].into());
+        service.set_blocked_doors([99].into());
         assert!(
             service.find_path(start, goal, MovementBits::WALK).is_none(),
             "locked door cell must be unpathable"
         );
 
-        service.set_locked_doors(Default::default());
+        service.set_blocked_doors(Default::default());
         assert!(
             service.find_path(start, goal, MovementBits::WALK).is_some(),
             "unlocking must restore the route"

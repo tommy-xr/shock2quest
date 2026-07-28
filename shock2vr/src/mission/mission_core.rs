@@ -1078,18 +1078,18 @@ impl MissionCore {
         // Sync live door state into the pathfinding service: impassable
         // doors make their below-door cells unpathable, so A* routes around
         // them (or stops at them) instead of through them. Impassable means
-        // locked-and-closed, OR a door this engine cannot operate at all - no
-        // runtime entity, or no TransDoor prop (e.g. medsci1's space-shield
-        // membranes, which StdDoor can't move; AIs wedged against them
-        // forever - issue #489). Unlocked closed translating doors stay
-        // pathable - pursuing AIs open those on arrival.
+        // locked-and-closed, a zero-travel TransDoor authored closed (e.g.
+        // medsci1's space-shield membranes), OR a door this engine cannot
+        // operate at all - no runtime entity or no TransDoor prop. Unlocked
+        // closed translating doors with real travel stay pathable - pursuing
+        // AIs open those on arrival.
         if time.elapsed.as_secs_f32() > 0.0 {
             if let Some(service) = &self.pathfinding_service {
                 if let Ok(id_map) = self
                     .world
                     .borrow::<UniqueView<crate::mission::GlobalTemplateIdMap>>()
                 {
-                    let locked: std::collections::HashSet<i32> = service
+                    let blocked: std::collections::HashSet<i32> = service
                         .path_database
                         .cell_doors
                         .iter()
@@ -1100,19 +1100,10 @@ impl MissionCore {
                                 // nothing can ever open it
                                 return true;
                             };
-                            match crate::scripts::script_util::door_is_closed(&self.world, ent) {
-                                Some(true) => {
-                                    crate::scripts::script_util::is_entity_locked(&self.world, ent)
-                                }
-                                Some(false) => false,
-                                // Not a translating door: neither AIs nor
-                                // StdDoor can move it - a wall until shield/
-                                // rotating door support exists
-                                None => true,
-                            }
+                            crate::scripts::script_util::door_blocks_pathfinding(&self.world, ent)
                         })
                         .collect();
-                    service.set_locked_doors(locked);
+                    service.set_blocked_doors(blocked);
                 }
             }
         }
