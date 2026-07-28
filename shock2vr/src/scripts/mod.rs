@@ -22,6 +22,7 @@ pub mod gui;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
+mod internal_frob_move;
 mod internal_keycard_script;
 mod internal_simple_health;
 mod internal_switch_held_model;
@@ -95,6 +96,7 @@ use self::gui::{
     ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MapGui, MediaGui, ReplicatorGui, TrainerGui,
     TrainerMode, TraitGui,
 };
+use self::internal_frob_move::InternalFrobMove;
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
@@ -537,6 +539,7 @@ impl ScriptWorld {
             "internal_map" => gui_script(Box::new(MapGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
+            "internal_frob_move" => Box::new(InternalFrobMove::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
             "internal_room_trigger" => Box::new(RoomTrigger::new()),
             "internal_simple_health" => Box::new(InternalSimpleHealth::new()),

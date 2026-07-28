@@ -308,6 +308,23 @@ pub fn create_entity_core(
         processed_scripts.push("internal_keycard".to_owned());
     }
 
+    // `MOVE` is an engine frob action, not an object script. Ordinary goodies
+    // such as Med Patches and armor only inherit that flag, so give them the
+    // internal handler that moves them into the backpack on Frob. Objects that
+    // also request SCRIPT keep their existing authored ownership (notably
+    // FrobQB's circuit-board/quest-item transfer).
+    let needs_frob_move = {
+        let v_frob_info = world.borrow::<View<PropFrobInfo>>().unwrap();
+        v_frob_info.get(entity_id).is_ok_and(|frob| {
+            !frob.world_action.contains(FrobFlag::SCRIPT)
+                && (frob.world_action.contains(FrobFlag::MOVE)
+                    || frob.world_action.contains(FrobFlag::USE_AMMO))
+        })
+    };
+    if needs_frob_move {
+        processed_scripts.push("internal_frob_move".to_owned());
+    }
+
     // Explosion SFX templates (class tag "explosiontype", e.g. HE / Incendiary
     // Explosion) with radius stim sources (arSrcDesc) blast once on spawn.
     // Radius sources WITHOUT the tag (electrical sparks, Swarm, Rad Burst) are
