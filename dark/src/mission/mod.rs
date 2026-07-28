@@ -68,6 +68,22 @@ pub struct SystemShock2Geometry {
     pub lightmap_pack_result: TexturePackResult,
 }
 
+#[derive(Debug, Clone)]
+pub struct WaterRenderInfo {
+    pub texture_prefixes: Vec<String>,
+    pub color: [u8; 3],
+    pub alpha: f32,
+}
+
+impl WaterRenderInfo {
+    pub fn texture_prefix(&self, flow_group: u8) -> &str {
+        self.texture_prefixes
+            .get(flow_group as usize)
+            .map(String::as_str)
+            .unwrap_or("bl")
+    }
+}
+
 pub struct SystemShock2Level {
     pub all_geometry: Vec<SystemShock2Geometry>,
 
@@ -83,6 +99,7 @@ pub struct SystemShock2Level {
     pub song_params: SongParams,
     pub bsp_tree: BspTree,
     pub path_database: Option<PathDatabase>,
+    pub water_render_info: WaterRenderInfo,
 }
 
 // Capstone for the loading-screen "foundation track" (projects/loading-screen.md, PR
@@ -221,7 +238,14 @@ pub fn read<T: io::Read + io::Seek>(
         obj_texture_families,
         reader,
     );
-    let all_geometry = create_geometry(asset_paths, base_path, &cells, &textures.0);
+    let water_render_info = read_water_render_info(&table_of_contents, reader);
+    let all_geometry = create_geometry(
+        asset_paths,
+        base_path,
+        &cells,
+        &textures.0,
+        &water_render_info,
+    );
 
     let _render_params = RenderParams::read(&table_of_contents, reader);
     let room_database = RoomDatabase::read(&table_of_contents, reader);
@@ -262,6 +286,83 @@ pub fn read<T: io::Read + io::Seek>(
         room_database,
         song_params,
         path_database,
+        water_render_info,
+    }
+}
+
+fn read_chunk_bytes<T: io::Read + io::Seek>(
+    table_of_contents: &ChunkFileTableOfContents,
+    reader: &mut T,
+    name: &str,
+) -> Option<Vec<u8>> {
+    let chunk = table_of_contents.get_chunk(name.to_string())?;
+    reader.seek(SeekFrom::Start(chunk.offset)).ok()?;
+    let mut bytes = vec![0; chunk.length as usize];
+    reader.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn fixed_string(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+}
+
+fn parse_default_water_prefix(bytes: &[u8]) -> Option<String> {
+    let record_size = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
+    let count = u32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?) as usize;
+    if count < 2 || record_size < 16 {
+        return None;
+    }
+    let start = 8 + record_size;
+    let prefix = fixed_string(bytes.get(start..start + 16)?);
+    (!prefix.is_empty() && !prefix.eq_ignore_ascii_case("null")).then_some(prefix)
+}
+
+fn parse_water_bank(bytes: &[u8]) -> Option<([u8; 3], f32)> {
+    let color = [*bytes.first()?, *bytes.get(1)?, *bytes.get(2)?];
+    let alpha = f32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?);
+    alpha.is_finite().then_some((color, alpha.clamp(0.0, 1.0)))
+}
+
+fn parse_flow_texture_prefixes(bytes: &[u8], default_prefix: &str) -> Vec<String> {
+    bytes
+        .chunks_exact(32)
+        .map(|record| {
+            let prefix = fixed_string(&record[4..32]);
+            if prefix.is_empty() {
+                default_prefix.to_string()
+            } else {
+                prefix
+            }
+        })
+        .collect()
+}
+
+fn read_water_render_info<T: io::Read + io::Seek>(
+    table_of_contents: &ChunkFileTableOfContents,
+    reader: &mut T,
+) -> WaterRenderInfo {
+    let default_prefix = read_chunk_bytes(table_of_contents, reader, "FAMILY")
+        .as_deref()
+        .and_then(parse_default_water_prefix)
+        .unwrap_or_else(|| "bl".to_string());
+    let (color, alpha) = read_chunk_bytes(table_of_contents, reader, "WATERBANKS")
+        .as_deref()
+        .and_then(parse_water_bank)
+        .unwrap_or(([50, 80, 100], 0.35));
+    let texture_prefixes = read_chunk_bytes(table_of_contents, reader, "FLOW_TEX")
+        .as_deref()
+        .map(|bytes| parse_flow_texture_prefixes(bytes, &default_prefix))
+        .filter(|prefixes| !prefixes.is_empty())
+        .unwrap_or_else(|| vec![default_prefix; 256]);
+
+    WaterRenderInfo {
+        texture_prefixes,
+        color,
+        alpha,
     }
 }
 
@@ -298,6 +399,7 @@ fn create_geometry(
     base_path: &str,
     cells: &Vec<Cell>,
     textures: &Vec<SystemShock2Texture>,
+    water_render_info: &WaterRenderInfo,
 ) -> Vec<SystemShock2Geometry> {
     let mut all_geometry: Vec<SystemShock2Geometry> = Vec::new();
     let mut cell_idx = 0;
@@ -313,11 +415,9 @@ fn create_geometry(
                 panic!("index doesn't match????");
             }
             let len = indices.len();
-            // TODO: What are 249/247 - BACKHACK or something?
-            if render_poly.texture_num == 249
-                || render_poly.texture_num == 247
-                || render_poly.texture_num == 248
-            {
+            // 247/248 are the two directed sides of a water boundary. Texture
+            // 249 is the unrelated sky/backhack surface and remains omitted.
+            if render_poly.texture_num == 249 {
                 continue;
             }
 
@@ -334,8 +434,22 @@ fn create_geometry(
             let sh_u = render_poly.u / 4096.0;
             let sh_v = render_poly.v / 4096.0;
 
-            let tex_info = &textures[render_poly.texture_num as usize];
-            let texture_dim = texture_dimensions(asset_paths, base_path, tex_info);
+            let texture_dim = if matches!(render_poly.texture_num, 247 | 248) {
+                let suffix = if render_poly.texture_num == 247 {
+                    "in"
+                } else {
+                    "out"
+                };
+                let prefix = water_render_info.texture_prefix(cell.flow_group);
+                texture_dimensions_for_asset(
+                    asset_paths,
+                    base_path,
+                    &format!("WATERHW/{prefix}{suffix}.PCX"),
+                )
+            } else {
+                let tex_info = &textures[render_poly.texture_num as usize];
+                texture_dimensions(asset_paths, base_path, tex_info)
+            };
 
             let rs_x = (texture_dim.width as f32) / 64.0;
             let rs_y = (texture_dim.height as f32) / 64.0;
@@ -514,8 +628,17 @@ fn texture_dimensions(
     )
     .to_ascii_lowercase();
 
+    texture_dimensions_for_asset(asset_paths, base_path, &tex_name)
+}
+
+fn texture_dimensions_for_asset(
+    asset_paths: &dyn AbstractAssetPath,
+    base_path: &str,
+    asset_name: &str,
+) -> TextureSize {
+    let asset_name = asset_name.to_ascii_lowercase();
     let dims = asset_paths
-        .get_reader(base_path.to_string(), tex_name.clone())
+        .get_reader(base_path.to_string(), asset_name.clone())
         .and_then(|r| {
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut *r.borrow_mut(), &mut bytes).ok()?;
@@ -525,11 +648,41 @@ fn texture_dimensions(
     match dims {
         Some((width, height)) => TextureSize { width, height },
         None => {
-            tracing::warn!("texture_dimensions: could not read PCX header for {tex_name}");
+            tracing::warn!("texture_dimensions: could not read PCX header for {asset_name}");
             TextureSize {
                 width: 1,
                 height: 1,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod water_tests {
+    use super::{parse_default_water_prefix, parse_flow_texture_prefixes, parse_water_bank};
+
+    #[test]
+    fn authored_water_chunks_select_texture_and_opacity() {
+        let mut family = Vec::new();
+        family.extend_from_slice(&24_u32.to_le_bytes());
+        family.extend_from_slice(&2_u32.to_le_bytes());
+        family.extend_from_slice(b"sky\0");
+        family.extend_from_slice(&[0; 20]);
+        family.extend_from_slice(b"bl\0");
+        family.extend_from_slice(&[0; 21]);
+        assert_eq!(parse_default_water_prefix(&family).as_deref(), Some("bl"));
+
+        let mut bank = vec![50, 80, 100, 0];
+        bank.extend_from_slice(&0.35_f32.to_le_bytes());
+        let (color, alpha) = parse_water_bank(&bank).expect("water bank");
+        assert_eq!(color, [50, 80, 100]);
+        assert!((alpha - 0.35).abs() < f32::EPSILON);
+
+        let mut flow = vec![0; 64];
+        flow[36..38].copy_from_slice(b"bl");
+        assert_eq!(
+            parse_flow_texture_prefixes(&flow, "default"),
+            ["default", "bl"]
+        );
     }
 }

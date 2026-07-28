@@ -22,8 +22,29 @@ pub fn to_scene(
     let all_geometry = &level.all_geometry;
     let mut texture_to_vertices: HashMap<&u16, Vec<VertexPositionTextureLightmapAtlasNormal>> =
         HashMap::new();
+    let mut water_texture_to_vertices: HashMap<String, Vec<VertexPositionTextureNormal>> =
+        HashMap::new();
     for geometry in all_geometry {
         let texture_id = &geometry.texture_idx;
+
+        if matches!(*texture_id, 247 | 248) {
+            let suffix = if *texture_id == 247 { "in" } else { "out" };
+            let prefix = level
+                .cells
+                .get(geometry.cell_idx as usize)
+                .map(|cell| level.water_render_info.texture_prefix(cell.flow_group))
+                .unwrap_or("bl");
+            let texture_name = format!("WATERHW/{prefix}{suffix}.PCX");
+            let current_vertices = water_texture_to_vertices.entry(texture_name).or_default();
+            current_vertices.extend(geometry.verts.iter().map(|vertex| {
+                VertexPositionTextureNormal {
+                    position: vertex.position,
+                    uv: vertex.uv,
+                    normal: vertex.normal,
+                }
+            }));
+            continue;
+        }
 
         // Skip empty texture
         if *texture_id == 0 {
@@ -113,6 +134,24 @@ pub fn to_scene(
 
         let scene_object1 = engine::scene::scene_object::SceneObject::create(material, mesh);
         scene_objects.push(scene_object1)
+    }
+
+    for (texture_name, vertices) in water_texture_to_vertices {
+        let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, &texture_name) else {
+            tracing::warn!("missing authored water texture {texture_name}");
+            continue;
+        };
+        let texture: Rc<dyn TextureTrait> = texture;
+        let mesh: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::mesh::create(vertices)));
+        let material = RefCell::new(engine::scene::basic_material::create(
+            texture,
+            1.0,
+            1.0 - level.water_render_info.alpha,
+        ));
+        scene_objects.push(engine::scene::scene_object::SceneObject::create(
+            material, mesh,
+        ));
     }
 
     scene_objects
