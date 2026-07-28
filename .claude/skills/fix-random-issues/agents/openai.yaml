@@ -1,4 +1,4 @@
 interface:
   display_name: "Fix Random Issues"
-  short_description: "Fix random open issues one at a time"
-  default_prompt: "Use $fix-random-issues to attempt 3 randomly selected open shock2quest issues sequentially."
+  short_description: "Fix random issues without active PRs"
+  default_prompt: "Use $fix-random-issues to attempt 3 randomly selected eligible shock2quest issues without active PRs and process them sequentially."

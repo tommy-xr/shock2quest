@@ -7,7 +7,8 @@ function usage() {
   console.log(`Usage:
   node select-open-issues.mjs <count> [--repo OWNER/REPO] [--seed VALUE]
 
-Randomly select a fixed sample of open GitHub issues. Output is JSON.
+Randomly select a fixed sample of open GitHub issues. Issues addressed by an
+open pull request are excluded before sampling. Output is JSON.
 
 Options:
   --repo OWNER/REPO  Repository to query (default: current gh repository)
@@ -134,7 +135,22 @@ function shuffle(values, random) {
   return result;
 }
 
-function listOpenIssues(repository) {
+function closingIssueNumbers(body, repository) {
+  const numbers = new Set();
+  const closingReference =
+    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/)|(?:([^#\s]+\/[^#\s]+)#)|#)(\d+)\b/gi;
+
+  for (const match of body?.matchAll(closingReference) ?? []) {
+    const referencedRepository = match[1] ?? match[2] ?? repository;
+    if (referencedRepository.toLowerCase() === repository.toLowerCase()) {
+      numbers.add(Number(match[3]));
+    }
+  }
+
+  return numbers;
+}
+
+function listOpenCandidates(repository) {
   const endpoint = `repos/${repository}/issues?state=open&per_page=100`;
   const raw = runGh(["api", "--paginate", "--slurp", endpoint]);
   let pages;
@@ -148,8 +164,8 @@ function listOpenIssues(repository) {
     fail("GitHub response was not a paginated issue list");
   }
 
-  return pages
-    .flat()
+  const items = pages.flat();
+  const openIssues = items
     .filter((issue) => !issue.pull_request)
     .map((issue) => ({
       number: issue.number,
@@ -161,13 +177,52 @@ function listOpenIssues(repository) {
       assignees: (issue.assignees ?? []).map((assignee) => assignee.login),
     }))
     .sort((left, right) => left.number - right.number);
+  const issueNumbers = new Set(openIssues.map(({ number }) => number));
+  const pullRequestsByIssue = new Map();
+
+  for (const pullRequest of items.filter((item) => item.pull_request)) {
+    for (const issueNumber of closingIssueNumbers(pullRequest.body, repository)) {
+      if (!issueNumbers.has(issueNumber)) {
+        continue;
+      }
+      const pullRequests = pullRequestsByIssue.get(issueNumber) ?? [];
+      pullRequests.push({
+        number: pullRequest.number,
+        title: pullRequest.title,
+        url: pullRequest.html_url,
+      });
+      pullRequestsByIssue.set(issueNumber, pullRequests);
+    }
+  }
+
+  for (const pullRequests of pullRequestsByIssue.values()) {
+    pullRequests.sort((left, right) => left.number - right.number);
+  }
+
+  const excludedActivePullRequests = openIssues
+    .filter(({ number }) => pullRequestsByIssue.has(number))
+    .map((issue) => ({
+      issueNumber: issue.number,
+      issueTitle: issue.title,
+      issueUrl: issue.url,
+      pullRequests: pullRequestsByIssue.get(issue.number),
+    }));
+  const eligibleIssues = openIssues.filter(
+    ({ number }) => !pullRequestsByIssue.has(number),
+  );
+
+  return { openIssues, eligibleIssues, excludedActivePullRequests };
 }
 
 const options = parseArgs(process.argv.slice(2));
 const repository = resolveRepository(options.repo);
 const seed = options.seed ?? randomBytes(16).toString("hex");
-const openIssues = listOpenIssues(repository);
-const selected = shuffle(openIssues, seededRandom(seed)).slice(0, options.count);
+const { openIssues, eligibleIssues, excludedActivePullRequests } =
+  listOpenCandidates(repository);
+const selected = shuffle(eligibleIssues, seededRandom(seed)).slice(
+  0,
+  options.count,
+);
 
 console.log(
   JSON.stringify(
@@ -175,7 +230,9 @@ console.log(
       repository,
       seed,
       requested: options.count,
-      available: openIssues.length,
+      openIssues: openIssues.length,
+      excludedActivePullRequests,
+      available: eligibleIssues.length,
       sampled: selected.length,
       selected,
     },
