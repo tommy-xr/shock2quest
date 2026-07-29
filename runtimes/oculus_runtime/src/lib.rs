@@ -20,6 +20,8 @@ use std::env;
 use tracing;
 
 mod android_permissions;
+mod frame_profiler;
+mod quest_config;
 
 use tokio::runtime::Runtime;
 
@@ -421,22 +423,26 @@ fn main() {
     let mut swapchain = None;
     let mut event_storage = xr::EventDataBuffer::new();
     let mut session_running = false;
-    // Index of the current frame, wrapped by PIPELINE_DEPTH. Not to be confused with the
-    // swapchain image index.
-    let mut frame = 0;
     let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
-    let mut experimental_features = HashSet::new();
+    let experimental_features = HashSet::new();
     // experimental_features.insert("gui".to_owned());
+    let mission = quest_config::configured_mission();
+    let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
         render_particles: false,
-        mission: "debug_gloves".to_string(),
+        mission: mission.clone(),
         experimental_features,
         debug_skeletons: false,
         ..GameOptions::default()
     };
     let mut game = shock2vr::Game::init(options, bundle_storage);
+    println!(
+        "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
+        mission,
+        game_init_started.elapsed().as_secs_f64() * 1_000.0
+    );
 
     // No discrete actions are mapped for VR controllers yet; this stays empty
     // until an OculusInputMapper is added.
@@ -446,10 +452,11 @@ fn main() {
 
     let render_time = Instant::now();
     let mut last_update_time = render_time;
+    let mut frame_profiler = frame_profiler::FrameProfiler::new(Duration::from_secs(1));
+    let mut display_refresh_rate = None;
+    let mut ready_reported = false;
+    let mut session_focused = false;
     'main_loop: loop {
-        frame = frame + 1;
-
-        println!("Starting frame: {}", frame);
         // println!(
         //     " - Before polling events: {}",
         //     render_time.elapsed().as_secs_f32()
@@ -461,11 +468,26 @@ fn main() {
                     // Session state change is where we can begin and end sessions, as well as
                     // find quit messages!
                     println!("entered state {:?}", e.state());
+                    println!(
+                        "SHOCK2QUEST_XR_STATE mission={} state={:?}",
+                        mission,
+                        e.state()
+                    );
+                    let next_session_focused = e.state() == xr::SessionState::FOCUSED;
+                    if next_session_focused != session_focused {
+                        // Never emit a one-second bucket containing samples from
+                        // both sides of a focus transition.
+                        frame_profiler.reset();
+                    }
+                    session_focused = next_session_focused;
                     match e.state() {
                         xr::SessionState::READY => {
                             session.begin(VIEW_TYPE).unwrap();
                             session_running = true;
-                            let _refresh_rate = session.get_display_refresh_rate().unwrap();
+                            display_refresh_rate = session.get_display_refresh_rate().ok();
+                            ready_reported = false;
+                            last_update_time = Instant::now();
+                            frame_profiler.reset();
 
                             // let available_rates =
                             //     session.enumerate_display_refresh_rates().unwrap();
@@ -477,6 +499,8 @@ fn main() {
                         xr::SessionState::STOPPING => {
                             session.end().unwrap();
                             session_running = false;
+                            last_update_time = Instant::now();
+                            frame_profiler.reset();
                         }
                         xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
                             break 'main_loop;
@@ -600,7 +624,9 @@ fn main() {
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
+        let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
+        let update_elapsed = update_started.elapsed();
 
         // Must be called before any rendering is done!
         frame_stream.begin().unwrap();
@@ -619,6 +645,9 @@ fn main() {
                     &[],
                 )
                 .unwrap();
+            if let Some(report) = frame_profiler.record_skipped(elapsed_time, update_elapsed) {
+                print_frame_report(&mission, session_focused, report);
+            }
             continue;
         }
 
@@ -764,10 +793,13 @@ fn main() {
             )
             .unwrap();
 
+        let scene_started = Instant::now();
         let (scene, camera_pos, camera_rot) = game.render();
+        let scene_elapsed = scene_started.elapsed();
 
         // Render to each eye
         let time = now.elapsed().as_secs_f32();
+        let left_eye_started = Instant::now();
         render_swapchain(
             &mut game,
             &engine,
@@ -780,6 +812,8 @@ fn main() {
             &scene,
             false,
         );
+        let left_eye_elapsed = left_eye_started.elapsed();
+        let right_eye_started = Instant::now();
         render_swapchain(
             &mut game,
             &engine,
@@ -792,6 +826,7 @@ fn main() {
             &scene,
             true,
         );
+        let right_eye_elapsed = right_eye_started.elapsed();
 
         let swap1 = &swapchain[0].handle.borrow();
         let rect = xr::Rect2Di {
@@ -811,6 +846,7 @@ fn main() {
         let sub2 = xr::SwapchainSubImage::new()
             .swapchain(swap2)
             .image_rect(rect);
+        let submit_started = Instant::now();
         frame_stream
             .end(
                 xr_frame_state.predicted_display_time,
@@ -829,6 +865,29 @@ fn main() {
                 ],
             )
             .unwrap();
+        let submit_elapsed = submit_started.elapsed();
+
+        if !ready_reported {
+            println!(
+                "SHOCK2QUEST_READY mission={} refresh_hz={:.3} eye_width={} eye_height={}",
+                mission,
+                display_refresh_rate.unwrap_or_default(),
+                swapchain[0].width,
+                swapchain[0].height
+            );
+            ready_reported = true;
+        }
+
+        if let Some(report) = frame_profiler.record(frame_profiler::FrameTimings {
+            frame: elapsed_time,
+            update: update_elapsed,
+            scene: scene_elapsed,
+            left_eye: left_eye_elapsed,
+            right_eye: right_eye_elapsed,
+            submit: submit_elapsed,
+        }) {
+            print_frame_report(&mission, session_focused, report);
+        }
 
         // let mut printed = false;
         // if right_aim.is_active(&session, xr::Path::NULL).unwrap() {
@@ -861,6 +920,23 @@ fn main() {
     //             reqs.max_api_version_supported.major() + 1
     //         );
     //     }
+}
+
+fn print_frame_report(mission: &str, focused: bool, report: frame_profiler::FrameReport) {
+    println!(
+        "SHOCK2QUEST_PERF mission={} focused={} samples={} skipped={} fps={:.3} frame_ms={:.3} update_ms={:.3} scene_ms={:.3} left_eye_ms={:.3} right_eye_ms={:.3} submit_ms={:.3}",
+        mission,
+        focused,
+        report.frames,
+        report.skipped_frames,
+        report.fps,
+        report.frame_ms,
+        report.update_ms,
+        report.scene_ms,
+        report.left_eye_ms,
+        report.right_eye_ms,
+        report.submit_ms
+    );
 }
 
 use cgmath::{Vector3, vec3};
@@ -997,7 +1073,6 @@ fn render_swapchain(
         game.finish_render(view_matrix, projection_matrix, screen_size);
     }
 
-    println!("-- Finished rendering");
     xr_swapchain.release_image().unwrap();
 }
 
