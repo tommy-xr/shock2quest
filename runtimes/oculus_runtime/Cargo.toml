@@ -66,7 +66,7 @@ cargo-apk = "0.9.7"
 gl = "0.14.0"
 khronos-egl = { version = "4.1.0", features = ["dynamic"] }
 libloading = "0.7.3"
-openxr = { path = "../../vendor/openxrs/openxr" }
+openxr = "0.21.1"
 engine = { path = "../../engine" }
 shock2vr = { path = "../../shock2vr", features = ["ffmpeg"] }
 pcx = "0.2.3"
