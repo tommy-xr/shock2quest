@@ -6005,6 +6005,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .run(|v: View<dark::properties::PropMaxHitPoints>| {
                 v.get(id).ok().map(|hp| hp.hit_points)
             });
+        let ecology_state = self
+            .world
+            .run(|v: View<dark::properties::PropEcoState>| v.get(id).ok().map(|state| state.0));
+        let ecology_timers = self
+            .world
+            .run(|v: View<crate::runtime_props::RuntimePropEcologyState>| v.get(id).ok().copied());
 
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
@@ -6088,6 +6094,29 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "MaxHitPoints".to_string(),
                         value: max_hit_points.to_string(),
                     });
+                }
+                if let Some(state) = ecology_state {
+                    properties.push(DebugPropertyInfo {
+                        name: "EcologyState".to_string(),
+                        value: match state {
+                            0 => "Normal".to_string(),
+                            1 => "Hacked".to_string(),
+                            2 => "Alert".to_string(),
+                            other => format!("Unknown({other})"),
+                        },
+                    });
+                }
+                if let Some(timers) = ecology_timers {
+                    properties.push(DebugPropertyInfo {
+                        name: "EcologyPollRemaining".to_string(),
+                        value: format!("{:.3}", timers.seconds_until_poll),
+                    });
+                    if let Some(remaining) = timers.recovery_seconds_remaining {
+                        properties.push(DebugPropertyInfo {
+                            name: "EcologyRecoveryRemaining".to_string(),
+                            value: format!("{remaining:.3}"),
+                        });
+                    }
                 }
 
                 // Add the current render model (e.g. to assert held-model

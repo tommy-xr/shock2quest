@@ -547,12 +547,30 @@ impl Script for CameraAI {
 
     fn handle_message(
         &mut self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         _world: &World,
         _physics: &PhysicsWorld,
-        _msg: &MessagePayload,
+        msg: &MessagePayload,
     ) -> Effect {
-        Effect::NoEffect
+        let MessagePayload::SetAlertness { level, .. } = msg else {
+            return Effect::NoEffect;
+        };
+        let Some(config) = self.config.clone() else {
+            return Effect::NoEffect;
+        };
+
+        self.state.alertness.visible_time = 0.0;
+        self.state.alertness.hidden_time = 0.0;
+        alertness::set_level(&mut self.state.alertness, *level, &config.alert_cap);
+        self.state
+            .reset_for_level(self.state.alertness.current_level);
+
+        let mut effects = vec![alertness::sync_alertness_effect(
+            entity_id,
+            &self.state.alertness,
+        )];
+        self.sync_model(entity_id, &config.models, &mut effects, true);
+        Self::combine_effects(effects)
     }
 }
 
