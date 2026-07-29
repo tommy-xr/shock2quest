@@ -37,6 +37,10 @@ name = "android.permission.WRITE_EXTERNAL_STORAGE"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.READ_EXTERNAL_STORAGE"
 
+[[package.metadata.android.uses_feature]]
+name = "oculus.software.handtracking"
+required = false
+
 [[package.metadata.android.application.activity.intent_filter]]
 actions = ["android.intent.action.MAIN"]
 categories = [

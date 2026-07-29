@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oculus Profiling"
+  short_description: "Profile shock2quest on a Meta Quest"
+  default_prompt: "Use $oculus-profiling to benchmark missions and diagnose this Quest performance issue."

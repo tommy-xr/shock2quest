@@ -6,6 +6,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jre/Contents/Home"
 export NDK="${SDK}/ndk/24.0.8215888"
 export ANDROID_NDK_ROOT="${NDK}"
 export ARM64_TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/darwin-x86_64"
+export FFMPEG_ROOT="$(pwd)/ffmpeg"
 export CC="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang"
 export CCP="${ARM64_TOOLCHAIN}/bin/aarch64-linux-android26-clang++"
 export SYSROOT="${ARM64_TOOLCHAIN}/sysroot"
@@ -52,15 +53,17 @@ alias cargo_android='unset CC && cargo'
 export PATH="$PATH:${SDK}/platform-tools"
 
 # FFmpeg cross-compilation setup
-export FFMPEG_ROOT="$(pwd)/ffmpeg"
 export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_PATH="${FFMPEG_ROOT}/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR="${FFMPEG_ROOT}"
+unset PKG_CONFIG_SYSROOT_DIR
+# Avoid resolving the host macOS libbz2 through pkg-config during the Android
+# build; bzip2-sys will compile its bundled source for the target instead.
+export BZIP2_NO_PKG_CONFIG=1
 
 # Set target-specific pkg-config variables
 export PKG_CONFIG_ALLOW_CROSS_aarch64_linux_android=1
 export PKG_CONFIG_PATH_aarch64_linux_android="${FFMPEG_ROOT}/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android="${FFMPEG_ROOT}"
+unset PKG_CONFIG_SYSROOT_DIR_aarch64_linux_android
 
 echo "FFmpeg cross-compilation environment configured:"
 echo "  FFMPEG_ROOT: ${FFMPEG_ROOT}"

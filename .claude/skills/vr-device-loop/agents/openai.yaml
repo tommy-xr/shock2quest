@@ -1,0 +1,4 @@
+interface:
+  display_name: "VR Device Loop"
+  short_description: "Build, drive, capture, and verify Quest"
+  default_prompt: "Use $vr-device-loop to run and verify this shock2quest change on an attached Quest."
