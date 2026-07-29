@@ -258,6 +258,15 @@ pub struct RuntimePropFlatAim {
     pub forward: Vector3<f32>,
 }
 
+/// Camera-origin ray for a fast projectile fired through the flat crosshair.
+///
+/// Flat projectiles still spawn ahead of the camera so slow physics projectiles
+/// clear the player. Fast projectiles consume this origin instead of deriving a
+/// shorter ray start from that forward spawn offset, keeping hitscan collision
+/// aligned with the crosshair all the way down to contact range.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
+
 // RuntimePropMapData - the automap page data for the current mission, attached
 // to the synthetic map-panel entity at mission init: the mission's level file
 // name (for the per-level `intrface/<LEVEL>/english/` art paths) and the decal

@@ -144,6 +144,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, crate::runtime_props::RuntimePropTransientFx);
     }
 
+    if let Some(origin) = additional_options.projectile_raycast_origin {
+        world.add_component(entity_id, RuntimePropProjectileRayOrigin(origin));
+    }
+
     create_entity_core(
         entity_id,
         template_id,
@@ -1113,6 +1117,10 @@ pub struct CreateEntityOptions {
     /// it is destroyed once its one-shot particle burst expires. Used for
     /// impact spangs so they don't accumulate at every bullet hole.
     pub transient_fx: bool,
+    /// Override the collision-ray origin when this entity resolves as a fast
+    /// projectile. Flat firing supplies the camera origin while retaining the
+    /// forward spawn clearance needed by slow physics projectiles.
+    pub projectile_raycast_origin: Option<Point3<f32>>,
 }
 
 impl Default for CreateEntityOptions {
@@ -1121,6 +1129,7 @@ impl Default for CreateEntityOptions {
             force_visible: false,
             attach_to: None,
             transient_fx: false,
+            projectile_raycast_origin: None,
         }
     }
 }
