@@ -94,8 +94,8 @@ use self::choose_service::ChooseServiceScript;
 /// read them at draw time.
 pub use self::gui::ElevatorContext;
 use self::gui::{
-    ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MapGui, MediaGui, ReplicatorGui, TrainerGui,
-    TrainerMode, TraitGui,
+    ComputerGui, ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MapGui, MediaGui, ReplicatorGui,
+    TrainerGui, TrainerMode, TraitGui,
 };
 use self::internal_frob_move::InternalFrobMove;
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
@@ -685,7 +685,7 @@ impl ScriptWorld {
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(UnimplementedScript::new(&script_name)),
             "psikitscript" => Box::new(PsiKitScript::new()),
-            "computer" => Box::new(UnimplementedScript::new(&script_name)),
+            "computer" => gui_script(Box::new(ComputerGui)),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => Box::new(UnimplementedScript::new(&script_name)),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),

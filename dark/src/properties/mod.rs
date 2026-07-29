@@ -257,6 +257,9 @@ pub struct PropMaterial(pub String);
 pub struct PropMapText(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropHackText(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMapObjIcon(pub String);
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -438,6 +441,8 @@ pub enum Link {
     /// particle group) to spawn when that projectile hits a descendant of the
     /// class (e.g. pistol bullets -> Hybrids spawns the blood spang).
     HitSpang(i32),
+    /// Script target activated when a tech hack succeeds.
+    Hacking,
     /// From a particle-group archetype to the object it rides
     /// ("ParticleAttachement"). On an archetype host, the engine instantiates
     /// the particle group when a concrete host is created (projectile trails,
@@ -1049,6 +1054,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         }),
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
+        define_link("L$HackingLi", |_| Link::Hacking),
         define_link("L$SwitchLin", |_| Link::SwitchLink),
         define_link("L$Teleport", |_| Link::Teleport),
         define_link("L$TPathInit", |_| Link::TPathInit),
@@ -1304,6 +1310,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HackDiff",
             PropHackDiff::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$HackText",
+            read_variable_length_string,
+            PropHackText,
             accumulator::latest,
         ),
         define_prop(

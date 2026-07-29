@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use dark::properties::{Link, Links, ToLink};
-use shipyard::{EntityId, IntoIter, IntoWithId, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, ViewMut, World};
 use tracing::info;
 
 use crate::physics::PhysicsWorld;
@@ -52,7 +52,23 @@ impl Script for TriggerMulti {
     ) -> Effect {
         match msg {
             MessagePayload::TurnOn { from } => {
-                self.entities_left_to_trigger.remove(from);
+                if !self.entities_left_to_trigger.remove(from) {
+                    return Effect::NoEffect;
+                }
+                // A TriggerMulti is a one-shot "all inputs" latch. Consume the
+                // incoming SwitchLink as each source arrives so the remaining
+                // input set is part of the ordinary, save-serialized Links
+                // graph. Rebuilding this Script after a load can then resume
+                // midway through the latch instead of demanding already-used
+                // sources again.
+                if let Ok(mut links) = world.borrow::<ViewMut<Links>>()
+                    && let Ok(source_links) = (&mut links).get(*from)
+                {
+                    source_links.to_links.retain(|link| {
+                        link.link != Link::SwitchLink
+                            || link.to_entity_id.is_none_or(|to| to.0 != entity_id)
+                    });
+                }
                 let after_count = self.entities_left_to_trigger.len();
                 info!(
                     "turn on from entity {:?}, {} remaining...",
@@ -71,5 +87,71 @@ impl Script for TriggerMulti {
             }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dark::properties::WrappedEntityId;
+
+    use super::*;
+
+    #[test]
+    fn consumed_inputs_survive_script_reinitialization_through_links() {
+        let mut world = World::new();
+        let destination = world.add_entity(Links::empty());
+        let multi = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 3,
+                to_entity_id: Some(WrappedEntityId(destination)),
+                link: Link::SwitchLink,
+            }],
+        });
+        let first = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 2,
+                to_entity_id: Some(WrappedEntityId(multi)),
+                link: Link::SwitchLink,
+            }],
+        });
+        let second = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 2,
+                to_entity_id: Some(WrappedEntityId(multi)),
+                link: Link::SwitchLink,
+            }],
+        });
+
+        let mut before_save = TriggerMulti::new();
+        before_save.initialize(multi, &world);
+        let physics = PhysicsWorld::new();
+        assert!(matches!(
+            before_save.handle_message(
+                multi,
+                &world,
+                &physics,
+                &MessagePayload::TurnOn { from: first },
+            ),
+            Effect::NoEffect
+        ));
+
+        let mut after_load = TriggerMulti::new();
+        after_load.initialize(multi, &world);
+        let effect = after_load.handle_message(
+            multi,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: second },
+        );
+        assert!(matches!(
+            effect,
+            Effect::Combined { effects }
+                if effects.iter().any(|effect| matches!(
+                    effect,
+                    Effect::Send { msg }
+                        if msg.to == destination
+                            && matches!(msg.payload, MessagePayload::TurnOn { from } if from == multi)
+                ))
+        ));
     }
 }
