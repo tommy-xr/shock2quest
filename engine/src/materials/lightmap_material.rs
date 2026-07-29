@@ -9,6 +9,7 @@ use c_string::*;
 use cgmath::prelude::*;
 
 use cgmath::Matrix4;
+use cgmath::Vector3;
 use once_cell::sync::OnceCell;
 use std::any::Any;
 use std::rc::Rc;
@@ -56,6 +57,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         // Material properties
         uniform sampler2D texture1; // lightmap
         uniform sampler2D texture2; // diffuse texture
+        uniform vec3 ambientColor;  // authored mission-wide minimum lighting
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform vec3 spotlightPos[6];
@@ -121,8 +123,9 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             vec4 lightmapColor = texture(texture1, wrappedTexCoord);
             vec4 diffuseColor = texture(texture2, texCoord);
 
-            // Base lighting from lightmap (baked static lighting)
-            vec3 finalColor = diffuseColor.rgb * lightmapColor.rgb;
+            // Dark's mission ambient is a minimum final intensity: preserve
+            // brighter authored pixels while keeping unlit surfaces legible.
+            vec3 finalColor = max(diffuseColor.rgb * lightmapColor.rgb, ambientColor);
 
             // Add dynamic spotlight contributions on top of baked lighting
             vec3 normal = normalize(worldNormal);
@@ -143,6 +146,7 @@ struct UnifiedUniforms {
     // Texture samplers
     texture1_loc: i32, // lightmap
     texture2_loc: i32, // diffuse
+    ambient_color_loc: i32,
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -159,16 +163,19 @@ pub struct LightmapMaterial {
     has_initialized: bool,
     lightmap_texture: Rc<Texture>,
     diffuse_texture: Rc<dyn TextureTrait>,
+    ambient_color: Vector3<f32>,
 }
 
 impl LightmapMaterial {
     pub fn create(
         lightmap_texture: Rc<Texture>,
         diffuse_texture: Rc<dyn TextureTrait>,
+        ambient_color: Vector3<f32>,
     ) -> Box<dyn Material> {
         Box::new(LightmapMaterial {
             diffuse_texture,
             lightmap_texture,
+            ambient_color,
             has_initialized: false,
         })
     }
@@ -201,6 +208,12 @@ impl LightmapMaterial {
             // Set texture samplers
             gl::Uniform1i(uniforms.texture1_loc, 0); // lightmap
             gl::Uniform1i(uniforms.texture2_loc, 1); // diffuse
+            gl::Uniform3f(
+                uniforms.ambient_color_loc,
+                self.ambient_color.x,
+                self.ambient_color.y,
+                self.ambient_color.z,
+            );
 
             // Set spotlight array uniforms
             for i in 0..6 {
@@ -291,6 +304,10 @@ impl Material for LightmapMaterial {
                     // Texture samplers
                     texture1_loc: gl::GetUniformLocation(shader.gl_id, c_str!("texture1").as_ptr()),
                     texture2_loc: gl::GetUniformLocation(shader.gl_id, c_str!("texture2").as_ptr()),
+                    ambient_color_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("ambientColor").as_ptr(),
+                    ),
 
                     // Spotlight array uniforms (6 spotlights)
                     spotlight_pos_loc: [
@@ -443,5 +460,23 @@ impl Material for LightmapMaterial {
     ) -> bool {
         // Lightmap materials are typically opaque
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UNIFIED_FRAGMENT_SHADER_SOURCE;
+
+    #[test]
+    fn world_shader_applies_authored_ambient_as_a_floor() {
+        assert!(
+            UNIFIED_FRAGMENT_SHADER_SOURCE
+                .contains("max(diffuseColor.rgb * lightmapColor.rgb, ambientColor)"),
+            "world pixels must not render below the mission ambient"
+        );
+        assert!(
+            !UNIFIED_FRAGMENT_SHADER_SOURCE.contains("+ ambientColor"),
+            "ambient is a floor, not an additive wash over authored lighting"
+        );
     }
 }
