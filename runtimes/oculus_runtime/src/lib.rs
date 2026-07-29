@@ -36,7 +36,9 @@ fn main() {
     #[cfg(feature = "linked")]
     let entry = xr::Entry::linked();
     #[cfg(not(feature = "linked"))]
-    let entry = xr::Entry::load()
+    // SAFETY: the APK packages Meta's OpenXR-conformant loader as
+    // `libopenxr_loader.so`.
+    let entry = unsafe { xr::Entry::load() }
         .expect("couldn't find the OpenXR loader; try enabling the \"static\" feature");
 
     #[cfg(target_os = "android")]
@@ -118,6 +120,7 @@ fn main() {
                 application_version: 0,
                 engine_name: "openxrs example",
                 engine_version: 0,
+                api_version: xr::Version::new(1, 0, 0),
             },
             &enabled_extensions,
             &[],
@@ -153,7 +156,7 @@ fn main() {
     println!("view configuration views: {:#?}", view_config_views);
 
     let reqs = xr_instance
-        .graphics_requirements::<xr::OpenGLES>(system)
+        .graphics_requirements::<xr::OpenGlEs>(system)
         .unwrap();
 
     println!(
@@ -272,7 +275,7 @@ fn main() {
     };
     let (session, mut frame_wait, mut frame_stream) = unsafe {
         xr_instance
-            .create_session::<xr::OpenGLES>(system, session_create_info)
+            .create_session::<xr::OpenGlEs>(system, session_create_info)
             .unwrap()
     };
 
@@ -412,11 +415,11 @@ fn main() {
 
     // Create an action space for each device we want to locate
     let right_aim_space = right_aim
-        .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
 
     let left_aim_space = left_aim
-        .create_space(session.clone(), xr::Path::NULL, xr::Posef::IDENTITY)
+        .create_space(&session, xr::Path::NULL, xr::Posef::IDENTITY)
         .unwrap();
 
     // Main loop
@@ -1085,7 +1088,7 @@ struct Swapchain {
     width: i32,
     height: i32,
     view: xr::ViewConfigurationView,
-    handle: RefCell<xr::Swapchain<xr::OpenGLES>>,
+    handle: RefCell<xr::Swapchain<xr::OpenGlEs>>,
     framebuffers: Vec<Framebuffer>,
     //     buffers: Vec<Framebuffer>,
     //     resolution: vk::Extent2D,
