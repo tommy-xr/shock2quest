@@ -37,9 +37,9 @@ use dark::{
     },
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
-        PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
-        PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature, PropEcoState,
+        PropEcology, PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel,
+        PropLocalPlayer, PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropTeleported,
         PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType,
@@ -82,8 +82,9 @@ use crate::{
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
-        RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropDoNotSerialize, RuntimePropEcologyState, RuntimePropFlatAim,
+        RuntimePropJointTransforms, RuntimePropReloading, RuntimePropSelectedAmmo,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -112,6 +113,35 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// floor-lying crumple pose doesn't start deeply interpenetrating the level
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
+
+fn ensure_ecology_runtime_state(world: &mut World) {
+    let missing = {
+        let ecologies = world.borrow::<View<PropEcology>>().unwrap();
+        let states = world.borrow::<View<PropEcoState>>().unwrap();
+        let runtime_states = world.borrow::<View<RuntimePropEcologyState>>().unwrap();
+        ecologies
+            .iter()
+            .with_id()
+            .map(|(entity, ecology)| {
+                (
+                    entity,
+                    states.get(entity).is_err(),
+                    runtime_states.get(entity).is_err(),
+                    ecology.period_seconds,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for (entity, needs_authored_state, needs_runtime_state, period_seconds) in missing {
+        if needs_authored_state {
+            world.add_component(entity, PropEcoState(0));
+        }
+        if needs_runtime_state {
+            world.add_component(entity, RuntimePropEcologyState::new(period_seconds));
+        }
+    }
+}
 
 fn is_realtime_crumple(frame_count: f32) -> bool {
     // `humdieup1` is an authored "already dead" pose: three frames with no
@@ -631,6 +661,8 @@ impl MissionCore {
         let template_to_entity_id = population.template_to_entity_id;
         let mut script_entity_id_map = population.entity_id_map;
         let mut saved_script_states = population.script_states;
+
+        ensure_ecology_runtime_state(&mut world);
 
         // Instantiate held items
         let mut interaction: Box<dyn PlayerInteraction> =

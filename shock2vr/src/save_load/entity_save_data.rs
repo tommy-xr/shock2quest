@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, World};
 
 use crate::runtime_props::{
-    RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropSelectedAmmo,
+    RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropEcologyState,
+    RuntimePropSelectedAmmo,
 };
 use crate::scripts::SavedScriptState;
 
@@ -38,6 +39,12 @@ pub struct EntitySaveData {
     /// for runtime modes, timers, latches, and similar script internals.
     #[serde(default)]
     pub script_states: Vec<SavedScriptState>,
+    /// Spawn-period and alarm-recovery clocks for ecology triggers.
+    ///
+    /// Older saves omit this field and receive authored fresh timers during
+    /// mission construction.
+    #[serde(default)]
+    pub ecology_states: HashMap<u64 /* entity id */, RuntimePropEcologyState>,
 }
 
 impl EntitySaveData {
@@ -51,6 +58,7 @@ impl EntitySaveData {
             selected_ammo: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             script_states: Vec::new(),
+            ecology_states: HashMap::new(),
         }
     }
     pub fn instantiate(
@@ -115,6 +123,12 @@ impl EntitySaveData {
                 );
             }
         }
+        for (old_entity_id, ecology_state) in &self.ecology_states {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(*new_entity_id, *ecology_state);
+            }
+        }
         (template_to_entity_id, old_entity_id_to_new_entity_id)
     }
 }
@@ -138,6 +152,7 @@ mod tests {
         .unwrap();
 
         assert!(save.death_poses.is_empty());
+        assert!(save.ecology_states.is_empty());
     }
 
     #[test]
@@ -213,6 +228,7 @@ mod tests {
         assert!(data.selected_ammo.is_empty());
         assert!(data.canonical_template_ids.is_empty());
         assert!(data.script_states.is_empty());
+        assert!(data.ecology_states.is_empty());
     }
 
     #[test]
@@ -253,5 +269,32 @@ mod tests {
             serde_json::from_value(serde_json::to_value(&data).unwrap()).unwrap();
 
         assert_eq!(decoded.script_states, data.script_states);
+    }
+
+    #[test]
+    fn instantiate_restores_ecology_clocks_on_the_remapped_entity() {
+        let old_entity = EntityId::new_from_index_and_gen(11, 2);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(old_entity.inner());
+        data.ecology_states.insert(
+            old_entity.inner(),
+            RuntimePropEcologyState {
+                seconds_until_poll: 6.5,
+                recovery_seconds_remaining: Some(91.25),
+            },
+        );
+        let mut world = World::new();
+
+        let (_, entity_map) = data.instantiate(&mut world);
+
+        let new_entity = entity_map[&old_entity];
+        let ecology_states = world.borrow::<View<RuntimePropEcologyState>>().unwrap();
+        assert_eq!(
+            *ecology_states.get(new_entity).unwrap(),
+            RuntimePropEcologyState {
+                seconds_until_poll: 6.5,
+                recovery_seconds_remaining: Some(91.25),
+            }
+        );
     }
 }

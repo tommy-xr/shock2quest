@@ -225,6 +225,27 @@ pub struct RuntimePropSelectedAmmo(pub usize);
 #[derive(Component, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePropCanonicalTemplateId(pub i32);
 
+/// Live timing for a retail ecology trigger.
+///
+/// Most runtime properties are reconstructed after loading, but ecology timers
+/// are gameplay state: rebuilding them would grant a fresh spawn period or a
+/// fresh security-alarm recovery window on every save/load. `EntitySaveData`
+/// therefore persists this component explicitly.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RuntimePropEcologyState {
+    pub seconds_until_poll: f32,
+    pub recovery_seconds_remaining: Option<f32>,
+}
+
+impl RuntimePropEcologyState {
+    pub fn new(period_seconds: f32) -> Self {
+        Self {
+            seconds_until_poll: period_seconds.max(0.0),
+            recovery_seconds_remaining: None,
+        }
+    }
+}
+
 /// Which phase the psi amp's hold-to-overload meter is in. `Charging` fills
 /// the bar; `Overloaded`/`Burnout` are brief result flashes after release.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

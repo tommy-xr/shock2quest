@@ -22,7 +22,7 @@ use crate::{
     mission::{GlobalTemplateIdMap, PlayerInfo},
     runtime_props::{
         RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
-        RuntimePropSelectedAmmo,
+        RuntimePropEcologyState, RuntimePropSelectedAmmo,
     },
     scripts::{ScriptWorld, script_util},
     util::partition_map,
@@ -128,6 +128,7 @@ pub fn to_save_data_with_scripts(
     let v_canonical_templates = world
         .borrow::<View<RuntimePropCanonicalTemplateId>>()
         .unwrap();
+    let v_ecology_states = world.borrow::<View<RuntimePropEcologyState>>().unwrap();
     let v_entities = world.borrow::<EntitiesView>().unwrap();
 
     let (all_properties, _, _) = dark::properties::get::<File>();
@@ -208,6 +209,16 @@ pub fn to_save_data_with_scripts(
         partition_map(raw_canonical_templates, |entity_id| {
             held_entities.contains(entity_id)
         });
+    let raw_ecology_states: HashMap<u64, RuntimePropEcologyState> = v_ecology_states
+        .iter()
+        .with_id()
+        .filter(|(entity_id, _)| !entities_to_filter.contains(&entity_id.inner()))
+        .map(|(entity_id, state)| (entity_id.inner(), *state))
+        .collect();
+    let (held_ecology_states, world_ecology_states) =
+        partition_map(raw_ecology_states, |entity_id| {
+            held_entities.contains(entity_id)
+        });
 
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
@@ -218,6 +229,7 @@ pub fn to_save_data_with_scripts(
         selected_ammo: world_selected_ammo,
         canonical_template_ids: world_canonical_templates,
         script_states: world_script_states,
+        ecology_states: world_ecology_states,
     };
 
     let held_entity_data = EntitySaveData {
@@ -229,6 +241,7 @@ pub fn to_save_data_with_scripts(
         selected_ammo: held_selected_ammo,
         canonical_template_ids: held_canonical_templates,
         script_states: held_script_states,
+        ecology_states: held_ecology_states,
     };
 
     let held_metadata = HeldItemSaveData {
@@ -238,4 +251,100 @@ pub fn to_save_data_with_scripts(
         inventory_entity: Some(player.inventory_entity_id.inner()),
     };
     (world_entity_data, held_metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Quaternion, vec3};
+    use dark::properties::{PropSpawn, SpawnFlags, ToLink, WrappedEntityId};
+    use shipyard::{Get, View};
+
+    use super::*;
+
+    #[test]
+    fn ecology_save_round_trip_preserves_supply_child_ownership_and_timers() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let inventory = world.add_entity(Links::empty());
+        let child = world.add_entity(());
+        let marker = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: -196,
+                to_entity_id: Some(WrappedEntityId(child)),
+                link: Link::Spawned,
+            }],
+        });
+        let generator = world.add_entity((
+            PropSpawn {
+                object_names: [
+                    "OG-Pipe".to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+                odds: [100, 0, 0, 0],
+                flags: SpawnFlags::POP_LIMIT,
+                supply: 3,
+            },
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 147,
+                    to_entity_id: Some(WrappedEntityId(marker)),
+                    link: Link::SpawnPoint,
+                }],
+            },
+        ));
+        let ecology = world.add_entity(RuntimePropEcologyState {
+            seconds_until_poll: 4.5,
+            recovery_seconds_remaining: Some(88.0),
+        });
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        world.add_unique(GlobalTemplateIdMap(HashMap::from([
+            (71, WrappedEntityId(ecology)),
+            (73, WrappedEntityId(generator)),
+            (147, WrappedEntityId(marker)),
+        ])));
+
+        let (save, _) = to_save_data(&world);
+        let mut loaded = World::new();
+        let (_, remapped) = save.instantiate(&mut loaded);
+
+        let loaded_generator = remapped[&generator];
+        let loaded_marker = remapped[&marker];
+        let loaded_child = remapped[&child];
+        let loaded_ecology = remapped[&ecology];
+        let spawns = loaded.borrow::<View<PropSpawn>>().unwrap();
+        assert_eq!(spawns.get(loaded_generator).unwrap().supply, 3);
+        drop(spawns);
+        let links = loaded.borrow::<View<Links>>().unwrap();
+        assert!(
+            links
+                .get(loaded_marker)
+                .unwrap()
+                .to_links
+                .iter()
+                .any(|link| {
+                    link.link == Link::Spawned
+                        && link
+                            .to_entity_id
+                            .is_some_and(|target| target.0 == loaded_child)
+                })
+        );
+        drop(links);
+        let runtime_states = loaded.borrow::<View<RuntimePropEcologyState>>().unwrap();
+        assert_eq!(
+            *runtime_states.get(loaded_ecology).unwrap(),
+            RuntimePropEcologyState {
+                seconds_until_poll: 4.5,
+                recovery_seconds_remaining: Some(88.0),
+            }
+        );
+    }
 }

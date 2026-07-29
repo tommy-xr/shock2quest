@@ -273,6 +273,17 @@ pub enum MessagePayload {
     TurnOff {
         from: EntityId,
     },
+    /// A security device has raised an alarm. `victim` is the entity the
+    /// ecology's alerted spawn should pursue.
+    Alarm {
+        from: EntityId,
+        victim: EntityId,
+    },
+    /// Clear an active security alarm and return linked devices/ecologies to
+    /// their normal state.
+    Reset {
+        from: EntityId,
+    },
     /// Replace a moving-terrain elevator's next waypoint. This is deliberately
     /// distinct from `TurnOn`, whose BaseElevator meaning is merely "advance
     /// to the next sequential TPath node."
