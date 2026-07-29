@@ -7,8 +7,9 @@ function usage() {
   console.log(`Usage:
   node select-open-issues.mjs <count> [--repo OWNER/REPO] [--seed VALUE]
 
-Randomly select a fixed sample of open GitHub issues. Issues addressed by an
-open pull request are excluded before sampling. Output is JSON.
+Randomly select a fixed sample of open GitHub issues authored by the repository
+owner. Issues addressed by an open pull request are excluded before sampling.
+Output is JSON.
 
 Options:
   --repo OWNER/REPO  Repository to query (default: current gh repository)
@@ -165,18 +166,28 @@ function listOpenCandidates(repository) {
   }
 
   const items = pages.flat();
-  const openIssues = items
+  const repositoryOwner = repository.split("/", 1)[0];
+  const allOpenIssues = items
     .filter((issue) => !issue.pull_request)
     .map((issue) => ({
       number: issue.number,
       title: issue.title,
       url: issue.html_url,
+      author: issue.user?.login ?? null,
       labels: (issue.labels ?? []).map((label) =>
         typeof label === "string" ? label : label.name
       ),
       assignees: (issue.assignees ?? []).map((assignee) => assignee.login),
     }))
     .sort((left, right) => left.number - right.number);
+  const openIssues = allOpenIssues.filter(
+    ({ author }) =>
+      author?.toLowerCase() === repositoryOwner.toLowerCase(),
+  );
+  const excludedNonOwnerIssues = allOpenIssues.filter(
+    ({ author }) =>
+      author?.toLowerCase() !== repositoryOwner.toLowerCase(),
+  );
   const issueNumbers = new Set(openIssues.map(({ number }) => number));
   const pullRequestsByIssue = new Map();
 
@@ -211,14 +222,25 @@ function listOpenCandidates(repository) {
     ({ number }) => !pullRequestsByIssue.has(number),
   );
 
-  return { openIssues, eligibleIssues, excludedActivePullRequests };
+  return {
+    allOpenIssues,
+    openIssues,
+    eligibleIssues,
+    excludedNonOwnerIssues,
+    excludedActivePullRequests,
+  };
 }
 
 const options = parseArgs(process.argv.slice(2));
 const repository = resolveRepository(options.repo);
 const seed = options.seed ?? randomBytes(16).toString("hex");
-const { openIssues, eligibleIssues, excludedActivePullRequests } =
-  listOpenCandidates(repository);
+const {
+  allOpenIssues,
+  openIssues,
+  eligibleIssues,
+  excludedNonOwnerIssues,
+  excludedActivePullRequests,
+} = listOpenCandidates(repository);
 const selected = shuffle(eligibleIssues, seededRandom(seed)).slice(
   0,
   options.count,
@@ -230,7 +252,9 @@ console.log(
       repository,
       seed,
       requested: options.count,
+      totalOpenIssues: allOpenIssues.length,
       openIssues: openIssues.length,
+      excludedNonOwnerIssues,
       excludedActivePullRequests,
       available: eligibleIssues.length,
       sampled: selected.length,
