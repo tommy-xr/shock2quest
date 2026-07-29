@@ -291,7 +291,15 @@ fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dark::properties::{FrobFlag, PropFrobInfo, PropPlayerGun};
+    use dark::properties::{FrobFlag, KeyCard, PropFrobInfo, PropKeySrc, PropPlayerGun};
+
+    fn frob_info(world_action: FrobFlag) -> PropFrobInfo {
+        PropFrobInfo {
+            world_action,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        }
+    }
 
     fn pistol() -> PropPlayerGun {
         PropPlayerGun {
@@ -311,7 +319,7 @@ mod tests {
     fn world_use_of_nonweapon_stores_it_without_displacing_wielded_weapon() {
         let mut world = World::new();
         let pistol = world.add_entity(pistol());
-        let ammo = world.add_entity(());
+        let ammo = world.add_entity(frob_info(FrobFlag::MOVE));
         let mut controller = FlatPlayerController::new();
         controller.wield(pistol);
 
@@ -352,11 +360,7 @@ mod tests {
     #[test]
     fn world_use_of_scripted_pickup_dispatches_frob_instead_of_bypassing_it() {
         let mut world = World::new();
-        let keycard = world.add_entity(PropFrobInfo {
-            world_action: FrobFlag::MOVE | FrobFlag::SCRIPT,
-            inventory_action: FrobFlag::empty(),
-            tool_action: FrobFlag::empty(),
-        });
+        let keycard = world.add_entity(frob_info(FrobFlag::MOVE | FrobFlag::SCRIPT));
         let mut controller = FlatPlayerController::new();
 
         let effects = controller.pick_up(&world, keycard);
@@ -372,6 +376,35 @@ mod tests {
                 }] if *to == keycard
             ),
             "a MOVE | SCRIPT pickup must run its authored Frob path"
+        );
+    }
+
+    #[test]
+    fn world_use_of_move_only_keycard_dispatches_frob_for_injected_script() {
+        let mut world = World::new();
+        let keycard = world.add_entity((
+            frob_info(FrobFlag::MOVE),
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 8192,
+                lock_id: 0,
+            }),
+        ));
+        let mut controller = FlatPlayerController::new();
+
+        let effects = controller.pick_up(&world, keycard);
+
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                }] if *to == keycard
+            ),
+            "a MOVE-only PropKeySrc pickup must run its injected keycard Frob path"
         );
     }
 }
