@@ -113,6 +113,27 @@ pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
     Some(to_closed <= to_open)
 }
 
+/// Whether a cell-gating entity is an obstacle A* must not cross.
+///
+/// Closed-but-unlocked translating doors stay pathable because a pursuing AI
+/// opens them on arrival. Entities that are not translating doors cannot be
+/// operated by `StdDoor`, so they remain walls.
+pub fn door_blocks_pathfinding(world: &World, entity_id: EntityId) -> bool {
+    match door_is_closed(world, entity_id) {
+        Some(true) => {
+            let permanently_closed = world
+                .borrow::<View<dark::properties::PropTranslatingDoor>>()
+                .unwrap()
+                .get(entity_id)
+                .map(|door| door.is_permanently_closed())
+                .unwrap_or(false);
+            permanently_closed || is_entity_locked(world, entity_id)
+        }
+        Some(false) => false,
+        None => true,
+    }
+}
+
 pub fn get_all_links_with_template<TData>(
     world: &World,
     producing_entity_id: EntityId,
@@ -771,7 +792,9 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 
 #[cfg(test)]
 mod tests {
-    use super::{debit_player_nanites, door_is_closed, plan_stack_payment};
+    use super::{
+        debit_player_nanites, door_blocks_pathfinding, door_is_closed, plan_stack_payment,
+    };
     use crate::mission::PlayerInfo;
     use crate::runtime_props::RuntimePropTransform;
     use cgmath::{Matrix4, Quaternion, Vector3, vec3};
@@ -820,6 +843,33 @@ mod tests {
         let (world, door) = door_world(at, at, 0, at);
 
         assert_eq!(door_is_closed(&world, door), Some(true));
+    }
+
+    #[test]
+    fn a_zero_travel_door_authored_closed_blocks_pathfinding() {
+        // medsci1's space shields have no lock, but have nowhere to move:
+        // A* must treat their below-door cells as permanently sealed (#606).
+        let at = vec3(-15.5, 1.4, 61.0);
+        let (world, door) = door_world(at, at, 0, at);
+
+        assert!(door_blocks_pathfinding(&world, door));
+    }
+
+    #[test]
+    fn a_permanently_open_door_does_not_block_pathfinding() {
+        let at = vec3(18.0, -0.4, 41.8);
+        let (world, door) = door_world(at, at, 1, at);
+
+        assert!(!door_blocks_pathfinding(&world, door));
+    }
+
+    #[test]
+    fn an_unlocked_travelling_door_does_not_block_pathfinding() {
+        let closed = vec3(10.3, -0.4, 42.0);
+        let open = vec3(10.3, -0.4, 44.3);
+        let (world, door) = door_world(closed, open, 0, closed);
+
+        assert!(!door_blocks_pathfinding(&world, door));
     }
 
     #[test]

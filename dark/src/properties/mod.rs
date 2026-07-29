@@ -996,6 +996,13 @@ impl PropTranslatingDoor {
     pub fn is_permanently_open(&self) -> bool {
         !self.has_travel() && self.state == 1
     }
+
+    /// A doorway that can never open: no travel, and not authored open.
+    /// These doors remain physical barriers regardless of their lock state
+    /// (e.g. medsci1's space-shield membranes).
+    pub fn is_permanently_closed(&self) -> bool {
+        !self.has_travel() && self.state != 1
+    }
 }
 
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
