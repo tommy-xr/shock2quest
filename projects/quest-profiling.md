@@ -3,12 +3,21 @@
 ## Initial mission-spawn baseline
 
 Measured July 28, 2026 on a Quest 3 running Android 14 with a release APK from
-this change. Each mission was launched in a fresh process, allowed to warm up
-for three seconds after reaching the OpenXR `FOCUSED` state, then sampled for
-five seconds. The runtime rendered at 1680x1760 per eye and 90 Hz. Human review
+this change (SHA-256
+`9aeb725f044f1f51bb1d688d291216786382c28872918e142fe628c29b333d3c`).
+Each mission was launched in a fresh process, allowed to warm up for three
+seconds after reaching the OpenXR `FOCUSED` state, then sampled for five
+seconds. The runtime rendered at 1680x1760 per eye and 90 Hz. Human review
 accepted identifiable mission content for 19 captures. `eng1.mis`, `eng2.mis`,
 `hydro3.mis`, and `ops4.mis` produced valid focused telemetry but only
 environment/void frames, including direct focused recapture attempts.
+
+The final focus-transition window hardening was rebuilt as APK SHA-256
+`b67a75354cd9509ef9abdf4efb56cce11180a5367e6d947301c20fed65f59f19`.
+An additional three-second focused `earth.mis` smoke run with that exact APK
+reported 90.333 FPS, 0 stale frames, 0 torn frames, and a fresh stereo device
+capture. The hardening resets incomplete buckets only when focus changes and
+does not alter continuous focused intervals in the all-mission baseline.
 
 This is a stationary initial-spawn baseline. It proves that every mission
 loads, reaches a focused XR session, and submits stereo frames at its spawn. It
