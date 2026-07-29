@@ -384,6 +384,7 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::Replicator => "Replicator".to_string(),
                 Link::MissSpang => "MissSpang".to_string(),
                 Link::HitSpang(_) => "HitSpang".to_string(),
+                Link::Hacking => "Hacking".to_string(),
                 Link::ParticleAttachement(_) => "ParticleAttachement".to_string(),
                 Link::PhysAttach(_) => "PhysAttach".to_string(),
                 Link::TPathInit => "TPathInit".to_string(),

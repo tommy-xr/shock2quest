@@ -1,3 +1,4 @@
+mod computer;
 mod container;
 mod elevator;
 mod gamepig;
@@ -8,6 +9,7 @@ mod replicator;
 mod trainer;
 mod traits;
 
+pub use computer::*;
 pub use container::*;
 pub use elevator::*;
 pub use gamepig::*;
