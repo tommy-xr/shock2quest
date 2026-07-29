@@ -11,8 +11,8 @@ description: >-
   (then the game) plays through with no new blocker. Aggregates every session into
   a self-contained HTML timeline report. Invoke with a mission (default medsci1)
   and a goal (default: reach the level's exit). Use `--auto` to keep iterating to
-  campaign completion, `--auto-once` for one iteration, or `--restart` to discard
-  campaign progress while preserving the current roll.
+  campaign completion, `--auto-once` for one iteration, or `--restart` to forget
+  the previous ledger and roll a fresh campaign.
 ---
 
 # play-through — the playtest → review → fix → replay loop
@@ -31,8 +31,9 @@ run those phases inline. The manager always owns loop state and the report.
 resume at the frontier (warp/teleport/QuickLoad) — or launch fresh at iteration 0
   1. PLAYTEST   → invoke `playtest` toward the goal → data.json + screenshots + frontier
   2. REVIEW     → adversarially judge the session (below). Shallow/invalid → re-play with guidance.
-  3. TRIAGE     → keep only REAL findings; identify the progress BLOCKER.
-  4. FIX        → file issue + delegate fix sub-agent (PR "Fixes #n"); re-validate.
+  3. TRIAGE     → keep only REAL findings; split progress BLOCKERS from playable findings.
+  4. FIX        → file + delegate every finding immediately; fix blockers on the campaign
+                  stack, and fix playable findings independently in parallel.
   5. REPLAY     → resume at the (now advanced) frontier; confirm it gets further.
 repeat until the mission plays through with no new blocker, then advance to the next level
 ```
@@ -102,8 +103,30 @@ asset set, seed; same on the fix PR).
 
 For a plain **bug**, a targeted fix + negative-first test is enough. Either way the
 fix agent follows the repo's incremental, review, and negative-first-test
-discipline, opens a PR `Fixes #n`, and re-validates. Non-blockers: log them,
-keep playing past them.
+discipline, opens a PR `Fixes #n`, and re-validates.
+
+**Playable findings start fixes immediately and do not wait for session end.**
+When the playtester discovers a likely issue but can still make progress, it
+must send the manager an early notification with the exact repro, expected vs
+actual behavior, current screenshot, and whether the issue is safely bypassable.
+The manager performs a focused adversarial review while the playtester keeps
+playing. As soon as the finding is validated:
+
+1. File its GitHub issue with the same evidence and campaign configuration used
+   for blockers.
+2. Immediately delegate an independent fix worker in a separate worktree/branch.
+   The worker follows the same faithful-feature, negative-first, PR, restack,
+   and green-CI requirements as a blocker fix.
+3. Keep the playtest moving in parallel. Do not wait for that worker or put its
+   commit onto `fix_branch` unless the issue later becomes necessary for campaign
+   progress.
+4. Add the issue and fix-PR links to the session `data.json`/report. The blocker
+   ledger remains reserved for changes the campaign must stack in order to
+   advance.
+
+Never merely collect validated non-blockers for a later sweep. If worker slots
+are full, preserve discovery order and start the next fix as soon as a slot
+opens; lack of an immediately free slot does not stop the playable session.
 
 **Opening the PR is not the finish line — the fix agent watches it land green:**
 - `cargo fmt --check --all`. `format` is a separate, fast-failing CI job, and it
@@ -200,7 +223,7 @@ them in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
 ```
 node .agents/skills/play-through/playthrough-state.mjs roll              # random campaign (idempotent)
 node .agents/skills/play-through/playthrough-state.mjs roll seed=42      # reproducible roll
-node .agents/skills/play-through/playthrough-state.mjs roll --restart    # keep roll, discard progress
+node .agents/skills/play-through/playthrough-state.mjs roll --restart    # forget ledger, roll fresh
 node .agents/skills/play-through/playthrough-state.mjs roll --force scenario=hydroponics tweak=melee-only assets=legacy
 node .agents/skills/play-through/scenarios.mjs list                      # browse all ids
 ```
@@ -209,9 +232,10 @@ node .agents/skills/play-through/scenarios.mjs list                      # brows
 idempotent — re-invoking the skill mid-campaign keeps the existing roll, so the
 frontier, scenario, tweak, and assets stay consistent across iterations
 (`--force` starts a fresh campaign with a new roll). `--restart` is different:
-it preserves the current seed, scenario, tweak, assets, mission order, and fix
-branch while resetting iteration to 0 and clearing the frontier, blockers, and
-history. `show` re-surfaces the goal, the tweak instructions, and the
+it is the autonomous-mode spelling for forgetting the previous ledger and
+starting a newly rolled campaign; it does not retain the old seed, scenario,
+tweak, assets, mission order, fix branch, frontier, blockers, or history. `show`
+re-surfaces the goal, the tweak instructions, and the
 `DARK_ASSET_PATH` in its NEXT line every iteration — **feed the tweak
 instructions and campaign goal into every `playtest` prompt**, and treat a
 tweak's verifications as first-class findings (a broken psi power under an OSA
@@ -286,11 +310,12 @@ its `seed`), `frontier` (the game **save** to `/v1/load` from), the
 completion, and `fix_branch` — the running branch that **stacks each fix** so
 the campaign plays *past* an already-fixed-but-unmerged blocker.
 
-**Restart the current roll:** invoke the skill with `--restart`. Before the
-normal iteration, run `playthrough-state.mjs roll --restart` exactly once, then
-`show`. Consume `--restart` once; every later iteration in the same `--auto`
-invocation uses plain idempotent `roll`. This disregards recorded gameplay
-progress but respects the current roll. A missing ledger is rolled normally.
+**Restart with a fresh ledger and roll:** invoke the skill with `--restart`.
+Before the normal iteration, run `playthrough-state.mjs roll --restart` exactly
+once, then `show`. This forgets the entire previous ledger and creates a newly
+randomized campaign. Consume `--restart` once; every later iteration in the same
+`--auto` invocation uses plain idempotent `roll`. A missing ledger is rolled
+normally.
 
 **Clear & start a new campaign:** `playthrough-state.mjs roll --force` (wipes
 the ledger back to iteration 0 with a fresh scenario/tweak/assets roll; plain
@@ -310,11 +335,14 @@ campaign just launches mission 0 with no frontier to load, which is harmless.
 3. **Playtest** from here toward the goal (the `playtest` primitive), passing the
    campaign goal + the tweak instructions into the playtest prompt → `data.json`.
 4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.
-5. **Triage** the blocker (bug vs **feature-gap** — §3-4; feature-gaps get a
-   *faithful*, non-shim fix).
-6. **Fix:** assign a fix worker, using a subagent when available, that commits on
-   **`fix_branch`** (stacked) and opens a PR `Fixes #n`. `blocker add` /
-   `blocker set` in the ledger.
+5. **Triage** every validated finding (bug vs **feature-gap** — §3-4;
+   feature-gaps get a *faithful*, non-shim fix). While play continues, file and
+   delegate each playable finding immediately on an independent branch. Do not
+   batch non-blockers at the end of the session.
+6. **Fix blockers:** assign a fix worker, using a subagent when available, that
+   commits on **`fix_branch`** (stacked) and opens a PR `Fixes #n`. `blocker add`
+   / `blocker set` in the ledger. Parallel playable-finding workers continue on
+   their own branches and do not gate replay.
 7. **Re-validate:** rebuild `fix_branch`, reload the frontier save, confirm the
    playtest now gets **past** the blocker. If it does not, run `blocker fail
    <issue#> [pr#]`. Failures one and two return to triage/fix with the new
@@ -347,9 +375,11 @@ campaign just launches mission 0 with no frontier to load, which is harmless.
   failed fixes on one blocker, or required human input.
 
 ## Notes
-- Delegate playtest, review, and each fix when supported; otherwise keep the
-  phases distinct inline. The manager keeps the ledger (frontier, issues→fixes,
-  iteration report).
+- Delegate playtest, review, and each fix when supported; tell the playtest
+  worker to notify the manager as soon as it encounters a bypassable likely
+  issue so validation and fixing can begin while play continues. Otherwise keep
+  the phases distinct inline. The manager keeps the ledger (frontier,
+  issues→fixes, iteration report).
 - Navigation today is teleport + short thumbstick drives; real-movement
   playtesting (navmesh traversal) is a planned upgrade — keep frontier positions
   as world coordinates so it drops in.

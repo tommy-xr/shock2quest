@@ -13,7 +13,8 @@
 //                                       them in the ledger. Idempotent like init —
 //                                       an existing campaign keeps its roll;
 //                                       --force re-rolls from scratch; --restart
-//                                       keeps that roll but discards progress.
+//                                       forgets the previous ledger and rolls a
+//                                       fresh campaign.
 //     show                              print the ledger + the recommended next action
 //     advance <level> <save> <x,y,z> [note...]   set frontier, bump iteration, log history
 //     complete <level> [note...]        mark the campaign complete at its final mission
@@ -82,34 +83,18 @@ switch (cmd) {
     // Randomized init: pick scenario + tweak + asset set and persist them so
     // every later iteration of the campaign plays under the same roll.
     // Idempotent like init — only rolls when no ledger exists. `--force`
-    // replaces the roll; `--restart` preserves it and clears campaign progress.
+    // replaces the roll; `--restart` forgets the old ledger and starts fresh.
     const force = args.includes("--force");
     const restart = args.includes("--restart");
     if (force && restart) {
-      console.error("--force and --restart are mutually exclusive: use --force for a new roll or --restart to keep the current roll");
+      console.error("--force and --restart are mutually exclusive: choose one way to replace the current campaign");
       process.exit(1);
     }
-    if (existsSync(FILE) && restart) {
-      const s = load();
-      s.iteration = 0;
-      s.frontier = null;
-      s.blockers = [];
-      s.history = [];
-      s.completed = false;
-      s.completion = null;
-      save(s);
-      console.log(`restarted campaign at ${FILE} — discarded progress and kept the current roll.`);
-      if (s.scenario) {
-        console.log(`scenario: ${s.scenario.name} · tweak: ${s.tweak?.name} · assets: ${s.assets?.name} · seed: ${s.seed}`);
-      } else {
-        console.log("WARNING: this fixed-order campaign predates randomization, so there is no scenario/tweak/assets roll to report.");
-      }
-      break;
-    }
-    if (existsSync(FILE) && !force) {
+    const hadLedger = existsSync(FILE);
+    if (hadLedger && !force && !restart) {
       const s = load();
       if (s.scenario) {
-        console.log(`ledger already exists at ${FILE} (iteration ${s.iteration}) — kept its roll. Use --restart to discard progress or --force to re-roll.`);
+        console.log(`ledger already exists at ${FILE} (iteration ${s.iteration}) — kept its roll. Use --restart or --force to replace it with a fresh roll.`);
         console.log(`scenario: ${s.scenario.name} · tweak: ${s.tweak?.name} · assets: ${s.assets?.name}`);
       } else {
         console.log(`WARNING: ledger at ${FILE} (iteration ${s.iteration}) predates campaign randomization — it has NO scenario/tweak/assets roll.`);
@@ -143,7 +128,11 @@ switch (cmd) {
       tweak: picked.tweak,
       assets: picked.assets,
     });
-    console.log(`rolled campaign (seed ${picked.seed}) -> ${FILE}`);
+    if (restart && hadLedger) {
+      console.log(`forgot previous ledger and rolled fresh campaign (seed ${picked.seed}) -> ${FILE}`);
+    } else {
+      console.log(`rolled campaign (seed ${picked.seed}) -> ${FILE}`);
+    }
     for (const w of picked.warnings) console.log(`  WARNING: ${w}`);
     console.log(`  scenario: ${picked.scenario.name} [${picked.scenario.id}] — ${picked.scenario.missions.join(", ")}`);
     console.log(`  goal:     ${picked.scenario.goal}`);

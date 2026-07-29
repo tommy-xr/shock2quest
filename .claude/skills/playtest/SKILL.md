@@ -19,6 +19,13 @@ make progress toward the goal, and **notice** what's broken. Output a structured
 `data.json` + screenshots. You do NOT fix anything here — you observe and report;
 the `play-through` manager triages and delegates fixes.
 
+When a `play-through` manager delegated the session and you find a likely issue
+that does **not** prevent further play, notify the manager immediately with the
+exact repro, expected vs actual behavior, current screenshot, and why it is
+bypassable, then keep playing. Do not wait until `data.json` is complete: the
+manager validates, files, and delegates its fix in parallel. Continue to record
+the finding in the final `data.json`.
+
 ## Reach the start state
 - **Fresh:** launch the runtime on the mission (SDK `GameServer.launch`, or
   `cargo dbgr --mission <m>.mis --port <p>`), `step 5` to settle.
