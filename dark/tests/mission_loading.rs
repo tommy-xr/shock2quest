@@ -267,6 +267,50 @@ fn command1_tram_physical_attachments_parse() {
 }
 
 #[test]
+fn command1_tram_reroute_links_parse() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let info = load_mission_entity_info(&data, "command1.mis");
+
+    let links_from = |source| {
+        info.template_to_links
+            .get(&source)
+            .map(|links| {
+                links
+                    .to_links
+                    .iter()
+                    .map(|link| (link.to_template_id, link.link.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    for (button, waypoint) in [(686, 100), (722, 101), (723, 103)] {
+        assert!(
+            links_from(button).contains(&(waypoint, Link::ScriptParams)),
+            "reroute button {button} should name waypoint {waypoint} with ScriptParams"
+        );
+    }
+    assert!(
+        links_from(137).contains(&(100, Link::ScriptParams)),
+        "tram 137 should record waypoint 100 as its authored starting station"
+    );
+    assert!(
+        links_from(137).contains(&(101, Link::TPathNext)),
+        "tram 137 should initially target waypoint 101"
+    );
+    assert!(
+        !info.unparsed_links.contains_key("L$ScriptPar")
+            && !info.unparsed_links.contains_key("L$TPathNext"),
+        "the authored tram routing relations must be typed: ScriptParams={:?}, TPathNext={:?}",
+        info.unparsed_links.get("L$ScriptPar"),
+        info.unparsed_links.get("L$TPathNext"),
+    );
+}
+
+#[test]
 fn medsci1_deaf_metaproperty_delivers_hearing_component() {
     let Some(data) = data_root() else {
         eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");

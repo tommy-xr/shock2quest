@@ -20,7 +20,7 @@ pub struct BaseElevator {
     desired_position: Vector3<f32>,
     speed: f32,
     is_moving: bool,
-    path: Vec<(PropPosition, Option<TPathData>)>,
+    path: Vec<(EntityId, PropPosition, Option<TPathData>)>,
     is_dontstop_elevator: bool, // Flag for if the elevator came from a 'DontStopElevator' script, where it should keep moving when it hits boundaries.
 }
 
@@ -50,9 +50,13 @@ impl BaseElevator {
         let _v_position = world.borrow::<View<PropPosition>>().unwrap();
 
         let next_position_idx = (self.current_index + 1).rem(self.path.len() as u32);
-        self.current_index = next_position_idx;
+        self.move_to_target(next_position_idx);
+    }
 
-        let (next_position, next_data) = &self.path[next_position_idx as usize];
+    fn move_to_target(&mut self, target_index: u32) {
+        self.current_index = target_index;
+
+        let (_, next_position, next_data) = &self.path[target_index as usize];
         self.desired_position = next_position.position;
 
         // If we have path data available, use it to set the speed
@@ -64,8 +68,31 @@ impl BaseElevator {
             "BaseElevator: Moving to index {} position {:?} with speed {}",
             self.current_index, self.desired_position, self.speed
         );
-        //self.target_entity = next_dest_entity;
         self.is_moving = true;
+    }
+
+    fn reroute_to(&mut self, target_waypoint: EntityId) -> bool {
+        let Some(target_index) = self
+            .path
+            .iter()
+            .position(|(waypoint, _, _)| *waypoint == target_waypoint)
+            .map(|index| index as u32)
+        else {
+            return false;
+        };
+
+        // The native script ignores a request for the station the platform is
+        // already at (within 0.1 world units), and a repeated request for the
+        // waypoint it is already approaching does not restart it.
+        let target_position = self.path[target_index as usize].1.position;
+        if (self.current_position - target_position).magnitude() <= 0.1
+            || (self.is_moving && self.current_index == target_index)
+        {
+            return false;
+        }
+
+        self.move_to_target(target_index);
+        true
     }
 }
 impl Script for BaseElevator {
@@ -164,6 +191,16 @@ impl Script for BaseElevator {
                     Effect::NoEffect
                 }
             }
+            MessagePayload::RerouteElevator { target_waypoint } => {
+                if self.reroute_to(*target_waypoint) {
+                    Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: "Devices/DOOR1OP".to_owned(),
+                    }
+                } else {
+                    Effect::NoEffect
+                }
+            }
             // MessagePayload::TurnOff => {
             //     //self.current_position = trans_door.base_closed_location;
             //     self.desired_position = trans_door.base_closed_location;
@@ -228,6 +265,52 @@ mod tests {
             },
         ));
         (world, elevator)
+    }
+
+    fn four_stop_world() -> (World, EntityId, [EntityId; 4]) {
+        let mut world = World::new();
+        let fourth = world.add_entity((position_at(30.0), Links::empty()));
+        let third = world.add_entity((
+            position_at(20.0),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(fourth)),
+                    link: Link::TPath(TPathData { speed: 4.0 }),
+                }],
+            },
+        ));
+        let second = world.add_entity((
+            position_at(10.0),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(third)),
+                    link: Link::TPath(TPathData { speed: 3.0 }),
+                }],
+            },
+        ));
+        let first = world.add_entity((
+            position_at(0.0),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(second)),
+                    link: Link::TPath(TPathData { speed: 2.0 }),
+                }],
+            },
+        ));
+        let elevator = world.add_entity((
+            position_at(0.0),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(first)),
+                    link: Link::TPathInit,
+                }],
+            },
+        ));
+        (world, elevator, [first, second, third, fourth])
     }
 
     /// Steps until the elevator stops, returning the effect of the frame it
@@ -299,6 +382,29 @@ mod tests {
     }
 
     #[test]
+    fn reroute_targets_the_requested_station_without_visiting_intermediate_nodes() {
+        let (world, entity_id, nodes) = four_stop_world();
+        let physics = PhysicsWorld::new();
+        let mut elevator = BaseElevator::new();
+        elevator.initialize(entity_id, &world);
+
+        let effect = elevator.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::RerouteElevator {
+                target_waypoint: nodes[3],
+            },
+        );
+
+        assert!(matches!(effect, Effect::PlaySound { .. }));
+        assert!(elevator.is_moving);
+        assert_eq!(elevator.current_index, 3);
+        assert_eq!(elevator.desired_position, vec3(30.0, 0.0, 0.0));
+        assert_eq!(elevator.speed, 4.0);
+    }
+
+    #[test]
     fn a_continuous_elevator_retargets_the_next_node_on_arrival() {
         let (world, entity_id) = two_stop_world(-377.53342, -184.43343, 12.0);
         let physics = PhysicsWorld::new();
@@ -337,7 +443,7 @@ mod tests {
 fn get_elevator_path(
     target_entity: EntityId,
     world: &World,
-) -> Vec<(PropPosition, Option<TPathData>)> {
+) -> Vec<(EntityId, PropPosition, Option<TPathData>)> {
     let v_position = world.borrow::<View<PropPosition>>().unwrap();
     let _v_template_id = world.borrow::<View<PropTemplateId>>().unwrap();
     let mut next_path = Some((target_entity, None));
@@ -359,7 +465,7 @@ fn get_elevator_path(
         let maybe_next_position = v_position.get(next_entity_id);
 
         if let Ok(next_position) = maybe_next_position {
-            path.push((next_position.clone(), path_data))
+            path.push((next_entity_id, next_position.clone(), path_data))
         }
 
         next_path = get_first_link_with_data(world, next_entity_id, |link| match link {

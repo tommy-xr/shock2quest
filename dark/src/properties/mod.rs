@@ -449,7 +449,14 @@ pub enum Link {
     /// authored world-space offset (tram wall/floor assemblies, lifts).
     PhysAttach(PhysAttachOptions),
     TPathInit,
+    /// Mutable moving-terrain state: from an elevator/platform to the waypoint
+    /// it is currently travelling toward. The original engine replaces this
+    /// bare relation when an elevator is rerouted.
+    TPathNext,
     TPath(TPathData),
+    /// Script-authored object parameter. `RerouteElevatorButton` uses this
+    /// bare relation to name the waypoint requested by each call button.
+    ScriptParams,
     /// From a patrol-point object to the next patrol point on its route. An AI
     /// with `PropAIPatrol(true)` walks this chain of points while idle. The
     /// link carries no data (a bare "go to the next point" edge).
@@ -1038,12 +1045,13 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_link("L$SwitchLin", |_| Link::SwitchLink),
         define_link("L$Teleport", |_| Link::Teleport),
         define_link("L$TPathInit", |_| Link::TPathInit),
+        define_link("L$TPathNext", |_| Link::TPathNext),
+        define_link("L$ScriptPar", |_| Link::ScriptParams),
         define_link("L$AIPatrol", |_| Link::AIPatrol),
         define_link("L$Clip", |_| Link::Clip),
         define_link("L$Miss Span", |_| Link::MissSpang),
         define_link("L$Weapon", |_| Link::Weapon),
         //define_link("L$TPath", |_| Link::TPath),
-        //define_link("L$TPathNext", |_| Link::TPath),
     ];
 
     // Links with data
