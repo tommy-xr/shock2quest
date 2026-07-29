@@ -24,6 +24,11 @@ pub struct InputContext {
     // is no headroom. VR leaves this false - physically crouching moves the
     // HMD instead.
     pub crouch: bool,
+
+    // Ordinary locomotion jump request. Runtimes provide this as a held
+    // button; the physics controller edge-detects it so holding the button
+    // cannot repeatedly add upward velocity.
+    pub jump: bool,
 }
 
 impl InputContext {
@@ -35,6 +40,7 @@ impl InputContext {
             right_hand: Hand::default(),
             pointer: None,
             crouch: false,
+            jump: false,
         }
     }
 }

@@ -143,6 +143,19 @@ fn slope_ground_probe_distance(shape: &dyn Shape) -> Real {
 /// without a jump.
 const PLAYER_STEP_HEIGHT: f32 = 2.0;
 
+/// Ordinary jump launch speed and downward acceleration, in SS2 feet per
+/// second(/squared). These produce a short, fixed-height hop while preserving
+/// the existing terminal fall speed. The authored shodan.mis final barrier is
+/// deliberately taller than the 2 ft stair probe and needs this separate
+/// player action to clear.
+const PLAYER_JUMP_SPEED: f32 = 28.0;
+const PLAYER_JUMP_GRAVITY: f32 = 40.0;
+const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
+/// Maximum forward search for a jump-through landing. This is deliberately a
+/// short body-scale transition, not a general wall bypass.
+const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
+const PLAYER_JUMP_MANTLE_PROBE_STEP: f32 = 0.5;
+
 /// How far below the player's feet (world units) a surface still counts as the
 /// thing they are *standing on* for support-motion transfer (see
 /// [`PlayerSupport`]). Comfortably clears the controller's contact offset plus
@@ -1046,11 +1059,163 @@ fn plan_climb_top_out(
     })
 }
 
-/// Advance a compressed ladder top-out by one fixed-timestep step, checking
-/// every substep against current parented entity geometry. Parentless immutable
-/// level terrain is the narrow Dark jump-through exception. A newly-blocked
-/// route returns to its last valid standing pose before the capsule is expanded,
-/// and final standing fit is checked against every collider.
+/// Plan Dark's ordinary jump-through/mantle for a grounded player pressing
+/// into a non-climbable low obstacle.
+///
+/// Dark's sparse sphere-stack can jump through the local terrain lip after a
+/// point probe finds clearance above it. Our continuous capsule cannot occupy
+/// that intermediate pose, so this uses the same temporary head sphere and
+/// parentless-terrain exception as ladder `BreakClimb`. The transition is
+/// tightly bounded: the current frame must either be blocked by a low lip or
+/// find a walkable landing above the stair limit, the first body-scale standing
+/// pose must fit against *all* colliders, and every scripted substep still
+/// collides with parented entities. A same-height landing requires a genuinely
+/// clear all-world probe above the lip, so full-height walls remain solid. An
+/// elevated landing may use Dark's parentless-terrain jump-through probe: that
+/// is what permits authored stacked corridors such as shodan's log platforms,
+/// whose upper floor is a ceiling to the lower cell.
+fn plan_jump_mantle(
+    controller: &KinematicCharacterController,
+    validation_queries: &QueryPipeline,
+    scripted_queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    dt: Real,
+) -> Option<PlayerMovement> {
+    let desired_h = vector![desired.x, 0.0, desired.z];
+    let desired_distance = desired_h.norm();
+    if desired_distance <= 1.0e-6 {
+        return None;
+    }
+    let direction = desired_h / desired_distance;
+    let walk = controller.move_shape(dt, validation_queries, shape, pos, desired_h, |_c| ());
+    let walk_blocked = walk.translation.dot(&direction) <= 0.25 * desired_distance;
+
+    let standing = standing_player_capsule();
+    let half_height = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR;
+    let current_feet_y = pos.translation.vector.y - half_height;
+    let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+    let head = pos.translation.vector + Vector::y() * head_offset;
+    let max_rise =
+        (PLAYER_JUMP_SPEED * PLAYER_JUMP_SPEED) / (2.0 * PLAYER_JUMP_GRAVITY * SCALE_FACTOR);
+    let minimum_forward =
+        (2.0 * PLAYER_STANDING_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
+    let mut transition = None;
+    let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
+    while rise_ss2 <= max_rise * SCALE_FACTOR + 1.0e-4 && transition.is_none() {
+        let raised = head + Vector::y() * (rise_ss2 / SCALE_FACTOR);
+        let mut forward_ss2 = minimum_forward * SCALE_FACTOR;
+        while forward_ss2 <= PLAYER_JUMP_MANTLE_FORWARD + 1.0e-4 {
+            let forward = forward_ss2 / SCALE_FACTOR;
+            let raised_forward = raised + direction * forward;
+            // Dark's sparse player spheres can pass the lip/underside of
+            // immutable level terrain during the jump-through transition.
+            // An elevated landing may therefore use the same parented-only
+            // probe as the scripted movement itself. Same-height crossings
+            // below additionally require the all-world probe to be clear, so
+            // a full-height wall with open space behind it is never a mantle.
+            let scripted_probe_clear =
+                ray_segment_is_clear(scripted_queries, raised, raised_forward);
+            let validation_probe_clear =
+                ray_segment_is_clear(validation_queries, raised, raised_forward);
+            if scripted_probe_clear {
+                // A platform above the current floor is a genuine mantle even
+                // when its underside has no blocking vertical face.
+                let down_ray = Ray::new(Point::from(raised_forward), -Vector::y());
+                let elevated_floor = validation_queries
+                    .cast_ray_and_get_normal(&down_ray, 2.0 * max_rise, true)
+                    .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+                    .map(|(_, ground)| raised_forward.y - ground.time_of_impact)
+                    .filter(|floor_y| {
+                        *floor_y - current_feet_y
+                            > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                    });
+                let final_standing = elevated_floor
+                    .map(|floor_y| {
+                        vector![
+                            raised_forward.x,
+                            floor_y
+                                + half_height
+                                + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR,
+                            raised_forward.z
+                        ]
+                    })
+                    // Otherwise, a blocked low lip crosses to the first
+                    // same-height standing pose beyond it. That destination
+                    // may open over a drop, as shodan's final descent does.
+                    .or_else(|| {
+                        (walk_blocked && validation_probe_clear)
+                            .then_some(pos.translation.vector + direction * forward)
+                    });
+                if let Some(final_standing) = final_standing {
+                    if !shape_intersects(validation_queries, final_standing, &standing) {
+                        transition = Some((raised, raised_forward, final_standing));
+                        break;
+                    }
+                }
+            }
+            forward_ss2 += PLAYER_JUMP_MANTLE_PROBE_STEP;
+        }
+        rise_ss2 += PLAYER_JUMP_MANTLE_PROBE_STEP;
+    }
+    let (raised, raised_forward, final_standing) = transition?;
+    let final_head = final_standing + Vector::y() * head_offset;
+    let waypoints = [
+        head,
+        raised,
+        raised_forward,
+        raised_forward,
+        final_head,
+        final_head,
+        final_standing,
+    ];
+
+    // Preflight the exact fixed-timestep route against every parented entity
+    // blocker. Parentless level terrain is the one Dark jump-through
+    // exception; the destination itself was validated against all colliders.
+    let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+    let mut simulated = pos.translation.vector;
+    let mut first_movement = None;
+    for waypoint in waypoints {
+        for _ in 0..512 {
+            if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                break;
+            }
+            let movement = slide_toward(
+                controller,
+                scripted_queries,
+                &compressed,
+                simulated,
+                waypoint,
+                dt,
+            )?;
+            first_movement.get_or_insert(movement.translation);
+            simulated += movement.translation;
+        }
+        if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
+            return None;
+        }
+    }
+
+    Some(PlayerMovement {
+        movement: scripted_character_movement(first_movement?),
+        top_out: Some(ClimbTopOut {
+            waypoints,
+            next_waypoint: 0,
+            save_pose: pos.translation.vector,
+            reversing: false,
+        }),
+        slope_displacement: Vector::zeros(),
+    })
+}
+
+/// Advance a compressed ladder or ordinary-jump top-out by one fixed-timestep
+/// step, checking every substep against current parented entity geometry.
+/// Parentless immutable level terrain is the narrow Dark jump-through
+/// exception. A newly-blocked route returns to its last valid standing pose
+/// before the capsule is expanded, and final standing fit is checked against
+/// every collider.
 fn advance_climb_top_out(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -1147,6 +1312,10 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
 /// gravity are resolved from where the platform has taken them. A player
 /// gripping a ladder is holding the ladder, not riding the floor, so the climb
 /// branch above skips it.
+///
+/// `airborne_vertical` is one frame of an ordinary jump arc. While present it
+/// replaces the legacy constant gravity pass and disables ground snapping and
+/// stair probes; all collision casts and wall/ceiling rejection remain live.
 fn step_player_movement(
     controller: &KinematicCharacterController,
     queries: &QueryPipeline,
@@ -1157,6 +1326,7 @@ fn step_player_movement(
     dt: Real,
     gravity: Real,
     slope_displacement: Option<Vector<Real>>,
+    airborne_vertical: Option<Real>,
     climb: Option<ClimbPass<'_>>,
 ) -> PlayerMovement {
     // Ladder: the climb vector replaces both the walk and the gravity pass.
@@ -1224,7 +1394,27 @@ fn step_player_movement(
     let mut mvt = controller.move_shape(dt, queries, shape, pos, desired, |_c| ());
     let after_walk = Translation::from(mvt.translation) * pos;
     let gravity_step = Vector::y() * gravity;
-    let (fall, next_slope_displacement) = if let Some(slope_displacement) = slope_displacement {
+    // A live jump owns vertical movement until it lands. Disable the
+    // stair-sized ground snap for that pass so the initial ascent is not
+    // immediately glued back to the floor; collision, sliding, ceiling
+    // rejection, and slope classification remain the same controller path.
+    // Slope carry resumes from rest after landing instead of adding horizontal
+    // fall momentum to an independently integrated jump arc.
+    let (fall, next_slope_displacement) = if let Some(vertical) = airborne_vertical {
+        let mut airborne_controller = *controller;
+        airborne_controller.snap_to_ground = None;
+        (
+            airborne_controller.move_shape(
+                dt,
+                queries,
+                shape,
+                &after_walk,
+                Vector::y() * vertical,
+                |_collision| (),
+            ),
+            Vector::zeros(),
+        )
+    } else if let Some(slope_displacement) = slope_displacement {
         // Dark's dynamic player preserves velocity when a fall is redirected
         // by terrain. Our kinematic controller has no velocity of its own, so
         // retain only the horizontal part of a slope slide and feed it into
@@ -1334,7 +1524,7 @@ fn step_player_movement(
     // Stairs: if grounded walking was blocked, probe for a step and hop onto
     // it. (Grounded-only: an airborne player pressed against a wall must not
     // ratchet up ledges.)
-    if mvt.grounded {
+    if airborne_vertical.is_none() && mvt.grounded {
         if let Some(step) = try_step_up(
             queries,
             shape,
@@ -1644,6 +1834,14 @@ pub struct PlayerHandle {
     // collision. Carried only while gravity keeps sliding the player; flat
     // support, climbing and direct relocation clear it.
     slope_displacement: Vector<Real>,
+    // Ground contact reported by the previous character-controller frame.
+    // Unlike `support`, this includes immutable level terrain.
+    is_grounded: bool,
+    // A live ordinary jump's vertical velocity (world units / second).
+    // `None` means the legacy constant-gravity walk/fall path is active.
+    jump_velocity: Option<Real>,
+    // Held-button edge state: one press launches at most one jump.
+    jump_was_pressed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2042,6 +2240,8 @@ impl PhysicsWorld {
     ) {
         player_handle.top_out = None;
         player_handle.slope_displacement = Vector::zeros();
+        player_handle.is_grounded = false;
+        player_handle.jump_velocity = None;
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let shape = if player_handle.is_crouched {
             crouched_player_shared_shape()
@@ -2240,6 +2440,7 @@ impl PhysicsWorld {
         let walk_dir = vector![delta_h.x / dist, 0.0, delta_h.z / dist];
         let destination = start + walk_dir * requested_distance;
         let mut stalled_substeps = 0;
+        let mut grounded = player_handle.is_grounded;
         // Sensor volumes the player occupies, carried across the sweep. The hop
         // is committed as one jump, so without polling per substep any volume
         // entered and left between the endpoints would never be observed (#654).
@@ -2306,10 +2507,12 @@ impl PhysicsWorld {
                     dt,
                     gravity,
                     None,
+                    None,
                     // No ladder redirect: a validated move walks, it doesn't climb.
                     None,
                 )
                 .movement;
+                grounded = mvt.grounded;
 
                 let candidate = Translation::from(mvt.translation) * pos;
                 let from_start = vector![
@@ -2366,6 +2569,7 @@ impl PhysicsWorld {
         if walked {
             self.set_player_translation(new_position, player_handle);
         }
+        player_handle.is_grounded = grounded;
 
         let remaining = vector![
             destination.x - pos.translation.vector.x,
@@ -2733,6 +2937,9 @@ impl PhysicsWorld {
             top_out: None,
             support: None,
             slope_displacement: Vector::zeros(),
+            is_grounded: false,
+            jump_velocity: None,
+            jump_was_pressed: false,
         }
     }
 
@@ -3037,6 +3244,23 @@ impl PhysicsWorld {
         facing: Vector3<f32>,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        self.update_with_facing_and_jump(desired_movement, facing, false, player_handle)
+    }
+
+    /// Update player movement with facing and a held ordinary-jump button.
+    ///
+    /// The button is edge-triggered inside [`PlayerHandle`], starts only from
+    /// controller-confirmed ground, and then follows a collision-cast ballistic
+    /// arc until landing. Keeping the request here (rather than as a debug
+    /// relocation/effect) means desktop, VR, and automated playtests all drive
+    /// the same production character controller.
+    pub fn update_with_facing_and_jump(
+        &mut self,
+        desired_movement: Vector3<f32>,
+        facing: Vector3<f32>,
+        jump_pressed: bool,
+        player_handle: &mut PlayerHandle,
+    ) -> (Vector3<f32>, Vec<CollisionEvent>) {
         // Queue every PhysAttach child at its parent's same next-frame target
         // before Rapier derives kinematic velocities. Moving-terrain assemblies
         // (tram floor + walls/buttons) therefore advance as one physical body,
@@ -3070,7 +3294,7 @@ impl PhysicsWorld {
         let desired_movement = vec_to_nvec(desired_movement);
         let facing = vec_to_nvec(facing);
         let (mut collision_events, character_body) =
-            { self.move_player(desired_movement, facing, player_handle) };
+            { self.move_player(desired_movement, facing, jump_pressed, player_handle) };
         let translation = nvec_to_cgmath(*character_body.translation());
 
         let mut additional_collision_events = { self.events.get_and_clear_events() };
@@ -3142,8 +3366,21 @@ impl PhysicsWorld {
         &mut self,
         desired_movement: Vector<Real>,
         facing: Vector<Real>,
+        jump_pressed: bool,
         player_handle: &mut PlayerHandle,
     ) -> (Vec<CollisionEvent>, &RigidBody) {
+        let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
+        player_handle.jump_was_pressed = jump_pressed;
+        let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
+        if launch_jump {
+            player_handle.jump_velocity = Some(PLAYER_JUMP_SPEED / SCALE_FACTOR);
+            player_handle.is_grounded = false;
+            // A jumping player has left their moving support. Its carry is
+            // already represented by the first frame's body pose; do not keep
+            // transferring later platform motion through the air.
+            player_handle.support = None;
+        }
+
         let character_body = &self.rigid_body_set[player_handle.character_handle];
         let original_position = *character_body.position();
         let character_user_data = character_body.user_data;
@@ -3164,7 +3401,9 @@ impl PhysicsWorld {
         // Flat climbing: when the player overlaps a climbable surface (ladder)
         // and pushes toward it, redirect that input to vertical movement and
         // suppress the gravity pass for this frame (see `climb_redirect`).
-        let climb_movement = {
+        let climb_movement = if player_handle.jump_velocity.is_some() {
+            None
+        } else {
             let climb_filter = QueryFilter::new()
                 .groups(InteractionGroups::new(
                     InternalCollisionGroups::PLAYER.bits.into(),
@@ -3309,24 +3548,48 @@ impl PhysicsWorld {
                     slope_displacement: Vector::zeros(),
                 }
             } else {
-                step_player_movement(
-                    &player_handle.controller,
-                    &queries,
-                    character_shape.as_ref(),
-                    &character_pos,
-                    desired_movement,
-                    carry,
-                    self.integration_parameters.dt,
-                    gravity,
-                    Some(player_handle.slope_displacement),
-                    climb_movement.map(|(movement, top_out)| ClimbPass {
-                        movement,
-                        top_out,
-                        validation_queries: queries,
-                        probe_queries: queries.with_filter(climb_pass_filter),
-                        scripted_queries: queries.with_filter(scripted_top_out_filter),
-                    }),
-                )
+                // A compressed mantle finishes by restoring the standing
+                // capsule. Keep crouched jumps ballistic so the collider flag
+                // and shape cannot diverge under low headroom.
+                let jump_mantle = (launch_jump && !player_handle.is_crouched)
+                    .then(|| {
+                        plan_jump_mantle(
+                            &player_handle.controller,
+                            &queries,
+                            &queries.with_filter(scripted_top_out_filter),
+                            character_shape.as_ref(),
+                            &character_pos,
+                            desired_movement,
+                            self.integration_parameters.dt,
+                        )
+                    })
+                    .flatten();
+                if let Some(jump_mantle) = jump_mantle {
+                    jump_mantle
+                } else {
+                    let airborne_vertical = player_handle
+                        .jump_velocity
+                        .map(|velocity| velocity * self.integration_parameters.dt);
+                    step_player_movement(
+                        &player_handle.controller,
+                        &queries,
+                        character_shape.as_ref(),
+                        &character_pos,
+                        desired_movement,
+                        carry,
+                        self.integration_parameters.dt,
+                        gravity,
+                        Some(player_handle.slope_displacement),
+                        airborne_vertical,
+                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                            movement,
+                            top_out,
+                            validation_queries: queries,
+                            probe_queries: queries.with_filter(climb_pass_filter),
+                            scripted_queries: queries.with_filter(scripted_top_out_filter),
+                        }),
+                    )
+                }
             }
         });
         let was_top_out = player_handle.top_out.is_some();
@@ -3342,6 +3605,31 @@ impl PhysicsWorld {
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
+
+        if is_top_out {
+            player_handle.jump_velocity = None;
+            player_handle.is_grounded = false;
+        } else if let Some(mut velocity) = player_handle.jump_velocity {
+            let requested_vertical = velocity * self.integration_parameters.dt;
+            let applied_vertical = mvt.translation.y - carry.y;
+            if mvt.grounded && requested_vertical <= 0.0 {
+                player_handle.jump_velocity = None;
+                player_handle.is_grounded = true;
+            } else {
+                // A ceiling (or other overhead collision) consumes the upward
+                // cast. Cancel the rise immediately, then let the next frame's
+                // downward half of the same arc settle normally.
+                if requested_vertical > 0.0 && applied_vertical < requested_vertical * 0.5 {
+                    velocity = 0.0;
+                }
+                velocity -= PLAYER_JUMP_GRAVITY / SCALE_FACTOR * self.integration_parameters.dt;
+                player_handle.jump_velocity =
+                    Some(velocity.max(-PLAYER_MAX_FALL_SPEED / SCALE_FACTOR));
+                player_handle.is_grounded = false;
+            }
+        } else {
+            player_handle.is_grounded = mvt.grounded;
+        }
 
         // Edges already observed along a swept `move_player_validated` hop come
         // first: they happened before this frame's pose. They also leave
@@ -6230,6 +6518,343 @@ mod tests {
             max_y - start.y > 0.25,
             "the player should step onto the threshold under the ceiling, rose {}",
             max_y - start.y
+        );
+    }
+
+    /// Ordinary jump is a separate, grounded input: it clears a low obstacle
+    /// taller than the stair probe without changing automatic step height.
+    /// Negative-first: the walking control remains stopped at the 5 ft wall,
+    /// and before jump locomotion both runs ended at that same face.
+    #[test]
+    fn grounded_jump_clears_a_non_climbable_low_obstacle() {
+        let run = |jump: bool| -> (Vector3<f32>, f32) {
+            let mut world = PhysicsWorld::new();
+            world.add_kinematic(
+                EntityId::from_inner(1000).unwrap(),
+                vec3(0.0, -0.5, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(20.0, 1.0, 20.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            // 2 world units == 5 SS2 ft: taller than the 2 ft stair probe but
+            // comfortably inside the ordinary jump arc.
+            world.add_kinematic(
+                EntityId::from_inner(1001).unwrap(),
+                vec3(0.0, 1.0, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(0.4, 2.0, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            let mut player = world.create_player(
+                vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
+            step(&mut world, &mut player, 30);
+            let start = world.get_player_translation(&player);
+            let mut max_y = start.y;
+            for frame in 0..120 {
+                world.update_with_facing_and_jump(
+                    vec3(0.1, 0.0, 0.0),
+                    Vector3::unit_x(),
+                    jump && frame == 0,
+                    &mut player,
+                );
+                max_y = max_y.max(world.get_player_translation(&player).y);
+            }
+            (world.get_player_translation(&player), max_y - start.y)
+        };
+
+        let (walked, walked_rise) = run(false);
+        assert!(
+            walked.x < -0.3 && walked_rise < 0.1,
+            "walking must stay blocked by the over-step-height wall, ended {walked:?}, rose {walked_rise}"
+        );
+
+        let (jumped, jumped_rise) = run(true);
+        assert!(
+            jumped.x > 1.0 && jumped_rise > 2.0,
+            "jump should arc over the low wall, ended {jumped:?}, rose {jumped_rise}"
+        );
+    }
+
+    /// The authored Delacroix-log route in shodan.mis uses a platform whose
+    /// walkable top is above the stair probe but still inside the player's
+    /// ordinary jump/head reach. Unlike the final-descent lip, its underside
+    /// leaves forward walking unobstructed, so the elevated landing probe must
+    /// recognize the top rather than waiting for a blocked walk cast.
+    #[test]
+    fn grounded_jump_mantles_an_elevated_world_platform() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.5, 10.0)
+                .translation(vector![0.0, -0.5, 0.0])
+                .build(),
+        );
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            ColliderBuilder::cuboid(3.0, 1.8, 3.0)
+                .translation(vector![1.5, 1.8, 0.0])
+                .build(),
+        );
+        let mut player = world.create_player(
+            vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+
+        for frame in 0..120 {
+            world.update_with_facing_and_jump(
+                vec3(0.1, 0.0, 0.0),
+                Vector3::unit_x(),
+                frame == 0,
+                &mut player,
+            );
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.x > 0.0 && end.y > 4.4,
+            "jump should mantle onto the elevated platform, ended {end:?}"
+        );
+    }
+
+    /// Jump remains collision-cast locomotion: it may clear a low barrier but
+    /// cannot climb or tunnel through a full-height wall.
+    #[test]
+    fn jump_still_rejects_full_height_walls() {
+        let run = |parented: bool| {
+            let mut world = PhysicsWorld::new();
+            world.add_kinematic(
+                EntityId::from_inner(1000).unwrap(),
+                vec3(0.0, -0.5, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(20.0, 1.0, 20.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            let wall = ColliderBuilder::cuboid(0.2, 5.0, 2.0)
+                .translation(vector![0.0, 5.0, 0.0])
+                .build();
+            if parented {
+                world.add_kinematic(
+                    EntityId::from_inner(1001).unwrap(),
+                    vec3(0.0, 5.0, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.4, 10.0, 4.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            } else {
+                world.add_collider(EntityId::from_inner(1001).unwrap(), wall);
+            }
+            let mut player = world.create_player(
+                vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
+            step(&mut world, &mut player, 30);
+            for frame in 0..180 {
+                world.update_with_facing_and_jump(
+                    vec3(0.1, 0.0, 0.0),
+                    Vector3::unit_x(),
+                    frame == 0,
+                    &mut player,
+                );
+            }
+            world.get_player_translation(&player)
+        };
+
+        for (kind, end) in [
+            ("parented entity", run(true)),
+            ("world terrain", run(false)),
+        ] {
+            assert!(
+                end.x < -0.3,
+                "jump must remain blocked by a full-height {kind} wall, ended {end:?}"
+            );
+        }
+    }
+
+    /// A held jump button is one impulse, not repeated upward thrust, and a
+    /// real low ceiling clips that impulse through the ordinary shape cast.
+    #[test]
+    fn held_jump_does_not_repeat_and_ceiling_blocks_rise() {
+        let run = |ceiling: bool| -> f32 {
+            let mut world = PhysicsWorld::new();
+            world.add_kinematic(
+                EntityId::from_inner(1000).unwrap(),
+                vec3(0.0, -0.5, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(20.0, 1.0, 20.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            if ceiling {
+                world.add_kinematic(
+                    EntityId::from_inner(1001).unwrap(),
+                    vec3(0.0, 2.8, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(6.0, 0.4, 6.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            }
+            let mut player = world.create_player(
+                vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
+            step(&mut world, &mut player, 30);
+            let start = world.get_player_translation(&player);
+            let mut max_y = start.y;
+            for _ in 0..240 {
+                world.update_with_facing_and_jump(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::unit_x(),
+                    true,
+                    &mut player,
+                );
+                max_y = max_y.max(world.get_player_translation(&player).y);
+            }
+            max_y - start.y
+        };
+
+        let open_rise = run(false);
+        assert!(
+            open_rise > 2.0 && open_rise < 5.0,
+            "one held press should produce one bounded hop, rose {open_rise}"
+        );
+        let capped_rise = run(true);
+        assert!(
+            capped_rise < 0.15,
+            "a low ceiling must clip the jump cast, rose {capped_rise}"
+        );
+    }
+
+    /// Releasing and pressing again while airborne must not reset the vertical
+    /// velocity to a fresh launch. This covers both rapid tapping and a held
+    /// controller that bounces around its threshold during one arc.
+    #[test]
+    fn airborne_jump_edges_do_not_relaunch() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        for _ in 0..5 {
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::unit_x(),
+                false,
+                &mut player,
+            );
+        }
+        let before_second_edge = player
+            .jump_velocity
+            .expect("the first jump should still be airborne");
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        let after_second_edge = player
+            .jump_velocity
+            .expect("an ignored airborne edge should leave the arc active");
+        assert!(
+            after_second_edge < before_second_edge,
+            "an airborne press must keep consuming gravity, not relaunch ({before_second_edge} -> {after_second_edge})"
+        );
+    }
+
+    /// A crouched player may hop, but must not enter the standing-only
+    /// compressed mantle path. Its collider stays crouched through the arc and
+    /// can return to the standing capsule normally once grounded in headroom.
+    #[test]
+    fn crouched_jump_preserves_collider_state_and_can_stand_after_landing() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.4, 2.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        assert!(world.set_player_crouch(true, &mut player));
+
+        world.update_with_facing_and_jump(
+            vec3(0.1, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.top_out.is_none() && player.is_crouched(),
+            "crouched jump must stay ballistic and keep the crouched collider"
+        );
+        let collider_handle = world.rigid_body_set[player.character_handle].colliders()[0];
+        let crouched = world.collider_set[collider_handle]
+            .shape()
+            .as_capsule()
+            .expect("player collider should remain a capsule");
+        assert!(
+            (2.0 * (crouched.half_height() + crouched.radius)
+                - PLAYER_CROUCH_HEIGHT / SCALE_FACTOR)
+                .abs()
+                < 1.0e-4,
+            "jump must not expand the crouched capsule"
+        );
+
+        for _ in 0..240 {
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::unit_x(),
+                false,
+                &mut player,
+            );
+        }
+        assert!(
+            !world.set_player_crouch(false, &mut player),
+            "a landed crouched player in open headroom should stand normally"
         );
     }
 

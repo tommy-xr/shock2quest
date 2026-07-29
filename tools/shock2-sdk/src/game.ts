@@ -408,6 +408,11 @@ export class InputApi {
     await this.client.post("/v1/control/input", { channel, value });
   }
 
+  /** Hold or release the ordinary production jump button. */
+  async setJump(pressed: boolean): Promise<void> {
+    await this.set("jump", pressed ? 1 : 0);
+  }
+
   /**
    * Point the production flat-mode camera/interaction ray at a world position.
    *

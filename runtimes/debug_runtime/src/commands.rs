@@ -383,6 +383,9 @@ pub struct InputState {
     /// Crouch REQUEST (the `crouch` channel), not the resulting collider
     /// state - standing up is refused while there is no headroom.
     pub crouch: bool,
+    /// Ordinary held jump request. The physics controller launches only on
+    /// its rising edge and only while grounded.
+    pub jump: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -414,6 +417,7 @@ impl Default for InputState {
             right_hand: InputHand::default(),
             pointer: None,
             crouch: false,
+            jump: false,
         }
     }
 }
