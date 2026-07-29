@@ -59,7 +59,11 @@ async function approach(game: GameServer, templateId: number): Promise<void> {
     templateId === CPUS[1]
       ? [
           { x: 25.56, y: start.y, z: 62.4 },
-          { x: 25.15, y: start.y, z: 60.05 },
+          // Stay west of the corner's contact band. The original 2.4-foot
+          // player footprint cannot reach the old point at (25.15, 60.05),
+          // but this nearby pose is collision-valid for both footprints and
+          // preserves the same outer route around the shield chamber.
+          { x: 24.9, y: start.y, z: 60.25 },
           { x: 28.8, y: start.y, z: 59.84 },
           { x: 32, y: start.y, z: 59.84 },
           { x: 35.2, y: start.y, z: 59.84 },
