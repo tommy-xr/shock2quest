@@ -141,12 +141,13 @@ test(
     await game.input.lookAtWorldPoint([
       ladder.x + 8,
       ladderTop + 2,
-      ladder.z + 1,
+      ladder.z + 2,
     ]);
 
-    // Climb with the slight +Z heading, stopping with a full one-frame margin
-    // below the top-out range. (Dead-straight input stalls on lower ship
-    // geometry at y ~= 7.7.)
+    // Climb with the slight +Z heading, stopping below the top-out range.
+    // The original-height body rests slightly lower on this irregular rung
+    // stack than the temporary capsule did, so keep a broad sub-frame staging
+    // band while remaining well below the actual top-out threshold.
     await game.input.set("right_hand.thumbstick", [0, 1]);
     let beforeTopOut = await game.player.position();
     for (let elapsed = 0; elapsed < 720; ) {
@@ -154,13 +155,15 @@ test(
       await game.step({ frames });
       elapsed += frames;
       beforeTopOut = await game.player.position();
-      if (beforeTopOut.y >= ladderTop - 2.6) {
+      if (beforeTopOut.y >= ladderTop - 2.7) {
         break;
       }
     }
     assert.ok(
-      beforeTopOut.y >= ladderTop - 2.6 && beforeTopOut.y < ladderTop - 2.4,
-      `forward input should reach the pre-top-out approach; ended at y=${beforeTopOut.y.toFixed(2)}`,
+      beforeTopOut.y >= ladderTop - 2.7 && beforeTopOut.y < ladderTop - 2.4,
+      `forward input should reach the pre-top-out approach; ladder top=${ladderTop.toFixed(2)}, ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `ended=(${beforeTopOut.x.toFixed(2)}, ${beforeTopOut.y.toFixed(2)}, ${beforeTopOut.z.toFixed(2)})`,
     );
 
     // Aim diagonally +Z BEFORE the top-out can be planned. The z=2.4 level wall

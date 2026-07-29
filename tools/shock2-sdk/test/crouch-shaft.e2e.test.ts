@@ -14,16 +14,15 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // Regression test for #502: crouch must shrink the player collider, not just
 // the camera. The MedSci critical path proves it end-to-end - behind the
-// keypad-45100 door (template 1739) the corridor is collapsed and the
-// authored route is a low air duct whose entrance grate leaves ~3.1 ft of
-// clearance: the standing 4.8 ft capsule cannot enter, a crouched one can,
-// and standing up under the grate must be refused for lack of headroom.
+// keypad-45100 door (template 1739) the corridor is collapsed into a five-foot
+// passage (floor y=-1.6, ceiling y=0.4): the standing 6.0 ft capsule cannot
+// enter, a crouched one can, and standing up under the ceiling is refused.
 //
-// Waypoints were mapped against the live level (raycast probes): the duct
+// Waypoints were mapped against the live level (raycast probes): the passage
 // runs west along z~=-16.7..-17.1 at floor y=-1.6; a "Broken Railing" prop
 // intrudes from the south, so the crawl line hugs the north side.
 test(
-  "crouch shrinks the collider: MedSci air shaft is crouch-only",
+  "crouch shrinks the collider: MedSci five-foot passage is crouch-only",
   { skip: !e2eEnabled, timeout: 600_000 },
   async (t) => {
     // This test has to QuickSave (it exercises the crouch save/load edge),
@@ -31,7 +30,7 @@ test(
     // it was found, so the suite stays order-independent - quickload-missing
     // requires a worktree with no session quicksave and glob order runs it
     // after this file - and so a developer's own quicksave survives a test run
-    // rather than being silently replaced by a MedSci air duct.
+    // rather than being silently replaced by a MedSci passage run.
     const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
     const quicksave = join(repoRoot, "save1.sav");
     const saved = existsSync(quicksave) ? readFileSync(quicksave) : null;
@@ -69,7 +68,7 @@ test(
     await game.step({ frames: 120 });
 
     // Walk the authored route: through the doorway to the collapsed-corridor
-    // threshold in front of the duct.
+    // threshold in front of the low passage.
     await teleportVerified(game, { x: -25.5, y: 0.7, z: -11.7 });
     await game.step({ frames: 10 });
     for (const wp of [
@@ -81,17 +80,17 @@ test(
       await walk(wp);
     }
 
-    // STANDING: the duct entrance grate must reject the 4.8 ft capsule. The
-    // player can drop into the duct mouth but not pass the grate at x=-24.0.
+    // STANDING: the world ceiling begins at x=-26.4 and must reject the
+    // six-foot capsule. (Before the footprint fix, the 4.8-foot body crossed.)
     await walk({ x: -27.0, y: -0.9, z: -16.9 });
     const standing = await game.player.position();
     assert.ok(
-      standing.x > -24.0,
-      `standing player must not pass the duct grate (reached x=${standing.x.toFixed(2)})`,
+      standing.x > -26.0,
+      `standing player must not pass the five-foot ceiling face (reached x=${standing.x.toFixed(2)})`,
     );
 
     // CROUCH: the capsule shrinks feet-planted (center y drops), and the
-    // duct becomes traversable - crawl west past the grate and the duct's
+    // passage becomes traversable - crawl west past the ceiling face and the
     // authored tripwire (x=-29.6) to its far half.
     const beforeCrouch = await game.player.position();
     await game.input.set("crouch", 1);
@@ -113,12 +112,12 @@ test(
     const deep = await game.player.position();
     assert.ok(
       deep.x < -30.0,
-      `crouched player must crawl through the duct (reached x=${deep.x.toFixed(2)})`,
+      `crouched player must crawl through the passage (reached x=${deep.x.toFixed(2)})`,
     );
 
     // SAVE/LOAD while crouched: the save must normalize the lowered center
     // and restore the crouched capsule, not reload a standing capsule
-    // embedded in the duct (regression guard for the crouch-save edge).
+    // embedded in the passage (regression guard for the crouch-save edge).
     const preSave = await game.player.position();
     await game.input.trigger("QuickSave");
     await game.step({ frames: 30 });
@@ -130,38 +129,62 @@ test(
       `crouched save must reload in the crouched pose (y ${preSave.y.toFixed(2)} -> ${loaded.y.toFixed(2)})`,
     );
 
-    // STAND-UP REFUSAL: crawl back under the entrance grate (~3.1 ft of
-    // headroom) and release crouch - the collider must stay crouched.
+    // STAND-UP REFUSAL: crawl back to x=-27, still below the five-foot
+    // ceiling, and release crouch - the collider must stay crouched. The
+    // upward world ray makes the fixture self-checking instead of relying on
+    // a prop collider or an assumed waypoint.
     for (const wp of [
       { x: -28.0, y: -0.9, z: -16.7 },
-      { x: -25.5, y: -0.9, z: -16.7 },
-      { x: -24.05, y: -0.9, z: -16.9 },
+      { x: -27.0, y: -0.9, z: -16.7 },
     ]) {
       await walk(wp);
     }
-    const underGrate = await game.player.position();
+    const underCeiling = await game.player.position();
+    const lowCeiling = await game.raycast({
+      start: [underCeiling.x, -1.55, underCeiling.z],
+      end: [underCeiling.x, 4.0, underCeiling.z],
+      collision_groups: ["world"],
+    });
+    assert.ok(
+      lowCeiling.hit_point && lowCeiling.hit_point[1] < 0.5,
+      `setup must remain under the authored low ceiling: ${JSON.stringify(lowCeiling)}`,
+    );
     await game.input.set("crouch", 0);
     await game.step({ frames: 20 });
     const afterRelease = await game.player.position();
     assert.ok(
-      Math.abs(afterRelease.y - underGrate.y) < 0.2,
-      `stand-up under the grate must be refused (y ${underGrate.y.toFixed(2)} -> ${afterRelease.y.toFixed(2)}; standing would be +0.40)`,
+      Math.abs(afterRelease.y - underCeiling.y) < 0.2,
+      `stand-up under the five-foot ceiling must be refused (y ${underCeiling.y.toFixed(2)} -> ${afterRelease.y.toFixed(2)}; standing would be +0.64)`,
     );
 
-    // Crawl back out of the duct mouth. Sample the crouched height AFTER
-    // exiting (the climb out of the duct raises y on its own), then release
-    // crouch - only the actual stand should produce the remaining rise.
+    // Continue east while crouched. The low ceiling ends at x=-26.4; the
+    // reachable point at (-23.2, -16.1) has twelve feet of world headroom
+    // (floor y=-1.6, ceiling y=3.2). Prove that clearance with the same upward
+    // ray before releasing crouch, then require the actual stand.
     await game.input.set("crouch", 1);
     await game.step({ frames: 5 });
+    await walk({ x: -25.5, y: -0.9, z: -16.7 });
+    await walk({ x: -24.05, y: -0.9, z: -16.9 });
     await walk({ x: -22.4, y: -0.9, z: -17.3 });
-    await walk({ x: -22.4, y: 0.5, z: -18.5 });
+    await walk({ x: -22.4, y: 0.7, z: -17.6 });
+    await walk({ x: -23.2, y: 0.7, z: -16.1 });
     const preStand = await game.player.position();
+    const highCeiling = await game.raycast({
+      start: [preStand.x, -1.55, preStand.z],
+      end: [preStand.x, 4.0, preStand.z],
+      collision_groups: ["world"],
+    });
+    assert.ok(
+      highCeiling.hit_point && highCeiling.hit_point[1] > 0.9,
+      `exit must have more than six feet of headroom: ${JSON.stringify(highCeiling)}`,
+    );
     await game.input.set("crouch", 0);
     await game.step({ frames: 20 });
     const stood = await game.player.position();
     assert.ok(
       stood.y - preStand.y > 0.25,
-      `player must stand once clear of the duct (y ${preStand.y.toFixed(2)} -> ${stood.y.toFixed(2)}; standing center is +0.40)`,
+      `player must stand once clear of the passage ` +
+        `(${JSON.stringify(preStand)} -> ${JSON.stringify(stood)}; standing center is +0.64)`,
     );
   },
 );
