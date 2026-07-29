@@ -120,7 +120,8 @@ export class PlayerApi {
       this.client.get<EntityDetailResult>(`/v1/entities/${entityId}`),
       this.client.get<FrameSnapshot>("/v1/info"),
     ]);
-    const eyeHeight = options?.eyeHeight ?? 1.6;
+    const eyeHeight =
+      options?.eyeHeight ?? snapshot.player.camera_offset?.[1] ?? 1.6;
     const eye: Vec3 = [
       snapshot.player.position[0],
       snapshot.player.position[1] + eyeHeight,
@@ -416,15 +417,16 @@ export class InputApi {
    * resulting head rotation still flows through the normal camera,
    * FlatInteraction, and weapon paths; this is aiming, not a debug hit shim.
    *
-   * `eyeHeight` defaults to the flat player's standing eye height. Pass a
-   * different value when deliberately testing crouched aiming.
+   * `eyeHeight` defaults to the runtime's live camera height, including
+   * crouch. An explicit override is measured in world units.
    */
   async lookAtWorldPoint(target: Vec3, options?: { eyeHeight?: number }): Promise<void> {
     const [{ position }, snapshot] = await Promise.all([
       this.client.get<{ position: Vec3 }>("/v1/player/position"),
       this.client.get<FrameSnapshot>("/v1/info"),
     ]);
-    const eyeHeight = options?.eyeHeight ?? 1.6;
+    const eyeHeight =
+      options?.eyeHeight ?? snapshot.player.camera_offset?.[1] ?? 1.6;
     const localHeadRotation = headRotationForWorldPoint(
       position,
       snapshot.player.rotation,

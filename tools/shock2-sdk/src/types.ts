@@ -148,6 +148,7 @@ export type AimClassification =
 
 export interface AimOptions {
   hitbox?: AimClassification;
+  /** Override the runtime's live camera height, in world units. */
   eyeHeight?: number;
   /**
    * `required` verifies line of sight from the flat camera eye and rejects an

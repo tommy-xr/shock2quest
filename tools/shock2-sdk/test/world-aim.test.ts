@@ -221,6 +221,75 @@ test("aimAt uses a visible non-creature selectable surface before its center", a
   assert.equal(writes[1]?.path, "/v1/control/input");
 });
 
+test("aimAt defaults to the runtime's live crouched camera height", async () => {
+  const detail = {
+    entity_id: 290,
+    name: "Audio Log",
+    template_id: 290,
+    position: [32, -26.2, 28.4],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [31.9264, -27.315, 28.5662],
+      rotation: [0, 0, 0, 1],
+      camera_offset: [0, 0.48, 0],
+    },
+  } as FrameSnapshot;
+  const writes: Array<{ path: string; body: unknown }> = [];
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/290") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string, body: unknown) => {
+      writes.push({ path, body });
+      if (path === "/v1/physics/raycast") {
+        return {
+          hit: true,
+          hit_point: [31.98, -26.82, 28.45],
+          hit_normal: [-1, 0, 1],
+          distance: 0.13,
+          entity_id: 290,
+          entity_name: "Audio Log",
+          collision_group: "selectable",
+          is_sensor: false,
+        };
+      }
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  const aim = await player.aimAt(290, {
+    hitbox: "surface",
+    visibility: "required",
+  });
+
+  assert.equal(aim.target_confirmed, true);
+  assert.deepEqual(
+    (writes[0]?.body as { start: Vec3 }).start,
+    [31.9264, -26.835, 28.5662],
+    "visibility must originate at the crouched production camera",
+  );
+  const input = writes.at(-1);
+  assert.equal(input?.path, "/v1/control/input");
+  assert.deepEqual(
+    (input?.body as { value: Quat }).value,
+    headRotationForWorldPoint(
+      snapshot.player.position,
+      snapshot.player.rotation,
+      aim.world_point,
+      0.48,
+    ),
+  );
+});
+
 test("aimAt reports center fallback when another entity occludes the target surface", async () => {
   const detail = {
     entity_id: 185,
