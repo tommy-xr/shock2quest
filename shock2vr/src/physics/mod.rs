@@ -1608,6 +1608,14 @@ struct KinematicAttachment {
     offset: Vector<Real>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LiveCreatureSweepRecovery {
+    support_translation: Vector<Real>,
+    had_moving_side_contact: bool,
+    horizontal_sweep_direction: Vector<Real>,
+    moving_body: RigidBodyHandle,
+}
+
 impl PlayerHandle {
     /// Whether the player collider is currently the crouched capsule. This is
     /// the *actual* state (stand-up can be refused for lack of headroom), not
@@ -1638,6 +1646,11 @@ pub struct PhysicsWorld {
     rigid_bodies_with_forces: Vec<RigidBodyHandle>,
 
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
+
+    // Short-lived recovery state created only while a living, gravity-driven
+    // creature is touching the side of horizontally-moving kinematic terrain.
+    // Ordinary supported movement, falling, and knockback allocate no entry.
+    live_creature_sweep_recovery: HashMap<EntityId, LiveCreatureSweepRecovery>,
 
     // Dark PhysAttach links rigidly drive a kinematic child's translation
     // from its parent's next translation plus an authored world-space offset.
@@ -2620,6 +2633,7 @@ impl PhysicsWorld {
             );
         }
         self.entity_id_to_body.remove(&entity_id);
+        self.live_creature_sweep_recovery.remove(&entity_id);
     }
 
     pub fn create_player(
@@ -2809,6 +2823,7 @@ impl PhysicsWorld {
             // physics_hooks: Box::new(physics_hooks),
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
+            live_creature_sweep_recovery: HashMap::new(),
             kinematic_attachments: HashMap::new(),
 
             debug_pipeline,
@@ -3443,6 +3458,232 @@ impl PhysicsWorld {
         collision_groups: InternalCollisionGroups,
     ) -> Option<RayCastResult> {
         self.ray_cast2(start_point, direction, 100.0, collision_groups, None, true)
+    }
+
+    /// Neutralize only the horizontal velocity transfer where moving
+    /// kinematic terrain sweeps through the side of a living creature, with
+    /// one validated recovery frame if that contact already removed support.
+    ///
+    /// The active side contact is essential: unsupported creatures otherwise
+    /// fall normally, and vertical lifts or horizontal platforms contacted
+    /// underfoot still carry their riders. Callers pass only currently living
+    /// creatures, so dead capsules/ragdolls retain their independent physics
+    /// lifecycle.
+    pub fn recover_live_creatures_swept_off_support(&mut self, living_creatures: &[EntityId]) {
+        self.live_creature_sweep_recovery
+            .retain(|entity_id, _| living_creatures.contains(entity_id));
+
+        for entity_id in living_creatures {
+            let Some(handle) = self.entity_id_to_body.get(entity_id).copied() else {
+                continue;
+            };
+            let Some(body) = self.rigid_body_set.get(handle) else {
+                continue;
+            };
+            if !body.is_dynamic() || body.gravity_scale() <= 0.0 {
+                self.live_creature_sweep_recovery.remove(entity_id);
+                continue;
+            }
+
+            let position = nvec_to_cgmath(*body.translation());
+            let colliders = body.colliders();
+            let lowest_collider = body
+                .colliders()
+                .iter()
+                .filter_map(|collider| self.collider_set.get(*collider))
+                .map(|collider| collider.compute_aabb().mins.y)
+                .min_by(f32::total_cmp);
+            let Some(lowest_collider) = lowest_collider else {
+                continue;
+            };
+
+            let horizontal_sweep = colliders.iter().find_map(|creature_collider| {
+                self.narrow_phase
+                    .contact_pairs_with(*creature_collider)
+                    .filter(|pair| pair.has_any_active_contact)
+                    .find_map(|pair| {
+                        let other_collider = if pair.collider1 == *creature_collider {
+                            pair.collider2
+                        } else {
+                            pair.collider1
+                        };
+                        let Some(other_body) = self.collider_set[other_collider]
+                            .parent()
+                            .and_then(|handle| self.rigid_body_set.get(handle))
+                        else {
+                            return None;
+                        };
+                        let horizontal_motion = other_body.linvel().x * other_body.linvel().x
+                            + other_body.linvel().z * other_body.linvel().z;
+                        let is_horizontal_kinematic_side_contact = other_body.body_type()
+                            == RigidBodyType::KinematicPositionBased
+                            && horizontal_motion > 1.0e-6
+                            && pair.manifolds.iter().any(|manifold| {
+                                !manifold.data.solver_contacts.is_empty()
+                                    && manifold.data.normal.y.abs() < 0.5
+                            });
+                        is_horizontal_kinematic_side_contact.then(|| {
+                            (
+                                vector![other_body.linvel().x, 0.0, other_body.linvel().z]
+                                    / horizontal_motion.sqrt(),
+                                self.collider_set[other_collider].parent().unwrap(),
+                            )
+                        })
+                    })
+            });
+            let swept_by_horizontal_kinematic = horizontal_sweep.is_some();
+            let recovery = self.live_creature_sweep_recovery.get(entity_id).copied();
+            // Most creatures never touch moving terrain. Avoid a per-creature
+            // support ray at 60 Hz until a moving side-contact starts a
+            // recovery episode (or for its one-frame contact-loss grace).
+            if !swept_by_horizontal_kinematic && recovery.is_none() {
+                continue;
+            }
+
+            // Reach from the body origin through its lowest collider point,
+            // plus one world unit for stairs, slopes, and contact separation.
+            let probe_distance = (position.y - lowest_collider + 1.0).max(1.0);
+            let moving_body = horizontal_sweep
+                .map(|(_, moving_body)| moving_body)
+                .or_else(|| recovery.map(|state| state.moving_body))
+                .unwrap();
+            let support_velocity = self.walkable_support_velocity_excluding_body(
+                *entity_id,
+                position,
+                probe_distance,
+                moving_body,
+            );
+            let supported = support_velocity.is_some();
+
+            if supported {
+                if swept_by_horizontal_kinematic {
+                    let support_translation = recovery
+                        .map(|state| {
+                            state.support_translation
+                                + support_velocity.unwrap() * self.integration_parameters.dt
+                        })
+                        .unwrap_or_else(|| vec_to_nvec(position));
+                    let sweep_direction = horizontal_sweep.unwrap().0;
+                    if let Some(body) = self.rigid_body_set.get_mut(handle) {
+                        body.set_translation(support_translation, true);
+                        let mut velocity = *body.linvel();
+                        let inherited_speed = velocity.dot(&sweep_direction);
+                        if inherited_speed > 0.0 {
+                            velocity -= sweep_direction * inherited_speed;
+                            body.set_linvel(velocity, true);
+                        }
+                    }
+                    self.live_creature_sweep_recovery.insert(
+                        *entity_id,
+                        LiveCreatureSweepRecovery {
+                            support_translation,
+                            had_moving_side_contact: true,
+                            horizontal_sweep_direction: sweep_direction,
+                            moving_body,
+                        },
+                    );
+                } else {
+                    // The creature is still safe, but Rapier leaves it with
+                    // the mover's horizontal normal velocity after contact
+                    // ends. Remove only that forward component; AI locomotion
+                    // can continue on the following frame and tangential or
+                    // opposing motion is preserved.
+                    if let Some(recovery) = recovery {
+                        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+                            let mut velocity = *body.linvel();
+                            let inherited_speed =
+                                velocity.dot(&recovery.horizontal_sweep_direction);
+                            if inherited_speed > 0.0 {
+                                velocity -= recovery.horizontal_sweep_direction * inherited_speed;
+                                body.set_linvel(velocity, true);
+                            }
+                        }
+                    }
+                    self.live_creature_sweep_recovery.remove(entity_id);
+                }
+            } else if let Some(recovery) = recovery {
+                if swept_by_horizontal_kinematic || recovery.had_moving_side_contact {
+                    let anchor_position = nvec_to_cgmath(recovery.support_translation);
+                    let anchor_is_still_supported = self
+                        .walkable_support_velocity_excluding_body(
+                            *entity_id,
+                            anchor_position,
+                            probe_distance,
+                            moving_body,
+                        )
+                        .is_some();
+
+                    if anchor_is_still_supported {
+                        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+                            body.set_translation(recovery.support_translation, true);
+                            body.set_linvel(Vector::zeros(), true);
+                            body.set_angvel(Vector::zeros(), true);
+                        }
+                        self.live_creature_sweep_recovery.insert(
+                            *entity_id,
+                            LiveCreatureSweepRecovery {
+                                had_moving_side_contact: swept_by_horizontal_kinematic,
+                                horizontal_sweep_direction: horizontal_sweep
+                                    .map(|(direction, _)| direction)
+                                    .unwrap_or(recovery.horizontal_sweep_direction),
+                                moving_body,
+                                ..recovery
+                            },
+                        );
+                    } else {
+                        self.live_creature_sweep_recovery.remove(entity_id);
+                    }
+                } else {
+                    self.live_creature_sweep_recovery.remove(entity_id);
+                }
+            }
+        }
+    }
+
+    fn walkable_support_velocity_excluding_body(
+        &self,
+        entity_to_ignore: EntityId,
+        position: Vector3<f32>,
+        probe_distance: f32,
+        body_to_ignore: RigidBodyHandle,
+    ) -> Option<Vector<Real>> {
+        let ray = Ray::new(
+            point![position.x, position.y, position.z],
+            -Vector::y_axis().into_inner(),
+        );
+        let predicate = |_handle: ColliderHandle, collider: &Collider| {
+            if collider.is_sensor()
+                || collider.parent() == Some(body_to_ignore)
+                || EntityId::from_inner(collider.user_data as u64) == Some(entity_to_ignore)
+            {
+                return false;
+            }
+            let aabb = collider.compute_aabb();
+            aabb.mins.iter().all(|v| v.is_finite())
+                && aabb.extents().iter().all(|e| e.is_finite() && *e > 1.0e-5)
+        };
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::ALL.bits.into(),
+                InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+                Default::default(),
+            ))
+            .predicate(&predicate);
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        let (collider, hit) = queries.cast_ray_and_get_normal(&ray, probe_distance, true)?;
+        (hit.normal.y >= 0.4).then(|| {
+            self.collider_set[collider]
+                .parent()
+                .and_then(|handle| self.rigid_body_set.get(handle))
+                .map(|body| *body.linvel())
+                .unwrap_or_else(Vector::zeros)
+        })
     }
 
     pub fn ray_cast3(
@@ -4514,6 +4755,149 @@ mod tests {
             (end.x - start.x).abs() < 0.02,
             "player must not be dragged along by a wall they only brush: moved {} in x",
             end.x - start.x,
+        );
+    }
+
+    fn live_creature_test_world(
+        first_id: u64,
+        floor_size: f32,
+    ) -> (PhysicsWorld, PlayerHandle, EntityId, RigidBodyHandle) {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(first_id).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(floor_size, 1.0, floor_size),
+            CollisionGroup::entity(),
+            false,
+        );
+        let creature_id = EntityId::from_inner(first_id + 1).unwrap();
+        let creature = world.add_dynamic(
+            creature_id,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 1.0,
+                radius: 0.5,
+            },
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_enabled_rotations(creature_id, false, false, false);
+        let player = world.create_player(
+            vec3(0.0, 10.0, 20.0),
+            EntityId::from_inner(first_id + 2).unwrap(),
+        );
+        (world, player, creature_id, creature)
+    }
+
+    fn step_creature_test(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        living_creatures: &[EntityId],
+        frames: usize,
+    ) {
+        for _ in 0..frames {
+            world.update(vec3(0.0, 0.0, 0.0), player);
+            world.recover_live_creatures_swept_off_support(living_creatures);
+        }
+    }
+
+    fn add_sweeping_wall(world: &mut PhysicsWorld, entity_id: u64) -> RigidBodyHandle {
+        world.add_kinematic(
+            EntityId::from_inner(entity_id).unwrap(),
+            vec3(-2.8, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.8, 3.0, 3.8),
+            CollisionGroup::entity(),
+            false,
+        )
+    }
+
+    fn sweep_wall_across_creature(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        wall: RigidBodyHandle,
+        living_creatures: &[EntityId],
+    ) {
+        for frame in 0..90 {
+            world.set_translation(wall, vec3(-2.8 + frame as f32 * 0.07, 1.0, 0.0));
+            step_creature_test(world, player, living_creatures, 1);
+        }
+        step_creature_test(world, player, living_creatures, 60);
+    }
+
+    /// A kinematic hazard crossing a finite deck must not sweep a living
+    /// gravity-driven creature over the edge. This is SHODAN's Spike02 /
+    /// Red Assassin 649 geometry in miniature.
+    #[test]
+    fn moving_kinematic_keeps_live_creature_on_its_last_support() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2100, 4.0);
+        let wall = add_sweeping_wall(&mut world, 2103);
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+        sweep_wall_across_creature(&mut world, &mut player, wall, &[creature_id]);
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.y > 0.5 && end.x < 2.5,
+            "moving terrain swept the live creature off its supported deck: {end:?}"
+        );
+    }
+
+    /// A support anchor is not a general anti-fall mechanism. With no moving
+    /// kinematic side-contact, a living creature can walk over an edge and
+    /// continues falling under gravity.
+    #[test]
+    fn live_creature_can_intentionally_leave_support_and_fall() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2110, 4.0);
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+        world.set_velocity(creature_id, vec3(20.0, 0.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 120);
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.y < -2.0,
+            "ordinary unsupported motion must keep falling instead of snapping to its anchor: {end:?}"
+        );
+    }
+
+    /// Repeated AI-style horizontal velocity on a broad static floor must not
+    /// be mistaken for a kinematic sweep or introduce anchor jitter.
+    #[test]
+    fn live_creature_locomotion_advances_normally_on_static_support() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2120, 40.0);
+
+        for _ in 0..120 {
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            world.set_velocity(creature_id, vec3(1.0, y_velocity, 0.0));
+            world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            world.recover_live_creatures_swept_off_support(&[creature_id]);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.x > 1.5 && end.y > 0.5,
+            "live locomotion should advance smoothly across static support: {end:?}"
+        );
+    }
+
+    /// Dead creatures are deliberately omitted by the mission caller. Any
+    /// stale living anchor is pruned, so corpse physics remains independent.
+    #[test]
+    fn moving_kinematic_does_not_restore_dead_creature_support() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2130, 4.0);
+        let wall = add_sweeping_wall(&mut world, 2133);
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+        sweep_wall_across_creature(&mut world, &mut player, wall, &[]);
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.y < 0.5 || end.x > 2.5,
+            "dead creature physics must not be restored to a stale living anchor: {end:?}"
         );
     }
 

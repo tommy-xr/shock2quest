@@ -1233,6 +1233,28 @@ impl MissionCore {
             )
         };
 
+        if !time.elapsed.is_zero() {
+            let player_id = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap()
+                .entity_id;
+            let living_creatures = self.world.run(
+                |v_creature: View<PropCreature>, v_hit_points: View<PropHitPoints>| {
+                    (&v_creature, &v_hit_points)
+                        .iter()
+                        .with_id()
+                        .filter_map(|(entity_id, (_, hit_points))| {
+                            (entity_id != player_id && hit_points.hit_points > 0)
+                                .then_some(entity_id)
+                        })
+                        .collect::<Vec<_>>()
+                },
+            );
+            self.physics
+                .recover_live_creatures_swept_off_support(&living_creatures);
+        }
+
         // Clear one-shot forces - but only after a step actually consumed
         // them. A paused (zero-dt) frame skips physics.update above, and
         // clearing there would silently erase forces queued between frames
