@@ -2207,6 +2207,94 @@ impl MissionCore {
         }
     }
 
+    fn spawn_ecology_entity(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_name: &str,
+        spawn_point: EntityId,
+        ecology_type: Option<i32>,
+        goto_player: bool,
+    ) {
+        let (position, orientation, patrol) = {
+            let positions = self.world.borrow::<View<PropPosition>>().unwrap();
+            let Ok(position) = positions.get(spawn_point) else {
+                warn!("TrapSpawn marker {:?} has no position", spawn_point);
+                return;
+            };
+            let patrol = self
+                .world
+                .borrow::<View<dark::properties::PropAIPatrol>>()
+                .ok()
+                .and_then(|patrols| patrols.get(spawn_point).ok().map(|patrol| patrol.0))
+                .unwrap_or(false);
+            (position.position, position.rotation, patrol)
+        };
+        let Some(created) = self.create_entity_by_template_name(
+            asset_cache,
+            template_name,
+            Point3::new(position.x, position.y, position.z),
+            orientation,
+        ) else {
+            warn!("TrapSpawn could not resolve archetype {template_name}");
+            return;
+        };
+
+        if let Some(ecology_type) = ecology_type {
+            self.world.add_component(
+                created.entity_id,
+                dark::properties::PropEcoType(ecology_type),
+            );
+        }
+        if patrol {
+            self.world
+                .add_component(created.entity_id, dark::properties::PropAIPatrol(true));
+        }
+
+        let created_template_id = self
+            .world
+            .borrow::<View<dark::properties::PropTemplateId>>()
+            .ok()
+            .and_then(|templates| {
+                templates
+                    .get(created.entity_id)
+                    .ok()
+                    .map(|template| template.template_id)
+            })
+            .unwrap_or_default();
+        let mut links = self.world.borrow::<ViewMut<Links>>().unwrap();
+        if let Ok(marker_links) = (&mut links).get(spawn_point) {
+            marker_links.to_links.push(ToLink {
+                to_template_id: created_template_id,
+                to_entity_id: Some(WrappedEntityId(created.entity_id)),
+                link: Link::Spawned,
+            });
+        }
+        drop(links);
+
+        // The original TrapSpawn creates the authored materialization effect at
+        // the marker alongside the child.
+        self.create_entity_by_template_name(
+            asset_cache,
+            "SpawnSFX",
+            Point3::new(position.x, position.y, position.z),
+            orientation,
+        );
+
+        if goto_player {
+            // Dark's GotoLoc asks the fresh AI to run directly to the player,
+            // even without ordinary sight awareness. Pinned combat awareness
+            // is the runtime's equivalent: it tracks the live player and
+            // naturally transitions from pursuit to attack at range.
+            self.script_world.dispatch(Message {
+                to: created.entity_id,
+                payload: MessagePayload::SetAlertness {
+                    level: dark::properties::AIAlertLevel::High,
+                    pin: true,
+                },
+            });
+        }
+    }
+
     pub fn make_un_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_none() {
@@ -3294,6 +3382,20 @@ impl MissionCore {
                         orientation,
                         root_transform,
                         options,
+                    );
+                }
+                Effect::SpawnEcologyEntity {
+                    template_name,
+                    spawn_point,
+                    ecology_type,
+                    goto_player,
+                } => {
+                    self.spawn_ecology_entity(
+                        asset_cache,
+                        &template_name,
+                        spawn_point,
+                        ecology_type,
+                        goto_player,
                     );
                 }
                 Effect::DropEntityInfo {

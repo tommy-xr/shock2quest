@@ -59,6 +59,7 @@ mod trap_router;
 mod trap_signal;
 mod trap_slayer;
 mod trap_sound;
+mod trap_spawn;
 mod trap_teleport;
 mod trap_teleport_player;
 mod trap_trip_level;
@@ -66,6 +67,7 @@ mod trap_tweq;
 mod trap_unlock;
 mod trigger_collide;
 mod trigger_destroy;
+mod trigger_ecology;
 mod trigger_multi;
 mod tweq_depressable;
 mod tweqable;
@@ -148,6 +150,7 @@ use self::{
     trap_router::TrapRouter,
     trap_slayer::TrapSlayer,
     trap_sound::TrapSound,
+    trap_spawn::TrapSpawn,
     trap_teleport::TrapTeleport,
     trap_teleport_player::TrapTeleportPlayer,
     trap_trip_level::TrapTripLevel,
@@ -155,6 +158,7 @@ use self::{
     trap_unlock::TrapUnlock,
     trigger_collide::TriggerCollide,
     trigger_destroy::TriggerDestroy,
+    trigger_ecology::TriggerEcology,
     trigger_multi::TriggerMulti,
     tweq_depressable::TweqDepressable,
     tweqable::Tweqable,
@@ -505,7 +509,12 @@ impl ScriptWorld {
             "reducehp" => Box::new(NoopScript::new()),
             "engineremoverad" => Box::new(NoopScript::new()),
             "radroom" => Box::new(NoopScript::new()),
-            "trapspawn" => Box::new(NoopScript::new()),
+            // SHODAN's ordinary creature/base-monster scripts own combat and
+            // death state. Keep the retail finale hook inert until its ending
+            // sequence is implemented; TrapSpawn must still be able to create
+            // the authored Avatar.
+            "shodandeath" => Box::new(NoopScript::new()),
+            "trapspawn" => Box::new(TrapSpawn::new()),
             // ops1 cutscene (the "Polito is SHODAN" reveal) - see scripts/cs9.rs
             "transluceinoutholo" => Box::new(TransluceInOutHolo::new()),
             "cs9_doorreporter" => Box::new(CS9DoorReporter::new()),
@@ -786,7 +795,7 @@ impl ScriptWorld {
             }
             "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
             // Need to read ambient hacked property
-            "triggerecology" => Box::new(UnimplementedScript::new(&script_name)),
+            "triggerecology" => Box::new(TriggerEcology::new()),
             "triggerecologydiff" => Box::new(UnimplementedScript::new(&script_name)),
             "unhackhack" => Box::new(UnimplementedScript::new(&script_name)),
             _ => Box::new(PanicOnLoadScript { name: script_name }),
