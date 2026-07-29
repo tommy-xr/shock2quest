@@ -14,6 +14,7 @@ mod create_sound;
 mod cs9;
 mod dead_power_cell;
 mod destroy_all_by_name;
+mod die_shodan_die;
 mod energy_station;
 mod energy_weapon;
 mod exp_cookie;
@@ -117,6 +118,7 @@ use self::{
     },
     dead_power_cell::DeadPowerCell,
     destroy_all_by_name::DestroyAllByName,
+    die_shodan_die::DieShodanDie,
     energy_station::EnergyStation,
     energy_weapon::EnergyWeapon,
     exp_cookie::ExpCookie,
@@ -528,9 +530,9 @@ impl ScriptWorld {
             "shodanhead" => Box::new(NoopScript::new()),  //?
             "shodanshield" => Box::new(NoopScript::new()), //?
             "seatplayer" => Box::new(TrapTeleportPlayer::new()), // This is used in final battle -does this do anything else besides teleport?
-            "dieshodandie" => Box::new(NoopScript::new()),       // end cutscene!
-            "teleportpath" => Box::new(NoopScript::new()),       // end cutscene!
-            "translucebydamage" => Box::new(NoopScript::new()),  // end cutscene!
+            "dieshodandie" => Box::new(DieShodanDie::new()),
+            "teleportpath" => Box::new(NoopScript::new()), // end cutscene!
+            "translucebydamage" => Box::new(NoopScript::new()), // end cutscene!
 
             // TODO: Should these actually be implemented?
             "earthtext" => Box::new(NoopScript::new()),

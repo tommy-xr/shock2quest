@@ -35,7 +35,10 @@ mod virtual_hand;
 mod vr_config;
 pub mod zip_asset_path;
 
-use scenes::{SceneInitResult, create_initial_scene, load_mission_from_save_data};
+use scenes::{
+    CutscenePlayerScene, SceneInitResult, create_initial_scene, load_mission_from_save_data,
+    resolve_ending_cutscene,
+};
 
 pub use mission::SpawnLocation;
 pub use mission::visibility_engine::CullingInfo;
@@ -379,6 +382,10 @@ pub struct Game {
     // Set when a scene requests quitting (e.g. the main menu's Quit). The
     // runtime observes this via `should_quit` and closes its window.
     should_quit: bool,
+
+    // Set only once the retail finale chain reaches DIE-SHODAN-DIE and the
+    // ending cutscene has become the active scene.
+    campaign_completed: bool,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -605,6 +612,7 @@ impl Game {
         );
         save_load::restore_player_vitals(&active_mission.mission_core.world, player_vitals);
         self.active_game_scene = Box::new(active_mission);
+        self.campaign_completed = false;
     }
 
     fn switch_mission(
@@ -700,6 +708,7 @@ impl Game {
         );
         save_load::restore_player_vitals(&mission.mission_core.world, pending.player_vitals);
         self.active_game_scene = Box::new(mission);
+        self.campaign_completed = false;
 
         for entity_name in pending.entities_to_trigger {
             self.active_game_scene.queue_entity_trigger(entity_name);
@@ -732,6 +741,11 @@ impl Game {
     /// Quit). Runtimes should observe this and close their window.
     pub fn should_quit(&self) -> bool {
         self.should_quit
+    }
+
+    /// Whether the retail campaign finale has entered its terminal cutscene.
+    pub fn campaign_completed(&self) -> bool {
+        self.campaign_completed
     }
 
     /// Whether the active scene wants a 2D mouse cursor (e.g. a menu). Flat
@@ -1049,6 +1063,7 @@ impl Game {
             options,
             mission_to_save_data,
             should_quit: false,
+            campaign_completed: false,
         }
     }
 
@@ -1182,6 +1197,7 @@ impl Game {
         }
         self.active_game_scene = Box::new(mission);
         self.mission_to_save_data = level_map;
+        self.campaign_completed = false;
         Ok(())
     }
 
@@ -1315,6 +1331,30 @@ impl Game {
                 } else {
                     self.switch_mission(level_name, spawn_loc, PlayerVitalsTransition::Preserve);
                 }
+            }
+            GlobalEffect::CompleteCampaign => {
+                // Preserve the destroyed head and the rest of the finale state
+                // in the in-memory mission ledger before the cutscene replaces
+                // the active world.
+                self.save_active_scene();
+
+                let (cutscene_name, cutscene_path) = resolve_ending_cutscene();
+                let path_string = cutscene_path.to_string_lossy().into_owned();
+                let cutscene = CutscenePlayerScene::new(
+                    cutscene_name.clone(),
+                    path_string.clone(),
+                    &mut self.audio_context,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "Failed to initialize ending cutscene '{}' from '{}': {}",
+                        cutscene_name, path_string, error
+                    )
+                });
+
+                self.pending_transition = None;
+                self.active_game_scene = Box::new(cutscene);
+                self.campaign_completed = true;
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;

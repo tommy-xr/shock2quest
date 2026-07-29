@@ -627,6 +627,8 @@ pub struct FrameSnapshot {
     pub frame_index: u64,
     pub time: TimeInfo,
     pub mission: String,
+    /// True once the retail finale has entered its terminal ending cutscene.
+    pub campaign_completed: bool,
     pub player: PlayerInfo,
     pub entity_count: usize,
     pub debug_features: Vec<String>,

@@ -58,6 +58,8 @@ pub struct SceneInitResult {
     pub mission_save_data: HashMap<String, EntitySaveData>,
 }
 
+const ENDING_CUTSCENE_CANDIDATES: &[&str] = &["enhanced/cs3.ogv", "cs3.avi", "cs3.ogv"];
+
 pub fn create_initial_scene(
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
@@ -317,10 +319,15 @@ pub fn load_mission_from_save_data(
 }
 
 fn is_cutscene_mission(name: &str) -> bool {
-    name.trim().to_ascii_lowercase().ends_with(".avi")
+    let normalized = name.trim().to_ascii_lowercase();
+    normalized.ends_with(".avi") || normalized.ends_with(".ogv")
 }
 
 fn resolve_cutscene_path(name: &str) -> PathBuf {
+    resolve_cutscene_path_from(&paths::data_root(), name)
+}
+
+fn resolve_cutscene_path_from(data_root: &Path, name: &str) -> PathBuf {
     let trimmed = name.trim();
     let raw_path = Path::new(trimmed);
 
@@ -328,9 +335,53 @@ fn resolve_cutscene_path(name: &str) -> PathBuf {
         return raw_path.to_path_buf();
     }
 
-    if raw_path.components().count() == 1 {
-        paths::data_root().join("cutscenes").join(raw_path)
+    let begins_with_cutscenes = raw_path
+        .components()
+        .next()
+        .is_some_and(|component| component.as_os_str().eq_ignore_ascii_case("cutscenes"));
+    if begins_with_cutscenes {
+        data_root.join(raw_path)
     } else {
-        paths::data_root().join(raw_path)
+        data_root.join("cutscenes").join(raw_path)
+    }
+}
+
+/// Resolve the retail ending for both 25th Anniversary (`enhanced/cs3.ogv`)
+/// and classic (`cs3.avi`) installs.
+pub(crate) fn resolve_ending_cutscene() -> (String, PathBuf) {
+    ENDING_CUTSCENE_CANDIDATES
+        .iter()
+        .map(|name| ((*name).to_string(), resolve_cutscene_path(name)))
+        .find(|(_, path)| path.is_file())
+        .unwrap_or_else(|| {
+            let name = ENDING_CUTSCENE_CANDIDATES[0].to_string();
+            let path = resolve_cutscene_path(&name);
+            (name, path)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_classic_and_enhanced_cutscene_extensions() {
+        assert!(is_cutscene_mission("cs3.avi"));
+        assert!(is_cutscene_mission("enhanced/cs3.ogv"));
+        assert!(!is_cutscene_mission("shodan.mis"));
+    }
+
+    #[test]
+    fn nested_cutscene_names_resolve_below_the_cutscene_directory() {
+        let root = Path::new("/retail");
+
+        assert_eq!(
+            resolve_cutscene_path_from(root, "enhanced/cs3.ogv"),
+            root.join("cutscenes/enhanced/cs3.ogv")
+        );
+        assert_eq!(
+            resolve_cutscene_path_from(root, "cutscenes/enhanced/cs3.ogv"),
+            root.join("cutscenes/enhanced/cs3.ogv")
+        );
     }
 }
