@@ -6,7 +6,7 @@ use engine::scene::SceneObject;
 use engine::script_log;
 
 use rapier3d::prelude::RigidBodyHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 use tracing::{self, trace};
 
 use crate::{
@@ -525,6 +525,26 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
             .borrow::<View<dark::properties::PropLimbModel>>()
             .map(|v| v.get(entity_id).is_ok())
             .unwrap_or(false)
+}
+
+/// Find the player's carried weapon matching an original gamesys weapon
+/// archetype. Mission objects and carried items can have more-specific or
+/// mission-local template ids, so selection follows the preserved canonical
+/// class identity through the global inheritance hierarchy.
+pub(crate) fn carried_weapon_by_class(world: &World, class_template_id: i32) -> Option<EntityId> {
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateHierarchy>>()
+        .ok()?;
+
+    crate::scripts::script_util::player_carried_items(world)
+        .into_iter()
+        .find(|entity| {
+            is_wieldable_weapon(world, *entity)
+                && crate::scripts::script_util::entity_class_template_id(world, *entity)
+                    .is_some_and(|template_id| {
+                        hierarchy.is_or_descends_from(template_id, class_template_id)
+                    })
+        })
 }
 
 ///

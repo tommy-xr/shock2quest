@@ -50,6 +50,78 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::CycleWeapon,
             },
+            // Original System Shock 2 direct weapon bindings. These select a
+            // matching carried item; unlike CycleWeapon they never spawn one.
+            Binding {
+                key: Key::Num1,
+                modifier: Modifier::None,
+                action: InputAction::EquipWrench,
+            },
+            Binding {
+                key: Key::Num2,
+                modifier: Modifier::None,
+                action: InputAction::EquipPistol,
+            },
+            Binding {
+                key: Key::Num3,
+                modifier: Modifier::None,
+                action: InputAction::EquipShotgun,
+            },
+            Binding {
+                key: Key::Num4,
+                modifier: Modifier::None,
+                action: InputAction::EquipAssaultRifle,
+            },
+            Binding {
+                key: Key::Num5,
+                modifier: Modifier::None,
+                action: InputAction::EquipLaserPistol,
+            },
+            Binding {
+                key: Key::Num6,
+                modifier: Modifier::None,
+                action: InputAction::EquipEmpRifle,
+            },
+            Binding {
+                key: Key::Num7,
+                modifier: Modifier::None,
+                action: InputAction::EquipElectroShock,
+            },
+            Binding {
+                key: Key::Num8,
+                modifier: Modifier::None,
+                action: InputAction::EquipGrenadeLauncher,
+            },
+            Binding {
+                key: Key::Num9,
+                modifier: Modifier::None,
+                action: InputAction::EquipStasisFieldGenerator,
+            },
+            Binding {
+                key: Key::Num0,
+                modifier: Modifier::None,
+                action: InputAction::EquipFusionCannon,
+            },
+            Binding {
+                key: Key::Minus,
+                modifier: Modifier::None,
+                action: InputAction::EquipCrystalShard,
+            },
+            Binding {
+                key: Key::Equal,
+                modifier: Modifier::None,
+                action: InputAction::EquipViralProliferator,
+            },
+            Binding {
+                key: Key::Backslash,
+                modifier: Modifier::None,
+                action: InputAction::EquipWormLauncher,
+            },
+            Binding {
+                key: Key::GraveAccent,
+                modifier: Modifier::None,
+                action: InputAction::EquipPsiAmp,
+            },
             Binding {
                 key: Key::R,
                 modifier: Modifier::None,
@@ -125,6 +197,40 @@ impl DesktopInputMapper {
                 state.release(binding.action);
                 self.prev_down.remove(&binding.action);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn original_weapon_keys_map_to_direct_equip_actions() {
+        let mapper = DesktopInputMapper::new();
+        let expected = [
+            (Key::Num1, InputAction::EquipWrench),
+            (Key::Num2, InputAction::EquipPistol),
+            (Key::Num3, InputAction::EquipShotgun),
+            (Key::Num4, InputAction::EquipAssaultRifle),
+            (Key::Num5, InputAction::EquipLaserPistol),
+            (Key::Num6, InputAction::EquipEmpRifle),
+            (Key::Num7, InputAction::EquipElectroShock),
+            (Key::Num8, InputAction::EquipGrenadeLauncher),
+            (Key::Num9, InputAction::EquipStasisFieldGenerator),
+            (Key::Num0, InputAction::EquipFusionCannon),
+            (Key::Minus, InputAction::EquipCrystalShard),
+            (Key::Equal, InputAction::EquipViralProliferator),
+            (Key::Backslash, InputAction::EquipWormLauncher),
+            (Key::GraveAccent, InputAction::EquipPsiAmp),
+        ];
+
+        for (key, action) in expected {
+            let binding = mapper
+                .bindings
+                .iter()
+                .find(|binding| binding.key == key && binding.modifier == Modifier::None);
+            assert_eq!(binding.map(|binding| binding.action), Some(action));
         }
     }
 }

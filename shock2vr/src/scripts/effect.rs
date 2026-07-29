@@ -126,6 +126,14 @@ pub enum Effect {
     /// two projectile links, or while its magazine still has loaded rounds.
     CycleAmmo,
 
+    /// Equip a weapon of this gamesys class from the player's carried items.
+    /// The handler resolves the live entity through the template hierarchy and
+    /// then reuses `GrabEntity`, so no item is spawned and a displaced flat
+    /// weapon returns to the backpack.
+    EquipCarriedWeapon {
+        class_template_id: i32,
+    },
+
     /// Toggle the flat-mode "use" (metagame) mode - cursor-driven UI over the
     /// 3D view, as the original game does on Tab. Currently only tracks the
     /// mode (introspectable via the debug runtime's `GET /v1/ui`); the cursor

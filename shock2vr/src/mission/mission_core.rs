@@ -3303,6 +3303,27 @@ impl MissionCore {
                     self.drop_entity_into_container(parent_entity_id, dropped_entity_id);
                 }
 
+                Effect::EquipCarriedWeapon { class_template_id } => {
+                    let maybe_weapon = crate::virtual_hand::carried_weapon_by_class(
+                        &self.world,
+                        class_template_id,
+                    );
+                    let already_wielded = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .ok()
+                        .and_then(|player| player.left_hand_entity_id);
+                    if let Some(entity_id) =
+                        maybe_weapon.filter(|entity| Some(*entity) != already_wielded)
+                    {
+                        effects.push_front(Effect::GrabEntity {
+                            entity_id,
+                            hand: crate::vr_config::Handedness::Right,
+                            current_parent_id: None,
+                        });
+                    }
+                }
+
                 Effect::GrabEntity {
                     entity_id,
                     hand,

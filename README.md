@@ -42,6 +42,11 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Alt+S` / `Alt+L` - quick save / quick load
 - `Space` - spawn a debug item
 - `P` - cycle the pathfinding test (set start → set goal → show path)
+- Directly equip a matching carried weapon with the original number-row bindings:
+  `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
+  `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field
+  Generator, `0` Fusion Cannon, `-` Crystal Shard, `=` Viral Proliferator,
+  `\` Worm Launcher, and `` ` `` / `~` Psi Amp
 
 ## Building
 

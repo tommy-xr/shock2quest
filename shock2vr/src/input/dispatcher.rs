@@ -14,6 +14,26 @@ const DEBUG_MONSTER_TEMPLATE_ID: i32 = -397;
 
 const QUICK_SAVE_FILE: &str = "save1.sav";
 
+/// Original System Shock 2 direct-weapon bindings. The input action describes
+/// the semantic selection; desktop keys are mapped separately by
+/// `DesktopInputMapper`.
+const CARRIED_WEAPON_ACTIONS: &[(InputAction, i32)] = &[
+    (InputAction::EquipWrench, -928),
+    (InputAction::EquipPistol, -17),
+    (InputAction::EquipShotgun, -19),
+    (InputAction::EquipAssaultRifle, -18),
+    (InputAction::EquipLaserPistol, -22),
+    (InputAction::EquipEmpRifle, -23),
+    (InputAction::EquipElectroShock, -24),
+    (InputAction::EquipGrenadeLauncher, -21),
+    (InputAction::EquipStasisFieldGenerator, -25),
+    (InputAction::EquipFusionCannon, -26),
+    (InputAction::EquipCrystalShard, -28),
+    (InputAction::EquipViralProliferator, -29),
+    (InputAction::EquipWormLauncher, -27),
+    (InputAction::EquipPsiAmp, -247),
+];
+
 pub struct ActionDispatcher;
 
 impl ActionDispatcher {
@@ -65,6 +85,11 @@ impl ActionDispatcher {
             effects.push(Effect::DebugCycleWeapon {
                 head_rotation: input_context.head.rotation,
             });
+        }
+        for &(action, class_template_id) in CARRIED_WEAPON_ACTIONS {
+            if state.just_triggered(action) {
+                effects.push(Effect::EquipCarriedWeapon { class_template_id });
+            }
         }
         if state.just_triggered(InputAction::CycleAmmo) {
             effects.push(Effect::CycleAmmo);
@@ -171,6 +196,22 @@ mod tests {
                 pin: false
             }
         ));
+    }
+
+    #[test]
+    fn original_weapon_actions_select_their_carried_archetypes() {
+        for &(action, class_template_id) in CARRIED_WEAPON_ACTIONS {
+            let mut state = InputActionState::new();
+            state.trigger(action);
+
+            let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+            assert!(matches!(
+                effects.as_slice(),
+                [Effect::EquipCarriedWeapon {
+                    class_template_id: actual
+                }] if *actual == class_template_id
+            ));
+        }
     }
 
     #[test]
