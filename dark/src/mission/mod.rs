@@ -73,6 +73,7 @@ pub struct SystemShock2Level {
 
     pub textures: TextureList,
     pub cells: Vec<Cell>,
+    pub render_params: RenderParams,
 
     pub lightmap_atlas: TexturePacker<image::Rgb<u8>>,
 
@@ -223,7 +224,7 @@ pub fn read<T: io::Read + io::Seek>(
     );
     let all_geometry = create_geometry(asset_paths, base_path, &cells, &textures.0);
 
-    let _render_params = RenderParams::read(&table_of_contents, reader);
+    let render_params = RenderParams::read(&table_of_contents, reader);
     let room_database = RoomDatabase::read(&table_of_contents, reader);
     let song_params = SongParams::read(&table_of_contents, reader);
     let path_database = PathDatabase::read(&table_of_contents, reader);
@@ -255,6 +256,7 @@ pub fn read<T: io::Read + io::Seek>(
         bsp_tree,
         all_geometry,
         textures,
+        render_params,
         lightmap_atlas: packer,
         obj_map,
         cells,

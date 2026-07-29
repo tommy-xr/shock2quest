@@ -107,6 +107,7 @@ pub fn to_scene(
                 RefCell::new(engine::materials::LightmapMaterial::create(
                     lightmap_texture.clone(),
                     animated_texture,
+                    level.render_params.ambient_color,
                 ))
             }
         };
