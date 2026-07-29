@@ -69,3 +69,43 @@ test("campaign completion is persisted and surfaced as the terminal action", () 
     assert.match(run("show").stdout, /COMPLETE.*campaign exit reached/s);
   });
 });
+
+test("--restart forgets the previous ledger and creates a fresh roll", () => {
+  withLedger(({ run, state }) => {
+    const first = run(
+      "roll",
+      "seed=111",
+      "scenario=engineering",
+      "tweak=none",
+      "assets=legacy",
+      "fixBranch=old-campaign-stack",
+    );
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(run("blocker", "add", "eng1", "bug", "42", "old", "finding").status, 0);
+    assert.equal(run("advance", "eng1", "frontier-001", "1,2,3", "old", "frontier").status, 0);
+
+    const restarted = run(
+      "roll",
+      "--restart",
+      "seed=222",
+      "scenario=shodan",
+      "tweak=detailed",
+      "assets=legacy",
+      "fixBranch=fresh-campaign-stack",
+    );
+    assert.equal(restarted.status, 0, restarted.stderr);
+    assert.match(restarted.stdout, /forgot previous ledger.*rolled fresh campaign/i);
+
+    const fresh = state();
+    assert.equal(fresh.seed, 222);
+    assert.equal(fresh.scenario.id, "shodan");
+    assert.equal(fresh.tweak.id, "detailed");
+    assert.equal(fresh.fix_branch, "fresh-campaign-stack");
+    assert.equal(fresh.iteration, 0);
+    assert.equal(fresh.frontier, null);
+    assert.deepEqual(fresh.blockers, []);
+    assert.deepEqual(fresh.history, []);
+    assert.equal(fresh.completed, false);
+    assert.equal(fresh.completion, null);
+  });
+});
