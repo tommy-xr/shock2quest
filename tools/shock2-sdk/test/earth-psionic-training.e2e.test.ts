@@ -80,8 +80,22 @@ async function aimAtEntity(
   target: EntitySummary,
 ): Promise<EntitySummary> {
   const [tx, ty, tz] = (await game.entities.detail(target.id)).position;
-  await game.player.teleport({ x: tx - 4, y: ty, z: tz });
-  await game.step({ frames: 5 });
+  // Stand on the droid's authored platform, close enough that its torso is a
+  // clear target. The old x-4 staging was unsupported void: the player kept
+  // falling after aimAt computed its ray, so Cryokinesis hit level geometry
+  // instead of the droid and falsely looked like a damage-path bug (#696).
+  await game.player.teleport({ x: tx + 4, y: ty + 1, z: tz });
+  await game.step({ frames: 60 });
+  const supported = await game.player.position();
+  await game.step({ frames: 10 });
+  const stillSupported = await game.player.position();
+  assert.ok(
+    Math.abs(supported.y - stillSupported.y) < 0.02,
+    `target staging must be collision-supported, got ${JSON.stringify({
+      supported,
+      stillSupported,
+    })}`,
+  );
   await game.input.set("left_hand.thumbstick", [0.75, 0]);
   await game.step({ frames: 20 });
   await game.input.set("left_hand.thumbstick", [0, 0]);
@@ -101,7 +115,10 @@ async function aimAtEntity(
   // hand the live handle back so the caller's damage check follows the same
   // object.
   const live = await exactlyOne(game, target.template_id, "Training Droid");
-  const aim = await game.player.aimAt(live, { hitbox: "torso" });
+  const aim = await game.player.aimAt(live, {
+    hitbox: "torso",
+    visibility: "required",
+  });
   assert.equal(aim.entity_id, live.id);
   assert.equal(aim.classification, "torso");
   assert.equal(aim.fallback_used, false);
@@ -181,12 +198,22 @@ test(
       "normal Cryokinesis projectile should damage the real Training Droid",
     );
 
+    // aimAtEntity deliberately exercises save/load; carried entities receive
+    // fresh runtime ids on load just like the droid. Re-resolve the boosters
+    // through their stable mission template ids before using them.
+    const liveBoosters: EntitySummary[] = [];
+    for (const booster of boosters) {
+      liveBoosters.push(
+        await exactlyOne(game, booster.template_id, "loaded Psi Booster"),
+      );
+    }
+
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 
     let expectedPsi = psiBeforeCast - 1;
-    let expectedBoosters = boosters.length;
-    for (const booster of boosters) {
+    let expectedBoosters = liveBoosters.length;
+    for (const booster of liveBoosters) {
       await useBooster(game, booster.id);
       expectedPsi = Math.min(expectedPsi + 20, 50);
       expectedBoosters -= 1;
