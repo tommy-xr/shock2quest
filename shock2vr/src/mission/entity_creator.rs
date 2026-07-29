@@ -750,8 +750,9 @@ pub fn create_physics_representation(
     let (
         v_pos,
         v_phys_attr,
-        _v_phys_type,
-        _v_phys_dimensions,
+        v_phys_type,
+        v_phys_dimensions,
+        v_model_name,
         v_frob_info,
         v_hud_select,
         v_creature,
@@ -763,6 +764,7 @@ pub fn create_physics_representation(
             View<PropPhysAttr>,
             View<PropPhysType>,
             View<PropPhysDimensions>,
+            View<PropModelName>,
             View<PropFrobInfo>,
             View<PropHUDSelect>,
             View<PropCreature>,
@@ -829,6 +831,23 @@ pub fn create_physics_representation(
 
     // Frobbable item, let's see what we can do...
     if let (Ok(pos), Ok(frob_info)) = (v_pos.get(entity_id), v_frob_info.get(entity_id)) {
+        // An inherited FrobInfo alone is not authored collision geometry. A
+        // script-only marker with no model and no physics properties has no
+        // shape to select or collide with; the old default-size fallback
+        // invented one anyway. eng1 object 181 ("Ectoplasm") is such a marker:
+        // it only relays its AIWatchObj action to the Radapp apparition, and
+        // the invented cube partially blocked the doorway (#564).
+        //
+        // Keep the fallback for renderable frob targets (including bitmaps,
+        // whose PropModelName does not load through MODELS_IMPORTER) and for
+        // explicitly physical invisible objects.
+        let has_model = maybe_model.is_some() || v_model_name.get(entity_id).is_ok();
+        let has_authored_physics =
+            v_phys_type.get(entity_id).is_ok() || v_phys_dimensions.get(entity_id).is_ok();
+        if !has_model && !has_authored_physics {
+            return None;
+        }
+
         let qrotation = pos.rotation;
 
         let _is_sensor = true;
@@ -1176,6 +1195,39 @@ mod tests {
     }
 
     const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
+
+    /// Script-only markers can inherit frob/select properties through their
+    /// archetype even though they have no visual or authored physics. The
+    /// eng1 Ectoplasm marker (object 181) is one such object: it only relays an
+    /// AIWatchObj action to the apparition, so inventing a default selectable
+    /// cube for it partially blocks the doorway (#564).
+    #[test]
+    fn model_less_frobbable_without_authored_physics_gets_no_collider() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(21.19, -15.22, -44.78),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropHUDSelect(true),
+            PropRenderType(RenderType::NoRender),
+            PropImmobile(false),
+        ));
+
+        assert_eq!(
+            create_physics_representation(&mut world, &mut physics, &None, entity_id),
+            None,
+            "a marker with no model or authored physics must not get an invented collider"
+        );
+        assert!(physics.debug_list_bodies().is_empty());
+    }
 
     /// A climbable entity with no `PropPhysDimensions` still gets a collider,
     /// sized from the model bounds and tagged climbable (issue #589 - 24 of
