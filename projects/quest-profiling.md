@@ -161,20 +161,54 @@ pretending Quest rendering is independent of headset lifecycle.
 
 ## OpenXR fork removal
 
-The Oculus runtime still depends on the repository's OpenXR 0.16 fork. That
-fork originally supplied OpenGL ES and Meta extensions that are present in
-current upstream `openxr`. Migrate to current crates.io OpenXR in a separate,
-small PR:
+The follow-up migration replaced the repository's OpenXR 0.16 fork with
+crates.io `openxr` 0.21.1 and removed `vendor/openxrs`. The fork's relevant
+changes—Android loader initialization through `ndk-context`, OpenGL ES,
+display-refresh-rate support, passthrough, and newer Meta extensions—are all
+available upstream.
 
-1. switch the dependency and adapt compile-time API changes;
-2. build, install, and verify session focus, tracking, input, swapchains, and
-   all 23 mission spawns on device;
-3. compare startup, frame telemetry, memory, and device visuals against this
-   baseline;
-4. remove `vendor/openxrs` only after the device comparison passes.
+The final fork-free release APK SHA-256 was
+`b72df86bae07f3a5eaf05bdfebf5302d65ec9917ededf973b9dad8378657620c`.
+It completed a fresh-process sweep of all 23 missions using the same
+three-second warmup and five-second sample as the baseline:
 
-Keeping the dependency migration separate makes the large vendored deletion
-reviewable and preserves this baseline as a clean comparison point.
+- 23/23 missions reached OpenXR `FOCUSED` and produced five complete focused
+  engine and primary-display VrApi samples;
+- mean presentation ranged from 90.2 to 90.8 FPS, with a minimum one-second
+  interval of 89 FPS;
+- the app reported zero skipped render frames across the sweep;
+- all missions retained 1680x1760-per-eye swapchains at 90 Hz;
+- `ops4.mis` reproduced its known black compositor-capture limitation while
+  focused numeric telemetry remained valid;
+- `rick3.mis` reported one torn frame in the initial five-second window; a
+  ten-second retry after a five-second warmup reported zero torn frames.
+
+A paired, same-settings representative comparison shows no frame-delivery,
+engine update/eye-time, or memory regression:
+
+| Mission | Build | FPS mean/min | Stale/torn | App | Update | Both eyes | PSS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `earth.mis` | fork | 90.2/89 | 2/0 | 3.308 ms | 1.470 ms | 3.997 ms | 343.5 MiB |
+| `earth.mis` | upstream | 90.4/90 | 2/0 | 4.770 ms | 1.555 ms | 3.936 ms | 344.9 MiB |
+| `eng2.mis` | fork | 89.6/88 | 14/0 | 2.994 ms | 3.558 ms | 3.323 ms | 384.6 MiB |
+| `eng2.mis` | upstream | 90.0/90 | 8/0 | 2.096 ms | 3.625 ms | 3.340 ms | 384.4 MiB |
+| `medsci1.mis` | fork | 90.6/90 | 3/0 | 2.052 ms | 2.898 ms | 4.133 ms | 418.3 MiB |
+| `medsci1.mis` | upstream | 90.6/90 | 5/0 | 1.968 ms | 2.848 ms | 4.100 ms | 418.6 MiB |
+| `rick1.mis` | fork | 90.4/89 | 5/0 | 4.396 ms | 3.490 ms | 5.009 ms | 419.6 MiB |
+| `rick1.mis` | upstream | 90.0/89 | 9/0 | 1.966 ms | 3.219 ms | 4.723 ms | 419.5 MiB |
+
+This does not prove compositor/GPU performance equivalence. VrApi `App` time
+varied substantially between short samples; in the paired runs it increased
+for `earth.mis` while decreasing for the other three missions. The short runs
+did not control headset pose, asset-cache state, or thermal state tightly enough
+to attribute those changes to the bindings. Repeat a longer, fixed-pose,
+thermally settled A/B before making a compositor or GPU performance claim; the
+evidence here establishes functional compatibility.
+
+The unattended loop continuously attached and synchronized the action set and
+queried head/controller pose and input state without OpenXR errors. It did not
+synthesize physical controller button presses, so controller semantics remain
+a manual acceptance item until the Quest debug API can drive input directly.
 
 ## Reproduce
 
