@@ -1015,10 +1015,19 @@ pub fn create_physics_representation(
             let qrotation = pos.rotation;
 
             let mut is_sensor = false;
-            let scale_factor = v_scale
-                .get(entity_id)
-                .map(|p| p.0)
-                .unwrap_or(vec3(1.0, 1.0, 1.0));
+            // Model scale belongs to the rendered model. An explicit
+            // P$PhysDims is already the independently authored collision
+            // volume and must not be scaled again (Shodan's window strips
+            // use a visual z-scale of 16 beside a 3.2-unit OBB). Only the
+            // model-bounds fallback needs the model's scale applied.
+            let scale_factor = if maybe_dimensions.is_some() {
+                vec3(1.0, 1.0, 1.0)
+            } else {
+                v_scale
+                    .get(entity_id)
+                    .map(|p| p.0)
+                    .unwrap_or(vec3(1.0, 1.0, 1.0))
+            };
             let _maybe_collision_prop = v_collision_type.get(entity_id);
             let maybe_trip_flags = v_trip_flags.get(entity_id);
 
@@ -1203,6 +1212,52 @@ mod tests {
     }
 
     const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
+
+    /// Model scale is a render transform, while `P$PhysDims` is the separately
+    /// authored collision volume. Shodan's long window strips make the
+    /// distinction observable: applying their visual z-scale to the OBB grows
+    /// a 3.2-unit collider to 51.2 units and seals an unrelated passage.
+    #[test]
+    fn authored_physics_dimensions_are_independent_of_model_scale() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let authored_size = vec3(3.2, 3.2, 3.2);
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(14.4, 0.0, 8.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                num_submodels: 6,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: 0.0,
+                radius1: 0.0,
+                offset0: Vector3::zero(),
+                offset1: Vector3::zero(),
+                size: authored_size,
+                unk1: 0,
+                unk2: 0,
+            },
+            PropScale(vec3(-0.888_888_9, 1.333_333_4, 16.0)),
+            PropImmobile(true),
+        ));
+
+        let handle = create_physics_representation(&mut world, &mut physics, &None, entity_id)
+            .expect("authored OBB should create a collider");
+        let actual_size = physics
+            .cuboid_full_size(handle)
+            .expect("authored OBB should remain a cuboid");
+
+        assert!(
+            (actual_size - authored_size).magnitude() < 0.001,
+            "render scale must not alter authored physics dimensions: expected {authored_size:?}, got {actual_size:?}"
+        );
+    }
 
     /// A climbable entity with no `PropPhysDimensions` still gets a collider,
     /// sized from the model bounds and tagged climbable (issue #589 - 24 of
