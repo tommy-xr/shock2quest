@@ -87,6 +87,46 @@ const PLAYER_CONTACT_OFFSET: f32 = 0.1;
 /// by `player_walks_on_rotated_platform`.
 const PLAYER_REST_LIFT: f32 = 0.01;
 
+/// Half-life for gravity-induced horizontal displacement after a slope hands
+/// the player onto walkable flat ground. Dark's dynamic player coasts through
+/// short flat seams instead of losing all tangent motion instantly; damping
+/// makes that carry finite for the kinematic controller.
+const PLAYER_SLOPE_FLAT_DAMPING_HALF_LIFE: f32 = 0.25;
+
+/// Below half a millimeter of per-frame horizontal displacement, slope carry
+/// is at rest. This also absorbs the tiny normal jitter emitted at trimesh
+/// triangle edges after the actual slide has ended.
+const PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED: f32 = 2.5e-7;
+
+/// Treat contacts shallower than about five degrees as flat. Triangle-edge
+/// shape casts can return slightly tilted normals even on a planar landing;
+/// accepting those as real slopes would continually regenerate tiny motion.
+const PLAYER_SLOPE_MIN_HORIZONTAL_NORMAL_SQUARED: f32 = 0.0076;
+
+/// A floor contact must have a meaningful upward normal. This still covers
+/// authored chute faces up to about 75 degrees while excluding near-vertical
+/// walls whose shape-cast normal has tiny upward numerical noise.
+const PLAYER_SLOPE_MIN_FLOOR_NORMAL: f32 = 0.25;
+
+fn slope_ground_probe_distance(shape: &dyn Shape) -> Real {
+    let contact_margin = (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
+    if let Some(capsule) = shape.as_capsule() {
+        // For a plane whose upward-normal component is n, the vertical
+        // center-to-plane distance at contact is:
+        //
+        //   segment_half_height + (radius + contact_margin) / n
+        //
+        // Size the probe for the steepest face we classify as a floor. This
+        // matters most for crouching: simply doubling its short vertical AABB
+        // does not reach the plane under the capsule's rounded side.
+        capsule.half_height() + (capsule.radius + contact_margin) / PLAYER_SLOPE_MIN_FLOOR_NORMAL
+    } else {
+        // Player locomotion uses capsules, but keep a conservative fallback
+        // for any future shape passed through this shared movement primitive.
+        2.0 * shape.compute_local_aabb().half_extents().y + contact_margin
+    }
+}
+
 /// Maximum ledge height (SS2 ft) the player steps up automatically, and how
 /// far below their feet the ground is snapped to when walking down. 2 ft is
 /// the original engine's step-probe height, so stairs climb and descend
@@ -457,6 +497,9 @@ struct ClimbTopOut {
 struct PlayerMovement {
     movement: EffectiveCharacterMovement,
     top_out: Option<ClimbTopOut>,
+    /// Horizontal part of a gravity-induced slope slide, carried into the
+    /// next gravity pass so a seam does not erase the player's momentum.
+    slope_displacement: Vector<Real>,
 }
 
 /// The moving-terrain body the player is standing on, and where it was the
@@ -953,6 +996,7 @@ fn plan_climb_top_out(
             save_pose: pos.translation.vector,
             reversing: false,
         }),
+        slope_displacement: Vector::zeros(),
     })
 }
 
@@ -1066,6 +1110,7 @@ fn step_player_movement(
     carry: Vector<Real>,
     dt: Real,
     gravity: Real,
+    slope_displacement: Option<Vector<Real>>,
     climb: Option<ClimbPass<'_>>,
 ) -> PlayerMovement {
     // Ladder: the climb vector replaces both the walk and the gravity pass.
@@ -1109,6 +1154,7 @@ fn step_player_movement(
             return PlayerMovement {
                 movement: mvt,
                 top_out: None,
+                slope_displacement: Vector::zeros(),
             };
         }
     }
@@ -1131,14 +1177,109 @@ fn step_player_movement(
     // zero-progress resting contacts (see `PLAYER_REST_LIFT`).
     let mut mvt = controller.move_shape(dt, queries, shape, pos, desired, |_c| ());
     let after_walk = Translation::from(mvt.translation) * pos;
-    let fall = controller.move_shape(
-        dt,
-        queries,
-        shape,
-        &after_walk,
-        Vector::y() * gravity,
-        |_c| (),
-    );
+    let gravity_step = Vector::y() * gravity;
+    let (fall, next_slope_displacement) = if let Some(slope_displacement) = slope_displacement {
+        // Dark's dynamic player preserves velocity when a fall is redirected
+        // by terrain. Our kinematic controller has no velocity of its own, so
+        // retain only the horizontal part of a slope slide and feed it into
+        // the next gravity cast. This is load-bearing at chained slope seams:
+        // a steep face can start a slide, and that momentum must carry onto a
+        // shallower, otherwise walkable face instead of treating the seam as
+        // a fresh rest.
+        //
+        // Keep the request at the existing fixed gravity-step magnitude. The
+        // retained component changes direction, not fall speed, preserving
+        // the established movement rate until gravity becomes fully
+        // integrated.
+        //
+        // This state models momentum redirected by ordinary downward gravity.
+        // A zero/negative-gravity room transition must not inject the old
+        // downhill direction into its first upward frame.
+        let carried_slope_displacement = if gravity < 0.0 {
+            slope_displacement
+        } else {
+            Vector::zeros()
+        };
+        let mut fall_input = gravity_step + carried_slope_displacement;
+        let gravity_distance = gravity.abs();
+        if gravity_distance == 0.0 {
+            fall_input = Vector::zeros();
+        } else if carried_slope_displacement.norm_squared()
+            > PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED
+        {
+            let fall_distance = fall_input.norm();
+            if fall_distance > gravity_distance {
+                fall_input *= gravity_distance / fall_distance;
+            }
+        }
+        let mut touched_floor = false;
+        let fall =
+            controller.move_shape(dt, queries, shape, &after_walk, fall_input, |collision| {
+                let up_dot = controller.up.dot(&collision.hit.normal1);
+                touched_floor |= up_dot > PLAYER_SLOPE_MIN_FLOOR_NORMAL;
+            });
+        // A capsule cast that begins inside the controller's target distance
+        // can report an edge-directed impact normal even on a planar trimesh.
+        // Probe straight down from the resolved center to classify the actual
+        // surface underfoot, otherwise an initial flat-floor contact can
+        // manufacture sideways momentum.
+        let resolved_pos = Translation::from(fall.translation) * after_walk;
+        let ground_ray = Ray::new(
+            Point::from(resolved_pos.translation.vector),
+            -*controller.up.as_ref(),
+        );
+        let ground_probe_distance = slope_ground_probe_distance(shape);
+        let touched_sloped_floor = touched_floor
+            && fall.is_sliding_down_slope
+            && queries
+                .cast_ray_and_get_normal(&ground_ray, ground_probe_distance, true)
+                .is_some_and(|(_, hit)| {
+                    let up_dot = controller.up.dot(&hit.normal);
+                    let horizontal_normal = hit.normal - *controller.up.as_ref() * up_dot;
+                    up_dot > PLAYER_SLOPE_MIN_FLOOR_NORMAL
+                        && horizontal_normal.norm_squared()
+                            > PLAYER_SLOPE_MIN_HORIZONTAL_NORMAL_SQUARED
+                });
+        // Rapier's flag means the slope handler took its permissive branch, not
+        // necessarily that the contact itself was a slope. In particular,
+        // carried horizontal input against a flat floor sets it too. Preserve
+        // the full tangent on an actual slope (and in the air), but damp it on
+        // flat support so short authored seams are crossed without making the
+        // player coast forever after landing.
+        let horizontal_fall = vector![fall.translation.x, 0.0, fall.translation.z];
+        let had_slope_displacement =
+            carried_slope_displacement.norm_squared() > PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED;
+        let mut next_slope_displacement = if fall.is_sliding_down_slope && touched_sloped_floor {
+            horizontal_fall
+        } else if had_slope_displacement && (touched_floor || fall.grounded) {
+            let damping = 2.0_f32.powf(-dt / PLAYER_SLOPE_FLAT_DAMPING_HALF_LIFE);
+            horizontal_fall * damping
+        } else if had_slope_displacement {
+            // A gap between faces is still part of the fall. With no floor
+            // contact there is no friction to remove horizontal motion.
+            horizontal_fall
+        } else {
+            Vector::zeros()
+        };
+        if next_slope_displacement.norm_squared() <= PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED {
+            next_slope_displacement = Vector::zeros();
+        }
+        (fall, next_slope_displacement)
+    } else {
+        // Collision-valid debug walks deliberately have no motion history:
+        // preserve their established exact gravity/step behavior.
+        (
+            controller.move_shape(
+                dt,
+                queries,
+                shape,
+                &after_walk,
+                gravity_step,
+                |_collision| (),
+            ),
+            Vector::zeros(),
+        )
+    };
     mvt.translation += fall.translation;
     mvt.grounded = fall.grounded;
     if mvt.grounded {
@@ -1165,6 +1306,7 @@ fn step_player_movement(
     PlayerMovement {
         movement: mvt,
         top_out: None,
+        slope_displacement: next_slope_displacement,
     }
 }
 
@@ -1452,6 +1594,10 @@ pub struct PlayerHandle {
     // then. Purely derived per-frame state (re-probed every move), so nothing
     // needs to save or restore it.
     support: Option<PlayerSupport>,
+    // Horizontal displacement produced by the previous frame's gravity/slope
+    // collision. Carried only while gravity keeps sliding the player; flat
+    // support, climbing and direct relocation clear it.
+    slope_displacement: Vector<Real>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1836,6 +1982,7 @@ impl PhysicsWorld {
         player_handle: &mut PlayerHandle,
     ) {
         player_handle.top_out = None;
+        player_handle.slope_displacement = Vector::zeros();
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let player_height = if player_handle.is_crouched {
             PLAYER_CROUCH_HEIGHT
@@ -1899,11 +2046,22 @@ impl PhysicsWorld {
     /// occupy places where the standing capsule does not fit, so persist its
     /// last valid standing start instead of an in-flight waypoint. A live
     /// blocker can move into that cached pose after planning; in that case
-    /// there is temporarily no safe standing transform to save.
+    /// there is temporarily no safe standing transform to save. Likewise,
+    /// defer while a slope carries transient motion that the position-only
+    /// save format cannot represent.
     pub fn get_player_save_translation(
         &self,
         player_handle: &PlayerHandle,
     ) -> Option<Vector3<f32>> {
+        // This short-lived displacement is the kinematic equivalent of
+        // in-flight velocity. Loading only a transform in the middle of a
+        // chained slope would erase it and can strand the player on an
+        // otherwise walkable face, so defer saving until the carry settles.
+        if player_handle.slope_displacement.norm_squared()
+            > PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED
+        {
+            return None;
+        }
         match player_handle.top_out {
             Some(top_out) if self.top_out_save_pose_is_clear(player_handle, top_out) => {
                 Some(nvec_to_cgmath(top_out.save_pose))
@@ -2091,6 +2249,7 @@ impl PhysicsWorld {
                     Vector::zeros(),
                     dt,
                     gravity,
+                    None,
                     // No ladder redirect: a validated move walks, it doesn't climb.
                     None,
                 )
@@ -2517,6 +2676,7 @@ impl PhysicsWorld {
             is_crouched: false,
             top_out: None,
             support: None,
+            slope_displacement: Vector::zeros(),
         }
     }
 
@@ -3063,7 +3223,11 @@ impl PhysicsWorld {
                     top_out,
                     self.integration_parameters.dt,
                 );
-                PlayerMovement { movement, top_out }
+                PlayerMovement {
+                    movement,
+                    top_out,
+                    slope_displacement: Vector::zeros(),
+                }
             } else {
                 step_player_movement(
                     &player_handle.controller,
@@ -3074,6 +3238,7 @@ impl PhysicsWorld {
                     carry,
                     self.integration_parameters.dt,
                     gravity,
+                    Some(player_handle.slope_displacement),
                     climb_movement.map(|(movement, top_out)| ClimbPass {
                         movement,
                         top_out,
@@ -3086,6 +3251,7 @@ impl PhysicsWorld {
         });
         let was_top_out = player_handle.top_out.is_some();
         player_handle.top_out = player_movement.top_out;
+        player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         if !was_top_out && is_top_out {
@@ -3991,6 +4157,170 @@ mod tests {
         for _ in 0..frames {
             world.update(Vector3::new(0.0, 0.0, 0.0), player);
         }
+    }
+
+    fn add_ramp(world: &mut PhysicsWorld, start: (f32, f32), end: (f32, f32), half_width: f32) {
+        let (x0, y0) = start;
+        let (x1, y1) = end;
+        let vertices = vec![
+            point![x0, y0, -half_width],
+            point![x0, y0, half_width],
+            point![x1, y1, -half_width],
+            point![x1, y1, half_width],
+        ];
+        let indices = vec![[0, 3, 2], [0, 1, 3]];
+        let mut collider = ColliderBuilder::trimesh(vertices, indices)
+            .expect("valid ramp mesh")
+            .build();
+        collider.set_collision_groups(InteractionGroups {
+            memberships: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
+        });
+        world.collider_set.insert(collider);
+    }
+
+    /// Falling onto a steep face carries the resulting downslope momentum
+    /// across a shallower face instead of treating the seam as a fresh rest.
+    ///
+    /// These are the two authored angles at the start of shodan.mis: 56.31°
+    /// slides under the controller's default 45° threshold, then hands off to
+    /// a 38.66° face. Negative-first: without retained slope momentum the
+    /// pure vertical gravity pass stops at that seam.
+    #[test]
+    fn fall_momentum_crosses_a_steep_to_shallow_ramp_seam() {
+        let mut world = PhysicsWorld::new();
+        // tan(56.31°) = 1.5; tan(38.66°) = 0.8.
+        add_ramp(&mut world, (-2.0, 7.0), (2.0, 1.0), 3.0);
+        add_ramp(&mut world, (2.0, 1.0), (7.0, -3.0), 3.0);
+        add_ramp(&mut world, (7.0, -3.0), (30.0, -3.0), 3.0);
+        let mut player =
+            world.create_player(vec3(0.0, 9.0, 0.0), EntityId::from_inner(2100).unwrap());
+
+        step(&mut world, &mut player, 180);
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.x > 2.5,
+            "fall momentum should carry the player across the shallow handoff; got {end:?}"
+        );
+
+        // Rapier also marks its permissive slope-handler branch as "sliding"
+        // when carried horizontal input meets a flat floor. That flag alone
+        // would re-inject the displacement forever, so verify the player
+        // settles once the chained slopes hand off to the flat landing.
+        step(&mut world, &mut player, 240);
+        let settled = world.get_player_translation(&player);
+        step(&mut world, &mut player, 120);
+        let after = world.get_player_translation(&player);
+        let drift = after - settled;
+        assert!(
+            drift.x.abs() < 0.05 && drift.y.abs() < 0.05 && drift.z.abs() < 0.05,
+            "slope displacement must settle on flat support; moved from {settled:?} to {after:?}"
+        );
+        assert!(
+            player.slope_displacement.norm_squared() <= PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED,
+            "flat support must clear retained displacement; got {:?}",
+            player.slope_displacement
+        );
+    }
+
+    /// A moderate ramp remains ordinary walkable ground when the player did
+    /// not arrive with downslope momentum.
+    #[test]
+    fn player_at_rest_does_not_slide_down_a_moderate_ramp() {
+        let mut world = PhysicsWorld::new();
+        add_ramp(&mut world, (0.0, 4.0), (5.0, 0.0), 3.0);
+        let start_x = 2.5;
+        let surface_y = 2.0;
+        let mut player = world.create_player(
+            vec3(start_x, surface_y + PLAYER_HALF_HEIGHT + 0.2, 0.0),
+            EntityId::from_inner(2101).unwrap(),
+        );
+
+        step(&mut world, &mut player, 120);
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.x - start_x).abs() < 0.05,
+            "a player placed at rest on a 38.66° ramp should not drift; got {end:?}"
+        );
+    }
+
+    /// The ground-normal probe must reach the plane below the rounded side of
+    /// both player capsules near the steepest angle accepted as a floor.
+    #[test]
+    fn standing_and_crouched_falls_retain_momentum_from_a_near_threshold_slope() {
+        let run = |crouched: bool| {
+            let mut world = PhysicsWorld::new();
+            // tan(75°) = 3.732; its upward normal is 0.259, just above the
+            // 0.25 floor threshold. It hands off to the same 38.66° moderate
+            // face used by the Shodan regression, then a flat landing.
+            add_ramp(&mut world, (-1.0, 7.464), (1.0, 0.0), 3.0);
+            add_ramp(&mut world, (1.0, 0.0), (6.0, -4.0), 3.0);
+            add_ramp(&mut world, (6.0, -4.0), (30.0, -4.0), 3.0);
+            let mut player = world.create_player(
+                vec3(-0.75, 10.0, 0.0),
+                EntityId::from_inner(if crouched { 2104 } else { 2105 }).unwrap(),
+            );
+            if crouched {
+                assert!(world.set_player_crouch(true, &mut player));
+            }
+
+            step(&mut world, &mut player, 240);
+            world.get_player_translation(&player)
+        };
+
+        for (label, end) in [("standing", run(false)), ("crouched", run(true))] {
+            assert!(
+                end.x > 2.0,
+                "{label} capsule should carry the near-threshold slide across the shallow handoff; got {end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn player_save_waits_for_transient_slope_displacement() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2102).unwrap());
+        assert!(
+            world.get_player_save_translation(&player).is_some(),
+            "a stationary player should be saveable"
+        );
+
+        player.slope_displacement = vector![0.1, 0.0, 0.0];
+        assert_eq!(
+            world.get_player_save_translation(&player),
+            None,
+            "a transform-only save must not erase active slope carry"
+        );
+
+        world.set_player_translation(vec3(1.0, 3.0, 0.0), &mut player);
+        assert!(
+            world.get_player_save_translation(&player).is_some(),
+            "an explicit relocation clears the transient carry"
+        );
+    }
+
+    #[test]
+    fn reversed_gravity_clears_downhill_displacement_without_carrying_it() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2103).unwrap());
+        world.rigid_body_set[player.character_handle].set_gravity_scale(-1.0, true);
+        player.slope_displacement = vector![0.1, 0.0, 0.0];
+        let start = world.get_player_translation(&player);
+
+        step(&mut world, &mut player, 2);
+        let end = world.get_player_translation(&player);
+        assert!(
+            (end.x - start.x).abs() < 1.0e-4 && (end.z - start.z).abs() < 1.0e-4,
+            "upward gravity must not inherit downhill displacement: {start:?} -> {end:?}"
+        );
+        assert_eq!(
+            player.slope_displacement,
+            Vector::zeros(),
+            "upward gravity must clear downhill carry immediately"
+        );
     }
 
     /// The scene-wide query pipeline the climb/top-out helpers take.
