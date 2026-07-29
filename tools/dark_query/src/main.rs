@@ -591,6 +591,8 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::GunFlash(_) => "GunFlash".to_string(),
         dark::properties::Link::LandingPoint => "LandingPoint".to_string(),
         dark::properties::Link::Replicator => "Replicator".to_string(),
+        dark::properties::Link::SpawnPoint => "SpawnPoint".to_string(),
+        dark::properties::Link::Spawned => "Spawned".to_string(),
         dark::properties::Link::MissSpang => "MissSpang".to_string(),
         dark::properties::Link::HitSpang(_) => "HitSpang".to_string(),
         dark::properties::Link::Hacking => "Hacking".to_string(),
