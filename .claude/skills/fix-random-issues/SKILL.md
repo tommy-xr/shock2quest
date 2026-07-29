@@ -5,9 +5,10 @@ description: >-
   excluding issues already addressed by an open PR, and process them
   sequentially. Delegate one issue at a time to an isolated agent that must
   reproduce or confirm the problem, implement a focused fix, verify it, open a
-  reviewable PR, or document and close a verified stale issue. Use for requests
-  to fix, sweep, tackle, or work through a bounded number of random open
-  shock2quest issues.
+  reviewable PR with mandatory pr-visuals assessment and player-observable
+  before/after evidence, or document and close a verified stale issue. Use for
+  requests to fix, sweep, tackle, or work through a bounded number of random
+  open shock2quest issues.
 ---
 
 # Fix random issues
@@ -83,14 +84,17 @@ For each selected issue, in emitted order:
    from current `origin/main`, named along the lines of
    `fix/issue-<number>-<slug>`.
 3. Give the worker the prompt contract below and the worktree path. Wait for its
-   final result. Do not start another issue worker concurrently. If the worker
-   uses a required helper such as `pr-visuals`, wait for that helper too.
-4. Inspect the worker's evidence, diff, tests, commit, PR, and CI result. Ask the
-   same worker for corrections when its result is incomplete. Do not take over
-   silently or delegate the issue to a second worker.
+   final result. Do not start another issue worker concurrently. Every proposed
+   fix must pass through the `pr-visuals` gate below; wait for its capture helper
+   before accepting the worker's result.
+4. Inspect the worker's evidence, diff, tests, visual-proof result, commit, PR,
+   and CI result. Ask the same worker for corrections when its result is
+   incomplete. Do not take over silently or delegate the issue to a second
+   worker.
 5. Record one terminal result:
    - `fixed`: reproduction/confirmation, focused fix, local verification,
-     conventional commit, PR containing `Fixes #N`, and green CI.
+     completed `pr-visuals` gate, conventional commit, PR containing `Fixes #N`,
+     and green CI.
    - `skipped`: closed, duplicate, actively addressed by an open PR, superseded,
      or already fixed on current main. Apply the verified-fix protocol when the
      issue is still open.
@@ -103,6 +107,38 @@ For each selected issue, in emitted order:
 
 One issue is complete before the next begins. Sequential processing is a
 correctness boundary, not merely a preference.
+
+### Mandatory pr-visuals gate
+
+Run the `pr-visuals` skill for every proposed fix before delivery. Do not decide
+that a fix is non-visual merely because it changes scripts, physics, AI, input,
+or state instead of renderer code. If success or failure changes what a player
+can see in a rendered frame or sequence, it is player-observable and requires
+visual proof. Cutscene timing/sequence fixes are always player-observable.
+
+For a player-observable fix:
+
+1. Delegate the complete `pr-visuals` flow to a capture helper when delegation
+   is available, and wait for it.
+2. Replay the same deterministic request sequence against the exact base and fix.
+3. Embed a looping GIF, a still PNG, and a labeled before/after comparison in
+   the PR. A one-sided after image is insufficient when existing behavior
+   changed.
+4. Inspect the media and confirm it visibly exercises the reported behavior.
+   Logs, API values, or screenshots that do not show the changed behavior are
+   not substitutes.
+
+For a genuinely non-renderable fix (for example pure documentation, CLI output,
+or an internal parser with no player-observable consequence), still read and
+apply `pr-visuals`, then return a concrete non-renderable rationale for manager
+approval. "No rendering code changed" is not a valid rationale. Record the
+approved rationale in the PR and sweep report. The manager must reject a fixed
+result that has neither embedded visual evidence nor an approved rationale.
+
+Apply the same assessment to an open issue that appears already fixed on current
+main. When the behavior is player-observable and the responsible pre-fix ref is
+available, capture matched pre-fix/current-main evidence before verified-fix
+closure.
 
 ### Verified-fix protocol
 
@@ -164,25 +200,33 @@ the product fix. Keep one logical conventional commit.
 
 VERIFY: Run the focused test, the repository's warning-free package checks,
 format checks, and every runtime/SDK/e2e verification required by AGENTS.md for
-the affected area. For visual changes, use the pr-visuals skill and include the
-required still/GIF and before/after evidence.
+the affected area.
+
+VISUALIZE: Run the pr-visuals skill for every proposed fix. Treat any behavior
+whose result changes a rendered frame or sequence as player-observable even
+when the code change is in scripts, physics, AI, input, or state. Capture and
+inspect a deterministic looping GIF, still PNG, and matched base/fix
+before/after, then embed them in the PR. If the fix is genuinely non-renderable,
+return a specific rationale for manager approval; "no rendering code changed"
+is insufficient.
 
 DELIVER: Fetch and rebase onto current origin/main, rerun affected verification,
 push the branch, and open one conventional-title PR whose body includes
-reproduction evidence, the fix, tests, and `Fixes #N`. Watch PR checks to a
-terminal result and fix failures caused by the change. Never merge the PR or
-close the issue yourself. If current main already fixes the issue, return the
-evidence and a `conclusive`, `appears fixed`, or `not fixed` closure
-recommendation to the manager.
+reproduction evidence, the fix, tests, the visual-proof result, and `Fixes #N`.
+Watch PR checks to a terminal result and fix failures caused by the change.
+Never merge the PR or close the issue yourself. If current main already fixes
+the issue, return the evidence and a `conclusive`, `appears fixed`, or `not
+fixed` closure recommendation to the manager.
 
 Return: status; pre-fix reproduction; root cause; files changed; tests and exact
-results; commit SHA; PR URL; CI status; remaining risks. If skipped,
-unreproduced, or blocked, make no speculative changes and return concrete
-evidence plus the clean worktree status.
+results; pr-visuals result with gist/raw URLs and local media paths, or the
+specific non-renderable rationale; commit SHA; PR URL; CI status; remaining
+risks. If skipped, unreproduced, or blocked, make no speculative changes and
+return concrete evidence plus the clean worktree status.
 ```
 
-Treat a worker report without pre-fix evidence or without targeted verification
-as incomplete. A PR URL alone is not completion.
+Treat a worker report without pre-fix evidence, targeted verification, or a
+completed `pr-visuals` gate as incomplete. A PR URL alone is not completion.
 
 ## 3. Report the sweep
 

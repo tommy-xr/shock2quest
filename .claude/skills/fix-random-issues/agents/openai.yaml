@@ -1,4 +1,4 @@
 interface:
   display_name: "Fix Random Issues"
-  short_description: "Sweep owner-authored issues and close stale fixes"
-  default_prompt: "Use $fix-random-issues to process 3 randomly selected owner-authored shock2quest issues, excluding active fixes and closing conclusively resolved reports."
+  short_description: "Fix random issues with mandatory visual proof"
+  default_prompt: "Use $fix-random-issues to process 3 randomly selected owner-authored shock2quest issues with pr-visuals evidence for every completed fix."
