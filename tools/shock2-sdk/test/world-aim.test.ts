@@ -329,6 +329,64 @@ test("aimAt center uses and confirms an ordinary entity's selectable surface", a
   assert.equal(writes[1]?.path, "/v1/control/input");
 });
 
+test("aimAt required visibility confirms an ordinary visible entity", async () => {
+  const detail = {
+    entity_id: 470,
+    name: "Airlock Door",
+    template_id: 470,
+    position: [30, -7, 18],
+    rotation: [0, 0, 0, 1],
+    inheritance_chain: [],
+    properties: [],
+    outgoing_links: [],
+    incoming_links: [],
+    aim_points: [],
+  } satisfies EntityDetailResult;
+  const snapshot = {
+    player: {
+      position: [30, -8.6, 13],
+      rotation: [0, 0, 0, 1],
+    },
+  } as FrameSnapshot;
+  const writes: Array<{ path: string; body: unknown }> = [];
+  const client = {
+    get: async (path: string) => {
+      if (path === "/v1/entities/470") return detail;
+      if (path === "/v1/info") return snapshot;
+      throw new Error(`unexpected GET ${path}`);
+    },
+    post: async (path: string, body: unknown) => {
+      writes.push({ path, body });
+      if (path === "/v1/physics/raycast") {
+        return {
+          hit: true,
+          hit_point: [30, -7, 17.25],
+          hit_normal: [0, 0, -1],
+          distance: 4.25,
+          entity_id: 470,
+          entity_name: "Airlock Door",
+          collision_group: "selectable",
+          is_sensor: false,
+        };
+      }
+    },
+  };
+  const player = new PlayerApi(client as unknown as HttpClient);
+
+  const aim = await player.aimAt(470, {
+    hitbox: "center",
+    visibility: "required",
+  });
+
+  assert.equal(aim.classification, "surface");
+  assert.equal(aim.visibility.state, "visible");
+  assert.deepEqual(aim.world_point, [30, -7, 17.25]);
+  assert.equal(aim.interaction_target_id, 470);
+  assert.equal(aim.target_confirmed, true);
+  assert.equal(writes[0]?.path, "/v1/physics/raycast");
+  assert.equal(writes[1]?.path, "/v1/control/input");
+});
+
 test("aimAt visibility required skips an occluded classified proxy", async () => {
   const detail = {
     entity_id: 363,

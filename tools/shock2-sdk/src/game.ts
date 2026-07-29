@@ -220,6 +220,7 @@ export class PlayerApi {
           targetIds.has(check.hit.entity_id) &&
           check.hit.hit_point !== null
         ) {
+          interactionTargetId = check.hit.entity_id;
           surfacePoint = check.hit.hit_point;
         }
       } else if (!explicitCreatureCenter) {

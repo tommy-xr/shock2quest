@@ -40,6 +40,8 @@ async function frobThroughReticle(
   await game.step({ frames: 3 });
   const aim = await game.player.aimAt(entity, { visibility: "required" });
   assert.equal(aim.classification, "surface", JSON.stringify(aim));
+  assert.equal(aim.interaction_target_id, entity.id, JSON.stringify(aim));
+  assert.equal(aim.target_confirmed, true, JSON.stringify(aim));
 
   await game.input.set("right_hand.squeeze_value", 1);
   await game.step({ frames: 2 });
