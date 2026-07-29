@@ -347,6 +347,7 @@ pub(super) fn create_projectile(
                 root_transform: Matrix4::from_translation(origin.to_vec()) * rot,
                 options: CreateEntityOptions {
                     force_visible: true,
+                    projectile_raycast_origin: Some(aim.origin),
                     ..CreateEntityOptions::default()
                 },
             };

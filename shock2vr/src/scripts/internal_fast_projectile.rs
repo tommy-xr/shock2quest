@@ -10,7 +10,7 @@ use crate::{
     creature::RuntimePropHitBox,
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    runtime_props::RuntimePropTransform,
+    runtime_props::{RuntimePropProjectileRayOrigin, RuntimePropTransform},
     scripts::{
         Message,
         ai::ai_util::does_entity_have_hitboxes,
@@ -50,7 +50,11 @@ impl Script for InternalFastProjectileScript {
         let current_position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
         // let forward = xform.transform_vector(vec3(0.0, 0.0, -1.0));
         let forward = self.velocity.normalize();
-        let start_point = current_position - forward * SCALE_FACTOR * 0.25;
+        let start_point = world
+            .borrow::<View<RuntimePropProjectileRayOrigin>>()
+            .ok()
+            .and_then(|origins| origins.get(entity_id).ok().map(|origin| origin.0))
+            .unwrap_or(current_position - forward * SCALE_FACTOR * 0.25);
         let maybe_hit_spot = projectile_ray_cast(start_point, forward, physics, distance, world);
 
         if let Some(RayCastResult {
@@ -147,6 +151,16 @@ impl Script for InternalFastProjectileScript {
     }
 }
 
+fn hitbox_belongs_to_entity(world: &World, hitbox_entity: EntityId, parent: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropHitBox>>()
+        .is_ok_and(|hitboxes| {
+            hitboxes
+                .get(hitbox_entity)
+                .is_ok_and(|hitbox| hitbox.parent_entity_id == parent)
+        })
+}
+
 fn projectile_ray_cast(
     start_point: Point3<f32>,
     forward: cgmath::Vector3<f32>,
@@ -171,13 +185,27 @@ fn projectile_ray_cast(
 
         if let Some(hit_entity_id) = &hit_spot.maybe_entity_id {
             if does_entity_have_hitboxes(world, *hit_entity_id) {
-                maybe_hit_spot = physics.ray_cast(
+                let refined_hit = physics.ray_cast(
                     start_point,
                     forward * distance,
                     InternalCollisionGroups::HITBOX
                         | InternalCollisionGroups::SELECTABLE
                         | InternalCollisionGroups::WORLD,
                 );
+                // Prefer the authored damage proxy when the ray intersects one.
+                // If the coarse creature capsule surrounds the ray origin but
+                // its proxies do not cover that exact line, retain the coarse
+                // entity hit instead of turning a contact-range shot into a
+                // terrain impact beyond the creature.
+                let refined_hits_target_hitbox = refined_hit
+                    .as_ref()
+                    .and_then(|hit| hit.maybe_entity_id)
+                    .is_some_and(|entity_id| {
+                        hitbox_belongs_to_entity(world, entity_id, *hit_entity_id)
+                    });
+                if refined_hits_target_hitbox {
+                    maybe_hit_spot = refined_hit;
+                }
             }
         }
     }
@@ -186,4 +214,44 @@ fn projectile_ray_cast(
     // This should be called recursively with some limit (ie, depth=3) to handle those cases
 
     maybe_hit_spot
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hitbox_belongs_to_entity;
+    use crate::creature::{HitBoxType, RuntimePropHitBox};
+    use shipyard::World;
+
+    #[test]
+    fn refined_hitbox_must_belong_to_the_coarse_creature() {
+        let mut world = World::new();
+        let coarse_creature = world.add_entity(());
+        let overlapping_creature = world.add_entity(());
+        let coarse_hitbox = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: coarse_creature,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 1,
+        });
+        let overlapping_hitbox = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: overlapping_creature,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 1,
+        });
+
+        assert!(hitbox_belongs_to_entity(
+            &world,
+            coarse_hitbox,
+            coarse_creature,
+        ));
+        assert!(!hitbox_belongs_to_entity(
+            &world,
+            overlapping_hitbox,
+            coarse_creature,
+        ));
+        assert!(!hitbox_belongs_to_entity(
+            &world,
+            coarse_creature,
+            coarse_creature,
+        ));
+    }
 }
