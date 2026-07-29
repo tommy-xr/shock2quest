@@ -113,6 +113,28 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 
+fn is_realtime_crumple(frame_count: f32) -> bool {
+    // `humdieup1` is an authored "already dead" pose: three frames with no
+    // fall. It shares the human crumple+die schema, but is not a real-time
+    // death and otherwise makes one in five human kills instantaneous.
+    frame_count > 3.0
+}
+
+fn select_motion_option(
+    options: &[String],
+    selection_strategy: &MotionQuerySelectionStrategy,
+) -> Option<String> {
+    if options.is_empty() {
+        return None;
+    }
+    match selection_strategy {
+        MotionQuerySelectionStrategy::Random => options.choose(&mut thread_rng()).cloned(),
+        MotionQuerySelectionStrategy::Sequential(sequence) => {
+            options.get(*sequence as usize % options.len()).cloned()
+        }
+    }
+}
+
 #[derive(Unique, Clone)]
 pub struct PlayerInfo {
     pub pos: Vector3<f32>,
@@ -1653,7 +1675,24 @@ impl MissionCore {
                     query_items.extend(actor_tags.iter().cloned());
                     let query = MotionQuery::new(actor_type, query_items)
                         .with_selection_strategy(selection_strategy.clone());
-                    let result = global_context.motiondb.query(query.clone());
+                    let result = if is_death_query {
+                        let options = global_context
+                            .motiondb
+                            .query_all(query.clone())
+                            .into_iter()
+                            .filter(|name| {
+                                is_realtime_crumple(
+                                    global_context
+                                        .motiondb
+                                        .get_mps_motions(name.clone())
+                                        .frame_count,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        select_motion_option(&options, &selection_strategy)
+                    } else {
+                        global_context.motiondb.query(query.clone())
+                    };
                     tried_queries.push(query);
                     result
                 });
@@ -1673,6 +1712,37 @@ impl MissionCore {
                         .get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", next_animation));
 
                     if let Some(clip) = maybe_clip {
+                        // The live pose is already registered against the
+                        // walk surface. Preserve its lowest-joint depth as the
+                        // creature-specific floor convention: CAL bind depth
+                        // is measurably higher for real human/hybrid assets.
+                        let death_floor_depth = is_death_query
+                            .then(|| {
+                                self.id_to_model
+                                    .get(&entity_id)
+                                    .and_then(Model::skeleton)
+                                    .and_then(|skeleton| {
+                                        dark::ss2_skeleton::lowest_joint_y(
+                                            skeleton,
+                                            &player.get_transforms(skeleton),
+                                        )
+                                    })
+                            })
+                            .flatten();
+                        let clip = match (
+                            is_death_query,
+                            self.id_to_model.get(&entity_id).and_then(Model::skeleton),
+                            death_floor_depth,
+                        ) {
+                            (true, Some(skeleton), Some(floor_depth)) => {
+                                Rc::new(dark::ss2_skeleton::ground_terminal_pose_to_floor(
+                                    skeleton,
+                                    &clip,
+                                    floor_depth,
+                                ))
+                            }
+                            _ => clip,
+                        };
                         self.failed_animation_queries.remove(&entity_id);
                         *player = apply(player, clip);
 
@@ -1687,7 +1757,8 @@ impl MissionCore {
                             .and_then(|view| view.get(entity_id).ok().map(|hp| hp.hit_points <= 0))
                             .unwrap_or(false);
                         if is_death_query && is_killed {
-                            resolved_death_pose = Some(next_animation);
+                            resolved_death_pose =
+                                Some(RuntimePropDeathPose::new(next_animation, death_floor_depth));
                         }
                     } else {
                         // Report completion just like the query-miss branch
@@ -1733,9 +1804,8 @@ impl MissionCore {
             }
         }
 
-        if let Some(motion_or_tag_name) = resolved_death_pose {
-            self.world
-                .add_component(entity_id, RuntimePropDeathPose(motion_or_tag_name));
+        if let Some(death_pose) = resolved_death_pose {
+            self.world.add_component(entity_id, death_pose);
         }
     }
 
@@ -6764,6 +6834,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         self.script_world.dispatch(Message { to: id, payload });
         true
+    }
+}
+
+#[cfg(test)]
+mod death_motion_tests {
+    use super::is_realtime_crumple;
+
+    #[test]
+    fn three_frame_already_dead_pose_is_not_a_realtime_crumple() {
+        assert!(!is_realtime_crumple(3.0));
+        assert!(is_realtime_crumple(79.0));
     }
 }
 

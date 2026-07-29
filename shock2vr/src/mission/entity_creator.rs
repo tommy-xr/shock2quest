@@ -481,8 +481,20 @@ fn create_model(
         // historical frame-1 bake and physics behavior.
         let (model, animation_player) = {
             if let Ok(death_pose) = v_death_pose.get(entity_id) {
-                let animation_clip =
-                    asset_cache.get(&ANIMATION_CLIP_IMPORTER, &format!("{}_.mc", death_pose.0));
+                let animation_clip = asset_cache.get(
+                    &ANIMATION_CLIP_IMPORTER,
+                    &format!("{}_.mc", death_pose.clip_name),
+                );
+                let animation_clip = match (model_ref.skeleton(), death_pose.floor_depth) {
+                    (Some(skeleton), Some(floor_depth)) => {
+                        Rc::new(dark::ss2_skeleton::ground_terminal_pose_to_floor(
+                            skeleton,
+                            &animation_clip,
+                            floor_depth,
+                        ))
+                    }
+                    _ => animation_clip,
+                };
                 let transformed_model = Model::transform(model_ref, transform);
                 (
                     transformed_model,
