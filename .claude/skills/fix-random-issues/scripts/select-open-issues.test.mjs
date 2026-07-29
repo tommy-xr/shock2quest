@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,11 +16,12 @@ const selector = fileURLToPath(
   new URL("./select-open-issues.mjs", import.meta.url),
 );
 
-function issue(number) {
+function issue(number, author = "owner") {
   return {
     number,
     title: `Issue ${number}`,
     html_url: `https://github.com/owner/repo/issues/${number}`,
+    user: { login: author },
     labels: [],
     assignees: [],
   };
@@ -30,7 +37,7 @@ function pullRequest(number, body) {
   };
 }
 
-test("excludes issues addressed by an open pull request before sampling", () => {
+test("samples only owner issues without an active closing pull request", () => {
   const temporaryDirectory = mkdtempSync(
     path.join(tmpdir(), "select-open-issues-"),
   );
@@ -55,6 +62,7 @@ process.stdout.write(process.env.FAKE_GH_RESPONSE);
         issue(12),
         issue(13),
         issue(14),
+        issue(15, "community-member"),
         pullRequest(90, "Fixes #11"),
         pullRequest(91, "Related context: #10"),
         pullRequest(92, "Resolves owner/repo#12"),
@@ -81,8 +89,16 @@ process.stdout.write(process.env.FAKE_GH_RESPONSE);
 
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout);
+    assert.equal(output.totalOpenIssues, 6);
     assert.equal(output.openIssues, 5);
     assert.equal(output.available, 2);
+    assert.deepEqual(
+      output.excludedNonOwnerIssues.map(({ number, author }) => ({
+        number,
+        author,
+      })),
+      [{ number: 15, author: "community-member" }],
+    );
     assert.deepEqual(
       output.selected
         .map(({ number }) => number)
@@ -103,4 +119,16 @@ process.stdout.write(process.env.FAKE_GH_RESPONSE);
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
+});
+
+test("documents evidence comments and controlled issue closure", () => {
+  const skill = readFileSync(
+    fileURLToPath(new URL("../SKILL.md", import.meta.url)),
+    "utf8",
+  );
+
+  assert.match(skill, /Only issues authored by the repository owner/i);
+  assert.match(skill, /Always leave one evidence-backed verification comment/i);
+  assert.match(skill, /three distinct evidence-backed reports/i);
+  assert.match(skill, /gh issue close .*--reason completed/);
 });

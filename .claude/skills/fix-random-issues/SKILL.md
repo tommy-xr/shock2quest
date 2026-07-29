@@ -1,12 +1,13 @@
 ---
 name: fix-random-issues
 description: >-
-  Randomly sample X eligible open GitHub issues from shock2quest, excluding
-  issues already addressed by an open PR, and process them sequentially,
-  delegating one issue at a time to an isolated agent that must reproduce or
-  confirm the problem, implement a focused fix, verify it, and open a reviewable
-  PR. Use for requests to fix, sweep, tackle, or work through a bounded number
-  of random open shock2quest issues.
+  Randomly sample X eligible owner-authored open GitHub issues from shock2quest,
+  excluding issues already addressed by an open PR, and process them
+  sequentially. Delegate one issue at a time to an isolated agent that must
+  reproduce or confirm the problem, implement a focused fix, verify it, open a
+  reviewable PR, or document and close a verified stale issue. Use for requests
+  to fix, sweep, tackle, or work through a bounded number of random open
+  shock2quest issues.
 ---
 
 # Fix random issues
@@ -21,6 +22,9 @@ before starting the next.
   positive integer.
 - Resolve the repository from the checkout, normally
   `tommy-xr/shock2quest`. Honor an explicit repository override.
+- Only issues authored by the repository owner are eligible. Exclude issues
+  opened by every other user, collaborator, organization member, or bot before
+  sampling.
 - Accept an optional seed. Generate and report one when omitted.
 
 Before drawing, exclude an issue when an open PR in the repository declares
@@ -40,7 +44,8 @@ issue after the sample is frozen, skip it without drawing a replacement.
 
 1. Read `AGENTS.md`, `README.md`, and `DEVELOPMENT.md`.
 2. Confirm `gh` authentication, repository access, and push/PR access before
-   starting a worker. Never merge a PR or close an issue directly.
+   starting a worker. Never merge a PR. Comment on and close issues only under
+   the verified-fix protocol below.
 3. Record the checkout's initial status. Preserve all existing user changes.
    Use an isolated branch/worktree for every issue; never stack unrelated issue
    fixes.
@@ -53,23 +58,26 @@ issue after the sample is frozen, skip it without drawing a replacement.
 
    Add `--seed <value>` when supplied. `.agents/skills` is the compatibility
    symlink to `.claude/skills`, so this command works for both Claude and Codex.
-5. Keep the emitted repository, seed, `excludedActivePullRequests`, and ordered
-   `selected` array as the run ledger. Do not rerun the draw unless the user
-   explicitly requests a new sample.
+5. Keep the emitted repository, seed, `totalOpenIssues`, owner-authored
+   `openIssues`, `excludedNonOwnerIssues`, `excludedActivePullRequests`, and
+   ordered `selected` array as the run ledger. Do not rerun the draw unless the
+   user explicitly requests a new sample.
 
-The selector samples all eligible open issues without inspecting difficulty,
-labels, or assignees first. The active-PR exclusion above is the only
-pre-sampling filter. Random means random; do not quietly filter the eligible
-pool further.
+The selector samples all eligible owner-authored open issues without inspecting
+difficulty, labels, or assignees first. Author and active-PR exclusions are the
+only pre-sampling filters. Random means random; do not quietly filter the
+eligible pool further.
 
 ## 2. Process the selected issues serially
 
 For each selected issue, in emitted order:
 
-1. Re-read it with `gh issue view`, including its current state, body, comments,
-   labels, and assignees. Skip it if it is no longer open or an open PR now
-   declares that it closes, fixes, or resolves the issue. Check current
-   `origin/main` for an existing fix or superseding merged PR before editing.
+1. Re-read it with `gh issue view`, including its author, current state, body,
+   comments, labels, and assignees. Stop and report a selector defect if the
+   author is not the repository owner; do not draw a replacement. Skip it if it
+   is no longer open or an open PR now declares that it closes, fixes, or
+   resolves the issue. Check current `origin/main` for an existing fix or
+   superseding merged PR before editing.
 2. Start one issue worker using the host's delegation tool. Prefer a
    host-provided isolated worktree. Otherwise create a unique branch/worktree
    from current `origin/main`, named along the lines of
@@ -84,15 +92,53 @@ For each selected issue, in emitted order:
    - `fixed`: reproduction/confirmation, focused fix, local verification,
      conventional commit, PR containing `Fixes #N`, and green CI.
    - `skipped`: closed, duplicate, actively addressed by an open PR, superseded,
-     or already fixed on current main.
+     or already fixed on current main. Apply the verified-fix protocol when the
+     issue is still open.
    - `not reproduced`: reasonable evidence failed to confirm the report.
    - `blocked`: a concrete product decision, unavailable dependency/hardware,
      unsafe scope, or persistent verification/CI failure prevents completion.
-6. Remove a temporary worktree only when it is clean and every change is safely
+6. Resolve any open, already-fixed issue under the verified-fix protocol below.
+7. Remove a temporary worktree only when it is clean and every change is safely
    committed and pushed. Otherwise preserve it and report its path.
 
 One issue is complete before the next begins. Sequential processing is a
 correctness boundary, not merely a preference.
+
+### Verified-fix protocol
+
+Use this protocol only after the selected issue's worker returns evidence about
+current `origin/main`. The manager owns comments and closure; the worker must
+not close the issue.
+
+1. Always leave one evidence-backed verification comment when an open selected
+   issue appears fixed. Include the current main SHA, the fixing commit or
+   merged PR when known, exact targeted verification and result, any remaining
+   scope, and this hidden marker:
+
+   ```html
+   <!-- fix-random-issues: appears-fixed-report -->
+   ```
+
+   Read existing comments first. Do not post or count a duplicate of the same
+   run or materially identical evidence.
+2. Treat the fix as conclusive only when:
+   - the issue's reported behavior or acceptance criteria pass a targeted test
+     or live reproduction on current main;
+   - the responsible merged change is present on current main when one exists;
+   - no acceptance criterion remains unresolved; and
+   - any adjacent product decision is explicitly out of scope or tracked
+     separately.
+
+   After posting the evidence comment, close a conclusive issue with
+   `gh issue close N --repo OWNER/REPO --reason completed`.
+3. When the issue merely appears fixed but the evidence is not conclusive, keep
+   it open. Count only three distinct evidence-backed reports from separate
+   verification runs, each carrying the marker above and identifying its tested
+   main SHA. On the third qualifying report, add a closing comment that links
+   the three reports and close the issue as completed.
+4. Never close based only on failure to reproduce, passing CI, stale evidence,
+   duplicated evidence, or an unverified code inspection. Report the remaining
+   uncertainty instead.
 
 ## Issue-worker prompt contract
 
@@ -103,7 +149,8 @@ worktree. Instruct the worker:
 Own issue #N end to end in the supplied isolated worktree.
 
 Read AGENTS.md, README.md, and DEVELOPMENT.md first. Read the full issue and
-comments. Work only on this issue; preserve unrelated changes.
+comments. Confirm the issue author is the repository owner. Work only on this
+issue; preserve unrelated changes.
 
 REPRODUCE: Confirm the reported behavior on current origin/main before changing
 code. For a feature gap, confirm the missing/stubbed behavior and investigate
@@ -124,7 +171,9 @@ DELIVER: Fetch and rebase onto current origin/main, rerun affected verification,
 push the branch, and open one conventional-title PR whose body includes
 reproduction evidence, the fix, tests, and `Fixes #N`. Watch PR checks to a
 terminal result and fix failures caused by the change. Never merge the PR or
-close the issue yourself.
+close the issue yourself. If current main already fixes the issue, return the
+evidence and a `conclusive`, `appears fixed`, or `not fixed` closure
+recommendation to the manager.
 
 Return: status; pre-fix reproduction; root cause; files changed; tests and exact
 results; commit SHA; PR URL; CI status; remaining risks. If skipped,
@@ -137,12 +186,15 @@ as incomplete. A PR URL alone is not completion.
 
 ## 3. Report the sweep
 
-Return the repository, seed, requested count, eligible count, actual sampled
-count, and the issues excluded because of active PRs. Then provide a table in
-sampled order with:
+Return the repository and owner, seed, requested count, total open issue count,
+owner-authored open issue count, eligible count, actual sampled count,
+non-owner exclusion count, and the issues excluded because of active PRs. Then
+provide a table in sampled order with:
 
-| Issue | Result | Evidence | Commit / PR | Verification |
-|---|---|---|---|---|
+| Issue | Result | Evidence | Issue action | Commit / PR | Verification |
+|---|---|---|---|---|---|
 
 State `fixed K of S sampled issues (X requested)`. List preserved worktree paths
-and blockers. Do not claim skipped or merely patched issues as fixed.
+and blockers. Report verification-comment and closure URLs, plus a count of
+stale fixed issues closed. Do not claim skipped, closed-as-stale, or merely
+patched issues as fixed.
