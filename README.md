@@ -40,7 +40,8 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Ctrl` - crouch
 - `I` - move the floating inventory in front of you
 - `Alt+S` / `Alt+L` - quick save / quick load
-- `Space` - spawn a debug item
+- `Space` - jump / swim up
+- `F10` - spawn a debug item
 - `P` - cycle the pathfinding test (set start → set goal → show path)
 
 ## Building

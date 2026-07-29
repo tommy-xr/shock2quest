@@ -1034,6 +1034,11 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
     -0.5 / SCALE_FACTOR * character_body.gravity_scale()
 }
 
+const PLAYER_JUMP_SPEED: Real = 10.0 / SCALE_FACTOR;
+const PLAYER_SWIM_UP_SPEED: Real = PLAYER_JUMP_SPEED / 4.0;
+const PLAYER_JUMP_GRAVITY: Real = 32.0 / SCALE_FACTOR;
+const PLAYER_SWIM_SPEED_SCALE: Real = 0.7;
+
 /// One frame of player locomotion: the character controller's walk pass, the
 /// gravity pass (with ground snapping and the resting lift), and the stair
 /// step-up probe. Shared by real player movement ([`PhysicsWorld::move_player`])
@@ -1429,6 +1434,12 @@ pub enum PhysicsShape {
     Sphere(f32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerMedium {
+    Air,
+    Water,
+}
+
 pub struct PlayerHandle {
     // Player
     controller: KinematicCharacterController,
@@ -1445,6 +1456,12 @@ pub struct PlayerHandle {
     // then. Purely derived per-frame state (re-probed every move), so nothing
     // needs to save or restore it.
     support: Option<PlayerSupport>,
+    // Integrated vertical speed is only used for an authored jump arc. Normal
+    // walking retains the existing fixed gravity pass, while water supplies
+    // neutral buoyancy and its own held swim-up speed.
+    vertical_velocity: Real,
+    grounded: bool,
+    jump_was_down: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1829,6 +1846,8 @@ impl PhysicsWorld {
         player_handle: &mut PlayerHandle,
     ) {
         player_handle.top_out = None;
+        player_handle.vertical_velocity = 0.0;
+        player_handle.grounded = false;
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let player_height = if player_handle.is_crouched {
             PLAYER_CROUCH_HEIGHT
@@ -2470,6 +2489,9 @@ impl PhysicsWorld {
             is_crouched: false,
             top_out: None,
             support: None,
+            vertical_velocity: 0.0,
+            grounded: false,
+            jump_was_down: false,
         }
     }
 
@@ -2738,7 +2760,13 @@ impl PhysicsWorld {
         desired_movement: Vector3<f32>,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
-        self.update_with_facing(desired_movement, desired_movement, player_handle)
+        self.update_player_with_facing(
+            desired_movement,
+            desired_movement,
+            PlayerMedium::Air,
+            false,
+            player_handle,
+        )
     }
 
     /// Update player movement with an explicit world-space facing vector.
@@ -2748,6 +2776,23 @@ impl PhysicsWorld {
         &mut self,
         desired_movement: Vector3<f32>,
         facing: Vector3<f32>,
+        player_handle: &mut PlayerHandle,
+    ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        self.update_player_with_facing(
+            desired_movement,
+            facing,
+            PlayerMedium::Air,
+            false,
+            player_handle,
+        )
+    }
+
+    pub fn update_player_with_facing(
+        &mut self,
+        desired_movement: Vector3<f32>,
+        facing: Vector3<f32>,
+        medium: PlayerMedium,
+        jump: bool,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
         // Queue every PhysAttach child at its parent's same next-frame target
@@ -2783,7 +2828,7 @@ impl PhysicsWorld {
         let desired_movement = vec_to_nvec(desired_movement);
         let facing = vec_to_nvec(facing);
         let (mut collision_events, character_body) =
-            { self.move_player(desired_movement, facing, player_handle) };
+            { self.move_player(desired_movement, facing, medium, jump, player_handle) };
         let translation = nvec_to_cgmath(*character_body.translation());
 
         let mut additional_collision_events = { self.events.get_and_clear_events() };
@@ -2853,10 +2898,40 @@ impl PhysicsWorld {
 
     fn move_player(
         &mut self,
-        desired_movement: Vector<Real>,
+        mut desired_movement: Vector<Real>,
         facing: Vector<Real>,
+        medium: PlayerMedium,
+        jump: bool,
         player_handle: &mut PlayerHandle,
     ) -> (Vec<CollisionEvent>, &RigidBody) {
+        let dt = self.integration_parameters.dt;
+        let gravity = match medium {
+            PlayerMedium::Water => {
+                desired_movement *= PLAYER_SWIM_SPEED_SCALE;
+                if jump {
+                    desired_movement.y += PLAYER_SWIM_UP_SPEED * dt;
+                }
+                player_handle.vertical_velocity = 0.0;
+                0.0
+            }
+            PlayerMedium::Air => {
+                if jump && !player_handle.jump_was_down && player_handle.grounded {
+                    player_handle.vertical_velocity = PLAYER_JUMP_SPEED;
+                    player_handle.grounded = false;
+                    player_handle.support = None;
+                }
+                if player_handle.vertical_velocity != 0.0 {
+                    desired_movement.y += player_handle.vertical_velocity * dt;
+                    player_handle.vertical_velocity -= PLAYER_JUMP_GRAVITY * dt;
+                    0.0
+                } else {
+                    let character_body = &self.rigid_body_set[player_handle.character_handle];
+                    player_gravity_step(character_body)
+                }
+            }
+        };
+        player_handle.jump_was_down = jump;
+
         let character_body = &self.rigid_body_set[player_handle.character_handle];
         let original_position = *character_body.position();
         let character_user_data = character_body.user_data;
@@ -2868,8 +2943,6 @@ impl PhysicsWorld {
         // borrows are released before we build the query pipeline below.
         let character_shape = character_collider.shared_shape().clone();
         let character_pos = *character_collider.position();
-
-        let gravity = player_gravity_step(&self.rigid_body_set[player_handle.character_handle]);
 
         let movement_filter = player_movement_filter(player_handle.character_handle);
         let dispatcher = self.narrow_phase.query_dispatcher();
@@ -3018,23 +3091,60 @@ impl PhysicsWorld {
                 );
                 PlayerMovement { movement, top_out }
             } else {
-                step_player_movement(
-                    &player_handle.controller,
-                    &queries,
-                    character_shape.as_ref(),
-                    &character_pos,
-                    desired_movement,
-                    carry,
-                    self.integration_parameters.dt,
-                    gravity,
-                    climb_movement.map(|(movement, top_out)| ClimbPass {
-                        movement,
-                        top_out,
-                        validation_queries: queries,
-                        probe_queries: queries.with_filter(climb_pass_filter),
-                        scripted_queries: queries.with_filter(scripted_top_out_filter),
-                    }),
-                )
+                let general_mantle = (jump
+                    && !player_handle.is_crouched
+                    && climb_movement.is_none())
+                .then(|| {
+                    let direction = climb_top_out_direction(desired_movement, facing)?;
+                    let desired_h =
+                        vector![desired_movement.x, 0.0, desired_movement.z];
+                    let attempted = desired_h.norm();
+                    if attempted <= 1.0e-6 {
+                        return None;
+                    }
+                    let probe = player_handle.controller.move_shape(
+                        self.integration_parameters.dt,
+                        &queries,
+                        character_shape.as_ref(),
+                        &character_pos,
+                        desired_h,
+                        |_c| (),
+                    );
+                    let progress = probe.translation.dot(&(desired_h / attempted));
+                    if progress > PLAYER_MOVE_PROGRESS_FRACTION * attempted {
+                        return None;
+                    }
+                    plan_climb_top_out(
+                        &player_handle.controller,
+                        &queries,
+                        &queries,
+                        &queries.with_filter(scripted_top_out_filter),
+                        &character_pos,
+                        direction,
+                        CLIMB_TOP_OUT_PROBE_FORWARD,
+                        self.integration_parameters.dt,
+                    )
+                })
+                .flatten();
+                general_mantle.unwrap_or_else(|| {
+                    step_player_movement(
+                        &player_handle.controller,
+                        &queries,
+                        character_shape.as_ref(),
+                        &character_pos,
+                        desired_movement,
+                        carry,
+                        self.integration_parameters.dt,
+                        gravity,
+                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                            movement,
+                            top_out,
+                            validation_queries: queries,
+                            probe_queries: queries.with_filter(climb_pass_filter),
+                            scripted_queries: queries.with_filter(scripted_top_out_filter),
+                        }),
+                    )
+                })
             }
         });
         let was_top_out = player_handle.top_out.is_some();
@@ -3049,6 +3159,10 @@ impl PhysicsWorld {
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
+        player_handle.grounded = mvt.grounded;
+        if mvt.grounded && player_handle.vertical_velocity < 0.0 {
+            player_handle.vertical_velocity = 0.0;
+        }
 
         // Edges already observed along a swept `move_player_validated` hop come
         // first: they happened before this frame's pose. They also leave
@@ -3938,6 +4052,134 @@ mod tests {
             EntityId::from_inner(1001).unwrap(),
         );
         (world, player)
+    }
+
+    #[test]
+    fn water_medium_suspends_gravity_and_jump_swims_upward() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 10.0, 0.0), EntityId::from_inner(1101).unwrap());
+        let start = world.get_player_translation(&player);
+
+        for _ in 0..60 {
+            world.update_player_with_facing(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                PlayerMedium::Water,
+                false,
+                &mut player,
+            );
+        }
+        let floating = world.get_player_translation(&player);
+        assert!(
+            (floating.y - start.y).abs() < 0.05,
+            "neutral buoyancy must hold the player in place, moved from {start:?} to {floating:?}"
+        );
+
+        for _ in 0..60 {
+            world.update_player_with_facing(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                PlayerMedium::Water,
+                true,
+                &mut player,
+            );
+        }
+        let swum = world.get_player_translation(&player);
+        assert!(
+            swum.y > floating.y + 0.2,
+            "holding jump in water must swim upward, moved from {floating:?} to {swum:?}"
+        );
+    }
+
+    #[test]
+    fn grounded_jump_has_a_ballistic_rise() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1200).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.05, 10.0)
+                .translation(vector![0.0, -0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 1.0, 0.0), EntityId::from_inner(1201).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let grounded = world.get_player_translation(&player);
+
+        world.update_player_with_facing(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            PlayerMedium::Air,
+            true,
+            &mut player,
+        );
+        for _ in 0..10 {
+            world.update_player_with_facing(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                PlayerMedium::Air,
+                false,
+                &mut player,
+            );
+        }
+        let airborne = world.get_player_translation(&player);
+        assert!(
+            airborne.y > grounded.y + 0.1,
+            "a grounded jump must rise after the button is released, moved from {grounded:?} to {airborne:?}"
+        );
+    }
+
+    #[test]
+    fn held_jump_mantles_a_blocking_pool_lip_without_a_ladder() {
+        let quad = |x0: f32, x1: f32, y: f32| {
+            let verts = vec![
+                point![x0, y, -100.0],
+                point![x1, y, -100.0],
+                point![x1, y, 100.0],
+                point![x0, y, 100.0],
+            ];
+            ColliderBuilder::trimesh(verts, vec![[0u32, 1, 2], [0, 2, 3]]).expect("trimesh")
+        };
+
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1300).unwrap(),
+            quad(-100.0, 100.0, 0.0).build(),
+        );
+        world.add_collider(
+            EntityId::from_inner(1301).unwrap(),
+            quad(-5.2, 100.0, 1.2).build(),
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(1302).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let mut saw_mantle = false;
+        for _ in 0..180 {
+            world.update_player_with_facing(
+                Vector3::new(walk, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                PlayerMedium::Water,
+                true,
+                &mut player,
+            );
+            saw_mantle |= player.top_out.is_some();
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            saw_mantle,
+            "a held jump against a pool lip must enter the mantle transition"
+        );
+        assert!(
+            end.x > -4.5 && end.y > 1.5,
+            "the mantle must leave the player standing beyond the upper lip, ended {end:?}"
+        );
     }
 
     fn step(world: &mut PhysicsWorld, player: &mut PlayerHandle, frames: usize) {

@@ -512,16 +512,54 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     false
 }
 
-/// Whether taking this world item must go through its authored scripts before
-/// the physical transfer. `MOVE | SCRIPT` quest items and keycards use this
-/// route so pickup cannot bypass their quest/access side effects.
+/// Whether taking this world item must go through a script before the physical
+/// transfer. This includes authored `MOVE | SCRIPT` items and `PropKeySrc`
+/// items, whose `internal_keycard` script is injected at runtime even when the
+/// authored world action is only `MOVE`.
 pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bool {
-    world
+    let has_authored_script = world
         .borrow::<View<PropFrobInfo>>()
         .map(|frob_info| {
             frob_info
                 .get(entity_id)
                 .is_ok_and(|frob_info| frob_info.world_action.contains(FrobFlag::SCRIPT))
+        })
+        .unwrap_or(false);
+
+    has_authored_script
+        || world
+            .borrow::<View<dark::properties::PropKeySrc>>()
+            .map(|keycards| keycards.get(entity_id).is_ok())
+            .unwrap_or(false)
+}
+
+/// Whether an authored script is already the sole owner of this item's
+/// physical fate on world Frob.
+///
+/// Most `MOVE | SCRIPT` objects need both halves of `PropFrobInfo`: their
+/// scripts run side effects while the engine performs `MOVE`. Two established
+/// script paths are exceptions: keycards' injected `internal_keycard` script
+/// and `FrobQB` both deliberately transfer or consume the object themselves.
+/// Giving either the engine move handler as well would reparent or destroy the
+/// same entity twice.
+pub(crate) fn scripted_world_frob_owns_transfer(world: &World, entity_id: EntityId) -> bool {
+    let is_keycard = world
+        .borrow::<View<dark::properties::PropKeySrc>>()
+        .map(|keycards| keycards.get(entity_id).is_ok())
+        .unwrap_or(false);
+    if is_keycard {
+        return true;
+    }
+
+    world
+        .borrow::<View<dark::properties::PropScripts>>()
+        .map(|scripts| {
+            scripts.get(entity_id).is_ok_and(|scripts| {
+                scripts
+                    .scripts
+                    .iter()
+                    .any(|script| script.eq_ignore_ascii_case("frobqb"))
+            })
         })
         .unwrap_or(false)
 }

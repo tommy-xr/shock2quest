@@ -5,12 +5,12 @@ use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 
 use super::{Effect, MessagePayload, Script, script_util::player_carried_items};
 
-/// Implements the engine-level `PropFrobInfo.world_action = MOVE` behavior for
-/// ordinary pickup items that do not ask an authored script to handle Frob.
+/// Implements the engine-level `PropFrobInfo.world_action = MOVE` behavior.
 ///
-/// `MOVE | SCRIPT` objects keep their existing scripted ownership. In
-/// particular, `FrobQB` must award the Engineering circuit board's quest bit
-/// and transfer it exactly once.
+/// `MOVE | SCRIPT` means both actions happen: authored scripts keep their side
+/// effects while this handler performs the physical transfer. Entities whose
+/// scripts explicitly own transfer/consumption (`FrobQB` and keycards) never
+/// receive this handler and are guarded here too.
 pub struct InternalFrobMove;
 
 impl InternalFrobMove {
@@ -31,14 +31,17 @@ impl Script for InternalFrobMove {
             return Effect::NoEffect;
         }
 
+        if crate::virtual_hand::scripted_world_frob_owns_transfer(world, entity_id) {
+            return Effect::NoEffect;
+        }
+
         let handles_move = {
             let frob_info = world
                 .borrow::<View<dark::properties::PropFrobInfo>>()
                 .unwrap();
             frob_info.get(entity_id).is_ok_and(|frob_info| {
-                !frob_info.world_action.contains(FrobFlag::SCRIPT)
-                    && (frob_info.world_action.contains(FrobFlag::MOVE)
-                        || frob_info.world_action.contains(FrobFlag::USE_AMMO))
+                frob_info.world_action.contains(FrobFlag::MOVE)
+                    || frob_info.world_action.contains(FrobFlag::USE_AMMO)
             })
         };
         if !handles_move {
@@ -65,7 +68,10 @@ impl Script for InternalFrobMove {
 #[cfg(test)]
 mod tests {
     use cgmath::{Quaternion, vec3};
-    use dark::properties::{FrobFlag, Link, Links, PropFrobInfo, ToLink, WrappedEntityId};
+    use dark::properties::{
+        FrobFlag, KeyCard, Link, Links, PropFrobInfo, PropKeySrc, PropScripts, ToLink,
+        WrappedEntityId,
+    };
     use shipyard::World;
 
     use crate::{
@@ -144,8 +150,8 @@ mod tests {
     }
 
     #[test]
-    fn scripted_move_remains_owned_by_the_authored_script() {
-        let (world, item, _inventory) = pickup_world(FrobFlag::MOVE | FrobFlag::SCRIPT, false);
+    fn scripted_move_preserves_the_engine_transfer() {
+        let (world, item, inventory) = pickup_world(FrobFlag::MOVE | FrobFlag::SCRIPT, false);
 
         let effect = InternalFrobMove::new().handle_message(
             item,
@@ -154,6 +160,61 @@ mod tests {
             &MessagePayload::Frob,
         );
 
-        assert!(matches!(effect, Effect::NoEffect));
+        assert!(matches!(
+            effect,
+            Effect::DropEntityInfo {
+                parent_entity_id,
+                dropped_entity_id,
+            } if parent_entity_id == inventory && dropped_entity_id == item
+        ));
+    }
+
+    #[test]
+    fn keycard_script_remains_the_sole_transfer_owner() {
+        let (mut world, item, _inventory) = pickup_world(FrobFlag::MOVE | FrobFlag::SCRIPT, false);
+        world.add_component(
+            item,
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 32,
+                lock_id: 0,
+            }),
+        );
+
+        let effect = InternalFrobMove::new().handle_message(
+            item,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "internal_keycard must remain the sole transfer owner, got {effect:?}"
+        );
+    }
+
+    #[test]
+    fn frob_qb_remains_the_sole_transfer_owner() {
+        let (mut world, item, _inventory) = pickup_world(FrobFlag::MOVE | FrobFlag::SCRIPT, false);
+        world.add_component(
+            item,
+            PropScripts {
+                scripts: vec!["BaseButton".to_owned(), "FrobQB".to_owned()],
+                inherits: true,
+            },
+        );
+
+        let effect = InternalFrobMove::new().handle_message(
+            item,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "FrobQB must remain the sole transfer owner, got {effect:?}"
+        );
     }
 }
