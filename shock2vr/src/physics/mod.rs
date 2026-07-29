@@ -71,11 +71,16 @@ fn standing_player_shared_shape() -> SharedShape {
 }
 
 /// The player's crouched collision capsule, in world units.
-fn crouched_player_shared_shape() -> SharedShape {
-    SharedShape::capsule_y(
+fn crouched_player_capsule() -> Capsule {
+    Capsule::new_y(
         (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_CROUCH_RADIUS) / SCALE_FACTOR,
         PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
     )
+}
+
+/// The player's crouched collision capsule, in world units.
+fn crouched_player_shared_shape() -> SharedShape {
+    SharedShape::new(crouched_player_capsule())
 }
 
 /// Gap (SS2 ft) the character controller keeps between the player collider
@@ -155,6 +160,15 @@ const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
 /// short body-scale transition, not a general wall bypass.
 const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
 const PLAYER_JUMP_MANTLE_PROBE_STEP: f32 = 0.5;
+/// Maximum authored drop a sparse-body jump transition may recover, in SS2
+/// feet. SHODAN's stacked final-descent cells put the lower side ring about
+/// 34 feet below the upper floor; keeping this below one room-scale span makes
+/// the exception local instead of a general search for arbitrary floors.
+const PLAYER_JUMP_MANTLE_MAX_DROP: f32 = 40.0;
+/// SHODAN's side ring is an authored 45-degree tread (normal y ~= 0.707).
+/// Rapier's default controller accepts that boundary; leave a small
+/// floating-point margin when selecting the same surface by raycast.
+const PLAYER_JUMP_DROP_MIN_GROUND_NORMAL: f32 = 0.7;
 
 /// How far below the player's feet (world units) a surface still counts as the
 /// thing they are *standing on* for support-motion transfer (see
@@ -551,6 +565,7 @@ struct ClimbTopOut {
     next_waypoint: usize,
     save_pose: Vector<Real>,
     reversing: bool,
+    is_crouched: bool,
 }
 
 struct PlayerMovement {
@@ -1054,6 +1069,7 @@ fn plan_climb_top_out(
             next_waypoint: 0,
             save_pose: pos.translation.vector,
             reversing: false,
+            is_crouched: false,
         }),
         slope_displacement: Vector::zeros(),
     })
@@ -1067,13 +1083,14 @@ fn plan_climb_top_out(
 /// that intermediate pose, so this uses the same temporary head sphere and
 /// parentless-terrain exception as ladder `BreakClimb`. The transition is
 /// tightly bounded: the current frame must either be blocked by a low lip or
-/// find a walkable landing above the stair limit, the first body-scale standing
-/// pose must fit against *all* colliders, and every scripted substep still
-/// collides with parented entities. A same-height landing requires a genuinely
-/// clear all-world probe above the lip, so full-height walls remain solid. An
-/// elevated landing may use Dark's parentless-terrain jump-through probe: that
-/// is what permits authored stacked corridors such as shodan's log platforms,
-/// whose upper floor is a ceiling to the lower cell.
+/// find a walkable landing beyond the stair limit, the first body-scale
+/// standing pose must fit against *all* colliders, and every scripted substep
+/// still collides with parented entities. Same-height and lower landings
+/// require a genuinely clear all-world point probe above the lip, so
+/// full-height walls remain solid. An elevated landing may use Dark's
+/// parentless-terrain jump-through probe: that is what permits authored
+/// stacked corridors such as shodan's log platforms, whose upper floor is a
+/// ceiling to the lower cell.
 fn plan_jump_mantle(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -1082,6 +1099,7 @@ fn plan_jump_mantle(
     pos: &Isometry<Real>,
     desired: Vector<Real>,
     dt: Real,
+    is_crouched: bool,
 ) -> Option<PlayerMovement> {
     let desired_h = vector![desired.x, 0.0, desired.z];
     let desired_distance = desired_h.norm();
@@ -1092,16 +1110,25 @@ fn plan_jump_mantle(
     let walk = controller.move_shape(dt, validation_queries, shape, pos, desired_h, |_c| ());
     let walk_blocked = walk.translation.dot(&direction) <= 0.25 * desired_distance;
 
-    let standing = standing_player_capsule();
-    let half_height = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR;
+    let final_shape = if is_crouched {
+        crouched_player_capsule()
+    } else {
+        standing_player_capsule()
+    };
+    let (body_height, body_radius) = if is_crouched {
+        (PLAYER_CROUCH_HEIGHT, PLAYER_CROUCH_RADIUS)
+    } else {
+        (PLAYER_STANDING_HEIGHT, PLAYER_STANDING_RADIUS)
+    };
+    let half_height = body_height / 2.0 / SCALE_FACTOR;
     let current_feet_y = pos.translation.vector.y - half_height;
-    let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+    let head_offset = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
     let max_rise =
         (PLAYER_JUMP_SPEED * PLAYER_JUMP_SPEED) / (2.0 * PLAYER_JUMP_GRAVITY * SCALE_FACTOR);
-    let minimum_forward =
-        (2.0 * PLAYER_STANDING_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
+    let minimum_forward = (2.0 * body_radius + 2.0 * PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
     let mut transition = None;
+    let mut lower_transition = None;
     let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
     while rise_ss2 <= max_rise * SCALE_FACTOR + 1.0e-4 && transition.is_none() {
         let raised = head + Vector::y() * (rise_ss2 / SCALE_FACTOR);
@@ -1123,35 +1150,103 @@ fn plan_jump_mantle(
                 // A platform above the current floor is a genuine mantle even
                 // when its underside has no blocking vertical face.
                 let down_ray = Ray::new(Point::from(raised_forward), -Vector::y());
-                let elevated_floor = validation_queries
+                let nearest_floor = validation_queries
                     .cast_ray_and_get_normal(&down_ray, 2.0 * max_rise, true)
-                    .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
-                    .map(|(_, ground)| raised_forward.y - ground.time_of_impact)
+                    .map(|(_, ground)| (ground.normal.y, raised_forward.y - ground.time_of_impact));
+                let elevated_floor = nearest_floor
+                    .filter(|(normal_y, _)| *normal_y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+                    .map(|(_, floor_y)| floor_y)
                     .filter(|floor_y| {
                         *floor_y - current_feet_y
                             > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
                     });
-                let final_standing = elevated_floor
-                    .map(|floor_y| {
-                        vector![
-                            raised_forward.x,
-                            floor_y
-                                + half_height
-                                + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR,
-                            raised_forward.z
-                        ]
+                // A same-height floor visible above the lower candidate is the
+                // stacked-terrain signature: the continuous capsule cannot
+                // descend without first clearing that overhang. An ordinary
+                // open ledge has no current-height floor at the forward probe
+                // and remains a normal ballistic fall.
+                let overhanging_current_floor = nearest_floor.is_some_and(|(normal_y, floor_y)| {
+                    normal_y > PLAYER_JUMP_DROP_MIN_GROUND_NORMAL
+                        && (floor_y - current_feet_y).abs()
+                            <= (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                });
+                let lower_probe_start = vector![
+                    raised_forward.x,
+                    current_feet_y - (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR,
+                    raised_forward.z
+                ];
+                let lower_ray = Ray::new(Point::from(lower_probe_start), -Vector::y());
+                let lower_floor = validation_probe_clear
+                    .then(|| {
+                        validation_queries
+                            .cast_ray_and_get_normal(
+                                &lower_ray,
+                                PLAYER_JUMP_MANTLE_MAX_DROP / SCALE_FACTOR,
+                                true,
+                            )
+                            .filter(|(_, ground)| {
+                                ground.normal.y > PLAYER_JUMP_DROP_MIN_GROUND_NORMAL
+                            })
+                            .map(|(_, ground)| {
+                                (
+                                    lower_probe_start - Vector::y() * ground.time_of_impact,
+                                    ground.normal,
+                                )
+                            })
+                            .filter(|(floor_point, _)| {
+                                current_feet_y - floor_point.y
+                                    > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                            })
                     })
-                    // Otherwise, a blocked low lip crosses to the first
-                    // same-height standing pose beyond it. That destination
-                    // may open over a drop, as shodan's final descent does.
-                    .or_else(|| {
-                        (walk_blocked && validation_probe_clear)
-                            .then_some(pos.translation.vector + direction * forward)
-                    });
-                if let Some(final_standing) = final_standing {
-                    if !shape_intersects(validation_queries, final_standing, &standing) {
+                    .flatten();
+                let elevated_standing = elevated_floor.map(|floor_y| {
+                    vector![
+                        raised_forward.x,
+                        floor_y
+                            + half_height
+                            + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR,
+                        raised_forward.z
+                    ]
+                });
+                let lower_standing = lower_floor
+                    .map(|(floor_point, floor_normal)| {
+                        // A vertical ray identifies the exact sloped tread.
+                        // Offset the capsule along that surface normal rather
+                        // than straight up: on SHODAN's 45-degree side ring, a
+                        // vertical half-height offset embeds the bottom sphere
+                        // into the upslope half of the triangle.
+                        let segment_half = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
+                        floor_point
+                            + floor_normal * ((body_radius + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR)
+                            + Vector::y() * (segment_half + PLAYER_REST_LIFT / SCALE_FACTOR)
+                    })
+                    // A normal open ledge needs no compatibility transition:
+                    // the ordinary ballistic capsule can fall beside it. Use
+                    // the sparse body only where the upper-floor ray proves
+                    // authored stacked terrain overhangs the lower landing,
+                    // and only while already crouched for that low route.
+                    .filter(|_| is_crouched && overhanging_current_floor);
+                // A blocked low lip first crosses to the same-height standing
+                // pose beyond it. That destination may itself open over a
+                // drop, as SHODAN's initial final-descent barrier does; do not
+                // skip that normal crossing in favor of a deeper landing.
+                let same_height_standing = (walk_blocked && validation_probe_clear)
+                    .then(|| pos.translation.vector + direction * forward);
+                if let Some(final_standing) = elevated_standing.or(same_height_standing) {
+                    if !shape_intersects(validation_queries, final_standing, &final_shape) {
                         transition = Some((raised, raised_forward, final_standing));
                         break;
+                    }
+                }
+                // A lower landing is a fallback for stacked geometry, never
+                // competition for an elevated/same-height mantle farther
+                // along the bounded search. Remember the first valid one and
+                // use it only if the preferred search is exhausted.
+                if lower_transition.is_none() {
+                    if let Some(final_standing) = lower_standing {
+                        if !shape_intersects(validation_queries, final_standing, &final_shape) {
+                            lower_transition = Some((raised, raised_forward, final_standing));
+                        }
                     }
                 }
             }
@@ -1159,7 +1254,7 @@ fn plan_jump_mantle(
         }
         rise_ss2 += PLAYER_JUMP_MANTLE_PROBE_STEP;
     }
-    let (raised, raised_forward, final_standing) = transition?;
+    let (raised, raised_forward, final_standing) = transition.or(lower_transition)?;
     let final_head = final_standing + Vector::y() * head_offset;
     let waypoints = [
         head,
@@ -1174,7 +1269,7 @@ fn plan_jump_mantle(
     // Preflight the exact fixed-timestep route against every parented entity
     // blocker. Parentless level terrain is the one Dark jump-through
     // exception; the destination itself was validated against all colliders.
-    let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+    let compressed = Ball::new(body_radius / SCALE_FACTOR);
     let mut simulated = pos.translation.vector;
     let mut first_movement = None;
     for waypoint in waypoints {
@@ -1205,6 +1300,7 @@ fn plan_jump_mantle(
             next_waypoint: 0,
             save_pose: pos.translation.vector,
             reversing: false,
+            is_crouched,
         }),
         slope_displacement: Vector::zeros(),
     })
@@ -1224,7 +1320,11 @@ fn advance_climb_top_out(
     mut top_out: ClimbTopOut,
     dt: Real,
 ) -> (EffectiveCharacterMovement, Option<ClimbTopOut>) {
-    let standing = standing_player_capsule();
+    let final_shape = if top_out.is_crouched {
+        crouched_player_capsule()
+    } else {
+        standing_player_capsule()
+    };
     let target = loop {
         let target = if top_out.reversing {
             match top_out.next_waypoint.checked_sub(1) {
@@ -1233,7 +1333,7 @@ fn advance_climb_top_out(
             }
         } else if let Some(target) = top_out.waypoints.get(top_out.next_waypoint) {
             *target
-        } else if shape_intersects(validation_queries, pos.translation.vector, &standing) {
+        } else if shape_intersects(validation_queries, pos.translation.vector, &final_shape) {
             top_out.reversing = true;
             continue;
         } else {
@@ -1245,7 +1345,7 @@ fn advance_climb_top_out(
         }
         if top_out.reversing {
             if top_out.next_waypoint == 0 {
-                if shape_intersects(validation_queries, top_out.save_pose, &standing) {
+                if shape_intersects(validation_queries, top_out.save_pose, &final_shape) {
                     return (scripted_character_movement(Vector::zeros()), Some(top_out));
                 }
                 return (scripted_character_movement(Vector::zeros()), None);
@@ -1255,7 +1355,12 @@ fn advance_climb_top_out(
             top_out.next_waypoint += 1;
         }
     };
-    let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+    let compressed_radius = if top_out.is_crouched {
+        PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+    } else {
+        CLIMB_TOP_OUT_RADIUS
+    };
+    let compressed = Ball::new(compressed_radius);
     // A live entity can move into the compressed sphere between frames. The
     // forward route must stop, but refusing every cast from an overlapping
     // pose would pin the recovery forever. During reversal only, let Rapier's
@@ -3548,10 +3653,10 @@ impl PhysicsWorld {
                     slope_displacement: Vector::zeros(),
                 }
             } else {
-                // A compressed mantle finishes by restoring the standing
-                // capsule. Keep crouched jumps ballistic so the collider flag
-                // and shape cannot diverge under low headroom.
-                let jump_mantle = (launch_jump && !player_handle.is_crouched)
+                // A compressed mantle restores the same standing/crouched
+                // capsule it started with, so a player deliberately crouched
+                // for a low stacked route never expands under its ceiling.
+                let jump_mantle = launch_jump
                     .then(|| {
                         plan_jump_mantle(
                             &player_handle.controller,
@@ -3561,6 +3666,7 @@ impl PhysicsWorld {
                             &character_pos,
                             desired_movement,
                             self.integration_parameters.dt,
+                            player_handle.is_crouched,
                         )
                     })
                     .flatten();
@@ -3598,9 +3704,22 @@ impl PhysicsWorld {
         let is_top_out = player_handle.top_out.is_some();
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         if !was_top_out && is_top_out {
-            self.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
+            let compressed_radius = if player_handle
+                .top_out
+                .is_some_and(|top_out| top_out.is_crouched)
+            {
+                PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+            } else {
+                CLIMB_TOP_OUT_RADIUS
+            };
+            self.collider_set[collider_handle].set_shape(SharedShape::ball(compressed_radius));
         } else if was_top_out && !is_top_out {
-            self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
+            let restored = if player_handle.is_crouched {
+                crouched_player_shared_shape()
+            } else {
+                standing_player_shared_shape()
+            };
+            self.collider_set[collider_handle].set_shape(restored);
         }
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
@@ -5760,6 +5879,7 @@ mod tests {
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
+            is_crouched: false,
         };
         let first = {
             let queries = query_pipeline(&world, QueryFilter::default());
@@ -5812,6 +5932,7 @@ mod tests {
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
+            is_crouched: false,
         };
         world.add_kinematic(
             EntityId::from_inner(2).unwrap(),
@@ -5845,6 +5966,39 @@ mod tests {
     }
 
     #[test]
+    fn crouched_top_out_finishes_without_expanding_into_low_headroom() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(2).unwrap(),
+            vec3(0.0, 0.75, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 0.1, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let controller = KinematicCharacterController::default();
+        let pos = Isometry::identity();
+        let completed = ClimbTopOut {
+            waypoints: test_waypoints(),
+            next_waypoint: test_waypoints().len(),
+            save_pose: Vector::zeros(),
+            reversing: false,
+            is_crouched: true,
+        };
+
+        let (movement, active) =
+            advance_climb_top_out(&controller, &queries, &queries, &pos, completed, 1.0 / 60.0);
+
+        assert_eq!(movement.translation, Vector::zeros());
+        assert!(
+            active.is_none(),
+            "the crouched final capsule fits below headroom that blocks standing"
+        );
+    }
+
+    #[test]
     fn validated_move_refuses_a_top_out_whose_safe_pose_became_blocked() {
         let mut world = PhysicsWorld::new();
         let mut player = world.create_player(vec3(3.0, 0.5, 0.0), EntityId::from_inner(1).unwrap());
@@ -5869,6 +6023,7 @@ mod tests {
             next_waypoint: 3,
             save_pose,
             reversing: true,
+            is_crouched: false,
         });
         assert_eq!(
             world.get_player_save_translation(&player),
@@ -6790,9 +6945,10 @@ mod tests {
         );
     }
 
-    /// A crouched player may hop, but must not enter the standing-only
-    /// compressed mantle path. Its collider stays crouched through the arc and
-    /// can return to the standing capsule normally once grounded in headroom.
+    /// A crouched player may hop without ever expanding to the standing
+    /// profile. An ordinary blocked hop remains ballistic, keeps the crouched
+    /// collider, and can return to the standing capsule once grounded in open
+    /// headroom.
     #[test]
     fn crouched_jump_preserves_collider_state_and_can_stand_after_landing() {
         let mut world = PhysicsWorld::new();
@@ -6829,7 +6985,7 @@ mod tests {
         );
         assert!(
             player.top_out.is_none() && player.is_crouched(),
-            "crouched jump must stay ballistic and keep the crouched collider"
+            "this blocked crouched jump should stay ballistic and keep the crouched collider"
         );
         let collider_handle = world.rigid_body_set[player.character_handle].colliders()[0];
         let crouched = world.collider_set[collider_handle]
@@ -7325,6 +7481,7 @@ mod tests {
             next_waypoint: 3,
             save_pose,
             reversing: false,
+            is_crouched: false,
         });
 
         let result = world.move_player_validated(vec3(f32::NAN, 0.5, 0.0), &mut player);
