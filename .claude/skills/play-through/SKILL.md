@@ -87,6 +87,22 @@ mission, repro: exact levers + step count, expected vs actual, the screenshot,
 and — in a rolled campaign — the campaign configuration: scenario, tweak,
 asset set, seed; same on the fix PR).
 
+**Attach stateful reproduction evidence locally.** When a finding depends on
+deep campaign state, create a dedicated game save immediately before the
+smallest reproducing action (for example `pt-shodan-issue-725-repro`), then
+record its logical save name, SHA-256, mission, position, asset set, and load
+steps in `data.json`, the local report, and the fix-agent handoff. Never
+overwrite or repurpose the campaign frontier or a user-owned save; the fix agent
+copies the reproduction save into its task-owned asset directory before using
+it. Skip this artifact when a fresh mission plus concise steps reproduces the
+issue just as reliably.
+
+Game saves contain user-generated state and retail-derived data. Do **not**
+commit, attach, gist, or otherwise upload them to a public issue/PR by default.
+The public issue may mention that a hashed local reproduction save exists, but
+must not expose a user-specific absolute path. Publish the binary only with
+explicit user authorization and repository-policy approval.
+
 **Fixing a feature gap — faithfulness is required:**
 - The fix agent must **investigate the original System Shock 2 behavior AND the
   engine's existing partial wiring** (the relevant scripts, properties, links,
