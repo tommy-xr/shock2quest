@@ -596,7 +596,9 @@ fn format_link_type(link: &dark::properties::Link) -> String {
         dark::properties::Link::ParticleAttachement(_) => "ParticleAttachement".to_string(),
         dark::properties::Link::PhysAttach(opts) => format!("PhysAttach({:?})", opts),
         dark::properties::Link::TPathInit => "TPathInit".to_string(),
+        dark::properties::Link::TPathNext => "TPathNext".to_string(),
         dark::properties::Link::TPath(_) => "TPath".to_string(),
+        dark::properties::Link::ScriptParams => "ScriptParams".to_string(),
         dark::properties::Link::AIPatrol => "AIPatrol".to_string(),
         dark::properties::Link::Teleport => "Teleport".to_string(),
         // Include the payload: blast tuning (intensity/radius) is exactly what

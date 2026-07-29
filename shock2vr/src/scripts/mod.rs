@@ -36,6 +36,7 @@ pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
 mod reduce_psi;
+mod reroute_elevator_button;
 mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
@@ -102,6 +103,7 @@ use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
 use self::reduce_psi::ReducePsi;
+use self::reroute_elevator_button::RerouteElevatorButton;
 use self::trap_signal::TrapSignal;
 use self::{
     base_button::BaseButton,
@@ -259,6 +261,12 @@ pub enum MessagePayload {
     },
     TurnOff {
         from: EntityId,
+    },
+    /// Replace a moving-terrain elevator's next waypoint. This is deliberately
+    /// distinct from `TurnOn`, whose BaseElevator meaning is merely "advance
+    /// to the next sequential TPath node."
+    RerouteElevator {
+        target_waypoint: EntityId,
     },
 }
 
@@ -742,7 +750,7 @@ impl ScriptWorld {
             "shakeyourbooty" => Box::new(UnimplementedScript::new(&script_name)), // what does this one do?
 
             // command1: some crazy scripts here
-            "rerouteelevatorbutton" => Box::new(NoopScript::new()),
+            "rerouteelevatorbutton" => Box::new(RerouteElevatorButton::new()),
             "trapambientoff" => Box::new(NoopScript::new()),
             "trapcollideoff" => Box::new(NoopScript::new()),
             "tweqbutton" => Box::new(NoopScript::new()),
