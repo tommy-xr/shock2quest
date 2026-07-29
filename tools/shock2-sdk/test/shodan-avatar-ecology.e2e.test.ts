@@ -7,8 +7,8 @@ import type { EntityDetailResult, EntitySummary, Vec3 } from "../src/index.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // Bare save name copied into DARK_ASSET_PATH/saves by the caller. Retail save
 // payloads are copyrighted and intentionally remain outside the repository.
-const bossSave = process.env.SHOCK2_SHODAN_BOSS_SAVE;
-const bossE2eEnabled = e2eEnabled && Boolean(bossSave);
+const avatarSave = process.env.SHOCK2_SHODAN_AVATAR_SAVE;
+const bossE2eEnabled = e2eEnabled && Boolean(avatarSave);
 
 // Stable gamesys archetype identity (`cargo dq templates 196`). Runtime entity
 // ids are assigned afresh on every launch and must never be used as fixtures.
@@ -44,14 +44,26 @@ async function waitForAvatar(
   game: GameServer,
   excludedId?: number,
 ): Promise<EntitySummary> {
-  // Raycast-authored generators intentionally reject a randomly chosen marker
-  // when it is visible. Retry across ecology polls just as retail does.
-  for (let poll = 0; poll < 24; poll += 1) {
-    await game.step({ frames: ECOLOGY_PERIOD_FRAMES });
-    const [avatar] = await livingAvatars(game, excludedId);
-    if (avatar) return avatar;
+  const originalPosition = await game.player.position();
+  // Retail chooses exactly one random marker per ecology pulse and rejects it
+  // when the RAYCAST flag says the player can see it. Stage the observer just
+  // beyond the authored east arena wall, where terrain occludes all four
+  // stable SpawnPoint objects. This removes only the retry lottery: the retail
+  // timer, SwitchLink, TrapSpawn selection, and entity creation remain real.
+  await game.player.teleport({ x: 60, y: -91.8, z: 72 });
+  let found: EntitySummary | undefined;
+  try {
+    for (let poll = 0; poll < 3; poll += 1) {
+      await game.step({ frames: ECOLOGY_PERIOD_FRAMES });
+      [found] = await livingAvatars(game, excludedId);
+      if (found) break;
+    }
+  } finally {
+    await game.player.teleport(originalPosition);
+    await game.step({ frames: 2 });
   }
-  assert.fail("the SHODAN ecology did not find a hidden authored spawn marker");
+  assert.ok(found, "the SHODAN ecology should spawn behind authored terrain");
+  return found;
 }
 
 test(
@@ -83,7 +95,7 @@ test(
       mission: "shodan.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8474) + 1,
     });
-    await game.load(bossSave!);
+    await game.load(avatarSave!);
     await game.step({ frames: 10 });
 
     const avatar = await waitForAvatar(game);
