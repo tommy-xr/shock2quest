@@ -129,40 +129,50 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.input.set("right_hand.thumbstick", [0, 0]);
-    let lowerRing:
-      | Awaited<ReturnType<typeof game.player.position>>
-      | undefined;
-    for (let sample = 0; sample < 36; sample += 1) {
-      await game.step({ frames: 10 });
-      position = await game.player.position();
-      if (position.y > -32.4 && position.y < -31.3) {
-        lowerRing = position;
-        break;
-      }
-    }
+    // Do not mistake the scripted transition passing through the ring's
+    // height for a landing. With no steering input, it must settle on authored
+    // collision for ten seconds and remain stationary for two more.
+    await game.step({ frames: 600 });
+    const lowerRing = await game.player.position();
+    await game.step({ frames: 120 });
+    const supportedLowerRing = await game.player.position();
+    const onLowerRing = (sample: typeof lowerRing): boolean =>
+      sample.x > 35.2 &&
+      sample.x < 36.8 &&
+      sample.y > -32.5 &&
+      sample.y < -31.5 &&
+      sample.z > 30.2 &&
+      sample.z < 31.8;
     assert.ok(
-      lowerRing &&
-        lowerRing.x > 35.2 &&
-        lowerRing.x < 36.8 &&
-        lowerRing.z > 30.2 &&
-        lowerRing.z < 31.8,
-      `jump should descend onto the finite lower side ring, got ${JSON.stringify(position)}`,
+      onLowerRing(lowerRing) &&
+        onLowerRing(supportedLowerRing) &&
+        Math.hypot(
+          supportedLowerRing.x - lowerRing.x,
+          supportedLowerRing.y - lowerRing.y,
+          supportedLowerRing.z - lowerRing.z,
+        ) < 0.05,
+      `jump should remain supported on the finite lower side ring ` +
+        `(${JSON.stringify(lowerRing)} -> ${JSON.stringify(supportedLowerRing)})`,
     );
-    position = lowerRing;
+    position = supportedLowerRing;
 
-    // Follow the authored crouch-only continuation west from the ring toward
-    // Delacroix log 4. This proves the landing opens the real route rather than
-    // merely finding an isolated point below the upper floor.
+    // Follow the authored crouch-only continuation around the outer north edge
+    // at z~=29, then west toward Delacroix log 4. This proves the landing opens
+    // the real route rather than merely finding an isolated point below.
     await game.input.lookAtWorldPoint([
       position.x,
       position.y + 1.6,
       28,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
-    await game.step({ frames: 7 });
+    await game.step({ frames: 18 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 5 });
     position = await game.player.position();
+    assert.ok(
+      position.z > 28.5 && position.z < 28.8,
+      `crouched movement should round the outer north edge, got ${JSON.stringify(position)}`,
+    );
     await game.input.lookAtWorldPoint(
       [30, position.y + 1.1, position.z],
       { eyeHeight: 1.1 },
@@ -170,13 +180,32 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await game.step({ frames: 20 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
-    position = await game.player.position();
+    // The central passage floor is a finite authored tread at z=28.5..28.8.
+    // Release input and prove the apparent entry is support rather than a
+    // mid-fall sample over the adjacent void.
+    await game.step({ frames: 600 });
+    const passage = await game.player.position();
+    await game.step({ frames: 120 });
+    const supportedPassage = await game.player.position();
+    const inPassage = (sample: typeof passage): boolean =>
+      sample.x > 31 &&
+      sample.x < 33 &&
+      // Player positions are capsule centers: crouched half-height is 0.56
+      // world units, putting the feet on the mapped y=-33.6..-33.3 tread.
+      sample.y > -33.04 &&
+      sample.y < -32.74 &&
+      sample.z > 28.5 &&
+      sample.z < 28.8;
     assert.ok(
-      position.x < 34 &&
-        position.y < -33 &&
-        position.z > 29.5 &&
-        position.z < 31.2,
-      `crouched production movement should enter the log 4 passage, got ${JSON.stringify(position)}`,
+      inPassage(passage) &&
+        inPassage(supportedPassage) &&
+        Math.hypot(
+          supportedPassage.x - passage.x,
+          supportedPassage.y - passage.y,
+          supportedPassage.z - passage.z,
+        ) < 0.05,
+      `crouched production movement should remain supported in the log 4 passage ` +
+        `(${JSON.stringify(passage)} -> ${JSON.stringify(supportedPassage)})`,
     );
   },
 );

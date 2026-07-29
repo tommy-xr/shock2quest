@@ -165,10 +165,11 @@ const PLAYER_JUMP_MANTLE_PROBE_STEP: f32 = 0.5;
 /// 34 feet below the upper floor; keeping this below one room-scale span makes
 /// the exception local instead of a general search for arbitrary floors.
 const PLAYER_JUMP_MANTLE_MAX_DROP: f32 = 40.0;
-/// SHODAN's side ring is an authored 45-degree tread (normal y ~= 0.707).
-/// Rapier's default controller accepts that boundary; leave a small
-/// floating-point margin when selecting the same surface by raycast.
-const PLAYER_JUMP_DROP_MIN_GROUND_NORMAL: f32 = 0.7;
+/// Lowest upward normal the player treats as walkable. SHODAN's side ring is
+/// an authored 45-degree tread (normal y ~= 0.707); the small margin prevents
+/// imported float normals from landing just beyond Rapier's exact pi/4
+/// climb/slide boundary.
+const PLAYER_MIN_WALKABLE_NORMAL: f32 = 0.7;
 
 /// How far below the player's feet (world units) a surface still counts as the
 /// thing they are *standing on* for support-motion transfer (see
@@ -183,6 +184,25 @@ const SUPPORT_PROBE_DISTANCE: f32 = 0.1;
 /// the controller's default 45-degree slide angle). A surface the player would
 /// slide down is not one they ride, and a wall never is.
 const SUPPORT_MIN_GROUND_NORMAL: f32 = CLIMB_TOP_OUT_MIN_GROUND_NORMAL;
+
+fn player_character_controller() -> KinematicCharacterController {
+    let mut controller = KinematicCharacterController::default();
+    controller.offset = CharacterLength::Absolute(PLAYER_CONTACT_OFFSET / SCALE_FACTOR);
+    // Walking down stairs stays grounded (snapped onto the next tread)
+    // instead of chaining micro-falls. Deliberate tradeoff: this also
+    // absorbs any intended drop up to the step height (the player glues
+    // to <= 2 ft ledges rather than falling) - revisit when gravity
+    // becomes an integrated velocity. Stepping UP is handled by an
+    // explicit probe in `move_player` (see `try_step_up`) - Rapier's
+    // built-in autostep needs a wall-classified contact, but a capsule
+    // touching a step edge above its bottom-sphere center reads as a
+    // ceiling and never triggers it.
+    controller.snap_to_ground = Some(CharacterLength::Absolute(PLAYER_STEP_HEIGHT / SCALE_FACTOR));
+    let max_walkable_angle = PLAYER_MIN_WALKABLE_NORMAL.acos();
+    controller.max_slope_climb_angle = max_walkable_angle;
+    controller.min_slope_slide_angle = max_walkable_angle;
+    controller
+}
 
 /// Horizontal reach (world units) for ladder detection: the player grips a
 /// climbable surface when their collider, inflated by this much radially,
@@ -716,6 +736,53 @@ fn shape_intersects(queries: &QueryPipeline, position: Vector<Real>, shape: &dyn
         .is_some()
 }
 
+/// Whether an expanded player shape is genuinely resting on walkable
+/// all-collider geometry at `position`.
+///
+/// A point ray can find a finite tread beside the capsule while the capsule
+/// itself remains non-overlapping in unsupported air. Run a short sequence of
+/// the same zero-input walk/gravity passes ordinary locomotion uses, accepting
+/// only endpoints that remain grounded within the contact-sized rest band.
+fn shape_has_stable_support(
+    controller: &KinematicCharacterController,
+    queries: &QueryPipeline,
+    shape: &dyn Shape,
+    position: Vector<Real>,
+    dt: Real,
+) -> bool {
+    const SETTLE_FRAMES: usize = 96;
+
+    let mut settled = position;
+    let settle_limit = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    for _ in 0..SETTLE_FRAMES {
+        let pose = Isometry::translation(settled.x, settled.y, settled.z);
+        let support = step_player_movement(
+            controller,
+            queries,
+            shape,
+            &pose,
+            Vector::zeros(),
+            Vector::zeros(),
+            dt,
+            -0.5 / SCALE_FACTOR,
+            None,
+            None,
+            None,
+        )
+        .movement;
+        if !support.grounded {
+            return false;
+        }
+        settled += support.translation;
+        let displacement = settled - position;
+        let lateral = vector![displacement.x, 0.0, displacement.z].norm();
+        if lateral > settle_limit || displacement.y.abs() > settle_limit {
+            return false;
+        }
+    }
+    true
+}
+
 fn slide_toward(
     controller: &KinematicCharacterController,
     queries: &QueryPipeline,
@@ -1166,7 +1233,7 @@ fn plan_jump_mantle(
                 // open ledge has no current-height floor at the forward probe
                 // and remains a normal ballistic fall.
                 let overhanging_current_floor = nearest_floor.is_some_and(|(normal_y, floor_y)| {
-                    normal_y > PLAYER_JUMP_DROP_MIN_GROUND_NORMAL
+                    normal_y > PLAYER_MIN_WALKABLE_NORMAL
                         && (floor_y - current_feet_y).abs()
                             <= (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
                 });
@@ -1184,9 +1251,7 @@ fn plan_jump_mantle(
                                 PLAYER_JUMP_MANTLE_MAX_DROP / SCALE_FACTOR,
                                 true,
                             )
-                            .filter(|(_, ground)| {
-                                ground.normal.y > PLAYER_JUMP_DROP_MIN_GROUND_NORMAL
-                            })
+                            .filter(|(_, ground)| ground.normal.y > PLAYER_MIN_WALKABLE_NORMAL)
                             .map(|(_, ground)| {
                                 (
                                     lower_probe_start - Vector::y() * ground.time_of_impact,
@@ -1225,7 +1290,30 @@ fn plan_jump_mantle(
                     // the sparse body only where the upper-floor ray proves
                     // authored stacked terrain overhangs the lower landing,
                     // and only while already crouched for that low route.
-                    .filter(|_| is_crouched && overhanging_current_floor);
+                    .filter(|_| is_crouched && overhanging_current_floor)
+                    // Restore the continuous capsule an additional radius
+                    // beyond the minimum crossing distance. The first point
+                    // sample on a finite downhill tread can support the bottom
+                    // sphere while leaving its center on the boundary; one
+                    // body-radius of interior clearance selects a durable
+                    // landing without widening the bounded forward search.
+                    .filter(|_| forward >= minimum_forward + body_radius / SCALE_FACTOR)
+                    .filter(|final_standing| {
+                        // A non-overlapping capsule can still be suspended
+                        // beside the finite tread that produced the point-ray
+                        // hit. Prove the expanded body is actually supported:
+                        // repeated ordinary zero-input gravity passes must keep
+                        // it grounded without meaningful drift. Unsupported
+                        // edge candidates are skipped so the bounded search
+                        // can reach the real side-ring tread.
+                        shape_has_stable_support(
+                            controller,
+                            validation_queries,
+                            &final_shape,
+                            *final_standing,
+                            dt,
+                        )
+                    });
                 // A blocked low lip first crosses to the same-height standing
                 // pose beyond it. That destination may itself open over a
                 // drop, as SHODAN's initial final-descent barrier does; do not
@@ -3017,21 +3105,7 @@ impl PhysicsWorld {
         self.collider_set
             .insert_with_parent(collider, character_handle, &mut self.rigid_body_set);
 
-        let mut controller = KinematicCharacterController::default();
-
-        controller.offset = CharacterLength::Absolute(PLAYER_CONTACT_OFFSET / SCALE_FACTOR);
-        // Walking down stairs stays grounded (snapped onto the next tread)
-        // instead of chaining micro-falls. Deliberate tradeoff: this also
-        // absorbs any intended drop up to the step height (the player glues
-        // to <= 2 ft ledges rather than falling) - revisit when gravity
-        // becomes an integrated velocity. Stepping UP is handled by an
-        // explicit probe in `move_player` (see `try_step_up`) - rapier's
-        // built-in autostep needs a wall-classified contact, but a capsule
-        // touching a step edge above its bottom-sphere center reads as a
-        // ceiling and never triggers it.
-        controller.snap_to_ground =
-            Some(CharacterLength::Absolute(PLAYER_STEP_HEIGHT / SCALE_FACTOR));
-
+        let controller = player_character_controller();
         self.entity_id_to_body
             .insert(player_entity, character_handle);
 
@@ -5113,6 +5187,102 @@ mod tests {
             &world.collider_set,
             filter,
         )
+    }
+
+    /// A point probe can see a narrow tread while the crouched capsule
+    /// endpoint chosen beside it is entirely unsupported. Non-overlap alone
+    /// accepted that endpoint and let the expanded body fall after top-out.
+    #[test]
+    fn jump_drop_support_rejects_pose_beside_finite_tread() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.05, 0.05, 0.05)
+                .translation(vector![0.0, -0.05, 0.0])
+                .build(),
+        );
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(1.0, 0.05, 1.0)
+                .translation(vector![2.0, -0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let shape = crouched_player_capsule();
+        let center_y = PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+            + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
+        let unsupported = vector![0.5, center_y, 0.0];
+        let supported = vector![2.0, center_y, 0.0];
+        let controller = player_character_controller();
+
+        assert!(
+            queries
+                .cast_ray(
+                    &Ray::new(vector![0.0, center_y, 0.0].into(), -Vector::y()),
+                    PLAYER_STEP_HEIGHT / SCALE_FACTOR,
+                    true,
+                )
+                .is_some(),
+            "the point probe must find the nearby finite tread"
+        );
+        assert!(
+            !shape_intersects(&queries, unsupported, &shape),
+            "the old non-overlap predicate must accept this unsupported endpoint"
+        );
+        assert!(
+            !shape_has_stable_support(&controller, &queries, &shape, unsupported, 1.0 / 60.0),
+            "an overlap-free pose beside the tread must not count as a landing"
+        );
+        assert!(
+            shape_has_stable_support(&controller, &queries, &shape, supported, 1.0 / 60.0),
+            "a crouched capsule centered over a broad tread must remain a valid landing"
+        );
+    }
+
+    /// Imported 45-degree treads carry tiny normal error around pi/4. The
+    /// player's walkable-normal margin must keep those authored surfaces from
+    /// turning into an automatic slide after a validated jump landing.
+    #[test]
+    fn jump_drop_support_accepts_authored_45_degree_tread() {
+        let mut world = PhysicsWorld::new();
+        let angle = std::f32::consts::FRAC_PI_4;
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(2.0, 0.05, 1.0)
+                .rotation(vector![0.0, 0.0, angle])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let shape = crouched_player_capsule();
+        let normal = vector![-angle.sin(), angle.cos(), 0.0];
+        let floor_point = normal * 0.05;
+        let segment_half = (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_CROUCH_RADIUS) / SCALE_FACTOR;
+        let standing = floor_point
+            + normal * ((PLAYER_CROUCH_RADIUS + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR)
+            + Vector::y() * (segment_half + PLAYER_REST_LIFT / SCALE_FACTOR);
+
+        assert!(
+            !shape_intersects(&queries, standing, &shape),
+            "the capsule should begin at a collision-valid rest offset"
+        );
+        assert!(
+            shape_has_stable_support(
+                &player_character_controller(),
+                &queries,
+                &shape,
+                standing,
+                1.0 / 60.0,
+            ),
+            "an authored 45-degree tread must remain stable through the landing preflight"
+        );
     }
 
     /// Plan the standard rejection-test mantle: from the origin, facing +X,
