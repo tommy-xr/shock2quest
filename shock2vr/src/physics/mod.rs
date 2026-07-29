@@ -123,6 +123,34 @@ const PLAYER_FATAL_FALL_DISTANCE: f32 = 50.0 / SCALE_FACTOR;
 /// catch the capsule, then release it into the same unrecoverable descent.
 const PLAYER_FATAL_FALL_SUPPORT_FRAMES: u8 = 3;
 
+/// Minimum per-frame horizontal redirection for a slope contact to count as
+/// traversing that surface. At the 60 Hz gravity step, the shallowest
+/// five-degree slope classified above redirects about 0.017 world units;
+/// SHODAN's void-side triangle jitter stays below 0.007.
+const PLAYER_FATAL_FALL_MIN_SURFACE_TRAVEL_SQUARED: f32 = 0.01 * 0.01;
+/// A grounded gravity pass which still descends faster than this is not a
+/// stable landing. Rapier may leave `grounded` set while a wide capsule grazes
+/// the side of a trimesh void.
+const PLAYER_FATAL_FALL_MAX_GROUNDED_DESCENT: f32 = 0.01;
+
+fn movement_touches_traversable_surface(
+    grounded: bool,
+    is_sliding_down_slope: bool,
+    touched_floor: bool,
+    translation: Vector<Real>,
+) -> bool {
+    let horizontal = vector![translation.x, 0.0, translation.z];
+    let traverses_slope = (grounded || (is_sliding_down_slope && touched_floor))
+        // Rapier can take its permissive slope branch or leave `grounded` set
+        // when a wide capsule merely brushes a triangle beside a vertical
+        // fall. A real slope redirects some of gravity horizontally; a side
+        // contact leaves the pass vertical and must not re-arm the fatal-fall
+        // reference.
+        && horizontal.norm_squared() > PLAYER_FATAL_FALL_MIN_SURFACE_TRAVEL_SQUARED;
+    let rests_on_ground = grounded && translation.y >= -PLAYER_FATAL_FALL_MAX_GROUNDED_DESCENT;
+    traverses_slope || rests_on_ground
+}
+
 fn slope_ground_probe_distance(shape: &dyn Shape) -> Real {
     let contact_margin = (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
     if let Some(capsule) = shape.as_capsule() {
@@ -1287,7 +1315,12 @@ fn step_player_movement(
         if next_slope_displacement.norm_squared() <= PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED {
             next_slope_displacement = Vector::zeros();
         }
-        touches_traversable_surface = touched_sloped_floor || fall.grounded;
+        touches_traversable_surface = movement_touches_traversable_surface(
+            fall.grounded,
+            fall.is_sliding_down_slope,
+            touched_sloped_floor,
+            fall.translation,
+        );
         (fall, next_slope_displacement)
     } else {
         // Collision-valid debug walks deliberately have no motion history:
@@ -1298,8 +1331,12 @@ fn step_player_movement(
                 touched_floor |=
                     controller.up.dot(&collision.hit.normal1) > PLAYER_SLOPE_MIN_FLOOR_NORMAL;
             });
-        touches_traversable_surface =
-            fall.grounded || (fall.is_sliding_down_slope && touched_floor);
+        touches_traversable_surface = movement_touches_traversable_surface(
+            fall.grounded,
+            fall.is_sliding_down_slope,
+            touched_floor,
+            fall.translation,
+        );
         (fall, Vector::zeros())
     };
     mvt.translation += fall.translation;
@@ -4541,6 +4578,28 @@ mod tests {
     }
 
     #[test]
+    fn downward_side_contacts_do_not_rearm_fatal_fall() {
+        let mut tracker = FatalFallTracker::new(0.0);
+        let mut events = 0;
+
+        // The integrated standing capsule can brush SHODAN's void-side
+        // triangles on every frame. Rapier reports the permissive slope branch
+        // and an upward contact normal, but the gravity pass remains purely
+        // vertical: the surface is not actually carrying the player.
+        for step in 1..=150 {
+            let y = -(step as f32) * 0.2;
+            let touches_surface =
+                movement_touches_traversable_surface(true, true, true, vector![0.0, -0.2, 0.0]);
+            events += tracker.update(y, touches_surface, false) as usize;
+        }
+
+        assert_eq!(
+            events, 1,
+            "side-contact classifications must not split one unsupported descent"
+        );
+    }
+
+    #[test]
     fn sustained_slope_contact_restarts_the_fall_reference() {
         let mut tracker = FatalFallTracker::new(30.0);
 
@@ -4548,8 +4607,10 @@ mod tests {
         // but continuous contact makes it traversal rather than a free fall.
         for step in 1..=150 {
             let y = 30.0 - step as f32 * 0.2;
+            let touches_surface =
+                movement_touches_traversable_surface(false, true, true, vector![0.1, -0.2, 0.0]);
             assert!(
-                !tracker.update(y, true, false),
+                !tracker.update(y, touches_surface, false),
                 "sustained terrain contact must remain safe at y={y}"
             );
         }
