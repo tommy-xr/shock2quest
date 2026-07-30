@@ -100,6 +100,13 @@ fn format_hover_label(
     }
 }
 
+fn format_inline_localized_text(text: &str) -> String {
+    text.replace("\\n", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn localized_log_title(
     asset_cache: &mut AssetCache,
     world: &World,
@@ -117,7 +124,7 @@ fn localized_log_title(
     let strings = asset_cache.get_opt(&STRINGS_IMPORTER, &format!("level{deck:02}.str"))?;
     strings
         .get(&format!("logname{log}"))
-        .map(|name| name.replace("\\n", "\n"))
+        .map(|name| format_inline_localized_text(name))
 }
 
 fn weapon_condition_key(condition: f32) -> String {
@@ -386,6 +393,14 @@ mod tests {
                 Some("Perfect: 10"),
             ),
             "A pistol. (Perfect: 10)",
+        );
+    }
+
+    #[test]
+    fn authored_log_line_breaks_become_single_line_hover_text() {
+        assert_eq!(
+            format_inline_localized_text("SANGER 10.JUL.14\\nre: Locking Eng. Control\\n"),
+            "SANGER 10.JUL.14 re: Locking Eng. Control",
         );
     }
 
