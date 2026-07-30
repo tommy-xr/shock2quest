@@ -1224,8 +1224,17 @@ fn plan_jump_mantle(
                     .filter(|(normal_y, _)| *normal_y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
                     .map(|(_, floor_y)| floor_y)
                     .filter(|floor_y| {
-                        *floor_y - current_feet_y
-                            > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                        let rise = *floor_y - current_feet_y;
+                        rise > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                            // The compressed body models Dark's discontinuous
+                            // sphere stack crossing a terrain lip; it does not
+                            // add vertical reach. Require the player's feet to
+                            // be able to reach the landing within the ordinary
+                            // ballistic apex. Otherwise an open lift shaft can
+                            // turn the room ceiling ahead into an "elevated
+                            // floor" and script the player onto its exterior
+                            // roof (#744).
+                            && rise <= max_rise
                     });
                 // A same-height floor visible above the lower candidate is the
                 // stacked-terrain signature: the continuous capsule cannot
