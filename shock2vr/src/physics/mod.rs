@@ -108,6 +108,21 @@ const PLAYER_SLOPE_MIN_HORIZONTAL_NORMAL_SQUARED: f32 = 0.0076;
 /// walls whose shape-cast normal has tiny upward numerical noise.
 const PLAYER_SLOPE_MIN_FLOOR_NORMAL: f32 = 0.25;
 
+/// One continuous unsupported drop this tall is unambiguously fatal.
+///
+/// Expressed in Dark units for traceability: 50 SS2 feet is 20 world units.
+/// The tracker resets on sustained terrain contact, direct relocation,
+/// climbing, moving support, and authored non-downward gravity, so this is an
+/// out-of-bounds guard rather than damage for stairs, slopes, lifts, or up
+/// gravshafts.
+const PLAYER_FATAL_FALL_DISTANCE: f32 = 50.0 / SCALE_FACTOR;
+
+/// Terrain has to support the player for several consecutive frames before it
+/// starts a new fall. A single collision on the way down is not a landing:
+/// SHODAN's center void has sloped faces every few world units that briefly
+/// catch the capsule, then release it into the same unrecoverable descent.
+const PLAYER_FATAL_FALL_SUPPORT_FRAMES: u8 = 3;
+
 fn slope_ground_probe_distance(shape: &dyn Shape) -> Real {
     let contact_margin = (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
     if let Some(capsule) = shape.as_capsule() {
@@ -500,6 +515,11 @@ struct PlayerMovement {
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
     slope_displacement: Vector<Real>,
+    /// This frame's gravity cast touched terrain it can traverse. Rapier's
+    /// final `grounded` flag alone is false on steep sliding faces, so callers
+    /// need this explicit contact to distinguish an authored descent from a
+    /// free fall.
+    touches_traversable_surface: bool,
 }
 
 /// The moving-terrain body the player is standing on, and where it was the
@@ -997,6 +1017,7 @@ fn plan_climb_top_out(
             reversing: false,
         }),
         slope_displacement: Vector::zeros(),
+        touches_traversable_surface: true,
     })
 }
 
@@ -1155,6 +1176,7 @@ fn step_player_movement(
                 movement: mvt,
                 top_out: None,
                 slope_displacement: Vector::zeros(),
+                touches_traversable_surface: true,
             };
         }
     }
@@ -1178,6 +1200,7 @@ fn step_player_movement(
     let mut mvt = controller.move_shape(dt, queries, shape, pos, desired, |_c| ());
     let after_walk = Translation::from(mvt.translation) * pos;
     let gravity_step = Vector::y() * gravity;
+    let touches_traversable_surface;
     let (fall, next_slope_displacement) = if let Some(slope_displacement) = slope_displacement {
         // Dark's dynamic player preserves velocity when a fall is redirected
         // by terrain. Our kinematic controller has no velocity of its own, so
@@ -1264,21 +1287,20 @@ fn step_player_movement(
         if next_slope_displacement.norm_squared() <= PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED {
             next_slope_displacement = Vector::zeros();
         }
+        touches_traversable_surface = touched_sloped_floor || fall.grounded;
         (fall, next_slope_displacement)
     } else {
         // Collision-valid debug walks deliberately have no motion history:
         // preserve their established exact gravity/step behavior.
-        (
-            controller.move_shape(
-                dt,
-                queries,
-                shape,
-                &after_walk,
-                gravity_step,
-                |_collision| (),
-            ),
-            Vector::zeros(),
-        )
+        let mut touched_floor = false;
+        let fall =
+            controller.move_shape(dt, queries, shape, &after_walk, gravity_step, |collision| {
+                touched_floor |=
+                    controller.up.dot(&collision.hit.normal1) > PLAYER_SLOPE_MIN_FLOOR_NORMAL;
+            });
+        touches_traversable_surface =
+            fall.grounded || (fall.is_sliding_down_slope && touched_floor);
+        (fall, Vector::zeros())
     };
     mvt.translation += fall.translation;
     mvt.grounded = fall.grounded;
@@ -1307,6 +1329,7 @@ fn step_player_movement(
         movement: mvt,
         top_out: None,
         slope_displacement: next_slope_displacement,
+        touches_traversable_surface,
     }
 }
 
@@ -1522,6 +1545,9 @@ pub enum CollisionEvent {
         entity1_id: EntityId,
         entity2_id: EntityId,
     },
+    /// The player exceeded the survivable distance of one continuous,
+    /// unsupported fall under ordinary gravity.
+    FatalFall { entity_id: EntityId },
 }
 
 /// Predicate selecting *only* sensor colliders - the volumes the player's
@@ -1578,6 +1604,60 @@ pub enum PhysicsShape {
     Sphere(f32),
 }
 
+#[derive(Clone, Copy, Debug)]
+struct FatalFallTracker {
+    reference_y: Real,
+    supported_frames: u8,
+    reported: bool,
+}
+
+impl FatalFallTracker {
+    fn new(y: Real) -> Self {
+        Self {
+            reference_y: y,
+            supported_frames: 0,
+            reported: false,
+        }
+    }
+
+    fn relocate(&mut self, y: Real) {
+        *self = Self::new(y);
+    }
+
+    /// Returns true once when one unsupported descent becomes fatal.
+    fn update(
+        &mut self,
+        target_y: Real,
+        touches_traversable_surface: bool,
+        has_explicit_support: bool,
+    ) -> bool {
+        if has_explicit_support {
+            self.relocate(target_y);
+            return false;
+        }
+
+        if touches_traversable_surface {
+            self.supported_frames = self.supported_frames.saturating_add(1);
+            if self.supported_frames >= PLAYER_FATAL_FALL_SUPPORT_FRAMES {
+                self.reference_y = target_y;
+                self.reported = false;
+                return false;
+            }
+        } else {
+            self.supported_frames = 0;
+        }
+
+        // A jump or an upward impulse starts measuring from its apex, not the
+        // last floor. This keeps the rule about actual downward travel.
+        self.reference_y = self.reference_y.max(target_y);
+        let fatal = self.reference_y - target_y >= PLAYER_FATAL_FALL_DISTANCE && !self.reported;
+        if fatal {
+            self.reported = true;
+        }
+        fatal
+    }
+}
+
 pub struct PlayerHandle {
     // Player
     controller: KinematicCharacterController,
@@ -1598,6 +1678,9 @@ pub struct PlayerHandle {
     // collision. Carried only while gravity keeps sliding the player; flat
     // support, climbing and direct relocation clear it.
     slope_displacement: Vector<Real>,
+    // Highest unsupported position plus the sustained-contact state needed to
+    // distinguish a real landing from geometry brushed during the same fall.
+    fatal_fall: FatalFallTracker,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1996,6 +2079,7 @@ impl PhysicsWorld {
     ) {
         player_handle.top_out = None;
         player_handle.slope_displacement = Vector::zeros();
+        player_handle.fatal_fall.relocate(position.y);
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let player_height = if player_handle.is_crouched {
             PLAYER_CROUCH_HEIGHT
@@ -2691,6 +2775,7 @@ impl PhysicsWorld {
             top_out: None,
             support: None,
             slope_displacement: Vector::zeros(),
+            fatal_fall: FatalFallTracker::new(start_pos.y),
         }
     }
 
@@ -3091,6 +3176,7 @@ impl PhysicsWorld {
         let character_shape = character_collider.shared_shape().clone();
         let character_pos = *character_collider.position();
 
+        let gravity_scale = self.rigid_body_set[player_handle.character_handle].gravity_scale();
         let gravity = player_gravity_step(&self.rigid_body_set[player_handle.character_handle]);
 
         let movement_filter = player_movement_filter(player_handle.character_handle);
@@ -3212,6 +3298,7 @@ impl PhysicsWorld {
         // Structural parentage is the boundary: every parented entity collider
         // stays live, while only parentless terrain and climbables are omitted.
         let scripted_top_out_filter = movement_filter.predicate(&parented_non_climbable);
+        let is_climbing = climb_movement.is_some() || player_handle.top_out.is_some();
 
         // How far the moving terrain the player is standing on travelled since
         // the last time we saw them on it. The physics step above has already
@@ -3242,6 +3329,7 @@ impl PhysicsWorld {
                     movement,
                     top_out,
                     slope_displacement: Vector::zeros(),
+                    touches_traversable_surface: true,
                 }
             } else {
                 step_player_movement(
@@ -3324,6 +3412,17 @@ impl PhysicsWorld {
         let character_body = &mut self.rigid_body_set[player_handle.character_handle];
         let pos = character_body.position();
         let target = pos.translation.vector + mvt.translation;
+        let has_explicit_support =
+            player_handle.support.is_some() || is_climbing || gravity_scale <= 0.0;
+        if player_handle.fatal_fall.update(
+            target.y,
+            player_movement.touches_traversable_surface,
+            has_explicit_support,
+        ) {
+            collision_events.push(CollisionEvent::FatalFall {
+                entity_id: player_id,
+            });
+        }
         if scripted_top_out_frame {
             // Dark's mantle states directly drive their preflighted target
             // locations. Rapier's kinematic next-position path still clips the
@@ -4398,6 +4497,69 @@ mod tests {
         for _ in 0..frames {
             world.update(Vector3::new(0.0, 0.0, 0.0), player);
         }
+    }
+
+    #[test]
+    fn unsupported_fall_beyond_survivable_distance_emits_one_fatal_event() {
+        let mut world = PhysicsWorld::new();
+        let player_id = EntityId::from_inner(1001).unwrap();
+        let mut player = world.create_player(vec3(0.0, 30.0, 0.0), player_id);
+        let mut events = Vec::new();
+
+        for _ in 0..180 {
+            events.extend(world.update(vec3(0.0, 0.0, 0.0), &mut player).1);
+        }
+
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    CollisionEvent::FatalFall { entity_id } if *entity_id == player_id
+                ))
+                .count(),
+            1,
+            "a fatal fall must leave the player damage path exactly one event to consume"
+        );
+    }
+
+    #[test]
+    fn brief_surface_contacts_do_not_split_one_fatal_fall() {
+        let mut tracker = FatalFallTracker::new(0.0);
+        let mut events = 0;
+
+        // The player descends 30 world units and brushes a surface for one
+        // frame every five units, matching the stepped faces in SHODAN's
+        // center void. None of those isolated contacts is a real landing.
+        for step in 1..=150 {
+            let y = -(step as f32) * 0.2;
+            let brushes_surface = step % 25 == 0;
+            events += tracker.update(y, brushes_surface, false) as usize;
+        }
+
+        assert_eq!(events, 1, "one interrupted descent is still one fatal fall");
+    }
+
+    #[test]
+    fn sustained_slope_contact_restarts_the_fall_reference() {
+        let mut tracker = FatalFallTracker::new(30.0);
+
+        // A long authored slope can descend farther than the fatal distance,
+        // but continuous contact makes it traversal rather than a free fall.
+        for step in 1..=150 {
+            let y = 30.0 - step as f32 * 0.2;
+            assert!(
+                !tracker.update(y, true, false),
+                "sustained terrain contact must remain safe at y={y}"
+            );
+        }
+
+        // Once the player leaves it, a new full-distance fall is fatal.
+        let mut fatal = false;
+        for step in 1..=110 {
+            fatal |= tracker.update(-step as f32 * 0.2, false, false);
+        }
+        assert!(fatal, "leaving the slope must arm a new fatal fall");
     }
 
     fn add_ramp(world: &mut PhysicsWorld, start: (f32, f32), end: (f32, f32), half_width: f32) {
