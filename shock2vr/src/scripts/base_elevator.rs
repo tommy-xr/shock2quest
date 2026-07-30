@@ -13,6 +13,11 @@ use super::{
     script_util::{get_first_link_of_type, get_first_link_with_data},
 };
 
+/// Native elevator reroutes treat a platform within this distance as already
+/// occupying a station. Use the same tolerance when reconstructing script
+/// state from a save-restored moving-terrain position.
+const ELEVATOR_STATION_TOLERANCE: f32 = 0.1;
+
 pub struct BaseElevator {
     path_offset: Vector3<f32>,
     current_index: u32,
@@ -94,6 +99,29 @@ impl BaseElevator {
         self.move_to_target(target_index);
         true
     }
+
+    fn restored_station_index(&self) -> Option<u32> {
+        let tolerance_squared = ELEVATOR_STATION_TOLERANCE * ELEVATOR_STATION_TOLERANCE;
+        let mut nearest: Option<(u32, f32)> = None;
+
+        for (index, (_, station, _)) in self.path.iter().enumerate() {
+            let distance_squared = (self.current_position - station.position).magnitude2();
+            if distance_squared > tolerance_squared {
+                continue;
+            }
+
+            // Strictly closer replaces the candidate. Equal-distance ties
+            // retain the earlier (lower) path index for deterministic routing.
+            if nearest
+                .map(|(_, nearest_distance)| distance_squared < nearest_distance)
+                .unwrap_or(true)
+            {
+                nearest = Some((index as u32, distance_squared));
+            }
+        }
+
+        nearest.map(|(index, _)| index)
+    }
 }
 impl Script for BaseElevator {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
@@ -123,6 +151,9 @@ impl Script for BaseElevator {
 
         // Save the path
         self.path = path;
+        if let Some(restored_index) = self.restored_station_index() {
+            self.current_index = restored_index;
+        }
 
         Effect::NoEffect
     }
@@ -267,7 +298,7 @@ mod tests {
         (world, elevator)
     }
 
-    fn four_stop_world() -> (World, EntityId, [EntityId; 4]) {
+    fn four_stop_world(elevator_x: f32) -> (World, EntityId, [EntityId; 4]) {
         let mut world = World::new();
         let fourth = world.add_entity((position_at(30.0), Links::empty()));
         let third = world.add_entity((
@@ -301,7 +332,7 @@ mod tests {
             },
         ));
         let elevator = world.add_entity((
-            position_at(0.0),
+            position_at(elevator_x),
             Links {
                 to_links: vec![ToLink {
                     to_template_id: 0,
@@ -383,7 +414,7 @@ mod tests {
 
     #[test]
     fn reroute_targets_the_requested_station_without_visiting_intermediate_nodes() {
-        let (world, entity_id, nodes) = four_stop_world();
+        let (world, entity_id, nodes) = four_stop_world(0.0);
         let physics = PhysicsWorld::new();
         let mut elevator = BaseElevator::new();
         elevator.initialize(entity_id, &world);
@@ -402,6 +433,48 @@ mod tests {
         assert_eq!(elevator.current_index, 3);
         assert_eq!(elevator.desired_position, vec3(30.0, 0.0, 0.0));
         assert_eq!(elevator.speed, 4.0);
+    }
+
+    /// Save/load restores the moving terrain's position but constructs a new
+    /// script. The next ordinary button press must advance from the station
+    /// the platform visibly occupies, not from path index zero.
+    #[test]
+    fn initialized_elevator_advances_from_its_restored_station() {
+        let (world, entity_id, _) = four_stop_world(20.0);
+        let physics = PhysicsWorld::new();
+        let mut elevator = BaseElevator::new();
+        elevator.initialize(entity_id, &world);
+
+        elevator.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+
+        assert_eq!(elevator.current_index, 3);
+        assert_eq!(elevator.desired_position, vec3(30.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn restored_station_match_has_bounded_deterministic_tolerance() {
+        let (world, entity_id, _) = four_stop_world(0.0);
+        let mut elevator = BaseElevator::new();
+        elevator.initialize(entity_id, &world);
+
+        elevator.current_position = vec3(20.09, 0.0, 0.0);
+        assert_eq!(elevator.restored_station_index(), Some(2));
+        elevator.current_position = vec3(20.11, 0.0, 0.0);
+        assert_eq!(elevator.restored_station_index(), None);
+
+        elevator.path[1].1.position = vec3(19.95, 0.0, 0.0);
+        elevator.path[2].1.position = vec3(20.05, 0.0, 0.0);
+        elevator.current_position = vec3(20.0, 0.0, 0.0);
+        assert_eq!(
+            elevator.restored_station_index(),
+            Some(1),
+            "an equal-distance tie should keep the lower path index"
+        );
     }
 
     #[test]
