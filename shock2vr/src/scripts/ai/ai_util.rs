@@ -168,24 +168,21 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
     let up_offset = 0.5 / SCALE_FACTOR;
     let right_offset = 0.5 / SCALE_FACTOR;
     let forward = vec3(right_offset, up_offset, 1.0 * forward_offset);
-    let position =
-        root_transform
-            .0
-            .transform_point(point3(right_offset, up_offset, forward_offset))
-            + forward;
+    let firing_transform = root_transform.0 * Matrix4::from(rotation);
+    let muzzle_transform = firing_transform * Matrix4::from_translation(forward);
+    let position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
 
     if maybe_ranged_weapon_entity_id.is_none() {
         // Let's create the proxy entity...
         Effect::CreateEntity {
             template_id: ranged_weapon,
-            position,
-            orientation: rotation,
-            root_transform: root_transform.0,
+            position: point3(0.0, 0.0, 0.0) + forward,
+            orientation: Quaternion::from_angle_y(Deg(90.0)),
+            root_transform: firing_transform,
             options: CreateEntityOptions::default(),
         }
     } else {
-        let rot_matrix: Matrix4<f32> = rotation.into();
-        let transformed_forward = root_transform.0.transform_vector(forward);
+        let transformed_forward = firing_transform.transform_vector(forward);
         let debug_effect = Effect::DrawDebugLines {
             lines: vec![(
                 position,
@@ -208,15 +205,17 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
 
         if let Some((_projectile_id, _options)) = maybe_projectile {
             let (projectile_template_id, _projectile_opts) = maybe_projectile.unwrap();
+            let projectile_transform =
+                projectile_transform_aimed_at_player(world, position, muzzle_transform);
 
             fire_effects.push(Effect::CreateEntity {
                 // Testing
                 // template_id: -1415, // rocket turret
                 // template_id: -1414, // laser turret
                 template_id: projectile_template_id,
-                position: point3(0.0, 0.0, 0.0) + forward,
+                position: point3(0.0, 0.0, 0.0),
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
-                root_transform: root_transform.0 * rot_matrix,
+                root_transform: projectile_transform,
                 options: CreateEntityOptions::default(),
             });
 
@@ -242,7 +241,7 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
                 template_id: muzzle_flash_template_id,
                 position: point3(0.0, 0.0, 0.0) + forward,
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
-                root_transform: root_transform.0 * rot_matrix,
+                root_transform: firing_transform,
                 options: CreateEntityOptions::default(),
             })
         }
@@ -283,7 +282,6 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
     if let Some((projectile_id, options)) = maybe_projectile {
         let root_transform = v_transform.get(entity_id).unwrap();
         let forward = vec3(0.0, 0.0, 1.0);
-        let _up = vec3(0.0, 1.0, 0.0);
 
         let creature_type = v_creature.get(entity_id).unwrap();
         let joint_index = creature::get_creature_definition(creature_type.0)
@@ -298,36 +296,55 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
             .unwrap_or(Matrix4::identity());
 
         let transform = root_transform.0;
-        //let transform = root_transform.0 * joint_transform;
-
-        //let orientation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0));
         let position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
+        let muzzle_transform = transform * Matrix4::from_translation((position + forward).to_vec());
+        let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
+        let projectile_transform =
+            projectile_transform_aimed_at_player(world, muzzle_position, muzzle_transform);
 
-        //let rotation = Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0));
-        // TODO: This rotation is needed for some monsters? Like the droids?
-        //let _rot_matrix: Matrix4<f32> = Matrix4::from(rotation);
-
-        // panic!("creating entity: {:?}", projectile_id);
         Effect::CreateEntity {
             template_id: projectile_id,
-            position: position + forward * 1.0,
-            // position: vec3(13.11, 0.382, 16.601),
-            // orientation: rotation,
-            // Not sure why, but it seems like the orientation of the AI models is off by 90 degrees for the bin models...
-            // so we have to corect, otherwise we get sideways lasers
-            // orientation: Quaternion::from_angle_y(Deg(180.0)),
-            // orientation: Quaternion {
-            //     s: 1.0,
-            //     v: vec3(0.0, 0.0, 0.0),
-            // },
+            position: point3(0.0, 0.0, 0.0),
             orientation: Quaternion::from_angle_y(Deg(90.0)),
-            // root_transform: transform * rot_matrix,
-            root_transform: transform,
+            root_transform: projectile_transform,
             options: CreateEntityOptions::default(),
         }
     } else {
         Effect::NoEffect
     }
+}
+
+fn projectile_transform_aimed_at_player(
+    world: &World,
+    muzzle_position: Point3<f32>,
+    fallback_transform: Matrix4<f32>,
+) -> Matrix4<f32> {
+    let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>() else {
+        return fallback_transform;
+    };
+    projectile_transform_aimed_at(muzzle_position, player.pos).unwrap_or(fallback_transform)
+}
+
+fn projectile_transform_aimed_at(
+    muzzle_position: Point3<f32>,
+    target_position: Vector3<f32>,
+) -> Option<Matrix4<f32>> {
+    // Fast hostile projectiles previously inherited only the attacker's yaw.
+    // Their high authored joints could therefore send a perfectly horizontal
+    // ray over the player's shorter capsule. Preserve the authored muzzle but
+    // orient +Z at the collider center so the existing velocity path includes
+    // the necessary pitch.
+    let to_player = target_position - muzzle_position.to_vec();
+    if to_player.magnitude2() <= 1.0e-12 {
+        return None;
+    }
+
+    Some(
+        Matrix4::from_translation(muzzle_position.to_vec())
+            * Matrix4::from(crate::util::get_rotation_from_forward_vector(
+                to_player.normalize(),
+            )),
+    )
 }
 
 /// Monster FOV half-angle, in degrees (matches `FovDebugConfig::monster()`).
@@ -812,6 +829,33 @@ mod separation_tests {
         assert!(
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod projectile_aim_tests {
+    use super::*;
+    use cgmath::MetricSpace;
+
+    #[test]
+    fn hostile_projectiles_pitch_from_the_muzzle_toward_the_player() {
+        let muzzle = point3(1.0, 3.0, 5.0);
+        let player = vec3(-2.0, 1.0, -7.0);
+        let transform =
+            projectile_transform_aimed_at(muzzle, player).expect("distinct points define aim");
+
+        let spawned_at = transform.transform_point(point3(0.0, 0.0, 0.0));
+        assert!(
+            spawned_at.distance(muzzle) < 1.0e-6,
+            "aiming must preserve the authored muzzle position",
+        );
+
+        let actual_forward = transform.transform_vector(vec3(0.0, 0.0, 1.0)).normalize();
+        let expected_forward = (player - muzzle.to_vec()).normalize();
+        assert!(
+            (actual_forward - expected_forward).magnitude() < 1.0e-6,
+            "projectile direction must include pitch toward the player's collider",
         );
     }
 }

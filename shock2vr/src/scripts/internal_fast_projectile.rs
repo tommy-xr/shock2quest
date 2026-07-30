@@ -175,6 +175,7 @@ fn projectile_ray_cast(
             // Sometimes, the hitbox can stick out past the bounding box...
             // so we should still check for it here
             | InternalCollisionGroups::HITBOX
+            | InternalCollisionGroups::PLAYER
             | InternalCollisionGroups::SELECTABLE
             | InternalCollisionGroups::WORLD,
     );
@@ -218,9 +219,34 @@ fn projectile_ray_cast(
 
 #[cfg(test)]
 mod tests {
-    use super::hitbox_belongs_to_entity;
+    use super::{hitbox_belongs_to_entity, projectile_ray_cast};
     use crate::creature::{HitBoxType, RuntimePropHitBox};
-    use shipyard::World;
+    use crate::physics::PhysicsWorld;
+    use cgmath::{point3, vec3};
+    use shipyard::{EntityId, World};
+
+    #[test]
+    fn projectile_raycast_hits_the_player_collider() {
+        let mut physics = PhysicsWorld::new();
+        let player_entity = EntityId::from_inner(1).unwrap();
+        let mut player = physics.create_player(vec3(0.0, 0.0, 5.0), player_entity);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let world = World::new();
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            10.0,
+            &world,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(player_entity),
+            "an AI/turret fast projectile must be able to hit the player's dedicated collider",
+        );
+    }
 
     #[test]
     fn refined_hitbox_must_belong_to_the_coarse_creature() {

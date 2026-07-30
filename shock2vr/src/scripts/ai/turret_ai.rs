@@ -203,6 +203,10 @@ impl TurretAI {
 impl Script for TurretAI {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
         self.initial_yaw = ai_util::current_yaw(entity_id, world);
+        // Steering returns an absolute world yaw. Seed it from the mounted
+        // orientation so the first steering update does not reinterpret zero
+        // as world-forward and turn a rotated turret away from its target.
+        self.current_heading = self.initial_yaw;
 
         // Load alertness configuration
         self.config = Self::build_config(world, entity_id);
@@ -235,7 +239,7 @@ impl Script for TurretAI {
             entity_id,
             world,
             physics,
-            -self.current_heading,
+            self.initial_yaw - self.current_heading,
             TURRET_FOV_HALF_ANGLE,
         );
 
@@ -295,7 +299,7 @@ impl Script for TurretAI {
         let fov_debug_eff = ai_debug_util::draw_debug_fov(
             world,
             entity_id,
-            -self.current_heading,
+            self.initial_yaw - self.current_heading,
             is_visible,
             &FovDebugConfig::turret(),
         );
