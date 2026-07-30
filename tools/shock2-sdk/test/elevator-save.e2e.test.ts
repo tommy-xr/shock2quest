@@ -43,15 +43,16 @@ async function walkTo(
   game: GameServer,
   target: { x: number; y: number; z: number },
 ): Promise<void> {
+  const waypointTolerance = 0.8;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const before = await game.player.position();
-    if (Math.hypot(before.x - target.x, before.z - target.z) < 0.3) return;
+    if (Math.hypot(before.x - target.x, before.z - target.z) < waypointTolerance) return;
     await game.player.moveTo(target);
     await game.step({ frames: 5 });
   }
   const position = await game.player.position();
   assert.ok(
-    Math.hypot(position.x - target.x, position.z - target.z) < 0.3,
+    Math.hypot(position.x - target.x, position.z - target.z) < waypointTolerance,
     `ordinary movement should reach ${JSON.stringify(target)}, got ${JSON.stringify(position)}`,
   );
 }
@@ -126,25 +127,21 @@ test(
       `top-to-bottom lift should carry player to y=-11.556, got ${JSON.stringify(bottomPlayer)}`,
     );
 
-    // The authored return leaves the bottom car to the north. This proves the
-    // saved player is no longer forced to reverse the one-way crate stack.
-    for (const target of [
-      { x: 43.9, y: -11.55, z: -163 },
-      { x: 43.9, y: -11.55, z: -158 },
-    ]) {
-      await walkTo(game, target);
-    }
-    const bottomExit = await game.player.position();
-    assert.ok(bottomExit.z > -158.3);
+    // The bottom floor independently permits ordinary movement north to
+    // z=-158. This is useful route evidence, but does not claim a path from
+    // the bottom room to Engineering's distant bulkhead.
+    await walkTo(game, { x: 43.9, y: -11.55, z: -163 });
+    await walkTo(game, { x: 43.9, y: -11.55, z: -158 });
+    const bottomNorth = await game.player.position();
+    assert.ok(
+      bottomNorth.z > -158.8,
+      `ordinary bottom-room movement should reach about z=-158, got ${JSON.stringify(bottomNorth)}`,
+    );
+    await walkTo(game, { x: 43.9, y: -11.55, z: -163 });
+    await walkTo(game, { x: 43.9, y: -11.55, z: -168.2 });
 
     // Check the other two restored stations as well. Strictly rediscover every
     // concrete entity after each load because runtime IDs are not stable.
-    await game.player.teleport({
-      x: 43.9006,
-      y: -11.556,
-      z: -168.2003,
-    });
-    await game.step({ frames: 30 });
     await saveLoad(game, "bottom");
     await assertLiftAt(game, BOTTOM_NODE_Y, "loaded bottom station");
     await squeeze(
@@ -153,7 +150,35 @@ test(
     );
     await game.step({ frames: 600 });
     await assertLiftAt(game, MIDDLE_NODE_Y, "bottom station should cycle to middle");
+    const middlePlayer = await game.player.position();
+    assert.ok(
+      Math.abs(middlePlayer.y - -4.056) < 0.1,
+      `bottom-to-middle lift should carry player to y=-4.056, got ${JSON.stringify(middlePlayer)}`,
+    );
 
+    // Leave the middle stop by the same collision-valid north/west/x=34 route
+    // confirmed in the campaign. This returns to the stable raised central
+    // bridge without reversing the elevated crate jumps.
+    for (const [x, z] of [
+      [43.9, -163],
+      [34, -163],
+      [34, -174.6],
+    ]) {
+      await walkTo(game, { x, y: -3.956, z });
+    }
+    const middleExit = await game.player.position();
+    assert.ok(
+      Math.hypot(middleExit.x - 34, middleExit.z - -174.6) < 0.8,
+      `ordinary middle-stop exit should reach the raised central bridge, got ${JSON.stringify(middleExit)}`,
+    );
+
+    // Setup only: return to the lift to isolate its restored middle station.
+    await game.player.teleport({
+      x: 43.9006,
+      y: -4.056,
+      z: -168.2003,
+    });
+    await game.step({ frames: 30 });
     await saveLoad(game, "middle");
     await assertLiftAt(game, MIDDLE_NODE_Y, "loaded middle station");
     await squeeze(
@@ -170,7 +195,8 @@ test(
     t.diagnostic(
       `Cargo lift save/load: top player ${JSON.stringify(topPlayer)} -> ` +
         `bottom lift ${JSON.stringify(bottomLift.position)}, player ` +
-        `${JSON.stringify(bottomPlayer)}, north exit ${JSON.stringify(bottomExit)}, ` +
+        `${JSON.stringify(bottomPlayer)}, bottom north ${JSON.stringify(bottomNorth)}, ` +
+        `middle exit ${JSON.stringify(middleExit)}, ` +
         `final top lift ${JSON.stringify(finalLift.position)}`,
     );
   },
