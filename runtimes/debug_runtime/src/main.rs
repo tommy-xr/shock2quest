@@ -1938,6 +1938,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
             total_ms: time.total.as_millis() as f32,
         },
         mission: game.scene_name().to_string(),
+        campaign_completed: game.campaign_completed(),
         player: {
             // Real player state from the active world (position, look, and the
             // held/wielded entities), or zeros when the scene has no player.

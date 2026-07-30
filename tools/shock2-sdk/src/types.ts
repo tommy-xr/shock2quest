@@ -415,6 +415,8 @@ export interface FrameSnapshot {
   frame_index: number;
   time: { total: number; delta: number };
   mission: string;
+  /** True once the retail finale has entered its terminal ending cutscene. */
+  campaign_completed: boolean;
   player: PlayerSnapshot;
   entity_count: number;
   debug_features: string[];

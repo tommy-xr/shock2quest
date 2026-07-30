@@ -51,6 +51,9 @@ pub enum GlobalEffect {
     // Test the reload functionality (as if saving + loading)
     TestReload,
 
+    /// Play the retail ending and enter the campaign's terminal state.
+    CompleteCampaign,
+
     // Quit the game (e.g. from the main menu). The runtime is responsible for
     // observing this via `Game::should_quit` and closing its window.
     Quit,
