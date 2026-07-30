@@ -17,7 +17,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use dark::{
     SCALE_FACTOR,
-    properties::{PropFrobInfo, PropLimbModel, PropPlayerGun},
+    properties::{PropFrobInfo, PropLimbModel, PropPickBias, PropPlayerGun},
 };
 
 use crate::{
@@ -287,7 +287,9 @@ impl FlatPlayerController {
             .filter(|(entity, distance_squared)| {
                 *distance_squared <= FROB_REACH * FROB_REACH && is_frobbable(world, *entity)
             })
-            .map(|(entity, _)| entity);
+            .map(|(entity, _)| entity)
+            .or_else(|| interaction_target(world, physics, point3(camera_pos.x, camera_pos.y, camera_pos.z), forward, self.wielded_entity));
+        let highlighted = frob_target.or(highlighted);
 
         // Place the viewmodel + fire on the trigger edge.
         if let Some(entity_id) = self.wielded_entity {
@@ -486,6 +488,53 @@ fn out_message(to: EntityId, payload: MessagePayload) -> VirtualHandEffect {
     VirtualHandEffect::OutMessage {
         message: Message { to, payload },
     }
+}
+
+const INTERACTION_GROUPS: InternalCollisionGroups = InternalCollisionGroups::ENTITIES
+    .union(InternalCollisionGroups::SELECTABLE)
+    .union(InternalCollisionGroups::WORLD)
+    .union(InternalCollisionGroups::UI)
+    .union(InternalCollisionGroups::RAYCAST);
+
+/// Resolve the flat crosshair's interaction target while honoring Dark's
+/// negative pick bias. The first combined hit still blocks normally. Only an
+/// explicitly de-prioritized entity is skipped, and the second cast keeps all
+/// world/entity groups enabled, so a wall or closed door behind it remains an
+/// occluder instead of allowing a through-geometry Frob.
+fn interaction_target(
+    world: &World,
+    physics: &PhysicsWorld,
+    origin: Point3<f32>,
+    forward: Vector3<f32>,
+    wielded_entity: Option<EntityId>,
+) -> Option<EntityId> {
+    let first = physics.ray_cast2(origin, forward, FROB_REACH, INTERACTION_GROUPS, None, true)?;
+    let first_raw = first.maybe_entity_id?;
+    let first_entity = resolve_proxy_entity(world, first_raw);
+    if Some(first_entity) != wielded_entity && is_frobbable(world, first_entity) {
+        return Some(first_entity);
+    }
+
+    let has_negative_pick_bias = world
+        .borrow::<View<PropPickBias>>()
+        .map(|v| v.get(first_entity).is_ok_and(|bias| bias.0 < 0.0))
+        .unwrap_or(false);
+    if !has_negative_pick_bias {
+        return None;
+    }
+
+    physics
+        .ray_cast2(
+            origin,
+            forward,
+            FROB_REACH,
+            INTERACTION_GROUPS,
+            Some(first_raw),
+            true,
+        )
+        .and_then(|hit| hit.maybe_entity_id)
+        .map(|entity| resolve_proxy_entity(world, entity))
+        .filter(|entity| Some(*entity) != wielded_entity && is_frobbable(world, *entity))
 }
 
 /// Whether an entity is worth *interacting* with (it has frob info), which
@@ -1012,6 +1061,123 @@ mod tests {
         assert!(
             effects.is_empty(),
             "ineligible use must emit no frob effects, got {effects:?}"
+        );
+    }
+    #[test]
+    fn negative_pick_bias_surface_yields_to_frobbable_overlay() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let decorative_surface = world.add_entity(PropPickBias(-2000.0));
+        let frobbable_overlay = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
+        let mut physics = PhysicsWorld::new();
+        let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        physics.add_kinematic(
+            decorative_surface,
+            vec3(0.0, 0.0, -1.0),
+            identity,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        physics.add_kinematic(
+            frobbable_overlay,
+            vec3(0.0, 0.0, -1.25),
+            identity,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        let (effects, highlighted) = FlatPlayerController::new().update(
+            &input,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            crate::death_camera::EyePose::flat(0.0, identity),
+            1.0 / 60.0,
+            &world,
+            &physics,
+        );
+
+        assert_eq!(highlighted, Some(frobbable_overlay));
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Frob
+                    }
+                } if *to == frobbable_overlay
+            )),
+            "the authored overlay should receive the production Frob"
+        );
+    }
+
+    #[test]
+    fn negative_pick_bias_does_not_frob_through_an_entity_blocker() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let decorative_surface = world.add_entity(PropPickBias(-2000.0));
+        let closed_door = world.add_entity(());
+        let frobbable_behind_door = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
+        let mut physics = PhysicsWorld::new();
+        let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        for (entity, z, group) in [
+            (decorative_surface, -1.0, CollisionGroup::entity()),
+            (closed_door, -1.25, CollisionGroup::entity()),
+            (frobbable_behind_door, -1.5, CollisionGroup::selectable()),
+        ] {
+            physics.add_kinematic(
+                entity,
+                vec3(0.0, 0.0, z),
+                identity,
+                vec3(0.0, 0.0, 0.0),
+                vec3(1.0, 1.0, 0.1),
+                group,
+                false,
+            );
+        }
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        let (effects, highlighted) = FlatPlayerController::new().update(
+            &input,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            crate::death_camera::EyePose::flat(0.0, identity),
+            1.0 / 60.0,
+            &world,
+            &physics,
+        );
+
+        assert_eq!(highlighted, Some(decorative_surface));
+        assert!(
+            !effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::OutMessage {
+                    message: Message {
+                        payload: MessagePayload::Frob,
+                        ..
+                    }
+                }
+            )),
+            "an ordinary entity between the biased surface and target must still occlude the Frob"
         );
     }
 }
