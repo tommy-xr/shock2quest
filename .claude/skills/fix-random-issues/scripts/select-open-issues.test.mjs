@@ -132,3 +132,16 @@ test("documents evidence comments and controlled issue closure", () => {
   assert.match(skill, /three distinct evidence-backed reports/i);
   assert.match(skill, /gh issue close .*--reason completed/);
 });
+
+test("requires pr-visuals assessment and player-observable before-after proof", () => {
+  const skill = readFileSync(
+    fileURLToPath(new URL("../SKILL.md", import.meta.url)),
+    "utf8",
+  );
+
+  assert.match(skill, /Run the `pr-visuals` skill for every proposed fix/i);
+  assert.match(skill, /Cutscene timing\/sequence fixes are always player-observable/i);
+  assert.match(skill, /same deterministic request sequence against the exact base and fix/i);
+  assert.match(skill, /looping GIF, a still PNG, and a labeled before\/after comparison/i);
+  assert.match(skill, /neither embedded visual evidence nor an approved rationale/i);
+});
