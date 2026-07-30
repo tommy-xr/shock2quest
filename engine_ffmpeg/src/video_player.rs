@@ -7,46 +7,37 @@ use ffmpeg::software::scaling::{context::Context, flag::Flags};
 use ffmpeg::util::frame::video::Video;
 use std::time::Duration;
 
+/// Incremental video decoder used by cutscene scenes.
+///
+/// Frames are decoded only as playback reaches them. A retail ending can be
+/// several minutes of 1080p video, so retaining every RGB frame would consume
+/// tens of gigabytes and terminate the runtime before the first frame appeared.
 pub struct VideoPlayer {
-    #[allow(dead_code)]
-    width: u32,
-    #[allow(dead_code)]
-    height: u32,
-
     current_time: Duration,
-
     duration: Duration,
-    #[allow(dead_code)]
-    total_frame_count: i64,
-
-    frames: Vec<RawTextureData>,
-    #[allow(dead_code)]
+    frames_per_second: f64,
+    current_frame_index: usize,
+    current_frame: RawTextureData,
+    input: ffmpeg::format::context::Input,
+    video_stream_index: usize,
     decoder: ffmpeg::decoder::Video,
-    #[allow(dead_code)]
     scaler: ffmpeg::software::scaling::Context,
+    sent_eof: bool,
 }
 
 impl VideoPlayer {
     pub fn from_filename(filename: &str) -> Result<VideoPlayer, ffmpeg::Error> {
-        let maybe_ictx = input(&filename);
-
-        if maybe_ictx.is_err() {
-            let err = maybe_ictx.err().unwrap();
-            return Err(err);
-        }
-
-        let mut ictx = maybe_ictx.unwrap();
-        let input = ictx
+        let input_context = input(filename)?;
+        let input_stream = input_context
             .streams()
             .best(Type::Video)
             .ok_or(ffmpeg::Error::StreamNotFound)?;
-        let video_stream_index = input.index();
+        let video_stream_index = input_stream.index();
 
         let context_decoder =
-            ffmpeg::codec::context::Context::from_parameters(input.parameters()).unwrap();
-        let mut decoder = context_decoder.decoder().video().unwrap();
-
-        let mut scaler = Context::get(
+            ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())?;
+        let decoder = context_decoder.decoder().video()?;
+        let scaler = Context::get(
             decoder.format(),
             decoder.width(),
             decoder.height(),
@@ -56,65 +47,163 @@ impl VideoPlayer {
             Flags::BILINEAR,
         )?;
 
-        let duration =
-            Duration::from_secs_f64(input.duration() as f64 * f64::from(input.time_base()));
-        let total_frame_count = input.frames();
-
-        let mut frame_index = 0;
-
-        let mut frames = Vec::new();
-
-        let mut receive_and_process_decoded_frames =
-            |decoder: &mut ffmpeg::decoder::Video| -> Result<(), ffmpeg::Error> {
-                let mut decoded = Video::empty();
-                while decoder.receive_frame(&mut decoded).is_ok() {
-                    let mut rgb_frame = Video::empty();
-                    scaler.run(&decoded, &mut rgb_frame).unwrap();
-                    frames.push(RawTextureData {
-                        bytes: rgb_frame.data(0).to_vec(),
-                        width: rgb_frame.width(),
-                        height: rgb_frame.height(),
-                        format: PixelFormat::RGB,
-                    });
-                    frame_index += 1;
-                }
-                Ok(())
+        let stream_duration_seconds =
+            input_stream.duration() as f64 * f64::from(input_stream.time_base());
+        // Some AVI/OGV streams omit their own duration even though the
+        // container reports one. FFmpeg's container duration is in
+        // microseconds (AV_TIME_BASE).
+        let container_duration_seconds = input_context.duration() as f64 / 1_000_000.0;
+        let duration_seconds =
+            if stream_duration_seconds.is_finite() && stream_duration_seconds > 0.0 {
+                stream_duration_seconds
+            } else {
+                container_duration_seconds.max(0.0)
             };
+        let duration = Duration::from_secs_f64(duration_seconds.max(0.0));
+        let reported_frame_rate = f64::from(input_stream.avg_frame_rate());
+        let frames_per_second = if reported_frame_rate.is_finite() && reported_frame_rate > 0.0 {
+            reported_frame_rate
+        } else {
+            30.0
+        };
 
-        for (stream, packet) in ictx.packets() {
-            if stream.index() == video_stream_index {
-                match decoder.send_packet(&packet) {
-                    Ok(()) => receive_and_process_decoded_frames(&mut decoder).unwrap(),
-                    Err(err) => println!("Video decoder send_packet error: {:?}", err),
+        // End the stream borrow before moving the input context into the player.
+        let _ = input_stream;
+
+        let mut player = VideoPlayer {
+            current_time: Duration::ZERO,
+            duration,
+            frames_per_second,
+            current_frame_index: 0,
+            current_frame: RawTextureData {
+                bytes: Vec::new(),
+                width: 0,
+                height: 0,
+                format: PixelFormat::RGB,
+            },
+            input: input_context,
+            video_stream_index,
+            decoder,
+            scaler,
+            sent_eof: false,
+        };
+        if !player.decode_next_frame()? {
+            return Err(ffmpeg::Error::InvalidData);
+        }
+        Ok(player)
+    }
+
+    /// Decode one more video frame, consuming packets from the demuxer only as
+    /// needed. Audio packets are skipped because the audio player owns its own
+    /// input context.
+    fn decode_next_frame(&mut self) -> Result<bool, ffmpeg::Error> {
+        loop {
+            let mut decoded = Video::empty();
+            if self.decoder.receive_frame(&mut decoded).is_ok() {
+                let mut rgb_frame = Video::empty();
+                self.scaler.run(&decoded, &mut rgb_frame)?;
+                self.current_frame = RawTextureData {
+                    bytes: rgb_frame.data(0).to_vec(),
+                    width: rgb_frame.width(),
+                    height: rgb_frame.height(),
+                    format: PixelFormat::RGB,
+                };
+                return Ok(true);
+            }
+
+            if self.sent_eof {
+                return Ok(false);
+            }
+
+            let next_packet = self.input.packets().find_map(|(stream, packet)| {
+                (stream.index() == self.video_stream_index).then_some(packet)
+            });
+            match next_packet {
+                Some(packet) => self.decoder.send_packet(&packet)?,
+                None => {
+                    self.decoder.send_eof()?;
+                    self.sent_eof = true;
                 }
             }
         }
-        decoder.send_eof()?;
-        receive_and_process_decoded_frames(&mut decoder)?;
-
-        Ok(VideoPlayer {
-            width: decoder.width(),
-            height: decoder.height(),
-            decoder,
-            scaler,
-            current_time: Duration::from_secs_f64(0.0),
-            frames,
-            total_frame_count,
-            duration,
-        })
     }
 
     pub fn advance_by_time(&mut self, time: Duration) {
-        self.current_time += time;
+        self.current_time = (self.current_time + time).min(self.duration);
+        let target_frame_index =
+            (self.current_time.as_secs_f64() * self.frames_per_second).floor() as usize;
+
+        while self.current_frame_index < target_frame_index {
+            match self.decode_next_frame() {
+                Ok(true) => self.current_frame_index += 1,
+                Ok(false) => break,
+                Err(error) => {
+                    eprintln!("cutscene video decode failed: {error}");
+                    break;
+                }
+            }
+        }
     }
 
     pub fn get_current_frame(&self) -> RawTextureData {
-        let ratio = self.current_time.as_secs_f64() / self.duration.as_secs_f64();
+        self.current_frame.clone()
+    }
+}
 
-        let current_frame = (ratio * self.frames.len() as f64) as usize;
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
 
-        let idx = current_frame.max(0).min(self.frames.len() - 1);
+    use super::*;
 
-        return self.frames[idx].clone();
+    fn retained_frame_bytes(player: &VideoPlayer) -> usize {
+        player.current_frame.bytes.len()
+    }
+
+    #[test]
+    fn avi_and_ogv_advance_without_retaining_prior_frames() {
+        crate::init().unwrap();
+        let testdata = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+
+        for fixture_name in ["streaming-test.avi", "streaming-test.ogv"] {
+            let fixture = testdata.join(fixture_name);
+            let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+            let first_frame = player.get_current_frame();
+            let one_rgb_frame = 64 * 64 * 3;
+
+            assert!(
+                retained_frame_bytes(&player) <= one_rgb_frame,
+                "opening {fixture_name} retained {} decoded bytes",
+                retained_frame_bytes(&player)
+            );
+
+            player.advance_by_time(Duration::from_secs(1));
+
+            assert!(
+                player.current_frame_index >= 29,
+                "{fixture_name} did not advance at its 30fps timeline"
+            );
+            assert_ne!(
+                player.get_current_frame().bytes,
+                first_frame.bytes,
+                "{fixture_name} should decode a later frame after advancing"
+            );
+            assert!(
+                retained_frame_bytes(&player) <= one_rgb_frame,
+                "advancing {fixture_name} retained prior decoded frames"
+            );
+
+            player.advance_by_time(Duration::from_secs(10));
+            let final_frame_index = player.current_frame_index;
+            player.advance_by_time(Duration::from_secs(10));
+            assert_eq!(
+                player.current_frame_index, final_frame_index,
+                "{fixture_name} should stop decoding cleanly at EOF"
+            );
+            assert!(
+                retained_frame_bytes(&player) <= one_rgb_frame,
+                "reaching EOF in {fixture_name} retained prior decoded frames"
+            );
+        }
     }
 }
