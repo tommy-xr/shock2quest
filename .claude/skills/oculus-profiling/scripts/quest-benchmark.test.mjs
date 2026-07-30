@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertStableRefreshRate,
   parseArgs,
   parseEngineTelemetry,
+  parseReadyInfo,
   parseVrApiTelemetry,
   renderMarkdown,
   summarize,
@@ -94,9 +96,9 @@ test("requires a whole number of one-second samples", () => {
 
 test("parses Shock2Quest engine timing records", () => {
   const telemetry = parseEngineTelemetry(`
-SHOCK2QUEST_PERF mission=earth.mis focused=false samples=40 skipped=2 fps=40 frame_ms=25 update_ms=8 scene_ms=8 left_eye_ms=8 right_eye_ms=8 submit_ms=1
-SHOCK2QUEST_PERF mission=earth.mis focused=true samples=90 skipped=0 fps=90 frame_ms=11.1 update_ms=1.0 scene_ms=2.0 left_eye_ms=3.0 right_eye_ms=3.1 submit_ms=0.1
-SHOCK2QUEST_PERF mission=earth.mis focused=true samples=89 skipped=1 fps=89 frame_ms=11.2 update_ms=1.2 scene_ms=2.2 left_eye_ms=3.2 right_eye_ms=3.3 submit_ms=0.2
+SHOCK2QUEST_PERF mission=earth.mis focused=false samples=40 skipped=2 fps=40 frame_ms=25 update_ms=8 scene_ms=8 left_eye_ms=8 right_eye_ms=8 finish_ms=2 submit_ms=1
+SHOCK2QUEST_PERF mission=earth.mis focused=true samples=90 skipped=0 fps=90 frame_ms=11.1 update_ms=1.0 scene_ms=2.0 left_eye_ms=3.0 right_eye_ms=3.1 finish_ms=0.4 submit_ms=0.1
+SHOCK2QUEST_PERF mission=earth.mis focused=true samples=89 skipped=1 fps=89 frame_ms=11.2 update_ms=1.2 scene_ms=2.2 left_eye_ms=3.2 right_eye_ms=3.3 finish_ms=0.6 submit_ms=0.2
 `);
 
   assert.equal(telemetry.samples, 2);
@@ -106,6 +108,30 @@ SHOCK2QUEST_PERF mission=earth.mis focused=true samples=89 skipped=1 fps=89 fram
   assert.equal(telemetry.fps.mean, 89.5);
   assert.equal(telemetry.update_ms.mean, 1.1);
   assert.equal(telemetry.right_eye_ms.max, 3.3);
+  assert.equal(telemetry.finish_ms.mean, 0.5);
+});
+
+test("parses requested and active display refresh rates", () => {
+  const ready = parseReadyInfo(
+    `SHOCK2QUEST_REFRESH_CHANGED from_hz=0 to_hz=90
+SHOCK2QUEST_READY mission=earth.mis target_refresh_hz=90 requested_refresh_hz=90 refresh_hz=89.999 eye_width=1680 eye_height=1760
+SHOCK2QUEST_REFRESH_CHANGED from_hz=90 to_hz=72`,
+  );
+  assert.deepEqual(
+    ready,
+    {
+      target_refresh_hz: 90,
+      requested_refresh_hz: 90,
+      refresh_hz: 72,
+      eye_width: 1680,
+      eye_height: 1760,
+      refresh_rate_changes: [{ from_hz: 90, to_hz: 72 }],
+    },
+  );
+  assert.throws(
+    () => assertStableRefreshRate(ready),
+    /diverged from requested 90 Hz.*observed 72 Hz/,
+  );
 });
 
 test("benchmark report exposes compositor freshness failures", () => {
@@ -121,6 +147,7 @@ test("benchmark report exposes compositor freshness failures", () => {
           scene_ms: { mean: 2 },
           left_eye_ms: { mean: 3 },
           right_eye_ms: { mean: 4 },
+          finish_ms: { mean: 0.5 },
         },
         vrapi: {
           fps: { mean: 90, min: 88 },
@@ -143,5 +170,6 @@ test("benchmark report exposes compositor freshness failures", () => {
   );
 
   assert.match(report, /\| earth\.mis .* \| 90\/88 \| 2 \| 1 \|/);
+  assert.match(report, /\| 7\.000 ms \| 0\.5 ms \|/);
   assert.match(report, /stale\/torn counts identify/);
 });

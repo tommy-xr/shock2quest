@@ -177,6 +177,7 @@ export function parseEngineTelemetry(text, expectedSamples) {
     scene_ms: summarize(valuesFor(lines, "scene_ms")),
     left_eye_ms: summarize(valuesFor(lines, "left_eye_ms")),
     right_eye_ms: summarize(valuesFor(lines, "right_eye_ms")),
+    finish_ms: summarize(valuesFor(lines, "finish_ms")),
     submit_ms: summarize(valuesFor(lines, "submit_ms")),
   };
 }
@@ -202,16 +203,50 @@ function markerField(text, marker, name) {
   return line ? numericField(line, name) : undefined;
 }
 
-function readyInfo(text) {
-  const line = text
-    .split("\n")
-    .find((entry) => entry.includes("SHOCK2QUEST_READY"));
-  if (!line) return undefined;
+export function parseReadyInfo(text) {
+  const lines = text.split("\n");
+  const readyIndex = lines.findIndex((entry) =>
+    entry.includes("SHOCK2QUEST_READY"),
+  );
+  if (readyIndex === -1) return undefined;
+  const line = lines[readyIndex];
+  const refreshRateChanges = lines
+    .slice(readyIndex + 1)
+    .filter((entry) => entry.includes("SHOCK2QUEST_REFRESH_CHANGED"))
+    .map((entry) => ({
+      from_hz: numericField(entry, "from_hz"),
+      to_hz: numericField(entry, "to_hz"),
+    }))
+    .filter(
+      (change) =>
+        change.from_hz !== undefined && change.to_hz !== undefined,
+    );
   return {
-    refresh_hz: numericField(line, "refresh_hz"),
+    target_refresh_hz: numericField(line, "target_refresh_hz"),
+    requested_refresh_hz: numericField(line, "requested_refresh_hz"),
+    refresh_hz:
+      refreshRateChanges.at(-1)?.to_hz ?? numericField(line, "refresh_hz"),
     eye_width: numericField(line, "eye_width"),
     eye_height: numericField(line, "eye_height"),
+    refresh_rate_changes: refreshRateChanges,
   };
+}
+
+export function assertStableRefreshRate(ready) {
+  const requestedHz = ready?.requested_refresh_hz;
+  if (!requestedHz) return;
+  const observedRates = [
+    ready.refresh_hz,
+    ...(ready.refresh_rate_changes ?? []).map((change) => change.to_hz),
+  ].filter((rate) => rate !== undefined);
+  const divergentRate = observedRates.find(
+    (rate) => Math.abs(rate - requestedHz) > 0.01,
+  );
+  if (divergentRate !== undefined) {
+    throw new Error(
+      `display refresh rate diverged from requested ${requestedHz} Hz during benchmark: observed ${divergentRate} Hz`,
+    );
+  }
 }
 
 async function collectTelemetry(serial, seconds) {
@@ -306,6 +341,11 @@ async function benchmarkMission(serial, mission, options, device) {
     "RustStdoutStderr:V",
     "*:S",
   ]);
+  const ready = parseReadyInfo(runtimeLogs);
+  if (!ready) {
+    throw new Error("missing SHOCK2QUEST_READY from runtime logs");
+  }
+  assertStableRefreshRate(ready);
   let screenshot;
   let visual_error;
   if (options.capture) {
@@ -335,7 +375,7 @@ async function benchmarkMission(serial, mission, options, device) {
       ),
       launch_to_focused_ms: launched.launchMilliseconds,
     },
-    ready: readyInfo(launched.logs),
+    ready,
     engine: engineTelemetry,
     vrapi: compositorTelemetry,
     memory: parseMemory(
@@ -366,13 +406,13 @@ export function renderMarkdown(results, metadata) {
     `- APK SHA-256: ${metadata.apk_sha256}`,
     `- Sample: ${metadata.seconds}s after ${metadata.warmup}s warmup per mission`,
     "",
-    "| Mission | Init | Focused | FPS mean/min | Stale | Torn | App | Update | Scene | Eyes | GPU load | PSS | Visual |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| Mission | Init | Focused | Hz | FPS mean/min | Stale | Torn | App | Update | Scene | Eyes | Finish | GPU load | PSS | Visual |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   ];
   for (const result of results) {
     if (result.status === "failed") {
       lines.push(
-        `| ${result.mission} | n/a | n/a | failed | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ${result.error} |`,
+        `| ${result.mission} | n/a | n/a | n/a | failed | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ${result.error} |`,
       );
       continue;
     }
@@ -393,7 +433,7 @@ export function renderMarkdown(results, metadata) {
       ? `${fps.mean}/${fps.min}`
       : "n/a";
     lines.push(
-      `| ${result.mission} | ${result.startup.game_init_ms?.toFixed(1) ?? "n/a"} ms | ${result.startup.launch_to_focused_ms} ms | ${fpsSummary} | ${result.vrapi?.stale_frames ?? "n/a"} | ${result.vrapi?.torn_frames ?? "n/a"} | ${metricMean(result.vrapi?.app_ms, " ms")} | ${metricMean(result.engine?.update_ms, " ms")} | ${metricMean(result.engine?.scene_ms, " ms")} | ${eyes} | ${metricMean(result.vrapi?.gpu_load)} | ${result.memory.total_pss_mib ?? "n/a"} MiB | ${visual} |`,
+      `| ${result.mission} | ${result.startup.game_init_ms?.toFixed(1) ?? "n/a"} ms | ${result.startup.launch_to_focused_ms} ms | ${result.ready?.refresh_hz ?? "n/a"} | ${fpsSummary} | ${result.vrapi?.stale_frames ?? "n/a"} | ${result.vrapi?.torn_frames ?? "n/a"} | ${metricMean(result.vrapi?.app_ms, " ms")} | ${metricMean(result.engine?.update_ms, " ms")} | ${metricMean(result.engine?.scene_ms, " ms")} | ${eyes} | ${metricMean(result.engine?.finish_ms, " ms")} | ${metricMean(result.vrapi?.gpu_load)} | ${result.memory.total_pss_mib ?? "n/a"} MiB | ${visual} |`,
     );
   }
   lines.push("");
