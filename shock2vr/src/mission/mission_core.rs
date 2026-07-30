@@ -377,6 +377,12 @@ pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 #[derive(Unique, Clone, Copy)]
 pub struct MapPanelEntity(pub EntityId);
 
+/// The synthetic player-owned entity hosting replayed audio logs in
+/// `MediaGui`. The physical log-disc entity belongs to its source mission, so
+/// the original `U` action needs a durable, unbound host after deck changes.
+#[derive(Unique, Clone, Copy)]
+pub struct MediaPanelEntity(pub EntityId);
+
 /// The automap location (`PropMapLoc`) of the mapped room the player most
 /// recently entered - the player's *current* map location. The automap uses it
 /// to draw that location bright (R-art) while other explored locations draw
@@ -798,6 +804,30 @@ impl MissionCore {
                 },
             ));
             world.add_unique(MapPanelEntity(entity));
+
+            // Replayed logs have no current-mission world object to bind: the
+            // source disc may be several decks behind the player. A synthetic,
+            // player-owned MediaGui host lets the original `U` action reuse the
+            // production reader while remaining unbound/sticky in FlatUiHost.
+            let entity = world.add_entity((
+                Links::empty(),
+                PropScripts {
+                    scripts: vec!["internal_media".to_owned()],
+                    inherits: false,
+                },
+                dark::properties::PropTemplateId { template_id: -1 },
+                PropPosition {
+                    position: vec3(0.0, 0.0, 0.0),
+                    rotation: Quaternion {
+                        v: vec3(0.0, 0.0, 0.0),
+                        s: 1.0,
+                    },
+                    cell: 0,
+                },
+                RuntimePropTransform(Matrix4::identity()),
+                RuntimePropDoNotSerialize,
+            ));
+            world.add_unique(MediaPanelEntity(entity));
         }
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
@@ -3398,6 +3428,7 @@ impl MissionCore {
                     deck,
                     log,
                 } => {
+                    let collected = crate::quest_info::CollectedLog { deck, log };
                     // Record the log identity into the persistent collection...
                     {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
@@ -3406,27 +3437,62 @@ impl MissionCore {
                     // ...and resolve the reader strings from `level<deck>.str`,
                     // caching them on the disc so the MediaGui panel can render
                     // the portrait / deck icon / header / transcript.
-                    let level_file = format!("level{deck:02}.str");
+                    let level_file = crate::scripts::gui::log_strings_file(&collected);
                     if let Some(strings) =
                         asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
                     {
-                        // The .str values carry literal backslash-n escapes
-                        // ("AMANPOUR 07.JUL.14\nre: New code\n"); unescape them
-                        // into real line breaks so the reader never draws "\n".
-                        let get = |prefix: &str| {
-                            strings
-                                .get(&format!("{prefix}{log}"))
-                                .map(|s| s.replace("\\n", "\n"))
-                        };
                         self.world.add_component(
                             entity_id,
-                            crate::runtime_props::RuntimePropLogData {
-                                name: get("logname"),
-                                text: get("logtext"),
-                                portrait: get("logportrait"),
-                                icon: get("logicon"),
-                            },
+                            crate::scripts::gui::log_data_from_strings(&collected, &strings),
                         );
+                    }
+                }
+
+                Effect::PlayUnreadLog => {
+                    // `collected_logs` is persisted in pickup order, matching
+                    // the original LOGTIMES selection. Clone the identity out
+                    // of QuestInfo before mutating the world/panel host.
+                    let latest = self
+                        .world
+                        .borrow::<UniqueView<QuestInfo>>()
+                        .ok()
+                        .and_then(|quests| quests.latest_collected_log().cloned());
+                    let Some(log) = latest else {
+                        continue;
+                    };
+
+                    // Audio replay is meaningful regardless of presentation.
+                    effects.push_front(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: crate::scripts::gui::log_audio_schema(&log),
+                    });
+
+                    // The reader MFD is flat-only. Its synthetic host is rebuilt
+                    // on each mission load, while the identity stays in
+                    // QuestInfo and is localized from the *source deck* table.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        let panel_entity = self
+                            .world
+                            .borrow::<UniqueView<MediaPanelEntity>>()
+                            .ok()
+                            .map(|panel| panel.0);
+                        if let Some(entity) = panel_entity {
+                            let level_file = crate::scripts::gui::log_strings_file(&log);
+                            if let Some(strings) =
+                                asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
+                            {
+                                self.world.add_component(
+                                    entity,
+                                    crate::scripts::gui::log_data_from_strings(&log, &strings),
+                                );
+                                self.flat_ui.open_unbound(entity);
+                            } else {
+                                warn!(
+                                    "Unable to replay collected log: missing localized table {}",
+                                    level_file
+                                );
+                            }
+                        }
                     }
                 }
 

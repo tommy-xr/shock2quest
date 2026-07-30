@@ -41,6 +41,7 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Space` - jump
 - `I` - move the floating inventory in front of you
 - `Alt+S` / `Alt+L` - quick save / quick load
+- `U` - replay the newest collected audio log
 - `P` - cycle the pathfinding test (set start → set goal → show path)
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,

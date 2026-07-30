@@ -131,6 +131,9 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ToggleMap) {
             effects.push(Effect::ToggleMap);
         }
+        if state.just_triggered(InputAction::PlayUnreadLog) {
+            effects.push(Effect::PlayUnreadLog);
+        }
         effects
     }
 }
@@ -260,6 +263,15 @@ mod tests {
 
         let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
         assert!(matches!(effects[0], Effect::ToggleMap));
+    }
+
+    #[test]
+    fn play_unread_log_maps_to_player_replay_effect() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::PlayUnreadLog);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(effects.as_slice(), [Effect::PlayUnreadLog]));
     }
 
     #[test]

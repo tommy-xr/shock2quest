@@ -169,6 +169,11 @@ pub enum Effect {
     /// VR and in scenes without a map panel. See `projects/flat-ui-panels.md` §5.
     ToggleMap,
 
+    /// Replay the newest persisted audio-log identity through the authentic
+    /// localized reader/audio paths. This is the original `play_unread_log`
+    /// player action (`U`), not a debug lever. No-op when no log is collected.
+    PlayUnreadLog,
+
     /// Mark an automap location as explored for the current mission (persisted
     /// in `QuestInfo`, the original's mission-scoped `EXPLORED[64]` file-var).
     /// Emitted by `CoreRoom` when the player enters a room whose room object

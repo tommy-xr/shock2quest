@@ -2,13 +2,14 @@
 //!
 //! The flat-mode reader panel matching the original game's email/log overlay: a
 //! `LOG.PCX` backdrop with the sender portrait, deck icon, header line and a word-wrapped,
-//! scrollable transcript. It is bound to the frobbed log-disc entity (the flat
-//! host's single-slot MFD), and reads its presentation strings from
-//! `RuntimePropLogData` - attached by the `Effect::CollectLog` handler when the
-//! disc is frobbed (that handler also records the log into the persistent
-//! `QuestInfo` collection and plays its audio). Deliberate deviation from the
-//! original's destroy-on-pickup: the disc survives so the reader stays bound and
-//! the code is readable in-fiction (research gap #6).
+//! scrollable transcript. On pickup it is bound to the physical log disc; the
+//! original `play_unread_log` / `U` action instead binds the same GUI to a
+//! synthetic player-owned entity and re-resolves the latest persisted
+//! `(deck, log)` identity. Both paths read `RuntimePropLogData`, so replay uses
+//! the same authentic strings, portraits and deck icons rather than a transcript
+//! copied into code. The full PDA archive browser remains deferred.
+
+use std::collections::HashMap;
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropLog;
@@ -16,7 +17,7 @@ use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor};
-use crate::quest_info::QuestInfo;
+use crate::quest_info::{CollectedLog, QuestInfo};
 use crate::runtime_props::RuntimePropLogData;
 use crate::scripts::{
     Effect, MessagePayload,
@@ -67,6 +68,37 @@ pub struct MediaGuiState {
 pub enum MediaGuiMsg {
     PageUp,
     PageDown,
+}
+
+/// The localized string table belonging to a persisted log identity.
+pub(crate) fn log_strings_file(log: &CollectedLog) -> String {
+    format!("level{:02}.str", log.deck)
+}
+
+/// The authentic audio schema belonging to a persisted log identity.
+pub(crate) fn log_audio_schema(log: &CollectedLog) -> String {
+    format!("LOG{:02}{:02}", log.deck, log.log)
+}
+
+/// Resolve the reader's presentation cache from the per-deck localized string
+/// table. The current mission is intentionally absent: a collected deck-1 log
+/// must still resolve while the player is on deck 2.
+pub(crate) fn log_data_from_strings(
+    log: &CollectedLog,
+    strings: &HashMap<String, String>,
+) -> RuntimePropLogData {
+    let get = |prefix: &str| {
+        strings
+            .get(&format!("{prefix}{}", log.log))
+            // Retail .str values encode line breaks as literal backslash-n.
+            .map(|value| value.replace("\\n", "\n"))
+    };
+    RuntimePropLogData {
+        name: get("logname"),
+        text: get("logtext"),
+        portrait: get("logportrait"),
+        icon: get("logicon"),
+    }
 }
 
 /// Greedy word-wrap that honors explicit `\n` paragraph breaks. A single word
@@ -582,5 +614,37 @@ mod tests {
         });
         let gui = MediaGui;
         assert!(matches!(gui.on_frob(disc, &world), Effect::NoEffect));
+    }
+
+    #[test]
+    fn persisted_cross_mission_identity_resolves_localized_reader_metadata() {
+        let log = CollectedLog { deck: 1, log: 13 };
+        let strings = HashMap::from([
+            (
+                "logname13".to_owned(),
+                "SANGER 12.JUL.14\\nre: Cargo bays".to_owned(),
+            ),
+            (
+                "logtext13".to_owned(),
+                "Localized deck-one transcript".to_owned(),
+            ),
+            ("logportrait13".to_owned(), "Sanger".to_owned()),
+            ("logicon13".to_owned(), "EngIcon".to_owned()),
+        ]);
+
+        assert_eq!(log_strings_file(&log), "level01.str");
+        assert_eq!(log_audio_schema(&log), "LOG0113");
+        let data = log_data_from_strings(&log, &strings);
+        assert_eq!(
+            data.name.as_deref(),
+            Some("SANGER 12.JUL.14\nre: Cargo bays")
+        );
+        assert_eq!(data.text.as_deref(), Some("Localized deck-one transcript"));
+        assert_eq!(data.portrait.as_deref(), Some("Sanger"));
+        assert_eq!(
+            data.icon.as_deref(),
+            Some("EngIcon"),
+            "the localized deck icon must come from the collected log's deck table"
+        );
     }
 }

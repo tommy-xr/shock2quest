@@ -24,6 +24,7 @@ export type InputAction =
   | "Reload"
   | "CyclePsiPower"
   | "ToggleUseMode"
+  | "PlayUnreadLog"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 

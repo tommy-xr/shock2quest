@@ -145,6 +145,14 @@ panel is *presentation + storage*: a reader `MediaGui`, log collection in
 `QuestInfo`, book.crf mount, audio observability. No engine unknowns. The full
 PDA browser (deck tabs, unread sort) is **out of scope this wave** — reader-only.
 
+**Implementation update (2026-07-29):** #468 shipped the entity-bound reader
+and persisted collection. The #740 follow-up adds the original player-facing
+`PlayUnreadLog` / `U` entry point, re-resolving the newest persisted `(deck,
+log)` through the source deck's localized strings and opening the same
+`MediaGui` after mission transitions. This is deliberately an extensible replay
+slice, not a substitute for the still-deferred PDA archive browser (deck tabs,
+entry selection/sorting, notes, videos).
+
 ---
 
 ## 2. Panel: Elevator

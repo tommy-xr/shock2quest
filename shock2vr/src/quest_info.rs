@@ -95,6 +95,13 @@ impl QuestInfo {
         &self.collected_logs
     }
 
+    /// The newest collected audio log (the original `LOGTIMES` ordering used
+    /// by `play_unread_log`). Collection order is persisted with QuestInfo, so
+    /// this remains valid after a level transition or save/load.
+    pub fn latest_collected_log(&self) -> Option<&CollectedLog> {
+        self.collected_logs.last()
+    }
+
     /// The player's persistent character sheet.
     pub fn player_stats(&self) -> &PlayerStats {
         &self.player_stats
@@ -152,5 +159,36 @@ impl QuestInfo {
 
     pub fn mark_email_as_played(&mut self, email: &str) {
         self.played_emails.insert(email.to_owned());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_collected_log_is_empty_then_tracks_pickup_order() {
+        let mut quests = QuestInfo::new();
+        assert_eq!(
+            quests.latest_collected_log(),
+            None,
+            "an empty collection has no replay target"
+        );
+
+        assert!(quests.collect_log(1, 1));
+        assert!(quests.collect_log(2, 20));
+        assert_eq!(
+            quests.latest_collected_log(),
+            Some(&CollectedLog { deck: 2, log: 20 })
+        );
+
+        assert!(
+            !quests.collect_log(1, 1),
+            "collecting a duplicate must not move an older log to newest"
+        );
+        assert_eq!(
+            quests.latest_collected_log(),
+            Some(&CollectedLog { deck: 2, log: 20 })
+        );
     }
 }

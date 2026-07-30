@@ -900,6 +900,7 @@ impl ScriptWorld {
             "internal_collision_type" => Box::new(InternalCollisionType::new()),
             "internal_inventory" => gui_script(Box::new(ContainerGui::inv_container())),
             "internal_map" => gui_script(Box::new(MapGui)),
+            "internal_media" => gui_script(Box::new(MediaGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
             "internal_frob_move" => Box::new(InternalFrobMove::new()),

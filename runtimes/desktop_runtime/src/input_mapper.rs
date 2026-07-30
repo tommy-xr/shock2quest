@@ -163,6 +163,11 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::ToggleMap,
             },
+            Binding {
+                key: Key::U,
+                modifier: Modifier::None,
+                action: InputAction::PlayUnreadLog,
+            },
         ];
 
         Self {
@@ -227,5 +232,18 @@ mod tests {
                 .find(|binding| binding.key == key && binding.modifier == Modifier::None);
             assert_eq!(binding.map(|binding| binding.action), Some(action));
         }
+    }
+
+    #[test]
+    fn original_audio_log_replay_key_maps_to_player_action() {
+        let mapper = DesktopInputMapper::new();
+        let binding = mapper
+            .bindings
+            .iter()
+            .find(|binding| binding.key == Key::U && binding.modifier == Modifier::None);
+        assert_eq!(
+            binding.map(|binding| binding.action),
+            Some(InputAction::PlayUnreadLog)
+        );
     }
 }

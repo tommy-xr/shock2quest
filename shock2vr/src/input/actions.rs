@@ -84,6 +84,10 @@ pub enum InputAction {
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key). No-op in VR. See `projects/flat-ui-panels.md` §5.
     ToggleMap,
+
+    /// Replay the newest collected audio log in the reader MFD (the original
+    /// `play_unread_log` / `U` binding). No-op when the collection is empty.
+    PlayUnreadLog,
 }
 
 impl InputAction {
@@ -122,6 +126,7 @@ impl InputAction {
             InputAction::DebugForceChase,
             InputAction::ToggleUseMode,
             InputAction::ToggleMap,
+            InputAction::PlayUnreadLog,
         ]
     }
 
@@ -158,6 +163,7 @@ impl InputAction {
             InputAction::DebugForceChase => "DebugForceChase",
             InputAction::ToggleUseMode => "ToggleUseMode",
             InputAction::ToggleMap => "ToggleMap",
+            InputAction::PlayUnreadLog => "PlayUnreadLog",
         }
     }
 }
