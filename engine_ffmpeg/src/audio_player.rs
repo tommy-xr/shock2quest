@@ -9,7 +9,7 @@ pub struct AudioPlayer;
 impl AudioPlayer {
     pub fn from_filename(filename: &str) -> Result<AudioClip, ffmpeg::Error> {
         // 2. Open the media file
-        let mut ictx = ffmpeg::format::input(&filename).unwrap();
+        let mut ictx = ffmpeg::format::input(&filename)?;
 
         // 3. Find the audio stream
         let input = ictx
@@ -51,11 +51,11 @@ impl AudioPlayer {
         let mut decoded_audio_samples: Vec<i16> = Vec::new();
 
         for (stream, packet) in ictx.packets() {
-            if stream.index() == audio_stream_index {
-                audio_decoder.send_packet(&packet).unwrap();
+            if stream.index() == audio_stream_index && packet_has_payload(&packet) {
+                audio_decoder.send_packet(&packet)?;
                 let mut audio_frame = ffmpeg::util::frame::audio::Audio::empty();
 
-                while audio_decoder.receive_frame(&mut audio_frame).is_ok() {
+                while let Ok(()) = audio_decoder.receive_frame(&mut audio_frame) {
                     let mut decoded_audio_frame = ffmpeg::util::frame::audio::Audio::empty();
                     audio_frame.set_channel_layout(ChannelLayout::STEREO);
                     let _option_delay = swr.run(&audio_frame, &mut decoded_audio_frame).unwrap();
@@ -88,5 +88,19 @@ impl AudioPlayer {
 
         let clip = AudioClip::from_raw(target_channel_count, target_sample_rate, remapped_samples);
         Ok(clip)
+    }
+}
+
+fn packet_has_payload(packet: &ffmpeg::Packet) -> bool {
+    packet.size() > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_empty_ogg_end_of_stream_packets() {
+        assert!(!packet_has_payload(&ffmpeg::Packet::empty()));
     }
 }
