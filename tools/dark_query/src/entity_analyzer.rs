@@ -382,6 +382,8 @@ fn get_link_types(entity_id: i32, entity_info: &SystemShock2EntityInfo) -> Vec<S
                 Link::GunFlash(_) => "GunFlash".to_string(),
                 Link::LandingPoint => "LandingPoint".to_string(),
                 Link::Replicator => "Replicator".to_string(),
+                Link::SpawnPoint => "SpawnPoint".to_string(),
+                Link::Spawned => "Spawned".to_string(),
                 Link::MissSpang => "MissSpang".to_string(),
                 Link::HitSpang(_) => "HitSpang".to_string(),
                 Link::Hacking => "Hacking".to_string(),

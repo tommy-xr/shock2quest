@@ -284,6 +284,15 @@ pub enum Effect {
         options: CreateEntityOptions,
     },
 
+    /// `TrapSpawn` creation with the Dark ecology bookkeeping that cannot be
+    /// expressed until the fresh runtime entity id exists.
+    SpawnEcologyEntity {
+        template_name: String,
+        spawn_point: EntityId,
+        ecology_type: Option<i32>,
+        goto_player: bool,
+    },
+
     DrawDebugLines {
         lines: Vec<(Point3<f32>, Point3<f32>, Vector4<f32>)>,
     },

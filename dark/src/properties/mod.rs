@@ -13,6 +13,7 @@ mod prop_base_gun_desc;
 mod prop_bitmap_animation;
 mod prop_collision_type;
 mod prop_creature_pose;
+mod prop_ecology;
 mod prop_frame_anim_config;
 mod prop_frame_anim_state;
 mod prop_frob_info;
@@ -33,6 +34,7 @@ mod prop_render_type;
 mod prop_replicator;
 mod prop_room_gravity;
 mod prop_service;
+mod prop_spawn;
 mod prop_trip_flags;
 mod prop_tweq;
 mod prop_voice;
@@ -52,6 +54,7 @@ pub use prop_base_gun_desc::*;
 pub use prop_bitmap_animation::*;
 pub use prop_collision_type::*;
 pub use prop_creature_pose::*;
+pub use prop_ecology::*;
 pub use prop_frame_anim_config::*;
 pub use prop_frame_anim_state::*;
 pub use prop_frob_info::*;
@@ -72,6 +75,7 @@ pub use prop_render_type::*;
 pub use prop_replicator::*;
 pub use prop_room_gravity::*;
 pub use prop_service::*;
+pub use prop_spawn::*;
 pub use prop_trip_flags::*;
 pub use prop_tweq::*;
 pub use prop_voice::*;
@@ -430,6 +434,10 @@ pub enum Link {
     LandingPoint,
     Projectile(ProjectileOptions),
     Replicator,
+    /// Authored candidate location for a `TrapSpawn` generator.
+    SpawnPoint,
+    /// Runtime ownership edge from a spawn marker to its live child.
+    Spawned,
     SwitchLink,
     MissSpang,
     /// From a melee AI to the weapon archetype it strikes with (its pipe,
@@ -1054,6 +1062,8 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         }),
         define_link("L$LandingPo", |_| Link::LandingPoint),
         define_link("L$Replicato", |_| Link::Replicator),
+        define_link("L$SpawnPoin", |_| Link::SpawnPoint),
+        define_link("L$Spawned", |_| Link::Spawned),
         define_link("L$HackingLi", |_| Link::Hacking),
         define_link("L$SwitchLin", |_| Link::SwitchLink),
         define_link("L$Teleport", |_| Link::Teleport),
@@ -1251,6 +1261,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$Ecology",
+            PropEcology::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$EcoType",
+            |reader, _len| read_i32(reader),
+            PropEcoType,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$EcoState",
+            |reader, _len| read_i32(reader),
+            PropEcoState,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$DestLevel",
             read_prop_string,
             PropDestLevel,
@@ -1274,6 +1302,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             PropStackCount,
             accumulator::latest,
         ),
+        define_prop("P$Spawn", PropSpawn::read, identity, accumulator::latest),
         define_prop(
             "P$FrameAniC",
             PropFrameAnimConfig::read,
