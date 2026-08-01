@@ -242,12 +242,21 @@ pub fn create_entity_core(
     //     world,
     // );
 
+    // A zero-travel door authored open has no retracted transform at which to
+    // draw its leaf. Keep the logical entity and scripts, but omit its visual
+    // just as its permanently-open state omits the collider (#608).
+    let create_visual = should_create_visual(world, entity_id);
+
     // Create model, if we can
-    let maybe_model = create_model(world, asset_cache, entity_id);
+    let maybe_model = if create_visual {
+        create_model(world, asset_cache, entity_id)
+    } else {
+        None
+    };
     let maybe_just_model = maybe_model.clone().map(|m| m.0);
 
     // Create bitmap animation, if no model
-    let bitmap_animation = if maybe_model.is_none() {
+    let bitmap_animation = if create_visual && maybe_model.is_none() {
         create_bitmap(world, asset_cache, entity_id)
     } else {
         None
@@ -386,6 +395,15 @@ pub fn create_entity_core(
         rigid_body,
         scripts: output_scripts,
     }
+}
+
+fn should_create_visual(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropTranslatingDoor>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|door| !door.is_permanently_open())
+        .unwrap_or(true)
 }
 
 fn initialize_sym_name_from_obj_map(
@@ -1338,6 +1356,21 @@ mod tests {
             create_physics_representation(&mut world, &mut physics, &None, door),
             None
         );
+    }
+
+    #[test]
+    fn a_permanently_open_door_gets_no_visual() {
+        // The authored open and closed locations of hydro2 obj 135 coincide,
+        // so there is no retracted transform at which its leaf can be drawn.
+        let mut world = World::new();
+        let at = vec3(18.0, -0.4, 41.8);
+        let permanently_open = add_door(&mut world, at, at, at, 1);
+        let permanently_closed = add_door(&mut world, at, at, at, 0);
+        let ordinary = add_door(&mut world, at, at, at + vec3(0.0, 0.0, 2.4), 0);
+
+        assert!(!should_create_visual(&world, permanently_open));
+        assert!(should_create_visual(&world, permanently_closed));
+        assert!(should_create_visual(&world, ordinary));
     }
 
     #[test]
