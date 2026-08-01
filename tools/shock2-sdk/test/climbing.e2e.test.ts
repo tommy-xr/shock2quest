@@ -694,3 +694,173 @@ test(
     );
   },
 );
+
+// Issue #657's Hydro2 extension is a third authored geometry family: eleven
+// separate Rick Ladder rungs climb the north face of a narrow Sector C shaft,
+// while the office landing sits beyond the terrain slab at the column top.
+// Ordinary ascent reaches the underside but cannot expand or establish support.
+test(
+  "flat climbing: hydro2 Sector C rung stack reaches the upper office",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids are unstable. Mission object 551 is the durable anchor for
+    // this stack; discover the rest by exact authored name and shared column
+    // geometry rather than baking its world coordinates into the scenario.
+    const rungs = (
+      await game.entities.list({ filter: "Rick Ladder", limit: 100 })
+    ).entities;
+    const anchor = rungs.find((entity) => entity.template_id === 551);
+    assert.ok(anchor, "hydro2 should contain Sector C Rick Ladder object 551");
+    const [ladderX, , ladderZ] = anchor.position;
+    const column = rungs.filter(
+      (entity) =>
+        entity.name === "Rick Ladder" &&
+        Math.hypot(
+          entity.position[0] - ladderX,
+          entity.position[2] - ladderZ,
+        ) < 0.05,
+    );
+    const stableIds = new Set(column.map((entity) => entity.template_id));
+    const ladderBottom = Math.min(...column.map((entity) => entity.position[1]));
+    const ladderTop = Math.max(...column.map((entity) => entity.position[1]));
+    assert.ok(
+      column.length === 11 &&
+        stableIds.has(551) &&
+        stableIds.has(564) &&
+        ladderTop - ladderBottom > 7.5,
+      `expected the authored 11-rung Sector C column, got ids=${JSON.stringify([...stableIds].sort())}, ` +
+        `span=${(ladderTop - ladderBottom).toFixed(2)}`,
+    );
+
+    // Geometry-relative setup reproduces the campaign save's supported
+    // north-face contact. The climb and top-out use only production input.
+    const standingFloorOffset = 1.243978;
+    const northFaceOffset = 0.5712;
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderBottom + standingFloorOffset,
+      z: ladderZ + northFaceOffset,
+    });
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const startSupport = await game.raycast({
+      start: [start.x, start.y, start.z],
+      end: [start.x, start.y - 3, start.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(start.x - ladderX, start.z - (ladderZ + northFaceOffset)) < 0.05 &&
+        startSupport.hit &&
+        startSupport.distance !== null &&
+        startSupport.distance > 0.5 &&
+        startSupport.distance < 2 &&
+        startSupport.hit_normal !== null &&
+        startSupport.hit_normal[1] > 0.5,
+      `expected supported north-face contact; start=${JSON.stringify(start)}, ` +
+        `support=${JSON.stringify(startSupport)}`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      ladderTop + 4,
+      ladderZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let landing = start;
+    let landingSupport: RayCastResult | null = null;
+    let supportedLanding = false;
+    for (let elapsed = 0; elapsed < 720; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      const crossedIntoOffice = landing.z < ladderZ - 0.4;
+      const atUpperFloor =
+        landing.y > ladderTop - 2 && landing.y < ladderTop + 0.5;
+      if (!crossedIntoOffice || !atUpperFloor) continue;
+      landingSupport = await game.raycast({
+        start: [landing.x, landing.y, landing.z],
+        end: [landing.x, landing.y - 3, landing.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      supportedLanding =
+        landingSupport.hit &&
+        landingSupport.distance !== null &&
+        landingSupport.distance > 0.5 &&
+        landingSupport.distance < 2 &&
+        landingSupport.hit_normal !== null &&
+        landingSupport.hit_normal[1] > 0.5;
+      if (supportedLanding) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      supportedLanding,
+      `continuous north-face input must cross the Sector C lip onto supported office floor; ` +
+        `ladder=(${ladderX.toFixed(2)}, ${ladderTop.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
+        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(landingSupport)}`,
+    );
+
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z < ladderZ - 0.4 &&
+        Math.abs(stable.y - landing.y) < 0.1 &&
+        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `the office landing must remain stable after release; ` +
+        `landing=${JSON.stringify(landing)}, stable=${JSON.stringify(stable)}, ` +
+        `support=${JSON.stringify(stableSupport)}`,
+    );
+
+    // Reorient deeper into the office and prove the restored standing capsule
+    // can use ordinary locomotion instead of merely perching on the lip.
+    await game.input.lookAtWorldPoint([
+      stable.x,
+      stable.y + 1.6,
+      stable.z - 6,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 60 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const office = await game.player.position();
+    const officeSupport = await game.raycast({
+      start: [office.x, office.y, office.z],
+      end: [office.x, office.y - 3, office.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z - office.z > 0.75 &&
+        officeSupport.hit &&
+        officeSupport.distance !== null &&
+        officeSupport.distance > 0.5 &&
+        officeSupport.distance < 2 &&
+        officeSupport.hit_normal !== null &&
+        officeSupport.hit_normal[1] > 0.5,
+      `the supported top-out must permit ordinary onward movement into the office; ` +
+        `stable=${JSON.stringify(stable)}, office=${JSON.stringify(office)}, ` +
+        `support=${JSON.stringify(officeSupport)}`,
+    );
+  },
+);
