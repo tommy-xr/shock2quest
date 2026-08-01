@@ -223,10 +223,10 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Give the player a carried item (source doesn't matter here).
-    const { entities: nanites } = await game.entities.list({ filter: "*Nanites*", limit: 10 });
-    assert.ok(nanites[0], "expected a Nanites pickup in medsci1");
-    await game.player.give(nanites[0].id);
+    // Provision a fresh carried item (source doesn't matter here). Do not pick
+    // an arbitrary mission Nanites entity: some are authored container loot,
+    // which `/v1/player/give` intentionally refuses to preserve containment.
+    await game.player.spawnItem("Nanites");
 
     // Tab into use mode and lift the item onto the cursor.
     await game.input.trigger("ToggleUseMode");

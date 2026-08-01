@@ -287,8 +287,9 @@ export class PlayerApi {
   /**
    * Put an existing world entity into the player's inventory - a headless
    * "pick up" for tests. `entityId` is a runtime id (see entities.list /
-   * entities.byTemplate). Throws (400) if the entity is not alive. The item
-   * lands in the backpack; wielding is a separate, presentation-specific step.
+   * entities.byTemplate). Throws (400) if the entity is not alive or is held
+   * by a container; container loot must go through the real MFD. World items
+   * land in the backpack; wielding is a separate, presentation-specific step.
    */
   async give(entityId: number): Promise<CommandResult> {
     return this.client.post<CommandResult>("/v1/player/give", {
