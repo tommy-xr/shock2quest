@@ -659,6 +659,9 @@ struct ClimbTopOut {
     save_pose: Vector<Real>,
     reversing: bool,
     is_crouched: bool,
+    /// Ladder recovery must restore onto proven upward support. An ordinary
+    /// jump mantle may instead release into its authored ballistic fall.
+    requires_final_support: bool,
 }
 
 struct PlayerMovement {
@@ -917,6 +920,23 @@ fn shape_sweep_is_clear(
             },
         )
         .is_none()
+}
+
+fn ray_segment_is_clear(queries: &QueryPipeline, from: Vector<Real>, to: Vector<Real>) -> bool {
+    // The compressed body intentionally models Dark's sparse player and may
+    // overlap immutable terrain during a scripted transition. Its centerline
+    // still has to pass every authored point probe unobstructed, preventing
+    // that exception from becoming permission to cross an unrelated wall.
+    let delta = to - from;
+    let distance = delta.norm();
+    distance <= 1.0e-6
+        || queries
+            .cast_ray(
+                &Ray::new(Point::from(from), delta / distance),
+                distance,
+                true,
+            )
+            .is_none()
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2247,6 +2267,7 @@ fn plan_climb_top_out(
             save_pose: pos.translation.vector,
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         }),
         slope_displacement: Vector::zeros(),
     })
@@ -2475,6 +2496,7 @@ fn plan_jump_mantle(
         final_head,
         final_head,
         final_standing,
+        final_standing,
     ];
 
     // Preflight the exact fixed-timestep route against every parented entity
@@ -2512,6 +2534,7 @@ fn plan_jump_mantle(
             save_pose: pos.translation.vector,
             reversing: false,
             is_crouched,
+            requires_final_support: false,
         }),
         slope_displacement: Vector::zeros(),
     })
@@ -2547,7 +2570,11 @@ fn advance_climb_top_out(
         } else if let Some(target) = top_out.waypoints.get(top_out.next_waypoint) {
             *target
         } else if shape_intersects(validation_queries, pos.translation.vector, &final_shape)
-            || !standing_pose_matches_current_support(validation_queries, pos.translation.vector)
+            || (top_out.requires_final_support
+                && !standing_pose_matches_current_support(
+                    validation_queries,
+                    pos.translation.vector,
+                ))
         {
             top_out.reversing = true;
             continue;
@@ -2562,15 +2589,16 @@ fn advance_climb_top_out(
             if top_out.next_waypoint == 0 {
                 let save_pose_is_supported =
                     standing_pose_matches_current_support(validation_queries, top_out.save_pose);
-                let save_pose_can_resume_climb =
-                    standing_pose_climb_direction(
-                        validation_queries,
-                        top_out.save_pose,
-                        &final_shape,
-                    )
-                    .is_some_and(|toward| climb_redirect(desired_movement, toward).is_some());
+                let save_pose_can_resume_climb = standing_pose_climb_direction(
+                    validation_queries,
+                    top_out.save_pose,
+                    &final_shape,
+                )
+                .is_some_and(|toward| climb_redirect(desired_movement, toward).is_some());
                 if shape_intersects(validation_queries, top_out.save_pose, &final_shape)
-                    || (!save_pose_is_supported && !save_pose_can_resume_climb)
+                    || (top_out.requires_final_support
+                        && !save_pose_is_supported
+                        && !save_pose_can_resume_climb)
                 {
                     return (scripted_character_movement(Vector::zeros()), Some(top_out));
                 }
@@ -2587,9 +2615,11 @@ fn advance_climb_top_out(
         CLIMB_TOP_OUT_RADIUS
     };
     let compressed = Ball::new(compressed_radius);
-    let movement_queries = if top_out.next_waypoint >= 5 {
+    let movement_queries = if top_out.requires_final_support && top_out.next_waypoint >= 5 {
         // Waypoint 4 is `lip_clear`; every segment leaving or returning to it
-        // uses ordinary all-collider validation, including climbables.
+        // in a ladder recovery uses ordinary all-collider validation,
+        // including climbables. Jump mantles keep Dark's parentless-terrain
+        // exception through their whole scripted transition.
         validation_queries
     } else {
         scripted_queries
@@ -7582,6 +7612,7 @@ mod tests {
             1.0 / 60.0,
             -0.2,
             None,
+            None,
             Some(ClimbPass {
                 movement: Vector::y() * 0.25,
                 top_out: Some((Vector::x(), CLIMB_TOP_OUT_PROBE_FORWARD)),
@@ -8514,6 +8545,8 @@ mod tests {
             next_waypoint: 7,
             save_pose: vector![-1.0, 1.0, 0.0],
             reversing: false,
+            is_crouched: false,
+            requires_final_support: true,
         };
         let queries = query_pipeline(&world, QueryFilter::default());
 
@@ -8547,6 +8580,8 @@ mod tests {
             next_waypoint: 0,
             save_pose,
             reversing: true,
+            is_crouched: false,
+            requires_final_support: true,
         };
         let queries = query_pipeline(&world, QueryFilter::default());
 
@@ -8592,6 +8627,8 @@ mod tests {
             next_waypoint: 0,
             save_pose,
             reversing: true,
+            is_crouched: false,
+            requires_final_support: true,
         };
         let queries = query_pipeline(&world, QueryFilter::default());
 
@@ -8652,6 +8689,8 @@ mod tests {
             next_waypoint: 7,
             save_pose: vector![-1.0, standing_floor_offset, 0.0],
             reversing: false,
+            is_crouched: false,
+            requires_final_support: true,
         };
         let queries = query_pipeline(&world, QueryFilter::default());
 
@@ -8686,6 +8725,7 @@ mod tests {
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         };
         let first = {
             let queries = query_pipeline(&world, QueryFilter::default());
@@ -8767,6 +8807,8 @@ mod tests {
             next_waypoint: 5,
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
+            is_crouched: false,
+            requires_final_support: true,
         };
         let validation_queries = query_pipeline(&world, QueryFilter::default());
         let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
@@ -8807,6 +8849,7 @@ mod tests {
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         };
         world.add_kinematic(
             EntityId::from_inner(2).unwrap(),
@@ -8867,10 +8910,18 @@ mod tests {
             save_pose: Vector::zeros(),
             reversing: false,
             is_crouched: true,
+            requires_final_support: false,
         };
 
-        let (movement, active) =
-            advance_climb_top_out(&controller, &queries, &queries, &pos, completed, 1.0 / 60.0);
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            completed,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
 
         assert_eq!(movement.translation, Vector::zeros());
         assert!(
@@ -8905,6 +8956,7 @@ mod tests {
             save_pose,
             reversing: true,
             is_crouched: false,
+            requires_final_support: true,
         });
         assert_eq!(
             world.get_player_save_translation(&player),
@@ -10627,6 +10679,7 @@ mod tests {
             save_pose,
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         });
 
         let result = world.move_player_validated(vec3(f32::NAN, 0.5, 0.0), &mut player);
