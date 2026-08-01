@@ -7864,7 +7864,13 @@ mod tests {
             // A thin shelf above the player is a genuine upward lip: the
             // upward probe meets its underside after one full compressed
             // radius, while the forward/down probe sees its walkable top.
-            let shelf_vertices = append_cuboid(vector![0.36, 1.1, 0.0], vector![0.38, 0.01, 2.0]);
+            let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+            let shelf_y = head_y + CLIMB_TOP_OUT_RADIUS + 0.02;
+            let shelf_half_x = CLIMB_TOP_OUT_PROBE_FORWARD / 2.0 + 0.02;
+            let shelf_vertices = append_cuboid(
+                vector![CLIMB_TOP_OUT_PROBE_FORWARD / 2.0, shelf_y, 0.0],
+                vector![shelf_half_x, 0.01, 2.0],
+            );
             if include_wall {
                 // Add a wall whose lower edge exactly reuses the shelf's top
                 // outer edge in the SAME production-style parentless
@@ -8066,6 +8072,9 @@ mod tests {
     #[test]
     fn climb_top_out_finds_a_laterally_offset_supported_landing() {
         let mut world = PhysicsWorld::new();
+        let cross_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR
+            + CLIMB_TOP_OUT_UP;
+        let deck_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
         // Every forward-only candidate is unsupported. The only landing is a
         // narrow deck at the full four-radius lateral bound to the right of
         // the probe endpoint, forcing the candidate budget to reach the edge
@@ -8076,7 +8085,7 @@ mod tests {
             ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
                 .translation(vector![
                     CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
-                    0.45,
+                    deck_top - 0.05,
                     -CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY
                 ])
                 .build(),
@@ -8089,6 +8098,7 @@ mod tests {
         let parented_only = QueryFilter::default()
             .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
         let scripted_queries = validation_queries.with_filter(parented_only);
+        let route_forward = 1.0;
         let movement = plan_climb_top_out(
             &KinematicCharacterController::default(),
             &validation_queries,
@@ -8096,7 +8106,7 @@ mod tests {
             &scripted_queries,
             &Isometry::translation(0.0, 0.0, 0.0),
             Vector::x(),
-            1.0,
+            route_forward,
             1.0 / 60.0,
         )
         .expect("the laterally offset deck should permit a top-out");
@@ -8112,20 +8122,20 @@ mod tests {
                     "the selected landing must be within the direct standing-drop bound; route {waypoints:?}"
                 )
             });
-        let expected_standing_y = 0.5
+        let expected_standing_y = deck_top
             + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
             + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
             + PLAYER_REST_LIFT / SCALE_FACTOR;
         let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
 
         assert!(
-            (final_sphere.x - CLIMB_TOP_OUT_PROBE_FORWARD).abs() < 1.0e-4
+            (final_sphere.x - route_forward).abs() < 1.0e-4
                 && (final_sphere.z + CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY).abs() < 1.0e-4,
             "the route must select the only laterally offset deck, got {final_sphere:?}"
         );
         assert!(
             support.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL
-                && (support.time_of_impact - (waypoints[5].y - 0.5)).abs() < 1.0e-4,
+                && (support.time_of_impact - (waypoints[5].y - deck_top)).abs() < 1.0e-4,
             "the selected deck support must be independently upward and nearby, got {support:?}"
         );
         assert!(
@@ -8218,8 +8228,8 @@ mod tests {
         // radius in +X clears the ledge before the exact descent.
         world.add_collider(
             EntityId::from_inner(2).unwrap(),
-            ColliderBuilder::cuboid(0.12, 0.05, 2.0)
-                .translation(vector![1.02, 1.65, 0.0])
+            ColliderBuilder::cuboid(0.48, 0.05, 2.0)
+                .translation(vector![1.32, 1.65, 0.0])
                 .build(),
         );
         let mut player =
@@ -8235,10 +8245,14 @@ mod tests {
         let full_advance = cross_end + Vector::x() * CLIMB_TOP_OUT_ADVANCE;
         let queries = query_pipeline(&world, QueryFilter::default());
         let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+        let expected_standing_y = -0.5
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
 
         assert!(
             final_sphere.x >= full_advance.x + CLIMB_TOP_OUT_RADIUS - 1.0e-4
-                && (final_standing.y - 0.504).abs() < 1.0e-4,
+                && (final_standing.y - expected_standing_y).abs() < 1.0e-4,
             "the route must stay high past the ledge before descending to the lower floor; got {waypoints:?}"
         );
         assert!(
@@ -8491,9 +8505,11 @@ mod tests {
     fn climb_top_out_reversal_returns_to_a_current_ladder_grip() {
         let mut world = PhysicsWorld::new();
         let save_pose = vector![0.0, 1.0, 0.0];
+        let ladder_x =
+            standing_player_capsule().radius + 0.04 + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
         world.add_kinematic(
             EntityId::from_inner(1).unwrap(),
-            vec3(0.48, save_pose.y, 0.0),
+            vec3(ladder_x, save_pose.y, 0.0),
             identity_quat(),
             Vector3::new(0.0, 0.0, 0.0),
             vec3(0.08, 2.0, 1.0),
