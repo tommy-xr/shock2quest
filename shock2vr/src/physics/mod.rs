@@ -1154,10 +1154,11 @@ fn plan_climb_top_out(
 /// standing pose must fit against *all* colliders, and every scripted substep
 /// still collides with parented entities. Same-height and lower landings
 /// require a genuinely clear all-world point probe above the lip, so
-/// full-height walls remain solid. An elevated landing may use Dark's
-/// parentless-terrain jump-through probe: that is what permits authored
-/// stacked corridors such as shodan's log platforms, whose upper floor is a
-/// ceiling to the lower cell.
+/// full-height walls remain solid. An elevated landing may cross the local
+/// platform lip with Dark's parentless-terrain jump-through probe, but its
+/// initial vertical rise must remain clear against all world geometry. That
+/// is what permits authored stacked corridors such as shodan's log platforms
+/// without treating a room ceiling directly overhead as an exterior landing.
 fn plan_jump_mantle(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -1199,6 +1200,7 @@ fn plan_jump_mantle(
     let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
     while rise_ss2 <= max_rise * SCALE_FACTOR + 1.0e-4 && transition.is_none() {
         let raised = head + Vector::y() * (rise_ss2 / SCALE_FACTOR);
+        let vertical_probe_clear = ray_segment_is_clear(validation_queries, head, raised);
         let mut forward_ss2 = minimum_forward * SCALE_FACTOR;
         while forward_ss2 <= PLAYER_JUMP_MANTLE_FORWARD + 1.0e-4 {
             let forward = forward_ss2 / SCALE_FACTOR;
@@ -1220,7 +1222,9 @@ fn plan_jump_mantle(
                 let nearest_floor = validation_queries
                     .cast_ray_and_get_normal(&down_ray, 2.0 * max_rise, true)
                     .map(|(_, ground)| (ground.normal.y, raised_forward.y - ground.time_of_impact));
-                let elevated_floor = nearest_floor
+                let elevated_floor = vertical_probe_clear
+                    .then_some(nearest_floor)
+                    .flatten()
                     .filter(|(normal_y, _)| *normal_y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
                     .map(|(_, floor_y)| floor_y)
                     .filter(|floor_y| {

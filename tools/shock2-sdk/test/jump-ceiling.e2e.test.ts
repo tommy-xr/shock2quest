@@ -10,6 +10,7 @@ const CARGO_LIFT_OBJECT = 669;
 const CARGO_LIFT_BOTTOM_BUTTON_OBJECT = 480;
 const CARGO_LIFT_MIDDLE_BUTTON_OBJECT = 481;
 const CARGO_LIFT_TOP_BUTTON_OBJECT = 620;
+const ENGINEERING_OG_PIPE_OBJECT = 1666;
 
 function only(matches: EntitySummary[], label: string): EntitySummary {
   assert.equal(matches.length, 1, `expected one ${label}, got ${matches.length}`);
@@ -161,6 +162,99 @@ test(
       `Cargo 2B ceiling: lift ${JSON.stringify(topLift.position)}, ` +
         `north exit ${JSON.stringify(northExit)}, player ` +
         `${JSON.stringify(jumpStart)} -> ${JSON.stringify(landed)} -> ` +
+        `${JSON.stringify(supported)}, world ceiling y=${ceilingY}`,
+    );
+  },
+);
+
+// The Engineering campaign's authored maintenance-maze route reaches this
+// corridor from below. An idle OG-Pipe narrows the passage, but an ordinary
+// jump used to turn that local obstruction into a scripted crossing through
+// the corridor ceiling and leave the player supported on the exterior shell.
+test(
+  "ordinary jump past Engineering's OG-Pipe stays below the corridor ceiling",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async (t) => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_ENG1_OG_PIPE_PORT ?? 8141),
+    });
+    await game.step({ frames: 30 });
+
+    const ogPipe = only(
+      await game.entities.byTemplate(ENGINEERING_OG_PIPE_OBJECT),
+      "maintenance-maze OG-Pipe mission object 1666",
+    );
+    assert.equal(ogPipe.name, "OG-Pipe");
+
+    // Setup only: stage at the campaign-observed interior approach, then let
+    // both player support and the authored dynamic creature settle. Starting
+    // the input edge before support is re-established after setup does not
+    // exercise a grounded production jump.
+    await game.player.teleport({
+      x: 4.4,
+      y: -15.556003,
+      z: -85.00001,
+    });
+    await game.step({ frames: 30 });
+    const before = await game.player.position();
+    const settledOgPipe = await game.entities.detail(ogPipe.id);
+    assert.ok(
+      Math.abs(before.x - 4.4) < 0.1 &&
+        Math.abs(before.y - -15.556003) < 0.1 &&
+        Math.abs(before.z - -85.00001) < 0.1,
+      `player should settle at the authentic maze approach, got ${JSON.stringify(before)}`,
+    );
+    assert.ok(
+      settledOgPipe.position[0] > 5 &&
+        settledOgPipe.position[0] < 7 &&
+        Math.abs(settledOgPipe.position[1] - -15.1) < 0.15 &&
+        settledOgPipe.position[2] > -86 &&
+        settledOgPipe.position[2] < -84,
+      `stable OG-Pipe 1666 should occupy the authored choke, got ` +
+        JSON.stringify(settledOgPipe.position),
+    );
+
+    // Self-check the nearby parentless world slab that bounds the corridor.
+    // The exploit exits through this ceiling and settles above its y plane.
+    const ceiling = await game.raycast({
+      start: [7.5, before.y, -84.5],
+      end: [7.5, -9, -84.5],
+      collision_groups: ["world"],
+    });
+    assert.ok(
+      ceiling.hit_point && Math.abs(ceiling.hit_point[1] - -12.9) < 0.1,
+      `expected maintenance-maze world ceiling at y=-12.9, got ${JSON.stringify(ceiling)}`,
+    );
+
+    // Exact product-input sequence from the campaign: aim through the choke,
+    // hold ordinary forward locomotion, and pulse one grounded Jump edge.
+    await game.input.lookAtWorldPoint([8, before.y + 1.6, -84.5]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await pulseJump(game);
+    await game.step({ frames: 90 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 120 });
+    const landed = await game.player.position();
+    await game.step({ frames: 240 });
+    const supported = await game.player.position();
+
+    const ceilingY = ceiling.hit_point[1];
+    assert.ok(
+      landed.y < ceilingY &&
+        supported.y < ceilingY &&
+        Math.hypot(
+          supported.x - landed.x,
+          supported.y - landed.y,
+          supported.z - landed.z,
+        ) < 0.05,
+      `one ordinary jump must remain inside below the OG-Pipe corridor ceiling ` +
+        `(${JSON.stringify(before)} -> ${JSON.stringify(landed)} -> ` +
+        `${JSON.stringify(supported)}, ceiling y=${ceilingY})`,
+    );
+    t.diagnostic(
+      `OG-Pipe 1666 ${JSON.stringify(settledOgPipe.position)}, player ` +
+        `${JSON.stringify(before)} -> ${JSON.stringify(landed)} -> ` +
         `${JSON.stringify(supported)}, world ceiling y=${ceilingY}`,
     );
   },
