@@ -51,6 +51,17 @@ pub struct HrmParams {
     pub stat_break_chance: [f32; 8],
 }
 
+/// Retail `SKILLPARAM` file-var (`sSkillParams`). Research scales authored
+/// progress by `1 + research_factor * (skill - 1)^2`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkillParams {
+    pub weapon_break_angle: i16,
+    pub weapon_break_factor: f32,
+    pub research_factor: f32,
+    pub damage_modifier: f32,
+    pub organ_damage: f32,
+}
+
 fn read_table<T: io::Read + io::Seek, const COLS: usize, const ROWS: usize>(
     table_of_contents: &ChunkFileTableOfContents,
     reader: &mut T,
@@ -125,5 +136,54 @@ impl HrmParams {
 
     pub fn mine_count(&self, base: i32, skill: i32, stat: i32) -> i32 {
         (base - skill * self.skill_critical_bonus - stat * self.stat_critical_bonus).max(0)
+    }
+}
+
+impl SkillParams {
+    /// Read the packed 18-byte `SKILLPARAM` chunk. Returns `None` for a
+    /// missing/truncated non-retail gamesys.
+    pub fn read<T: io::Read + io::Seek>(
+        table_of_contents: &ChunkFileTableOfContents,
+        reader: &mut T,
+    ) -> Option<Self> {
+        let chunk = table_of_contents.get_chunk("SKILLPARAM".to_owned())?;
+        if chunk.length < 18 {
+            return None;
+        }
+        reader.seek(io::SeekFrom::Start(chunk.offset)).ok()?;
+        Self::read_record(reader)
+    }
+
+    fn read_record<T: io::Read>(reader: &mut T) -> Option<Self> {
+        Some(Self {
+            weapon_break_angle: reader.read_i16::<LittleEndian>().ok()?,
+            weapon_break_factor: reader.read_f32::<LittleEndian>().ok()?,
+            research_factor: reader.read_f32::<LittleEndian>().ok()?,
+            damage_modifier: reader.read_f32::<LittleEndian>().ok()?,
+            organ_damage: reader.read_f32::<LittleEndian>().ok()?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::SkillParams;
+
+    #[test]
+    fn parses_packed_retail_skill_params_layout() {
+        let mut bytes = 0_i16.to_le_bytes().to_vec();
+        for value in [0.0_f32, 1.0, 0.15, 1.25] {
+            bytes.extend(value.to_le_bytes());
+        }
+        assert_eq!(bytes.len(), 18);
+
+        let parsed = SkillParams::read_record(&mut Cursor::new(bytes)).unwrap();
+        assert_eq!(parsed.weapon_break_angle, 0);
+        assert_eq!(parsed.weapon_break_factor, 0.0);
+        assert_eq!(parsed.research_factor, 1.0);
+        assert!((parsed.damage_modifier - 0.15).abs() < f32::EPSILON);
+        assert_eq!(parsed.organ_damage, 1.25);
     }
 }

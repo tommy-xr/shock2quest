@@ -4,7 +4,7 @@ use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
 
 use crate::{
     EnvMap, EnvSoundQuery, SoundSchema, SpeechDB, TagDatabase,
-    gamesys::params::{HrmParams, TrainerCostTables},
+    gamesys::params::{HrmParams, SkillParams, TrainerCostTables},
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},
     ss2_chunk_file_reader::{self},
     ss2_entity_info::{self, SystemShock2EntityInfo},
@@ -20,6 +20,8 @@ pub struct Gamesys {
     trainer_costs: Option<TrainerCostTables>,
     /// HRM hacking/repair/modify tuning (`HRM` file-var chunk).
     hrm_params: Option<HrmParams>,
+    /// Skill-system tuning (`SKILLPARAM` file-var chunk).
+    skill_params: Option<SkillParams>,
 }
 
 impl Gamesys {
@@ -69,6 +71,10 @@ impl Gamesys {
     pub fn hrm_params(&self) -> Option<&HrmParams> {
         self.hrm_params.as_ref()
     }
+
+    pub fn skill_params(&self) -> Option<&SkillParams> {
+        self.skill_params.as_ref()
+    }
 }
 
 pub fn read<T: io::Read + io::Seek>(
@@ -93,6 +99,7 @@ pub fn read<T: io::Read + io::Seek>(
     let speech_db = SpeechDB::read(&table_of_contents, reader);
     let trainer_costs = TrainerCostTables::read(&table_of_contents, reader);
     let hrm_params = HrmParams::read(&table_of_contents, reader);
+    let skill_params = SkillParams::read(&table_of_contents, reader);
 
     // Uncomment to output debug info for voices:
     // debug_print_voices(&sound_schema, &speech_db);
@@ -105,5 +112,6 @@ pub fn read<T: io::Read + io::Seek>(
         speech_db,
         trainer_costs,
         hrm_params,
+        skill_params,
     }
 }
