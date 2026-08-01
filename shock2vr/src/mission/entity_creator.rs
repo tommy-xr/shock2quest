@@ -977,24 +977,22 @@ pub fn create_physics_representation(
             .map(|pa| pa.climbable != 0)
             .unwrap_or(false);
 
-        // `P$PhysDims` is optional: an author who never opened the physics
-        // dimensions dialog leaves the object with only a physics *type*, and
-        // the object then got no collider at all - which is why most ladders
-        // were neither solid nor climbable (issue #589). The original engine
-        // falls back to the model's bounds, and the shipped data proves it:
-        // every ladder that *does* carry authored dimensions carries exactly
-        // its model's bbox (e.g. eng1's `Ladder 16'` #945: size
-        // (1.65, 6.40, 0.14) == ladder.bin's bounds, offset zero == its
-        // bbox center).
-        //
-        // Deliberately limited to *climbable* objects. The same fallback
-        // applied to every dimension-less physics object turns ~187 further
-        // props solid across the shipped missions (hydro2 pipe runs, station
-        // windows and crates, bar stools) - plausibly also faithful, but a
-        // separate change with its own traversal testing, not a silent
-        // side effect of a ladder fix.
+        // `P$PhysDims` is an instantiated, non-inherited property in Dark. A
+        // concrete object can therefore inherit a physics type without storing
+        // dimensions in the mission: the original PhysType listener loads its
+        // model and initializes an instance PhysDims from the scaled model
+        // bounds. Do the same here for every supported physical model, not only
+        // climbable ones (#597). Objects with PhysType `None` and model-less
+        // markers still receive no fallback.
         let maybe_dimensions = v_dimensions.get(entity_id).ok();
-        let model_bounds = if maybe_dimensions.is_none() && is_climbable {
+        let has_supported_physics_type = v_phys_type
+            .get(entity_id)
+            .map(|phys_type| {
+                phys_type.phys_type == PhysicsModelType::ORIENTED_BOUNDING_BOX
+                    || phys_type.phys_type == PhysicsModelType::SPHERE
+            })
+            .unwrap_or(false);
+        let model_bounds = if maybe_dimensions.is_none() && has_supported_physics_type {
             // Raw model bounds - deliberately NOT `abs_dimensions`, whose
             // minimum-size clamp would make a fallback ladder 41% thicker
             // than the authored ladder standing next to it. Degenerate sizes
@@ -1305,20 +1303,26 @@ mod tests {
         }
     }
 
-    /// The fallback is scoped to climbable objects: a non-climbable entity with
-    /// no `PropPhysDimensions` keeps the old behavior (no collider), so the
-    /// ladder fix does not silently turn set dressing solid.
+    /// `P$PhysDims` is an instantiated, non-inherited Dark property: a concrete
+    /// object can inherit `P$PhysType` from its archetype without carrying raw
+    /// dimensions in the mission. Dark creates those instance dimensions from
+    /// the model bounds, so ordinary OBB props need the same fallback as ladders.
     #[test]
-    fn non_climbable_without_dimensions_still_gets_no_collider() {
+    fn non_climbable_without_dimensions_gets_collider_from_model_bounds() {
         let mut world = World::new();
         let mut physics = PhysicsWorld::new();
         let entity_id = add_ladder(&mut world, PhysicsModelType::ORIENTED_BOUNDING_BOX, 0);
         let model = ladder_model();
 
-        assert!(
+        let handle =
             create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
-                .is_none(),
-            "non-climbable entities must keep their previous (collider-less) behavior"
+                .expect("an ordinary dimension-less OBB should use its model bounds");
+        let size = physics
+            .cuboid_full_size(handle)
+            .expect("the model-bounds fallback should create an OBB");
+        assert!(
+            (size - LADDER_SIZE).magnitude() < 0.01,
+            "collider should match the model bounds {LADDER_SIZE:?}, got {size:?}"
         );
     }
 
@@ -1339,6 +1343,22 @@ mod tests {
         let bodies = physics.debug_list_bodies();
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0].body_type, "kinematic");
+    }
+
+    /// `PhysType::NONE` means the archetype deliberately disables physical
+    /// representation. A renderable model does not override that decision.
+    #[test]
+    fn dimensionless_none_never_gets_model_bounds_collider() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_ladder(&mut world, PhysicsModelType::NONE, 0);
+        let model = ladder_model();
+
+        assert_eq!(
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id),
+            None
+        );
+        assert!(physics.debug_list_bodies().is_empty());
     }
 
     fn contains_link(to: EntityId) -> ToLink {
