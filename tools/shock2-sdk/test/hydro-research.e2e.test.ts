@@ -2,25 +2,34 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { UiElement } from "../src/types.js";
+import type { UiElement, UiState } from "../src/types.js";
 import { clickUiElement } from "./helpers/ui.js";
+import { teleportVerified } from "./helpers/teleport.js";
 
-// Hydroponics' authored Toxin-A research objective. The test deliberately
-// starts the vial through the production flat inventory interaction (Tab/use
-// mode, cursor lift, second-click use), rather than injecting a script message.
-// Runtime entity ids are discovered every launch.
+// Hydroponics' authored Toxin-A research objective. Every player-facing use
+// travels through production interactions: the inventory strip double-click,
+// the Hydro 2 Tech Trainer, real carried chemical entities, and Hydro 1's ACR1
+// regulator. Runtime ids are discovered each time (including after save/load).
 //
-// Negative-first evidence for #763: on origin/main at 5ebca74d the second
-// inventory click reaches the `ResearchableScript` stub, leaving
-// `/v1/ui.active_panel` null. The first panel assertion below therefore fails.
+// Negative-first evidence for #763: on origin/main at 5ebca74d the first
+// Toxin-A double-click reaches the `ResearchableScript` stub, leaving
+// `/v1/ui.active_panel` null. The first research-panel assertion therefore
+// fails before the implementation.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
+
+async function ensureUseMode(game: GameServer): Promise<void> {
+  if ((await game.ui.state()).mode !== "use") {
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+  }
+}
 
 async function useInventoryItem(
   game: GameServer,
   entityId: number,
 ): Promise<void> {
+  await ensureUseMode(game);
   const ui = await game.ui.state();
-  assert.equal(ui.mode, "use", "inventory use requires the live use-mode strip");
   const element = ui.strip?.elements.find(
     (candidate: UiElement) => candidate.entity_id === entityId,
   );
@@ -41,37 +50,229 @@ async function useInventoryItem(
   await game.step({ frames: 5 });
 }
 
+function panelTexts(ui: UiState): string[] {
+  return (
+    ui.active_panel?.elements
+      .filter((element) => element.kind === "text")
+      .flatMap((element) => (element.text ? [element.text] : [])) ?? []
+  );
+}
+
+async function carriedNamed(game: GameServer, name: string) {
+  return (await game.player.inventory()).items.find((item) => item.name === name);
+}
+
+async function researchPanel(game: GameServer): Promise<UiState> {
+  const ui = await game.ui.state();
+  assert.ok(ui.active_panel, "Toxin-A should have an open Research MFD");
+  assert.ok(
+    ui.active_panel.elements.some((element) =>
+      element.texture?.toLowerCase().endsWith("research.pcx"),
+    ),
+    "the panel should use the retail RESEARCH.PCX backdrop",
+  );
+  return ui;
+}
+
 test(
-  "hydro2.mis: Toxin-A starts research through the real flat inventory",
+  "Hydro Toxin-A: train, research with chemicals, persist, and use ACR once",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
+    const saveName = `hydro_research_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8233),
     });
     await game.step({ frames: 5 });
 
-    const toxin = (
+    // Pick up an authored Hydro 2 vial, then prove Hydro 1's real regulator
+    // refuses it while its Dark object state is still Unresearched.
+    const authoredToxin = (
       await game.entities.list({ filter: "Anti-Annelid Toxin", limit: 20 })
     ).entities[0];
-    assert.ok(toxin, "Hydro 2 should contain an authored Toxin-A vial");
-    await game.player.give(toxin.id);
-
-    await game.input.trigger("ToggleUseMode");
+    assert.ok(authoredToxin, "Hydro 2 should contain an authored Toxin-A vial");
+    await game.player.give(authoredToxin.id);
+    await game.transitionLevel("hydro1.mis");
     await game.step({ frames: 5 });
-    await useInventoryItem(game, toxin.id);
-
-    const opened = await game.ui.state();
-    assert.ok(
-      opened.active_panel,
-      "using unresearched Toxin-A should open the research panel",
+    const acr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
+      (entity) => entity.name === "ACR1",
     );
-    assert.equal(opened.active_panel.entity_id, toxin.id);
+    assert.ok(acr1, "Hydro 1 should contain the authored ACR1 regulator");
+    await game.entities.sendMessage(acr1.id, { type: "Frob" });
+    await game.step({ frames: 30 });
     assert.ok(
-      opened.active_panel.elements.some(
-        (element) => element.texture?.toLowerCase() === "research.pcx",
+      await carriedNamed(game, "Anti-Annelid Toxin"),
+      "ACR1 must not consume unresearched toxin",
+    );
+    assert.notEqual(
+      await game.quests.get("ACR1"),
+      "complete",
+      "rejected toxin must not advance the ACR objective",
+    );
+
+    await game.transitionLevel("hydro2.mis");
+    await game.step({ frames: 5 });
+    let toxin = await carriedNamed(game, "Anti-Annelid Toxin");
+    assert.ok(toxin, "Toxin-A should remain carried after returning to Hydro 2");
+
+    // Double-click through the production inventory. With no Research skill,
+    // the MFD opens but explicitly refuses to begin.
+    await useInventoryItem(game, toxin.entity_id);
+    let panel = await researchPanel(game);
+    assert.ok(
+      panelTexts(panel).some((text) => text.includes("Research skill of 1")),
+      `untrained panel should explain the requirement; got ${JSON.stringify(panelTexts(panel))}`,
+    );
+
+    // Fund and use Hydro 2's authored Tech Trainer, purchasing Research 0->1
+    // for the retail WTECHCOST price of ten modules.
+    await game.player.setStats({ cyber_modules: 10 });
+    const techTrainer = (
+      await game.entities.list({ filter: "Tech Trainer", limit: 20 })
+    ).entities.find((entity) => entity.template_id === 966);
+    assert.ok(techTrainer, "Hydro 2 should contain its authored Tech Trainer");
+    const [tx, ty, tz] = (await game.entities.detail(techTrainer.id)).position;
+    await teleportVerified(game, { x: tx, y: ty + 0.5, z: tz + 1.2 });
+    await game.step({ frames: 20 });
+    await game.entities.sendMessage(techTrainer.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+    const trainer = await game.ui.state();
+    const researchRow = trainer.active_panel?.elements.find(
+      (element) => element.kind === "button" && element.label === "Research",
+    );
+    assert.ok(researchRow, "Tech Trainer should expose the Research row");
+    await clickUiElement(game, researchRow);
+    await game.step({ frames: 3 });
+    const trained = (await game.info()).player.stats!;
+    assert.equal(trained.skills.research, 1, "real trainer purchase grants Research 1");
+    assert.equal(trained.cyber_modules, 0, "Research 1 spends ten cyber modules");
+
+    // Raise only for test-time acceleration after proving the real purchase;
+    // the state-machine unit test covers the exact skill multiplier. At skill
+    // 6, the retail formula advances 26 authored seconds per real second.
+    await game.player.setStats({ skills: { research: 6 } });
+    toxin = await carriedNamed(game, "Anti-Annelid Toxin");
+    assert.ok(toxin);
+    await useInventoryItem(game, toxin.entity_id);
+    await game.step({ frames: 75 });
+    panel = await researchPanel(game);
+    assert.ok(
+      panelTexts(panel).some((text) => text.includes("Antimony (Sb)")),
+      `first gate should request antimony; got ${JSON.stringify(panelTexts(panel))}`,
+    );
+
+    // Carry the actual authored Hydro chemical objects. Wrong Vanadium is
+    // refused and remains; Antimony is consumed, reaching the second gate.
+    const antimonyWorld = (
+      await game.entities.list({ filter: "Chem #4", limit: 30 })
+    ).entities.slice(0, 2);
+    const vanadiumWorld = (
+      await game.entities.list({ filter: "Chem #2", limit: 30 })
+    ).entities[0];
+    assert.equal(antimonyWorld.length, 2, "Hydro 2 should author two Antimony doses");
+    assert.ok(vanadiumWorld, "Hydro 2 should author a Vanadium dose");
+    for (const chemical of [...antimonyWorld, vanadiumWorld]) {
+      await game.player.give(chemical.id);
+    }
+
+    let vanadium = await carriedNamed(game, "Chem #2");
+    assert.ok(vanadium);
+    await useInventoryItem(game, vanadium.entity_id);
+    assert.ok(await carriedNamed(game, "Chem #2"), "wrong chemical must remain carried");
+
+    let antimony = await carriedNamed(game, "Chem #4");
+    assert.ok(antimony);
+    await useInventoryItem(game, antimony.entity_id);
+    await game.step({ frames: 75 });
+    panel = await researchPanel(game);
+    assert.ok(
+      panelTexts(panel).some((text) => text.includes("Vanadium (V)")),
+      `second gate should request vanadium; got ${JSON.stringify(panelTexts(panel))}`,
+    );
+
+    // Save/load while paused at a chemical gate, then reopen the carried item:
+    // active partial progress and the pending chemical must survive.
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 5 });
+    toxin = await carriedNamed(game, "Anti-Annelid Toxin");
+    assert.ok(toxin, "Toxin-A survives save/load");
+    await useInventoryItem(game, toxin.entity_id);
+    panel = await researchPanel(game);
+    assert.ok(
+      panelTexts(panel).some((text) => text.includes("Vanadium (V)")),
+      "the pending second chemical survives save/load",
+    );
+
+    vanadium = await carriedNamed(game, "Chem #2");
+    assert.ok(vanadium);
+    await useInventoryItem(game, vanadium.entity_id);
+    await game.step({ frames: 430 });
+    panel = await researchPanel(game);
+    assert.ok(
+      panelTexts(panel).some((text) => text.includes("Antimony (Sb)")),
+      "the authored 240-second gate requests the second Antimony dose",
+    );
+
+    antimony = await carriedNamed(game, "Chem #4");
+    assert.ok(antimony);
+    await useInventoryItem(game, antimony.entity_id);
+    await game.step({ frames: 850 });
+    panel = await researchPanel(game);
+    assert.ok(
+      panelTexts(panel).some((text) => text.includes("Research complete")),
+      `completion should be player-visible; got ${JSON.stringify(panelTexts(panel))}`,
+    );
+    assert.equal(
+      await game.quests.get("Note_3_2"),
+      "complete",
+      "Toxin-A completion grants its authored research quest bit",
+    );
+
+    const report = panel.active_panel!.elements.find(
+      (element) => element.label === "Research report",
+    );
+    assert.ok(report, "completed research unlocks report #5");
+    await clickUiElement(game, report);
+    await game.step({ frames: 3 });
+    assert.ok(
+      panelTexts(await game.ui.state()).some((text) => text.includes("Summary:")),
+      "the report button reveals the authored analysis",
+    );
+
+    // A researched vial is accepted once by ACR1. After its authored model
+    // tweq reaches the used frame, another researched vial is left untouched.
+    await game.transitionLevel("hydro1.mis");
+    await game.step({ frames: 5 });
+    const liveAcr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
+      (entity) => entity.name === "ACR1",
+    );
+    assert.ok(liveAcr1);
+    toxin = await carriedNamed(game, "Anti-Annelid Toxin");
+    assert.ok(toxin);
+    await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
+    await game.step({ frames: 600 });
+    assert.ok(
+      !(await game.player.inventory()).items.some(
+        (item) => item.entity_id === toxin!.entity_id,
       ),
-      "the panel should use the retail RESEARCH.PCX backdrop",
+      "ACR1 consumes the researched vial",
+    );
+    assert.equal(
+      await game.quests.get("ACR1"),
+      "incomplete",
+      "the authored ACR1-Activate trap marks this regulator active",
+    );
+
+    const secondToxin = await game.player.spawnItem(-1341);
+    await game.step({ frames: 5 });
+    await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
+    await game.step({ frames: 30 });
+    assert.ok(
+      (await game.player.inventory()).items.some(
+        (item) => item.entity_id === secondToxin.entity_id,
+      ),
+      "an already-used ACR must not consume another vial",
     );
   },
 );
