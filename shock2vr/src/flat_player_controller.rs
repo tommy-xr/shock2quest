@@ -9,12 +9,12 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slices 5-6).
 
-use cgmath::{Deg, Point3, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
+use cgmath::{Deg, InnerSpace, Point3, Quaternion, Rotation, Rotation3, Vector3, point3, vec3};
 use shipyard::{EntityId, Get, View, World};
 
 use dark::{
     SCALE_FACTOR,
-    properties::{PropFrobInfo, PropLimbModel, PropPickBias, PropPlayerGun},
+    properties::{PropFrobInfo, PropHUDSelect, PropLimbModel, PropPickBias, PropPlayerGun},
 };
 
 use crate::{
@@ -275,11 +275,21 @@ const INTERACTION_GROUPS: InternalCollisionGroups = InternalCollisionGroups::ENT
     .union(InternalCollisionGroups::UI)
     .union(InternalCollisionGroups::RAYCAST);
 
+/// HUD-hidden computer shells and their invisible frob overlays are authored
+/// at the same origin. Keep the tolerance tight enough that a nearby control
+/// cannot become the shell's accidental target.
+const HUD_OVERLAY_POSITION_EPSILON: f32 = 0.05;
+/// The selectable overlay may sit just inside the decorative shell's collider,
+/// but it must still be part of the same visible surface rather than an object
+/// farther into the room.
+const HUD_OVERLAY_SURFACE_GAP: f32 = 0.5;
+
 /// Resolve the flat crosshair's interaction target while honoring Dark's
-/// negative pick bias. The first combined hit still blocks normally. Only an
-/// explicitly de-prioritized entity is skipped, and the second cast keeps all
-/// world/entity groups enabled, so a wall or closed door behind it remains an
-/// occluder instead of allowing a through-geometry Frob.
+/// authored selection priority. The first combined hit still blocks normally.
+/// Only an explicitly de-prioritized entity or a tightly matched HUD-hidden
+/// shell is skipped, and the second cast keeps all world/entity groups enabled,
+/// so a wall or closed door behind it remains an occluder instead of allowing a
+/// through-geometry Frob.
 fn interaction_target(
     world: &World,
     physics: &PhysicsWorld,
@@ -290,7 +300,8 @@ fn interaction_target(
     let first = physics.ray_cast(origin, forward, INTERACTION_GROUPS)?;
     let first_raw = first.maybe_entity_id?;
     let first_entity = resolve_proxy_entity(world, first_raw);
-    if Some(first_entity) != wielded_entity && is_frobbable(world, first_entity) {
+    let hud_hidden = has_hud_select(world, first_entity, false);
+    if !hud_hidden && Some(first_entity) != wielded_entity && is_frobbable(world, first_entity) {
         return Some(first_entity);
     }
 
@@ -298,30 +309,67 @@ fn interaction_target(
         .borrow::<View<PropPickBias>>()
         .map(|v| v.get(first_entity).is_ok_and(|bias| bias.0 < 0.0))
         .unwrap_or(false);
-    if !has_negative_pick_bias {
+    if !has_negative_pick_bias && !hud_hidden {
         return None;
     }
 
-    physics
-        .ray_cast2(
-            origin,
-            forward,
-            100.0,
-            INTERACTION_GROUPS,
-            Some(first_raw),
-            true,
-        )
-        .and_then(|hit| hit.maybe_entity_id)
-        .map(|entity| resolve_proxy_entity(world, entity))
-        .filter(|entity| Some(*entity) != wielded_entity && is_frobbable(world, *entity))
+    let second = physics.ray_cast2(
+        origin,
+        forward,
+        100.0,
+        INTERACTION_GROUPS,
+        Some(first_raw),
+        true,
+    )?;
+    let second_raw = second.maybe_entity_id?;
+    let second_entity = resolve_proxy_entity(world, second_raw);
+    if Some(second_entity) == wielded_entity || !is_frobbable(world, second_entity) {
+        return None;
+    }
+
+    // Explicit negative pick bias keeps its existing general-purpose behavior.
+    if has_negative_pick_bias {
+        return Some(second_entity);
+    }
+
+    // HUDSelect(false) alone is narrower: it represents a decorative shell
+    // that may yield only to its co-located HUDSelect(true) frob overlay. The
+    // combined recast above ensures a wall, closed door, or unrelated entity
+    // between them remains the immediate hit and blocks the interaction.
+    // Require direct entity colliders before comparing body origins: a damage
+    // proxy's rigid body is not located at its resolved parent entity.
+    if first_raw != first_entity
+        || second_raw != second_entity
+        || !has_hud_select(world, second_entity, true)
+    {
+        return None;
+    }
+    let first_position = physics.get_position(first.maybe_rigid_body_handle?)?;
+    let second_position = physics.get_position(second.maybe_rigid_body_handle?)?;
+    let co_located = (first_position - second_position).magnitude2()
+        <= HUD_OVERLAY_POSITION_EPSILON * HUD_OVERLAY_POSITION_EPSILON;
+    let close_surface = (first.hit_point - second.hit_point).magnitude2()
+        <= HUD_OVERLAY_SURFACE_GAP * HUD_OVERLAY_SURFACE_GAP;
+    (co_located && close_surface).then_some(second_entity)
 }
 
-/// Whether an entity is worth highlighting / interacting with (it has frob
-/// info), which excludes plain world geometry the ray also hits.
+fn has_hud_select(world: &World, entity_id: EntityId, expected: bool) -> bool {
+    world
+        .borrow::<View<PropHUDSelect>>()
+        .map(|v| v.get(entity_id).is_ok_and(|select| select.0 == expected))
+        .unwrap_or(false)
+}
+
+/// Whether an entity is worth highlighting / interacting with. Empty authored
+/// FrobInfo overrides deliberately suppress an inherited world action, so
+/// property presence by itself is not enough.
 fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<View<PropFrobInfo>>()
-        .map(|v| v.get(entity_id).is_ok())
+        .map(|v| {
+            v.get(entity_id)
+                .is_ok_and(|frob| !frob.world_action.is_empty())
+        })
         .unwrap_or(false)
 }
 
@@ -329,7 +377,15 @@ fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
 mod tests {
     use super::*;
     use crate::physics::CollisionGroup;
-    use dark::properties::{FrobFlag, PropPickBias, PropPlayerGun};
+    use dark::properties::{FrobFlag, PropHUDSelect, PropPickBias, PropPlayerGun};
+
+    fn frob_info(world_action: FrobFlag) -> PropFrobInfo {
+        PropFrobInfo {
+            world_action,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        }
+    }
 
     fn pistol() -> PropPlayerGun {
         PropPlayerGun {
@@ -388,15 +444,25 @@ mod tests {
     }
 
     #[test]
+    fn empty_or_inventory_only_frob_info_is_not_world_frobbable() {
+        let mut world = World::new();
+        let empty = world.add_entity(frob_info(FrobFlag::empty()));
+        let inventory_only = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::empty(),
+            inventory_action: FrobFlag::SCRIPT,
+            tool_action: FrobFlag::empty(),
+        });
+
+        assert!(!is_frobbable(&world, empty));
+        assert!(!is_frobbable(&world, inventory_only));
+    }
+
+    #[test]
     fn negative_pick_bias_surface_yields_to_frobbable_overlay() {
         let mut world = World::new();
         let player = world.add_entity(());
         let decorative_surface = world.add_entity(PropPickBias(-2000.0));
-        let frobbable_overlay = world.add_entity(PropFrobInfo {
-            world_action: FrobFlag::SCRIPT,
-            inventory_action: FrobFlag::empty(),
-            tool_action: FrobFlag::empty(),
-        });
+        let frobbable_overlay = world.add_entity(frob_info(FrobFlag::SCRIPT));
         let mut physics = PhysicsWorld::new();
         let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
@@ -448,16 +514,193 @@ mod tests {
     }
 
     #[test]
+    fn hud_hidden_surface_yields_to_colocated_selectable_overlay() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let decorative_surface =
+            world.add_entity((PropHUDSelect(false), frob_info(FrobFlag::empty())));
+        let frobbable_overlay =
+            world.add_entity((PropHUDSelect(true), frob_info(FrobFlag::SCRIPT)));
+        let mut physics = PhysicsWorld::new();
+        let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        physics.add_kinematic(
+            decorative_surface,
+            vec3(0.0, 0.0, -1.0),
+            identity,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        physics.add_kinematic(
+            frobbable_overlay,
+            vec3(0.0, 0.0, -1.0),
+            identity,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        let (effects, highlighted) = FlatPlayerController::new().update(
+            &input,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            identity,
+            0.0,
+            &world,
+            &physics,
+        );
+
+        assert_eq!(highlighted, Some(frobbable_overlay));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            VirtualHandEffect::OutMessage {
+                message: Message {
+                    to,
+                    payload: MessagePayload::Frob
+                }
+            } if *to == frobbable_overlay
+        )));
+    }
+
+    #[test]
+    fn hud_hidden_surface_does_not_frob_through_an_entity_blocker() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let decorative_surface = world.add_entity(PropHUDSelect(false));
+        let closed_door = world.add_entity(());
+        let frobbable_overlay =
+            world.add_entity((PropHUDSelect(true), frob_info(FrobFlag::SCRIPT)));
+        let mut physics = PhysicsWorld::new();
+        let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        for (entity, z, depth, group) in [
+            (decorative_surface, -1.0, 0.2, CollisionGroup::entity()),
+            (closed_door, -0.925, 0.02, CollisionGroup::entity()),
+            (frobbable_overlay, -1.0, 0.1, CollisionGroup::selectable()),
+        ] {
+            physics.add_kinematic(
+                entity,
+                vec3(0.0, 0.0, z),
+                identity,
+                vec3(0.0, 0.0, 0.0),
+                vec3(1.0, 1.0, depth),
+                group,
+                false,
+            );
+        }
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let first = physics
+            .ray_cast(
+                point3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, -1.0),
+                INTERACTION_GROUPS,
+            )
+            .expect("the hidden shell should be the first combined hit");
+        assert_eq!(first.maybe_entity_id, Some(decorative_surface));
+        let second = physics
+            .ray_cast2(
+                point3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, -1.0),
+                100.0,
+                INTERACTION_GROUPS,
+                Some(decorative_surface),
+                true,
+            )
+            .expect("the door should block the recast behind the shell");
+        assert_eq!(second.maybe_entity_id, Some(closed_door));
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        let (effects, highlighted) = FlatPlayerController::new().update(
+            &input,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            identity,
+            0.0,
+            &world,
+            &physics,
+        );
+
+        assert_eq!(highlighted, None);
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            VirtualHandEffect::OutMessage {
+                message: Message {
+                    payload: MessagePayload::Frob,
+                    ..
+                }
+            }
+        )));
+    }
+
+    #[test]
+    fn hud_hidden_surface_does_not_frob_an_unrelated_selectable() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let decorative_surface = world.add_entity(PropHUDSelect(false));
+        let unrelated_control =
+            world.add_entity((PropHUDSelect(true), frob_info(FrobFlag::SCRIPT)));
+        let mut physics = PhysicsWorld::new();
+        let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        physics.add_kinematic(
+            decorative_surface,
+            vec3(0.0, 0.0, -1.0),
+            identity,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        physics.add_kinematic(
+            unrelated_control,
+            vec3(0.0, 0.0, -1.3),
+            identity,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 0.1),
+            CollisionGroup::selectable(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        let (effects, highlighted) = FlatPlayerController::new().update(
+            &input,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            identity,
+            0.0,
+            &world,
+            &physics,
+        );
+
+        assert_eq!(highlighted, None);
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            VirtualHandEffect::OutMessage {
+                message: Message {
+                    payload: MessagePayload::Frob,
+                    ..
+                }
+            }
+        )));
+    }
+
+    #[test]
     fn negative_pick_bias_does_not_frob_through_an_entity_blocker() {
         let mut world = World::new();
         let player = world.add_entity(());
         let decorative_surface = world.add_entity(PropPickBias(-2000.0));
         let closed_door = world.add_entity(());
-        let frobbable_behind_door = world.add_entity(PropFrobInfo {
-            world_action: FrobFlag::SCRIPT,
-            inventory_action: FrobFlag::empty(),
-            tool_action: FrobFlag::empty(),
-        });
+        let frobbable_behind_door = world.add_entity(frob_info(FrobFlag::SCRIPT));
         let mut physics = PhysicsWorld::new();
         let mut player_handle = physics.create_player(vec3(1000.0, 1000.0, 1000.0), player);
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
