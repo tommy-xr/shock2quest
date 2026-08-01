@@ -50,15 +50,69 @@ test(
     await game.input.lookAtWorldPoint([59.6, before.y + 1.6, 22.77]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await pulseJump(game);
-    await game.step({ frames: 90 });
+    let crossed: Awaited<ReturnType<typeof game.player.position>> | undefined;
+    for (let frame = 0; frame < 80; frame += 1) {
+      await game.step({ frames: 1 });
+      const sample = await game.player.position();
+      if (sample.x > 57.15) {
+        crossed = sample;
+        break;
+      }
+    }
     await game.input.set("right_hand.thumbstick", [0, 0]);
-    await game.step({ frames: 60 });
-
-    const crossed = await game.player.position();
     assert.ok(
-      crossed.x > 58,
-      `production jump should vault the rail toward the ladder ` +
-        `(${JSON.stringify(before)} -> ${JSON.stringify(crossed)})`,
+      crossed &&
+        crossed.x < 58 &&
+        crossed.z > 22.5 &&
+        crossed.z < 24,
+      `production jump should cross the rail inside its authored span, not ` +
+        `bypass an endpoint (${JSON.stringify(before)} -> ${JSON.stringify(crossed)})`,
+    );
+
+    // Release every input and prove the apparent crossing is a real landing
+    // on the corridor floor, not a transient scripted or ballistic sample.
+    await game.step({ frames: 600 });
+    const landed = await game.player.position();
+    await game.step({ frames: 120 });
+    const supported = await game.player.position();
+    const inLadderCorridor = (sample: typeof landed): boolean =>
+      sample.x > 57.1 &&
+      sample.x < 58 &&
+      sample.y > -1 &&
+      sample.y < -0.5 &&
+      sample.z > 22.5 &&
+      sample.z < 24;
+    assert.ok(
+      inLadderCorridor(landed) &&
+        inLadderCorridor(supported) &&
+        Math.hypot(
+          supported.x - landed.x,
+          supported.y - landed.y,
+          supported.z - landed.z,
+        ) < 0.05,
+      `vault should remain supported in the finite ladder corridor ` +
+        `(${JSON.stringify(landed)} -> ${JSON.stringify(supported)})`,
+    );
+
+    // Continue from that production landing to the ladder base. This proves
+    // the vault opens the mandatory route rather than reaching an isolated
+    // pocket on the far side of the railing.
+    await game.input.lookAtWorldPoint([59.6, supported.y + 1.6, 22.77]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let ladderApproach = supported;
+    for (let frame = 0; frame < 30; frame += 1) {
+      await game.step({ frames: 1 });
+      ladderApproach = await game.player.position();
+      if (ladderApproach.x > 58.5) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      ladderApproach.x > 58.5 &&
+        ladderApproach.x < 59.5 &&
+        ladderApproach.z > 22.3 &&
+        ladderApproach.z < 23.5,
+      `production locomotion should continue to the Sector C ladder base, got ` +
+        JSON.stringify(ladderApproach),
     );
   },
 );
