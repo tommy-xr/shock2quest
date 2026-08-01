@@ -20,12 +20,11 @@ import { teleportVerified } from "./helpers/teleport.js";
 // "45100" IN-FICTION - by reading the log's transcript off the reader panel,
 // not by peeking at PropKeypadCode.
 //
-// Negative-first: on main, frobbing log 1608 plays LOG0220.wav and destroys
-// the disc - /v1/ui shows no panel, no transcript exists anywhere, and
-// /v1/info has no collected-log state, so every assertion below fails.
-// The review-fix assertion is also negative-verified: pre-fix, the backdrop
-// was requested as the plain "log.pcx", which obj.crf's 64x64 floppy model
-// texture wins - the archive-qualified assertions below fail on that build.
+// Negative-first for #494: on main, EmailTrap 1131 plays EM0201 but leaves
+// /v1/ui on the previously opened log panel (or empty), so the synthetic email
+// host, Polito Email* strings, and EMAIL art assertions fail. Earlier reader
+// review assertions remain here too: archive-qualified LOG art avoids the
+// colliding obj.crf floppy texture.
 //
 // Entity discovery is by stable template_id (1608 = the mission-file object
 // id); runtime entity ids are NOT stable across launches.
@@ -185,6 +184,59 @@ test(
       (s) => s.sample.toLowerCase() === "em0201",
     );
     assert.equal(afterEmail.length, 1, "EM0201 should play on TurnOn");
+
+    // Receiving an email opens the same reader overlay as a log, but with the
+    // EMAIL backdrop and Email* strings. The trap itself is consumed, so the
+    // panel is hosted by a synthetic, unbound entity rebuilt per mission.
+    const emailOpened = await game.ui.state();
+    assert.ok(
+      emailOpened.active_panel,
+      "receiving an email should open the reader MFD panel",
+    );
+    assert.equal(
+      emailOpened.active_panel.template_id,
+      -1,
+      "the email reader should be hosted by the synthetic panel entity",
+    );
+    const emailTranscript = textOf(emailOpened.active_panel);
+    assert.ok(
+      emailTranscript.toUpperCase().includes("POLITO"),
+      "the email reader header should name Polito",
+    );
+    assert.ok(
+      emailTranscript.toLowerCase().includes("depressurizing"),
+      "the reader should show EmailText1 from level02.str",
+    );
+    const emailTextures = emailOpened.active_panel.elements
+      .filter((e) => e.kind === "image")
+      .map((e) => e.texture?.toLowerCase());
+    assert.ok(
+      emailTextures.includes("iface/email.pcx"),
+      `email reader should draw the iface.crf EMAIL backdrop (images: ${emailTextures.join(", ")})`,
+    );
+    assert.ok(
+      !emailTextures.includes("iface/log.pcx"),
+      "email reader must not reuse the LOG backdrop",
+    );
+    if (hasLooseCrfArchives()) {
+      const backdrop = pcxSize(
+        readCrfEntry(path.join(dataRoot(), "res", "iface.crf"), "EMAIL.PCX"),
+      );
+      assert.deepEqual(
+        backdrop,
+        { width: 188, height: 296 },
+        "iface.crf's EMAIL.PCX should be the 188x296 MFD frame",
+      );
+    }
+    assert.ok(
+      emailTextures.includes("polito.pcx"),
+      "reader should draw the email sender portrait from book.crf",
+    );
+    assert.ok(
+      emailTextures.includes("opsicon.pcx"),
+      "reader should draw the email sender deck icon from book.crf",
+    );
+    await game.screenshot("email-reader-open.png");
 
     // --- The collection survives save/load ---
     await game.save("log-reader-e2e");

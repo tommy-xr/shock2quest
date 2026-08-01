@@ -85,11 +85,23 @@ test(
     await game.step({ frames: 10 });
 
     const before = await uiState();
+    // This authored route receives EM0203 beside the elevator. Incoming email
+    // owns the same single MFD slot, and frobbing the button below replaces it
+    // with ElevatorGui.
     assert.ok(
-      !before.active_panel,
-      "no panel should be active before frobbing the elevator button",
+      before.active_panel,
+      "approaching the elevator should receive its authored email",
     );
-    await game.screenshot("elevator-before-frob.png");
+    assert.equal(before.active_panel.name, "Email Reader");
+    assert.ok(
+      before.active_panel.elements.some(
+        (e) =>
+          e.kind === "text" &&
+          (e.text ?? "").toLowerCase().includes("fixing the elevators"),
+      ),
+      "EM0203 should explain how to restore elevator power",
+    );
+    await game.screenshot("elevator-email-before-frob.png");
 
     // --- Frob: the elevator panel must open, bound to the button ---
     await game.entities.sendMessage(buttonId, { type: "Frob" });

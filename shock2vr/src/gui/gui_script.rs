@@ -111,6 +111,10 @@ where
                 self.gui.prepare_state_on_frob(&mut self.state);
                 Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
             }
+            MessagePayload::OpenUnboundPanel => {
+                self.gui.prepare_state_on_frob(&mut self.state);
+                Effect::OpenUnboundPanel { entity: entity_id }
+            }
             MessagePayload::GUIHover {
                 held_entity_id,
                 screen_coordinates,

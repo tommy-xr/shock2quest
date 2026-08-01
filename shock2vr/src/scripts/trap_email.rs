@@ -8,6 +8,9 @@ use super::{
     script_util::{send_to_all_switch_links, set_quest_bit_effect},
 };
 
+/// Empty `PropLog` bitmasks decode as `trailing_zeros + 1 == 33`.
+const EMAIL_UNSET: u32 = 33;
+
 pub struct TrapEmail {}
 impl TrapEmail {
     pub fn new() -> TrapEmail {
@@ -27,11 +30,13 @@ impl Script for TrapEmail {
             MessagePayload::TurnOn { from: _ } => {
                 let v_log = world.borrow::<View<PropLog>>().unwrap();
                 let email_effect = match v_log.get(entity_id) {
-                    Ok(log) if log.deck > 0 && log.email > 0 => Effect::PlayEmail {
-                        deck: log.deck,
-                        email: log.email,
-                        force: false,
-                    },
+                    Ok(log) if log.deck > 0 && log.email > 0 && log.email != EMAIL_UNSET => {
+                        Effect::PlayEmail {
+                            deck: log.deck,
+                            email: log.email,
+                            force: false,
+                        }
+                    }
                     _ => Effect::NoEffect,
                 };
 
@@ -125,5 +130,27 @@ mod tests {
             plays_email(&effect),
             "the objective must be granted alongside the email, not instead of it"
         );
+    }
+
+    #[test]
+    fn unset_email_sentinel_does_not_play_email_33() {
+        let mut world = World::new();
+        let entity_id = world.add_entity(PropLog {
+            deck: 2,
+            email: EMAIL_UNSET,
+            log: 1,
+            note: 0,
+            video: 0,
+        });
+        let physics = PhysicsWorld::new();
+
+        let effect = TrapEmail::new().handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+
+        assert!(!plays_email(&effect));
     }
 }

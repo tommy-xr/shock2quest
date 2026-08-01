@@ -287,6 +287,12 @@ pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 #[derive(Unique, Clone, Copy)]
 pub struct MapPanelEntity(pub EntityId);
 
+/// Synthetic host for received-email presentation. Email traps are one-shot
+/// and destroy themselves, so the flat reader binds to this unbound panel
+/// entity instead. Rebuilt on every mission load and never serialized.
+#[derive(Unique, Clone, Copy)]
+pub struct EmailPanelEntity(pub EntityId);
+
 /// The automap location (`PropMapLoc`) of the mapped room the player most
 /// recently entered - the player's *current* map location. The automap uses it
 /// to draw that location bright (R-art) while other explored locations draw
@@ -693,6 +699,27 @@ impl MissionCore {
                 },
             ));
             world.add_unique(MapPanelEntity(entity));
+
+            let entity = world.add_entity((
+                Links::empty(),
+                PropScripts {
+                    scripts: vec!["internal_media".to_owned()],
+                    inherits: false,
+                },
+                dark::properties::PropTemplateId { template_id: -1 },
+                dark::properties::PropSymName("Email Reader".to_owned()),
+                PropPosition {
+                    position: vec3(0.0, 0.0, 0.0),
+                    rotation: Quaternion {
+                        v: vec3(0.0, 0.0, 0.0),
+                        s: 1.0,
+                    },
+                    cell: 0,
+                },
+                RuntimePropTransform(Matrix4::identity()),
+                RuntimePropDoNotSerialize,
+            ));
+            world.add_unique(EmailPanelEntity(entity));
         }
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
@@ -3134,6 +3161,12 @@ impl MissionCore {
                     }
                 }
 
+                Effect::OpenUnboundPanel { entity } => {
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        self.flat_ui.open_unbound(entity);
+                    }
+                }
+
                 Effect::CollectLog {
                     entity_id,
                     deck,
@@ -3162,6 +3195,7 @@ impl MissionCore {
                         self.world.add_component(
                             entity_id,
                             crate::runtime_props::RuntimePropLogData {
+                                kind: crate::runtime_props::RuntimeMediaKind::Log,
                                 name: get("logname"),
                                 text: get("logtext"),
                                 portrait: get("logportrait"),
@@ -3726,6 +3760,7 @@ impl MissionCore {
                     let has_read = quests.has_played_email(&email_file);
                     if !has_read || force {
                         quests.mark_email_as_played(&email_file);
+                        drop(quests);
                         let audio_clip =
                             asset_cache.get(&AUDIO_IMPORTER, &format!("{email_file}.wav"));
                         engine::audio::play_audio(
@@ -3741,8 +3776,47 @@ impl MissionCore {
                             vec![("kind".to_string(), "email".to_string())],
                             [0.0, 0.0, 0.0],
                         );
+
+                        // The authored trap is consumed later in this effect
+                        // batch, so flat mode renders the received email on a
+                        // synthetic unbound MediaGui host. Resolve the same
+                        // per-deck strings as the original reader overlay.
+                        if game_options.presentation_mode == crate::PresentationMode::Flat {
+                            let panel = self
+                                .world
+                                .borrow::<UniqueView<EmailPanelEntity>>()
+                                .ok()
+                                .map(|panel| panel.0);
+                            if let Some(panel) = panel {
+                                let level_file = format!("level{deck:02}.str");
+                                let strings = asset_cache
+                                    .get_opt(&dark::importers::STRINGS_IMPORTER, &level_file);
+                                let get = |prefix: &str| {
+                                    strings.as_ref().and_then(|strings| {
+                                        strings
+                                            .get(&format!("{prefix}{email}"))
+                                            .map(|s| s.replace("\\n", "\n"))
+                                    })
+                                };
+                                self.world.add_component(
+                                    panel,
+                                    crate::runtime_props::RuntimePropLogData {
+                                        kind: crate::runtime_props::RuntimeMediaKind::Email,
+                                        name: get("emailname"),
+                                        text: get("emailtext"),
+                                        portrait: get("emailportrait"),
+                                        icon: get("emailicon"),
+                                    },
+                                );
+                                self.script_world.dispatch(Message {
+                                    to: panel,
+                                    payload: MessagePayload::OpenUnboundPanel,
+                                });
+                            }
+                        }
+                    } else {
+                        drop(quests);
                     }
-                    drop(quests);
                 }
                 Effect::PlaySound { handle, name } => {
                     println!("Trying to play sound: {}", &name);

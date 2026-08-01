@@ -152,6 +152,12 @@ pub enum Effect {
         entity: EntityId,
     },
 
+    /// Open a flat MFD hosted by a synthetic entity with no world-object
+    /// distance behind it. It stays open until explicitly closed/replaced.
+    OpenUnboundPanel {
+        entity: EntityId,
+    },
+
     /// Record an audio log the player just frobbed into the persistent
     /// collection (`QuestInfo`) and resolve its transcript/portrait strings onto
     /// the disc entity (`RuntimePropLogData`) for the reader panel. Emitted by

@@ -255,6 +255,9 @@ pub enum MessagePayload {
         is_grabbing: bool,
         hand: Handedness,
     },
+    /// Open a GUI-bearing entity without frobbing a world object. Used by
+    /// incoming email, whose authored trap is consumed as soon as it fires.
+    OpenUnboundPanel,
 
     // VR Interactions
     TriggerPull,    // player started pulling the trigger
@@ -556,6 +559,7 @@ impl ScriptWorld {
             "internal_collision_type" => Box::new(InternalCollisionType::new()),
             "internal_inventory" => gui_script(Box::new(ContainerGui::inv_container())),
             "internal_map" => gui_script(Box::new(MapGui)),
+            "internal_media" => gui_script(Box::new(MediaGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
             "internal_frob_move" => Box::new(InternalFrobMove::new()),

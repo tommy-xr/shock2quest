@@ -71,12 +71,33 @@ test(
     assert.ok(markerBefore, "panel should draw the player marker (plrpip)");
 
     // Walk forward while the map is open: the unbound panel must NOT
-    // walk-away close (it has no bound world object), and the marker moves.
+    // walk-away close (it has no bound world object). After 20 frames this
+    // authored route receives EM0215, which faithfully takes over the game's
+    // single MFD slot; verify ordinary movement first, then the interruption.
     await game.input.set("right_hand.thumbstick", [0.0, 1.0]);
-    await game.step({ frames: 90 });
+    await game.step({ frames: 10 });
+    assert.ok(await marker(), "map panel must survive ordinary walking");
+    await game.step({ frames: 80 });
     await game.input.set("right_hand.thumbstick", [0.0, 0.0]);
+    const interrupted = await game.ui.state();
+    assert.ok(interrupted.active_panel, "EM0215 should open the reader");
+    assert.equal(
+      interrupted.active_panel.name,
+      "Email Reader",
+      "receiving EM0215 should replace the map in the single MFD slot",
+    );
+    assert.ok(
+      interrupted.active_panel.elements.some(
+        (e) => (e.texture ?? "").toLowerCase() === "iface/email.pcx",
+      ),
+      "the interruption should be the received-email reader",
+    );
+
+    // ToggleMap replaces the email reader with the persistent map host.
+    await game.input.trigger("ToggleMap");
+    await game.step({ frames: 5 });
     const markerAfter = await marker();
-    assert.ok(markerAfter, "map panel must survive walking (no distance close)");
+    assert.ok(markerAfter, "ToggleMap should reopen the map after email");
     const moved = Math.hypot(
       markerAfter.rect[0] - markerBefore.rect[0],
       markerAfter.rect[1] - markerBefore.rect[1],

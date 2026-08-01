@@ -282,14 +282,24 @@ pub struct RuntimePropMapData {
     pub explored_rects: Vec<dark::map::MapRect>,
 }
 
-// RuntimePropLogData - the resolved presentation strings for an audio log,
-// attached to the log-disc entity when it is frobbed (collected). The reader
-// panel (`MediaGui`) reads it to render the portrait/deck-icon/name/transcript.
-// Not serialized: it is a presentation cache derived from the string tables and
-// is re-resolved on the next frob (the log identity itself persists in
-// `QuestInfo`).
+/// Which original reader-overlay presentation owns resolved media strings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeMediaKind {
+    Log,
+    Email,
+}
+
+// RuntimePropLogData - the resolved presentation strings for an audio log or
+// email. Attached to a log-disc entity when it is frobbed (collected), or to
+// the synthetic email-reader entity when an email arrives. The reader panel
+// (`MediaGui`) reads it to render the right backdrop plus the
+// portrait/deck-icon/name/transcript.
+// Not serialized: it is a presentation cache derived from the string tables
+// and is re-resolved on the next log frob or received-email event (the log
+// identity itself persists in `QuestInfo`).
 #[derive(Component, Clone, Debug)]
 pub struct RuntimePropLogData {
+    pub kind: RuntimeMediaKind,
     pub name: Option<String>,
     pub text: Option<String>,
     pub portrait: Option<String>,

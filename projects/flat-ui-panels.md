@@ -563,6 +563,13 @@ QuestInfo; EmailTrap 1131 TurnOn → `EM0201` plays once, replay-deduped.
 (If audio observability proves awkward, the PR may defer audio *assertion* —
 not audio playback — and must say so.)
 
+Implemented follow-up: audio-log pickup/reader and collection shipped in #468;
+received-email presentation is completed by #494. `PlayEmail` now resolves the
+per-deck `Email*` strings onto a synthetic nonserialized `MediaGui` host and
+opens it as an unbound flat MFD with the archive-qualified `iface/email.pcx`
+backdrop. The one-shot authored `EmailTrap` can still be destroyed immediately
+without closing the reader.
+
 **PR B2 — Map panel** (~600–900 LOC, stacks on B1's QuestInfo edits)
 Files: new `scripts/gui/map.rs` (`MapGui` composing `MapChunkData` +
 `PAGE001`/decals/markers into `GuiComponent`s — port `map_renderer.rs` logic to

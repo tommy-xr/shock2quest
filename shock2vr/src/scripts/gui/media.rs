@@ -1,14 +1,11 @@
 //! Audio-log / email reader MFD (`projects/flat-ui-panels.md` §1).
 //!
-//! The flat-mode reader panel matching the original game's email/log overlay: a
-//! `LOG.PCX` backdrop with the sender portrait, deck icon, header line and a word-wrapped,
-//! scrollable transcript. It is bound to the frobbed log-disc entity (the flat
-//! host's single-slot MFD), and reads its presentation strings from
-//! `RuntimePropLogData` - attached by the `Effect::CollectLog` handler when the
-//! disc is frobbed (that handler also records the log into the persistent
-//! `QuestInfo` collection and plays its audio). Deliberate deviation from the
-//! original's destroy-on-pickup: the disc survives so the reader stays bound and
-//! the code is readable in-fiction (research gap #6).
+//! The flat-mode reader panel matching the original game's email/log overlay:
+//! the media-specific `LOG.PCX` / `EMAIL.PCX` backdrop with the sender portrait,
+//! deck icon, header line and a word-wrapped, scrollable transcript. Logs bind
+//! to the frobbed disc; received emails bind to a synthetic unbound panel host
+//! because their one-shot trap entity is consumed. Both read resolved strings
+//! from `RuntimePropLogData`.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropLog;
@@ -17,7 +14,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::quest_info::QuestInfo;
-use crate::runtime_props::RuntimePropLogData;
+use crate::runtime_props::{RuntimeMediaKind, RuntimePropLogData};
 use crate::scripts::{
     Effect, MessagePayload,
     script_util::{send_to_all_switch_links, set_quest_bit_effect},
@@ -149,16 +146,20 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         world: &World,
         state: &MediaGuiState,
     ) -> Vec<GuiComponent<MediaGuiMsg>> {
+        let v_data = world.borrow::<View<RuntimePropLogData>>().unwrap();
+        let backdrop = match v_data.get(entity_id).map(|data| data.kind) {
+            Ok(RuntimeMediaKind::Email) => "iface/email.pcx",
+            _ => "iface/log.pcx",
+        };
         let mut components: Vec<GuiComponent<MediaGuiMsg>> = vec![
-            // Archive-qualified: obj.crf also ships a 64x64 model texture named
-            // LOG.PCX (the floppy disc art) and its mount wins the plain name -
-            // "iface/" pins the 188x296 MFD frame from the interface archive.
-            gui::image("iface/log.pcx")
+            // Archive-qualified: basenames can collide across archive mounts
+            // (notably LOG.PCX with obj.crf's floppy texture). "iface/" pins
+            // the 188x296 MFD frame from the interface archive.
+            gui::image(backdrop)
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(PANEL_W, PANEL_H)),
         ];
 
-        let v_data = world.borrow::<View<RuntimePropLogData>>().unwrap();
         if let Ok(data) = v_data.get(entity_id) {
             if let Some(portrait) = &data.portrait {
                 components.push(
@@ -327,9 +328,12 @@ mod tests {
 
     /// Whether a (possibly combined) effect includes opening the panel.
     fn opens_panel(effect: Effect) -> bool {
-        Effect::flatten(vec![effect])
-            .iter()
-            .any(|e| matches!(e, Effect::OpenPanel { .. }))
+        Effect::flatten(vec![effect]).iter().any(|e| {
+            matches!(
+                e,
+                Effect::OpenPanel { .. } | Effect::OpenUnboundPanel { .. }
+            )
+        })
     }
 
     /// The body text lines the reader currently draws (via the same
@@ -407,6 +411,7 @@ mod tests {
                 video: 0,
             },
             RuntimePropLogData {
+                kind: RuntimeMediaKind::Log,
                 name: None,
                 text: Some(text),
                 portrait: None,
@@ -532,6 +537,65 @@ mod tests {
         }
     }
 
+    #[test]
+    fn email_data_selects_the_email_reader_backdrop() {
+        let mut world = World::new();
+        let email = world.add_entity(RuntimePropLogData {
+            kind: RuntimeMediaKind::Email,
+            name: Some("POLITO".to_owned()),
+            text: Some("Move it!".to_owned()),
+            portrait: Some("Polito".to_owned()),
+            icon: Some("OpsIcon".to_owned()),
+        });
+
+        let components = MediaGui.get_components(&None, email, &world, &MediaGuiState::default());
+        assert!(matches!(
+            components.first(),
+            Some(GuiComponent::Image { texture, .. }) if texture == "iface/email.pcx"
+        ));
+    }
+
+    #[test]
+    fn programmatic_open_resets_received_media_to_the_first_page() {
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        let email = world.add_entity(RuntimePropLogData {
+            kind: RuntimeMediaKind::Email,
+            name: None,
+            text: Some(
+                (1..=20)
+                    .map(|i| format!("l{i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            portrait: None,
+            icon: None,
+        });
+        let mut script = GuiScript::new(Box::new(MediaGui));
+        script.initialize(email, &world);
+
+        let (cx, cy) = (SCROLL_X + 9.0, PGDN_Y + 13.0);
+        script.handle_message(email, &world, &physics, &hover_at(cx, cy, false));
+        script.handle_message(email, &world, &physics, &hover_at(cx, cy, true));
+        assert_eq!(
+            drawn_lines(&mut script, email, &world, &physics)
+                .first()
+                .map(String::as_str),
+            Some("l8")
+        );
+
+        let effect =
+            script.handle_message(email, &world, &physics, &MessagePayload::OpenUnboundPanel);
+        assert!(opens_panel(effect));
+        assert_eq!(
+            drawn_lines(&mut script, email, &world, &physics)
+                .first()
+                .map(String::as_str),
+            Some("l1"),
+            "each received email should open at the top"
+        );
+    }
+
     /// Scroll clamps to the last full page: a transcript that fits on one page
     /// never scrolls, and a longer one stops at `lines - PAGE_LINES` instead of
     /// a near-empty tail page (xreview [AGREED] finding).
@@ -542,6 +606,7 @@ mod tests {
             // `line_count` one-word lines (each word fits one wrapped line).
             let text = vec!["line"; line_count].join("\n");
             let disc = world.add_entity(RuntimePropLogData {
+                kind: RuntimeMediaKind::Log,
                 name: None,
                 text: Some(text),
                 portrait: None,
