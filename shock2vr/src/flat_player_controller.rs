@@ -360,16 +360,15 @@ fn has_hud_select(world: &World, entity_id: EntityId, expected: bool) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether an entity is worth highlighting / interacting with. Empty authored
-/// FrobInfo overrides deliberately suppress an inherited world action, so
-/// property presence by itself is not enough.
+/// Whether an entity is worth highlighting / interacting with (it has frob
+/// info), which excludes plain world geometry the ray also hits. Some scripted
+/// world objects (including StdDoor leaves) have an empty world-action mask but
+/// still consume Frob messages, so property presence is the compatibility
+/// boundary here.
 fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<View<PropFrobInfo>>()
-        .map(|v| {
-            v.get(entity_id)
-                .is_ok_and(|frob| !frob.world_action.is_empty())
-        })
+        .map(|v| v.get(entity_id).is_ok())
         .unwrap_or(false)
 }
 
@@ -441,20 +440,6 @@ mod tests {
             ),
             "weapon pickup should preserve flat auto-wield"
         );
-    }
-
-    #[test]
-    fn empty_or_inventory_only_frob_info_is_not_world_frobbable() {
-        let mut world = World::new();
-        let empty = world.add_entity(frob_info(FrobFlag::empty()));
-        let inventory_only = world.add_entity(PropFrobInfo {
-            world_action: FrobFlag::empty(),
-            inventory_action: FrobFlag::SCRIPT,
-            tool_action: FrobFlag::empty(),
-        });
-
-        assert!(!is_frobbable(&world, empty));
-        assert!(!is_frobbable(&world, inventory_only));
     }
 
     #[test]
