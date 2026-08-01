@@ -38,9 +38,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `W` `A` `S` `D` - move around (hold `Shift` to move faster)
 - `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
 - `Ctrl` - crouch
+- `Space` - jump
 - `I` - move the floating inventory in front of you
 - `Alt+S` / `Alt+L` - quick save / quick load
-- `Space` - spawn a debug item
 - `P` - cycle the pathfinding test (set start → set goal → show path)
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,

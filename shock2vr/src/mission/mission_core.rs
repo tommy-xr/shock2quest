@@ -1225,9 +1225,10 @@ impl MissionCore {
                 .set_player_crouch(input_context.crouch, &mut self.player_handle);
             profile!(
                 "shock2.update.physics",
-                self.physics.update_with_facing(
+                self.physics.update_with_facing_and_jump(
                     forward + cgmath::vec3(0.0, up_value, 0.0),
                     facing,
+                    input_context.jump,
                     &mut self.player_handle,
                 )
             )
