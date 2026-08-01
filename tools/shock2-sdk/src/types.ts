@@ -167,11 +167,21 @@ export type DebugEntityMessage =
         | "Hacked";
     };
 
+/** Where a carried item is held. */
+export type InventoryLocation = "inventory" | "left_hand" | "right_hand";
+
+/** Whether an entity is in the world or carried by the player. */
+export type EntityLocation = "world" | InventoryLocation;
+
 export interface EntitySummary {
   id: number;
   name: string;
   template_id: number;
+  /** Carried entities remain listed so runtime-id and template discovery continue to work. */
+  location: EntityLocation;
+  /** Live transform, or the player's current position for a backpack/nested item. */
   position: Vec3;
+  /** Distance from the player; zero for a backpack/nested item. */
   distance: number;
   script_count: number;
   link_count: number;
@@ -818,9 +828,6 @@ export interface QuestBitsResult {
   quests: QuestBitEntry[];
   count: number;
 }
-
-/** Where a carried item is held. */
-export type InventoryLocation = "inventory" | "left_hand" | "right_hand";
 
 export interface InventoryItem {
   entity_id: number;
