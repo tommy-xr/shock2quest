@@ -918,23 +918,6 @@ fn shape_sweep_is_clear(
         .is_none()
 }
 
-fn ray_segment_is_clear(queries: &QueryPipeline, from: Vector<Real>, to: Vector<Real>) -> bool {
-    // The compressed sphere intentionally models Dark's sparse body and may
-    // overlap immutable terrain around the ladder lip. Its centerline still
-    // has to pass every authored point probe unobstructed: this prevents the
-    // exception from becoming permission to cross an unrelated wall.
-    let delta = to - from;
-    let distance = delta.norm();
-    distance <= 1.0e-6
-        || queries
-            .cast_ray(
-                &Ray::new(Point::from(from), delta / distance),
-                distance,
-                true,
-            )
-            .is_none()
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ShapeObstruction {
     Collider(ColliderHandle),
@@ -7577,7 +7560,6 @@ mod tests {
             Vector::zeros(),
             1.0 / 60.0,
             -0.2,
-            None,
             None,
             Some(ClimbPass {
                 movement: Vector::y() * 0.25,
