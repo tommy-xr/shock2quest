@@ -43,7 +43,7 @@ use scenes::{
 pub use mission::SpawnLocation;
 pub use mission::visibility_engine::CullingInfo;
 
-/// Player eye (camera) height above the body/feet position, in SS2 units
+/// Player eye (camera) height above the physics body's center, in SS2 units
 /// (before the `dark::SCALE_FACTOR` world-scale divide). Shared by every
 /// runtime's render camera (`head_offset`) AND the flat controller's
 /// shot/viewmodel origin, so the rendered view and where shots come from stay
@@ -51,6 +51,8 @@ pub use mission::visibility_engine::CullingInfo;
 /// the debug runtime renders at a different height than desktop. Crouch swaps
 /// this for [`PLAYER_CROUCH_EYE_HEIGHT`] - flat runtimes should use
 /// [`Game::player_eye_height`] rather than reading the constants directly.
+/// The standing footprint resize deliberately leaves this body-relative Dark
+/// offset unchanged, so the camera, crosshair ray and viewmodel remain aligned.
 pub const PLAYER_EYE_HEIGHT: f32 = 4.0;
 
 /// Crouched eye height above the (crouched) body position, in SS2 units.

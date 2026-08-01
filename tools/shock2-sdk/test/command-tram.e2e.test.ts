@@ -56,13 +56,20 @@ test(
     // bounded, shape-cast-validated move endpoint before asserting carry.
     await game.player.teleport({ x: -377.6, y: -16.4, z: 5.2 });
     await game.step({ frames: 2 });
-    const boarding = await game.player.moveTo({
+    const boardingTarget = {
       x: tram.position[0] - 0.25,
       y: -16.4,
       z: tram.position[2] + 0.08,
-    });
+    };
+    const boarding = await game.player.moveTo(boardingTarget);
     assert.equal(boarding.moved, true, "player should walk through the tram doorway");
-    assert.equal(boarding.blocked, false, "open tram doorway should not block boarding");
+    assert.ok(
+      Math.hypot(
+        boarding.new_position[0] - boardingTarget.x,
+        boarding.new_position[2] - boardingTarget.z,
+      ) < 0.1,
+      `open tram doorway should admit the original-width player: ${JSON.stringify(boarding)}`,
+    );
     await game.step({ frames: 10 });
 
     const playerBefore = await game.player.position();

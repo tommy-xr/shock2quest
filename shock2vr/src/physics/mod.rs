@@ -23,20 +23,22 @@ use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
 
-/// Player capsule dimensions (SS2 ft): total height and radius. Kept at the
-/// old cuboid's footprint (4.8 tall, 1.6 wide) - resizing toward the original
-/// engine's 6.0 x 2.4 player is deferred until crouch can shrink the collider.
-const PLAYER_HEIGHT: f32 = 4.8;
-const PLAYER_RADIUS: f32 = 0.8;
+/// Original standing player collision profile (SS2 ft): six feet tall and
+/// 2.4 feet wide. Dark represents it as a vertical stack of spheres; a capsule
+/// is the continuous equivalent and preserves the rounded traversal behavior.
+const PLAYER_STANDING_HEIGHT: f32 = 6.0;
+const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
 /// Crouched capsule height (SS2 ft). The original engine's crouched COLLISION
 /// profile (a stack of two 1.2 ft spheres, body-bottom -1.8 to head-top +1.0
 /// around the object origin) is ~2.8 ft tall - its taller "crouch height" is
-/// only the camera. The authored crawl routes are built for that: the MedSci
-/// air shaft behind keypad 45100 chokes to ~3.1 ft between its floor grate
-/// and entrance lip, which a 2.8 ft capsule plus the 0.1 ft contact offset
-/// clears with margin while 3.0+ scrapes.
+/// only the camera. The shorter collision profile leaves authored low routes
+/// traversable while keeping the player's feet planted during the transition.
 const PLAYER_CROUCH_HEIGHT: f32 = 2.8;
+/// Keep the crouched footprint added in #513 unchanged at 1.6 feet wide. It
+/// clears the authentic MedSci low passage while the wider standing profile
+/// does not.
+const PLAYER_CROUCH_RADIUS: f32 = 0.8;
 
 /// Margin (SS2 ft) for the stand-up headroom test capsule: its radius is
 /// shrunk by this and its pose lifted by it, keeping the test top exactly at
@@ -52,20 +54,28 @@ const PLAYER_STAND_TEST_MARGIN: f32 = 0.05;
 /// code uses this to store a standing-equivalent center so a game saved
 /// while crouched doesn't reload a standing capsule embedded in the floor.
 pub fn player_crouch_center_shift() -> f32 {
-    (PLAYER_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
+    (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
 }
 
 /// The player's standing collision capsule, in world units.
 fn standing_player_capsule() -> Capsule {
     Capsule::new_y(
-        (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-        PLAYER_RADIUS / SCALE_FACTOR,
+        (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
+        PLAYER_STANDING_RADIUS / SCALE_FACTOR,
     )
 }
 
 /// [`standing_player_capsule`] as a collider shape.
 fn standing_player_shared_shape() -> SharedShape {
     SharedShape::new(standing_player_capsule())
+}
+
+/// The player's crouched collision capsule, in world units.
+fn crouched_player_shared_shape() -> SharedShape {
+    SharedShape::capsule_y(
+        (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_CROUCH_RADIUS) / SCALE_FACTOR,
+        PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
+    )
 }
 
 /// Gap (SS2 ft) the character controller keeps between the player collider
@@ -176,12 +186,12 @@ const CLIMB_MIN_PROGRESS_FRACTION: f32 = 0.1;
 /// Dark probes one head diameter beyond the cleared lip, then advances the
 /// compressed player another body diameter.
 const CLIMB_TOP_OUT_PROBE_FORWARD: f32 = 2.0 * CLIMB_TOP_OUT_RADIUS;
-const CLIMB_TOP_OUT_ADVANCE: f32 = 2.0 * PLAYER_RADIUS / SCALE_FACTOR;
+const CLIMB_TOP_OUT_ADVANCE: f32 = 2.0 * PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 
 /// Dark's mantle probe goes 3.5 units up, then seven down.
 const CLIMB_TOP_OUT_UP: f32 = 3.5 / SCALE_FACTOR;
 const CLIMB_TOP_OUT_MAX_DROP: f32 = 7.0 / SCALE_FACTOR;
-const CLIMB_TOP_OUT_RADIUS: f32 = PLAYER_RADIUS / SCALE_FACTOR;
+const CLIMB_TOP_OUT_RADIUS: f32 = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 const CLIMB_TOP_OUT_FINAL_DROP: f32 = 4.0 / SCALE_FACTOR;
 const CLIMB_TOP_OUT_MIN_GROUND_NORMAL: f32 = 0.72;
 const CLIMB_TOP_OUT_RECOVERY_RETREAT: f32 = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
@@ -193,10 +203,11 @@ const CLIMB_TOP_OUT_MAX_RECOVERY_RETREAT: f32 = 4.0 / SCALE_FACTOR;
 /// controller gap: rick1's vertical cast stops with the capsule crown just over
 /// one half-height below the authored top, before the nominal crown-only
 /// threshold can ever become true.
-const CLIMB_TOP_OUT_TOP_REACH: f32 = PLAYER_HEIGHT / 2.0 / SCALE_FACTOR
+const CLIMB_TOP_OUT_TOP_REACH: f32 = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
     + CLIMB_TOP_OUT_SUBSTEP
     + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
-const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 = CLIMB_TOP_OUT_UP + PLAYER_HEIGHT / SCALE_FACTOR;
+const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
+    CLIMB_TOP_OUT_UP + PLAYER_STANDING_HEIGHT / SCALE_FACTOR;
 
 /// Dark's jump-through phase moves at ten SS2 feet per second. The physics
 /// runtime advances at a fixed 60 Hz.
@@ -309,8 +320,8 @@ const MIN_SLIDE_FRACTION: f32 = 0.2;
 /// `pos` is the collider pose after the blocked move; `desired` the movement
 /// input for the frame; `applied` the translation the move actually achieved.
 /// The probe (all casts collision-checked, so the result is a valid pose):
-/// 1. headroom: the capsule must fit `PLAYER_STEP_HEIGHT` straight up;
-/// 2. clearance: at that height it must fit forward far enough to plant the
+/// 1. headroom: find lift candidates up to `PLAYER_STEP_HEIGHT`;
+/// 2. clearance: at a viable height it must fit forward far enough to plant the
 ///    capsule axis past the riser face (radius + contact gaps) - otherwise
 ///    the overhanging capsule gets pulled back down by snap-to-ground;
 /// 3. tread: dropping back down must land on a walkable (mostly-horizontal)
@@ -338,7 +349,12 @@ fn try_step_up(
     // Far enough forward that the capsule axis (its lowest point) stands on
     // the tread: the capsule radius, the gap to the riser (which can exceed
     // the contact offset when the walk stalled early), and margin on top.
-    let forward = PLAYER_RADIUS / SCALE_FACTOR + 4.0 * contact_offset;
+    let capsule_radius = shape
+        .as_capsule()
+        .map_or(PLAYER_STANDING_RADIUS / SCALE_FACTOR, |capsule| {
+            capsule.radius
+        });
+    let forward = capsule_radius + 4.0 * contact_offset;
     // Full-width cast, used for the LANDING sweep: the tread height it
     // measures depends on the real capsule bottom, and its `target_distance`
     // is the contact offset so the player comes to rest at the normal gap
@@ -381,78 +397,108 @@ fn try_step_up(
         )
     };
 
-    // 1) Headroom directly above.
-    let lifted = Translation::from(Vector::y() * step_height) * pos;
-    if cast_narrow(pos, Vector::y(), step_height).is_some() {
+    // 1) Measure headroom directly above. Requiring the entire maximum lift
+    // rejects smaller legal steps under a ceiling: earth.mis's
+    // tram-to-boardwalk lip needs only ~0.7 SS2 ft, but has just under the full
+    // two-foot probe distance above the six-foot player. Stay one controller
+    // contact offset below a hit because the clearance cast uses the narrowed
+    // shape; the final full-width overlap remains the authoritative fit check.
+    let max_lift = cast_narrow(pos, Vector::y(), step_height)
+        .map(|(_, hit)| (hit.time_of_impact - contact_offset).max(0.0))
+        .unwrap_or(step_height);
+    if max_lift < 0.05 / SCALE_FACTOR {
         return None;
     }
-    // 2) Forward clearance at the lifted height, and 3) drop onto the tread.
-    //    `land` assumes the forward path for `d` is already known clear.
-    let land = |d: Vector<Real>| -> Option<Vector<Real>> {
-        let planted = Translation::from(d * forward) * lifted;
-        let (_, hit) = cast(&planted, -Vector::y(), step_height, contact_offset)?;
-        let lift = step_height - hit.time_of_impact;
-        // Too small to matter (the rounded capsule bottom slides over it
-        // anyway), or a downward/steep landing normal (not a tread). The
-        // threshold sits just above cos(45 deg) so the probe can't hop up
-        // slopes the controller's slope limit (default 45 deg) refuses to walk.
-        if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.72 {
+
+    let try_lift = |lift_height: f32| -> Option<Vector<Real>> {
+        let lifted = Translation::from(Vector::y() * lift_height) * pos;
+        // 2) Forward clearance at the lifted height, and 3) drop onto the
+        // tread. `land` assumes the forward path for `d` is already clear.
+        let land = |d: Vector<Real>| -> Option<Vector<Real>> {
+            let planted = Translation::from(d * forward) * lifted;
+            let (_, hit) = cast(&planted, -Vector::y(), lift_height, contact_offset)?;
+            let lift = lift_height - hit.time_of_impact;
+            // Too small to matter (the rounded capsule bottom slides over it
+            // anyway), or a downward/steep landing normal (not a tread). The
+            // threshold sits just above cos(45 deg) so the probe can't hop up
+            // slopes the controller's slope limit (default 45 deg) refuses to
+            // walk.
+            if lift < 0.05 / SCALE_FACTOR || hit.normal1.y < 0.72 {
+                return None;
+            }
+            // The clearance sweeps above ran NARROWED, which is what lets them
+            // ignore surfaces the player is merely resting against - but it
+            // also means they would miss a surface that the real, full-width
+            // capsule would clip by up to `PROBE_SKIN` at the landing pose.
+            // Check the final pose at full width so the hop still lands the
+            // player in a genuinely valid pose, preserving the invariant that
+            // every applied translation comes from a collision-checked query
+            // (see `step_player_movement`).
+            let step = Vector::y() * lift + d * forward;
+            if queries
+                .intersect_shape(Translation::from(step) * pos, shape)
+                .next()
+                .is_some()
+            {
+                return None;
+            }
+            Some(step)
+        };
+
+        // Straight ahead: if nothing blocks the lifted path, the landing
+        // decides.
+        let Some((_, wall)) = cast_narrow(&lifted, dir, forward) else {
+            return land(dir);
+        };
+        // Blocked by a WALL: the player walking into it would slide along it,
+        // so probe the slide direction too - mirroring what the character
+        // controller's own movement does. Without this, a diagonal push into
+        // a corner whose forward face is a wall but whose side is a steppable
+        // ledge never steps at all: on the station.mis service hall, pushing
+        // northwest wedges the player against the west wall instead of
+        // climbing the ledge to the north (issue #499). Only a
+        // mostly-vertical face deflects; a steep slope or tread is the straight
+        // path's business, handled above.
+        if wall.normal1.y.abs() > 0.72 {
             return None;
         }
-        // The clearance sweeps above ran NARROWED, which is what lets them
-        // ignore surfaces the player is merely resting against - but it also
-        // means they would miss a surface that the real, full-width capsule
-        // would clip by up to `PROBE_SKIN` at the landing pose. Check the
-        // final pose at full width so the hop still lands the player in a
-        // genuinely valid pose, preserving the invariant that every applied
-        // translation comes from a collision-checked query (see
-        // `step_player_movement`).
-        let step = Vector::y() * lift + d * forward;
-        if queries
-            .intersect_shape(Translation::from(step) * pos, shape)
-            .next()
-            .is_some()
-        {
+        let n_h = vector![wall.normal1.x, 0.0, wall.normal1.z];
+        let n_norm = n_h.norm();
+        if n_norm < 1.0e-3 {
             return None;
         }
-        Some(step)
+        // Project the input onto the wall face (n must be unit for the
+        // rejection to be correct). `dir` is a unit vector, so `slide_norm` is
+        // exactly the tangential fraction of the input - require a real
+        // sideways intent before hopping sideways.
+        let n = n_h / n_norm;
+        let slide = dir - n * dir.dot(&n);
+        let slide_norm = slide.norm();
+        if slide_norm < MIN_SLIDE_FRACTION {
+            return None;
+        }
+        let slide_dir = slide / slide_norm;
+        if cast_narrow(&lifted, slide_dir, forward).is_some() {
+            return None;
+        }
+        land(slide_dir)
     };
 
-    // Straight ahead: if nothing blocks the lifted path, the landing decides.
-    let Some((_, wall)) = cast_narrow(&lifted, dir, forward) else {
-        return land(dir);
-    };
-    // Blocked by a WALL: the player walking into it would slide along it, so
-    // probe the slide direction too - mirroring what the character
-    // controller's own movement does. Without this, a diagonal push into a
-    // corner whose forward face is a wall but whose side is a steppable ledge
-    // never steps at all: on the station.mis service hall, pushing northwest
-    // wedges the player against the west wall instead of climbing the ledge to
-    // the north (issue #499). Only a mostly-vertical face deflects; a steep
-    // slope or tread is the straight path's business, handled above.
-    if wall.normal1.y.abs() > 0.72 {
-        return None;
+    // Start with a small half-foot probe and increase only as needed. That
+    // avoids scraping a nearby ceiling for a short step while reaching the
+    // original two-foot step limit in at most four attempts.
+    let increment = 0.5 / SCALE_FACTOR;
+    let mut lift_height = increment.min(max_lift);
+    loop {
+        if let Some(step) = try_lift(lift_height) {
+            return Some(step);
+        }
+        if lift_height >= max_lift - 1.0e-5 {
+            break;
+        }
+        lift_height = (lift_height + increment).min(max_lift);
     }
-    let n_h = vector![wall.normal1.x, 0.0, wall.normal1.z];
-    let n_norm = n_h.norm();
-    if n_norm < 1.0e-3 {
-        return None;
-    }
-    // Project the input onto the wall face (n must be unit for the rejection
-    // to be correct). `dir` is a unit vector, so `slide_norm` is exactly the
-    // tangential fraction of the input - require a real sideways intent
-    // before hopping sideways.
-    let n = n_h / n_norm;
-    let slide = dir - n * dir.dot(&n);
-    let slide_norm = slide.norm();
-    if slide_norm < MIN_SLIDE_FRACTION {
-        return None;
-    }
-    let slide_dir = slide / slide_norm;
-    if cast_narrow(&lifted, slide_dir, forward).is_some() {
-        return None;
-    }
-    land(slide_dir)
+    None
 }
 
 /// One frame of gripped ladder movement: the vertical redirect from
@@ -794,7 +840,7 @@ fn plan_climb_top_out(
         return None;
     }
     let direction = direction_h / direction_norm;
-    let head_offset = (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR;
+    let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
     let raised = head + Vector::y() * CLIMB_TOP_OUT_UP;
     let probe_ahead = raised + direction * CLIMB_TOP_OUT_PROBE_FORWARD;
@@ -844,7 +890,7 @@ fn plan_climb_top_out(
     let minimum_cross_y = mantle_floor
         .map(|floor| {
             head.y
-                .max(floor.y + (1.02 * PLAYER_RADIUS + 1.0) / SCALE_FACTOR)
+                .max(floor.y + (1.02 * PLAYER_STANDING_RADIUS + 1.0) / SCALE_FACTOR)
         })
         .unwrap_or(head.y);
     // Dark's rise target is the authored 3.5-foot probe endpoint (or the
@@ -927,7 +973,7 @@ fn plan_climb_top_out(
             let floor = final_sphere - Vector::y() * ground.time_of_impact;
             floor
                 + Vector::y()
-                    * (PLAYER_HEIGHT / 2.0 / SCALE_FACTOR
+                    * (PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
                         + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
                         + PLAYER_REST_LIFT / SCALE_FACTOR)
         })
@@ -1997,15 +2043,12 @@ impl PhysicsWorld {
         player_handle.top_out = None;
         player_handle.slope_displacement = Vector::zeros();
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
-        let player_height = if player_handle.is_crouched {
-            PLAYER_CROUCH_HEIGHT
+        let shape = if player_handle.is_crouched {
+            crouched_player_shared_shape()
         } else {
-            PLAYER_HEIGHT
+            standing_player_shared_shape()
         };
-        self.collider_set[collider_handle].set_shape(SharedShape::capsule_y(
-            (player_height / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-            PLAYER_RADIUS / SCALE_FACTOR,
-        ));
+        self.collider_set[collider_handle].set_shape(shape);
         let character_body = self
             .rigid_body_set
             .get_mut(player_handle.character_handle)
@@ -2649,12 +2692,11 @@ impl PhysicsWorld {
         let player_entity_user_data = player_entity.inner() as u128;
         rigid_body.user_data = player_entity_user_data;
         let character_handle = self.rigid_body_set.insert(rigid_body);
-        // A capsule with the same footprint as the old cuboid: 4.8 SS2 ft tall,
-        // 1.6 ft wide (the original engine's player is a stack of spheres - a
-        // rounded shape slides cleanly along corners/seams the box snagged on).
+        // Dark's standing player is six SS2 feet tall and 2.4 feet wide. A
+        // capsule is the continuous equivalent of its vertical sphere stack.
         let mut collider = ColliderBuilder::capsule_y(
-            (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-            PLAYER_RADIUS / SCALE_FACTOR,
+            (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
+            PLAYER_STANDING_RADIUS / SCALE_FACTOR,
         );
         collider = collider.collision_groups(InteractionGroups::new(
             InternalCollisionGroups::PLAYER.bits.into(),
@@ -2717,14 +2759,10 @@ impl PhysicsWorld {
         let character_handle = player_handle.character_handle;
         let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
         // Feet-planted center shift between the two capsule sizes.
-        let center_shift = (PLAYER_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR;
+        let center_shift = (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR;
 
         if want_crouch {
-            let crouched = SharedShape::capsule_y(
-                (PLAYER_CROUCH_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-                PLAYER_RADIUS / SCALE_FACTOR,
-            );
-            self.collider_set[collider_handle].set_shape(crouched);
+            self.collider_set[collider_handle].set_shape(crouched_player_shared_shape());
             let body = &mut self.rigid_body_set[character_handle];
             let mut translation = *body.translation();
             translation.y -= center_shift;
@@ -2743,8 +2781,8 @@ impl PhysicsWorld {
                 Vector::y() * (center_shift + PLAYER_STAND_TEST_MARGIN / SCALE_FACTOR),
             ) * self.rigid_body_set[character_handle].position();
             let test_shape = Capsule::new_y(
-                (PLAYER_HEIGHT / 2.0 - PLAYER_RADIUS) / SCALE_FACTOR,
-                (PLAYER_RADIUS - PLAYER_STAND_TEST_MARGIN) / SCALE_FACTOR,
+                (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
+                (PLAYER_STANDING_RADIUS - PLAYER_STAND_TEST_MARGIN) / SCALE_FACTOR,
             );
             let filter = QueryFilter::new()
                 .groups(InteractionGroups::new(
@@ -2761,10 +2799,37 @@ impl PhysicsWorld {
                 &self.collider_set,
                 filter,
             );
-            let blocked = queries
+            let overlaps_final_pose = queries
                 .intersect_shape(standing_pos, &test_shape)
                 .next()
                 .is_some();
+            // Level ceilings are authored as one-sided triangles facing down.
+            // A static overlap against their underside can miss them, even
+            // though an upward movement cast correctly blocks. Sweep a sphere
+            // from the standing capsule's bottom axis endpoint to its top
+            // endpoint: the swept sphere is exactly the capsule volume and
+            // approaches those ceiling faces from below. Keep the final-pose
+            // overlap above as well, because a cast configured to leave an
+            // initial penetration may not report a prop already intersecting
+            // the bottom sphere.
+            let bottom_sphere_pos =
+                Translation::from(Vector::y() * test_shape.segment.a.y) * standing_pos;
+            let axis_length = (test_shape.segment.b - test_shape.segment.a).norm();
+            let crown_sweep = Ball::new(test_shape.radius);
+            let blocked_by_crown_sweep = queries
+                .cast_shape(
+                    &bottom_sphere_pos,
+                    &Vector::y(),
+                    &crown_sweep,
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: axis_length,
+                        target_distance: 0.0,
+                        stop_at_penetration: false,
+                        compute_impact_geometry_on_penetration: true,
+                    },
+                )
+                .is_some();
+            let blocked = overlaps_final_pose || blocked_by_crown_sweep;
 
             if !blocked {
                 self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
@@ -4498,8 +4563,13 @@ mod tests {
             add_ramp(&mut world, (-1.0, 7.464), (1.0, 0.0), 3.0);
             add_ramp(&mut world, (1.0, 0.0), (6.0, -4.0), 3.0);
             add_ramp(&mut world, (6.0, -4.0), (30.0, -4.0), 3.0);
+            // Drop over the interior of the finite face. The restored
+            // 2.4-foot standing width reaches around the old x=-0.75 start
+            // and contacts the ramp's upper endpoint, whose edge normal does
+            // not exercise the planar near-threshold ground probe this
+            // regression is about.
             let mut player = world.create_player(
-                vec3(-0.75, 10.0, 0.0),
+                vec3(0.0, 10.0, 0.0),
                 EntityId::from_inner(if crouched { 2104 } else { 2105 }).unwrap(),
             );
             if crouched {
@@ -4564,6 +4634,70 @@ mod tests {
         );
     }
 
+    fn walk_player_toward(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        target: Vector3<f32>,
+        max_frames: usize,
+    ) {
+        for _ in 0..max_frames {
+            let current = world.get_player_translation(player);
+            let delta = vec3(target.x - current.x, 0.0, target.z - current.z);
+            if delta.magnitude() < 0.05 {
+                break;
+            }
+            world.update(delta.normalize() * (25.0 / 60.0 / SCALE_FACTOR), player);
+        }
+    }
+
+    fn player_capsule_dimensions_ss2(world: &PhysicsWorld, player: &PlayerHandle) -> (f32, f32) {
+        let body = &world.rigid_body_set[player.character_handle];
+        let collider = &world.collider_set[body.colliders()[0]];
+        let capsule = collider
+            .shape()
+            .as_capsule()
+            .expect("player collider should be a capsule");
+        (
+            2.0 * (capsule.half_height() + capsule.radius) * SCALE_FACTOR,
+            2.0 * capsule.radius * SCALE_FACTOR,
+        )
+    }
+
+    fn assert_player_capsule_dimensions(
+        world: &PhysicsWorld,
+        player: &PlayerHandle,
+        expected_height: f32,
+        expected_width: f32,
+    ) {
+        let (height, width) = player_capsule_dimensions_ss2(world, player);
+        assert!(
+            (height - expected_height).abs() < 1.0e-5 && (width - expected_width).abs() < 1.0e-5,
+            "expected {expected_height} x {expected_width} SS2 feet, got {height} x {width}"
+        );
+    }
+
+    /// Standing restores Dark's original 6 x 2.4-foot body, while crouch and
+    /// direct relocation retain the 2.8 x 1.6-foot profile added in #513.
+    #[test]
+    fn player_capsule_uses_original_standing_and_existing_crouched_footprints() {
+        let mut world = PhysicsWorld::new();
+        let mut player = world.create_player(vec3(0.0, 0.0, 0.0), EntityId::from_inner(1).unwrap());
+
+        assert_player_capsule_dimensions(&world, &player, 6.0, 2.4);
+        assert!(
+            (player_crouch_center_shift() - 0.64).abs() < 1.0e-6,
+            "save/load normalization must use the new feet-planted center shift"
+        );
+
+        assert!(world.set_player_crouch(true, &mut player));
+        assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
+        world.set_player_translation(vec3(1.0, 2.0, 3.0), &mut player);
+        assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
+
+        assert!(!world.set_player_crouch(false, &mut player));
+        assert_player_capsule_dimensions(&world, &player, 6.0, 2.4);
+    }
+
     /// The scene-wide query pipeline the climb/top-out helpers take.
     fn query_pipeline<'a>(world: &'a PhysicsWorld, filter: QueryFilter<'a>) -> QueryPipeline<'a> {
         world.broad_phase.as_query_pipeline(
@@ -4595,7 +4729,7 @@ mod tests {
 
     /// Half the player capsule's height in world units - the body translation
     /// sits this far above the surface the player stands on.
-    const PLAYER_HALF_HEIGHT: f32 = PLAYER_HEIGHT / 2.0 / SCALE_FACTOR;
+    const PLAYER_HALF_HEIGHT: f32 = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR;
 
     /// One frame of the tram's authored pace: `command1`'s car covers ~12.2
     /// world units per second, i.e. ~0.2 per 60 Hz frame.
@@ -4732,7 +4866,8 @@ mod tests {
         world.set_player_translation(vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0), &mut player);
         // A tall thin wall running along x, just grazing the player's side
         // (its face sits one contact offset away from the capsule).
-        let wall_z = PLAYER_RADIUS / SCALE_FACTOR + 0.1 + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+        let wall_z =
+            PLAYER_STANDING_RADIUS / SCALE_FACTOR + 0.1 + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
         let wall = world.add_kinematic(
             EntityId::from_inner(2002).unwrap(),
             vec3(0.0, 1.0, wall_z),
@@ -5643,7 +5778,8 @@ mod tests {
         );
         let origin = vector![-0.755, 0.0, -0.392];
         let direction = vector![0.592, 0.0, 0.806];
-        let clearance = PLAYER_RADIUS / SCALE_FACTOR + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+        let clearance =
+            PLAYER_STANDING_RADIUS / SCALE_FACTOR + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
         let exit = climbable_aabb_exit_distance(origin, direction, &aabb, clearance)
             .expect("the diagonal route crosses the expanded ladder");
 
@@ -5772,7 +5908,7 @@ mod tests {
         // contact offset). That is where a climbing player actually sits
         // (measured live on hydro2: 0.04 wu of clearance) and it is what puts
         // the rungs' horizontal caps in the path of the descent cast.
-        let stand_x = -5.05 - (PLAYER_RADIUS + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
+        let stand_x = -5.05 - (PLAYER_STANDING_RADIUS + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
         let mut player =
             world.create_player(vec3(stand_x, 6.5, 0.0), EntityId::from_inner(3000).unwrap());
 
@@ -5799,7 +5935,7 @@ mod tests {
         }
         let end = world.get_player_translation(&player);
         assert!(
-            end.y < 1.2,
+            end.y < PLAYER_HALF_HEIGHT + 0.1,
             "the descent must carry the player all the way to the floor, ended {end:?}"
         );
     }
@@ -5903,7 +6039,7 @@ mod tests {
         }
         let end = world.get_player_translation(&player);
         assert!(
-            end.y < 1.2,
+            end.y < PLAYER_HALF_HEIGHT + 0.1,
             "the descent must carry the player to the shaft floor, ended {end:?}"
         );
     }
@@ -5993,8 +6129,10 @@ mod tests {
                     .expect("floor trimesh")
                     .build(),
             );
-            let mut player =
-                world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+            let mut player = world.create_player(
+                vec3(-6.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
             // A platform ahead of the player whose top sits at `step_height`.
             world.add_kinematic(
                 EntityId::from_inner(2001).unwrap(),
@@ -6031,6 +6169,67 @@ mod tests {
         assert!(
             ledge < 0.1,
             "a 3 ft ledge must not be auto-stepped, rose {ledge}"
+        );
+    }
+
+    /// A short legal step must not require the entire two-foot probe height of
+    /// overhead clearance. Earth’s intro tram has this arrangement at the
+    /// boardwalk threshold: the original six-foot body fits after stepping,
+    /// but a full-height preliminary lift brushes the tram ceiling.
+    #[test]
+    fn player_steps_under_a_ceiling_with_less_than_maximum_probe_headroom() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        let mut player = world.create_player(
+            vec3(-3.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        // A 0.75 SS2 ft threshold followed by a ceiling that allows about 1.9
+        // ft of upward probe from the floor: enough for the real step, less
+        // than the controller's full two-foot maximum.
+        world.add_kinematic(
+            EntityId::from_inner(2001).unwrap(),
+            vec3(1.0, 0.15, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 0.3, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2002).unwrap(),
+            vec3(0.0, 3.3, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(10.0, 0.2, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        let mut max_y = start.y;
+        for _ in 0..160 {
+            world.update(Vector3::new(0.05, 0.0, 0.0), &mut player);
+            max_y = max_y.max(world.get_player_translation(&player).y);
+        }
+        assert!(
+            max_y - start.y > 0.25,
+            "the player should step onto the threshold under the ceiling, rose {}",
+            max_y - start.y
         );
     }
 
@@ -6491,7 +6690,7 @@ mod tests {
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
 
         let compressed_pose = vector![0.0, 0.5, 0.0];
-        let save_pose = vector![-3.0, 0.5, 0.0];
+        let save_pose = vector![-3.0, PLAYER_HALF_HEIGHT - 0.5 + 0.1, 0.0];
         world.set_player_translation(nvec_to_cgmath(compressed_pose), &mut player);
         let collider_handle = world.rigid_body_set[player.character_handle].colliders()[0];
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
@@ -6611,8 +6810,10 @@ mod tests {
                     .expect("floor trimesh")
                     .build(),
             );
-            let mut player =
-                world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+            let mut player = world.create_player(
+                vec3(-6.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
             world.add_kinematic(
                 EntityId::from_inner(2001).unwrap(),
                 vec3(-3.0, 0.3, 0.0),
@@ -6699,6 +6900,125 @@ mod tests {
         ))
     }
 
+    /// The authored MedSci corridor west of keypad 45100 has exactly five SS2
+    /// feet between its floor and ceiling. The original six-foot standing
+    /// profile must stop at the ceiling face around x=-26.4; only crouching
+    /// may enter. This exercises the real mission geometry when game data is
+    /// available (the checked-in fixture below covers CI).
+    #[test]
+    fn standing_player_does_not_enter_medsci_five_foot_ceiling() {
+        let Some(level) = try_load_level("medsci1.mis") else {
+            return;
+        };
+        let mut world = PhysicsWorld::new();
+        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        let mut player = world.create_player(
+            vec3(-22.294, -0.596, -17.1),
+            EntityId::from_inner(2).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+
+        for _ in 0..60 {
+            world.update(vec3(-10.0 / 60.0, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.x > -26.0,
+            "standing player crossed the five-foot ceiling face: ended {end:?}"
+        );
+    }
+
+    /// The two ceiling triangles from the real MedSci corridor above. Keeping
+    /// the authored coordinates makes the regression run without game data in
+    /// CI while the live-mission test verifies the extraction locally.
+    const MEDSCI_FIVE_FOOT_CEILING_TRIS: &[[[f32; 3]; 3]] = &[
+        [
+            [-28.8, 0.4, -15.6],
+            [-26.4, 0.4, -15.6],
+            [-26.4, 0.4, -17.6],
+        ],
+        [
+            [-28.8, 0.4, -17.6],
+            [-28.8, 0.4, -15.6],
+            [-26.4, 0.4, -17.6],
+        ],
+    ];
+
+    fn world_with_medsci_five_foot_ceiling() -> (PhysicsWorld, PlayerHandle) {
+        let mut world = PhysicsWorld::new();
+        let floor = world.create_static_body(
+            Isometry::translation(0.0, -2.6, 0.0),
+            EntityId::from_inner(1000),
+        );
+        world.attach_collider(
+            floor,
+            SharedShape::cuboid(100.0, 1.0, 100.0),
+            1.0,
+            CollisionGroup::entity(),
+        );
+
+        let mut verts = Vec::new();
+        let mut tris = Vec::new();
+        for triangle in MEDSCI_FIVE_FOOT_CEILING_TRIS {
+            let base = verts.len() as u32;
+            verts.extend(
+                triangle
+                    .iter()
+                    .map(|point| point![point[0], point[1], point[2]]),
+            );
+            tris.push([base, base + 1, base + 2]);
+        }
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            ColliderBuilder::trimesh(verts, tris)
+                .expect("MedSci ceiling trimesh")
+                .build(),
+        );
+
+        let player = world.create_player(
+            vec3(-22.294, -0.596, -17.1),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        (world, player)
+    }
+
+    /// The six-foot standing profile stops before MedSci's five-foot ceiling,
+    /// while the unchanged 2.8-foot crouched profile enters and cannot expand
+    /// there. Negative-first: the temporary 4.8-foot standing capsule reached
+    /// x=-31.96 through this clearance.
+    #[test]
+    fn only_crouched_player_enters_extracted_medsci_five_foot_clearance() {
+        let (mut standing_world, mut standing_player) = world_with_medsci_five_foot_ceiling();
+        step(&mut standing_world, &mut standing_player, 30);
+        for _ in 0..60 {
+            standing_world.update(vec3(-10.0 / 60.0, 0.0, 0.0), &mut standing_player);
+        }
+        let standing_end = standing_world.get_player_translation(&standing_player);
+        assert!(
+            standing_end.x > -26.0,
+            "standing player crossed the five-foot ceiling face: ended {standing_end:?}"
+        );
+
+        let (mut crouched_world, mut crouched_player) = world_with_medsci_five_foot_ceiling();
+        step(&mut crouched_world, &mut crouched_player, 30);
+        assert!(
+            crouched_world.set_player_crouch(true, &mut crouched_player),
+            "crouch request must shrink the collider"
+        );
+        for _ in 0..36 {
+            crouched_world.update(vec3(-10.0 / 60.0, 0.0, 0.0), &mut crouched_player);
+        }
+        let crouched_end = crouched_world.get_player_translation(&crouched_player);
+        assert!(
+            crouched_end.x < -27.0,
+            "crouched player should cross the ceiling face: ended {crouched_end:?}"
+        );
+        assert!(
+            crouched_world.set_player_crouch(false, &mut crouched_player),
+            "standing must be refused under the five-foot ceiling"
+        );
+    }
+
     /// The station.mis service-hall ledge that blocked the Earth -> Station
     /// campaign (issue #499). The player stands in the pocket below the ledge
     /// and pushes northwest along the authored AIPATH route
@@ -6726,10 +7046,15 @@ mod tests {
             world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
         }
         let start = world.get_player_translation(&player);
-        // Northwest, toward the authored post-ramp waypoint (12.0, 6.8).
-        let dir = vec3(-1.38f32, 0.0, 0.4).normalize() * (25.0 / 60.0 / dark::SCALE_FACTOR);
-        for _ in 0..120 {
-            world.update(dir, &mut player);
+        // Follow every authored AIPATH waypoint around the corner. The wider
+        // original body cannot cut diagonally across the inside wall the way
+        // the temporary narrow capsule did.
+        for target in [
+            vec3(13.38, 0.0, 6.6),
+            vec3(12.8, 0.0, 6.7),
+            vec3(12.0, 0.0, 6.8),
+        ] {
+            walk_player_toward(&mut world, &mut player, target, 60);
         }
         let end = world.get_player_translation(&player);
         assert!(
@@ -6905,10 +7230,12 @@ mod tests {
             world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
         }
         let start = world.get_player_translation(&player);
-        // Northwest, toward the authored post-ramp waypoint (12.0, 6.8).
-        let dir = vec3(-1.38f32, 0.0, 0.4).normalize() * (25.0 / 60.0 / dark::SCALE_FACTOR);
-        for _ in 0..120 {
-            world.update(dir, &mut player);
+        for target in [
+            vec3(13.38, 0.0, 6.6),
+            vec3(12.8, 0.0, 6.7),
+            vec3(12.0, 0.0, 6.8),
+        ] {
+            walk_player_toward(&mut world, &mut player, target, 60);
         }
         let end = world.get_player_translation(&player);
         assert!(
