@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntitySummary } from "../src/index.js";
+import type { EntitySummary, RayCastResult } from "../src/index.js";
 
 // End-to-end test for flat (desktop-style) ladder climbing.
 //
@@ -571,6 +571,131 @@ test(
         `deck-side=(${deckSide.x.toFixed(2)}, ${deckSide.y.toFixed(2)}, ${deckSide.z.toFixed(2)}), ` +
         `recovered=(${recovered.x.toFixed(2)}, ${recovered.y.toFixed(2)}, ${recovered.z.toFixed(2)}), ` +
         `recovered-support=${JSON.stringify(recoveredSupport)}`,
+    );
+  },
+);
+
+// Issue #657's Eng1 blocker is a different Dark BreakClimb shape from Rick1:
+// authored ladder 317 ends under a thick terrain slab. The player must rise
+// through the slab's two locally sampled wall planes, then descend to the
+// lower far-side deck. Treating the first plane as an ordinary full-height
+// wall caps the standing capsule near y=-14.64 forever.
+test(
+  "flat climbing: eng1 ladder 317 crosses its local wall onto supported deck",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids are unstable; object/template 317 and its authored name are
+    // the durable mission identity. Derive both contact poses from that
+    // authored object rather than baking its world coordinates into the test.
+    const ladder = (
+      await game.entities.list({ filter: "Ladder 16'", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 317);
+    assert.ok(ladder, "eng1 should contain authored Ladder 16' object 317");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+    const standingY = ladderY + 1.243978;
+
+    // Negative control: the north face is behind ordinary world terrain. A
+    // production-forward push toward -Z must not phase through that wall or
+    // gain the ladder's top-out rise.
+    await game.player.teleport({
+      x: ladderX,
+      y: standingY,
+      z: ladderZ + 0.99,
+    });
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      standingY + 1.6,
+      ladderZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 60 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const wrongFace = await game.player.position();
+    assert.ok(
+      wrongFace.z > ladderZ + 0.5 && wrongFace.y < ladderY + 2.5,
+      `the terrain-occluded face must remain a wall; ladder=(${ladderX.toFixed(2)}, ${ladderY.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `ended=(${wrongFace.x.toFixed(2)}, ${wrongFace.y.toFixed(2)}, ${wrongFace.z.toFixed(2)})`,
+    );
+
+    // Setup-only correct-face contact. No simulation frame occurs between the
+    // relocation and production input, matching the campaign fixture while
+    // keeping the test independent of a private save.
+    await game.player.teleport({
+      x: ladderX,
+      y: standingY,
+      z: ladderZ - 0.68944,
+    });
+    const start = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      start.x,
+      start.y + 1.6,
+      start.z + 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let crossedWall = false;
+    let supportedLanding = false;
+    let landing = start;
+    let landingSupport: RayCastResult | null = null;
+    for (let elapsed = 0; elapsed < 360; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      crossedWall ||= landing.y > ladderY + 3.5;
+      if (landing.z > ladderZ + 0.7 && landing.y < ladderY + 2.5) {
+        landingSupport = await game.raycast({
+          start: [landing.x, landing.y, landing.z],
+          end: [landing.x, landing.y - 3, landing.z],
+          collision_groups: ["world", "entity", "selectable"],
+          ignore_sensors: true,
+        });
+        supportedLanding =
+          landingSupport.hit &&
+          landingSupport.distance !== null &&
+          landingSupport.distance > 0.5 &&
+          landingSupport.distance < 2 &&
+          landingSupport.hit_normal !== null &&
+          landingSupport.hit_normal[1] > 0.5;
+        if (supportedLanding) break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      crossedWall && supportedLanding,
+      `correct-face forward input must cross the local wall and reach supported far-side standing; ` +
+        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
+        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(landingSupport)}`,
+    );
+
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z > ladderZ + 0.7 &&
+        Math.abs(stable.y - standingY) < 0.1 &&
+        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `release must remain stable on Eng1's far-side deck; ` +
+        `landing=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(stableSupport)}`,
     );
   },
 );
