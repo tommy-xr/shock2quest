@@ -296,13 +296,14 @@ const CLIMB_TOP_OUT_LOCAL_LIP_EXIT_ALLOWANCE: f32 =
 const CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
 /// A narrow landing can require clearing the side of a rail after the forward
 /// lip crossing. Keep that safety recovery separate from Dark's backward rise
-/// retreat and bound it to four compressed-player radii.
-const CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
+/// retreat and bound it to five compressed-player radii. The fifth sample is
+/// needed when the compressed route fits beside a wall but the standing
+/// capsule must clear that wall before expanding.
+const CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY: f32 = 5.0 * CLIMB_TOP_OUT_RADIUS;
 /// Bound synchronous support/route evaluation when a ladder top has no valid
-/// landing. Candidates are ordered by total recovery distance; 75 covers every
-/// three-base/two-side candidate through the complete four-radius Manhattan
-/// shell, including both zero-forward lateral and zero-lateral forward bounds.
-const CLIMB_TOP_OUT_MAX_LANDING_CANDIDATES: usize = 75;
+/// landing. The three route bases, five forward offsets, and eleven signed
+/// lateral offsets cover the complete independently bounded recovery grid.
+const CLIMB_TOP_OUT_MAX_LANDING_CANDIDATES: usize = 3 * 5 * 11;
 /// Egress validation samples a full standing stride at contact-offset
 /// intervals. It is a landing preference, not a safety requirement, so limit
 /// it to the first few already-safe candidates in each support tier.
@@ -653,7 +654,7 @@ struct ClimbPass<'a> {
 
 #[derive(Clone, Copy)]
 struct ClimbTopOut {
-    waypoints: [Vector<Real>; 7],
+    waypoints: [Vector<Real>; 8],
     next_waypoint: usize,
     save_pose: Vector<Real>,
     reversing: bool,
@@ -1051,14 +1052,16 @@ struct RouteObstructionScan {
 /// Follow a sampled route and permit exactly one bounded obstruction interval.
 ///
 /// The route may begin obstructed, or enter within `entry_limit`, but has to
-/// clear by `initial_obstruction_limit` and may never re-enter. Every actual
-/// collider/triangle touched must also satisfy `allowed`.
+/// stay within `initial_obstruction_limit` and may never re-enter. When
+/// `require_clear` is true it must also clear before the route ends. Every
+/// actual collider/triangle touched must satisfy `allowed`.
 fn scan_initial_route_obstruction(
     queries: &QueryPipeline,
     waypoints: &[Vector<Real>],
     shape: &dyn Shape,
     initial_obstruction_limit: Real,
     entry_limit: Real,
+    require_clear: bool,
     allowed: impl Fn(ShapeObstruction) -> bool,
 ) -> Option<RouteObstructionScan> {
     // Dark's sparse body may start inside the local lip before reaching the
@@ -1142,7 +1145,7 @@ fn scan_initial_route_obstruction(
         }
         route_distance += distance;
     }
-    if obstruction_seen && !cleared_after_obstruction {
+    if require_clear && obstruction_seen && !cleared_after_obstruction {
         return None;
     }
     Some(RouteObstructionScan { first_clear })
@@ -1261,6 +1264,7 @@ fn shape_route_exits_only_initial_obstruction(
         shape,
         initial_obstruction_limit,
         entry_limit,
+        true,
         |_| true,
     )
     .is_some()
@@ -1898,6 +1902,7 @@ fn plan_climb_top_out(
         &compressed,
         (cross_start - rise_start).norm(),
         (cross_start - rise_start).norm(),
+        false,
         |hit| lip_patch.as_ref().is_some_and(|patch| patch.contains(hit)),
     )
     .is_none()
@@ -1986,6 +1991,7 @@ fn plan_climb_top_out(
             &compressed,
             lip_exit_allowance,
             CLIMB_TOP_OUT_RECOVERY_RETREAT,
+            true,
             |hit| {
                 exit_lip_patch
                     .as_ref()
@@ -2031,16 +2037,16 @@ fn plan_climb_top_out(
     // even though the probe itself found the deck. Search the full advance,
     // geometry-derived exit, and probe endpoint for the nearest standing-safe
     // landing. Each ordered base can recover forward past an overhang, while a
-    // separate one-radius-step lateral search can clear a narrow rail. Both
-    // searches have four-radius safety bounds. The compressed route first
-    // reaches the geometry-derived `lip_clear` before moving to the selected
-    // landing.
+    // separate one-radius-step lateral search can clear a narrow rail. Forward
+    // recovery stays within four radii and lateral recovery within five. The
+    // compressed route first reaches the geometry-derived `lip_clear` before
+    // moving to the selected landing.
     let lateral = vector![direction.z, 0.0, -direction.x];
     let lateral_steps = (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / CLIMB_TOP_OUT_RADIUS).ceil() as usize;
     let forward_steps = (CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY / CLIMB_TOP_OUT_RADIUS).ceil() as usize;
     // Breadth-first by total recovery distance. Within an equal distance,
-    // consider lateral recovery first so the fixed candidate budget always
-    // reaches the promised four-radius side clearance at zero forward offset.
+    // consider lateral recovery first so the fixed candidate budget reaches
+    // the complete independently bounded forward/lateral grid.
     let mut landing_candidates = Vec::new();
     for total_step in 0..=lateral_steps + forward_steps {
         for lateral_step in (0..=lateral_steps).rev() {
@@ -2077,14 +2083,27 @@ fn plan_climb_top_out(
         reject_top_out!("scripted_or_lip_clear");
     }
     let validated_landing = |landing: SupportedLanding| {
-        (shape_sweep_is_clear(validation_queries, lip_clear, landing.sphere, &compressed)
-            && shape_sweep_is_clear(
-                validation_queries,
-                landing.sphere,
-                landing.standing,
-                &compressed,
-            ))
-        .then_some((landing.sphere, landing.standing))
+        if !shape_sweep_is_clear(
+            validation_queries,
+            landing.sphere,
+            landing.standing,
+            &compressed,
+        ) {
+            return None;
+        }
+        let landing_delta = landing.sphere - lip_clear;
+        let lateral_turn = lip_clear + lateral * landing_delta.dot(&lateral);
+        let forward_turn = lip_clear + direction * landing_delta.dot(&direction);
+        // A diagonal can cut through the corner of an otherwise-clear shaft
+        // cap. Prefer the direct route, then try the two geometry-derived
+        // orthogonal doglegs; every leg uses ordinary all-collider sweeps.
+        [lip_clear, lateral_turn, forward_turn]
+            .into_iter()
+            .find(|turn| {
+                shape_sweep_is_clear(validation_queries, lip_clear, *turn, &compressed)
+                    && shape_sweep_is_clear(validation_queries, *turn, landing.sphere, &compressed)
+            })
+            .map(|turn| (turn, landing.sphere, landing.standing))
     };
     // Preserve cheap forward-first candidate order, generating bases lazily
     // and deduplicating identical coordinates before their support and route
@@ -2168,7 +2187,7 @@ fn plan_climb_top_out(
             .map(|(_, validated)| validated)
     })
     .flatten();
-    let Some((final_sphere, final_standing)) = direct_with_egress
+    let Some((landing_route, final_sphere, final_standing)) = direct_with_egress
         .or(deep_with_egress.flatten())
         .or(direct_fallback)
         .or(deep_fallback)
@@ -2185,6 +2204,7 @@ fn plan_climb_top_out(
         cross_start,
         lip_approach,
         lip_clear,
+        landing_route,
         final_sphere,
         final_standing,
     ];
@@ -7297,14 +7317,15 @@ mod tests {
         );
     }
 
-    /// The seven-waypoint route the reversal tests drive by hand.
-    fn test_waypoints() -> [Vector<Real>; 7] {
+    /// The eight-waypoint route the reversal tests drive by hand.
+    fn test_waypoints() -> [Vector<Real>; 8] {
         [
             vector![0.0, 0.0, 0.0],
             vector![0.0, 0.0, 0.0],
             vector![2.0, 0.0, 0.0],
             vector![2.5, 0.0, 0.0],
             vector![3.0, 0.0, 0.0],
+            vector![3.5, 0.0, 0.0],
             vector![4.0, 0.0, 0.0],
             vector![4.0, -0.64, 0.0],
         ]
@@ -7770,6 +7791,51 @@ mod tests {
     }
 
     #[test]
+    fn climb_top_out_rise_can_hand_off_one_attributed_overlap() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.6, 0.6, 0.6)
+                .translation(vector![1.0, 0.0, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let compressed = Ball::new(0.2);
+        let route = [vector![0.0, 0.0, 0.0], vector![1.0, 0.0, 0.0]];
+
+        assert!(
+            scan_initial_route_obstruction(&queries, &route, &compressed, 1.0, 1.0, false, |_| {
+                true
+            },)
+            .is_some(),
+            "an attributed initial interval may remain contiguous for the next route leg to clear"
+        );
+        assert!(
+            scan_initial_route_obstruction(
+                &queries,
+                &route,
+                &compressed,
+                1.0,
+                1.0,
+                true,
+                |_| true,
+            )
+            .is_none(),
+            "a caller that owns the complete route must still require the interval to clear"
+        );
+        assert!(
+            scan_initial_route_obstruction(&queries, &route, &compressed, 1.0, 1.0, false, |_| {
+                false
+            },)
+            .is_none(),
+            "an unfinished interval never permits an unattributed obstruction"
+        );
+    }
+
+    #[test]
     fn climb_top_out_rejects_parentless_terrain_on_recovered_approach() {
         let mut world = PhysicsWorld::new();
         world.add_collider(
@@ -8076,7 +8142,7 @@ mod tests {
             + CLIMB_TOP_OUT_UP;
         let deck_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
         // Every forward-only candidate is unsupported. The only landing is a
-        // narrow deck at the full four-radius lateral bound to the right of
+        // narrow deck at the full five-radius lateral bound to the right of
         // the probe endpoint, forcing the candidate budget to reach the edge
         // of the promised recovery search. It extends far enough in +X to
         // provide the required supported standing egress.
@@ -8112,8 +8178,8 @@ mod tests {
         .expect("the laterally offset deck should permit a top-out");
         let waypoints = movement.top_out.expect("planned top-out").waypoints;
         let cross_end = waypoints[4];
-        let final_sphere = waypoints[5];
-        let final_standing = waypoints[6];
+        let final_sphere = waypoints[6];
+        let final_standing = waypoints[7];
         let support_ray = Ray::new(Point::from(final_sphere), -Vector::y());
         let (_, support) = validation_queries
             .cast_ray_and_get_normal(&support_ray, CLIMB_TOP_OUT_FINAL_DROP, true)
@@ -8135,7 +8201,7 @@ mod tests {
         );
         assert!(
             support.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL
-                && (support.time_of_impact - (waypoints[5].y - deck_top)).abs() < 1.0e-4,
+                && (support.time_of_impact - (waypoints[6].y - deck_top)).abs() < 1.0e-4,
             "the selected deck support must be independently upward and nearby, got {support:?}"
         );
         assert!(
@@ -8155,7 +8221,7 @@ mod tests {
         let expected_x = route_forward + CLIMB_TOP_OUT_ADVANCE + CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY;
         // A narrow cap supports only the full-advance base at the last forward
         // recovery step. It intentionally has no standing egress, exercising
-        // the exact-supported fallback after the complete four-radius shell.
+        // the exact-supported fallback after the complete forward bound.
         world.add_collider(
             EntityId::from_inner(1).unwrap(),
             ColliderBuilder::cuboid(0.12, 0.05, 0.12)
@@ -8181,7 +8247,7 @@ mod tests {
             1.0 / 60.0,
         )
         .expect("the candidate budget must reach the full forward recovery bound");
-        let final_sphere = movement.top_out.expect("planned top-out").waypoints[5];
+        let final_sphere = movement.top_out.expect("planned top-out").waypoints[6];
 
         assert!(
             (final_sphere.x - expected_x).abs() < 1.0e-4 && final_sphere.z.abs() < 1.0e-4,
@@ -8204,7 +8270,7 @@ mod tests {
 
         let movement =
             plan_top_out_from_origin(&world).expect("the wide deck should permit egress");
-        let final_sphere = movement.top_out.expect("planned top-out").waypoints[5];
+        let final_sphere = movement.top_out.expect("planned top-out").waypoints[6];
         assert!(
             (final_sphere.x - (CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_ADVANCE)).abs() < 1.0e-4
                 && final_sphere.z.abs() < 1.0e-4,
@@ -8240,8 +8306,8 @@ mod tests {
             .expect("the lower floor should be reachable past the upper ledge");
         let waypoints = movement.top_out.expect("planned top-out").waypoints;
         let cross_end = waypoints[4];
-        let final_sphere = waypoints[5];
-        let final_standing = waypoints[6];
+        let final_sphere = waypoints[6];
+        let final_standing = waypoints[7];
         let full_advance = cross_end + Vector::x() * CLIMB_TOP_OUT_ADVANCE;
         let queries = query_pipeline(&world, QueryFilter::default());
         let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
@@ -8421,7 +8487,7 @@ mod tests {
 
         let movement = plan_top_out_from_origin(&world)
             .expect("an exact supported fallback should avoid re-freezing");
-        let final_standing = movement.top_out.expect("planned top-out").waypoints[6];
+        let final_standing = movement.top_out.expect("planned top-out").waypoints[7];
         let expected_standing_y = 0.5
             + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
             + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
@@ -8441,11 +8507,11 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let final_pose = vector![4.0, 1.0, 0.0];
         let pos = Isometry::translation(final_pose.x, final_pose.y, final_pose.z);
-        let mut waypoints = [final_pose; 7];
-        waypoints[5] = final_pose + Vector::y();
+        let mut waypoints = [final_pose; 8];
+        waypoints[6] = final_pose + Vector::y();
         let top_out = ClimbTopOut {
             waypoints,
-            next_waypoint: 6,
+            next_waypoint: 7,
             save_pose: vector![-1.0, 1.0, 0.0],
             reversing: false,
         };
@@ -8477,7 +8543,7 @@ mod tests {
         let save_pose = vector![0.0, 1.0, 0.0];
         let pos = Isometry::translation(save_pose.x, save_pose.y, save_pose.z);
         let top_out = ClimbTopOut {
-            waypoints: [save_pose; 7],
+            waypoints: [save_pose; 8],
             next_waypoint: 0,
             save_pose,
             reversing: true,
@@ -8522,7 +8588,7 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let pos = Isometry::translation(save_pose.x, save_pose.y, save_pose.z);
         let top_out = ClimbTopOut {
-            waypoints: [save_pose; 7],
+            waypoints: [save_pose; 8],
             next_waypoint: 0,
             save_pose,
             reversing: true,
@@ -8582,8 +8648,8 @@ mod tests {
         let final_pose = vector![4.0, standing_floor_offset, 0.0];
         let pos = Isometry::translation(final_pose.x, final_pose.y, final_pose.z);
         let top_out = ClimbTopOut {
-            waypoints: [final_pose; 7],
-            next_waypoint: 6,
+            waypoints: [final_pose; 8],
+            next_waypoint: 7,
             save_pose: vector![-1.0, standing_floor_offset, 0.0],
             reversing: false,
         };
@@ -8834,7 +8900,7 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
-            waypoints: [compressed_pose; 7],
+            waypoints: [compressed_pose; 8],
             next_waypoint: 3,
             save_pose,
             reversing: true,
@@ -10556,7 +10622,7 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
-            waypoints: [compressed_pose; 7],
+            waypoints: [compressed_pose; 8],
             next_waypoint: 3,
             save_pose,
             reversing: false,

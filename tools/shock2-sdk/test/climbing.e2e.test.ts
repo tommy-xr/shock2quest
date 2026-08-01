@@ -781,9 +781,7 @@ test(
       await game.step({ frames: 1 });
       landing = await game.player.position();
       const crossedIntoOffice = landing.z < ladderZ - 0.4;
-      const atUpperFloor =
-        landing.y > ladderTop - 2 && landing.y < ladderTop + 0.5;
-      if (!crossedIntoOffice || !atUpperFloor) continue;
+      if (!crossedIntoOffice) continue;
       landingSupport = await game.raycast({
         start: [landing.x, landing.y, landing.z],
         end: [landing.x, landing.y - 3, landing.z],
@@ -795,6 +793,9 @@ test(
         landingSupport.distance !== null &&
         landingSupport.distance > 0.5 &&
         landingSupport.distance < 2 &&
+        Math.abs(landingSupport.distance - standingFloorOffset) < 0.05 &&
+        landingSupport.hit_point !== null &&
+        landingSupport.hit_point[1] >= ladderTop - 0.1 &&
         landingSupport.hit_normal !== null &&
         landingSupport.hit_normal[1] > 0.5;
       if (supportedLanding) break;
@@ -825,6 +826,8 @@ test(
         stableSupport.distance !== null &&
         stableSupport.distance > 0.5 &&
         stableSupport.distance < 2 &&
+        stableSupport.hit_point !== null &&
+        stableSupport.hit_point[1] >= ladderTop - 0.1 &&
         stableSupport.hit_normal !== null &&
         stableSupport.hit_normal[1] > 0.5,
       `the office landing must remain stable after release; ` +
@@ -856,6 +859,8 @@ test(
         officeSupport.distance !== null &&
         officeSupport.distance > 0.5 &&
         officeSupport.distance < 2 &&
+        officeSupport.hit_point !== null &&
+        officeSupport.hit_point[1] >= ladderTop - 0.1 &&
         officeSupport.hit_normal !== null &&
         officeSupport.hit_normal[1] > 0.5,
       `the supported top-out must permit ordinary onward movement into the office; ` +
