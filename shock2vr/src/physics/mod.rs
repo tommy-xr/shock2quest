@@ -300,6 +300,16 @@ const CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
 /// needed when the compressed route fits beside a wall but the standing
 /// capsule must clear that wall before expanding.
 const CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY: f32 = 5.0 * CLIMB_TOP_OUT_RADIUS;
+/// Only redirect a valid forward landing onto a recessed approach-side floor
+/// when the forward route needs at least a full compressed-body-width dogleg.
+/// A one-radius sidestep is ordinary ledge recovery and must keep the player's
+/// held-direction intent.
+const CLIMB_TOP_OUT_LARGE_LATERAL_DOGLEG: f32 = 2.0 * CLIMB_TOP_OUT_RADIUS;
+/// When every ordinary forward landing needs a wider sideways detour, also
+/// consider stepping back onto the ladder's approach side. Dark ladders can
+/// terminate above a recessed same-side floor; bounding this search by the
+/// already-validated deep-drop reach keeps the compressed route local.
+const CLIMB_TOP_OUT_MAX_APPROACH_RECOVERY: f32 = CLIMB_TOP_OUT_DEEP_DROP;
 /// Bound synchronous support/route evaluation when a ladder top has no valid
 /// landing. The three route bases, five forward offsets, and eleven signed
 /// lateral offsets cover the complete independently bounded recovery grid.
@@ -2193,6 +2203,40 @@ fn plan_climb_top_out(
                 has_egress.then_some(validated)
             })
     });
+    // A ladder may project above a recessed floor on the same side from which
+    // it is climbed. The normal held-direction search cannot see that floor:
+    // every candidate advances beyond the ladder, potentially finding a
+    // collision-safe but disconnected roof only after a large lateral dogleg.
+    // Probe a bounded straight retreat from `lip_clear` and validate both the
+    // complete all-collider route and an ordinary stride away from the shaft.
+    // This is deliberately not a general second 2-D grid: straight approach-
+    // side recovery is the least-steering alternative to a sideways detour.
+    let approach_steps =
+        (CLIMB_TOP_OUT_MAX_APPROACH_RECOVERY / CLIMB_TOP_OUT_RADIUS).ceil() as usize;
+    let approach_with_egress = (1..=approach_steps).find_map(|step| {
+        let offset = lip_clear - direction * (step as Real * CLIMB_TOP_OUT_RADIUS);
+        let candidate = vector![offset.x, head.y, offset.z];
+        let landing = landing_pose(candidate)?;
+        if !shape_obstructions(validation_queries, candidate, &compressed).is_empty()
+            || !shape_sweep_is_clear(validation_queries, head, candidate, &compressed)
+            || !shape_sweep_is_clear(
+                validation_queries,
+                landing.sphere,
+                landing.standing,
+                &compressed,
+            )
+            || !has_supported_standing_egress(
+                validation_queries,
+                landing.standing,
+                -direction,
+                &standing,
+                standing_floor_offset,
+            )
+        {
+            return None;
+        }
+        Some((head, landing.sphere, landing.standing))
+    });
     let direct_fallback = direct_with_egress
         .is_none()
         .then(|| direct_candidates.into_iter().next())
@@ -2207,10 +2251,33 @@ fn plan_climb_top_out(
             .map(|(_, validated)| validated)
     })
     .flatten();
-    let Some((landing_route, final_sphere, final_standing)) = direct_with_egress
+    let forward_landing = direct_with_egress
         .or(deep_with_egress.flatten())
         .or(direct_fallback)
-        .or(deep_fallback)
+        .or(deep_fallback);
+    // Prefer the held-direction result unless it needs more lateral steering
+    // than the straight approach-side route. This preserves ordinary forward
+    // top-outs and uses the recessed-floor alternative only when it avoids a
+    // wider sideways recovery.
+    let selected_landing = match (forward_landing, approach_with_egress) {
+        (Some(forward), Some(approach)) => {
+            let lateral_distance = |landing: &(Vector<Real>, Vector<Real>, Vector<Real>)| {
+                (landing.1 - lip_clear).dot(&lateral).abs()
+            };
+            let forward_lateral = lateral_distance(&forward);
+            if forward_lateral + 1.0e-5 >= CLIMB_TOP_OUT_LARGE_LATERAL_DOGLEG
+                && lateral_distance(&approach) + 1.0e-5 < forward_lateral
+            {
+                Some((approach, true))
+            } else {
+                Some((forward, false))
+            }
+        }
+        (Some(forward), None) => Some((forward, false)),
+        (None, Some(approach)) => Some((approach, true)),
+        (None, None) => None,
+    };
+    let Some(((landing_route, final_sphere, final_standing), approach_side)) = selected_landing
     else {
         reject_top_out!("landing");
     };
@@ -2218,16 +2285,29 @@ fn plan_climb_top_out(
     // parented entity blockers live but deliberately permit passage through
     // parentless immutable level terrain, the narrow Dark jump-through
     // exception. Final standing fit still uses `validation_queries`.
-    let waypoints = [
-        head,
-        rise_start,
-        cross_start,
-        lip_approach,
-        lip_clear,
-        landing_route,
-        final_sphere,
-        final_standing,
-    ];
+    let waypoints = if approach_side {
+        [
+            head,
+            head,
+            head,
+            head,
+            head,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    } else {
+        [
+            head,
+            rise_start,
+            cross_start,
+            lip_approach,
+            lip_clear,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    };
     let mut simulated = pos.translation.vector;
     let mut first_movement = None;
     for (waypoint_index, waypoint) in waypoints.into_iter().enumerate() {
@@ -8284,6 +8364,63 @@ mod tests {
         assert!(
             final_sphere.x > 0.0 && (final_sphere.z + CLIMB_TOP_OUT_RADIUS).abs() < 1.0e-5,
             "the one-radius forward sidestep must outrank the recessed approach floor: {waypoints:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_prefers_a_straight_recessed_approach_side_landing() {
+        let mut world = PhysicsWorld::new();
+        let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+        let cross_y = head_y + CLIMB_TOP_OUT_UP;
+        let roof_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
+        // A collision-safe roof exists only after the maximum lateral dogleg,
+        // matching the misleading Hydro2 landing. It has ordinary +X egress.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
+                .translation(vector![
+                    CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
+                    roof_top - 0.05,
+                    -CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY,
+                ])
+                .build(),
+        );
+        // The approach side instead has a lower, straight, fully supported
+        // floor. Reaching it never crosses the upper slab: the compressed body
+        // backs away at head height and then descends through clear space.
+        let recessed_floor_top = -1.0;
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(2.0, 0.05, 0.6)
+                .translation(vector![-2.4, recessed_floor_top - 0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin(&world)
+            .expect("the recessed approach-side floor should permit a top-out");
+        let waypoints = movement.top_out.expect("planned top-out").waypoints;
+        let final_sphere = waypoints[6];
+        let final_standing = waypoints[7];
+        let expected_standing_y = recessed_floor_top
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+
+        assert!(
+            waypoints[0..=5]
+                .iter()
+                .all(|waypoint| (*waypoint - waypoints[0]).norm() < 1.0e-5),
+            "same-side recovery must remain below the upper slab instead of running the rise/cross route: {waypoints:?}"
+        );
+        assert!(
+            final_sphere.x < 0.0
+                && final_sphere.z.abs() < 1.0e-5
+                && (final_sphere.y - head_y).abs() < 1.0e-5
+                && (final_standing.y - expected_standing_y).abs() < 1.0e-5,
+            "the straight recessed floor must outrank the maximum-lateral roof: {waypoints:?}"
         );
     }
 
