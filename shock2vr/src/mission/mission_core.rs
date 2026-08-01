@@ -2073,12 +2073,10 @@ impl MissionCore {
         did_slay
     }
 
-    /// Apply a radius stim blast (Effect::RadiusBlast): every entity with hit
-    /// points in range receives the stim at linear-falloff intensity, and its
-    /// receptrons decide the damage (no receptron for the stim = no response -
-    /// the type-effectiveness mechanism: EMP does nothing to organics).
-    /// Dynamic bodies in range are shoved outward regardless.
-    fn radius_blast(
+    /// Apply a radius stimulus: every entity with hit points in range receives
+    /// the stim at linear-falloff intensity, and its receptrons decide the
+    /// damage (no receptron for the stim = no response).
+    fn radius_stim(
         &mut self,
         center: Vector3<f32>,
         radius: f32,
@@ -2102,6 +2100,23 @@ impl MissionCore {
                     in_range.push((entity_id, intensity * falloff));
                 }
             }
+
+            // The player is represented by the physics character and keeps
+            // its live position in PlayerInfo, not RuntimePropTransform. Add
+            // it explicitly so environmental radius sources can reach the
+            // player's receptrons too.
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            if v_hit_points.get(player.entity_id).is_ok()
+                && !in_range
+                    .iter()
+                    .any(|(entity_id, _)| *entity_id == player.entity_id)
+            {
+                let distance = (player.pos - center).magnitude();
+                if distance < radius {
+                    let falloff = 1.0 - distance / radius;
+                    in_range.push((player.entity_id, intensity * falloff));
+                }
+            }
         }
 
         for (entity_id, felt_intensity) in in_range {
@@ -2115,16 +2130,18 @@ impl MissionCore {
                 stim_template_id,
                 felt_intensity,
             );
-            // Explosions only ever deal damage: dispatch a Damage message only
-            // for a positive result. A zero amount (fully shielded) would still
-            // read as "took damage" and aggro AI; a negative one (a heal
-            // receptron) has no meaning through the damage path.
+            // Radius stims currently expose only the damage response path:
+            // dispatch a Damage message only for a positive result. A zero
+            // amount (fully shielded) would still read as "took damage" and
+            // aggro AI; a negative one (a heal receptron) has no meaning
+            // through the damage path.
             if let Some(amount) = maybe_damage {
                 if amount > 0.0 {
                     self.script_world.dispatch(Message {
                         to: entity_id,
-                        // No impact vector: the blast's physical push is
-                        // applied radially to bodies by radius_blast itself.
+                        // Stim propagation has no directional impact; an
+                        // explosive source applies its physical push
+                        // separately in radius_blast.
                         payload: MessagePayload::Damage {
                             amount,
                             impact: None,
@@ -2133,7 +2150,17 @@ impl MissionCore {
                 }
             }
         }
+    }
 
+    /// Apply an explosive radius stimulus, then shove nearby dynamic bodies.
+    fn radius_blast(
+        &mut self,
+        center: Vector3<f32>,
+        radius: f32,
+        intensity: f32,
+        stim_template_id: i32,
+    ) {
+        self.radius_stim(center, radius, intensity, stim_template_id);
         self.physics.apply_radial_impulse(
             center,
             radius,
@@ -3066,6 +3093,15 @@ impl MissionCore {
                     stim_template_id,
                 } => {
                     self.radius_blast(center, radius, intensity, stim_template_id);
+                }
+
+                Effect::RadiusStim {
+                    center,
+                    radius,
+                    intensity,
+                    stim_template_id,
+                } => {
+                    self.radius_stim(center, radius, intensity, stim_template_id);
                 }
 
                 Effect::RaiseNoise { origin, radius } => {

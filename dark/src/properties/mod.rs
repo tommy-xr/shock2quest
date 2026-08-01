@@ -670,13 +670,30 @@ pub enum StimPropagator {
 pub struct StimSourceOptions {
     pub intensity: f32,
     pub propagator: StimPropagator,
+    /// The temporal portion of the source descriptor. Radius sources use this
+    /// to fire once at birth and then at the authored cadence.
+    #[serde(default)]
+    pub lifecycle: StimSourceLifecycle,
+}
+
+/// Dark Engine's standard periodic source lifecycle (`sPeriodicLifeCycle`).
+/// The values occupy the first 16 bytes of the 32-byte lifecycle block in an
+/// `sStimSourceDesc` record.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StimSourceLifecycle {
+    pub period: Duration,
+    pub max_firings: i32,
+    pub no_max_firings: bool,
+    pub destroy_on_completion: bool,
+    pub intensity_slope: f32,
 }
 
 impl StimSourceOptions {
-    pub fn read(reader: &mut Box<dyn ReadAndSeek>, _len: u32) -> StimSourceOptions {
+    pub fn read(reader: &mut Box<dyn ReadAndSeek>, len: u32) -> StimSourceOptions {
         // sStimSourceDesc (108 bytes): propagator id, intensity, then
-        // propagator-specific params (a redundant propagator name string sits
-        // at +76). Only the fields the game consumes are parsed.
+        // a 32-byte shape block and 32-byte lifecycle block. A redundant
+        // propagator name string sits at +76. Radius shape data starts at +12;
+        // the standard periodic lifecycle is flags/period/max/slope at +44.
         let propagator_id = read_u32(reader);
         let intensity = read_single(reader);
         let _unknown = read_u32(reader);
@@ -688,9 +705,23 @@ impl StimSourceOptions {
             },
             other => StimPropagator::Unknown(other),
         };
+        let lifecycle = if len >= 60 {
+            reader.seek(io::SeekFrom::Start(44)).unwrap();
+            let flags = read_u32(reader);
+            StimSourceLifecycle {
+                no_max_firings: flags & 1 != 0,
+                destroy_on_completion: flags & 2 != 0,
+                period: Duration::from_millis(read_u32(reader).into()),
+                max_firings: read_i32(reader),
+                intensity_slope: read_single(reader),
+            }
+        } else {
+            StimSourceLifecycle::default()
+        };
         StimSourceOptions {
             intensity,
             propagator,
+            lifecycle,
         }
     }
 }
@@ -2316,6 +2347,30 @@ mod tests {
 
         let null = read_stim_source(stim_source_payload(0, 16.0, 0.0));
         assert_eq!(null.propagator, StimPropagator::Null);
+    }
+
+    #[test]
+    fn stim_source_preserves_periodic_lifecycle_data() {
+        let mut one_second = stim_source_payload(2, 5.0, 6.0);
+        one_second[44..48].copy_from_slice(&3u32.to_le_bytes());
+        one_second[48..52].copy_from_slice(&1_000u32.to_le_bytes());
+        one_second[52..56].copy_from_slice(&3i32.to_le_bytes());
+        one_second[56..60].copy_from_slice(&0.25f32.to_le_bytes());
+
+        let mut five_seconds = one_second.clone();
+        five_seconds[48..52].copy_from_slice(&5_000u32.to_le_bytes());
+
+        let parsed = read_stim_source(one_second.clone());
+        assert_eq!(parsed.lifecycle.period, Duration::from_secs(1));
+        assert_eq!(parsed.lifecycle.max_firings, 3);
+        assert!(parsed.lifecycle.no_max_firings);
+        assert!(parsed.lifecycle.destroy_on_completion);
+        assert_eq!(parsed.lifecycle.intensity_slope, 0.25);
+        assert_ne!(
+            read_stim_source(one_second),
+            read_stim_source(five_seconds),
+            "authored lifecycle timing must survive parsing"
+        );
     }
 
     /// Build an 88-byte sReceptron payload the way shock2.gam lays it out:

@@ -329,29 +329,31 @@ pub fn create_entity_core(
         processed_scripts.push("internal_frob_move".to_owned());
     }
 
-    // Explosion SFX templates (class tag "explosiontype", e.g. HE / Incendiary
-    // Explosion) with radius stim sources (arSrcDesc) blast once on spawn.
-    // Radius sources WITHOUT the tag (electrical sparks, Swarm, Rad Burst) are
-    // periodic emitters in the original engine - not one-shot blasts - and are
-    // not handled yet.
-    let is_explosion = {
+    // Radius stim sources with an "explosiontype" class tag blast once on
+    // spawn. Other radius sources (electrical sparks, Swarm, Rad Burst) use
+    // their authored periodic lifecycle.
+    let (is_explosion, is_periodic_stim_emitter) = {
         let v_class_tag = world.borrow::<View<PropClassTag>>().unwrap();
         let v_links = world.borrow::<View<Links>>().unwrap();
-        v_class_tag
+        let has_explosion_tag = v_class_tag
             .get(entity_id)
             .map(|tag| tag.class_tags().iter().any(|(k, _)| *k == "explosiontype"))
-            .unwrap_or(false)
-            && v_links.get(entity_id).is_ok_and(|links| {
-                links.to_links.iter().any(|l| {
-                    matches!(
-                        l.link,
-                        Link::StimSource(StimSourceOptions {
-                            propagator: StimPropagator::Radius { .. },
-                            ..
-                        })
-                    )
-                })
+            .unwrap_or(false);
+        let has_radius_source = v_links.get(entity_id).is_ok_and(|links| {
+            links.to_links.iter().any(|l| {
+                matches!(
+                    l.link,
+                    Link::StimSource(StimSourceOptions {
+                        propagator: StimPropagator::Radius { .. },
+                        ..
+                    })
+                )
             })
+        });
+        (
+            has_explosion_tag && has_radius_source,
+            !has_explosion_tag && has_radius_source,
+        )
     };
     // Release the property views before add_component below needs the world
     // mutably; nothing after this point reads them.
@@ -367,6 +369,9 @@ pub fn create_entity_core(
         // (has_fired) is not persisted, so a saved mid-animation explosion
         // would re-detonate on every load.
         world.add_component(entity_id, RuntimePropDoNotSerialize);
+    }
+    if is_periodic_stim_emitter {
+        processed_scripts.push("internal_periodic_stim".to_owned());
     }
 
     // ...and remove any duplicates!
