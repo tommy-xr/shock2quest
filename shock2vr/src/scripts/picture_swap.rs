@@ -1,12 +1,22 @@
 use dark::properties::{PropTweqModelConfig, PropTweqModelState};
+use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, View, ViewMut, World};
 
 use crate::{physics::PhysicsWorld, time::Time};
 
-use super::{Effect, MessagePayload, Script, script_util::send_to_all_switch_links};
+use super::{
+    Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
+    script_util::send_to_all_switch_links,
+};
 
 /// Retail `PictureSwap` transition length (`StaticOver`, 1.0 seconds).
 const STATIC_DURATION_SECONDS: f32 = 1.0;
+const SCRIPT_STATE_KEY: &str = "shock2vr.picture_swap";
+
+#[derive(Serialize, Deserialize)]
+struct PictureSwapState {
+    static_time_remaining: Option<f32>,
+}
 
 /// The Recreation deck's interactive code-art display.
 ///
@@ -45,9 +55,10 @@ impl PictureSwap {
 
 impl Script for PictureSwap {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
-        // A save taken during the retail script's one-second static phase
-        // persists the odd model-tweq frame. Script-local timers are not part
-        // of shock2quest saves, so reconstruct that pending completion.
+        // Legacy saves persist the odd model-tweq frame but have no private
+        // script payload, so conservatively reconstruct a full pending delay.
+        // Current saves hydrate the exact remaining timer and skip this fresh
+        // initialization path.
         let v_state = world.borrow::<View<PropTweqModelState>>().unwrap();
         if v_state
             .get(entity_id)
@@ -90,6 +101,30 @@ impl Script for PictureSwap {
         self.static_time_remaining = None;
         advance_model(world, entity_id).unwrap_or(Effect::NoEffect)
     }
+
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some(SCRIPT_STATE_KEY)
+    }
+
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        ScriptState::encode(
+            1,
+            &PictureSwapState {
+                static_time_remaining: self.static_time_remaining,
+            },
+            SCRIPT_STATE_KEY,
+        )
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        let restored: PictureSwapState = state.decode(1, SCRIPT_STATE_KEY)?;
+        self.static_time_remaining = restored.static_time_remaining;
+        Ok(())
+    }
 }
 
 /// Advance the persisted model-tweq frame by one, wrapping after its last
@@ -115,7 +150,7 @@ fn advance_model(world: &World, entity_id: EntityId) -> Option<Effect> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::HashMap, time::Duration};
 
     use dark::properties::{
         Link, Links, PropTweqModelConfig, PropTweqModelState, ToLink, TweqAnimationConfig,
@@ -236,6 +271,57 @@ mod tests {
         let ignored = script.handle_message(picture, &world, &physics, &MessagePayload::Frob);
         assert!(matches!(ignored, Effect::NoEffect));
         assert_eq!(frame(&world, picture), 1);
+    }
+
+    #[test]
+    fn saved_static_timer_resumes_exactly_without_fresh_initialization() {
+        let (world, picture) = picture_world();
+        let physics = PhysicsWorld::new();
+        let mut before_save = PictureSwap::new();
+        before_save.handle_message(picture, &world, &physics, &MessagePayload::Frob);
+        before_save.update(
+            picture,
+            &world,
+            &physics,
+            &Time {
+                elapsed: Duration::from_millis(400),
+                total: Duration::from_millis(400),
+            },
+        );
+        let state = before_save.save_state().unwrap();
+
+        let mut after_load = PictureSwap::new();
+        after_load
+            .restore_state(&state, &ScriptRestoreContext::new(&HashMap::new()))
+            .unwrap();
+        assert!(matches!(
+            after_load.initialize_after_hydration(picture, &world, true),
+            Effect::NoEffect
+        ));
+
+        let almost_done = after_load.update(
+            picture,
+            &world,
+            &physics,
+            &Time {
+                elapsed: Duration::from_millis(500),
+                total: Duration::from_millis(900),
+            },
+        );
+        assert_eq!(changed_model(almost_done), None);
+        assert_eq!(frame(&world, picture), 1);
+
+        let completed = after_load.update(
+            picture,
+            &world,
+            &physics,
+            &Time {
+                elapsed: Duration::from_millis(101),
+                total: Duration::from_millis(1001),
+            },
+        );
+        assert_eq!(changed_model(completed), Some("pic03".to_owned()));
+        assert_eq!(frame(&world, picture), 2);
     }
 
     #[test]

@@ -14,7 +14,10 @@ import { GameServer } from "../src/index.js";
 // input, not the debug message-injection endpoint.
 //
 // Negative-first: with `pictureswap` mapped to NoopScript, the first model
-// assertion after the normal frob reads `pic05` instead of `static`.
+// assertion after the normal frob reads `pic05` instead of `static`. Before
+// versioned script state, loading the mid-static save below reran initialize
+// and reset the remaining delay to a full second, so the 31 restored frames
+// still read `static` instead of `pic03`.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CODE_PIC_1 = "Code Pic 1";
 
@@ -78,14 +81,41 @@ test(
       "static",
       "PictureSwap should retain static for the authored one-second delay",
     );
-    await game.step({ frames: 31 });
-    assert.equal(modelOf(await game.entities.detail(picture.id)), "pic03");
+    const saveName = `picture_swap_mid_static_${Date.now()}`;
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    const restoredPictures = (
+      await game.entities.list({ filter: CODE_PIC_1, limit: 20 })
+    ).entities;
+    const restoredPicture = restoredPictures.find(
+      (entity) => entity.name === CODE_PIC_1,
+    );
+    assert.ok(restoredPicture, `expected restored ${CODE_PIC_1}`);
+    assert.equal(
+      modelOf(await game.entities.detail(restoredPicture.id)),
+      "static",
+    );
+    await game.step({ frames: 20 });
+    assert.equal(
+      modelOf(await game.entities.detail(restoredPicture.id)),
+      "static",
+      "the restored exact timer should not finish too early",
+    );
+    await game.step({ frames: 11 });
+    assert.equal(
+      modelOf(await game.entities.detail(restoredPicture.id)),
+      "pic03",
+      "the restored timer must not restart from a full second",
+    );
 
-    await frobThroughReticle(game, picture);
-    assert.equal(modelOf(await game.entities.detail(picture.id)), "static");
+    await frobThroughReticle(game, restoredPicture);
+    assert.equal(
+      modelOf(await game.entities.detail(restoredPicture.id)),
+      "static",
+    );
     await game.step({ frames: 61 });
     assert.equal(
-      modelOf(await game.entities.detail(picture.id)),
+      modelOf(await game.entities.detail(restoredPicture.id)),
       "code10",
       "the second normal frob should visibly reveal this frame's code segment",
     );
