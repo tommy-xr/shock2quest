@@ -13,7 +13,7 @@ use crate::{
     input_context::InputContext,
     mission::GlobalContext,
     quest_info::QuestInfo,
-    scripts::{Effect, GlobalEffect},
+    scripts::{Effect, GlobalEffect, ScriptWorld},
     time::Time,
 };
 
@@ -109,6 +109,12 @@ pub trait GameScene {
 
     /// Access to the ECS world (required for most game systems)
     fn world(&self) -> &World;
+
+    /// Script runtime paired with `world`, when this scene owns one. Save code
+    /// uses it for opt-in private script state; menus/cutscenes return `None`.
+    fn script_world(&self) -> Option<&ScriptWorld> {
+        None
+    }
 
     /// Scene identification
     fn scene_name(&self) -> &str;

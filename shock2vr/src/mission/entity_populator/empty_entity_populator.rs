@@ -5,10 +5,9 @@
 use shipyard::World;
 use std::collections::HashMap;
 
-use dark::properties::WrappedEntityId;
 use dark::ss2_entity_info::SystemShock2EntityInfo;
 
-use super::EntityPopulator;
+use super::{EntityPopulation, EntityPopulator};
 
 #[allow(dead_code)]
 pub struct EmptyEntityPopulator {}
@@ -23,7 +22,11 @@ impl EntityPopulator for EmptyEntityPopulator {
 
         _obj_name_map: &HashMap<i32, String>, // name override map
         _world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId> {
-        HashMap::new()
+    ) -> EntityPopulation {
+        EntityPopulation {
+            template_to_entity_id: HashMap::new(),
+            entity_id_map: HashMap::new(),
+            script_states: Vec::new(),
+        }
     }
 }

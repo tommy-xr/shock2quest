@@ -14,7 +14,7 @@ use dark::ss2_entity_info::SystemShock2EntityInfo;
 
 use crate::{mission::entity_creator, save_load::EntitySaveData};
 
-use super::EntityPopulator;
+use super::{EntityPopulation, EntityPopulator};
 
 pub struct SaveFileEntityPopulator {
     pub save_data: EntitySaveData,
@@ -33,9 +33,9 @@ impl EntityPopulator for SaveFileEntityPopulator {
         level_entity_info: &SystemShock2EntityInfo,
         obj_name_map: &HashMap<i32, String>, // name override map
         world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId> {
+    ) -> EntityPopulation {
         let world_entity_data = &self.save_data;
-        let (template_to_entity, _) = world_entity_data.instantiate(world);
+        let (template_to_entity, entity_id_map) = world_entity_data.instantiate(world);
         restore_newly_parsed_authored_ecology(
             gamesys_entity_info,
             level_entity_info,
@@ -43,7 +43,11 @@ impl EntityPopulator for SaveFileEntityPopulator {
             &template_to_entity,
             world,
         );
-        template_to_entity
+        EntityPopulation {
+            template_to_entity_id: template_to_entity,
+            entity_id_map,
+            script_states: world_entity_data.script_states.clone(),
+        }
     }
 }
 

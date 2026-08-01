@@ -75,11 +75,16 @@ mod tweqable;
 mod use_sound;
 mod vaporize_inventory;
 mod weapon_script;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use cgmath::{Point2, Vector3};
 use dark::motion::MotionFlags;
 pub use effect::*;
+
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use shipyard::{EntityId, World};
 use tracing::{Level, info, span, warn};
@@ -282,6 +287,174 @@ pub struct Message {
     pub to: EntityId,
 }
 
+/// One script-owned, versioned payload.
+///
+/// The payload deliberately remains data, rather than a serialized trait
+/// object. Each opting-in script owns its schema and must either restore the
+/// saved version or reject it explicitly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScriptState {
+    pub version: u32,
+    pub payload: serde_json::Value,
+}
+
+impl ScriptState {
+    pub fn encode<T: Serialize>(
+        version: u32,
+        payload: &T,
+        script_key: &str,
+    ) -> Result<Self, ScriptStateError> {
+        serde_json::to_value(payload)
+            .map(|payload| Self { version, payload })
+            .map_err(|error| ScriptStateError::InvalidPayload {
+                script_key: script_key.to_owned(),
+                message: error.to_string(),
+            })
+    }
+
+    pub fn decode<T: DeserializeOwned>(
+        &self,
+        supported_version: u32,
+        script_key: &str,
+    ) -> Result<T, ScriptStateError> {
+        if self.version != supported_version {
+            return Err(ScriptStateError::UnsupportedVersion {
+                script_key: script_key.to_owned(),
+                found: self.version,
+                supported: supported_version,
+            });
+        }
+        serde_json::from_value(self.payload.clone()).map_err(|error| {
+            ScriptStateError::InvalidPayload {
+                script_key: script_key.to_owned(),
+                message: error.to_string(),
+            }
+        })
+    }
+}
+
+/// Collision-safe identity within one entity's script tree.
+///
+/// `path` contains the top-level `ScriptWorld` ordinal followed by every
+/// `CompositeScript` child ordinal. `script_key` is an explicit stable name
+/// owned by the script implementation; the path distinguishes duplicate keys.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScriptStateIdentity {
+    pub script_key: String,
+    pub path: Vec<u32>,
+}
+
+/// Save-file envelope for one script instance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedScriptState {
+    /// Entity ID in the pre-save world. It is remapped before hydration.
+    pub entity_id: u64,
+    pub identity: ScriptStateIdentity,
+    pub state: ScriptState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScriptStateError {
+    UnsupportedVersion {
+        script_key: String,
+        found: u32,
+        supported: u32,
+    },
+    InvalidPayload {
+        script_key: String,
+        message: String,
+    },
+    InvalidEntityId(u64),
+    MissingEntityReference(u64),
+    MissingOwner(u64),
+    MissingScript {
+        entity_id: u64,
+        identity: ScriptStateIdentity,
+    },
+    DuplicateState {
+        entity_id: u64,
+        path: Vec<u32>,
+    },
+    StateHookMissing(String),
+}
+
+impl fmt::Display for ScriptStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedVersion {
+                script_key,
+                found,
+                supported,
+            } => write!(
+                formatter,
+                "script '{script_key}' has unsupported version {found} (supported: {supported})"
+            ),
+            Self::InvalidPayload {
+                script_key,
+                message,
+            } => write!(
+                formatter,
+                "invalid state for script '{script_key}': {message}"
+            ),
+            Self::InvalidEntityId(entity_id) => {
+                write!(
+                    formatter,
+                    "saved script state has invalid entity ID {entity_id}"
+                )
+            }
+            Self::MissingEntityReference(entity_id) => write!(
+                formatter,
+                "saved script state references entity ID {entity_id}, which was not restored"
+            ),
+            Self::MissingOwner(entity_id) => write!(
+                formatter,
+                "saved script state owner {entity_id} was not restored"
+            ),
+            Self::MissingScript {
+                entity_id,
+                identity,
+            } => write!(
+                formatter,
+                "saved script '{}' at path {:?} has no matching instance on restored entity {entity_id}",
+                identity.script_key, identity.path
+            ),
+            Self::DuplicateState { entity_id, path } => write!(
+                formatter,
+                "saved entity {entity_id} has duplicate script state at path {path:?}"
+            ),
+            Self::StateHookMissing(script_key) => write!(
+                formatter,
+                "script '{script_key}' declares a state key but does not implement its state hook"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ScriptStateError {}
+
+/// Entity-ID remapping available while a script hydrates its payload.
+pub struct ScriptRestoreContext<'a> {
+    entity_id_map: &'a HashMap<EntityId, EntityId>,
+}
+
+impl<'a> ScriptRestoreContext<'a> {
+    fn new(entity_id_map: &'a HashMap<EntityId, EntityId>) -> Self {
+        Self { entity_id_map }
+    }
+
+    /// Convert a pre-save entity ID stored in a script payload to the entity
+    /// instantiated for the loaded world. Missing references are errors, not
+    /// silently stale handles.
+    pub fn remap_entity(&self, saved_entity_id: u64) -> Result<EntityId, ScriptStateError> {
+        let old_entity = EntityId::from_inner(saved_entity_id)
+            .ok_or(ScriptStateError::InvalidEntityId(saved_entity_id))?;
+        self.entity_id_map
+            .get(&old_entity)
+            .copied()
+            .ok_or(ScriptStateError::MissingEntityReference(saved_entity_id))
+    }
+}
+
 pub trait Script {
     fn initialize(&mut self, _entity_id: EntityId, _world: &World) -> Effect {
         Effect::NoEffect
@@ -305,6 +478,90 @@ pub trait Script {
         _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
+    }
+
+    /// Stable opt-in identity for private runtime state. Entity properties and
+    /// links do not belong here: they are already serialized by the ECS save
+    /// layer. Return a key only for state owned exclusively by this script.
+    fn script_state_key(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Serialize this script's current private state. An opting-in script must
+    /// always emit an envelope, including for its default/idle state, so load
+    /// can distinguish hydration from a legacy save with no script state.
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        Err(ScriptStateError::StateHookMissing(
+            self.script_state_key()
+                .unwrap_or("<unregistered>")
+                .to_owned(),
+        ))
+    }
+
+    /// Restore private state before the first update. Payloads containing
+    /// entity IDs must use `context` instead of retaining pre-save handles.
+    fn restore_state(
+        &mut self,
+        _state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        Err(ScriptStateError::StateHookMissing(
+            self.script_state_key()
+                .unwrap_or("<unregistered>")
+                .to_owned(),
+        ))
+    }
+
+    /// Fresh instances run `initialize`. Hydrated instances skip its
+    /// fresh-session side effects because `restore_state` has already supplied
+    /// their complete private state. Composite scripts override this to make
+    /// the decision independently for each child.
+    #[doc(hidden)]
+    fn initialize_after_hydration(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        hydrated: bool,
+    ) -> Effect {
+        if hydrated {
+            Effect::NoEffect
+        } else {
+            self.initialize(entity_id, world)
+        }
+    }
+
+    #[doc(hidden)]
+    fn collect_script_states(
+        &self,
+        entity_id: EntityId,
+        path: &mut Vec<u32>,
+        output: &mut Vec<SavedScriptState>,
+    ) -> Result<(), ScriptStateError> {
+        if let Some(script_key) = self.script_state_key() {
+            output.push(SavedScriptState {
+                entity_id: entity_id.inner(),
+                identity: ScriptStateIdentity {
+                    script_key: script_key.to_owned(),
+                    path: path.clone(),
+                },
+                state: self.save_state()?,
+            });
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    fn restore_script_state(
+        &mut self,
+        path: &[u32],
+        saved: &SavedScriptState,
+        context: &ScriptRestoreContext<'_>,
+    ) -> Result<bool, ScriptStateError> {
+        if !path.is_empty() || self.script_state_key() != Some(saved.identity.script_key.as_str()) {
+            return Ok(false);
+        }
+        self.restore_state(&saved.state, context)?;
+        Ok(true)
     }
 }
 
@@ -333,13 +590,29 @@ impl Script for UnimplementedScript {
     }
 }
 
+struct ScriptInstance {
+    script: Box<dyn Script>,
+    hydrated: bool,
+}
+
+impl ScriptInstance {
+    fn fresh(script: Box<dyn Script>) -> Self {
+        Self {
+            script,
+            hydrated: false,
+        }
+    }
+}
+
 pub struct CompositeScript {
-    scripts: Vec<Box<dyn Script>>,
+    scripts: Vec<ScriptInstance>,
 }
 
 impl CompositeScript {
     pub fn new(scripts: Vec<Box<dyn Script>>) -> CompositeScript {
-        CompositeScript { scripts }
+        CompositeScript {
+            scripts: scripts.into_iter().map(ScriptInstance::fresh).collect(),
+        }
     }
 }
 
@@ -348,7 +621,7 @@ impl Script for CompositeScript {
         let effects = self
             .scripts
             .iter_mut()
-            .map(|sc| sc.initialize(entity_id, world))
+            .map(|instance| instance.script.initialize(entity_id, world))
             .collect();
 
         Effect::combine(effects)
@@ -364,7 +637,7 @@ impl Script for CompositeScript {
         let effects = self
             .scripts
             .iter_mut()
-            .map(|sc| sc.update(entity_id, world, physics, time))
+            .map(|instance| instance.script.update(entity_id, world, physics, time))
             .collect();
 
         Effect::combine(effects)
@@ -380,10 +653,69 @@ impl Script for CompositeScript {
         let effects = self
             .scripts
             .iter_mut()
-            .map(|sc| sc.handle_message(entity_id, world, physics, msg))
+            .map(|instance| {
+                instance
+                    .script
+                    .handle_message(entity_id, world, physics, msg)
+            })
             .collect();
 
         Effect::combine(effects)
+    }
+
+    fn initialize_after_hydration(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _hydrated: bool,
+    ) -> Effect {
+        Effect::combine(
+            self.scripts
+                .iter_mut()
+                .map(|instance| {
+                    instance
+                        .script
+                        .initialize_after_hydration(entity_id, world, instance.hydrated)
+                })
+                .collect(),
+        )
+    }
+
+    fn collect_script_states(
+        &self,
+        entity_id: EntityId,
+        path: &mut Vec<u32>,
+        output: &mut Vec<SavedScriptState>,
+    ) -> Result<(), ScriptStateError> {
+        for (index, instance) in self.scripts.iter().enumerate() {
+            path.push(index as u32);
+            instance
+                .script
+                .collect_script_states(entity_id, path, output)?;
+            path.pop();
+        }
+        Ok(())
+    }
+
+    fn restore_script_state(
+        &mut self,
+        path: &[u32],
+        saved: &SavedScriptState,
+        context: &ScriptRestoreContext<'_>,
+    ) -> Result<bool, ScriptStateError> {
+        let Some((&child_index, child_path)) = path.split_first() else {
+            return Ok(false);
+        };
+        let Some(instance) = self.scripts.get_mut(child_index as usize) else {
+            return Ok(false);
+        };
+        let restored = instance
+            .script
+            .restore_script_state(child_path, saved, context)?;
+        if restored {
+            instance.hydrated = true;
+        }
+        Ok(restored)
     }
 }
 
@@ -456,7 +788,7 @@ impl Script for NoopScript {
 
 pub struct ScriptWorld {
     entity_has_initialized: HashMap<EntityId, bool>,
-    entity_to_scripts: HashMap<EntityId, Vec<Box<dyn Script>>>,
+    entity_to_scripts: HashMap<EntityId, Vec<ScriptInstance>>,
     message_queue: Vec<Message>,
 }
 
@@ -813,7 +1145,7 @@ impl ScriptWorld {
         self.entity_to_scripts
             .entry(entity_id)
             .or_default()
-            .push(script);
+            .push(ScriptInstance::fresh(script));
 
         self.entity_has_initialized.insert(entity_id, false);
     }
@@ -827,6 +1159,86 @@ impl ScriptWorld {
         self.message_queue.push(message);
     }
 
+    /// Snapshot all opting-in private script state. The output is sorted so
+    /// identical worlds produce reviewable, deterministic save JSON despite
+    /// `HashMap` iteration order.
+    pub fn save_states(&self) -> Result<Vec<SavedScriptState>, ScriptStateError> {
+        let mut output = Vec::new();
+        for (entity_id, scripts) in &self.entity_to_scripts {
+            for (index, instance) in scripts.iter().enumerate() {
+                let mut path = vec![index as u32];
+                instance
+                    .script
+                    .collect_script_states(*entity_id, &mut path, &mut output)?;
+            }
+        }
+        output.sort_by(|left, right| {
+            left.entity_id
+                .cmp(&right.entity_id)
+                .then_with(|| left.identity.path.cmp(&right.identity.path))
+                .then_with(|| left.identity.script_key.cmp(&right.identity.script_key))
+        });
+        Ok(output)
+    }
+
+    /// Hydrate matching script instances before their first update.
+    ///
+    /// Missing state is intentionally not an error: legacy saves and scripts
+    /// which do not opt in retain the existing fresh initialization path.
+    pub fn restore_states(
+        &mut self,
+        saved_states: &[SavedScriptState],
+        entity_id_map: &HashMap<EntityId, EntityId>,
+    ) -> Result<(), ScriptStateError> {
+        let context = ScriptRestoreContext::new(entity_id_map);
+        let mut restored_paths = HashSet::new();
+
+        for saved in saved_states {
+            let old_entity = EntityId::from_inner(saved.entity_id)
+                .ok_or(ScriptStateError::InvalidEntityId(saved.entity_id))?;
+            let new_entity = entity_id_map
+                .get(&old_entity)
+                .copied()
+                .ok_or(ScriptStateError::MissingOwner(saved.entity_id))?;
+            if !restored_paths.insert((new_entity, saved.identity.path.clone())) {
+                return Err(ScriptStateError::DuplicateState {
+                    entity_id: saved.entity_id,
+                    path: saved.identity.path.clone(),
+                });
+            }
+
+            let Some((&top_index, child_path)) = saved.identity.path.split_first() else {
+                return Err(ScriptStateError::MissingScript {
+                    entity_id: saved.entity_id,
+                    identity: saved.identity.clone(),
+                });
+            };
+            let Some(instance) = self
+                .entity_to_scripts
+                .get_mut(&new_entity)
+                .and_then(|scripts| scripts.get_mut(top_index as usize))
+            else {
+                return Err(ScriptStateError::MissingScript {
+                    entity_id: saved.entity_id,
+                    identity: saved.identity.clone(),
+                });
+            };
+
+            let restored = instance
+                .script
+                .restore_script_state(child_path, saved, &context)?;
+            if !restored {
+                return Err(ScriptStateError::MissingScript {
+                    entity_id: saved.entity_id,
+                    identity: saved.identity.clone(),
+                });
+            }
+            instance.hydrated = true;
+        }
+
+        Ok(())
+    }
+
     pub fn update(&mut self, world: &World, physics: &PhysicsWorld, time: &Time) -> Vec<Effect> {
         let mut produced_effects = Vec::new();
 
@@ -836,8 +1248,12 @@ impl ScriptWorld {
                 self.entity_to_scripts
                     .entry(*entity_id)
                     .and_modify(|scripts| {
-                        for script in scripts {
-                            let eff = script.initialize(*entity_id, world);
+                        for instance in scripts {
+                            let eff = instance.script.initialize_after_hydration(
+                                *entity_id,
+                                world,
+                                instance.hydrated,
+                            );
                             produced_effects.push(eff);
                         }
                     });
@@ -870,14 +1286,19 @@ impl ScriptWorld {
             self.entity_to_scripts
                 .entry(to_entity_id)
                 .and_modify(|scripts| {
-                    for script in scripts {
+                    for instance in scripts {
                         if is_turn_on {
                             info!(
                                 "-- processing turn on message: {}",
                                 debug_entity(world, to_entity_id)
                             );
                         }
-                        let eff = script.handle_message(to_entity_id, world, physics, &msg.payload);
+                        let eff = instance.script.handle_message(
+                            to_entity_id,
+                            world,
+                            physics,
+                            &msg.payload,
+                        );
                         produced_effects.push(eff);
                     }
                 });
@@ -890,8 +1311,8 @@ impl ScriptWorld {
         self.message_queue.clear();
 
         for (entity_id, scripts) in self.entity_to_scripts.iter_mut() {
-            for script in scripts.iter_mut() {
-                let eff = script.update(*entity_id, world, physics, time);
+            for instance in scripts.iter_mut() {
+                let eff = instance.script.update(*entity_id, world, physics, time);
                 produced_effects.push(eff);
             }
         }
@@ -907,8 +1328,8 @@ impl ScriptWorld {
                     let entity_id = msg.to;
                     let mut slay_effects = Vec::new();
                     if let Some(scripts) = self.entity_to_scripts.get_mut(&entity_id) {
-                        for script in scripts {
-                            slay_effects.push(script.handle_message(
+                        for instance in scripts {
+                            slay_effects.push(instance.script.handle_message(
                                 entity_id,
                                 world,
                                 physics,
@@ -930,5 +1351,349 @@ impl ScriptWorld {
         }
 
         ret
+    }
+}
+
+#[cfg(test)]
+mod script_state_tests {
+    use std::{
+        cell::{Cell, RefCell},
+        collections::HashMap,
+        rc::Rc,
+    };
+
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    struct TestState {
+        mode: String,
+        timer: f32,
+        referenced_entity: Option<u64>,
+    }
+
+    struct StatefulTestScript {
+        state: TestState,
+        initialize_count: Rc<Cell<u32>>,
+        observed: Rc<RefCell<Option<TestState>>>,
+    }
+
+    impl StatefulTestScript {
+        fn new(
+            mode: &str,
+            timer: f32,
+            referenced_entity: Option<EntityId>,
+            initialize_count: Rc<Cell<u32>>,
+            observed: Rc<RefCell<Option<TestState>>>,
+        ) -> Self {
+            Self {
+                state: TestState {
+                    mode: mode.to_owned(),
+                    timer,
+                    referenced_entity: referenced_entity.map(EntityId::inner),
+                },
+                initialize_count,
+                observed,
+            }
+        }
+    }
+
+    impl Script for StatefulTestScript {
+        fn initialize(&mut self, _entity_id: EntityId, _world: &World) -> Effect {
+            self.initialize_count
+                .set(self.initialize_count.get().saturating_add(1));
+            self.state = TestState {
+                mode: "fresh".to_owned(),
+                timer: 0.0,
+                referenced_entity: None,
+            };
+            Effect::NoEffect
+        }
+
+        fn update(
+            &mut self,
+            _entity_id: EntityId,
+            _world: &World,
+            _physics: &PhysicsWorld,
+            _time: &Time,
+        ) -> Effect {
+            *self.observed.borrow_mut() = Some(self.state.clone());
+            Effect::NoEffect
+        }
+
+        fn script_state_key(&self) -> Option<&'static str> {
+            Some("test.stateful")
+        }
+
+        fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+            ScriptState::encode(1, &self.state, "test.stateful")
+        }
+
+        fn restore_state(
+            &mut self,
+            state: &ScriptState,
+            context: &ScriptRestoreContext<'_>,
+        ) -> Result<(), ScriptStateError> {
+            let mut restored: TestState = state.decode(1, "test.stateful")?;
+            if let Some(saved_entity) = restored.referenced_entity {
+                restored.referenced_entity = Some(context.remap_entity(saved_entity)?.inner());
+            }
+            self.state = restored;
+            Ok(())
+        }
+    }
+
+    fn tick(scripts: &mut ScriptWorld, world: &World) {
+        scripts.update(world, &PhysicsWorld::new(), &Time::default());
+    }
+
+    #[test]
+    fn hydrated_mode_and_timer_survive_without_replaying_initialize() {
+        let mut source_world = World::new();
+        let old_entity = source_world.add_entity(());
+        let mut source_scripts = ScriptWorld::new();
+        source_scripts.add_entity2(
+            old_entity,
+            Box::new(StatefulTestScript::new(
+                "waiting",
+                2.75,
+                None,
+                Rc::new(Cell::new(0)),
+                Rc::new(RefCell::new(None)),
+            )),
+        );
+        let saved = source_scripts.save_states().unwrap();
+
+        let mut loaded_world = World::new();
+        let _different_generation = loaded_world.add_entity(());
+        let new_entity = loaded_world.add_entity(());
+        let initialize_count = Rc::new(Cell::new(0));
+        let observed = Rc::new(RefCell::new(None));
+        let mut loaded_scripts = ScriptWorld::new();
+        loaded_scripts.add_entity2(
+            new_entity,
+            Box::new(StatefulTestScript::new(
+                "fresh",
+                0.0,
+                None,
+                initialize_count.clone(),
+                observed.clone(),
+            )),
+        );
+        loaded_scripts
+            .restore_states(&saved, &HashMap::from([(old_entity, new_entity)]))
+            .unwrap();
+
+        tick(&mut loaded_scripts, &loaded_world);
+
+        assert_eq!(initialize_count.get(), 0);
+        assert_eq!(
+            *observed.borrow(),
+            Some(TestState {
+                mode: "waiting".to_owned(),
+                timer: 2.75,
+                referenced_entity: None,
+            })
+        );
+    }
+
+    #[test]
+    fn missing_legacy_state_keeps_fresh_initialization_semantics() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let initialize_count = Rc::new(Cell::new(0));
+        let observed = Rc::new(RefCell::new(None));
+        let mut scripts = ScriptWorld::new();
+        scripts.add_entity2(
+            entity,
+            Box::new(StatefulTestScript::new(
+                "stale-constructor-value",
+                9.0,
+                None,
+                initialize_count.clone(),
+                observed.clone(),
+            )),
+        );
+
+        tick(&mut scripts, &world);
+
+        assert_eq!(initialize_count.get(), 1);
+        assert_eq!(
+            *observed.borrow(),
+            Some(TestState {
+                mode: "fresh".to_owned(),
+                timer: 0.0,
+                referenced_entity: None,
+            })
+        );
+    }
+
+    #[test]
+    fn duplicate_and_nested_composite_children_have_distinct_paths() {
+        let mut source_world = World::new();
+        let old_entity = source_world.add_entity(());
+        let mut source_scripts = ScriptWorld::new();
+        let inert_count = Rc::new(Cell::new(0));
+        let inert_observation = Rc::new(RefCell::new(None));
+        let stateful = |mode: &str, timer: f32| {
+            Box::new(StatefulTestScript::new(
+                mode,
+                timer,
+                None,
+                inert_count.clone(),
+                inert_observation.clone(),
+            )) as Box<dyn Script>
+        };
+        source_scripts.add_entity2(
+            old_entity,
+            Box::new(CompositeScript::new(vec![
+                stateful("outer-first", 1.0),
+                Box::new(CompositeScript::new(vec![
+                    stateful("nested-first", 2.0),
+                    stateful("nested-second", 3.0),
+                ])),
+            ])),
+        );
+        source_scripts.add_entity2(old_entity, stateful("top-duplicate", 4.0));
+
+        let saved = source_scripts.save_states().unwrap();
+        assert_eq!(
+            saved
+                .iter()
+                .map(|state| state.identity.path.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![0, 0], vec![0, 1, 0], vec![0, 1, 1], vec![1]]
+        );
+
+        let mut loaded_world = World::new();
+        let new_entity = loaded_world.add_entity(());
+        let observations: Vec<_> = (0..4).map(|_| Rc::new(RefCell::new(None))).collect();
+        let counts: Vec<_> = (0..4).map(|_| Rc::new(Cell::new(0))).collect();
+        let loaded = |index: usize| {
+            Box::new(StatefulTestScript::new(
+                "fresh",
+                0.0,
+                None,
+                counts[index].clone(),
+                observations[index].clone(),
+            )) as Box<dyn Script>
+        };
+        let mut loaded_scripts = ScriptWorld::new();
+        loaded_scripts.add_entity2(
+            new_entity,
+            Box::new(CompositeScript::new(vec![
+                loaded(0),
+                Box::new(CompositeScript::new(vec![loaded(1), loaded(2)])),
+            ])),
+        );
+        loaded_scripts.add_entity2(new_entity, loaded(3));
+        loaded_scripts
+            .restore_states(&saved, &HashMap::from([(old_entity, new_entity)]))
+            .unwrap();
+
+        tick(&mut loaded_scripts, &loaded_world);
+
+        assert!(counts.iter().all(|count| count.get() == 0));
+        assert_eq!(
+            observations
+                .iter()
+                .map(|state| state.borrow().as_ref().unwrap().mode.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "outer-first",
+                "nested-first",
+                "nested-second",
+                "top-duplicate"
+            ]
+        );
+    }
+
+    #[test]
+    fn restore_context_remaps_saved_entity_references() {
+        let mut source_world = World::new();
+        let old_owner = source_world.add_entity(());
+        let old_target = source_world.add_entity(());
+        let mut source_scripts = ScriptWorld::new();
+        source_scripts.add_entity2(
+            old_owner,
+            Box::new(StatefulTestScript::new(
+                "tracking",
+                1.0,
+                Some(old_target),
+                Rc::new(Cell::new(0)),
+                Rc::new(RefCell::new(None)),
+            )),
+        );
+        let mut save_data = crate::save_load::EntitySaveData::empty();
+        save_data.all_entities = vec![old_owner.inner(), old_target.inner()];
+        save_data.script_states = source_scripts.save_states().unwrap();
+        let save_data: crate::save_load::EntitySaveData =
+            serde_json::from_value(serde_json::to_value(save_data).unwrap()).unwrap();
+
+        let mut loaded_world = World::new();
+        let _sentinel = loaded_world.add_entity(());
+        let (_, entity_id_map) = save_data.instantiate(&mut loaded_world);
+        let new_owner = entity_id_map[&old_owner];
+        let new_target = entity_id_map[&old_target];
+        let observed = Rc::new(RefCell::new(None));
+        let mut loaded_scripts = ScriptWorld::new();
+        loaded_scripts.add_entity2(
+            new_owner,
+            Box::new(StatefulTestScript::new(
+                "fresh",
+                0.0,
+                None,
+                Rc::new(Cell::new(0)),
+                observed.clone(),
+            )),
+        );
+        loaded_scripts
+            .restore_states(&save_data.script_states, &entity_id_map)
+            .unwrap();
+
+        tick(&mut loaded_scripts, &loaded_world);
+
+        assert_eq!(
+            observed.borrow().as_ref().unwrap().referenced_entity,
+            Some(new_target.inner())
+        );
+    }
+
+    #[test]
+    fn unsupported_script_state_version_fails_clearly() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let mut source = ScriptWorld::new();
+        source.add_entity2(
+            entity,
+            Box::new(StatefulTestScript::new(
+                "waiting",
+                1.0,
+                None,
+                Rc::new(Cell::new(0)),
+                Rc::new(RefCell::new(None)),
+            )),
+        );
+        let mut saved = source.save_states().unwrap();
+        saved[0].state.version = 99;
+
+        let mut loaded = ScriptWorld::new();
+        loaded.add_entity2(
+            entity,
+            Box::new(StatefulTestScript::new(
+                "fresh",
+                0.0,
+                None,
+                Rc::new(Cell::new(0)),
+                Rc::new(RefCell::new(None)),
+            )),
+        );
+        let error = loaded
+            .restore_states(&saved, &HashMap::from([(entity, entity)]))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("unsupported version 99"));
+        assert!(error.to_string().contains("test.stateful"));
     }
 }
