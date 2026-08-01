@@ -79,16 +79,12 @@ impl ElevatorContext {
 /// 1 = partial ("worm goo") lockout, 2 = fully accessible
 /// (projects/flat-ui-panels.md §2.1).
 ///
-/// We deliberately treat the **unset/0 default as fully accessible** rather
-/// than "no power": the shipped, hands-on-verified behavior is an ungated
-/// elevator, and shipping ungated is "strictly more playable" (doc §7.3 #2).
-/// Only an explicit partial-lockout value (`INCOMPLETE`, raw 1) gates - it
-/// seals deck 1 (Engineering), leaving decks >= 2 reachable, matching the
-/// original's "only buttons >= deck 2 work" rule.
 fn is_floor_available(elev_state: u32, deck: usize) -> bool {
     match elev_state {
-        1 => deck >= 2,
-        _ => true,
+        0 => false,
+        1 => deck <= 3,
+        2 => true,
+        _ => false,
     }
 }
 
@@ -136,11 +132,23 @@ impl Gui<ElevatorGuiState, ElevatorGuiMsg> for ElevatorGui {
                 )
             });
 
-        // ElevState quest bit (raw): 1 = partial lockout, else accessible.
+        // ElevState quest bit (raw): 0 = no power, 1 = lower three decks,
+        // 2 = every deck.
         let elev_state = world
             .borrow::<UniqueView<QuestInfo>>()
             .map(|q| q.read_quest_bit_value("ElevState").bits())
             .unwrap_or(0);
+
+        // The original replaces the entire elevator backdrop with POWER.PCX
+        // while the elevator is unpowered. Qualify the archive because
+        // objicon also contains a different 32x32 POWER.PCX.
+        if elev_state == 0 {
+            return vec![
+                gui::image("iface/power.pcx")
+                    .with_position(vec2(0.0, 0.0))
+                    .with_size(vec2(188.0, 296.0)),
+            ];
+        }
 
         let mut components: Vec<GuiComponent<ElevatorGuiMsg>> = vec![
             gui::image("elev.pcx")
@@ -241,23 +249,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_and_full_power_unlock_every_floor() {
-        // Unset (0) and fully-powered (COMPLETE, 2) leave every deck reachable -
-        // the shipped playable behavior.
-        for state in [0u32, 2] {
-            for deck in 1..=5 {
-                assert!(is_floor_available(state, deck), "state {state} deck {deck}");
-            }
+    fn no_power_blocks_every_floor() {
+        for deck in 1..=5 {
+            assert!(
+                !is_floor_available(0, deck),
+                "unpowered deck {deck} must stay unavailable"
+            );
         }
     }
 
     #[test]
-    fn partial_lockout_seals_only_engineering() {
-        // INCOMPLETE (1) is the "worm goo" partial lockout: deck 1 sealed,
-        // decks >= 2 reachable.
-        assert!(!is_floor_available(1, 1));
-        for deck in 2..=5 {
-            assert!(is_floor_available(1, deck), "deck {deck} should stay open");
+    fn partial_power_reaches_only_engineering_through_hydroponics() {
+        for deck in 1..=3 {
+            assert!(is_floor_available(1, deck), "deck {deck} should be open");
+        }
+        for deck in 4..=5 {
+            assert!(!is_floor_available(1, deck), "deck {deck} should be sealed");
+        }
+    }
+
+    #[test]
+    fn full_power_unlocks_every_floor() {
+        for deck in 1..=5 {
+            assert!(is_floor_available(2, deck), "deck {deck} should be open");
         }
     }
 }
