@@ -25,6 +25,7 @@ mod physics;
 pub mod player_stats;
 mod psi;
 pub mod quest_info;
+pub mod research;
 mod runtime_props;
 mod scripts;
 mod systems;

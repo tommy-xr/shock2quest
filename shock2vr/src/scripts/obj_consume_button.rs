@@ -1,4 +1,6 @@
-use dark::properties::{PropConsumeType, PropSymName};
+use dark::properties::{
+    ObjectState, PropConsumeType, PropModelName, PropObjState, PropSymName, PropTweqModelConfig,
+};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
@@ -61,6 +63,28 @@ fn consume(world: &World, entity_id: EntityId, entity_to_consume: EntityId) -> E
 }
 
 fn can_consume_entity(world: &World, self_id: EntityId, entity_to_consume_id: EntityId) -> bool {
+    let already_used = {
+        let models = world.borrow::<View<PropModelName>>().unwrap();
+        let configs = world.borrow::<View<PropTweqModelConfig>>().unwrap();
+        match (models.get(self_id), configs.get(self_id)) {
+            (Ok(model), Ok(config)) => model_is_final(&model.0, &config.model_names),
+            _ => false,
+        }
+    };
+    if already_used {
+        return false;
+    }
+
+    let unresearched = world
+        .borrow::<View<PropObjState>>()
+        .unwrap()
+        .get(entity_to_consume_id)
+        .map(|state| state.0 == ObjectState::Unresearched)
+        .unwrap_or(false);
+    if unresearched {
+        return false;
+    }
+
     let v_consume_type = world.borrow::<View<PropConsumeType>>().unwrap();
     let v_sym_name = world.borrow::<View<PropSymName>>().unwrap();
 
@@ -71,4 +95,43 @@ fn can_consume_entity(world: &World, self_id: EntityId, entity_to_consume_id: En
         return consume_type.0.eq_ignore_ascii_case(&sym_name.0);
     }
     false
+}
+
+fn model_is_final(current: &str, frames: &[String]) -> bool {
+    frames
+        .last()
+        .map(|last| current.eq_ignore_ascii_case(last))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use dark::properties::{PropConsumeType, PropModelName, PropObjState, PropSymName};
+    use shipyard::World;
+
+    use super::*;
+
+    #[test]
+    fn unresearched_candidate_is_rejected() {
+        let mut world = World::new();
+        let receptor = world.add_entity(PropConsumeType("AAToxin".to_owned()));
+        let toxin = world.add_entity((
+            PropSymName("AAToxin".to_owned()),
+            PropObjState(ObjectState::Unresearched),
+        ));
+        assert!(!can_consume_entity(&world, receptor, toxin));
+
+        world.add_component(toxin, PropObjState(ObjectState::Normal));
+        assert!(can_consume_entity(&world, receptor, toxin));
+    }
+
+    #[test]
+    fn final_tweq_model_marks_receptor_used() {
+        let frames = vec!["air_reof".to_owned(), "air_re".to_owned()];
+        assert!(!model_is_final("air_reof", &frames));
+        assert!(model_is_final("AIR_RE", &frames));
+
+        // A model without frames cannot accidentally become one-shot.
+        assert!(!model_is_final(&PropModelName("air_re".to_owned()).0, &[]));
+    }
 }

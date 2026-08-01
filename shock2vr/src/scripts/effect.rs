@@ -156,6 +156,17 @@ pub enum Effect {
         entity: EntityId,
     },
 
+    /// Start or resume research on a carried researchable object.
+    BeginResearch {
+        entity_id: EntityId,
+    },
+
+    /// Offer one carried chemical to the active research project. The handler
+    /// consumes it only when it matches the currently authored gate.
+    UseResearchChemical {
+        entity_id: EntityId,
+    },
+
     /// Record an audio log the player just frobbed into the persistent
     /// collection (`QuestInfo`) and resolve its transcript/portrait strings onto
     /// the disc entity (`RuntimePropLogData`) for the reader panel. Emitted by
