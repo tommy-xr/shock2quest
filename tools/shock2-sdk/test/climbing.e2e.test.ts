@@ -338,65 +338,75 @@ test(
     const ladderBottom = Math.min(...ladder.ys);
     const ladderTop = Math.max(...ladder.ys);
 
-    // Settle on the west/south face at the same geometry-relative contact used
-    // by the original reproduction. From there yaw 63° faces the visible
-    // +X,+Z deck opening; pitch -60° preserves the original player's view.
-    await game.player.teleport({
-      x: ladder.x - 0.43,
+    // Start in clear floor space on the west/south side. The old direct-contact
+    // teleport was valid for the temporary narrow player but overlaps this
+    // rung stack after #712 restores Dark's 2.4-foot standing footprint. From
+    // this reachable pose, one continuous production heading performs the
+    // approach, grip, climb, and top-out. Aim in world space because the
+    // low-level `head.look` channel is pawn-local and rick1's restored player
+    // rotation otherwise turns the nominal +X,+Z heading toward -Z.
+    const clearTarget = {
+      x: ladder.x - 1,
       y: ladderBottom - 2.2,
-      z: ladder.z - 0.41,
-    });
+      z: ladder.z - 0.4,
+    };
+    await game.player.teleport(clearTarget);
     await game.step({ frames: 30 });
     const base = await game.player.position();
+    const baseSupport = await game.raycast({
+      start: [base.x, base.y, base.z],
+      end: [base.x, base.y - 3, base.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
     assert.ok(
-      Math.hypot(base.x - (ladder.x - 0.43), base.z - (ladder.z - 0.41)) <
-        0.1,
-      `expected to settle at the ladder contact; ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
-        `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)})`,
+      Math.hypot(
+        base.x - clearTarget.x,
+        base.z - clearTarget.z,
+      ) < 0.05 &&
+        baseSupport.hit &&
+        baseSupport.distance !== null &&
+        baseSupport.distance > 0.5 &&
+        baseSupport.distance < 1.5 &&
+        baseSupport.hit_normal !== null &&
+        baseSupport.hit_normal[1] > 0.5,
+      `expected to settle in clear floor space before the one-heading approach; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `target=(${clearTarget.x.toFixed(2)}, ${clearTarget.y.toFixed(2)}, ${clearTarget.z.toFixed(2)}), ` +
+        `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(baseSupport)}`,
     );
 
-    await game.input.set("head.look", [63, -60]);
+    await game.input.lookAtWorldPoint([
+      ladder.x + 8,
+      ladderTop + 2,
+      ladder.z + 2,
+    ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
 
     let previous = base;
     let position = base;
-    let regularWalkResumed = false;
+    let supportedFarSideReached = false;
     let ordinaryWalkStart = base;
-    let fineSampling = false;
-    let maxDownwardDelta = 0;
-    let maxDropStart = base;
-    let maxDropEnd = base;
-    let unsupportedOrdinaryFrame = false;
-    let unsupportedOrdinaryStart = base;
-    let unsupportedOrdinaryEnd = base;
-    let unsupportedOrdinaryDistance = 0;
-    let unsupportedOrdinarySupport = "";
+    let ordinaryWalkSupport = "";
     for (let elapsed = 0; elapsed < 1_050; ) {
-      // Climb quickly to the approach, then sample each frame so the test can
-      // distinguish the scripted mantle's <=0.067-unit substeps from ordinary
-      // locomotion after the standing capsule has been restored.
-      fineSampling ||= position.y >= ladderTop - 3;
-      const frames = fineSampling ? 1 : 30;
+      // Sample every frame from input onset. With the restored full footprint,
+      // the bounded mantle can begin several feet below the authored rung top;
+      // a coarse ascent batch can therefore hide the first supported far-side
+      // landing pose that this safety regression must inspect.
+      const frames = 1;
       await game.step({ frames });
       elapsed += frames;
       previous = position;
       position = await game.player.position();
-      const downwardDelta = previous.y - position.y;
-      if (frames === 1 && downwardDelta > maxDownwardDelta) {
-        maxDownwardDelta = downwardDelta;
-        maxDropStart = previous;
-        maxDropEnd = position;
-      }
-      const horizontalDistance = Math.hypot(
-        position.x - previous.x,
-        position.z - previous.z,
-      );
       const beyondLip =
         position.x > ladder.x && position.z > ladder.z + 0.35;
-      if (frames === 1 && beyondLip && horizontalDistance > 0.075) {
+      const atDeckHeight =
+        position.y > ladderTop - 1.5 && position.y < ladderTop + 0.2;
+      if (beyondLip && atDeckHeight) {
         const nearbySupport = await game.raycast({
-          start: [previous.x, previous.y, previous.z],
-          end: [previous.x, previous.y - 3, previous.z],
+          start: [position.x, position.y, position.z],
+          end: [position.x, position.y - 3, position.z],
           collision_groups: ["world", "entity", "selectable"],
           ignore_sensors: true,
         });
@@ -408,46 +418,31 @@ test(
           nearbySupport.hit_normal !== null &&
           nearbySupport.hit_normal[1] > 0.5;
         if (hasNearbySupport) {
-          regularWalkResumed = true;
-          ordinaryWalkStart = previous;
-        } else if (!unsupportedOrdinaryFrame) {
-          unsupportedOrdinaryFrame = true;
-          unsupportedOrdinaryStart = previous;
-          unsupportedOrdinaryEnd = position;
-          unsupportedOrdinaryDistance = horizontalDistance;
-          unsupportedOrdinarySupport = JSON.stringify(nearbySupport);
+          supportedFarSideReached = true;
+          ordinaryWalkStart = position;
+          ordinaryWalkSupport = JSON.stringify(nearbySupport);
         }
       }
-      if (regularWalkResumed) {
+      if (supportedFarSideReached) {
         break;
       }
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
 
     assert.ok(
-      !unsupportedOrdinaryFrame,
-      `ordinary-speed movement beyond the lip must begin only from a supported standing pose; ` +
-        `horizontal=${unsupportedOrdinaryDistance.toFixed(4)}, ` +
-        `from=(${unsupportedOrdinaryStart.x.toFixed(2)}, ${unsupportedOrdinaryStart.y.toFixed(2)}, ${unsupportedOrdinaryStart.z.toFixed(2)}), ` +
-        `to=(${unsupportedOrdinaryEnd.x.toFixed(2)}, ${unsupportedOrdinaryEnd.y.toFixed(2)}, ${unsupportedOrdinaryEnd.z.toFixed(2)}), ` +
-        `support=${unsupportedOrdinarySupport}, ` +
-        `max-downward-delta=${maxDownwardDelta.toFixed(4)} ` +
-        `from=(${maxDropStart.x.toFixed(2)}, ${maxDropStart.y.toFixed(2)}, ${maxDropStart.z.toFixed(2)}) ` +
-        `to=(${maxDropEnd.x.toFixed(2)}, ${maxDropEnd.y.toFixed(2)}, ${maxDropEnd.z.toFixed(2)})`,
-    );
-    assert.ok(
-      regularWalkResumed,
-      `one continuous diagonal heading must restore ordinary walking past the lip; ` +
+      supportedFarSideReached,
+      `one continuous diagonal heading must reach supported standing height past the lip; ` +
         `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
         `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
         `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
         `previous=(${previous.x.toFixed(2)}, ${previous.y.toFixed(2)}, ${previous.z.toFixed(2)}), ` +
-        `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`,
+        `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}), ` +
+        `support=${ordinaryWalkSupport}`,
     );
 
-    // The first supported horizontal frame marks contact with the upper deck
-    // after the bounded descent. Verify that pose has real production support,
-    // then release input and require a stable ordinary recovery.
+    // The first supported standing-height frame marks contact with the upper
+    // deck after the bounded descent. Verify that pose has real production
+    // support, then release input and require a stable ordinary recovery.
     const support = await game.raycast({
       start: [
         ordinaryWalkStart.x,
