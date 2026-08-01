@@ -328,8 +328,15 @@ fn try_step_up(
         return None;
     }
     let dir = desired_h / desired_norm;
-    // Not blocked: the move achieved most of the desired horizontal distance.
-    if applied.dot(&dir) > 0.5 * desired_norm {
+    // Not blocked: the resolved horizontal vector stayed close to the input.
+    // Comparing only its projection onto `dir` masks a blocked component: a
+    // diagonal walk into a low riser can preserve most of its speed by sliding
+    // sideways along the face, so the step probe never runs even though the
+    // intended forward component was lost. A vector residual catches that
+    // deflection while the collision-checked probes below still reject an
+    // ordinary full-height wall.
+    let applied_h = vector![applied.x, 0.0, applied.z];
+    if (desired_h - applied_h).norm() <= 0.25 * desired_norm {
         return None;
     }
 
@@ -1323,25 +1330,29 @@ pub const MAX_PLAYER_MOVE_DISTANCE: f32 = 5.0;
 /// (applied once per substep, as it is once per frame) fall at the real rate.
 const PLAYER_MOVE_SUBSTEP: f32 = 25.0 / SCALE_FACTOR / 60.0;
 
-/// Fraction of a substep's attempted distance that still counts as progress.
+/// Fraction of a substep's attempted distance that still counts as movement.
 /// Below it the player is genuinely stopped (a wall, a closed door) and the
-/// move ends; above it, walking / slope handling / the step-up probe is still
-/// carrying the player toward the target.
-const PLAYER_MOVE_PROGRESS_FRACTION: f32 = 0.25;
+/// move ends; above it, walking / collision sliding / the step-up probe is
+/// still carrying the player through the world.
+const PLAYER_MOVE_MIN_ADVANCE_FRACTION: f32 = 0.25;
 
-/// Consecutive low-progress substeps tolerated before a validated move is
+/// Consecutive low-advance substeps tolerated before a validated move is
 /// considered blocked. Real locomotion keeps stepping while the capsule
 /// scrapes around a corner; a single sub-threshold frame is therefore not
 /// evidence of a wall. Three frames cover the shipped corner contacts while
 /// keeping a truly stopped move short.
 const PLAYER_MOVE_STALL_SUBSTEPS: usize = 3;
 
-/// How close to the requested distance a validated move must get to count as
-/// having arrived (world units). Also the tolerance for reporting `blocked`,
-/// and what keeps the loop from grinding on an ever-shrinking remainder (the
-/// final attempt shrinks to whatever is left, so its minimum progress shrinks
-/// with it).
+/// Geometric tolerance used by collision-checked scripted movement and by the
+/// validated move's strict horizontal-radius bound.
 const PLAYER_MOVE_ARRIVAL_EPSILON: f32 = 0.02;
+
+/// How close a validated move may finish to its bounded horizontal target and
+/// still count as successful. Collision sliding can lengthen the walked route
+/// while the API's strict radius bound prevents spending more distance than
+/// requested; a substep-scale miss is therefore an arrival, not evidence that
+/// the walkable target is unreachable.
+const PLAYER_MOVE_TARGET_EPSILON: f32 = 0.1;
 
 bitflags! {
     pub struct InternalCollisionGroups: u32 {
@@ -2102,9 +2113,9 @@ impl PhysicsWorld {
     /// player through a wall or out of bounds. Collision sliding may alter the
     /// route, but no result outside the requested horizontal radius is applied.
     ///
-    /// `blocked` means the player did not cover the requested distance: either
+    /// `blocked` means the player did not reach the target tolerance: either
     /// [`PLAYER_MOVE_STALL_SUBSTEPS`] consecutive substeps made less than
-    /// [`PLAYER_MOVE_PROGRESS_FRACTION`] of their attempts (a wall, a closed
+    /// [`PLAYER_MOVE_MIN_ADVANCE_FRACTION`] of their attempts (a wall, a closed
     /// door), the next solver result would exceed the bounded radius, or the
     /// move ran out of substeps still short of the target. A purely vertical
     /// request has nothing to walk toward and is a no-op.
@@ -2190,9 +2201,9 @@ impl PhysicsWorld {
         let dt = self.integration_parameters.dt;
         // The bounded destination (which may be short of a farther target).
         // Keep feeding the controller the same heading real thumbstick
-        // locomotion receives, but measure progress against this destination:
-        // collision sliding can alter the route, so summing only the original
-        // heading's projection overshoots the target and oscillates around it.
+        // locomotion receives, but measure the final result against this
+        // destination: collision sliding can alter the route, so summing only
+        // the original heading's projection can overshoot it.
         let start = pos.translation.vector;
         let walk_dir = vector![delta_h.x / dist, 0.0, delta_h.z / dist];
         let destination = start + walk_dir * requested_distance;
@@ -2230,13 +2241,12 @@ impl PhysicsWorld {
             observe_sensors(&pos, &mut occupied_sensors, &mut swept_sensor_events);
 
             // Walk toward the target one substep at a time. The iteration bound
-            // is the worst case a *progressing* move can need (every substep
-            // scraping by at the progress fraction, plus a few for the
-            // shrinking final attempt); running it out leaves `distance_moved`
-            // short of the request, which is reported as `blocked` below rather
-            // than passing for success.
+            // is the worst case a moving capsule can need (every substep at the
+            // minimum advance fraction, plus a few for the shrinking final
+            // attempt); running it out leaves `distance_moved` short of the
+            // request, which is reported as `blocked` below.
             let max_substeps = (requested_distance
-                / (PLAYER_MOVE_SUBSTEP * PLAYER_MOVE_PROGRESS_FRACTION))
+                / (PLAYER_MOVE_SUBSTEP * PLAYER_MOVE_MIN_ADVANCE_FRACTION))
                 .ceil() as usize
                 + 8;
             for _ in 0..max_substeps {
@@ -2246,7 +2256,7 @@ impl PhysicsWorld {
                     destination.z - pos.translation.vector.z
                 ];
                 let remaining = to_destination.norm();
-                if remaining <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                if remaining <= PLAYER_MOVE_TARGET_EPSILON {
                     break;
                 }
                 let attempt = remaining.min(PLAYER_MOVE_SUBSTEP);
@@ -2280,17 +2290,16 @@ impl PhysicsWorld {
                 if from_start.norm() > requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON {
                     break;
                 }
-                let after = vector![
-                    destination.x - candidate.translation.vector.x,
-                    0.0,
-                    destination.z - candidate.translation.vector.z
-                ]
-                .norm();
-                let progress = remaining - after;
+                // A wall may deflect an oblique input sideways for several
+                // frames before the capsule clears its finite end. Ordinary
+                // locomotion keeps supplying that same input; judge a stall by
+                // whether the capsule moved, not whether the deflected frame
+                // happened to reduce straight-line distance to the target.
+                let advance = vector![mvt.translation.x, 0.0, mvt.translation.z].norm();
                 pos = candidate;
                 observe_sensors(&pos, &mut occupied_sensors, &mut swept_sensor_events);
 
-                if progress < attempt * PLAYER_MOVE_PROGRESS_FRACTION {
+                if advance < attempt * PLAYER_MOVE_MIN_ADVANCE_FRACTION {
                     stalled_substeps += 1;
                     if stalled_substeps >= PLAYER_MOVE_STALL_SUBSTEPS {
                         break;
@@ -2334,7 +2343,7 @@ impl PhysicsWorld {
 
         MoveResult {
             moved,
-            blocked: remaining > PLAYER_MOVE_ARRIVAL_EPSILON,
+            blocked: remaining > PLAYER_MOVE_TARGET_EPSILON,
             new_position,
             distance_moved,
             requested_distance,
@@ -6416,6 +6425,97 @@ mod tests {
         );
     }
 
+    /// A diagonal walk into a low tread may preserve most of its speed by
+    /// sliding along the riser while losing the component that would carry it
+    /// onto the tread. The step probe must classify the resolved vector, not
+    /// just its projection onto the requested heading.
+    #[test]
+    fn diagonal_move_steps_instead_of_sliding_along_a_low_tread() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        // One-foot-high tread spanning x, with its front face at z=0.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.0, 0.2, 2.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(100.0, 0.4, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 1.0, -1.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        let input = vec3(2.4f32, 0.0, 1.2).normalize() * PLAYER_MOVE_SUBSTEP;
+        for _ in 0..20 {
+            world.update(input, &mut player);
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            end.y - start.y > 0.3 && end.z > 0.2,
+            "the diagonal walk should climb and reach the tread: {start:?} -> {end:?}"
+        );
+    }
+
+    /// A fixed heading can spend more than the three stall-tolerance frames
+    /// sliding along a finite wall before its capsule clears the end. This is
+    /// still real controller movement, even while it temporarily increases
+    /// straight-line distance to the target.
+    #[test]
+    fn validated_move_keeps_walking_while_sliding_toward_a_finite_wall_end() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        // A full-height wall at z=0 whose finite right edge is x=1. The
+        // oblique request must slide about one world unit before rounding it.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(-49.5, 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(101.0, 4.0, 0.1),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.5, 1.0, -1.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        let result = world.move_player_validated(start + vec3(1.5, 0.0, 4.7), &mut player);
+
+        assert!(
+            result.new_position.x > 1.6 && result.new_position.z > 0.2,
+            "validated movement should round the finite wall: {result:?}"
+        );
+    }
+
     /// Sliding along a wall changes the controller's route. Progress projected
     /// only onto the requested heading can therefore consume the whole request
     /// while the net translation travels much farther; the hop must remain
@@ -6737,6 +6837,47 @@ mod tests {
             "should climb the ~1.5 ft service-hall riser, rose {} (ended {:?})",
             end.y - start.y,
             end
+        );
+    }
+
+    /// The earth.mis Basic Training course crosses from a floor at
+    /// y=20.4 onto a one-foot-higher tread at y=20.8 around z=240.4. Both
+    /// ordinary locomotion and the collision-valid debug walk used to wedge at
+    /// the riser even though it is well inside Dark's two-foot step height.
+    #[test]
+    fn player_climbs_earth_basic_training_low_wall() {
+        let Some(level) = try_load_level("earth.mis") else {
+            return;
+        };
+        let mut world = PhysicsWorld::new();
+        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        let mut player =
+            world.create_player(vec3(6.6, 22.2, 239.6), EntityId::from_inner(2).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let start = world.get_player_translation(&player);
+        let dir = vec3(2.4f32, 0.0, 1.2).normalize() * (25.0 / 60.0 / dark::SCALE_FACTOR);
+        for _ in 0..20 {
+            world.update(dir, &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.z > 240.8 && end.y - start.y > 0.3,
+            "should climb the one-foot Basic Training tread, moved {start:?} -> {end:?}"
+        );
+
+        let mut world = PhysicsWorld::new();
+        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        let mut player =
+            world.create_player(vec3(6.6, 22.2, 239.6), EntityId::from_inner(2).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let result = world.move_player_validated(vec3(9.0, 21.4, 240.8), &mut player);
+        assert!(
+            !result.blocked,
+            "validated walk should cross the same tread: {result:?}"
         );
     }
 

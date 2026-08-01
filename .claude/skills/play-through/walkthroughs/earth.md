@@ -91,6 +91,12 @@ Follow the instructor prompts and demonstrate each available lesson:
    trap 379 must return the player once to approximately
    **(11.61, 24.26, 65.79)**, without an automatic re-entry loop.
 
+After that return, leave the Basic booth by walking **back/decreasing z**
+through tripwire 359 and its door leaves 358/368, then cross the hub to the
+x≈5 service passage described in Phase 4. Walking forward through the old
+Basic-entry volume is not the route to enlistment; its correctly ignored
+tripwire is not evidence that the concourse is blocked.
+
 The course begins behind timed fields. Wait for the authored delays, operate
 the highlighted Simple Button through player Frob, cross the lesson tripwires,
 climb the real ladder, and traverse the upper platform. Do not damage or
@@ -140,8 +146,9 @@ inventory; prove each exercise before leaving its room.
 Each lobby aperture has an authored **0.8-world-unit raised threshold**. Back
 off, center on the room's tripwire z coordinate, face west, and use sustained
 normal locomotion so the character controller can autostep onto it. The debug
-`/v1/player/move` helper performs a direct capsule shape cast without autostep,
-so a blocked helper move is not evidence that these entrances are impassable.
+`/v1/player/move` helper uses the same controller and step probe, but remains a
+single fixed-heading hop; a blocked direct hop is not evidence that these
+entrances are impassable without a centered or thumbstick retry.
 
 ### Weapons
 
@@ -329,9 +336,13 @@ marker is only a wiring diagnostic.
    reporting a blocker.
 3. The scripted Basic-course return must suppress stale entry-tripwire tracking.
    More than one automatic return/re-entry is a teleport-loop regression.
-4. Low Basic-course walls require observed steering. A long held input into a wall
-   is a test-navigation failure unless bounded corrective attempts prove the
-   passage itself is impassable.
+4. Low Basic-course walls require observed steering. The two walls near
+   z≈237–241 are initially topped by authored `BlueForceField` objects 548/566;
+   lesson Destroy Trap 300 removes both after the button sequence. Trying to
+   cross them before that is a real collision, while sliding along the exposed
+   one-foot tread afterward is a controller regression. A long held input into
+   a remaining wall is a test-navigation failure unless bounded corrective
+   attempts prove the passage itself is impassable.
 5. Doors 80/81 are intentionally player-frobbed `StdDoor`s with no incoming
    SwitchLinks. Waiting for an automatic trigger is tester error; a correctly
    targeted player frob that does not move both the panel and collider is a

@@ -203,3 +203,52 @@ test(
     );
   },
 );
+
+test(
+  "validated player move: climbs the earth Basic Training low tread",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "earth.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8107),
+    });
+    await game.step({ frames: 2 });
+
+    // The course initially gates this tread with two authored force fields;
+    // Destroy Trap mission object 300 removes them after the lesson button.
+    // Reproduce that state without relying on unstable runtime entity IDs.
+    const destroyTrap = (
+      await game.entities.list({ filter: "Destroy Trap", limit: 20 })
+    ).entities.find((entity) => entity.template_id === 300);
+    assert.ok(destroyTrap, "expected Basic Training Destroy Trap 300");
+    await game.entities.sendMessage(destroyTrap.id, { type: "TurnOn" });
+    await game.step({ frames: 2 });
+    const forceFields = await game.entities.list({ filter: "BlueForceField", limit: 10 });
+    assert.equal(forceFields.entities.length, 0, "fixture fields should be destroyed");
+
+    // Regression for #517. The now-open authored route crosses diagonally from
+    // the y=20.4 floor onto a one-foot-higher tread near z=240.4. The
+    // controller used to preserve most of its speed by sliding along the
+    // riser, so the step probe missed the lost z component and stopped on the
+    // wrong side despite the tread being comfortably walkable.
+    await game.player.teleport({ x: 6.6, y: 22.2, z: 239.6 });
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const move = await game.player.moveTo({ x: 9, y: start.y, z: 240.8 });
+    const end = await game.player.position();
+
+    assert.equal(
+      move.blocked,
+      false,
+      `walkable tread reported blocked: ${JSON.stringify(move)}`,
+    );
+    assert.ok(
+      end.y - start.y > 0.3,
+      `player should climb the tread: ${JSON.stringify({ start, end })}`,
+    );
+    assert.ok(
+      end.z > 240.7,
+      `player should cross the riser: ${JSON.stringify({ start, end })}`,
+    );
+  },
+);
