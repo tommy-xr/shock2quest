@@ -462,11 +462,22 @@ fn handle_empty_hand_state(
         }) = result
         {
             if can_grab_item(world, entity_id) {
-                let position = &physics.get_position(rigid_body_handle).unwrap();
-                let _dir = hand_position - position;
-                msgs.push(VirtualHandEffect::HoldItem { entity_id });
+                if world_pickup_requires_frob(world, entity_id) {
+                    // Keycards grant their access state through the injected
+                    // script, which also performs their physical transfer.
+                    msgs.push(VirtualHandEffect::OutMessage {
+                        message: Message {
+                            to: entity_id,
+                            payload: MessagePayload::Frob,
+                        },
+                    });
+                } else {
+                    let position = &physics.get_position(rigid_body_handle).unwrap();
+                    let _dir = hand_position - position;
+                    msgs.push(VirtualHandEffect::HoldItem { entity_id });
 
-                next_hand_state = HandState::Grabbing { entity_id };
+                    next_hand_state = HandState::Grabbing { entity_id };
+                }
             }
         }
     }
@@ -510,6 +521,16 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     }
 
     false
+}
+
+/// Whether physically taking this world item must first run an injected Frob
+/// script. `PropKeySrc` is the data-driven marker for `internal_keycard`, even
+/// when the authored world action is only `MOVE`.
+pub(crate) fn world_pickup_requires_frob(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropKeySrc>>()
+        .map(|keycards| keycards.get(entity_id).is_ok())
+        .unwrap_or(false)
 }
 
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
@@ -559,5 +580,80 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     RayCastResult {
         maybe_entity_id: maybe_new_entity_id,
         ..ray_cast_result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dark::properties::{FrobFlag, KeyCard, PropFrobInfo, PropKeySrc};
+
+    use super::*;
+    use crate::physics::CollisionGroup;
+
+    #[test]
+    fn only_keycard_world_pickups_require_injected_frob() {
+        let mut world = World::new();
+        let ordinary = world.add_entity(());
+        let keycard = world.add_entity(PropKeySrc(KeyCard {
+            is_master: false,
+            region_id: 8192,
+            lock_id: 0,
+        }));
+
+        assert!(!world_pickup_requires_frob(&world, ordinary));
+        assert!(world_pickup_requires_frob(&world, keycard));
+    }
+
+    #[test]
+    fn vr_grip_of_keycard_dispatches_frob_instead_of_bypassing_access() {
+        let mut world = World::new();
+        let keycard = world.add_entity((
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 8192,
+                lock_id: 0,
+            }),
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            keycard,
+            vec3(0.0, 0.0, -1.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        let player_entity = world.add_entity(());
+        let mut player = physics.create_player(vec3(100.0, 100.0, 100.0), player_entity);
+        physics.update(Vector3::zero(), &mut player);
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+
+        let (hand, effects) = handle_empty_hand_state(
+            Handedness::Right,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            None,
+            &world,
+            &physics,
+            &input,
+        );
+
+        assert_eq!(hand.get_held_entity(), None);
+        assert!(matches!(
+            effects.as_slice(),
+            [VirtualHandEffect::OutMessage {
+                message: Message {
+                    to,
+                    payload: MessagePayload::Frob,
+                },
+            }] if *to == keycard
+        ));
     }
 }

@@ -31,6 +31,12 @@ impl Script for InternalFrobMove {
             return Effect::NoEffect;
         }
 
+        // `internal_keycard` grants the access state and owns the physical
+        // transfer as one operation. Do not independently reparent the card.
+        if crate::virtual_hand::world_pickup_requires_frob(world, entity_id) {
+            return Effect::NoEffect;
+        }
+
         let handles_move = {
             let frob_info = world
                 .borrow::<View<dark::properties::PropFrobInfo>>()
@@ -65,7 +71,9 @@ impl Script for InternalFrobMove {
 #[cfg(test)]
 mod tests {
     use cgmath::{Quaternion, vec3};
-    use dark::properties::{FrobFlag, Link, Links, PropFrobInfo, ToLink, WrappedEntityId};
+    use dark::properties::{
+        FrobFlag, KeyCard, Link, Links, PropFrobInfo, PropKeySrc, ToLink, WrappedEntityId,
+    };
     use shipyard::World;
 
     use crate::{
@@ -155,5 +163,30 @@ mod tests {
         );
 
         assert!(matches!(effect, Effect::NoEffect));
+    }
+
+    #[test]
+    fn keycard_script_remains_the_sole_transfer_owner() {
+        let (mut world, item, _inventory) = pickup_world(FrobFlag::MOVE, false);
+        world.add_component(
+            item,
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 8192,
+                lock_id: 0,
+            }),
+        );
+
+        let effect = InternalFrobMove::new().handle_message(
+            item,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "internal_keycard must remain the sole transfer owner, got {effect:?}"
+        );
     }
 }
