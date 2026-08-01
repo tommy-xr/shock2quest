@@ -8246,6 +8246,48 @@ mod tests {
     }
 
     #[test]
+    fn climb_top_out_keeps_a_small_forward_sidestep_over_a_recessed_landing() {
+        let mut world = PhysicsWorld::new();
+        let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+        let cross_y = head_y + CLIMB_TOP_OUT_UP;
+        let deck_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
+        // A normal forward landing needs only one compressed-radius sidestep
+        // and has ordinary +X egress.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
+                .translation(vector![
+                    CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
+                    deck_top - 0.05,
+                    -CLIMB_TOP_OUT_RADIUS,
+                ])
+                .build(),
+        );
+        // A lower approach-side floor is also safe, but it should not redirect
+        // an otherwise ordinary small forward sidestep back down the ladder.
+        let recessed_floor_top = -1.0;
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(2.0, 0.05, 0.6)
+                .translation(vector![-2.4, recessed_floor_top - 0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin(&world)
+            .expect("the small-offset forward deck should permit a top-out");
+        let waypoints = movement.top_out.expect("planned top-out").waypoints;
+        let final_sphere = waypoints[6];
+
+        assert!(
+            final_sphere.x > 0.0 && (final_sphere.z + CLIMB_TOP_OUT_RADIUS).abs() < 1.0e-5,
+            "the one-radius forward sidestep must outrank the recessed approach floor: {waypoints:?}"
+        );
+    }
+
+    #[test]
     fn climb_top_out_reaches_the_full_forward_recovery_bound() {
         let mut world = PhysicsWorld::new();
         let route_forward = 1.0;

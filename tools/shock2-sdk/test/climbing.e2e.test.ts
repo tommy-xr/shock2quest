@@ -697,8 +697,10 @@ test(
 
 // Issue #657's Hydro2 extension is a third authored geometry family: eleven
 // separate Rick Ladder rungs climb the north face of a narrow Sector C shaft,
-// while the office landing sits beyond the terrain slab at the column top.
-// Ordinary ascent reaches the underside but cannot expand or establish support.
+// while the authored office sits below and behind the terrain slab at the
+// column top. A collision-supported exterior roof is not a successful landing:
+// the real route must descend through tripwire 1194, open doors 1195/1196, and
+// permit ordinary movement into the furnished office toward ACR3.
 test(
   "flat climbing: hydro2 Sector C rung stack reaches the upper office",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -737,6 +739,24 @@ test(
       `expected the authored 11-rung Sector C column, got ids=${JSON.stringify([...stableIds].sort())}, ` +
         `span=${(ladderTop - ladderBottom).toFixed(2)}`,
     );
+
+    // Discover the authored progression gate by stable mission identities.
+    // Their runtime ids vary between launches. Door positions are live, so the
+    // paired z deltas prove the tripwire actually fired rather than inferring
+    // success from a nearby player coordinate.
+    const tripwire = (
+      await game.entities.list({ filter: "New Tripwire", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 1194);
+    const hydroDoors = (
+      await game.entities.list({ filter: "Double_Hydro", limit: 100 })
+    ).entities;
+    const nearDoor = hydroDoors.find((entity) => entity.template_id === 1196);
+    const farDoor = hydroDoors.find((entity) => entity.template_id === 1195);
+    assert.ok(tripwire, "hydro2 should contain authored office tripwire 1194");
+    assert.ok(nearDoor, "hydro2 should contain authored office door 1196");
+    assert.ok(farDoor, "hydro2 should contain authored office door 1195");
+    const nearDoorClosedZ = nearDoor.position[2];
+    const farDoorClosedZ = farDoor.position[2];
 
     // Geometry-relative setup reproduces the campaign save's supported
     // north-face contact. The climb and top-out use only production input.
@@ -780,7 +800,8 @@ test(
     for (let elapsed = 0; elapsed < 720; elapsed += 1) {
       await game.step({ frames: 1 });
       landing = await game.player.position();
-      const crossedIntoOffice = landing.z < ladderZ - 0.4;
+      const crossedIntoOffice =
+        landing.z > ladderZ + 1 && landing.y < ladderTop - 1;
       if (!crossedIntoOffice) continue;
       landingSupport = await game.raycast({
         start: [landing.x, landing.y, landing.z],
@@ -795,7 +816,10 @@ test(
         landingSupport.distance < 2 &&
         Math.abs(landingSupport.distance - standingFloorOffset) < 0.05 &&
         landingSupport.hit_point !== null &&
-        landingSupport.hit_point[1] >= ladderTop - 0.1 &&
+        Math.abs(
+          landingSupport.hit_point[1] -
+            (tripwire.position[1] - 1.6),
+        ) < 0.05 &&
         landingSupport.hit_normal !== null &&
         landingSupport.hit_normal[1] > 0.5;
       if (supportedLanding) break;
@@ -803,7 +827,7 @@ test(
     await game.input.set("right_hand.thumbstick", [0, 0]);
     assert.ok(
       supportedLanding,
-      `continuous north-face input must cross the Sector C lip onto supported office floor; ` +
+      `continuous north-face input must recover onto the supported lower office floor; ` +
         `ladder=(${ladderX.toFixed(2)}, ${ladderTop.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
         `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
         `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
@@ -819,7 +843,8 @@ test(
       ignore_sensors: true,
     });
     assert.ok(
-      stable.z < ladderZ - 0.4 &&
+      stable.z > ladderZ + 1 &&
+        stable.y < ladderTop - 1 &&
         Math.abs(stable.y - landing.y) < 0.1 &&
         Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
         stableSupport.hit &&
@@ -827,7 +852,10 @@ test(
         stableSupport.distance > 0.5 &&
         stableSupport.distance < 2 &&
         stableSupport.hit_point !== null &&
-        stableSupport.hit_point[1] >= ladderTop - 0.1 &&
+        Math.abs(
+          stableSupport.hit_point[1] -
+            (tripwire.position[1] - 1.6),
+        ) < 0.05 &&
         stableSupport.hit_normal !== null &&
         stableSupport.hit_normal[1] > 0.5,
       `the office landing must remain stable after release; ` +
@@ -835,15 +863,61 @@ test(
         `support=${JSON.stringify(stableSupport)}`,
     );
 
-    // Reorient deeper into the office and prove the restored standing capsule
-    // can use ordinary locomotion instead of merely perching on the lip.
+    // Reorient toward the authored office threshold using only ordinary
+    // locomotion. The old oracle walked farther across the same exterior roof;
+    // this one requires the real sensor and its paired door movement.
     await game.input.lookAtWorldPoint([
-      stable.x,
+      tripwire.position[0],
       stable.y + 1.6,
-      stable.z - 6,
+      tripwire.position[2],
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
+    let threshold = stable;
+    for (let elapsed = 0; elapsed < 180; elapsed += 1) {
+      await game.step({ frames: 1 });
+      threshold = await game.player.position();
+      if (
+        Math.hypot(
+          threshold.x - tripwire.position[0],
+          threshold.z - tripwire.position[2],
+        ) < 0.25
+      ) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 60 });
+    threshold = await game.player.position();
+    const openedNearDoor = await game.entities.detail(nearDoor.id);
+    const openedFarDoor = await game.entities.detail(farDoor.id);
+    const nearDoorTravel = Math.abs(
+      openedNearDoor.position[2] - nearDoorClosedZ,
+    );
+    const farDoorTravel = Math.abs(
+      openedFarDoor.position[2] - farDoorClosedZ,
+    );
+
+    assert.ok(
+      threshold.y < ladderTop - 1 &&
+        Math.abs(threshold.y - (tripwire.position[1] - 0.356022)) < 0.2 &&
+        nearDoorTravel > 1 &&
+        farDoorTravel > 1,
+      `the production top-out and ordinary approach must reach the lower office sensor and open both doors; ` +
+        `ladder-top=${ladderTop.toFixed(2)}, stable=${JSON.stringify(stable)}, ` +
+        `tripwire=${JSON.stringify(tripwire.position)}, threshold=${JSON.stringify(threshold)}, ` +
+        `door1196-z=${nearDoorClosedZ.toFixed(2)}->${openedNearDoor.position[2].toFixed(2)}, ` +
+        `door1195-z=${farDoorClosedZ.toFixed(2)}->${openedFarDoor.position[2].toFixed(2)}`,
+    );
+
+    // With the gate open, walk east through the real office instead of merely
+    // proving a sensor overlap. This remains ordinary production input.
+    await game.input.lookAtWorldPoint([
+      tripwire.position[0] + 8,
+      threshold.y + 1.6,
+      tripwire.position[2],
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 120 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 60 });
     const office = await game.player.position();
@@ -854,17 +928,18 @@ test(
       ignore_sensors: true,
     });
     assert.ok(
-      stable.z - office.z > 0.75 &&
+      office.x > tripwire.position[0] + 2 &&
+        office.y < ladderTop - 1 &&
         officeSupport.hit &&
         officeSupport.distance !== null &&
         officeSupport.distance > 0.5 &&
         officeSupport.distance < 2 &&
         officeSupport.hit_point !== null &&
-        officeSupport.hit_point[1] >= ladderTop - 0.1 &&
+        officeSupport.hit_point[1] < ladderTop - 1 &&
         officeSupport.hit_normal !== null &&
         officeSupport.hit_normal[1] > 0.5,
       `the supported top-out must permit ordinary onward movement into the office; ` +
-        `stable=${JSON.stringify(stable)}, office=${JSON.stringify(office)}, ` +
+        `threshold=${JSON.stringify(threshold)}, office=${JSON.stringify(office)}, ` +
         `support=${JSON.stringify(officeSupport)}`,
     );
   },
