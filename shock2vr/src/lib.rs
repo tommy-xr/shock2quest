@@ -560,8 +560,10 @@ impl Game {
             .unwrap()
             .clone();
 
-        let (current_save_data, held_data) =
-            save_load::to_save_data(self.active_game_scene.world());
+        let (current_save_data, held_data) = save_load::to_save_data_with_scripts(
+            self.active_game_scene.world(),
+            self.active_game_scene.script_world(),
+        );
         game_log!(
             DEBUG,
             "Saving {} entities to save data",
@@ -1245,7 +1247,10 @@ impl Game {
     fn build_save_data(&self) -> Option<SaveData> {
         let mut level_data = self.mission_to_save_data.clone();
 
-        let (save_data, held_items) = save_load::to_save_data(self.active_game_scene.world());
+        let (save_data, held_items) = save_load::to_save_data_with_scripts(
+            self.active_game_scene.world(),
+            self.active_game_scene.script_world(),
+        );
 
         level_data.insert(self.active_game_scene.scene_name().to_string(), save_data);
 

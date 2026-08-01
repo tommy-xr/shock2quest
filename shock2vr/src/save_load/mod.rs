@@ -24,7 +24,7 @@ use crate::{
         RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
         RuntimePropSelectedAmmo,
     },
-    scripts::script_util,
+    scripts::{ScriptWorld, script_util},
     util::partition_map,
 };
 
@@ -89,12 +89,39 @@ fn get_entities_to_filter_out(world: &World) -> HashSet<u64> {
 }
 
 pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
+    to_save_data_with_scripts(world, None)
+}
+
+/// Serialize ECS-owned entity data plus opt-in private state from the mission's
+/// script world. Non-mission scenes pass `None` and retain the legacy behavior.
+pub fn to_save_data_with_scripts(
+    world: &World,
+    script_world: Option<&ScriptWorld>,
+) -> (EntitySaveData, HeldItemSaveData) {
     let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
     let template_id_to_entity_id = world.borrow::<UniqueView<GlobalTemplateIdMap>>().unwrap();
 
     let held_entities = get_held_items(world);
 
     let entities_to_filter = get_entities_to_filter_out(world);
+
+    let script_states = script_world
+        .map(ScriptWorld::save_states)
+        .transpose()
+        .unwrap_or_else(|error| panic!("unable to serialize script state: {error}"))
+        .unwrap_or_default();
+    let mut world_script_states = Vec::new();
+    let mut held_script_states = Vec::new();
+    for state in script_states {
+        if entities_to_filter.contains(&state.entity_id) {
+            continue;
+        }
+        if held_entities.contains(&state.entity_id) {
+            held_script_states.push(state);
+        } else {
+            world_script_states.push(state);
+        }
+    }
 
     let v_links = world.borrow::<View<Links>>().unwrap();
     let v_selected_ammo = world.borrow::<View<RuntimePropSelectedAmmo>>().unwrap();
@@ -190,6 +217,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
         canonical_template_ids: world_canonical_templates,
+        script_states: world_script_states,
     };
 
     let held_entity_data = EntitySaveData {
@@ -200,6 +228,7 @@ pub fn to_save_data(world: &World) -> (EntitySaveData, HeldItemSaveData) {
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
         canonical_template_ids: held_canonical_templates,
+        script_states: held_script_states,
     };
 
     let held_metadata = HeldItemSaveData {

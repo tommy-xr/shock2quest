@@ -8,6 +8,7 @@ use shipyard::{EntityId, World};
 use crate::runtime_props::{
     RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropSelectedAmmo,
 };
+use crate::scripts::SavedScriptState;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct EntitySaveData {
@@ -32,6 +33,11 @@ pub struct EntitySaveData {
     /// positive, mission-local object ID.
     #[serde(default)]
     pub canonical_template_ids: HashMap<u64 /* entity id */, i32>,
+    /// Opt-in private state owned by scripts on these entities. Registered ECS
+    /// properties and links remain in their existing fields above; this is only
+    /// for runtime modes, timers, latches, and similar script internals.
+    #[serde(default)]
+    pub script_states: Vec<SavedScriptState>,
 }
 
 impl EntitySaveData {
@@ -44,6 +50,7 @@ impl EntitySaveData {
             death_poses: HashMap::new(),
             selected_ammo: HashMap::new(),
             canonical_template_ids: HashMap::new(),
+            script_states: Vec::new(),
         }
     }
     pub fn instantiate(
@@ -115,6 +122,7 @@ impl EntitySaveData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scripts::{SavedScriptState, ScriptState, ScriptStateIdentity};
     use shipyard::{Get, View};
 
     #[test]
@@ -204,6 +212,7 @@ mod tests {
 
         assert!(data.selected_ammo.is_empty());
         assert!(data.canonical_template_ids.is_empty());
+        assert!(data.script_states.is_empty());
     }
 
     #[test]
@@ -222,5 +231,27 @@ mod tests {
             .borrow::<View<RuntimePropCanonicalTemplateId>>()
             .unwrap();
         assert_eq!(canonical.get(new_entity).unwrap().0, -1358);
+    }
+
+    #[test]
+    fn script_state_envelope_round_trips_with_identity_and_version() {
+        let old_entity = EntityId::new_from_index_and_gen(11, 4);
+        let mut data = EntitySaveData::empty();
+        data.script_states.push(SavedScriptState {
+            entity_id: old_entity.inner(),
+            identity: ScriptStateIdentity {
+                script_key: "shock2vr.test".to_owned(),
+                path: vec![2, 0, 1],
+            },
+            state: ScriptState {
+                version: 3,
+                payload: serde_json::json!({ "timer": 1.25 }),
+            },
+        });
+
+        let decoded: EntitySaveData =
+            serde_json::from_value(serde_json::to_value(&data).unwrap()).unwrap();
+
+        assert_eq!(decoded.script_states, data.script_states);
     }
 }

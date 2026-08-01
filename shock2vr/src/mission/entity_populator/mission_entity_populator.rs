@@ -12,7 +12,7 @@ use dark::ss2_entity_info::SystemShock2EntityInfo;
 
 use crate::mission::entity_creator;
 
-use super::EntityPopulator;
+use super::{EntityPopulation, EntityPopulator};
 
 pub struct MissionEntityPopulator {}
 
@@ -30,7 +30,7 @@ impl EntityPopulator for MissionEntityPopulator {
 
         obj_name_map: &HashMap<i32, String>, // name override map
         world: &mut World,
-    ) -> HashMap<i32, WrappedEntityId> {
+    ) -> EntityPopulation {
         let mut template_to_entity_id = HashMap::new();
         let mut all_entities = Vec::new();
         for (template_id, _props) in &level_entity_info.entity_to_properties {
@@ -69,7 +69,11 @@ impl EntityPopulator for MissionEntityPopulator {
             );
         }
 
-        template_to_entity_id
+        EntityPopulation {
+            template_to_entity_id,
+            entity_id_map: HashMap::new(),
+            script_states: Vec::new(),
+        }
     }
 }
 

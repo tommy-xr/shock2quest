@@ -622,12 +622,15 @@ impl MissionCore {
 
         // ** Entity creation
 
-        let template_to_entity_id = entity_populator.populate(
+        let population = entity_populator.populate(
             &entity_info_rc,
             &abstract_mission.entity_info,
             &abstract_mission.obj_map,
             &mut world,
         );
+        let template_to_entity_id = population.template_to_entity_id;
+        let mut script_entity_id_map = population.entity_id_map;
+        let mut saved_script_states = population.script_states;
 
         // Instantiate held items
         let mut interaction: Box<dyn PlayerInteraction> =
@@ -636,8 +639,20 @@ impl MissionCore {
             } else {
                 Box::new(VrInteraction::new())
             };
-        let (left_hand_entity, right_hand_entity, maybe_inventory_entity) = held_item_save_data
+        let held_instantiation = held_item_save_data
             .instantiate_with_legacy_template_names(&mut world, &unique_gamesys_template_names);
+        let left_hand_entity = held_instantiation.left_hand_entity_id;
+        let right_hand_entity = held_instantiation.right_hand_entity_id;
+        let maybe_inventory_entity = held_instantiation.inventory_entity_id;
+        for (old_entity, new_entity) in held_instantiation.entity_id_map {
+            assert!(
+                script_entity_id_map
+                    .insert(old_entity, new_entity)
+                    .is_none(),
+                "saved entity ID appears in both mission and held-item data: {old_entity:?}"
+            );
+        }
+        saved_script_states.extend(held_instantiation.script_states);
 
         // Instantiate inventory
         // TODO: This should be move into the held_item_save_data
@@ -783,6 +798,10 @@ impl MissionCore {
                 Matrix4::identity(),
             );
         }
+
+        script_world
+            .restore_states(&saved_script_states, &script_entity_id_map)
+            .unwrap_or_else(|error| panic!("unable to restore script state: {error}"));
 
         // If the player is holding anything, we should un-physical it
 
@@ -7215,6 +7234,10 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn world(&self) -> &World {
         &self.world
+    }
+
+    fn script_world(&self) -> Option<&crate::scripts::ScriptWorld> {
+        Some(&self.script_world)
     }
 
     fn scene_name(&self) -> &str {

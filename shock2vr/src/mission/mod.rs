@@ -259,6 +259,10 @@ impl crate::game_scene::GameScene for Mission {
         &self.mission_core.world
     }
 
+    fn script_world(&self) -> Option<&crate::scripts::ScriptWorld> {
+        Some(&self.mission_core.script_world)
+    }
+
     fn scene_name(&self) -> &str {
         &self.mission_core.level_name
     }

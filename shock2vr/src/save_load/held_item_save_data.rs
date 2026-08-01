@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, World};
 
 use super::EntitySaveData;
+use crate::scripts::SavedScriptState;
+
+pub struct HeldItemInstantiation {
+    pub left_hand_entity_id: Option<EntityId>,
+    pub right_hand_entity_id: Option<EntityId>,
+    pub inventory_entity_id: Option<EntityId>,
+    pub entity_id_map: HashMap<EntityId, EntityId>,
+    pub script_states: Vec<SavedScriptState>,
+}
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct HeldItemSaveData {
@@ -27,6 +36,15 @@ impl HeldItemSaveData {
         &self,
         world: &mut World,
     ) -> (Option<EntityId>, Option<EntityId>, Option<EntityId>) {
+        let instantiated = self.instantiate_with_script_state(world);
+        (
+            instantiated.left_hand_entity_id,
+            instantiated.right_hand_entity_id,
+            instantiated.inventory_entity_id,
+        )
+    }
+
+    fn instantiate_with_script_state(&self, world: &mut World) -> HeldItemInstantiation {
         let (_, entity_id_map) = self.held_entities.instantiate(world);
 
         let mut left_hand_entity_id = None;
@@ -51,11 +69,13 @@ impl HeldItemSaveData {
             }
         }
 
-        (
+        HeldItemInstantiation {
             left_hand_entity_id,
             right_hand_entity_id,
             inventory_entity_id,
-        )
+            entity_id_map,
+            script_states: self.held_entities.script_states.clone(),
+        }
     }
 
     /// Instantiate held entities while conservatively migrating saves written
@@ -68,13 +88,13 @@ impl HeldItemSaveData {
         &self,
         world: &mut World,
         unique_gamesys_templates: &HashMap<String, i32>,
-    ) -> (Option<EntityId>, Option<EntityId>, Option<EntityId>) {
+    ) -> HeldItemInstantiation {
         let mut migrated = self.clone();
         backfill_legacy_canonical_template_ids(
             &mut migrated.held_entities,
             unique_gamesys_templates,
         );
-        migrated.instantiate(world)
+        migrated.instantiate_with_script_state(world)
     }
 }
 
