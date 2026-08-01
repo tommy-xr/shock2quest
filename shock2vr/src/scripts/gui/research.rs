@@ -20,19 +20,27 @@ const TEXT_X: f32 = 15.0;
 const TEXT_TOP: f32 = 153.0;
 const TEXT_W: f32 = 138.0;
 const LINE_H: f32 = 11.0;
-const PAGE_LINES: usize = 10;
+// Seven lines stop above the authored report button at y=243. The adjacent
+// retail page gadgets expose the remainder instead of drawing underneath it.
+const PAGE_LINES: usize = 7;
 const WRAP_CHARS: usize = 27;
+const SCROLL_X: f32 = 159.0;
+const PGUP_Y: f32 = 174.0;
+const PGDN_Y: f32 = 203.0;
 
 pub struct ResearchGui;
 
 #[derive(Clone, Debug, Default)]
 pub struct ResearchGuiState {
     show_report: bool,
+    scroll: usize,
 }
 
 #[derive(Clone)]
 pub enum ResearchGuiMsg {
     ToggleReport,
+    PageUp,
+    PageDown,
 }
 
 impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
@@ -130,18 +138,36 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             "Research suspended. Double-click this item to resume.".to_owned()
         };
 
-        for (index, line) in wrap_text(&body, WRAP_CHARS)
-            .into_iter()
-            .take(PAGE_LINES)
-            .enumerate()
-        {
+        let lines = wrap_text(&body, WRAP_CHARS);
+        let start = if status.complete && state.show_report {
+            state.scroll.min(lines.len())
+        } else {
+            0
+        };
+        for (index, line) in lines[start..].iter().take(PAGE_LINES).enumerate() {
             if !line.is_empty() {
                 components.push(
-                    gui::text(&line)
+                    gui::text(line)
                         .with_position(vec2(TEXT_X, TEXT_TOP + index as f32 * LINE_H))
                         .with_size(vec2(TEXT_W, LINE_H)),
                 );
             }
+        }
+        if status.complete && state.show_report && lines.len() > PAGE_LINES {
+            components.push(
+                gui::button(ResearchGuiMsg::PageUp)
+                    .with_image("pgup0.pcx")
+                    .with_label("Research report previous page")
+                    .with_position(vec2(SCROLL_X, PGUP_Y))
+                    .with_size(vec2(18.0, 26.0)),
+            );
+            components.push(
+                gui::button(ResearchGuiMsg::PageDown)
+                    .with_image("pgdn0.pcx")
+                    .with_label("Research report next page")
+                    .with_position(vec2(SCROLL_X, PGDN_Y))
+                    .with_size(vec2(18.0, 26.0)),
+            );
         }
         components
     }
@@ -155,17 +181,31 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
 
     fn handle_msg(
         &self,
-        _entity_id: EntityId,
-        _world: &World,
+        entity_id: EntityId,
+        world: &World,
         state: &ResearchGuiState,
-        _msg: &ResearchGuiMsg,
+        msg: &ResearchGuiMsg,
     ) -> (ResearchGuiState, Effect) {
-        (
-            ResearchGuiState {
+        let next_state = match msg {
+            ResearchGuiMsg::ToggleReport => ResearchGuiState {
                 show_report: !state.show_report,
+                scroll: 0,
             },
-            Effect::NoEffect,
-        )
+            ResearchGuiMsg::PageUp => ResearchGuiState {
+                show_report: state.show_report,
+                scroll: state.scroll.saturating_sub(PAGE_LINES),
+            },
+            ResearchGuiMsg::PageDown => {
+                let max_scroll = wrap_text(&property_fallback(world, entity_id, true), WRAP_CHARS)
+                    .len()
+                    .saturating_sub(PAGE_LINES);
+                ResearchGuiState {
+                    show_report: state.show_report,
+                    scroll: (state.scroll + PAGE_LINES).min(max_scroll),
+                }
+            }
+        };
+        (next_state, Effect::NoEffect)
     }
 
     fn on_frob(&self, entity_id: EntityId, _world: &World) -> Effect {

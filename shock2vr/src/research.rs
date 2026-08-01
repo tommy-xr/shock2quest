@@ -6,8 +6,72 @@
 
 use std::collections::HashMap;
 
-use dark::properties::PropChemicalNeeded;
+use dark::{
+    properties::{
+        PropBaseTechDesc, PropChemicalNeeded, PropObjLookString, PropObjState,
+        PropRequiredTechDesc, PropResearchReport, PropResearchText, PropResearchTime,
+    },
+    ss2_entity_info::SystemShock2EntityInfo,
+};
 use serde::{Deserialize, Serialize};
+use shipyard::{Component, EntityId, Get, View, World};
+
+use crate::{
+    runtime_props::RuntimePropCanonicalTemplateId, scripts::script_util::hydrate_template_component,
+};
+
+/// Older campaign saves serialized carried objects before research metadata
+/// became a runtime component. Restore only the newly understood properties
+/// from the stable gamesys archetype, while preserving every live serialized
+/// value that was already present in the save.
+pub(crate) fn backfill_legacy_held_research_components(
+    world: &mut World,
+    held_entities: &[EntityId],
+    entity_info: &SystemShock2EntityInfo,
+) {
+    let researchables = {
+        let canonical = world
+            .borrow::<View<RuntimePropCanonicalTemplateId>>()
+            .unwrap();
+        held_entities
+            .iter()
+            .filter_map(|entity_id| {
+                let template_id = canonical.get(*entity_id).ok()?.0;
+                hydrate_template_component::<PropResearchTime>(template_id, entity_info)
+                    .map(|_| (*entity_id, template_id))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for (entity_id, template_id) in researchables {
+        backfill_component::<PropBaseTechDesc>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropChemicalNeeded>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropObjLookString>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropObjState>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropRequiredTechDesc>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropResearchReport>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropResearchText>(world, entity_id, template_id, entity_info);
+        backfill_component::<PropResearchTime>(world, entity_id, template_id, entity_info);
+    }
+}
+
+fn backfill_component<T>(
+    world: &mut World,
+    entity_id: EntityId,
+    template_id: i32,
+    entity_info: &SystemShock2EntityInfo,
+) where
+    T: Component + Clone + Send + Sync,
+{
+    let is_missing = world
+        .borrow::<View<T>>()
+        .map(|components| components.get(entity_id).is_err())
+        .unwrap_or(true);
+    if is_missing && let Some(component) = hydrate_template_component::<T>(template_id, entity_info)
+    {
+        world.add_component(entity_id, component);
+    }
+}
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ResearchState {
@@ -197,6 +261,14 @@ fn chemical_due<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use dark::{
+        properties::{ObjectState, PropObjState, PropResearchReport, PropResearchText},
+        ss2_entity_info::SystemShock2EntityInfo,
+    };
+    use shipyard::{Get, View, World};
+
     use super::*;
 
     fn toxin_chemicals() -> PropChemicalNeeded {
@@ -263,5 +335,55 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let loaded: ResearchState = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded, state);
+    }
+
+    #[test]
+    fn legacy_held_researchable_backfills_newly_parsed_template_metadata() {
+        let mut world = World::new();
+        let toxin = world.add_entity((
+            RuntimePropCanonicalTemplateId(-1341),
+            PropResearchReport(0x20),
+        ));
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        entity_info.entity_to_properties.insert(
+            -1341,
+            vec![
+                Arc::new(Box::new(PropResearchTime(600))),
+                Arc::new(Box::new(PropResearchReport(0x10))),
+                Arc::new(Box::new(PropResearchText("AATText".to_owned()))),
+                Arc::new(Box::new(PropObjState(ObjectState::Unresearched))),
+            ],
+        );
+
+        backfill_legacy_held_research_components(&mut world, &[toxin], &entity_info);
+
+        assert_eq!(
+            world
+                .borrow::<View<PropResearchTime>>()
+                .unwrap()
+                .get(toxin)
+                .unwrap()
+                .0,
+            600
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropResearchReport>>()
+                .unwrap()
+                .get(toxin)
+                .unwrap()
+                .0,
+            0x20,
+            "serialized live values must win over template defaults"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropObjState>>()
+                .unwrap()
+                .get(toxin)
+                .unwrap()
+                .0,
+            ObjectState::Unresearched
+        );
     }
 }

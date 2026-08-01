@@ -781,6 +781,12 @@ impl MissionCore {
         let left_hand_entity = held_instantiation.left_hand_entity_id;
         let right_hand_entity = held_instantiation.right_hand_entity_id;
         let maybe_inventory_entity = held_instantiation.inventory_entity_id;
+        let held_entities: Vec<_> = held_instantiation.entity_id_map.values().copied().collect();
+        crate::research::backfill_legacy_held_research_components(
+            &mut world,
+            &held_entities,
+            &entity_info_rc,
+        );
         let held_script_entity_id_map = held_instantiation.entity_id_map;
         let held_saved_script_states = held_instantiation.script_states;
 
@@ -6104,10 +6110,22 @@ fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
         return Vec::new();
     }
     game_log!(INFO, "Research complete");
-    let mut effects = vec![Effect::SetObjectState {
-        entity_id,
-        state: dark::properties::ObjectState::Normal,
-    }];
+    // Research belongs to the archetype, not one inventory instance. A legacy
+    // campaign can already carry multiple Toxin-A vials when the project
+    // completes, so normalize every live copy immediately; newly created
+    // copies are covered by ResearchableScript::initialize.
+    let canonical = world
+        .borrow::<View<crate::runtime_props::RuntimePropCanonicalTemplateId>>()
+        .unwrap();
+    let mut effects = (&canonical)
+        .iter()
+        .with_id()
+        .filter(|(_, canonical)| canonical.0 == template_id)
+        .map(|(entity_id, _)| Effect::SetObjectState {
+            entity_id,
+            state: dark::properties::ObjectState::Normal,
+        })
+        .collect::<Vec<_>>();
     if let Some(quest_bit) = crate::scripts::script_util::set_quest_bit_effect(world, entity_id) {
         effects.push(quest_bit);
     }

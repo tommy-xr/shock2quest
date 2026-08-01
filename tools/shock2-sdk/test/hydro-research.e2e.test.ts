@@ -62,6 +62,10 @@ async function carriedNamed(game: GameServer, name: string) {
   return (await game.player.inventory()).items.find((item) => item.name === name);
 }
 
+async function carriedItemsNamed(game: GameServer, name: string) {
+  return (await game.player.inventory()).items.filter((item) => item.name === name);
+}
+
 async function researchPanel(game: GameServer): Promise<UiState> {
   const ui = await game.ui.state();
   assert.ok(ui.active_panel, "Toxin-A should have an open Research MFD");
@@ -75,7 +79,7 @@ async function researchPanel(game: GameServer): Promise<UiState> {
 }
 
 test(
-  "Hydro Toxin-A: train, research with chemicals, persist, and use ACR once",
+  "Hydro Toxin-A: train, research with chemicals, persist, and use both ACRs",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     const saveName = `hydro_research_${Date.now()}`;
@@ -87,11 +91,17 @@ test(
 
     // Pick up an authored Hydro 2 vial, then prove Hydro 1's real regulator
     // refuses it while its Dark object state is still Unresearched.
-    const authoredToxin = (
+    const authoredToxins = (
       await game.entities.list({ filter: "Anti-Annelid Toxin", limit: 20 })
-    ).entities[0];
-    assert.ok(authoredToxin, "Hydro 2 should contain an authored Toxin-A vial");
-    await game.player.give(authoredToxin.id);
+    ).entities.slice(0, 2);
+    assert.equal(
+      authoredToxins.length,
+      2,
+      "Hydro 2 should contain both authored Toxin-A vials",
+    );
+    for (const authoredToxin of authoredToxins) {
+      await game.player.give(authoredToxin.id);
+    }
     await game.transitionLevel("hydro1.mis");
     await game.step({ frames: 5 });
     const acr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
@@ -101,8 +111,8 @@ test(
     await game.entities.sendMessage(acr1.id, { type: "Frob" });
     await game.step({ frames: 30 });
     assert.ok(
-      await carriedNamed(game, "Anti-Annelid Toxin"),
-      "ACR1 must not consume unresearched toxin",
+      (await carriedItemsNamed(game, "Anti-Annelid Toxin")).length === 2,
+      "ACR1 must not consume either unresearched toxin",
     );
     assert.notEqual(
       await game.quests.get("ACR1"),
@@ -235,28 +245,49 @@ test(
     assert.ok(report, "completed research unlocks report #5");
     await clickUiElement(game, report);
     await game.step({ frames: 3 });
+    let reportPanel = await game.ui.state();
     assert.ok(
-      panelTexts(await game.ui.state()).some((text) => text.includes("Summary:")),
+      panelTexts(reportPanel).some((text) => text.includes("Summary:")),
       "the report button reveals the authored analysis",
     );
 
-    // A researched vial is accepted once by ACR1. After its authored model
-    // tweq reaches the used frame, another researched vial is left untouched.
+    // The report is longer than the safe text region. Page through the retail
+    // scroll gadget and prove the late recommendation is reachable rather
+    // than silently truncated or drawn under the report button.
+    for (let page = 0; page < 8; page += 1) {
+      if (panelTexts(reportPanel).some((text) => text.includes("Recommendation:"))) {
+        break;
+      }
+      const nextPage = reportPanel.active_panel?.elements.find(
+        (element) => element.label === "Research report next page",
+      );
+      assert.ok(nextPage, "a long research report should expose next-page navigation");
+      await clickUiElement(game, nextPage);
+      await game.step({ frames: 3 });
+      reportPanel = await game.ui.state();
+    }
+    assert.ok(
+      panelTexts(reportPanel).some((text) => text.includes("Recommendation:")),
+      `late report recommendation should be reachable; got ${JSON.stringify(panelTexts(reportPanel))}`,
+    );
+
+    // Both vials predated completion, so both must be normalized to researched
+    // and accepted by Hydro's two independent, cross-deck regulators.
     await game.transitionLevel("hydro1.mis");
     await game.step({ frames: 5 });
     const liveAcr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
       (entity) => entity.name === "ACR1",
     );
     assert.ok(liveAcr1);
-    toxin = await carriedNamed(game, "Anti-Annelid Toxin");
-    assert.ok(toxin);
+    let carriedToxins = await carriedItemsNamed(game, "Anti-Annelid Toxin");
+    assert.equal(carriedToxins.length, 2, "both preexisting vials survive research");
     await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
     await game.step({ frames: 600 });
-    assert.ok(
-      !(await game.player.inventory()).items.some(
-        (item) => item.entity_id === toxin!.entity_id,
-      ),
-      "ACR1 consumes the researched vial",
+    carriedToxins = await carriedItemsNamed(game, "Anti-Annelid Toxin");
+    assert.equal(
+      carriedToxins.length,
+      1,
+      "ACR1 consumes one researched preexisting vial",
     );
     assert.equal(
       await game.quests.get("ACR1"),
@@ -264,9 +295,32 @@ test(
       "the authored ACR1-Activate trap marks this regulator active",
     );
 
+    // ACR2 is the second real regulator in Hydro 2, not another Hydro 1
+    // object. Follow the authored cross-deck objective before using it.
+    await game.transitionLevel("hydro2.mis");
+    await game.step({ frames: 5 });
+    const liveAcr2 = (await game.entities.list({ filter: "ACR2", limit: 30 })).entities.find(
+      (entity) => entity.name === "ACR2",
+    );
+    assert.ok(liveAcr2, "Hydro 2 should contain the authored ACR2 regulator");
+    await game.entities.sendMessage(liveAcr2.id, { type: "Frob" });
+    await game.step({ frames: 600 });
+    assert.equal(
+      (await carriedItemsNamed(game, "Anti-Annelid Toxin")).length,
+      0,
+      "ACR2 consumes the other researched preexisting vial",
+    );
+    assert.equal(
+      await game.quests.get("ACR2"),
+      "incomplete",
+      "the authored ACR2-Activate trap marks the second regulator active",
+    );
+
+    // After its authored model tweq reaches the used frame, another researched
+    // vial is left untouched by an already-used regulator.
     const secondToxin = await game.player.spawnItem(-1341);
     await game.step({ frames: 5 });
-    await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
+    await game.entities.sendMessage(liveAcr2.id, { type: "Frob" });
     await game.step({ frames: 30 });
     assert.ok(
       (await game.player.inventory()).items.some(
