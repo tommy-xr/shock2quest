@@ -9,18 +9,19 @@ import { teleportVerified } from "./helpers/teleport.js";
 // §2, PR A - "flat UI 6a"): frobbing the medsci1 Master Elevator Button opens
 // ElevatorGui in the left MFD, whose floor buttons are now semantically
 // labeled from MISC.STR (`ElevLevel<n>`), the current deck is lit + inert, and
-// floors gate on the `ElevState` quest bit. Clicking an available floor
-// transitions the game to that mission (marker StartLoc 22).
+// floors gate on the `ElevState` quest bit. With no power the original draws
+// POWER.PCX instead of any floor controls; partial power reaches decks 1..=3;
+// full power reaches all five. Clicking an available floor transitions the
+// game to that mission (marker StartLoc 22).
 //
 // Entity discovery is by NAME at run time (runtime entity ids are NOT stable
 // across launches): the "Master Elevator Button" (medsci1 mission id 1041,
 // script ElevatorButton). The floor labels/decks are global data (the gamesys
 // `Elev` file-var), so the button carries no floor links.
 //
-// Negative-first: on main the floor buttons render with `label: null` (the
-// host only knew the keypad's art-derived labels), so the "button labeled
-// 'Engineering (1)'" assertion fails; the fix adds the generic button-label
-// field + MISC.STR floor names.
+// Issue #593 negative-first: current main renders the normal ELEV.PCX panel
+// and exposes every non-current floor while ElevState is unset. It also gates
+// partial power backwards, exposing decks 4..=5 instead of decks 1..=3.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // The five floor labels ElevatorGui reads from MISC.STR (deck 1..5). Med / Sci
@@ -42,6 +43,11 @@ const OPERATIONS: Floor = {
   deck: 4,
   describe: "Operations (deck 4)",
 };
+const HYDROPONICS: Floor = {
+  name: /hydroponics/i,
+  deck: 3,
+  describe: "Hydroponics (deck 3)",
+};
 const MED_SCI: Floor = {
   name: /med\s*\/?\s*sci/i,
   deck: 2,
@@ -57,7 +63,7 @@ const floorButton = (state: UiState, floor: Floor): UiElement | undefined =>
   );
 
 test(
-  "flat elevator MFD: labeled floors, current-floor inert, ElevState gating, click transitions",
+  "flat elevator MFD: power states, labeled floors, current-floor inert, click transitions",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -106,46 +112,56 @@ test(
       "the active panel should be bound to the elevator button entity",
     );
 
-    // --- Floor buttons must be semantically labeled (THE fix; negative on main) ---
+    // --- No power: retail shows only POWER.PCX, with no floor controls. ---
     assert.ok(
-      floorButton(opened, ENGINEERING),
-      `panel should expose a floor button labeling ${ENGINEERING.describe} (on main labels are null)`,
+      opened.active_panel.elements.some(
+        (element) => element.texture === "iface/power.pcx",
+      ),
+      "an unset ElevState should draw the archive-qualified no-power panel",
     );
-    assert.ok(
-      floorButton(opened, OPERATIONS),
-      `panel should expose a floor button labeling ${OPERATIONS.describe}`,
+    assert.deepEqual(
+      opened.active_panel.elements
+        .filter((element) => element.kind === "button")
+        .map((element) => element.label),
+      ["close"],
+      "an unpowered elevator should expose no floor buttons",
     );
-    // The current deck (Med / Sci, deck 2) is lit + inert - never a clickable
-    // button.
-    assert.ok(
-      !floorButton(opened, MED_SCI),
-      "the current floor should be inert (not a clickable button)",
-    );
-    await game.screenshot("elevator-panel-open.png");
+    await game.screenshot("elevator-panel-unpowered.png");
 
-    // --- Gating: ElevState = INCOMPLETE seals deck 1 (Engineering) ---
+    // --- Partial power: decks 1..=3 work; decks 4..=5 remain blocked. ---
     await game.quests.set("ElevState", "incomplete");
     await game.step({ frames: 5 });
-    const gated = await uiState();
-    assert.ok(gated.active_panel, "panel should stay open across the gate change");
+    const partial = await uiState();
     assert.ok(
-      !floorButton(gated, ENGINEERING),
-      "with ElevState=incomplete, Engineering (deck 1) must be sealed (no button)",
+      partial.active_panel,
+      "panel should stay open across the power change",
     );
     assert.ok(
-      floorButton(gated, OPERATIONS),
-      "with ElevState=incomplete, decks >= 2 (e.g. Operations) stay available",
+      floorButton(partial, ENGINEERING),
+      "with partial power, Engineering (deck 1) should be available",
+    );
+    assert.ok(
+      floorButton(partial, HYDROPONICS),
+      "with partial power, Hydroponics (deck 3) should be available",
+    );
+    assert.ok(
+      !floorButton(partial, OPERATIONS),
+      "with partial power, Operations (deck 4) should remain sealed",
+    );
+    assert.ok(
+      !floorButton(partial, MED_SCI),
+      "the current floor should remain inert (not a clickable button)",
     );
     await game.screenshot("elevator-panel-gated.png");
 
-    // --- Ungate and click Engineering: the game transitions to eng1.mis ---
-    await game.quests.set("ElevState", "unknown");
+    // --- Full power and click Engineering: transition to eng1.mis. ---
+    await game.quests.set("ElevState", "complete");
     await game.step({ frames: 5 });
-    const ungated = await uiState();
-    const engineering = floorButton(ungated, ENGINEERING);
+    const fullyPowered = await uiState();
+    const engineering = floorButton(fullyPowered, ENGINEERING);
     assert.ok(
       engineering,
-      "ungating should restore the Engineering floor button",
+      "full power should retain the Engineering floor button",
     );
 
     assert.equal(
