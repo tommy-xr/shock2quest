@@ -11,6 +11,58 @@ async function pulseJump(game: GameServer): Promise<void> {
   await game.input.setJump(false);
 }
 
+// Fresh Hydro campaign `hydro -> ops -> rec -> command -> rick -> many ->
+// shodan · seed 1378752978` reached the authored Sector C ladder approach at
+// this exact pose. Two adjacent Railing Terminator OBBs (stable mission ids
+// 228/1701) span the route at x=56.7. Dark's jump-held mantle compresses its
+// sphere-stack player to cross low OBB lips; the continuous production capsule
+// instead jumps in place against the rail and cannot reach the required ladder.
+test(
+  "ordinary jump vaults Hydro2's Sector C ladder-approach railing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_HYDRO_CLEARANCE_PORT ?? 8256),
+    });
+    await game.step({ frames: 5 });
+
+    const railings = (await game.entities.list({ filter: "Railing Terminator" }))
+      .entities.filter(
+        (entity) => entity.template_id === 228 || entity.template_id === 1701,
+      );
+    assert.equal(
+      railings.length,
+      2,
+      "hydro2 should retain both stable railing objects across the ladder approach",
+    );
+
+    // Setup only: stage at the cold-verified campaign frontier. The crossing
+    // itself uses only production look, locomotion, and jump input.
+    await game.player.teleport({
+      x: 56.125435,
+      y: -0.756035,
+      z: 24.1012,
+    });
+    await game.step({ frames: 30 });
+    const before = await game.player.position();
+
+    await game.input.lookAtWorldPoint([59.6, before.y + 1.6, 22.77]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await pulseJump(game);
+    await game.step({ frames: 90 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+
+    const crossed = await game.player.position();
+    assert.ok(
+      crossed.x > 58,
+      `production jump should vault the rail toward the ladder ` +
+        `(${JSON.stringify(before)} -> ${JSON.stringify(crossed)})`,
+    );
+  },
+);
+
 // Issue #708: shodan.mis's mandatory final descent begins behind a low
 // non-climbable barrier at z=32. Ordinary walking, crouching, and the
 // collision-valid move endpoint all stop at its face; retail expects the
