@@ -55,15 +55,15 @@ test(
       "expected the locked elevator control",
     );
 
-    // Setup only: satisfy the authored nacelle filter and stand at the exact
-    // campaign position, then drive the production camera and squeeze path.
+    // Setup only: satisfy the authored nacelle filter and stand within retail
+    // frob reach, then drive the production camera and squeeze path.
     await game.quests.set("NacellesFrobbed", "incomplete");
     assert.equal(
       await pressRefused(game, elevatorControl.id),
       true,
       "the authored elevator control should begin locked",
     );
-    await game.player.teleport({ x: 1.5, y: 4.444, z: -19.72 });
+    await game.player.teleport({ x: 1.5, y: 4.444, z: -19.2 });
     await game.step({ frames: 2 });
     const aim = await game.player.aimAt(button, { hitbox: "center" });
     assert.equal(

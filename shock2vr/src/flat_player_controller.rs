@@ -285,10 +285,20 @@ impl FlatPlayerController {
         // surface-distance bound without imposing it on the HUD.
         let frob_target = pick
             .filter(|(entity, distance_squared)| {
-                *distance_squared <= FROB_REACH * FROB_REACH && is_frobbable(world, *entity)
+                *distance_squared <= FROB_REACH * FROB_REACH
+                    && !has_hud_select(world, *entity, false)
+                    && is_frobbable(world, *entity)
             })
             .map(|(entity, _)| entity)
-            .or_else(|| interaction_target(world, physics, point3(camera_pos.x, camera_pos.y, camera_pos.z), forward, self.wielded_entity));
+            .or_else(|| {
+                interaction_target(
+                    world,
+                    physics,
+                    point3(camera_pos.x, camera_pos.y, camera_pos.z),
+                    forward,
+                    self.wielded_entity,
+                )
+            });
         let highlighted = frob_target.or(highlighted);
 
         // Place the viewmodel + fire on the trigger edge.
@@ -581,16 +591,15 @@ fn has_hud_select(world: &World, entity_id: EntityId, expected: bool) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether an entity is worth highlighting / interacting with. Empty authored
-/// FrobInfo overrides deliberately suppress an inherited world action, so
-/// property presence by itself is not enough.
+/// Whether an entity is worth highlighting / interacting with (it has frob
+/// info), which excludes plain world geometry the ray also hits. Some scripted
+/// world objects (including StdDoor leaves) have an empty world-action mask but
+/// still consume Frob messages, so property presence is the compatibility
+/// boundary here.
 pub(crate) fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<View<PropFrobInfo>>()
-        .map(|v| {
-            v.get(entity_id)
-                .is_ok_and(|frob| !frob.world_action.is_empty())
-        })
+        .map(|v| v.get(entity_id).is_ok())
         .unwrap_or(false)
 }
 
@@ -1110,20 +1119,6 @@ mod tests {
         );
     }
     #[test]
-    fn empty_or_inventory_only_frob_info_is_not_world_frobbable() {
-        let mut world = World::new();
-        let empty = world.add_entity(frob_info(FrobFlag::empty()));
-        let inventory_only = world.add_entity(PropFrobInfo {
-            world_action: FrobFlag::empty(),
-            inventory_action: FrobFlag::SCRIPT,
-            tool_action: FrobFlag::empty(),
-        });
-
-        assert!(!is_frobbable(&world, empty));
-        assert!(!is_frobbable(&world, inventory_only));
-    }
-
-    #[test]
     fn negative_pick_bias_surface_yields_to_frobbable_overlay() {
         let mut world = World::new();
         let player = world.add_entity(());
@@ -1216,8 +1211,8 @@ mod tests {
             &input,
             vec3(0.0, 0.0, 0.0),
             identity,
-            identity,
-            0.0,
+            crate::death_camera::EyePose::flat(0.0, identity),
+            1.0 / 60.0,
             &world,
             &physics,
         );
@@ -1288,13 +1283,13 @@ mod tests {
             &input,
             vec3(0.0, 0.0, 0.0),
             identity,
-            identity,
-            0.0,
+            crate::death_camera::EyePose::flat(0.0, identity),
+            1.0 / 60.0,
             &world,
             &physics,
         );
 
-        assert_eq!(highlighted, None);
+        assert_eq!(highlighted, Some(decorative_surface));
         assert!(!effects.iter().any(|effect| matches!(
             effect,
             VirtualHandEffect::OutMessage {
@@ -1342,13 +1337,13 @@ mod tests {
             &input,
             vec3(0.0, 0.0, 0.0),
             identity,
-            identity,
-            0.0,
+            crate::death_camera::EyePose::flat(0.0, identity),
+            1.0 / 60.0,
             &world,
             &physics,
         );
 
-        assert_eq!(highlighted, None);
+        assert_eq!(highlighted, Some(decorative_surface));
         assert!(!effects.iter().any(|effect| matches!(
             effect,
             VirtualHandEffect::OutMessage {
