@@ -44,3 +44,7 @@ Payloads must never retain a serialized `shipyard::EntityId` directly. Store
 its `u64` saved form and resolve it through `ScriptRestoreContext::remap_entity`
 during hydration. A missing target is an explicit load error rather than a
 stale handle into the rebuilt world.
+
+`PictureSwap` is the first production opt-in: it persists the exact remaining
+duration of its one-second static phase. Its existing property-based recovery
+remains the backward-compatible fallback for older saves.
