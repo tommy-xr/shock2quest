@@ -684,6 +684,7 @@ fn process_events(
     }
 
     input_context.crouch = window.get_key(Key::LeftControl) == Action::Press;
+    input_context.jump = window.get_key(Key::Space) == Action::Press;
 
     // Discrete actions (spawn, save/load, inventory, pathfinding test) are
     // handled by the mapper, which edge-detects key presses.

@@ -67,3 +67,77 @@ test(
     );
   },
 );
+
+test(
+  "shodan.mis: the Citadel-memory portal is open while its window stays solid",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "shodan.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8233) + 1,
+    });
+
+    // Resume the reviewed campaign frontier immediately before the portal.
+    // Relocation is setup only: both legs through the opening are
+    // collision-valid production movement.
+    await game.player.teleport({ x: 12.0, y: -2.196, z: -14.0 });
+    await game.step({ frames: 10 });
+    const start = await game.player.position();
+    const east = await game.player.moveTo({
+      x: 13.5,
+      y: start.y,
+      z: start.z,
+    });
+    assert.ok(
+      !east.blocked && east.new_position[0] > 13.3,
+      `window collision must not extend into the portal approach, got ${JSON.stringify(east)}`,
+    );
+
+    const beforeCrossing = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      beforeCrossing.x,
+      beforeCrossing.y,
+      -20.0,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 120 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 30 });
+
+    const across = await game.player.position();
+    assert.ok(
+      across.z < -18.0 && Math.abs(across.y - start.y) < 0.25,
+      `ordinary walking should cross onto the supported floor, got ${JSON.stringify({
+        start,
+        across,
+      })}`,
+    );
+
+    // The fix narrows the collision to the authored 3.2-unit OBB; it does not
+    // make the unbreakable window itself non-solid.
+    const windows = await game.entities.list({
+      filter: "UBWin_6x9",
+      limit: 100,
+    });
+    const window = windows.entities.find(
+      (entity) => entity.template_id === 1288,
+    );
+    assert.ok(window, "expected Shodan mission object 1288 (UBWin_6x9)");
+    const windowHit = await game.raycast({
+      start: [10.0, 0.0, 8.0],
+      end: [18.0, 0.0, 8.0],
+      collision_groups: ["entity"],
+      ignore_sensors: true,
+    });
+    assert.equal(
+      windowHit.entity_id,
+      window.id,
+      `authored window footprint should stay solid, got ${JSON.stringify(windowHit)}`,
+    );
+    assert.ok(
+      windowHit.hit_point !== null &&
+        Math.abs(windowHit.hit_point[0] - 12.8) < 0.02,
+      `window west face should use its authored OBB at x=12.8, got ${JSON.stringify(windowHit)}`,
+    );
+  },
+);

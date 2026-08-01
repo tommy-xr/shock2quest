@@ -155,7 +155,11 @@ test(
     // Thumbstick locomotion keeps walking and crosses it; the validated move
     // used to treat the first low-progress frame as a terminal obstruction and
     // return after only ~0.08u.
-    const corner: Position = { x: 28.36, y: 2.2, z: -65.96 };
+    // Stage 0.2u farther south so the restored 2.4-foot-wide player starts
+    // outside the wall's rounded-capsule contact band. The same 210-degree
+    // route still spends its first frames scraping the corner before clearing
+    // it, which is the validated-move behavior this regression covers.
+    const corner: Position = { x: 28.36, y: 2.2, z: -66.16 };
     await game.player.teleport(corner);
     await game.step({ frames: 3 });
     const walkStart = await game.player.position();
