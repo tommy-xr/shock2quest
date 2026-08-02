@@ -42,8 +42,9 @@ use dark::{
         PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropTeleported,
-        PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType,
-        TeleportSource, ToLink, TripFlags, TweqAnimationState, WrappedEntityId,
+        PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropTweqModelConfig,
+        PropertyDefinition, RenderType, TeleportSource, ToLink, TripFlags, TweqAnimationState,
+        WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -144,6 +145,95 @@ pub struct PlayerInfo {
     pub left_hand_entity_id: Option<EntityId>,
     pub right_hand_entity_id: Option<EntityId>,
     pub inventory_entity_id: EntityId,
+}
+
+/// The live player's death/reconstruction lifecycle.
+///
+/// This is mission-local runtime state: a dead game cannot be saved (see
+/// `player_save_position`), so only the player's persistent vitals and an
+/// activated station's authored model state need serialization.
+#[derive(Unique, Clone, Debug, PartialEq)]
+pub enum PlayerLifeState {
+    Alive,
+    /// No activated/affordable QBR exists in this mission. The player remains
+    /// terminally dead until a load or level restart replaces the scene.
+    Dead,
+    /// The retail five-second death pause before a QBR reconstruction.
+    Respawning {
+        elapsed_seconds: f32,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+    },
+}
+
+impl PlayerLifeState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlayerLifeState::Alive => "alive",
+            PlayerLifeState::Dead => "dead",
+            PlayerLifeState::Respawning { .. } => "respawning",
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        matches!(self, PlayerLifeState::Alive)
+    }
+}
+
+const PLAYER_RESPAWN_DELAY_SECONDS: f32 = 5.0;
+const PLAYER_RESPAWN_NANITE_COST: i32 = 10;
+
+/// Resolve the active QBR's authored teleport trap. `ResurrectMachine` uses
+/// the scanner's model tweq as its durable activation state: the initial
+/// `res_pad` becomes the config's final model (`res_pad2`) when frobbed, and
+/// `PropModelName` already persists with the rest of the mission.
+fn active_resurrection_target(world: &World) -> Option<(Vector3<f32>, Quaternion<f32>)> {
+    let scripts = world.borrow::<View<PropScripts>>().ok()?;
+    let models = world.borrow::<View<PropModelName>>().ok()?;
+    let tweq_configs = world.borrow::<View<PropTweqModelConfig>>().ok()?;
+    let links = world.borrow::<View<Links>>().ok()?;
+    let positions = world.borrow::<View<PropPosition>>().ok()?;
+
+    for (button, (button_scripts, model, config)) in
+        (&scripts, &models, &tweq_configs).iter().with_id()
+    {
+        let is_resurrection_button = button_scripts
+            .scripts
+            .iter()
+            .any(|script| script.eq_ignore_ascii_case("resurrectmachine"));
+        let is_active = config
+            .model_names
+            .last()
+            .is_some_and(|active_model| model.0.eq_ignore_ascii_case(active_model));
+        if !is_resurrection_button || !is_active {
+            continue;
+        }
+
+        let Some(button_links) = links.get(button).ok() else {
+            continue;
+        };
+        for link in &button_links.to_links {
+            if !matches!(link.link, Link::SwitchLink) {
+                continue;
+            }
+            let Some(target) = link.to_entity_id.map(|target| target.0) else {
+                continue;
+            };
+            let target_is_teleport = scripts.get(target).is_ok_and(|target_scripts| {
+                target_scripts
+                    .scripts
+                    .iter()
+                    .any(|script| script.eq_ignore_ascii_case("trapteleport"))
+            });
+            if target_is_teleport {
+                if let Ok(position) = positions.get(target) {
+                    return Some((position.position, position.rotation));
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -831,6 +921,7 @@ impl MissionCore {
             right_hand_entity_id: None,
             inventory_entity_id: inventory,
         });
+        world.add_unique(PlayerLifeState::Alive);
 
         world.add_unique(quest_info);
 
@@ -1074,6 +1165,112 @@ impl MissionCore {
         }
     }
 
+    fn player_is_alive(&self) -> bool {
+        self.world
+            .borrow::<UniqueView<PlayerLifeState>>()
+            .map(|life| life.is_alive())
+            .unwrap_or(true)
+    }
+
+    /// Enter the death state once. An active QBR is usable only when the
+    /// player can atomically pay the retail 10-nanite reconstruction cost;
+    /// otherwise death is terminal and the scene remains available for an
+    /// explicit quick-load/restart.
+    fn begin_player_death(&mut self) {
+        if !self.player_is_alive() {
+            return;
+        }
+
+        let paid_respawn = active_resurrection_target(&self.world).and_then(|target| {
+            crate::scripts::script_util::debit_player_nanites(
+                &self.world,
+                PLAYER_RESPAWN_NANITE_COST,
+            )
+            .map(|exhausted| (target, exhausted))
+        });
+
+        let next_state = if let Some(((position, rotation), exhausted)) = paid_respawn {
+            for entity_id in exhausted {
+                self.destroy_entity(entity_id);
+            }
+            info!(
+                "Player died: QBR reconstruction queued at {:?} (-{} nanites)",
+                position, PLAYER_RESPAWN_NANITE_COST
+            );
+            PlayerLifeState::Respawning {
+                elapsed_seconds: 0.0,
+                position,
+                rotation,
+            }
+        } else {
+            info!("Player died: no activated and affordable QBR");
+            PlayerLifeState::Dead
+        };
+
+        *self
+            .world
+            .borrow::<UniqueViewMut<PlayerLifeState>>()
+            .unwrap() = next_state;
+    }
+
+    /// Advance the retail death pause and perform the reconstruction when its
+    /// five seconds have elapsed.
+    fn update_player_life_state(&mut self, elapsed_seconds: f32) {
+        let respawn = {
+            let mut life = self
+                .world
+                .borrow::<UniqueViewMut<PlayerLifeState>>()
+                .unwrap();
+            match &mut *life {
+                PlayerLifeState::Respawning {
+                    elapsed_seconds: elapsed,
+                    position,
+                    rotation,
+                } => {
+                    *elapsed += elapsed_seconds;
+                    (*elapsed + f32::EPSILON >= PLAYER_RESPAWN_DELAY_SECONDS)
+                        .then_some((*position, *rotation))
+                }
+                PlayerLifeState::Alive | PlayerLifeState::Dead => None,
+            }
+        };
+
+        let Some((position, rotation)) = respawn else {
+            return;
+        };
+
+        self.physics
+            .set_player_translation(position, &mut self.player_handle);
+        let player_entity = {
+            let mut player = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
+            player.pos = position;
+            player.rotation = rotation;
+            player.entity_id
+        };
+        self.world.add_component(
+            player_entity,
+            PropTeleported::with_source(TeleportSource::ScriptedTrap),
+        );
+        self.world.run(
+            |mut hit_points: ViewMut<PropHitPoints>,
+             max_hit_points: View<dark::properties::PropMaxHitPoints>| {
+                let maximum = max_hit_points
+                    .get(player_entity)
+                    .map(|max| max.hit_points as i32)
+                    .unwrap_or(1)
+                    .max(1);
+                if let Ok(hit_points) = (&mut hit_points).get(player_entity) {
+                    hit_points.hit_points = (maximum / 2).max(1);
+                }
+            },
+        );
+        *self
+            .world
+            .borrow::<UniqueViewMut<PlayerLifeState>>()
+            .unwrap() = PlayerLifeState::Alive;
+        info!("Player reconstructed at QBR {:?}", position);
+    }
+
     pub fn update(
         &mut self,
         time: &Time,
@@ -1084,6 +1281,38 @@ impl MissionCore {
     ) -> Vec<Effect> {
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
+
+        // Old saves can legitimately restore a zero-HP player even though
+        // PlayerLifeState itself is runtime-only. Enter death on the first
+        // update in that case, then advance any pending QBR reconstruction.
+        let player_health_depleted = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            self.world
+                .borrow::<View<PropHitPoints>>()
+                .ok()
+                .and_then(|hit_points| {
+                    hit_points
+                        .get(player.entity_id)
+                        .ok()
+                        .map(|hit_points| hit_points.hit_points <= 0)
+                })
+                .unwrap_or(false)
+        };
+        if self.player_is_alive() && player_health_depleted {
+            self.begin_player_death();
+        }
+        self.update_player_life_state(time.elapsed.as_secs_f32());
+
+        // A dead player's physical head can still look around in VR, but all
+        // actionable movement, hand, trigger, crouch, and pointer channels are
+        // neutral until reconstruction. Discrete quick-load remains available
+        // because it arrives separately in `command_effects`.
+        let suppressed_input = InputContext::default();
+        let input_context = if self.player_is_alive() {
+            input_context
+        } else {
+            &suppressed_input
+        };
         // Refill the per-frame AI pathfind budget - only on advancing frames,
         // so paused zero-dt ticks (debug runtime introspection) can't grant
         // extra query slots between stepped frames
@@ -3023,13 +3252,20 @@ impl MissionCore {
                 }
 
                 Effect::AdjustHitPoints { entity_id, delta } => {
+                    // Once death has started, stray queued damage/healing must
+                    // not churn the terminal pool or revive the player outside
+                    // the reconstruction path.
+                    if entity_id == player_entity && !self.player_is_alive() {
+                        continue;
+                    }
                     let mut v_hit_points = self
                         .world
                         .borrow::<ViewMut<dark::properties::PropHitPoints>>()
                         .unwrap();
 
                     if let Ok(hit_points) = (&mut v_hit_points).get(entity_id) {
-                        hit_points.hit_points += delta;
+                        let previous = hit_points.hit_points;
+                        hit_points.hit_points = hit_points.hit_points.saturating_add(delta).max(0);
                         // Every HP change flows through here (weapon, stim,
                         // collision damage) - trace it with the resulting
                         // total so a mysterious death is attributable.
@@ -3041,6 +3277,9 @@ impl MissionCore {
                             delta,
                             hp
                         );
+                        if entity_id == player_entity && previous > 0 && hp == 0 {
+                            self.begin_player_death();
+                        }
                     }
                 }
 
@@ -5246,6 +5485,9 @@ impl MissionCore {
     }
 
     pub fn player_save_position(&self) -> Option<Vector3<f32>> {
+        if !self.player_is_alive() {
+            return None;
+        }
         self.physics
             .get_player_save_translation(&self.player_handle)
     }
@@ -7077,6 +7319,67 @@ mod death_motion_tests {
     fn three_frame_already_dead_pose_is_not_a_realtime_crumple() {
         assert!(!is_realtime_crumple(3.0));
         assert!(is_realtime_crumple(79.0));
+    }
+}
+
+#[cfg(test)]
+mod player_death_tests {
+    use dark::properties::{PropTweqModelConfig, TweqAnimationConfig, TweqHalt};
+
+    use super::*;
+
+    fn resurrection_world(model: &str) -> (World, Vector3<f32>, Quaternion<f32>) {
+        let mut world = World::new();
+        let target_position = vec3(4.0, 5.0, 6.0);
+        let target_rotation = Quaternion::from_angle_y(cgmath::Deg(90.0));
+        let target = world.add_entity((
+            PropScripts {
+                scripts: vec!["TrapTeleport".to_owned()],
+                inherits: true,
+            },
+            PropPosition {
+                position: target_position,
+                rotation: target_rotation,
+                cell: 0,
+            },
+        ));
+        world.add_entity((
+            PropScripts {
+                scripts: vec!["ResurrectMachine".to_owned(), "Tweqable".to_owned()],
+                inherits: true,
+            },
+            PropModelName(model.to_owned()),
+            PropTweqModelConfig {
+                animation_config: TweqAnimationConfig::SIM,
+                halt: TweqHalt::StopTweq,
+                model_names: vec!["res_pad".to_owned(), "res_pad2".to_owned()],
+            },
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(target)),
+                    link: Link::SwitchLink,
+                }],
+            },
+        ));
+        (world, target_position, target_rotation)
+    }
+
+    #[test]
+    fn inactive_resurrection_scanner_has_no_respawn_target() {
+        let (world, _, _) = resurrection_world("res_pad");
+
+        assert_eq!(active_resurrection_target(&world), None);
+    }
+
+    #[test]
+    fn activated_scanner_resolves_its_linked_teleport_target() {
+        let (world, expected_position, expected_rotation) = resurrection_world("res_pad2");
+
+        assert_eq!(
+            active_resurrection_target(&world),
+            Some((expected_position, expected_rotation))
+        );
     }
 }
 

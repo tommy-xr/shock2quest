@@ -652,6 +652,8 @@ pub struct PlayerInfo {
     pub entity_id: Option<i32>,
     pub position: [f32; 3],
     pub rotation: [f32; 4], // quaternion
+    /// "alive", terminally "dead", or waiting for QBR reconstruction.
+    pub life_state: String,
     pub camera_offset: [f32; 3],
     pub camera_rotation: [f32; 4], // quaternion
     /// The wielded/first-person weapon in flatscreen mode (the player's left-hand

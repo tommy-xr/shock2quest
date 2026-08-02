@@ -399,6 +399,9 @@ pub struct PlayerStateSnapshot {
     pub entity_id: i32,
     pub position: [f32; 3],
     pub rotation: [f32; 4],
+    /// "alive", terminally "dead", or waiting for an activated QBR while
+    /// "respawning". This is the automation-visible loss signal.
+    pub life_state: String,
     pub wielded_entity_id: Option<i32>,
     pub right_hand_entity_id: Option<i32>,
     /// Whether the wielded weapon is mid-reload, and (if so) the current
@@ -416,8 +419,8 @@ pub struct PlayerStateSnapshot {
     /// is only one (it just cannot be cycled).
     pub wielded_ammo_type: Option<String>,
     /// The player's hit points (current, max), or `None` when the player has
-    /// no health pool. Seeded from `The Player` template; drained by psi
-    /// burnout (real damage handling is still TODO).
+    /// no health pool. Seeded from `The Player` template and consumed by every
+    /// damage path, with zero entering the player death lifecycle.
     pub hit_points: Option<(i32, i32)>,
     /// The player's psi pool (current, max), or `None` when the player has no
     /// psi state (e.g. gamesys not loaded).
@@ -473,6 +476,10 @@ impl Game {
                 info.rotation.v.z,
                 info.rotation.s,
             ],
+            life_state: world
+                .borrow::<shipyard::UniqueView<crate::mission::PlayerLifeState>>()
+                .map(|life| life.as_str().to_owned())
+                .unwrap_or_else(|_| "alive".to_owned()),
             wielded_entity_id: info.left_hand_entity_id.map(|e| e.inner() as i32),
             right_hand_entity_id: info.right_hand_entity_id.map(|e| e.inner() as i32),
             reloading: reload.is_some(),

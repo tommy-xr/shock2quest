@@ -1966,6 +1966,10 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                     .as_ref()
                     .map(|s| s.rotation)
                     .unwrap_or([1.0, 0.0, 0.0, 0.0]),
+                life_state: state
+                    .as_ref()
+                    .map(|s| s.life_state.clone())
+                    .unwrap_or_else(|| "alive".to_owned()),
                 camera_offset: [0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0],
                 camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
                 wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
