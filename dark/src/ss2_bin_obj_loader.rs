@@ -12,7 +12,10 @@ use cgmath::{Point3, point3, prelude::*, vec3};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, VertexPositionTextureNormal, VertexPositionTextureSkinnedNormal},
+    scene::{
+        FrontFaceWinding, SceneObject, VertexPositionTextureNormal,
+        VertexPositionTextureSkinnedNormal,
+    },
     texture::{AnimatedTexture, TextureTrait},
 };
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -29,6 +32,9 @@ use crate::{
     ss2_skeleton::{Bone, Skeleton},
     util::load_multiple_textures_for_model,
 };
+
+// Dark LGMD polygons use clockwise front faces.
+const DARK_OBJECT_FRONT_FACE: FrontFaceWinding = FrontFaceWinding::Clockwise;
 
 #[derive(FromPrimitive, ToPrimitive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum VhotType {
@@ -232,7 +238,7 @@ pub fn to_scene_objects(
             };
 
             let material = RefCell::new(mat);
-            let mut so = engine::scene::scene_object::SceneObject::create(material, geometry);
+            let mut so = create_dark_object_scene_object(material, geometry);
 
             so.set_skinning_data(skeleton.get_transforms());
 
@@ -256,6 +262,15 @@ pub fn to_scene_objects(
 
     mesh_objects.append(&mut vhot_objs);
     (mesh_objects, skeleton)
+}
+
+fn create_dark_object_scene_object(
+    material: RefCell<Box<dyn engine::scene::Material>>,
+    geometry: Rc<Box<dyn engine::scene::Geometry>>,
+) -> SceneObject {
+    let mut scene_object = SceneObject::create(material, geometry);
+    scene_object.set_backface_culling(Some(DARK_OBJECT_FRONT_FACE));
+    scene_object
 }
 
 // Data
@@ -889,6 +904,39 @@ fn convert_skinned_vertices_to_static_vertices(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// S_HIVOLT.BIN contains two coplanar, opposite-wound faces with inverse U
+    /// mappings. Only its authored clockwise face reads left-to-right from the
+    /// affected command1 placement; rendering both lets the mirrored face win
+    /// the depth test.
+    #[test]
+    fn dark_object_culling_selects_the_readable_sign_face() {
+        let sign_faces = [
+            (FrontFaceWinding::CounterClockwise, 1.0_f32, 0.0_f32),
+            (FrontFaceWinding::Clockwise, 0.0_f32, 1.0_f32),
+        ];
+
+        let (_, left_u, right_u) = sign_faces
+            .into_iter()
+            .find(|(winding, _, _)| *winding == DARK_OBJECT_FRONT_FACE)
+            .expect("the configured winding should match an authored sign face");
+
+        assert!(
+            left_u < right_u,
+            "the selected sign face must not be mirrored"
+        );
+    }
+
+    #[test]
+    fn dark_object_scene_objects_enable_clockwise_culling() {
+        let material = RefCell::new(engine::scene::color_material::create(vec3(1.0, 1.0, 1.0)));
+        let geometry: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::geometry::EmptyMesh));
+
+        let object = create_dark_object_scene_object(material, geometry);
+
+        assert_eq!(object.backface_culling(), Some(FrontFaceWinding::Clockwise));
+    }
 
     fn material(name: &str) -> SystemShock2MeshMaterial {
         SystemShock2MeshMaterial {

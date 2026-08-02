@@ -30,6 +30,12 @@ use super::quad;
 use super::skinned_material::SkinnedMaterial;
 use crate::materials;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrontFaceWinding {
+    Clockwise,
+    CounterClockwise,
+}
+
 #[derive(Clone)]
 pub struct SceneObject {
     pub material: Rc<RefCell<Box<dyn Material>>>,
@@ -48,6 +54,9 @@ pub struct SceneObject {
     /// a lasting material-level override would bleed between entities; instead
     /// this is applied to the material only around this object's own draw.
     pub transparency_override: Option<f32>,
+    /// Front-face winding used to cull backfaces for this object. Most engine
+    /// geometry remains double-sided; imported Dark models opt in explicitly.
+    backface_culling: Option<FrontFaceWinding>,
 }
 
 impl SceneObject {
@@ -223,6 +232,7 @@ impl SceneObject {
             depth_write: true,
             clear_depth: false,
             transparency_override: None,
+            backface_culling: None,
         }
     }
 
@@ -261,7 +271,7 @@ impl SceneObject {
             &self.skinning_data,
             lights,
         ) {
-            self.geometry.draw();
+            self.draw_geometry();
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
@@ -291,7 +301,7 @@ impl SceneObject {
             &self.skinning_data,
             lights,
         ) {
-            self.geometry.draw();
+            self.draw_geometry();
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
@@ -352,6 +362,7 @@ impl SceneObject {
             depth_write: true,
             clear_depth: false,
             transparency_override: None,
+            backface_culling: None,
         }
     }
 
@@ -365,6 +376,7 @@ impl SceneObject {
             depth_write: self.depth_write,
             clear_depth: self.clear_depth,
             transparency_override: self.transparency_override,
+            backface_culling: self.backface_culling,
         }
     }
 
@@ -374,6 +386,38 @@ impl SceneObject {
 
     pub fn set_clear_depth(&mut self, enabled: bool) {
         self.clear_depth = enabled;
+    }
+
+    pub fn set_backface_culling(&mut self, front_face: Option<FrontFaceWinding>) {
+        self.backface_culling = front_face;
+    }
+
+    pub fn backface_culling(&self) -> Option<FrontFaceWinding> {
+        self.backface_culling
+    }
+
+    fn draw_geometry(&self) {
+        if let Some(front_face) = self.backface_culling {
+            unsafe {
+                gl::Enable(gl::CULL_FACE);
+                gl::CullFace(gl::BACK);
+                gl::FrontFace(match front_face {
+                    FrontFaceWinding::Clockwise => gl::CW,
+                    FrontFaceWinding::CounterClockwise => gl::CCW,
+                });
+            }
+        }
+
+        self.geometry.draw();
+
+        if self.backface_culling.is_some() {
+            // Culling is an explicit per-object opt-in; restore the default for
+            // world, procedural, and UI geometry drawn afterward.
+            unsafe {
+                gl::Disable(gl::CULL_FACE);
+                gl::FrontFace(gl::CCW);
+            }
+        }
     }
 
     pub fn set_skinned_transparency(&mut self, transparency: Option<f32>) {
@@ -395,5 +439,20 @@ impl SceneObject {
     /// objects sharing the same material are unaffected.
     pub fn set_transparency(&mut self, transparency: Option<f32>) {
         self.transparency_override = transparency;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_scene_objects_are_double_sided_by_default() {
+        let object = SceneObject::new(
+            super::super::color_material::create(vec3(1.0, 1.0, 1.0)),
+            Box::new(super::super::geometry::EmptyMesh),
+        );
+
+        assert_eq!(object.backface_culling(), None);
     }
 }
