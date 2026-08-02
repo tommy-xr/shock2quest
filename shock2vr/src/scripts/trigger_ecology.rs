@@ -15,7 +15,6 @@ use super::{
 const PHYSICAL_TEMPLATE_ID: i32 = -11;
 const ECOLOGY_STATE_NORMAL: i32 = 0;
 const ECOLOGY_STATE_ALERT: i32 = 2;
-const ECOLOGY_STATE_COUNT: usize = 3;
 const SCRIPT_STATE_KEY: &str = "shock2vr.trigger_ecology";
 
 #[derive(Serialize, Deserialize)]
@@ -110,12 +109,13 @@ impl TriggerEcology {
         let Ok(ecology_type) = ecology_types.get(entity_id) else {
             return Effect::NoEffect;
         };
-        let state = Self::eco_state(world, entity_id);
-        let Some(state_index) = usize::try_from(state)
-            .ok()
-            .filter(|index| *index < ECOLOGY_STATE_COUNT)
-        else {
-            return Effect::NoEffect;
+        // Retail's script switches only on Normal and Alert; every other
+        // state (notably Hacked) falls through to "do nothing", so a hacked
+        // ecology pauses spawning regardless of its authored hacked column.
+        let state_index = match Self::eco_state(world, entity_id) {
+            ECOLOGY_STATE_NORMAL => ECOLOGY_STATE_NORMAL as usize,
+            ECOLOGY_STATE_ALERT => ECOLOGY_STATE_ALERT as usize,
+            _ => return Effect::NoEffect,
         };
         let minimum = ecology.min_count[state_index];
         let maximum = ecology.max_count[state_index];
@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn hacked_ecology_uses_its_authored_hacked_profile() {
+    fn hacked_ecology_is_paused_even_with_nonzero_population_targets() {
         let mut world = World::new();
         world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
         let generator = world.add_entity(());
@@ -357,9 +357,9 @@ mod tests {
         let mut script = TriggerEcology::new();
         script.initialize(ecology, &world);
 
-        // The hacked column authors min 1 / max 1 with an empty population,
-        // so the hacked ecology keeps spawning from its own profile.
-        assert!(sends_to(step(&mut script, ecology, &world, 15), generator));
+        // Even though the hacked column authors min 1 / max 1 against an
+        // empty population, retail's script never reads it: hacked pauses.
+        assert!(!sends_to(step(&mut script, ecology, &world, 15), generator));
     }
 
     #[test]
