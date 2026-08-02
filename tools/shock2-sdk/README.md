@@ -126,6 +126,21 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;
   pass `repoRoot` to override. First launch may take minutes while cargo
   compiles; the default readiness timeout is 5 minutes.
+- **Lifecycle / reaping stale runtimes**: a long automation session that dies
+  without reaching `/v1/shutdown` (a crashed agent, a killed test runner)
+  leaves its `debug_runtime` orphaned - still bound to its port and burning a
+  CPU core. To guard against that, `launch()` reaps (SIGKILL) any
+  `debug_runtime` already bound to the requested port *before* starting a new
+  one, by default. This only ever targets the exact port you asked for
+  (`port ?? 8080`) - never a fallback port picked by the bind-race retry loop,
+  and never a process that isn't a `debug_runtime` by command line, and never
+  a port a live `GameServer` in *this* process already owns (that one is
+  skipped as "not stale," not killed). It does **not** distinguish an actual
+  orphan from another agent's currently-running session that happens to share
+  the same port - if you rely on the existing walk-up-to-a-free-port behavior
+  to coexist with concurrent runs on a shared default port, pass an explicit
+  unique `port` per run, or set `reapStale: false` to fall back to walk-up
+  instead of killing what's there.
 - Injected actions apply on the next game update, which runs even while
   paused (with zero delta time).
 - `game.logs()` returns recent runtime output (also included in launch

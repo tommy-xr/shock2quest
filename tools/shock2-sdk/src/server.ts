@@ -1,8 +1,9 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 
 import { HttpClient } from "./client.js";
 import { Game } from "./game.js";
@@ -32,6 +33,15 @@ export interface LaunchOptions {
   rustLog?: string;
   /** Echo runtime output to this process's stderr (default false). */
   echoLogs?: boolean;
+  /**
+   * Reap (SIGKILL) a stale `debug_runtime` already bound to the requested
+   * launch port before starting - e.g. an orphan left by a prior agent
+   * session that died without reaching `/v1/shutdown` (see #786). Only ever
+   * targets the exact port this launch asked for (`port ?? 8080`); a
+   * fallback port picked by the free-port walk-up on a bind race is never
+   * touched. Default true.
+   */
+  reapStale?: boolean;
 }
 
 /** Walk up from a directory until a cargo workspace root is found. */
@@ -115,6 +125,131 @@ export async function findFreePort(start: number): Promise<number> {
   );
 }
 
+const execFileAsync = promisify(execFile);
+
+/** A live process with a listening socket on a port, as reported by the OS. */
+export interface PortProcess {
+  pid: number;
+  /** Full command line (not the truncated program name `lsof` reports). */
+  command: string;
+}
+
+/**
+ * Finds processes with a listening TCP socket on `port`, via `lsof` (pid
+ * discovery) + `ps` (full command line - `lsof`'s COMMAND column truncates to
+ * 9 characters and drops arguments, so it can't be used to confirm this is a
+ * `debug_runtime` bound to the port we think it is). Best-effort: returns []
+ * if either tool is unavailable or reports nothing, rather than throwing -
+ * callers treat that the same as "no stale process found".
+ */
+export async function findProcessesOnPort(port: number): Promise<PortProcess[]> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync("lsof", [
+      "-nP",
+      `-iTCP:${port}`,
+      "-sTCP:LISTEN",
+      "-t",
+    ]));
+  } catch {
+    // No listener on the port (lsof exits non-zero), or lsof isn't installed.
+    return [];
+  }
+  const pids = [...new Set(stdout.split("\n").map((line) => line.trim()).filter(Boolean))].map(
+    Number,
+  );
+
+  const processes: PortProcess[] = [];
+  for (const pid of pids) {
+    try {
+      const { stdout: command } = await execFileAsync("ps", ["-p", String(pid), "-o", "command="]);
+      processes.push({ pid, command: command.trim() });
+    } catch {
+      // Process exited between the lsof snapshot and this lookup - skip it.
+    }
+  }
+  return processes;
+}
+
+/**
+ * True when `command` is a `debug_runtime` invocation bound to exactly
+ * `port` - checked by tokenizing the full command line (not a raw substring
+ * match, which a name like `debug_runtime_proxy` or a `--port 8080` vs.
+ * `--port 808` collision could fool): the executable's basename must be
+ * exactly `debug_runtime`, and its args must contain the literal token pair
+ * `--port <port>`.
+ */
+function isDebugRuntimeOnPort(command: string, port: number): boolean {
+  const argv = command.trim().split(/\s+/);
+  const exe = argv[0]?.split("/").pop();
+  if (exe !== "debug_runtime") return false;
+  const portFlagIndex = argv.indexOf("--port");
+  return portFlagIndex !== -1 && argv[portFlagIndex + 1] === String(port);
+}
+
+/**
+ * Kill any `debug_runtime` process bound to `port` (see
+ * `isDebugRuntimeOnPort` for the exact match criteria - never kills an
+ * unrelated process, or a `debug_runtime` that merely mentions this port
+ * without actually being bound to it). Best-effort: swallows discovery/kill
+ * errors, since a permission failure or the process exiting mid-reap just
+ * means the subsequent bind proceeds normally (or fails loudly on its own).
+ *
+ * Returns the pids it killed, mainly for tests.
+ */
+export async function reapStaleRuntimeOnPort(
+  port: number,
+  deps: {
+    findProcesses?: (port: number) => Promise<PortProcess[]>;
+    kill?: (pid: number, signal: NodeJS.Signals) => void;
+  } = {},
+): Promise<number[]> {
+  const findProcesses = deps.findProcesses ?? findProcessesOnPort;
+  const kill = deps.kill ?? ((pid, signal) => process.kill(pid, signal));
+
+  let candidates: PortProcess[];
+  try {
+    candidates = await findProcesses(port);
+  } catch {
+    return [];
+  }
+
+  const toKill = candidates.filter((p) => isDebugRuntimeOnPort(p.command, port));
+
+  const killed: number[] = [];
+  for (const { pid } of toKill) {
+    try {
+      kill(pid, "SIGKILL");
+      killed.push(pid);
+    } catch {
+      // Already gone, or no permission - nothing more we can do.
+    }
+  }
+  if (killed.length > 0) {
+    // Wait for the OS to actually release the socket before returning, so
+    // the caller's very next bind probe (`findFreePort`) sees the port as
+    // free instead of racing the kill - a fixed short sleep isn't reliably
+    // enough under load (see #786 PR discussion), so poll with a bound.
+    const deadline = Date.now() + 2000;
+    while (!(await portIsFree(port)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  return killed;
+}
+
+/**
+ * Indirection for `GameServer.launch`'s reap call, so tests can swap it out
+ * without spawning a real runtime. ES module exports are read-only live
+ * bindings (reassigning the `reapStaleRuntimeOnPort` export from outside
+ * this module throws), so a plain mutable object is the seam instead - only
+ * the property write needs to be assignable, not the export itself. Not
+ * meant to be used outside tests.
+ */
+export const reapHooks = {
+  reapStaleRuntimeOnPort,
+};
+
 /**
  * Pick the most useful slice of runtime output for an error message.
  *
@@ -191,6 +326,16 @@ export class GameServer extends Game implements AsyncDisposable {
    */
   static async launch(options: LaunchOptions): Promise<GameServer> {
     const hint = options.port ?? 8080;
+    // Only the exact requested port - never a fallback port from the
+    // bind-race retry loop below (see reapStale's doc comment). Skip
+    // entirely when THIS process already reserved the port for a live
+    // sibling GameServer (findFreePort below, `reservedPorts`) - that's not
+    // a stale orphan, it's our own in-flight launch, and killing it would
+    // destroy a live instance for no benefit (the walk-up below would still
+    // skip the port via `reservedPorts` regardless of whether we killed it).
+    if ((options.reapStale ?? true) && !reservedPorts.has(hint)) {
+      await reapHooks.reapStaleRuntimeOnPort(hint);
+    }
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
