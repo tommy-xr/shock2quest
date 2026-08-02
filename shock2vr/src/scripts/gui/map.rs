@@ -31,9 +31,9 @@ use crate::scripts::Effect;
 const PANEL_W: f32 = 636.0;
 const PANEL_H: f32 = 296.0;
 
-/// `PAGE001.PCX` page-art size (shared with the world map renderer via
-/// `dark::map`) and its fixed offset inside the frame - the original engine
-/// draws the page at (10, 8), leaving the frame's bottom strip clear.
+/// `PAGE001.PCX` page-art size (from `dark::map`, also consumed by the
+/// `debug_map` scene) and its fixed offset inside the frame - the original
+/// engine draws the page at (10, 8), leaving the frame's bottom strip clear.
 const PAGE_W: f32 = dark::map::PAGE_WIDTH;
 const PAGE_H: f32 = dark::map::PAGE_HEIGHT;
 const PAGE_X: f32 = 10.0;

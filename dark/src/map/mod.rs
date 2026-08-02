@@ -36,8 +36,8 @@ impl MapRect {
 }
 
 /// `PAGE001.PCX` automap page-art size in pixels - every deck's page ships at
-/// this size. Shared by every map composition path (automap panel, world map
-/// renderer) so they cannot drift.
+/// this size. Every map presentation (the automap panel and its `debug_map`
+/// host) reads it from here so they cannot drift.
 pub const PAGE_WIDTH: f32 = 614.0;
 pub const PAGE_HEIGHT: f32 = 260.0;
 
@@ -105,16 +105,6 @@ impl MapChunkData {
     pub fn chunk_count(&self) -> usize {
         // Both revealed and explored should have the same count
         std::cmp::max(self.revealed_rects.len(), self.explored_rects.len())
-    }
-
-    /// Get rectangle for a specific chunk slot
-    pub fn get_revealed_rect(&self, slot: usize) -> Option<&MapRect> {
-        self.revealed_rects.get(slot)
-    }
-
-    /// Get explored rectangle for a specific chunk slot
-    pub fn get_explored_rect(&self, slot: usize) -> Option<&MapRect> {
-        self.explored_rects.get(slot)
     }
 }
 

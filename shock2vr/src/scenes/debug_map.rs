@@ -30,7 +30,8 @@ const LOCATION_REVEAL_INTERVAL: f32 = 1.0; // Reveal one map location every seco
 /// ~2.5m wide) to comfortably fit the debug camera's view.
 const PANEL_WORLD_SCALE: f32 = 0.5;
 /// Nudge each successive panel component toward the camera so coplanar decals
-/// draw over the page art (same role as `UI2DRenderer`'s per-rect z offsets).
+/// draw over the page art (a debug-presentation offset; the shared composition
+/// emits coplanar components and relies on draw order elsewhere).
 const COMPONENT_Z_STEP: f32 = 0.002;
 
 /// The real medsci1 `MapRef` markers (mission ids 1032/1034 + the two inset
@@ -158,21 +159,25 @@ impl GameScene for DebugMapScene {
         self.update_player_info();
 
         // Attach the level's page data to the panel entity on first update -
-        // the same `RuntimePropMapData` the mission attaches at init.
+        // the same `RuntimePropMapData` the mission attaches at init. Like
+        // `mission_core`, a failed load attaches empty rect lists, which
+        // `MapGui` renders as the original's `nomap` art.
         if !self.map_data_loaded {
             self.map_data_loaded = true;
             let level = MAP_MISSION.split('.').next().unwrap_or(MAP_MISSION);
-            if let Ok(data) = dark::map::MapChunkData::load_from_mission(asset_cache, level) {
-                self.location_count = data.revealed_rects.len();
-                self.world.add_component(
-                    self.map_entity,
-                    RuntimePropMapData {
-                        mission: MAP_MISSION.to_string(),
-                        revealed_rects: data.revealed_rects,
-                        explored_rects: data.explored_rects,
-                    },
-                );
-            }
+            let (revealed_rects, explored_rects) =
+                dark::map::MapChunkData::load_from_mission(asset_cache, level)
+                    .map(|data| (data.revealed_rects, data.explored_rects))
+                    .unwrap_or_default();
+            self.location_count = revealed_rects.len().max(explored_rects.len());
+            self.world.add_component(
+                self.map_entity,
+                RuntimePropMapData {
+                    mission: MAP_MISSION.to_string(),
+                    revealed_rects,
+                    explored_rects,
+                },
+            );
         }
 
         // Walk the map every LOCATION_REVEAL_INTERVAL seconds: reveal the next
