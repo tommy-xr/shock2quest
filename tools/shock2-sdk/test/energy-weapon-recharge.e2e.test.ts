@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { rotateByInverse } from "../src/anim-metrics.js";
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { fireOnce } from "./helpers/weapon.js";
 
@@ -27,7 +27,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const LASER_PISTOL_OBJECT = 253;
 const RECHARGING_STATION_OBJECT = 258;
 const LASER_AUTHORED_CAPACITY = 100;
-const PLAYER_EYE_HEIGHT_WORLD = 1.6; // 4 SS2 units / SCALE_FACTOR
 
 function ammoOf(detail: {
   properties: { name: string; value: string }[];

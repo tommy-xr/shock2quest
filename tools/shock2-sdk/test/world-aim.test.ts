@@ -4,6 +4,7 @@ import {
   AimOcclusionError,
   headRotationForWorldPoint,
   HttpClient,
+  PLAYER_EYE_HEIGHT_WORLD,
   PlayerApi,
 } from "../src/index.js";
 import type {
@@ -12,6 +13,11 @@ import type {
   RayCastResult,
   Vec3,
 } from "../src/index.js";
+
+/** Distance from the default standing eye of the fixture player at (62, -15.8, 83). */
+function distanceFromEye([x, y, z]: Vec3): number {
+  return Math.hypot(x - 62, y - (-15.8 + PLAYER_EYE_HEIGHT_WORLD), z - 83);
+}
 
 type Quat = [number, number, number, number];
 
@@ -43,7 +49,8 @@ test("world aim cancels a non-identity save-restored pawn rotation", () => {
 
 test("world aim rejects an undefined zero-length direction", () => {
   assert.throws(
-    () => headRotationForWorldPoint([1, 2, 3], [0, 0, 0, 1], [1, 3.6, 3]),
+    () =>
+      headRotationForWorldPoint([1, 2, 3], [0, 0, 0, 1], [1, 2 + PLAYER_EYE_HEIGHT_WORLD, 3]),
     /target must differ/,
   );
 });
@@ -63,7 +70,8 @@ function rotateVec(q: Quat, v: Vec3): Vec3 {
 }
 
 test("world aim keeps the horizon level for every direction, including world +z", () => {
-  const eye: Vec3 = [0, -1.6, 0]; // eye height 1.6 lands the eye at the origin
+  // The default eye height lands the eye at the origin.
+  const eye: Vec3 = [0, -PLAYER_EYE_HEIGHT_WORLD, 0];
   const pitches = [-80, -45, -10, 0, 10, 45, 80];
   for (let yawDeg = 0; yawDeg < 360; yawDeg += 15) {
     for (const pitchDeg of pitches) {
@@ -104,7 +112,7 @@ test("world aim keeps the horizon level for every direction, including world +z"
 });
 
 test("world aim picks a stable yaw when looking straight up or down", () => {
-  const eye: Vec3 = [0, -1.6, 0];
+  const eye: Vec3 = [0, -PLAYER_EYE_HEIGHT_WORLD, 0];
   for (const y of [10, -10]) {
     const head = headRotationForWorldPoint(eye, [0, 0, 0, 1], [0, y, 0]);
     const forward = rotateVec(head, [0, 0, -1]);
@@ -116,7 +124,7 @@ test("world aim picks a stable yaw when looking straight up or down", () => {
 });
 
 test("world aim still honors a near-vertical direction's tiny yaw", () => {
-  const eye: Vec3 = [0, -1.6, 0];
+  const eye: Vec3 = [0, -PLAYER_EYE_HEIGHT_WORLD, 0];
   const head = headRotationForWorldPoint(eye, [0, 0, 0, 1], [1e-10, 10, 0]);
   const forward = rotateVec(head, [0, 0, -1]);
   assert.ok(forward[0] > 0, `tiny +x yaw must survive, got forward ${forward}`);
@@ -469,7 +477,9 @@ test("aimAt visibility required skips an occluded classified proxy", async () =>
   assert.equal(aim.visibility.state, "visible");
   assert.equal(aim.visibility.origin, "view");
   assert.equal(aim.visibility.blocker, null);
-  assert.ok(Math.abs(aim.visibility.target_distance - 5.8558) < 0.001);
+  assert.ok(
+    Math.abs(aim.visibility.target_distance - distanceFromEye([56.5, -14, 81])) < 0.001,
+  );
   assert.equal(
     writes.filter(({ path }) => path === "/v1/physics/raycast").length,
     2,
@@ -545,7 +555,9 @@ test("aimAt visibility required reports the blocker when every proxy is occluded
       assert.equal(error.result.visibility.state, "blocked");
       assert.equal(error.result.visibility.origin, "view");
       assert.ok(
-        Math.abs(error.result.visibility.target_distance - 5.5317) < 0.001,
+        Math.abs(
+          error.result.visibility.target_distance - distanceFromEye([56.8, -13.2, 81.4]),
+        ) < 0.001,
       );
       assert.deepEqual(error.result.visibility.blocker, {
         entity_id: 77,

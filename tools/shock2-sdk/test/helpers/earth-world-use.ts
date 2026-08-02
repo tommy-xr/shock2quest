@@ -1,3 +1,4 @@
+import { PLAYER_EYE_HEIGHT_WORLD } from "../../src/index.js";
 import type { GameServer } from "../../src/index.js";
 import type { EntitySummary } from "../../src/types.js";
 
@@ -18,9 +19,8 @@ const DEFAULT_STAGING: EarthWorldUseStaging = {
   pitchDeg: undefined,
 };
 
-/** Eye height above the player's body position, in world units:
- * `PLAYER_EYE_HEIGHT` (4.0) divided by `dark::SCALE_FACTOR` (2.5). */
-const EYE_HEIGHT = 1.6;
+/** Eye height above the player's body position, in world units. */
+const EYE_HEIGHT = PLAYER_EYE_HEIGHT_WORLD;
 
 /**
  * Aim at and world-use an authored entity through the normal flat crosshair

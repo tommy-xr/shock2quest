@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 
 // End-to-end test for data-driven impact spangs: a projectile spawns the spang
 // its authored links say, not a hardcoded effect.
@@ -30,7 +30,6 @@ import { GameServer } from "../src/index.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const PLAYER_EYE_HEIGHT_WORLD = 1.6; // 4 SS2 units / SCALE_FACTOR
 
 test(
   "projectile impacts spawn the authored spangs (terrain + blood)",

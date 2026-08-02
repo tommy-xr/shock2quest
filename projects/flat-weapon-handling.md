@@ -106,7 +106,8 @@ Done:
   rotation — applying it over-rotates each gun by exactly its heading — so it is
   deliberately unused.
 - **Eye-height alignment** — the shot origin + viewmodel use the shared
-  `shock2vr::PLAYER_EYE_HEIGHT` (4.0 SS2 units), matching every runtime's render
+  `shock2vr::PLAYER_EYE_HEIGHT` (the original engine's `PLAYER_HEAD` sphere,
+  1.8 SS2 units above the body origin), matching every runtime's render
   camera, so shots land on the crosshair and the debug-runtime camera matches
   desktop (was rendering ~1 world unit low).
 - **Tooling**: debug-runtime controllable input over HTTP (`head.look` + hand

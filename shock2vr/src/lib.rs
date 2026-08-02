@@ -51,9 +51,16 @@ pub use mission::visibility_engine::CullingInfo;
 /// the debug runtime renders at a different height than desktop. Crouch swaps
 /// this for [`PLAYER_CROUCH_EYE_HEIGHT`] - flat runtimes should use
 /// [`Game::player_eye_height`] rather than reading the constants directly.
-/// The standing footprint resize deliberately leaves this body-relative Dark
-/// offset unchanged, so the camera, crosshair ray and viewmodel remain aligned.
-pub const PLAYER_EYE_HEIGHT: f32 = 4.0;
+///
+/// This is the original engine's `PLAYER_HEAD` sphere: Dark's first-person
+/// camera IS that submodel's location (`CameraUpdate` calls
+/// `PhysGetSubModLocation(objid, 0 /* PLAYER_HEAD */)`), and the sphere sits at
+/// `PLAYER_HEAD_POS = (PLAYER_HEIGHT / 2) - PLAYER_RADIUS` above the body
+/// origin. Deriving it from the collision profile keeps the eye *inside* the
+/// standing collider: an eye above the crown starts the crosshair ray outside
+/// any room whose ceiling the body itself clears, so the ray hits that ceiling
+/// from above and nothing in the room can be highlighted or frobbed (#795).
+pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS;
 
 /// Crouched eye height above the (crouched) body position, in SS2 units.
 /// The crouched capsule is 2.8 ft tall with its center 1.4 ft above the feet;

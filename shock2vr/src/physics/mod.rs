@@ -29,6 +29,14 @@ use self::debug_render_pipeline::DebugRenderer;
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
+/// Height of the player's head sphere above the body origin (SS2 ft), the
+/// original engine's `PLAYER_HEAD_POS = (PLAYER_HEIGHT / 2) - PLAYER_RADIUS`
+/// (`src/physics/physapi.h`). Dark places the first-person camera at exactly
+/// this submodel, so it is also the eye height ([`crate::PLAYER_EYE_HEIGHT`]);
+/// deriving it here keeps the camera tied to the collision profile, inside the
+/// capsule rather than above its crown.
+pub const PLAYER_HEAD_POS: f32 = PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS;
+
 /// Crouched capsule height (SS2 ft). The original engine's crouched COLLISION
 /// profile (a stack of two 1.2 ft spheres, body-bottom -1.8 to head-top +1.0
 /// around the object origin) is ~2.8 ft tall - its taller "crouch height" is
@@ -4965,6 +4973,106 @@ mod tests {
             test_mode: Default::default(),
         });
         world.collider_set.insert(collider);
+    }
+
+    /// A room's level geometry: a floor quad at `floor_y` and a ceiling quad at
+    /// `ceiling_y`, in ONE `ALL_COLLIDABLE` trimesh, exactly as
+    /// [`PhysicsWorld::add_level_geometry`] builds `WorldRep`.
+    fn add_level_room(world: &mut PhysicsWorld, floor_y: f32, ceiling_y: f32, half: f32) {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for y in [floor_y, ceiling_y] {
+            let base = vertices.len() as u32;
+            vertices.push(point![-half, y, -half]);
+            vertices.push(point![-half, y, half]);
+            vertices.push(point![half, y, -half]);
+            vertices.push(point![half, y, half]);
+            indices.push([base, base + 1, base + 3]);
+            indices.push([base, base + 3, base + 2]);
+        }
+        let collider = ColliderBuilder::trimesh(vertices, indices)
+            .expect("valid room mesh")
+            .build();
+        world.add_collider(EntityId::from_inner(2199).unwrap(), collider);
+    }
+
+    /// The eye is the head sphere's center, so it is always inside the standing
+    /// collider. A camera above the crown is outside every room whose ceiling
+    /// the body itself clears.
+    #[test]
+    fn standing_eye_stays_inside_the_standing_collider() {
+        let crown = PLAYER_STANDING_HEIGHT / 2.0;
+        let eye = crate::player_eye_height_for(false);
+        assert!(
+            eye <= crown,
+            "the standing eye ({eye} ft) must not sit above the collider crown ({crown} ft)"
+        );
+    }
+
+    /// The crosshair ray must reach a frobbable object in a room the player can
+    /// stand in. hydro2's Hydro Card B corpse (#795) lies under a seven-foot
+    /// ceiling: the six-foot body clears it, but an eye above the crown put the
+    /// ray origin *above* the ceiling, so every aim point hit that ceiling from
+    /// outside the room instead of the container - no highlight, no frob.
+    ///
+    /// Negative-first: with the previous `PLAYER_EYE_HEIGHT` of 4.0 ft this
+    /// resolves to the one-sided ceiling rather than the container.
+    #[test]
+    fn standing_crosshair_reaches_a_container_under_a_seven_foot_ceiling() {
+        // hydro2's corpse alcove: a flat floor with a one-sided level ceiling
+        // seven feet above it, which the six-foot standing body clears.
+        const ROOM_HEIGHT: f32 = 7.0 / SCALE_FACTOR;
+        let mut world = PhysicsWorld::new();
+        add_level_room(&mut world, 0.0, ROOM_HEIGHT, 20.0);
+
+        // A frobbable container resting on the floor, two units ahead.
+        let container = EntityId::from_inner(2201).unwrap();
+        let container_pos = vec3(2.0, 0.2, 0.0);
+        world.add_kinematic(
+            container,
+            container_pos,
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.8, 0.4, 0.8),
+            CollisionGroup::selectable(),
+            false,
+        );
+
+        let mut player =
+            world.create_player(vec3(0.0, 2.0, 0.0), EntityId::from_inner(2200).unwrap());
+        step(&mut world, &mut player, 120);
+        let body = world.get_player_translation(&player);
+        assert!(
+            (body.y - PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR).abs() < 0.2,
+            "the standing player should fit in a seven-foot room; got {body:?}"
+        );
+
+        let eye = point3(
+            body.x,
+            body.y + crate::player_eye_height_for(false) / SCALE_FACTOR,
+            body.z,
+        );
+        // The exact mask the flat controller's crosshair raycast uses.
+        let direction =
+            (point3(container_pos.x, container_pos.y, container_pos.z) - eye).normalize();
+        let hit = world
+            .ray_cast(
+                eye,
+                direction,
+                InternalCollisionGroups::ENTITY
+                    | InternalCollisionGroups::SELECTABLE
+                    | InternalCollisionGroups::WORLD
+                    | InternalCollisionGroups::UI
+                    | InternalCollisionGroups::RAYCAST,
+            )
+            .expect("the crosshair ray should hit something");
+        assert_eq!(
+            hit.maybe_entity_id,
+            Some(container),
+            "the crosshair should select the container, not the ceiling; hit {:?} at {:?}",
+            hit.maybe_entity_id,
+            hit.hit_point
+        );
     }
 
     /// Falling onto a steep face carries the resulting downslope momentum
