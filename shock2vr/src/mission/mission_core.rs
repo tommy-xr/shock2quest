@@ -3979,6 +3979,17 @@ impl MissionCore {
                         self.world.add_component(entity_id, PropObjState(state));
                     }
                 }
+                Effect::SetEcologyState { entity_id, state } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world
+                            .add_component(entity_id, dark::properties::PropEcoState(state));
+                    }
+                }
                 Effect::SetLocked { entity_id, locked } => {
                     crate::scripts::script_util::set_entity_locked(
                         &mut self.world,
