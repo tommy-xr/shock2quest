@@ -24,13 +24,11 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Find a pickup item in the level (a nanite stack) by name.
-    const { entities } = await game.entities.list({
-      filter: "*Nanites*",
-      limit: 50,
-    });
-    const item = entities[0];
-    assert.ok(item, "expected to find a Nanites pickup in medsci1");
+    // Cryo Card 1050 is an authored world-placed item with no incoming
+    // Contains link (also used as the world-item control in container-loot).
+    const worldItems = await game.entities.byTemplate(1050);
+    assert.equal(worldItems.length, 1, "expected exactly one world-placed Cryo Card");
+    const item = worldItems[0];
 
     // It should not be carried yet.
     const before = await game.player.inventory();
@@ -81,6 +79,53 @@ test(
     assert.ok(
       sameTemplate.some((e) => e.id === item.id),
       "byTemplate should include the item among its template's instances",
+    );
+  },
+);
+
+test(
+  "give refuses container-held items without severing their containment",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8104),
+    });
+    await game.step({ frames: 5 });
+
+    // Male Corpse 1 (mission template 219) has exactly one authored item: a
+    // Psi Amp. Runtime ids vary between launches, so discover it through the
+    // stable container template and its live Contains link.
+    const corpses = await game.entities.byTemplate(219);
+    assert.equal(corpses.length, 1, "expected exactly one Male Corpse 1");
+    const corpse = corpses[0];
+    const before = await game.entities.detail(corpse.id);
+    const contains = before.outgoing_links.filter((link) =>
+      link.link_type.startsWith("Contains"),
+    );
+    assert.equal(contains.length, 1, "corpse should contain exactly one item");
+    const itemId = contains[0].target_id;
+
+    // Negative-first regression for #572: main accepts this request, moves the
+    // amp to the backpack, and permanently removes the corpse's Contains link.
+    await assert.rejects(
+      game.player.give(itemId),
+      /status 400.*container-held.*loot it via the container MFD/is,
+      "container-held items must be looted through the real container UI",
+    );
+
+    const after = await game.entities.detail(corpse.id);
+    const preserved = after.outgoing_links.filter((link) =>
+      link.link_type.startsWith("Contains"),
+    );
+    assert.deepEqual(
+      preserved,
+      contains,
+      "a rejected give must preserve the original Contains link exactly",
+    );
+    assert.ok(
+      !(await game.player.inventory()).items.some((item) => item.entity_id === itemId),
+      "a rejected give must not move the contained item into the backpack",
     );
   },
 );

@@ -746,7 +746,8 @@ pub trait DebuggableScene {
 
     /// Put an existing world entity into the player's inventory (a headless
     /// "pick up" for testing). Models a pickup - the item lands in the backpack;
-    /// wielding is a separate, presentation-specific concern. Default:
+    /// wielding is a separate, presentation-specific concern. Container-held
+    /// items are rejected so tests must exercise the real loot UI. Default:
     /// unsupported.
     fn give_item(&mut self, _entity_id: EntityId) -> Result<(), String> {
         Err("scene does not support giving items".to_string())

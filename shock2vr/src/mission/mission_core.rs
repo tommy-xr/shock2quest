@@ -6653,6 +6653,32 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return Err(format!("entity {:?} is not a pickup item", entity_id));
         }
 
+        // This debug lever is only for world-placed items. Moving an authored
+        // container's loot straight into the backpack would make
+        // `drop_entity_into_container` remove the original Contains link,
+        // permanently bypassing (and invalidating tests of) the real loot UI.
+        // Reject before mutating anything so the container remains intact.
+        let containing_entity = {
+            let links = self.world.borrow::<View<Links>>().unwrap();
+            links.iter().with_id().find_map(|(container_id, links)| {
+                links
+                    .to_links
+                    .iter()
+                    .any(|link| {
+                        matches!(link.link, Link::Contains(_))
+                            && link.to_entity_id.map(|wrapped| wrapped.0) == Some(entity_id)
+                    })
+                    .then_some(container_id)
+            })
+        };
+        if let Some(container_id) = containing_entity {
+            return Err(format!(
+                "entity {} is container-held by entity {}; loot it via the container MFD",
+                entity_id.inner(),
+                container_id.inner()
+            ));
+        }
+
         let inventory_entity = {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             player.inventory_entity_id

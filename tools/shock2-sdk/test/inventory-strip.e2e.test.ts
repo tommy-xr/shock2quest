@@ -23,7 +23,7 @@ import { teleportVerified } from "./helpers/teleport.js";
 //
 // Item acquisition is honest where it matters: the Wrench is looted from MS
 // Male Corpse 1177 via the PR 3 loot panel (the authored first MedSci
-// interaction); the Nanites use the debug give lever as test setup.
+// interaction); the Nanites use debug template provisioning as test setup.
 //
 // Negative-first: on main, Tab already flips /v1/ui mode to "use" (the PR 1
 // mode flag) but NO inventory strip exists - `strip` is absent/null and no
@@ -55,13 +55,8 @@ test(
     };
 
     // --- Setup: give the player a couple of items ---
-    // Nanites via the debug give lever (plain test setup)...
-    const { entities: nanites } = await game.entities.list({
-      filter: "*Nanites*",
-      limit: 10,
-    });
-    assert.ok(nanites[0], "expected a Nanites pickup in medsci1");
-    await game.player.give(nanites[0].id);
+    // Fresh Nanites via debug template provisioning (plain test setup)...
+    await game.player.spawnItem("Nanites");
 
     // ...and the Wrench looted honestly through the PR 3 loot MFD.
     const corpses = await game.entities.byTemplate(CORPSE_WRENCH);
