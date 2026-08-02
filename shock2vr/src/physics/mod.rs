@@ -354,6 +354,23 @@ const PROBE_SKIN: f32 = PLAYER_CONTACT_OFFSET / 2.0;
 /// input; the guard is against deflecting on noise, not against large angles.
 const MIN_SLIDE_FRACTION: f32 = 0.2;
 
+/// How far forward of a blocked position [`try_step_up`] must plant the
+/// capsule axis to stand on a riser's tread: the capsule radius plus a
+/// margin of contact-offset gaps. Shared with [`PhysicsWorld::move_player_validated`],
+/// whose bounded-hop overshoot guard must not reject a completed step-up
+/// just because it needed more room than a short request budgeted (issue
+/// #782) - this fixed, small quantity (not the walk distance) is the true
+/// bound on how far a step can outrun the request.
+fn step_up_forward_clearance(shape: &dyn Shape) -> f32 {
+    let contact_offset = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    let capsule_radius = shape
+        .as_capsule()
+        .map_or(PLAYER_STANDING_RADIUS / SCALE_FACTOR, |capsule| {
+            capsule.radius
+        });
+    capsule_radius + 4.0 * contact_offset
+}
+
 /// Step-up probe (the original engine's stair-climbing approach: probe up,
 /// forward, then down from the blocked position). Called when the player's
 /// horizontal movement was mostly blocked; returns the extra translation that
@@ -396,12 +413,7 @@ fn try_step_up(
     // Far enough forward that the capsule axis (its lowest point) stands on
     // the tread: the capsule radius, the gap to the riser (which can exceed
     // the contact offset when the walk stalled early), and margin on top.
-    let capsule_radius = shape
-        .as_capsule()
-        .map_or(PLAYER_STANDING_RADIUS / SCALE_FACTOR, |capsule| {
-            capsule.radius
-        });
-    let forward = capsule_radius + 4.0 * contact_offset;
+    let forward = step_up_forward_clearance(shape);
     // Full-width cast, used for the LANDING sweep: the tread height it
     // measures depends on the real capsule bottom, and its `target_distance`
     // is the contact offset so the player comes to rest at the normal gap
@@ -2617,6 +2629,22 @@ impl PhysicsWorld {
         let character_body = &self.rigid_body_set[player_handle.character_handle];
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let character_shape = character_collider.shared_shape().clone();
+        // A step-up's own forward clearance requirement (a small, fixed
+        // geometric quantity - see `step_up_forward_clearance`) can exceed a
+        // short `requested_distance`. Real per-frame walking has no
+        // per-call distance budget at all, so it climbs the same riser fine;
+        // the bounded hop's overshoot guard below must not reject an
+        // otherwise-valid, fully collision-checked step-up just because the
+        // caller asked for less room than a step needs (issue #782 - without
+        // this, automation stepping toward a target in short hops could get
+        // permanently wedged against a climbable riser/small prop).
+        //
+        // The substep that triggers the step-up also carries its own partial
+        // walk contribution (`step_player_movement` returns walk + step as one
+        // translation) - up to one `PLAYER_MOVE_SUBSTEP` on top of the step's
+        // own forward clearance - so the allowance must cover both.
+        let step_up_allowance =
+            PLAYER_MOVE_SUBSTEP + step_up_forward_clearance(character_shape.as_ref());
         let mut pos = *character_body.position();
         let gravity = player_gravity_step(character_body);
         let player_id = EntityId::from_inner(character_body.user_data as u64);
@@ -2714,9 +2742,14 @@ impl PhysicsWorld {
                     candidate.translation.vector.z - start.z
                 ];
                 // A collision slide may alter the route, but this API promises
-                // a bounded hop. Never commit a solver result outside the
-                // requested horizontal radius.
-                if from_start.norm() > requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON {
+                // a bounded hop: bound it to the request, with a floor of
+                // `step_up_allowance` so a legitimate step-up (itself
+                // collision-checked and safe, just geometrically wider than a
+                // short request) is never discarded outright - see the
+                // `step_up_allowance` comment above.
+                if from_start.norm()
+                    > requested_distance.max(step_up_allowance) + PLAYER_MOVE_ARRIVAL_EPSILON
+                {
                     break;
                 }
                 let after = vector![
@@ -7563,6 +7596,81 @@ mod tests {
         assert!(
             wall_x < 0.8,
             "a validated move must not pass into a wall, advanced {wall_x}"
+        );
+    }
+
+    /// An automation client that steers toward a distant goal in short
+    /// (sub-clearance) hops must not get permanently wedged against a small,
+    /// climbable riser/crate the way one long hop already proves is
+    /// steppable. Each `move_player_validated` call only requested 0.3wu -
+    /// less than the ~0.64wu of forward clearance a step-up needs to land -
+    /// so the bounded-hop overshoot guard used to discard the completed,
+    /// fully collision-checked step outright and report `blocked` forever.
+    /// (Negative-first: before the `step_up_allowance` floor on the overshoot
+    /// guard, this looped at the riser's near face with `distance_moved`
+    /// pinned at 0 for the rest of the 40 requests - issue #782.)
+    #[test]
+    fn validated_move_climbs_a_riser_via_short_requests_without_wedging() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, floor_tris)
+                .expect("floor trimesh")
+                .build(),
+        );
+        // A small crate-sized DYNAMIC prop (real in-mission crates are
+        // dynamic bodies, added via `add_dynamic`), 0.6wu tall - the same
+        // walkable riser height `validated_move_steps_up_stairs_but_not_walls`
+        // already proves climbable with long hops.
+        let obstacle_height = 0.6;
+        world.add_dynamic(
+            EntityId::from_inner(2001).unwrap(),
+            vec3(-3.0, obstacle_height / 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(2.0, obstacle_height, 2.0)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        // Walk in short 0.3wu increments (below the step-up's own forward
+        // clearance requirement) all the way past the crate.
+        let start = world.get_player_translation(&player);
+        let mut consecutive_blocked = 0;
+        let mut max_consecutive_blocked = 0;
+        for _ in 0..40 {
+            let current = world.get_player_translation(&player);
+            let result = world.move_player_validated(current + vec3(0.3, 0.0, 0.0), &mut player);
+            if result.blocked {
+                consecutive_blocked += 1;
+                max_consecutive_blocked = max_consecutive_blocked.max(consecutive_blocked);
+            } else {
+                consecutive_blocked = 0;
+            }
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            end.x - start.x > 10.0,
+            "short-hop navigation should cross the crate and keep going, advanced {}",
+            end.x - start.x
+        );
+        assert!(
+            max_consecutive_blocked <= 3,
+            "must not wedge indefinitely against a climbable crate: {max_consecutive_blocked} consecutive blocked calls"
         );
     }
 
