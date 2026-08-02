@@ -893,7 +893,10 @@ impl MissionCore {
             .restore_states(&saved_script_states, &script_entity_id_map)
             .unwrap_or_else(|error| panic!("unable to restore script state: {error}"));
 
-        // If the player is holding anything, we should un-physical it
+        // If the player is holding anything, we should un-physical it.
+        // NB: these grabs discard their effects (there is no `self` yet to run
+        // them against), so a flat load of a VR two-handed save strands the
+        // displaced weapon - see #787.
 
         if let Some(entity_id) = left_hand_entity {
             interaction.grab(&world, entity_id, vr_config::Handedness::Left);
