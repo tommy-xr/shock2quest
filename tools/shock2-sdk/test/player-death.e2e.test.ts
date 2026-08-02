@@ -124,3 +124,70 @@ test(
     );
   },
 );
+
+// The game-over screen is the original load-game screen (`GAMELOD.PCX`), so
+// its "Load" button sits at the `GAMELODR.BIN` rect [527, 161, 96x62] on the
+// 640x480 canvas. The runtime renders 4:3, so aspect-preserving placement maps
+// canvas coordinates straight onto normalized screen coordinates.
+const GAME_OVER_LOAD_BUTTON: [number, number] = [(527 + 96 / 2) / 640, (161 + 62 / 2) / 480];
+const DEATH_SEQUENCE_FRAMES = 3 * 60;
+
+async function click(game: GameServer, [x, y]: [number, number]): Promise<void> {
+  await game.input.set("pointer.position", [x, y]);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 2 });
+}
+
+test(
+  "terminal death reaches the game-over screen, whose load path resumes play",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 2,
+    });
+    await game.step({ frames: 5 });
+
+    // The screen offers the most recent save, so make ours the newest one.
+    const saveName = `player_death_game_over_${Date.now()}`;
+    assert.equal((await game.save(saveName)).success, true);
+
+    const audioBefore = (await game.audio.recent()).sounds.length;
+    await killPlayer(game);
+
+    const dead = await game.info();
+    assert.equal(lifeState(dead.player), "dead");
+    assert.equal(dead.mission, "medsci1.mis", "the death sequence plays out in the mission");
+    assert.ok(
+      (await game.audio.recent()).sounds.length > audioBefore,
+      "death should play the authored player death vocalization",
+    );
+
+    // The death sequence hands off to the game-over screen.
+    await game.step({ frames: DEATH_SEQUENCE_FRAMES + 30 });
+    const gameOver = await game.info();
+    assert.equal(
+      gameOver.mission,
+      "game_over",
+      "terminal death must reach the game-over screen instead of hanging in the dead mission",
+    );
+    assert.equal(lifeState(gameOver.player), "game_over");
+
+    // ... and its "Load" button is a real recovery path back into play. The
+    // screen restores the most recent save in the shared `<data>/saves`
+    // directory, so assert on being playable again rather than on which
+    // mission another test's save may have left as the newest.
+    await click(game, GAME_OVER_LOAD_BUTTON);
+    const resumed = await game.info();
+    assert.notEqual(
+      resumed.mission,
+      "game_over",
+      "loading from the game-over screen must return to a playable mission",
+    );
+    assert.equal(lifeState(resumed.player), "alive");
+    assert.ok((resumed.player.hit_points ?? 0) > 0, "the resumed player is alive with health");
+  },
+);

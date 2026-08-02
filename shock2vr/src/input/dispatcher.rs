@@ -12,7 +12,17 @@ const DEBUG_SPAWN_TEMPLATE_ID: i32 = -17;
 /// Template spawned by InputAction::SpawnDebugMonster (grunt og-pipe)
 const DEBUG_MONSTER_TEMPLATE_ID: i32 = -397;
 
-const QUICK_SAVE_FILE: &str = "save1.sav";
+/// Bare name of the quick save slot. It resolves through
+/// [`crate::save_file_path`] so quicksaves land beside every other named save
+/// in `<data_root>/saves`, which is the directory the load/game-over screens
+/// search for a save to offer.
+const QUICK_SAVE_NAME: &str = "save1";
+
+fn quick_save_file() -> String {
+    crate::save_file_path(QUICK_SAVE_NAME)
+        .to_string_lossy()
+        .into_owned()
+}
 
 /// Original System Shock 2 direct-weapon bindings. The input action describes
 /// the semantic selection; desktop keys are mapped separately by
@@ -51,12 +61,12 @@ impl ActionDispatcher {
         }
         if state.just_triggered(InputAction::QuickSave) {
             effects.push(Effect::GlobalEffect(GlobalEffect::Save {
-                file_name: QUICK_SAVE_FILE.to_owned(),
+                file_name: quick_save_file(),
             }));
         }
         if state.just_triggered(InputAction::QuickLoad) {
             effects.push(Effect::GlobalEffect(GlobalEffect::Load {
-                file_name: QUICK_SAVE_FILE.to_owned(),
+                file_name: quick_save_file(),
             }));
         }
         if state.just_triggered(InputAction::SpawnDebugItem) {

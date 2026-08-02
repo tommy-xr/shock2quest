@@ -323,9 +323,10 @@ export interface PlayerSnapshot {
   entity_id: number | null;
   position: Vec3;
   rotation: [number, number, number, number];
-  /** Current player lifecycle. `dead` is terminal until a load/restart;
-   * `respawning` is the five-second QBR reconstruction delay. */
-  life_state: "alive" | "dead" | "respawning";
+  /** Current player lifecycle. `dead` is the terminal death sequence (no
+   * activated QBR), which hands off to the `game_over` screen after three
+   * seconds; `respawning` is the five-second QBR reconstruction delay. */
+  life_state: "alive" | "dead" | "game_over" | "respawning";
   camera_offset: Vec3;
   camera_rotation: [number, number, number, number];
   /** The wielded/first-person weapon in flatscreen mode; null when unarmed. */

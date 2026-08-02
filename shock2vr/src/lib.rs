@@ -36,8 +36,8 @@ mod vr_config;
 pub mod zip_asset_path;
 
 use scenes::{
-    CutscenePlayerScene, SceneInitResult, create_initial_scene, load_mission_from_save_data,
-    resolve_ending_cutscene,
+    CutscenePlayerScene, GameOverScene, SceneInitResult, create_initial_scene,
+    load_mission_from_save_data, resolve_ending_cutscene,
 };
 
 pub use mission::SpawnLocation;
@@ -1345,6 +1345,14 @@ impl Game {
                 } else {
                     self.switch_mission(level_name, spawn_loc, PlayerVitalsTransition::Preserve);
                 }
+            }
+            GlobalEffect::GameOver => {
+                // The run is over, so the dead mission is deliberately NOT
+                // written back to the in-memory level ledger: the only way
+                // forward is the screen's own recovery path (reload a save),
+                // which replaces the ledger wholesale.
+                self.pending_transition = None;
+                self.active_game_scene = Box::new(GameOverScene::new());
             }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state

@@ -2,11 +2,13 @@ mod entity_save_data;
 mod held_item_save_data;
 mod player_vitals;
 mod save_data;
+mod save_files;
 
 pub use entity_save_data::*;
 pub use held_item_save_data::*;
 pub use player_vitals::*;
 pub use save_data::*;
+pub use save_files::*;
 
 use std::{
     collections::{HashMap, HashSet},
