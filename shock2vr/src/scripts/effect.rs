@@ -591,8 +591,8 @@ pub enum Effect {
     },
 
     /// Debug: spawn the next player weapon in front of the player and wield it
-    /// as the flat viewmodel (dropping the previously wielded one). Cycles the
-    /// SS2 weapon roster for aim/viewmodel testing.
+    /// as the flat viewmodel (holstering the previously wielded one). Cycles
+    /// the SS2 weapon roster for aim/viewmodel testing.
     DebugCycleWeapon {
         head_rotation: Quaternion<f32>,
     },

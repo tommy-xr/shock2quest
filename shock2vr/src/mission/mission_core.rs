@@ -3690,12 +3690,11 @@ impl MissionCore {
                     hand,
                     current_parent_id: _,
                 } => {
-                    // What's held before the grab, so anything the grab
-                    // displaces (the flat wield swaps the viewmodel out) can
-                    // be holstered back into the backpack below. VR grabs
-                    // into an occupied hand no-op, so no displacement there.
-                    let held_before = self.interaction.held_entities();
-
+                    // A grab that displaces something (the flat wield swapping
+                    // the viewmodel out) holsters it back into the backpack
+                    // itself, via the `StoreItem` the controller returns. VR
+                    // grabs into an occupied hand no-op, so nothing is
+                    // displaced there.
                     let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
                     self.process_virtual_hand_effects(asset_cache, grab_effects);
 
@@ -3721,31 +3720,6 @@ impl MissionCore {
 
                                 !is_link_to_entity
                             })
-                        }
-                    }
-
-                    // Holster anything the grab displaced (a weapon the flat
-                    // wield swapped out) back into the player's backpack -
-                    // the original returns it to the inventory grid, not the
-                    // floor at the viewmodel position.
-                    let held_after = self.interaction.held_entities();
-                    let displaced =
-                        [held_before.0, held_before.1]
-                            .into_iter()
-                            .flatten()
-                            .find(|prev| {
-                                *prev != entity_id
-                                    && held_after.0 != Some(*prev)
-                                    && held_after.1 != Some(*prev)
-                            });
-                    if let Some(prev) = displaced {
-                        let inventory_entity = self
-                            .world
-                            .borrow::<UniqueView<PlayerInfo>>()
-                            .map(|player| player.inventory_entity_id)
-                            .ok();
-                        if let Some(inventory_entity) = inventory_entity {
-                            self.drop_entity_into_container(inventory_entity, prev);
                         }
                     }
                 }
@@ -4661,8 +4635,8 @@ impl MissionCore {
                         Matrix4::identity(),
                         CreateEntityOptions::default(),
                     );
-                    // Force-wield (unlike SpawnDebugItem): `wield` drops the
-                    // previously held weapon back into the world, so each cycle
+                    // Force-wield (unlike SpawnDebugItem): `wield` holsters the
+                    // previously held weapon into the backpack, so each cycle
                     // swaps the viewmodel. No-op in VR (wield returns nothing).
                     let msgs = self.interaction.wield(info.entity_id);
                     self.process_virtual_hand_effects(asset_cache, msgs);
