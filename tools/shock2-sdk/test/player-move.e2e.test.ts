@@ -207,3 +207,55 @@ test(
     );
   },
 );
+
+test(
+  "validated player move: short hops climb a small prop instead of wedging",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // Regression for #782: an automation client that steers toward a distant
+    // goal in short (sub-clearance) hops - e.g. 0.3u increments, well under
+    // the ~0.64u of forward clearance a step-up needs to land - used to get
+    // permanently wedged against a small, climbable riser/crate: the bounded
+    // hop's overshoot guard discarded the completed, fully collision-checked
+    // step outright because it was wider than the tiny request, and every
+    // later call reported `blocked: true, distance_moved: 0` forever.
+    //
+    // `debug_small_prop` (shock2vr/src/scenes/debug_small_prop.rs) spawns the
+    // player facing a 0.6u-tall, 4u-wide prop 6u ahead - the same riser
+    // height the wall/stairs test above already proves climbable with a long
+    // hop.
+    await using game = await GameServer.launch({
+      mission: "debug_small_prop",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8108),
+    });
+    await game.step({ frames: 30 });
+
+    const start = await game.player.position();
+    let maxConsecutiveBlocked = 0;
+    let consecutiveBlocked = 0;
+    for (let i = 0; i < 40; i++) {
+      const current = await game.player.position();
+      const result = await game.player.moveTo({
+        x: current.x - 0.3,
+        y: current.y,
+        z: current.z,
+      });
+      if (result.blocked) {
+        consecutiveBlocked++;
+        maxConsecutiveBlocked = Math.max(maxConsecutiveBlocked, consecutiveBlocked);
+      } else {
+        consecutiveBlocked = 0;
+      }
+    }
+    const end = await game.player.position();
+
+    assert.ok(
+      start.x - end.x > 10,
+      `short-hop navigation should cross the prop and keep going, advanced ${start.x - end.x}u`,
+    );
+    assert.ok(
+      maxConsecutiveBlocked <= 3,
+      `must not wedge indefinitely against a climbable prop: ${maxConsecutiveBlocked} consecutive blocked calls`,
+    );
+  },
+);

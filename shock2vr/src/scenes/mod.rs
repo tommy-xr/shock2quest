@@ -30,6 +30,7 @@ pub mod debug_minimal;
 pub mod debug_particles;
 pub mod debug_psi;
 pub mod debug_ragdoll;
+pub mod debug_small_prop;
 pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
@@ -47,6 +48,7 @@ pub use debug_minimal::DebugMinimalScene;
 pub use debug_particles::DebugParticlesScene;
 pub use debug_psi::create_debug_psi_scene;
 pub use debug_ragdoll::DebugRagdollScene;
+pub use debug_small_prop::create_debug_small_prop_scene;
 pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
@@ -111,6 +113,18 @@ pub fn create_initial_scene(
                 asset_cache,
                 audio_context,
             )),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_small_prop") {
+        return SceneInitResult {
+            scene: create_debug_small_prop_scene(
+                global_context,
+                options,
+                asset_cache,
+                audio_context,
+            ),
             mission_save_data: HashMap::new(),
         };
     }

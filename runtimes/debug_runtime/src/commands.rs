@@ -17,8 +17,13 @@ pub enum RuntimeCommand {
     /// Step the simulation forward by frames or time
     Step(StepSpec, oneshot::Sender<Result<StepResult, StepError>>),
 
-    /// Take a screenshot of the current frame
-    Screenshot(ScreenshotSpec, oneshot::Sender<ScreenshotResult>),
+    /// Take a screenshot of the current frame. Replies `Err(message)` when the
+    /// PNG could not be verified as fully written to disk (e.g. ENOSPC) - see
+    /// `capture_screenshot` in `main.rs`.
+    Screenshot(
+        ScreenshotSpec,
+        oneshot::Sender<Result<ScreenshotResult, String>>,
+    ),
 
     /// Perform a physics raycast
     RayCast(RayCastRequest, oneshot::Sender<RayCastResult>),

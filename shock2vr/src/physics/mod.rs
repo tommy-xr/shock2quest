@@ -354,6 +354,23 @@ const PROBE_SKIN: f32 = PLAYER_CONTACT_OFFSET / 2.0;
 /// input; the guard is against deflecting on noise, not against large angles.
 const MIN_SLIDE_FRACTION: f32 = 0.2;
 
+/// How far forward of a blocked position [`try_step_up`] must plant the
+/// capsule axis to stand on a riser's tread: the capsule radius plus a
+/// margin of contact-offset gaps. Shared with [`PhysicsWorld::move_player_validated`],
+/// whose bounded-hop overshoot guard must not reject a completed step-up
+/// just because it needed more room than a short request budgeted (issue
+/// #782) - this fixed, small quantity (not the walk distance) is the true
+/// bound on how far a step can outrun the request.
+fn step_up_forward_clearance(shape: &dyn Shape) -> f32 {
+    let contact_offset = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    let capsule_radius = shape
+        .as_capsule()
+        .map_or(PLAYER_STANDING_RADIUS / SCALE_FACTOR, |capsule| {
+            capsule.radius
+        });
+    capsule_radius + 4.0 * contact_offset
+}
+
 /// Step-up probe (the original engine's stair-climbing approach: probe up,
 /// forward, then down from the blocked position). Called when the player's
 /// horizontal movement was mostly blocked; returns the extra translation that
@@ -396,12 +413,7 @@ fn try_step_up(
     // Far enough forward that the capsule axis (its lowest point) stands on
     // the tread: the capsule radius, the gap to the riser (which can exceed
     // the contact offset when the walk stalled early), and margin on top.
-    let capsule_radius = shape
-        .as_capsule()
-        .map_or(PLAYER_STANDING_RADIUS / SCALE_FACTOR, |capsule| {
-            capsule.radius
-        });
-    let forward = capsule_radius + 4.0 * contact_offset;
+    let forward = step_up_forward_clearance(shape);
     // Full-width cast, used for the LANDING sweep: the tread height it
     // measures depends on the real capsule bottom, and its `target_distance`
     // is the contact offset so the player comes to rest at the normal gap
@@ -594,6 +606,10 @@ struct PlayerMovement {
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
     slope_displacement: Vector<Real>,
+    /// Whether `try_step_up` actually fired this pass (as opposed to an
+    /// ordinary walk/slide). `move_player_validated`'s bounded-hop overshoot
+    /// guard only widens for a genuine step-up - see `step_up_allowance`.
+    stepped_up: bool,
 }
 
 /// The moving-terrain body the player is standing on, and where it was the
@@ -1139,6 +1155,7 @@ fn plan_climb_top_out(
             is_crouched: false,
         }),
         slope_displacement: Vector::zeros(),
+        stepped_up: false,
     })
 }
 
@@ -1391,6 +1408,7 @@ fn plan_jump_mantle(
             is_crouched,
         }),
         slope_displacement: Vector::zeros(),
+        stepped_up: false,
     })
 }
 
@@ -1564,6 +1582,7 @@ fn step_player_movement(
                 movement: mvt,
                 top_out: None,
                 slope_displacement: Vector::zeros(),
+                stepped_up: false,
             };
         }
     }
@@ -1717,6 +1736,7 @@ fn step_player_movement(
     // Stairs: if grounded walking was blocked, probe for a step and hop onto
     // it. (Grounded-only: an airborne player pressed against a wall must not
     // ratchet up ledges.)
+    let mut stepped_up = false;
     if airborne_vertical.is_none() && mvt.grounded {
         if let Some(step) = try_step_up(
             queries,
@@ -1726,6 +1746,7 @@ fn step_player_movement(
             mvt.translation,
         ) {
             mvt.translation += step;
+            stepped_up = true;
         }
     }
     // The caller applies one translation from the ORIGINAL pose, so fold the
@@ -1736,6 +1757,7 @@ fn step_player_movement(
         movement: mvt,
         top_out: None,
         slope_displacement: next_slope_displacement,
+        stepped_up,
     }
 }
 
@@ -2617,6 +2639,22 @@ impl PhysicsWorld {
         let character_body = &self.rigid_body_set[player_handle.character_handle];
         let character_collider = &self.collider_set[character_body.colliders()[0]];
         let character_shape = character_collider.shared_shape().clone();
+        // A step-up's own forward clearance requirement (a small, fixed
+        // geometric quantity - see `step_up_forward_clearance`) can exceed a
+        // short `requested_distance`. Real per-frame walking has no
+        // per-call distance budget at all, so it climbs the same riser fine;
+        // the bounded hop's overshoot guard below must not reject an
+        // otherwise-valid, fully collision-checked step-up just because the
+        // caller asked for less room than a step needs (issue #782 - without
+        // this, automation stepping toward a target in short hops could get
+        // permanently wedged against a climbable riser/small prop).
+        //
+        // The substep that triggers the step-up also carries its own partial
+        // walk contribution (`step_player_movement` returns walk + step as one
+        // translation) - up to one `PLAYER_MOVE_SUBSTEP` on top of the step's
+        // own forward clearance - so the allowance must cover both.
+        let step_up_allowance =
+            PLAYER_MOVE_SUBSTEP + step_up_forward_clearance(character_shape.as_ref());
         let mut pos = *character_body.position();
         let gravity = player_gravity_step(character_body);
         let player_id = EntityId::from_inner(character_body.user_data as u64);
@@ -2687,7 +2725,7 @@ impl PhysicsWorld {
                     break;
                 }
                 let attempt = remaining.min(PLAYER_MOVE_SUBSTEP);
-                let mvt = step_player_movement(
+                let substep = step_player_movement(
                     &player_handle.controller,
                     &queries,
                     character_shape.as_ref(),
@@ -2703,8 +2741,8 @@ impl PhysicsWorld {
                     None,
                     // No ladder redirect: a validated move walks, it doesn't climb.
                     None,
-                )
-                .movement;
+                );
+                let mvt = substep.movement;
                 grounded = mvt.grounded;
 
                 let candidate = Translation::from(mvt.translation) * pos;
@@ -2714,9 +2752,19 @@ impl PhysicsWorld {
                     candidate.translation.vector.z - start.z
                 ];
                 // A collision slide may alter the route, but this API promises
-                // a bounded hop. Never commit a solver result outside the
-                // requested horizontal radius.
-                if from_start.norm() > requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON {
+                // a bounded hop: bound it to the request. The one exception is
+                // a genuine step-up (`substep.stepped_up`) - itself
+                // collision-checked and safe, just geometrically wider than a
+                // short request - which gets the `step_up_allowance` floor
+                // instead, so it is never discarded outright. An ordinary
+                // walk/slide substep (issue #599's wall-slide overshoot) stays
+                // held to the request even when it is short.
+                let overshoot_bound = if substep.stepped_up {
+                    requested_distance.max(step_up_allowance)
+                } else {
+                    requested_distance
+                };
+                if from_start.norm() > overshoot_bound + PLAYER_MOVE_ARRIVAL_EPSILON {
                     break;
                 }
                 let after = vector![
@@ -2764,12 +2812,24 @@ impl PhysicsWorld {
         }
         player_handle.is_grounded = grounded;
 
-        let remaining = vector![
+        let to_destination = vector![
             destination.x - pos.translation.vector.x,
             0.0,
             destination.z - pos.translation.vector.z
-        ]
-        .norm();
+        ];
+        // A completed step-up's fixed forward clearance can carry the player
+        // PAST `destination` on a short request (see `step_up_allowance`
+        // above). Past that point a plain Euclidean distance-to-destination
+        // grows again with the overshoot, which would wrongly report
+        // `blocked: true, distance_moved: 0` on a call that actually
+        // succeeded - exactly the symptom this fix resolves. Detect
+        // "reached or passed" via the signed progress along the requested
+        // heading instead of unsigned distance.
+        let remaining = if to_destination.dot(&walk_dir) <= 0.0 {
+            0.0
+        } else {
+            to_destination.norm()
+        };
         let distance_moved = (requested_distance - remaining).clamp(0.0, requested_distance);
 
         MoveResult {
@@ -3725,6 +3785,7 @@ impl PhysicsWorld {
                     movement,
                     top_out,
                     slope_displacement: Vector::zeros(),
+                    stepped_up: false,
                 }
             } else {
                 // A compressed mantle restores the same standing/crouched
@@ -7566,6 +7627,95 @@ mod tests {
         );
     }
 
+    /// An automation client that steers toward a distant goal in short
+    /// (sub-clearance) hops must not get permanently wedged against a small,
+    /// climbable riser/crate the way one long hop already proves is
+    /// steppable. Each `move_player_validated` call only requested 0.3wu -
+    /// less than the ~0.64wu of forward clearance a step-up needs to land -
+    /// so the bounded-hop overshoot guard used to discard the completed,
+    /// fully collision-checked step outright and report `blocked` forever.
+    /// (Negative-first: before the `step_up_allowance` floor on the overshoot
+    /// guard, this looped at the riser's near face with `distance_moved`
+    /// pinned at 0 for the rest of the 40 requests - issue #782.)
+    #[test]
+    fn validated_move_climbs_a_riser_via_short_requests_without_wedging() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, floor_tris)
+                .expect("floor trimesh")
+                .build(),
+        );
+        // A small crate-sized DYNAMIC prop (real in-mission crates are
+        // dynamic bodies, added via `add_dynamic`), 0.6wu tall - the same
+        // walkable riser height `validated_move_steps_up_stairs_but_not_walls`
+        // already proves climbable with long hops.
+        let obstacle_height = 0.6;
+        world.add_dynamic(
+            EntityId::from_inner(2001).unwrap(),
+            vec3(-3.0, obstacle_height / 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(2.0, obstacle_height, 2.0)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let mut player =
+            world.create_player(vec3(-6.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        // Walk in short 0.3wu increments (below the step-up's own forward
+        // clearance requirement) all the way past the crate.
+        let start = world.get_player_translation(&player);
+        let mut consecutive_blocked = 0;
+        let mut max_consecutive_blocked = 0;
+        for _ in 0..40 {
+            let current = world.get_player_translation(&player);
+            let result = world.move_player_validated(current + vec3(0.3, 0.0, 0.0), &mut player);
+            if result.blocked {
+                consecutive_blocked += 1;
+                max_consecutive_blocked = max_consecutive_blocked.max(consecutive_blocked);
+            } else {
+                consecutive_blocked = 0;
+            }
+            // A completed step-up can carry the player past this call's
+            // `destination` (the step's fixed forward clearance can exceed
+            // the 0.3wu request). That must be reported as real progress,
+            // not wrapped back into `blocked: true, distance_moved: 0` -
+            // the exact signature issue #782 describes, now on a call that
+            // actually advanced the player.
+            let advanced = (world.get_player_translation(&player) - current).x.abs();
+            assert!(
+                !(result.blocked && advanced > 0.5),
+                "a call that substantially advanced the player must not report blocked \
+                 with no distance credited: advanced={advanced} distance_moved={} blocked={}",
+                result.distance_moved,
+                result.blocked
+            );
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            end.x - start.x > 10.0,
+            "short-hop navigation should cross the crate and keep going, advanced {}",
+            end.x - start.x
+        );
+        assert!(
+            max_consecutive_blocked <= 3,
+            "must not wedge indefinitely against a climbable crate: {max_consecutive_blocked} consecutive blocked calls"
+        );
+    }
+
     /// Sliding along a wall changes the controller's route. Progress projected
     /// only onto the requested heading can therefore consume the whole request
     /// while the net translation travels much farther; the hop must remain
@@ -7615,6 +7765,59 @@ mod tests {
             vec3(translated.x, 0.0, translated.z).magnitude()
                 <= result.requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON,
             "validated movement must remain inside its requested radius: {result:?}"
+        );
+    }
+
+    /// The `step_up_allowance` floor added for issue #782 must only widen the
+    /// overshoot guard for a genuine, completed step-up - an ordinary
+    /// collision slide (issue #599) against a plain wall must stay held
+    /// tightly to a SHORT request, not opportunistically use the wider
+    /// step-up allowance (~0.6-0.8wu) just because the request was small.
+    /// Same fixture as `validated_move_stays_bounded_while_sliding_along_a_wall`,
+    /// but with a 0.3wu request - well under the step-up allowance - so a
+    /// regression that widened the guard unconditionally would let this slide
+    /// travel much farther than requested.
+    #[test]
+    fn validated_move_short_request_stays_bounded_while_sliding_along_a_wall() {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+                .build(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(-1.0, 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(1.28, 4.0, 100.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 1.0, 0.0), EntityId::from_inner(2000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        let start = world.get_player_translation(&player);
+        let direction = vec3(-0.5, 0.0, -f32::sqrt(3.0) / 2.0);
+        let result = world.move_player_validated(start + direction * 0.3, &mut player);
+        let translated = result.new_position - start;
+
+        assert!(
+            vec3(translated.x, 0.0, translated.z).magnitude()
+                <= result.requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON,
+            "a short request sliding along a wall must stay inside its OWN \
+             requested radius, not opportunistically use the wider step-up \
+             allowance: {result:?}"
         );
     }
 
