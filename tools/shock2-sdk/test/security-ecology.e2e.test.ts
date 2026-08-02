@@ -113,23 +113,25 @@ test(
       "Alert",
       "CameraAlert should raise its linked ecology",
     );
-    const initialRecovery = Number(
-      property(ecologyDetail, "EcologyRecoveryRemaining"),
-    );
-    assert.ok(
-      initialRecovery > 100 && initialRecovery <= 120,
-      `medsci ecology should start its authored 120s recovery, got ${initialRecovery}`,
-    );
+
+    // The alarm was raised at most one 120-frame poll before it was observed,
+    // so `framesSinceAlert + 120` bounds the frames elapsed since the alarm.
+    // The authored recovery is 120 seconds (7200 fixed-timestep frames).
+    let framesSinceAlert = 0;
+    const step = async (frames: number) => {
+      await game.step({ frames });
+      framesSinceAlert += frames;
+    };
 
     let spawned: EntitySummary | undefined;
     for (let poll = 0; poll < 4 && !spawned; poll += 1) {
-      await game.step({ frames: 901 });
+      await step(901);
       spawned = (await pipeOrganisms(game)).find(
         (organism) => !organismsBefore.has(organism.id),
       );
     }
     assert.ok(spawned, "the alert population should spawn its authored OG-Pipe");
-    await game.step({ frames: 2 });
+    await step(2);
 
     let spawnedDetail = await game.entities.detail(spawned.id);
     assert.equal(
@@ -150,29 +152,24 @@ test(
     await game.player.teleport({ x: mx + 3.0, y: my + 0.5, z: mz });
     let attacked = false;
     for (let second = 0; second < 20 && !attacked; second += 1) {
-      await game.step({ frames: 60 });
+      await step(60);
       spawnedDetail = await game.entities.detail(spawned.id);
       attacked ||= property(spawnedDetail, "AIBehavior")?.endsWith("Attack") ?? false;
     }
     assert.ok(attacked, "the alarm-spawned organism should engage the player");
 
-    // Leave the camera's visibility and step to just before the live authored
-    // recovery deadline. Recovery is read from runtime introspection rather
-    // than approximated from when the test first noticed the alarm.
+    // Leave the camera's visibility, then bracket the authored recovery
+    // deadline: at 110s since the alert was observed at most 112s have
+    // elapsed since the alarm (still inside the 120s window), and at 125s at
+    // least 125s have (past it, with margin for the expiry-frame Reset).
     await game.player.teleport({ x: 300, y: 0, z: 300 });
-    ecologyDetail = await game.entities.detail(ecology.id);
-    const remaining = Number(
-      property(ecologyDetail, "EcologyRecoveryRemaining"),
-    );
-    assert.ok(remaining > 0, `expected active recovery, got ${remaining}`);
-    const beforeExpiryFrames = Math.max(0, Math.floor((remaining - 1) * 60));
-    await game.step({ frames: beforeExpiryFrames });
+    await step(110 * 60 - framesSinceAlert);
     assert.equal(
       property(await game.entities.detail(ecology.id), "EcologyState"),
       "Alert",
       "the ecology must remain alerted until recovery expires",
     );
-    await game.step({ frames: 121 });
+    await step(15 * 60);
     assert.equal(
       property(await game.entities.detail(ecology.id), "EcologyState"),
       "Normal",

@@ -1,29 +1,44 @@
 use dark::properties::{PropEcoState, PropEcoType, PropEcology, PropHitPoints};
 use rand::Rng;
-use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, ViewMut, World};
-
-use crate::{
-    mission::mission_core::GlobalTemplateHierarchy, physics::PhysicsWorld,
-    runtime_props::RuntimePropEcologyState, time::Time,
+use serde::{Deserialize, Serialize};
+use shipyard::{
+    EntitiesView, EntityId, Get, IntoIter, IntoWithId, UniqueView, View, ViewMut, World,
 };
 
+use crate::{mission::mission_core::GlobalTemplateHierarchy, physics::PhysicsWorld, time::Time};
+
 use super::{
-    Effect, MessagePayload, Script,
+    Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
     script_util::{entity_class_template_id, send_to_all_switch_links},
 };
 
 const PHYSICAL_TEMPLATE_ID: i32 = -11;
 const ECOLOGY_STATE_NORMAL: i32 = 0;
-const ECOLOGY_STATE_HACKED: i32 = 1;
 const ECOLOGY_STATE_ALERT: i32 = 2;
+const ECOLOGY_STATE_COUNT: usize = 3;
+const SCRIPT_STATE_KEY: &str = "shock2vr.trigger_ecology";
+
+#[derive(Serialize, Deserialize)]
+struct TriggerEcologyState {
+    seconds_until_poll: f32,
+    recovery_seconds_remaining: Option<f32>,
+}
 
 /// Retail `TriggerEcology`: periodically count live physical objects carrying
 /// this trigger's EcoType and pulse its SwitchLinks when population is low.
-pub struct TriggerEcology;
+/// A security `Alarm` switches to the alert-column population profile until
+/// the authored recovery window expires or a `Reset` arrives.
+pub struct TriggerEcology {
+    seconds_until_poll: f32,
+    recovery_seconds_remaining: Option<f32>,
+}
 
 impl TriggerEcology {
     pub fn new() -> Self {
-        Self
+        Self {
+            seconds_until_poll: 0.0,
+            recovery_seconds_remaining: None,
+        }
     }
 
     fn population(world: &World, ecology_type: i32) -> usize {
@@ -53,9 +68,87 @@ impl TriggerEcology {
     fn should_spawn(population: i32, minimum: i32, maximum: i32, random_hit: bool) -> bool {
         population < maximum && (population < minimum || random_hit)
     }
+
+    fn eco_state(world: &World, entity_id: EntityId) -> i32 {
+        world
+            .borrow::<View<PropEcoState>>()
+            .ok()
+            .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
+            .unwrap_or(ECOLOGY_STATE_NORMAL)
+    }
+
+    /// Most ecologies author no explicit `P$EcoState`, so the component may
+    /// need to be created on the first transition away from Normal.
+    fn set_eco_state(world: &World, entity_id: EntityId, state: i32) {
+        let entities = world.borrow::<EntitiesView>().unwrap();
+        let mut states = world.borrow::<ViewMut<PropEcoState>>().unwrap();
+        if let Ok(existing) = (&mut states).get(entity_id) {
+            existing.0 = state;
+        } else {
+            entities.add_component(entity_id, &mut states, PropEcoState(state));
+        }
+    }
+
+    fn authored_alert_recovery(world: &World, entity_id: EntityId) -> Option<f32> {
+        world
+            .borrow::<View<PropEcology>>()
+            .ok()
+            .and_then(|ecologies| {
+                ecologies
+                    .get(entity_id)
+                    .ok()
+                    .map(|ecology| ecology.recovery_seconds[ECOLOGY_STATE_ALERT as usize])
+            })
+    }
+
+    fn poll(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        let ecologies = world.borrow::<View<PropEcology>>().unwrap();
+        let ecology_types = world.borrow::<View<PropEcoType>>().unwrap();
+        let Ok(ecology) = ecologies.get(entity_id) else {
+            return Effect::NoEffect;
+        };
+        let Ok(ecology_type) = ecology_types.get(entity_id) else {
+            return Effect::NoEffect;
+        };
+        let state = Self::eco_state(world, entity_id);
+        let Some(state_index) = usize::try_from(state)
+            .ok()
+            .filter(|index| *index < ECOLOGY_STATE_COUNT)
+        else {
+            return Effect::NoEffect;
+        };
+        let minimum = ecology.min_count[state_index];
+        let maximum = ecology.max_count[state_index];
+        let random_chance = ecology.random_chance[state_index];
+        let population = Self::population(world, ecology_type.0) as i32;
+        let random_hit = random_chance > 0 && rand::thread_rng().gen_range(0..random_chance) == 0;
+        if Self::should_spawn(population, minimum, maximum, random_hit) {
+            send_to_all_switch_links(world, entity_id, MessagePayload::TurnOn { from: entity_id })
+        } else {
+            Effect::NoEffect
+        }
+    }
 }
 
 impl Script for TriggerEcology {
+    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        let ecologies = world.borrow::<View<PropEcology>>().unwrap();
+        self.seconds_until_poll = ecologies
+            .get(entity_id)
+            .map(|ecology| ecology.period_seconds.max(0.0))
+            .unwrap_or(0.0);
+        drop(ecologies);
+        // Legacy saves persist the alerted `P$EcoState` but carry no private
+        // script payload, so conservatively reconstruct a full authored
+        // recovery window. Current saves hydrate the exact remaining timer
+        // and skip this fresh initialization path.
+        if Self::eco_state(world, entity_id) == ECOLOGY_STATE_ALERT {
+            self.recovery_seconds_remaining =
+                Self::authored_alert_recovery(world, entity_id).filter(|seconds| *seconds > 0.0);
+        }
+        Effect::NoEffect
+    }
+
     fn update(
         &mut self,
         entity_id: EntityId,
@@ -77,76 +170,28 @@ impl Script for TriggerEcology {
             return Effect::NoEffect;
         };
 
-        let (should_poll, recovery_expired) = {
-            let mut runtime_states = world.borrow::<ViewMut<RuntimePropEcologyState>>().unwrap();
-            let mut ecology_states = world.borrow::<ViewMut<PropEcoState>>().unwrap();
-            let (Ok(runtime_state), Ok(ecology_state)) = (
-                (&mut runtime_states).get(entity_id),
-                (&mut ecology_states).get(entity_id),
-            ) else {
-                return Effect::NoEffect;
-            };
-
-            let mut recovery_expired = false;
-            if ecology_state.0 == ECOLOGY_STATE_ALERT
-                && let Some(remaining) = &mut runtime_state.recovery_seconds_remaining
-            {
-                *remaining -= elapsed;
-                if *remaining <= 0.0 {
-                    ecology_state.0 = ECOLOGY_STATE_NORMAL;
-                    runtime_state.recovery_seconds_remaining = None;
-                    recovery_expired = true;
-                }
+        let mut effects = Vec::new();
+        if Self::eco_state(world, entity_id) == ECOLOGY_STATE_ALERT
+            && let Some(remaining) = &mut self.recovery_seconds_remaining
+        {
+            *remaining -= elapsed;
+            if *remaining <= 0.0 {
+                self.recovery_seconds_remaining = None;
+                Self::set_eco_state(world, entity_id, ECOLOGY_STATE_NORMAL);
+                effects.push(send_to_all_switch_links(
+                    world,
+                    entity_id,
+                    MessagePayload::Reset { from: entity_id },
+                ));
             }
-
-            runtime_state.seconds_until_poll -= elapsed;
-            let should_poll = runtime_state.seconds_until_poll <= 0.0;
-            if should_poll {
-                runtime_state.seconds_until_poll = period_seconds;
-            }
-            (should_poll, recovery_expired)
-        };
-
-        if recovery_expired {
-            return send_to_all_switch_links(
-                world,
-                entity_id,
-                MessagePayload::Reset { from: entity_id },
-            );
-        }
-        if !should_poll {
-            return Effect::NoEffect;
         }
 
-        let state = world
-            .borrow::<View<PropEcoState>>()
-            .ok()
-            .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
-            .unwrap_or(ECOLOGY_STATE_NORMAL);
-        let state_index = match state {
-            ECOLOGY_STATE_NORMAL => ECOLOGY_STATE_NORMAL as usize,
-            ECOLOGY_STATE_ALERT => ECOLOGY_STATE_ALERT as usize,
-            ECOLOGY_STATE_HACKED => return Effect::NoEffect,
-            _ => return Effect::NoEffect,
-        };
-        let ecologies = world.borrow::<View<PropEcology>>().unwrap();
-        let ecology_types = world.borrow::<View<PropEcoType>>().unwrap();
-        let Ok(ecology) = ecologies.get(entity_id) else {
-            return Effect::NoEffect;
-        };
-        let Ok(ecology_type) = ecology_types.get(entity_id) else {
-            return Effect::NoEffect;
-        };
-        let minimum = ecology.min_count[state_index];
-        let maximum = ecology.max_count[state_index];
-        let random_chance = ecology.random_chance[state_index];
-        let population = Self::population(world, ecology_type.0) as i32;
-        let random_hit = random_chance > 0 && rand::thread_rng().gen_range(0..random_chance) == 0;
-        if Self::should_spawn(population, minimum, maximum, random_hit) {
-            send_to_all_switch_links(world, entity_id, MessagePayload::TurnOn { from: entity_id })
-        } else {
-            Effect::NoEffect
+        self.seconds_until_poll -= elapsed;
+        if self.seconds_until_poll <= 0.0 {
+            self.seconds_until_poll = period_seconds;
+            effects.push(self.poll(entity_id, world));
         }
+        Effect::combine(effects)
     }
 
     fn handle_message(
@@ -157,84 +202,64 @@ impl Script for TriggerEcology {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Alarm { victim, .. } => {
-                let recovery_seconds =
-                    world
-                        .borrow::<View<PropEcology>>()
-                        .ok()
-                        .and_then(|ecologies| {
-                            ecologies.get(entity_id).ok().map(|ecology| {
-                                ecology.recovery_seconds[ECOLOGY_STATE_ALERT as usize]
-                            })
-                        });
-                let Some(recovery_seconds) = recovery_seconds else {
+            MessagePayload::Alarm { .. } => {
+                if Self::eco_state(world, entity_id) != ECOLOGY_STATE_NORMAL {
+                    // A repeated Alarm must not extend the retail recovery
+                    // timer, and hacked ecologies ignore security alarms.
+                    return Effect::NoEffect;
+                }
+                // An authored recovery of zero means this ecology has no
+                // alert profile; entering it would expire (and Reset the
+                // linked devices) on the very next frame.
+                let Some(recovery_seconds) = Self::authored_alert_recovery(world, entity_id)
+                    .filter(|seconds| *seconds > 0.0)
+                else {
                     return Effect::NoEffect;
                 };
-
-                let transitioned = {
-                    let mut ecology_states = world.borrow::<ViewMut<PropEcoState>>().unwrap();
-                    let mut runtime_states =
-                        world.borrow::<ViewMut<RuntimePropEcologyState>>().unwrap();
-                    let (Ok(ecology_state), Ok(runtime_state)) = (
-                        (&mut ecology_states).get(entity_id),
-                        (&mut runtime_states).get(entity_id),
-                    ) else {
-                        return Effect::NoEffect;
-                    };
-                    if ecology_state.0 != ECOLOGY_STATE_NORMAL {
-                        false
-                    } else {
-                        ecology_state.0 = ECOLOGY_STATE_ALERT;
-                        runtime_state.recovery_seconds_remaining = Some(recovery_seconds.max(0.0));
-                        true
-                    }
-                };
-
-                if transitioned {
-                    send_to_all_switch_links(
-                        world,
-                        entity_id,
-                        MessagePayload::Alarm {
-                            from: entity_id,
-                            victim: *victim,
-                        },
-                    )
-                } else {
-                    Effect::NoEffect
-                }
+                Self::set_eco_state(world, entity_id, ECOLOGY_STATE_ALERT);
+                self.recovery_seconds_remaining = Some(recovery_seconds);
+                Effect::NoEffect
             }
             MessagePayload::Reset { .. } => {
-                let transitioned = {
-                    let mut ecology_states = world.borrow::<ViewMut<PropEcoState>>().unwrap();
-                    let mut runtime_states =
-                        world.borrow::<ViewMut<RuntimePropEcologyState>>().unwrap();
-                    let (Ok(ecology_state), Ok(runtime_state)) = (
-                        (&mut ecology_states).get(entity_id),
-                        (&mut runtime_states).get(entity_id),
-                    ) else {
-                        return Effect::NoEffect;
-                    };
-                    if ecology_state.0 != ECOLOGY_STATE_ALERT {
-                        false
-                    } else {
-                        ecology_state.0 = ECOLOGY_STATE_NORMAL;
-                        runtime_state.recovery_seconds_remaining = None;
-                        true
-                    }
-                };
-
-                if transitioned {
-                    send_to_all_switch_links(
-                        world,
-                        entity_id,
-                        MessagePayload::Reset { from: entity_id },
-                    )
-                } else {
-                    Effect::NoEffect
+                if Self::eco_state(world, entity_id) != ECOLOGY_STATE_ALERT {
+                    return Effect::NoEffect;
                 }
+                Self::set_eco_state(world, entity_id, ECOLOGY_STATE_NORMAL);
+                self.recovery_seconds_remaining = None;
+                send_to_all_switch_links(
+                    world,
+                    entity_id,
+                    MessagePayload::Reset { from: entity_id },
+                )
             }
             _ => Effect::NoEffect,
         }
+    }
+
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some(SCRIPT_STATE_KEY)
+    }
+
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        ScriptState::encode(
+            1,
+            &TriggerEcologyState {
+                seconds_until_poll: self.seconds_until_poll,
+                recovery_seconds_remaining: self.recovery_seconds_remaining,
+            },
+            SCRIPT_STATE_KEY,
+        )
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        let restored: TriggerEcologyState = state.decode(1, SCRIPT_STATE_KEY)?;
+        self.seconds_until_poll = restored.seconds_until_poll;
+        self.recovery_seconds_remaining = restored.recovery_seconds_remaining;
+        Ok(())
     }
 }
 
@@ -246,6 +271,39 @@ mod tests {
 
     use super::*;
     use crate::runtime_props::RuntimePropCanonicalTemplateId;
+
+    fn ecology_props(
+        min_count: [i32; 3],
+        max_count: [i32; 3],
+        recovery_seconds: [f32; 3],
+        random_chance: [i32; 3],
+    ) -> PropEcology {
+        PropEcology {
+            period_seconds: 15.0,
+            min_count,
+            max_count,
+            recovery_seconds,
+            random_chance,
+        }
+    }
+
+    fn step(script: &mut TriggerEcology, ecology: EntityId, world: &World, seconds: u64) -> Effect {
+        script.update(
+            ecology,
+            world,
+            &PhysicsWorld::new(),
+            &Time {
+                elapsed: Duration::from_secs(seconds),
+                total: Duration::from_secs(seconds),
+            },
+        )
+    }
+
+    fn sends_to(effect: Effect, target: EntityId) -> bool {
+        Effect::flatten(vec![effect])
+            .into_iter()
+            .any(|effect| matches!(effect, Effect::Send { msg } if msg.to == target))
+    }
 
     #[test]
     fn pulses_when_matching_physical_population_is_below_minimum() {
@@ -259,14 +317,7 @@ mod tests {
             PropTemplateId { template_id: 292 },
             PropEcoType(2501),
             PropEcoState(ECOLOGY_STATE_NORMAL),
-            PropEcology {
-                period_seconds: 15.0,
-                min_count: [1, 0, 0],
-                max_count: [1, 0, 0],
-                recovery_seconds: [0.0; 3],
-                random_chance: [1, 0, 0],
-            },
-            RuntimePropEcologyState::new(15.0),
+            ecology_props([1, 0, 0], [1, 0, 0], [0.0; 3], [1, 0, 0]),
             Links {
                 to_links: vec![ToLink {
                     to_template_id: 293,
@@ -278,40 +329,15 @@ mod tests {
         let mut script = TriggerEcology::new();
         script.initialize(ecology, &world);
 
-        let effect = script.update(
-            ecology,
-            &world,
-            &PhysicsWorld::new(),
-            &Time {
-                elapsed: Duration::from_secs(15),
-                total: Duration::from_secs(15),
-            },
-        );
-        assert!(matches!(
-            effect,
-            Effect::Combined { effects }
-                if effects.iter().any(|effect| matches!(
-                    effect,
-                    Effect::Send { msg }
-                        if msg.to == generator
-                ))
-        ));
+        assert!(sends_to(step(&mut script, ecology, &world, 15), generator));
 
         world.add_entity((PropEcoType(2501), RuntimePropCanonicalTemplateId(-196)));
-        let effect = script.update(
-            ecology,
-            &world,
-            &PhysicsWorld::new(),
-            &Time {
-                elapsed: Duration::from_secs(15),
-                total: Duration::from_secs(30),
-            },
-        );
-        assert!(matches!(effect, Effect::NoEffect));
+        let effect = step(&mut script, ecology, &world, 15);
+        assert!(!sends_to(effect, generator));
     }
 
     #[test]
-    fn hacked_ecology_is_paused_even_with_nonzero_population_targets() {
+    fn hacked_ecology_uses_its_authored_hacked_profile() {
         let mut world = World::new();
         world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
         let generator = world.add_entity(());
@@ -319,14 +345,7 @@ mod tests {
             PropTemplateId { template_id: 292 },
             PropEcoType(2501),
             PropEcoState(1),
-            PropEcology {
-                period_seconds: 15.0,
-                min_count: [0, 1, 0],
-                max_count: [0, 1, 0],
-                recovery_seconds: [0.0; 3],
-                random_chance: [0, 1, 0],
-            },
-            RuntimePropEcologyState::new(15.0),
+            ecology_props([0, 1, 0], [0, 1, 0], [0.0; 3], [0, 0, 0]),
             Links {
                 to_links: vec![ToLink {
                     to_template_id: 293,
@@ -338,122 +357,99 @@ mod tests {
         let mut script = TriggerEcology::new();
         script.initialize(ecology, &world);
 
-        let effect = script.update(
-            ecology,
-            &world,
-            &PhysicsWorld::new(),
-            &Time {
-                elapsed: Duration::from_secs(15),
-                total: Duration::from_secs(15),
-            },
-        );
-
-        assert!(matches!(effect, Effect::NoEffect));
+        // The hacked column authors min 1 / max 1 with an empty population,
+        // so the hacked ecology keeps spawning from its own profile.
+        assert!(sends_to(step(&mut script, ecology, &world, 15), generator));
     }
 
     #[test]
     fn alarm_selects_alert_profile_and_starts_authored_recovery_once() {
         let mut world = World::new();
         world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
-        let victim = world.add_entity(());
-        let generator = world.add_entity(());
         let camera = world.add_entity(());
         let ecology = world.add_entity((
             PropTemplateId { template_id: 292 },
             PropEcoType(2501),
             PropEcoState(ECOLOGY_STATE_NORMAL),
-            PropEcology {
-                period_seconds: 15.0,
-                min_count: [0, 0, 2],
-                max_count: [0, 0, 2],
-                recovery_seconds: [0.0, 0.0, 120.0],
-                random_chance: [0, 0, 0],
-            },
-            RuntimePropEcologyState::new(15.0),
-            Links {
-                to_links: vec![
-                    ToLink {
-                        to_template_id: 293,
-                        to_entity_id: Some(WrappedEntityId(generator)),
-                        link: Link::SwitchLink,
-                    },
-                    ToLink {
-                        to_template_id: 294,
-                        to_entity_id: Some(WrappedEntityId(camera)),
-                        link: Link::SwitchLink,
-                    },
-                ],
-            },
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
         ));
         let mut script = TriggerEcology::new();
+        script.initialize(ecology, &world);
 
-        let effect = script.handle_message(
+        script.handle_message(
             ecology,
             &world,
             &PhysicsWorld::new(),
-            &MessagePayload::Alarm {
-                from: camera,
-                victim,
-            },
+            &MessagePayload::Alarm { from: camera },
         );
 
         let states = world.borrow::<View<PropEcoState>>().unwrap();
         assert_eq!(states.get(ecology).unwrap().0, ECOLOGY_STATE_ALERT);
         drop(states);
-        let runtime_states = world.borrow::<View<RuntimePropEcologyState>>().unwrap();
-        assert_eq!(
-            runtime_states
-                .get(ecology)
-                .unwrap()
-                .recovery_seconds_remaining,
-            Some(120.0)
-        );
-        drop(runtime_states);
-        let sent_to = Effect::flatten(vec![effect])
-            .into_iter()
-            .filter_map(|effect| match effect {
-                Effect::Send { msg }
-                    if matches!(
-                        msg.payload,
-                        MessagePayload::Alarm {
-                            victim: sent_victim,
-                            ..
-                        } if sent_victim == victim
-                    ) =>
-                {
-                    Some(msg.to)
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(sent_to, vec![generator, camera]);
+        assert_eq!(script.recovery_seconds_remaining, Some(120.0));
 
-        {
-            let mut runtime_states = world.borrow::<ViewMut<RuntimePropEcologyState>>().unwrap();
-            (&mut runtime_states)
-                .get(ecology)
-                .unwrap()
-                .recovery_seconds_remaining = Some(17.0);
-        }
+        script.recovery_seconds_remaining = Some(17.0);
         let repeated = script.handle_message(
             ecology,
             &world,
             &PhysicsWorld::new(),
-            &MessagePayload::Alarm {
-                from: camera,
-                victim,
-            },
+            &MessagePayload::Alarm { from: camera },
         );
         assert!(matches!(repeated, Effect::NoEffect));
-        let runtime_states = world.borrow::<View<RuntimePropEcologyState>>().unwrap();
         assert_eq!(
-            runtime_states
-                .get(ecology)
-                .unwrap()
-                .recovery_seconds_remaining,
+            script.recovery_seconds_remaining,
             Some(17.0),
             "repeated Alarm must not extend the retail recovery timer"
         );
+    }
+
+    #[test]
+    fn alarm_without_authored_recovery_never_enters_alert() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let camera = world.add_entity(());
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            PropEcoState(ECOLOGY_STATE_NORMAL),
+            ecology_props([1, 0, 0], [1, 0, 0], [0.0; 3], [0, 0, 0]),
+        ));
+        let mut script = TriggerEcology::new();
+        script.initialize(ecology, &world);
+
+        script.handle_message(
+            ecology,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Alarm { from: camera },
+        );
+
+        let states = world.borrow::<View<PropEcoState>>().unwrap();
+        assert_eq!(states.get(ecology).unwrap().0, ECOLOGY_STATE_NORMAL);
+        assert_eq!(script.recovery_seconds_remaining, None);
+    }
+
+    #[test]
+    fn alarm_adds_missing_eco_state_component() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let camera = world.add_entity(());
+        // Authored like medsci1's ecology 71: no explicit P$EcoState.
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
+        ));
+        let mut script = TriggerEcology::new();
+        script.initialize(ecology, &world);
+
+        script.handle_message(
+            ecology,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Alarm { from: camera },
+        );
+
+        let states = world.borrow::<View<PropEcoState>>().unwrap();
+        assert_eq!(states.get(ecology).unwrap().0, ECOLOGY_STATE_ALERT);
     }
 
     #[test]
@@ -464,17 +460,7 @@ mod tests {
         let ecology = world.add_entity((
             PropEcoType(2501),
             PropEcoState(ECOLOGY_STATE_ALERT),
-            PropEcology {
-                period_seconds: 15.0,
-                min_count: [0, 0, 2],
-                max_count: [0, 0, 2],
-                recovery_seconds: [0.0, 0.0, 120.0],
-                random_chance: [0, 0, 0],
-            },
-            RuntimePropEcologyState {
-                seconds_until_poll: 10.0,
-                recovery_seconds_remaining: Some(1.0),
-            },
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
             Links {
                 to_links: vec![ToLink {
                     to_template_id: 294,
@@ -484,19 +470,14 @@ mod tests {
             },
         ));
         let mut script = TriggerEcology::new();
+        script.seconds_until_poll = 10.0;
+        script.recovery_seconds_remaining = Some(1.0);
 
-        let effect = script.update(
-            ecology,
-            &world,
-            &PhysicsWorld::new(),
-            &Time {
-                elapsed: Duration::from_secs(1),
-                total: Duration::from_secs(1),
-            },
-        );
+        let effect = step(&mut script, ecology, &world, 1);
 
         let states = world.borrow::<View<PropEcoState>>().unwrap();
         assert_eq!(states.get(ecology).unwrap().0, ECOLOGY_STATE_NORMAL);
+        drop(states);
         assert!(Effect::flatten(vec![effect]).into_iter().any(|effect| {
             matches!(
                 effect,
@@ -508,24 +489,16 @@ mod tests {
     }
 
     #[test]
-    fn alert_profile_pulses_until_its_population_minimum_is_met() {
+    fn recovery_expiry_frame_still_runs_a_due_poll() {
         let mut world = World::new();
         world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
         let generator = world.add_entity(());
         let ecology = world.add_entity((
             PropEcoType(2501),
             PropEcoState(ECOLOGY_STATE_ALERT),
-            PropEcology {
-                period_seconds: 15.0,
-                min_count: [0, 0, 2],
-                max_count: [0, 0, 2],
-                recovery_seconds: [0.0, 0.0, 120.0],
-                random_chance: [0, 0, 0],
-            },
-            RuntimePropEcologyState {
-                seconds_until_poll: 15.0,
-                recovery_seconds_remaining: Some(120.0),
-            },
+            // The normal profile wants population; the poll due on the same
+            // frame recovery expires must run against it, not be swallowed.
+            ecology_props([1, 0, 0], [1, 0, 0], [0.0, 0.0, 120.0], [0, 0, 0]),
             Links {
                 to_links: vec![ToLink {
                     to_template_id: 293,
@@ -535,22 +508,68 @@ mod tests {
             },
         ));
         let mut script = TriggerEcology::new();
+        script.seconds_until_poll = 1.0;
+        script.recovery_seconds_remaining = Some(1.0);
 
-        let effect = script.update(
-            ecology,
-            &world,
-            &PhysicsWorld::new(),
-            &Time {
-                elapsed: Duration::from_secs(15),
-                total: Duration::from_secs(15),
+        let effect = step(&mut script, ecology, &world, 1);
+
+        assert!(sends_to(effect, generator));
+    }
+
+    #[test]
+    fn alert_profile_pulses_until_its_population_minimum_is_met() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let generator = world.add_entity(());
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            PropEcoState(ECOLOGY_STATE_ALERT),
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 293,
+                    to_entity_id: Some(WrappedEntityId(generator)),
+                    link: Link::SwitchLink,
+                }],
             },
-        );
+        ));
+        let mut script = TriggerEcology::new();
+        script.seconds_until_poll = 15.0;
+        script.recovery_seconds_remaining = Some(120.0);
 
-        assert!(
-            Effect::flatten(vec![effect])
-                .into_iter()
-                .any(|effect| { matches!(effect, Effect::Send { msg } if msg.to == generator) })
-        );
+        assert!(sends_to(step(&mut script, ecology, &world, 15), generator));
+    }
+
+    #[test]
+    fn script_state_round_trips_both_clocks() {
+        let mut before_save = TriggerEcology::new();
+        before_save.seconds_until_poll = 6.5;
+        before_save.recovery_seconds_remaining = Some(91.25);
+
+        let state = before_save.save_state().unwrap();
+        let mut after_load = TriggerEcology::new();
+        after_load
+            .restore_state(&state, &ScriptRestoreContext::new(&HashMap::new()))
+            .unwrap();
+
+        assert_eq!(after_load.seconds_until_poll, 6.5);
+        assert_eq!(after_load.recovery_seconds_remaining, Some(91.25));
+    }
+
+    #[test]
+    fn legacy_alerted_save_reconstructs_a_full_recovery_window() {
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::new()));
+        let ecology = world.add_entity((
+            PropEcoType(2501),
+            PropEcoState(ECOLOGY_STATE_ALERT),
+            ecology_props([0, 0, 2], [0, 0, 2], [0.0, 0.0, 120.0], [0, 0, 0]),
+        ));
+        let mut script = TriggerEcology::new();
+
+        script.initialize(ecology, &world);
+
+        assert_eq!(script.recovery_seconds_remaining, Some(120.0));
     }
 
     #[test]

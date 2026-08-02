@@ -275,11 +275,10 @@ pub enum MessagePayload {
     TurnOff {
         from: EntityId,
     },
-    /// A security device has raised an alarm. `victim` is the entity the
-    /// ecology's alerted spawn should pursue.
+    /// A security device has raised an alarm; the linked ecology switches to
+    /// its alert-column population profile.
     Alarm {
         from: EntityId,
-        victim: EntityId,
     },
     /// Clear an active security alarm and return linked devices/ecologies to
     /// their normal state.

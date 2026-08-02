@@ -37,9 +37,9 @@ use dark::{
     },
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature, PropEcoState,
-        PropEcology, PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel,
-        PropLocalPlayer, PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
+        PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
+        PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropTeleported,
         PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropertyDefinition, RenderType,
@@ -82,9 +82,8 @@ use crate::{
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
-        RuntimePropDoNotSerialize, RuntimePropEcologyState, RuntimePropFlatAim,
-        RuntimePropJointTransforms, RuntimePropReloading, RuntimePropSelectedAmmo,
-        RuntimePropTransform, RuntimePropVhots,
+        RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
+        RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -113,35 +112,6 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// floor-lying crumple pose doesn't start deeply interpenetrating the level
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
-
-fn ensure_ecology_runtime_state(world: &mut World) {
-    let missing = {
-        let ecologies = world.borrow::<View<PropEcology>>().unwrap();
-        let states = world.borrow::<View<PropEcoState>>().unwrap();
-        let runtime_states = world.borrow::<View<RuntimePropEcologyState>>().unwrap();
-        ecologies
-            .iter()
-            .with_id()
-            .map(|(entity, ecology)| {
-                (
-                    entity,
-                    states.get(entity).is_err(),
-                    runtime_states.get(entity).is_err(),
-                    ecology.period_seconds,
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-
-    for (entity, needs_authored_state, needs_runtime_state, period_seconds) in missing {
-        if needs_authored_state {
-            world.add_component(entity, PropEcoState(0));
-        }
-        if needs_runtime_state {
-            world.add_component(entity, RuntimePropEcologyState::new(period_seconds));
-        }
-    }
-}
 
 fn is_realtime_crumple(frame_count: f32) -> bool {
     // `humdieup1` is an authored "already dead" pose: three frames with no
@@ -661,8 +631,6 @@ impl MissionCore {
         let template_to_entity_id = population.template_to_entity_id;
         let mut script_entity_id_map = population.entity_id_map;
         let mut saved_script_states = population.script_states;
-
-        ensure_ecology_runtime_state(&mut world);
 
         // Instantiate held items
         let mut interaction: Box<dyn PlayerInteraction> =
@@ -6005,12 +5973,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .run(|v: View<dark::properties::PropMaxHitPoints>| {
                 v.get(id).ok().map(|hp| hp.hit_points)
             });
-        let ecology_state = self
-            .world
-            .run(|v: View<dark::properties::PropEcoState>| v.get(id).ok().map(|state| state.0));
-        let ecology_timers = self
-            .world
-            .run(|v: View<crate::runtime_props::RuntimePropEcologyState>| v.get(id).ok().copied());
+        // Most ecologies author no explicit P$EcoState; they behave as Normal
+        // until their script's first transition creates the component.
+        let ecology_state = self.world.run(
+            |v_state: View<dark::properties::PropEcoState>,
+             v_ecology: View<dark::properties::PropEcology>| {
+                v_state
+                    .get(id)
+                    .ok()
+                    .map(|state| state.0)
+                    .or(v_ecology.get(id).ok().map(|_| 0))
+            },
+        );
 
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
@@ -6105,18 +6079,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                             other => format!("Unknown({other})"),
                         },
                     });
-                }
-                if let Some(timers) = ecology_timers {
-                    properties.push(DebugPropertyInfo {
-                        name: "EcologyPollRemaining".to_string(),
-                        value: format!("{:.3}", timers.seconds_until_poll),
-                    });
-                    if let Some(remaining) = timers.recovery_seconds_remaining {
-                        properties.push(DebugPropertyInfo {
-                            name: "EcologyRecoveryRemaining".to_string(),
-                            value: format!("{remaining:.3}"),
-                        });
-                    }
                 }
 
                 // Add the current render model (e.g. to assert held-model
