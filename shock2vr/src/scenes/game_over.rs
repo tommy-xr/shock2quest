@@ -10,8 +10,6 @@
 //! Structurally it is a sibling of [`crate::scenes::MainMenuScene`]: a pointer
 //! driven `GameScene` that emits a `GlobalEffect` on click.
 
-use std::collections::HashMap;
-
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::{
@@ -25,11 +23,7 @@ use crate::{
     GameOptions,
     game_scene::GameScene,
     input_context::{InputContext, Pointer2D},
-    inventory::PlayerInventoryEntity,
-    mission::{
-        GlobalContext, GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo, PlayerLifeState,
-    },
-    quest_info::QuestInfo,
+    mission::{GlobalContext, PlayerLifeState},
     save_load::{SaveFile, latest_save},
     scripts::{Effect, GlobalEffect},
     time::Time,
@@ -53,7 +47,7 @@ const DEATH_MESSAGE: &str = "YOU HAVE DIED";
 const NO_SAVE_LABEL: &str = "< EMPTY >";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GameOverAction {
+enum GameOverAction {
     /// Reload the most recent save and resume play.
     Load,
     Quit,
@@ -143,32 +137,10 @@ pub struct GameOverScene {
 
 impl GameOverScene {
     pub fn new() -> Self {
-        // Mirror `MainMenuScene`'s minimal world so the shared save/transition
-        // machinery has the uniques it expects.
-        let mut world = World::new();
-
-        let player_entity = world.add_entity(());
-        let inventory_entity = PlayerInventoryEntity::create(&mut world);
-        PlayerInventoryEntity::set_position_rotation(
-            &mut world,
-            vec3(0.0, -1000.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        );
-        world.add_unique(PlayerInfo {
-            pos: vec3(0.0, 0.0, 0.0),
-            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            entity_id: player_entity,
-            left_hand_entity_id: None,
-            right_hand_entity_id: None,
-            inventory_entity_id: inventory_entity,
-        });
+        let world = super::ui_scene_world();
         // Keep the lifecycle signal (`/v1/info` player.life_state) honest once
         // the mission is gone: the run is over, not alive.
         world.add_unique(PlayerLifeState::GameOver);
-        world.add_unique(QuestInfo::new());
-        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
-        world.add_unique(GlobalEntityMetadata(HashMap::new()));
-        world.add_unique(Time::default());
 
         Self {
             world,
@@ -194,11 +166,20 @@ impl GameScene for GameOverScene {
         input_context: &InputContext,
         asset_cache: &mut AssetCache,
         _game_options: &GameOptions,
-        _command_effects: Vec<Effect>,
+        command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         if let Ok(mut world_time) = self.world.borrow::<UniqueViewMut<Time>>() {
             *world_time = time.clone();
         }
+
+        // Discrete input actions (quick-load above all) must keep working here:
+        // this screen is the only thing left, so swallowing them would restore
+        // the dead end it exists to remove. Only global effects are meaningful
+        // without a mission; the rest have nothing to act on.
+        let mut effects: Vec<Effect> = command_effects
+            .into_iter()
+            .filter(|effect| matches!(effect, Effect::GlobalEffect(_)))
+            .collect();
 
         let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
         let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
@@ -214,19 +195,17 @@ impl GameScene for GameOverScene {
         self.last_pressed = last_pressed;
 
         match action {
-            Some(GameOverAction::Load) => self
-                .save
-                .as_ref()
-                .map(|save| {
-                    Effect::GlobalEffect(GlobalEffect::Load {
+            Some(GameOverAction::Load) => {
+                if let Some(save) = &self.save {
+                    effects.push(Effect::GlobalEffect(GlobalEffect::Load {
                         file_name: save.path.to_string_lossy().into_owned(),
-                    })
-                })
-                .into_iter()
-                .collect(),
-            Some(GameOverAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
-            None => Vec::new(),
+                    }));
+                }
+            }
+            Some(GameOverAction::Quit) => effects.push(Effect::GlobalEffect(GlobalEffect::Quit)),
+            None => {}
         }
+        effects
     }
 
     fn render(

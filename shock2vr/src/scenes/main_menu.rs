@@ -8,8 +8,6 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slice 3).
 
-use std::collections::HashMap;
-
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::{
@@ -23,9 +21,7 @@ use crate::{
     GameOptions,
     game_scene::GameScene,
     input_context::{InputContext, Pointer2D},
-    inventory::PlayerInventoryEntity,
-    mission::{GlobalContext, GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
-    quest_info::QuestInfo,
+    mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
@@ -148,29 +144,7 @@ pub struct MainMenuScene {
 
 impl MainMenuScene {
     pub fn new() -> Self {
-        let mut world = World::new();
-
-        let player_entity = world.add_entity(());
-
-        let inventory_entity = PlayerInventoryEntity::create(&mut world);
-        PlayerInventoryEntity::set_position_rotation(
-            &mut world,
-            vec3(0.0, -1000.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        );
-
-        world.add_unique(PlayerInfo {
-            pos: vec3(0.0, 0.0, 0.0),
-            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            entity_id: player_entity,
-            left_hand_entity_id: None,
-            right_hand_entity_id: None,
-            inventory_entity_id: inventory_entity,
-        });
-        world.add_unique(QuestInfo::new());
-        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
-        world.add_unique(GlobalEntityMetadata(HashMap::new()));
-        world.add_unique(Time::default());
+        let world = super::ui_scene_world();
 
         Self {
             world,

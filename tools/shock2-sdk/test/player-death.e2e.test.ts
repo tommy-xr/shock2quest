@@ -12,7 +12,7 @@ const RESURRECTION_TARGET = 187;
 const RESURRECTION_COST = 10;
 const RESPAWN_DELAY_FRAMES = 5 * 60;
 
-type LifeState = "alive" | "dead" | "respawning";
+type LifeState = "alive" | "dead" | "game_over" | "respawning";
 
 function lifeState(player: object): LifeState | undefined {
   return (player as { life_state?: LifeState }).life_state;
@@ -161,9 +161,14 @@ test(
     const dead = await game.info();
     assert.equal(lifeState(dead.player), "dead");
     assert.equal(dead.mission, "medsci1.mis", "the death sequence plays out in the mission");
+    // The authored `PlayerDeath0..4` schemas resolve to the retail player death
+    // samples (`XXpdieNN`), so assert on the resolved sample, not just a count.
+    const played = (await game.audio.recent()).sounds.slice(audioBefore);
     assert.ok(
-      (await game.audio.recent()).sounds.length > audioBefore,
-      "death should play the authored player death vocalization",
+      played.some((sound) => /pdie/i.test(sound.sample)),
+      `death should play the authored player death vocalization, got ${JSON.stringify(
+        played.map((sound) => sound.sample),
+      )}`,
     );
 
     // The death sequence hands off to the game-over screen.
@@ -189,5 +194,38 @@ test(
     );
     assert.equal(lifeState(resumed.player), "alive");
     assert.ok((resumed.player.hit_points ?? 0) > 0, "the resumed player is alive with health");
+  },
+);
+
+test(
+  "the game-over screen still honors the quick-load action (the runtime-agnostic way out)",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 3,
+    });
+    await game.step({ frames: 5 });
+
+    // Quick-save writes `<data>/saves/save1.sav`, creating the directory if the
+    // install has never saved.
+    await game.input.trigger("QuickSave");
+    await game.step({ frames: 2 });
+
+    await killPlayer(game);
+    await game.step({ frames: DEATH_SEQUENCE_FRAMES + 30 });
+    assert.equal((await game.info()).mission, "game_over");
+
+    // The screen's buttons are pointer-driven, but a headset has no pointer, so
+    // discrete actions must still reach the global effect handler.
+    await game.input.trigger("QuickLoad");
+    await game.step({ frames: 5 });
+    const resumed = await game.info();
+    assert.equal(
+      resumed.mission,
+      "medsci1.mis",
+      "quick-load on the game-over screen must restore the quick save",
+    );
+    assert.equal(lifeState(resumed.player), "alive");
   },
 );

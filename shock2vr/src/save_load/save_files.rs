@@ -34,7 +34,7 @@ pub fn latest_save() -> Option<SaveFile> {
 }
 
 /// [`latest_save`] against an explicit directory (missing directory -> `None`).
-pub fn latest_save_in(directory: &Path) -> Option<SaveFile> {
+fn latest_save_in(directory: &Path) -> Option<SaveFile> {
     fs::read_dir(directory)
         .ok()?
         .flatten()

@@ -43,7 +43,8 @@ The resurrection scanner uses the mission's existing authored flow:
   teleported to that trap and restored to half maximum health.
 - Without an activated and affordable station, death is terminal: the authored
   player death vocalization (`PlayerDeath0..4`, the gamesys SPEECH_TRIGGERS
-  schemas) plays, input stays suppressed for a three-second death sequence, and
+  schemas) plays, continuous input stays suppressed (discrete actions such as
+  quick-load deliberately keep working) for a three-second death sequence, and
   the mission is then replaced by the game-over screen. Dead games cannot be
   saved.
 
@@ -65,8 +66,9 @@ land in the same directory and are offered like any other save.
 
 A full save browser (selecting among slots, the retail list widget) is deferred;
 the screen offers the most recent save, which is the port's existing quick-load
-idiom. Like the main menu, it is pointer-driven, so it is a flatscreen path
-until VR gets a pointer.
+idiom. Like the main menu, its buttons are pointer-driven, so clicking is a
+flatscreen path until VR gets a pointer; the screen also forwards discrete input
+actions (quick-load, quick-save), so every runtime keeps a way out.
 
 The debug runtime exposes `player.life_state` as `alive`, `dead`, `game_over`,
 or `respawning`, and `mission` becomes `game_over` on the screen, giving

@@ -149,9 +149,12 @@ pub struct PlayerInfo {
 
 /// The live player's death/reconstruction lifecycle.
 ///
-/// This is mission-local runtime state: a dead game cannot be saved (see
+/// This is runtime state, never serialized: a dead game cannot be saved (see
 /// `player_save_position`), so only the player's persistent vitals and an
-/// activated station's authored model state need serialization.
+/// activated station's authored model state need serialization. Missions own
+/// the full state machine; the game-over screen carries the terminal
+/// `GameOver` value so automation still sees the loss after the mission is
+/// gone.
 #[derive(Unique, Clone, Debug, PartialEq)]
 pub enum PlayerLifeState {
     Alive,
@@ -1478,8 +1481,10 @@ impl MissionCore {
                 }
             }
         }
-        let mut effects = command_effects;
-        effects.append(&mut life_state_effects);
+        // Life-state effects go first so a scene-replacing GameOver cannot
+        // clobber a same-frame quick-load arriving in `command_effects`.
+        let mut effects = life_state_effects;
+        effects.extend(command_effects);
 
         let player = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
