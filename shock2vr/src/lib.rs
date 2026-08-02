@@ -450,6 +450,16 @@ pub struct PlayerStateSnapshot {
 }
 
 impl Game {
+    /// True while a deferred level transition (`--experimental loading_screen`)
+    /// is in flight. `update` is what advances it (`pending_transition.frames_shown`
+    /// and the background parse-completion check), so a caller that only calls
+    /// `update` on activity - e.g. the debug runtime's idle-throttled loop
+    /// (#784) - needs this to know a transition still needs frames pumped even
+    /// while otherwise idle.
+    pub fn has_pending_transition(&self) -> bool {
+        self.pending_transition.is_some()
+    }
+
     /// A snapshot of the player (position, look rotation, held/wielded entities)
     /// for debug tooling, or `None` if the active scene has no player (e.g. a
     /// menu). Reads the `PlayerInfo` unique from the active world.
