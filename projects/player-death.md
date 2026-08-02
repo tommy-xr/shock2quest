@@ -41,14 +41,39 @@ The resurrection scanner uses the mission's existing authored flow:
 - With an active station and 10 carried nanites, the cost is debited atomically,
   input is suppressed for the retail five-second delay, then the player is
   teleported to that trap and restored to half maximum health.
-- Without an activated and affordable station, the player remains terminally
-  dead until an explicit load/restart. Dead games cannot be saved.
+- Without an activated and affordable station, death is terminal: the authored
+  player death vocalization (`PlayerDeath0..4`, the gamesys SPEECH_TRIGGERS
+  schemas) plays, input stays suppressed for a three-second death sequence, and
+  the mission is then replaced by the game-over screen. Dead games cannot be
+  saved.
 
-The debug runtime exposes `player.life_state` as `alive`, `dead`, or
-`respawning`, giving play-through automation an explicit loss signal.
+## Game over
+
+Retail death without reconstruction ends the run at the Tri-Optimum archive
+database - the load-game screen - so that is where this port lands too.
+`scenes::GameOverScene` draws the original `GAMELOD.PCX` backdrop on the shared
+`UiCanvas`, positioned by the authored `GAMELODR.BIN` widget rects (header,
+archive list, and the two right-hand buttons), and shows:
+
+- "YOU HAVE DIED" in the archive header,
+- the most recent save in `<data_root>/saves` (or `GAMELOD.STR`'s `< EMPTY >`),
+- "LOAD", which emits `GlobalEffect::Load` for that save, and "QUIT".
+
+"LOAD" is inert and dimmed when no save exists, so the screen never offers a
+recovery it cannot perform. Quicksaves resolve through `save_file_path`, so they
+land in the same directory and are offered like any other save.
+
+A full save browser (selecting among slots, the retail list widget) is deferred;
+the screen offers the most recent save, which is the port's existing quick-load
+idiom. Like the main menu, it is pointer-driven, so it is a flatscreen path
+until VR gets a pointer.
+
+The debug runtime exposes `player.life_state` as `alive`, `dead`, `game_over`,
+or `respawning`, and `mission` becomes `game_over` on the screen, giving
+play-through automation an explicit loss signal.
 
 ## Presentation follow-up
 
 The functional lifecycle does not yet force the VR camera into a collapse pose
-or draw a dedicated death overlay. A future presentation pass can add those
-effects without changing the authoritative HP/QBR state machine above.
+during the death sequence. A future presentation pass can add that without
+changing the authoritative HP/QBR state machine above.
