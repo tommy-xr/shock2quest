@@ -172,3 +172,58 @@ impl AbstractAssetPath for ZipAssetPath {
         Some(RefCell::new(Box::new(Cursor::new(file_contents))))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::assets::asset_paths::AssetPath;
+
+    /// `res/iface.crf` bundles its own `fonts/` subfolder sharing most
+    /// basenames with `res/fonts.crf` (the canonical font family) - almost all
+    /// byte-identical, but its `MAINFONT.FON`/`MAINAA.FON` are stripped copies
+    /// missing glyph data for `%` and `&` (a 1px-wide blank cell instead of the
+    /// real bitmap - shock2quest issue #778, the Research MFD's "Research: 5%"
+    /// progress line rendering as "Research: 5"). `fonts.crf` must be mounted
+    /// ahead of `iface.crf` (as `Game::init` does) so the bare "mainfont.fon"
+    /// lookup resolves to the complete font, not the archive that merely
+    /// happens to also carry a `fonts/` subfolder.
+    #[test]
+    fn fonts_crf_outranks_iface_crfs_bundled_fonts_folder() {
+        let root = std::env::var("DARK_ASSET_PATH").unwrap_or_else(|_| "../Data".to_owned());
+        let fonts_crf = format!("{root}/res/fonts.crf");
+        let iface_crf = format!("{root}/res/iface.crf");
+        if !std::path::Path::new(&fonts_crf).exists() || !std::path::Path::new(&iface_crf).exists()
+        {
+            eprintln!("skipping: res/fonts.crf or res/iface.crf not found under {root}");
+            return;
+        }
+
+        // Same relative order as the `Game::init` mount list: fonts.crf first.
+        let mounts = AssetPath::combine(vec![
+            ZipAssetPath::new(fonts_crf.clone()),
+            ZipAssetPath::with_namespace(iface_crf, "iface"),
+        ]);
+        let reader = mounts
+            .get_reader(String::new(), "mainfont.fon".to_owned())
+            .expect("mainfont.fon should resolve from either mount");
+        let mut bytes = Vec::new();
+        reader.borrow_mut().read_to_end(&mut bytes).unwrap();
+
+        // fonts.crf's MAINFONT.FON is 1737 bytes; iface.crf's stripped copy is
+        // 1715. Confirms the resolved bytes came from fonts.crf, not iface.crf.
+        let expected = std::fs::read(&fonts_crf)
+            .ok()
+            .and_then(|zip_bytes| {
+                let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).ok()?;
+                let mut file = archive.by_name("MAINFONT.FON").ok()?;
+                let mut out = Vec::new();
+                file.read_to_end(&mut out).ok()?;
+                Some(out)
+            })
+            .expect("fonts.crf should contain MAINFONT.FON directly");
+        assert_eq!(
+            bytes, expected,
+            "mainfont.fon must resolve to fonts.crf's complete copy, not iface.crf's stripped one"
+        );
+    }
+}
