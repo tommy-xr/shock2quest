@@ -54,6 +54,14 @@ test(
       "top lift button mission object 620",
     );
 
+    // Setup only: driving the lift below costs 1200 fixed-timestep frames, and
+    // eng2's mission start leaves the player standing in a wandering ranged
+    // hybrid's line of fire, which kills an unattended player in ~14s. Park on
+    // the Cargo 2B top landing, out of that fire lane, so setup cannot decide
+    // the measurement.
+    await game.player.teleport({ x: 44, y: 5, z: -165 });
+    await game.step({ frames: 90 });
+
     // Setup only: drive the real lift along its authored 477 -> 478 -> 479
     // path and stage at the exact campaign-observed top-stop pose.
     await game.entities.sendMessage(bottomButton.id, { type: "Frob" });
@@ -77,6 +85,12 @@ test(
       z: -168.2003,
     });
     await game.step({ frames: 30 });
+    const staged = await game.info();
+    assert.ok(
+      (staged.player.hit_points ?? 0) > 0,
+      `setup must not kill the player before the jump is measured, got ` +
+        `${staged.player.hit_points} hp (a dead player cannot walk or jump)`,
+    );
     const before = await game.player.position();
     assert.ok(
       Math.abs(before.x - 43.9006) < 0.1 &&
