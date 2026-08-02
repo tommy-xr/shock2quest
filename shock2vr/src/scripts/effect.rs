@@ -453,6 +453,15 @@ pub enum Effect {
         state: ObjectState,
     },
 
+    /// Persistently set Dark's `P$EcoState` on one live object - emitted by
+    /// `scripts::trigger_ecology` for alarm/recovery transitions. Most
+    /// ecologies author no explicit EcoState, so this may create the
+    /// component. A registered Dark property, so save/load serializes it.
+    SetEcologyState {
+        entity_id: EntityId,
+        state: i32,
+    },
+
     /// Persistently set Dark's `P$Locked` on one live object - the lock state
     /// `script_util::is_entity_locked` consults. Emitted by the in-world lock
     /// traps; see `scripts::trap_lock`.

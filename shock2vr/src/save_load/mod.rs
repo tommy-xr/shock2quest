@@ -208,7 +208,6 @@ pub fn to_save_data_with_scripts(
         partition_map(raw_canonical_templates, |entity_id| {
             held_entities.contains(entity_id)
         });
-
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),

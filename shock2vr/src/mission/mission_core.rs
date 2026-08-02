@@ -3979,6 +3979,17 @@ impl MissionCore {
                         self.world.add_component(entity_id, PropObjState(state));
                     }
                 }
+                Effect::SetEcologyState { entity_id, state } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world
+                            .add_component(entity_id, dark::properties::PropEcoState(state));
+                    }
+                }
                 Effect::SetLocked { entity_id, locked } => {
                     crate::scripts::script_util::set_entity_locked(
                         &mut self.world,
@@ -5973,6 +5984,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .run(|v: View<dark::properties::PropMaxHitPoints>| {
                 v.get(id).ok().map(|hp| hp.hit_points)
             });
+        // Most ecologies author no explicit P$EcoState; they behave as Normal
+        // until their script's first transition creates the component.
+        let ecology_state = self.world.run(
+            |v_state: View<dark::properties::PropEcoState>,
+             v_ecology: View<dark::properties::PropEcology>| {
+                v_state
+                    .get(id)
+                    .ok()
+                    .map(|state| state.0)
+                    .or(v_ecology.get(id).ok().map(|_| 0))
+            },
+        );
 
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
@@ -6055,6 +6078,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "MaxHitPoints".to_string(),
                         value: max_hit_points.to_string(),
+                    });
+                }
+                if let Some(state) = ecology_state {
+                    properties.push(DebugPropertyInfo {
+                        name: "EcologyState".to_string(),
+                        value: match state {
+                            0 => "Normal".to_string(),
+                            1 => "Hacked".to_string(),
+                            2 => "Alert".to_string(),
+                            other => format!("Unknown({other})"),
+                        },
                     });
                 }
 

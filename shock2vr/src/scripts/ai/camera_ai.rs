@@ -87,6 +87,9 @@ impl CameraState {
 pub struct CameraAI {
     config: Option<CameraConfig>,
     state: CameraState,
+    /// Pinned (e.g. DebugForceChase): the level neither escalates nor decays
+    /// until a non-pinned `SetAlertness` clears it.
+    alertness_pinned: bool,
 }
 
 impl CameraAI {
@@ -94,6 +97,7 @@ impl CameraAI {
         CameraAI {
             config: None,
             state: CameraState::default(),
+            alertness_pinned: false,
         }
     }
 
@@ -467,13 +471,15 @@ impl Script for CameraAI {
             max_delta = Some(speed_deg_per_sec * delta);
 
             // Use the shared alertness update logic
-            if let Some((old_level, new_level)) = alertness::process_alertness_update(
-                &mut self.state.alertness,
-                is_visible,
-                delta,
-                &config.timings,
-                &config.alert_cap,
-            ) {
+            if !self.alertness_pinned
+                && let Some((old_level, new_level)) = alertness::process_alertness_update(
+                    &mut self.state.alertness,
+                    is_visible,
+                    delta,
+                    &config.timings,
+                    &config.alert_cap,
+                )
+            {
                 // Level changed - sync model and play speech
                 self.sync_model(entity_id, &config.models, &mut effects, false);
                 self.on_alert_level_changed(
@@ -547,12 +553,42 @@ impl Script for CameraAI {
 
     fn handle_message(
         &mut self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         _world: &World,
         _physics: &PhysicsWorld,
-        _msg: &MessagePayload,
+        msg: &MessagePayload,
     ) -> Effect {
-        Effect::NoEffect
+        let MessagePayload::SetAlertness { level, pin } = msg else {
+            return Effect::NoEffect;
+        };
+        let Some(config) = self.config.clone() else {
+            return Effect::NoEffect;
+        };
+
+        self.alertness_pinned = *pin;
+        self.state.alertness.visible_time = 0.0;
+        self.state.alertness.hidden_time = 0.0;
+        let mut effects = Vec::new();
+        let previous_level = self.state.alertness.current_level;
+        if alertness::set_level(&mut self.state.alertness, *level, &config.alert_cap) {
+            // Route through the ordinary level-transition path so a scripted
+            // reset speaks the same lines as a natural decay.
+            self.on_alert_level_changed(
+                entity_id,
+                &config,
+                previous_level,
+                self.state.alertness.current_level,
+                false,
+                &mut effects,
+            );
+        }
+
+        effects.push(alertness::sync_alertness_effect(
+            entity_id,
+            &self.state.alertness,
+        ));
+        self.sync_model(entity_id, &config.models, &mut effects, true);
+        Self::combine_effects(effects)
     }
 }
 

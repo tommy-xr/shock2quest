@@ -110,6 +110,33 @@ Runtime:
 └── shock2vr/src/scripts/    - Entity behavior implementations
 ```
 
+### Script Purity & Effects
+
+Object scripts (`shock2vr/src/scripts/`) are pure with respect to the world:
+they read via `View<...>` borrows, mutate only their own `&mut self` state, and
+express every world change as a returned `Effect` (applied centrally by the
+mission loop, `mission_core`'s effect handler). This keeps world mutation in
+one traceable choke point, makes scripts unit-testable by asserting on the
+returned effects, and keeps save/load consistent.
+
+- **One-shot semantic transitions → an `Effect`.** Setting a Dark property
+  (`SetObjectState`, `SetLocked`, `SetEcologyState`, ...) gets a dedicated
+  variant; the applier's `world.add_component` inserts-or-replaces, so it also
+  covers entities that never authored the property. Note the effect is applied
+  *after* the script returns: a script cannot read back state it just emitted
+  in the same frame — track the post-transition value locally if the same
+  update depends on it (see `trigger_ecology`'s recovery-expiry poll).
+- **Continuous per-frame integration of a prop the script exclusively owns**
+  (e.g. `std_door`'s `PropTranslatingDoor` motion, tweq frame advancement) is
+  the tolerated exception where `ViewMut` is acceptable — a round-trip effect
+  per frame adds ceremony without benefit. Prefer an effect when in doubt.
+- **Scripts never add components** (`EntitiesView::add_component`) — component
+  creation belongs to entity instantiation or the effect applier.
+- Script-private state that must survive save/load (timers, latches, modes)
+  goes through the `script_state_key`/`save_state`/`restore_state` hooks
+  (`SavedScriptState`), not new ECS components or bespoke save fields — see
+  `picture_swap` and `trigger_ecology` for the pattern.
+
 ## Input Action System
 
 Discrete, non-contextual inputs (quick save/load, debug spawns, pathfinding test) flow through a unified action system in `shock2vr/src/input/` rather than per-runtime key handling:

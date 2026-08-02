@@ -7,6 +7,7 @@ mod apparition;
 mod base_button;
 mod base_elevator;
 mod base_monster;
+mod camera_alert;
 mod choose_mission;
 mod choose_service;
 mod core_room;
@@ -117,6 +118,7 @@ use self::{
     base_button::BaseButton,
     base_elevator::BaseElevator,
     base_monster::BaseMonster,
+    camera_alert::CameraAlert,
     core_room::*,
     create_sound::*,
     cs9::{
@@ -271,6 +273,16 @@ pub enum MessagePayload {
         from: EntityId,
     },
     TurnOff {
+        from: EntityId,
+    },
+    /// A security device has raised an alarm; the linked ecology switches to
+    /// its alert-column population profile.
+    Alarm {
+        from: EntityId,
+    },
+    /// Clear an active security alarm and return linked devices/ecologies to
+    /// their normal state.
+    Reset {
         from: EntityId,
     },
     /// Replace a moving-terrain elevator's next waypoint. This is deliberately
@@ -1113,7 +1125,7 @@ impl ScriptWorld {
             //"baseai" => Box::new(PanicOnLoadScript::new(&script_name)),
             "baseai" => Box::new(NoopScript::new()),
             "basemonster" => Box::new(BaseMonster::new()),
-            "cameraalert" => Box::new(UnimplementedScript::new(&script_name)),
+            "cameraalert" => Box::new(CameraAlert::new()),
             "cameradeath" => Box::new(UnimplementedScript::new(&script_name)),
             "censor" => Box::new(UnimplementedScript::new(&script_name)),
             "censorme" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1128,9 +1140,12 @@ impl ScriptWorld {
                 Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())
             }
             "toxinpatch" => Box::new(UnimplementedScript::new(&script_name)),
-            // Need to read ambient hacked property
             "triggerecology" => Box::new(TriggerEcology::new()),
-            "triggerecologydiff" => Box::new(UnimplementedScript::new(&script_name)),
+            // Retail's difficulty variant applies shock.cfg/difficulty
+            // population adjustments before entering this same state machine.
+            // The port has neither setting yet, so its authored baseline is
+            // identical to TriggerEcology.
+            "triggerecologydiff" => Box::new(TriggerEcology::new()),
             "unhackhack" => Box::new(UnimplementedScript::new(&script_name)),
             _ => Box::new(PanicOnLoadScript { name: script_name }),
         }
