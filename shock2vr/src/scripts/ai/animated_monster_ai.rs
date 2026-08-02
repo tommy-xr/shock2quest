@@ -91,10 +91,17 @@ fn default_alert_cap() -> PropAIAlertCap {
 /// Orienting on what it can see lets the normal escalation ladder finish.
 ///
 /// Pursuing levels (Moderate and up) are excluded because their behaviors
-/// already steer at their target, and a running scripted sequence owns its
-/// actor's heading.
-fn should_orient_on_target(level: AIAlertLevel, is_visible: bool, scripted: ScriptedState) -> bool {
-    is_visible
+/// already steer at their target, a running scripted sequence owns its
+/// actor's heading, and a creature with no alertness config at all (an
+/// apparition - see `build_config`) must never notice the player.
+fn should_orient_on_target(
+    processes_alertness: bool,
+    level: AIAlertLevel,
+    is_visible: bool,
+    scripted: ScriptedState,
+) -> bool {
+    processes_alertness
+        && is_visible
         && matches!(level, AIAlertLevel::Lowest | AIAlertLevel::Low)
         && scripted != ScriptedState::Running
 }
@@ -972,6 +979,7 @@ impl Script for AnimatedMonsterAI {
         // `should_orient_on_target`). The behavior's own steering effects
         // still apply - only the heading is overridden.
         let steering_output = if should_orient_on_target(
+            self.config.is_some(),
             self.alertness.current_level,
             is_visible,
             self.current_behavior.borrow().scripted_state(),
@@ -1417,10 +1425,15 @@ mod tests {
     /// player standing 10 units down +Z. The physics world is empty, so
     /// line-of-sight is always clear and only the FOV cone gates visibility.
     fn world_with_monster_and_player(heading: Deg<f32>) -> (World, EntityId) {
+        world_with_creature_and_player(heading, "creaturetype hybrid")
+    }
+
+    fn world_with_creature_and_player(heading: Deg<f32>, class_tag: &str) -> (World, EntityId) {
         let mut world = World::new();
         let rotation = Quaternion::from_angle_y(heading);
         let entity_id = world.add_entity((
             dark::properties::PropHitPoints { hit_points: 12 },
+            dark::properties::PropClassTag::from_string(class_tag),
             dark::properties::PropPosition {
                 position: vec3(0.0, 0.0, 0.0),
                 rotation,
@@ -1473,10 +1486,32 @@ mod tests {
 
         let effects = step(&mut monster, &world, entity_id);
 
+        // 100ms at the 180 deg/s turn speed closes 18 of the 45 degrees.
         let heading = commanded_heading(&effects).expect("the AI steers every frame");
         assert!(
-            heading.0 < 44.0,
+            (26.0..28.0).contains(&heading.0),
             "a calm AI that sees the player should turn toward it (0 degrees), got {heading:?}",
+        );
+    }
+
+    /// Apparitions replay an authored performance and are excluded from
+    /// alertness entirely (`build_config` returns no config for them), so the
+    /// player they "see" must not turn their head either - a ghost that
+    /// tracked the player would face away from its mark.
+    #[test]
+    fn apparition_does_not_track_a_visible_player() {
+        let (world, entity_id) =
+            world_with_creature_and_player(Deg(45.0), "creaturetype apparition");
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+        assert!(monster.config.is_none(), "apparitions process no alertness");
+
+        let effects = step(&mut monster, &world, entity_id);
+
+        let heading = commanded_heading(&effects).expect("the AI steers every frame");
+        assert!(
+            (heading.0 - 45.0).abs() < 1.0,
+            "an apparition must hold its authored heading, got {heading:?}",
         );
     }
 
@@ -1503,37 +1538,50 @@ mod tests {
         use ScriptedState::*;
         // Sighted while unaware or merely suspicious: look at it.
         assert!(should_orient_on_target(
+            true,
             AIAlertLevel::Lowest,
             true,
             NotScripted
         ));
         assert!(should_orient_on_target(
+            true,
             AIAlertLevel::Low,
             true,
             NotScripted
         ));
         // No sight, no turn.
         assert!(!should_orient_on_target(
+            true,
             AIAlertLevel::Lowest,
             false,
             NotScripted
         ));
         // Pursuing behaviors steer at their own target.
         assert!(!should_orient_on_target(
+            true,
             AIAlertLevel::Moderate,
             true,
             NotScripted
         ));
         assert!(!should_orient_on_target(
+            true,
             AIAlertLevel::High,
             true,
             NotScripted
         ));
         // A running scripted sequence owns its actor's heading.
         assert!(!should_orient_on_target(
+            true,
             AIAlertLevel::Lowest,
             true,
             Running
+        ));
+        // A creature that processes no alertness notices nothing.
+        assert!(!should_orient_on_target(
+            false,
+            AIAlertLevel::Lowest,
+            true,
+            NotScripted
         ));
     }
 

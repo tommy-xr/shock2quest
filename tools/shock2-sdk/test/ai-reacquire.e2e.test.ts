@@ -61,6 +61,11 @@ test(
       (e) => e.name === "OG-Pipe" && known.has(e.id) && e.distance > 10,
     );
     assert.ok(control, "expected a native OG-Pipe out of sight for the control");
+    assert.notEqual(
+      aiProp(await game.entities.detail(control.id), "AITargetVisible"),
+      "true",
+      "setup: the control AI must not be able to see the player",
+    );
 
     // The issue's state: a hostile that engaged the player earlier and has
     // since fully calmed down. SetAlertness is scenario setup only - what is
