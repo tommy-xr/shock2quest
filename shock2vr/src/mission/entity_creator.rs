@@ -1097,6 +1097,29 @@ pub fn create_physics_representation(
                 CollisionGroup::entity()
             };
 
+            // `SPHERE` is Dark's *moving* physics model - a simulated sphere
+            // hull. Loose debris carries it (`Monster Parts` gibs, `Chair
+            // Parts`, `Misc Parts`), while terrain, doors and level furniture
+            // carry an OBB or are `Immobile`. Without authored `P$PhysDims`
+            // there is no radius to simulate with, so the collider here is the
+            // immovable kinematic model-bounds box of the #597 fallback - the
+            // exact opposite of a body that yields. Retail shoves debris out
+            // of the player's way; this stand-in cannot move at all, and a gib
+            // resting against the capsule wedges it permanently, because the
+            // character controller has no depenetration pass and resolves a
+            // penetrating pose to zero movement in every direction (#803).
+            // Not stopping the player is the closest this collider gets to
+            // being pushed aside. `Immobile` is what keeps ladders (whose leaf
+            // templates say SPHERE) and other fixtures solid.
+            let is_unsimulated_debris = phys_type.phys_type == PhysicsModelType::SPHERE
+                && maybe_dimensions.is_none()
+                && !immobile;
+            let group = if is_unsimulated_debris {
+                group.non_solid_to_player()
+            } else {
+                group
+            };
+
             let offset = match (maybe_dimensions, model_bounds) {
                 (Some(dimensions), _) => dimensions.offset0,
                 (None, Some((_, center))) => center,
@@ -1297,6 +1320,92 @@ mod tests {
                 "a frob collider must stay raycastable, got {:?}",
                 bodies[0].collision_groups
             );
+        }
+    }
+
+    /// A non-frobbable object with a physics type but no `P$PhysDims` - the
+    /// #597 model-bounds fallback. `immobile` separates level furniture (and
+    /// the ladder leaves whose own template says SPHERE) from loose debris.
+    fn add_dimensionless_object(
+        world: &mut World,
+        phys_type: PhysicsModelType,
+        immobile: bool,
+    ) -> EntityId {
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropPhysType {
+                phys_type,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+        ));
+        if immobile {
+            world.add_component(entity_id, PropImmobile(true));
+        }
+        entity_id
+    }
+
+    /// `eggbit.bin`'s bounds, the annelid gib a smashed Floor Pod flinderizes
+    /// into: measured live off its collider at 0.66 x 0.74 x 0.31 wu.
+    fn gib_model() -> Model {
+        Model::from_glb(
+            vec![],
+            Aabb3::new(
+                Point3::new(-0.331, -0.368, -0.155),
+                Point3::new(0.331, 0.368, 0.155),
+            ),
+            None,
+        )
+    }
+
+    /// Dark's SPHERE physics model is a simulated, movable sphere hull - what
+    /// gibs and other debris carry. With no authored `P$PhysDims` this engine
+    /// can only stand in an immovable kinematic box, which never yields, so a
+    /// gib that comes to rest against the player capsule wedges it forever:
+    /// the character controller has no depenetration pass (#803). Such debris
+    /// must therefore not be solid to the player. `Immobile` objects - ladder
+    /// leaves that say SPHERE, level furniture - stay solid, as does anything
+    /// with the static OBB model.
+    ///
+    /// Negative-first: before the fix the debris case blocked too.
+    #[test]
+    fn dimensionless_movable_debris_does_not_block_the_player() {
+        for (phys_type, immobile, should_block) in [
+            (PhysicsModelType::SPHERE, false, false),
+            (PhysicsModelType::SPHERE, true, true),
+            (PhysicsModelType::ORIENTED_BOUNDING_BOX, false, true),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_dimensionless_object(&mut world, phys_type, immobile);
+            let model = gib_model();
+
+            let handle =
+                create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                    .expect("the model-bounds fallback should still build a collider");
+
+            assert_eq!(
+                physics.collider_blocks_player(handle),
+                should_block,
+                "{phys_type:?} (immobile: {immobile}) should{} block the player",
+                if should_block { "" } else { " not" }
+            );
+            // Debris keeps its collider and its `entity` membership: it is
+            // still shootable, selectable and solid to everything else.
+            let bodies = physics.debug_list_bodies();
+            assert_eq!(bodies.len(), 1, "expected exactly one body in the world");
+            assert_eq!(bodies[0].body_type, "kinematic");
+            assert!(
+                bodies[0].collision_groups.iter().any(|g| g == "entity"),
+                "debris must stay raycastable, got {:?}",
+                bodies[0].collision_groups
+            );
+            assert_eq!(bodies[0].blocks_player, should_block);
         }
     }
 

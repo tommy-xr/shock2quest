@@ -2461,9 +2461,9 @@ impl PhysicsWorld {
 
     /// Whether a body's collider is solid to the player capsule. Membership
     /// alone does not say - it is the collider's *filter* that this turns on
-    /// and off (see `CollisionGroup::non_solid_to_player`).
-    #[cfg(test)]
-    pub(crate) fn collider_blocks_player(&self, handle: RigidBodyHandle) -> bool {
+    /// and off (see `CollisionGroup::non_solid_to_player`), which is why
+    /// `DebugBodyInfo` reports it separately from `collision_groups`.
+    pub fn collider_blocks_player(&self, handle: RigidBodyHandle) -> bool {
         let Some(body) = self.rigid_body_set.get(handle) else {
             return false;
         };
@@ -4990,6 +4990,7 @@ impl PhysicsWorld {
             linear_damping: body.linear_damping(),
             angular_damping: body.angular_damping(),
             collision_groups,
+            blocks_player: self.collider_blocks_player(handle),
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
@@ -5076,6 +5077,10 @@ pub struct DebugBodyInfo {
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub collision_groups: Vec<String>,
+    /// Whether this body stops the player capsule. `collision_groups` reports
+    /// membership only, so a body that keeps its `entity` membership while
+    /// dropping `PLAYER` from its filter looks identical there.
+    pub blocks_player: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
@@ -7490,6 +7495,101 @@ mod tests {
                 "a non-solid frob box must leave {start:?} walkable, moved {walked}"
             );
         }
+    }
+
+    /// A gib-sized box at the end of a narrow aisle, the way a smashed Floor
+    /// Pod leaves its `Eggbit` flinders in hydro2 cold storage: an aisle 1.8
+    /// wide (a capsule is 0.96 across), a wall behind the player, and one
+    /// piece of debris resting on the floor in front of them.
+    fn debris_aisle_fixture(solid: bool) -> (PhysicsWorld, f32) {
+        let mut world = PhysicsWorld::new();
+        let mut wall = |id: u64, pos: Vector3<f32>, size: Vector3<f32>| {
+            world.add_kinematic(
+                EntityId::from_inner(id).unwrap(),
+                pos,
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, 0.0),
+                size,
+                CollisionGroup::entity(),
+                false,
+            );
+        };
+        // Floor: top face at y = 0.5.
+        wall(1001, vec3(0.0, 0.0, 0.0), vec3(40.0, 1.0, 40.0));
+        // Aisle sides, leaving z in (-0.75, 0.75) open, and the wall behind.
+        wall(1002, vec3(5.0, 2.5, 1.25), vec3(20.0, 4.0, 1.0));
+        wall(1003, vec3(5.0, 2.5, -1.25), vec3(20.0, 4.0, 1.0));
+        wall(1004, vec3(0.0, 2.5, 0.0), vec3(1.0, 4.0, 4.0));
+        // The gib: `eggbit.bin`'s model bounds, hanging at capsule height in
+        // x [0.87, 1.53] - inside the capsule's reach from x = 1.0. A gib
+        // hangs wherever it was flinderized, because a kinematic body ignores
+        // both gravity and the launch impulse Dark gives a flinder.
+        let debris = CollisionGroup::entity();
+        world.add_kinematic(
+            EntityId::from_inner(1005).unwrap(),
+            vec3(1.2, 1.7, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.66, 0.74, 0.31),
+            if solid {
+                debris
+            } else {
+                debris.non_solid_to_player()
+            },
+            false,
+        );
+        (world, 1.7)
+    }
+
+    /// Furthest the player gets from `start` in the debris aisle over eight
+    /// compass headings of ordinary locomotion input.
+    fn best_walk_in_aisle(solid: bool, start: Vector3<f32>) -> f32 {
+        const HEADINGS: usize = 8;
+        let mut best: f32 = 0.0;
+        for heading in 0..HEADINGS {
+            let angle = std::f32::consts::TAU * heading as f32 / HEADINGS as f32;
+            let (mut world, _) = debris_aisle_fixture(solid);
+            let mut player = world.create_player(start, EntityId::from_inner(2000).unwrap());
+            for _ in 0..30 {
+                world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            }
+            let from = world.get_player_translation(&player);
+            let step = vec3(angle.cos() * 0.05, 0.0, angle.sin() * 0.05);
+            for _ in 0..120 {
+                world.update(step, &mut player);
+            }
+            let to = world.get_player_translation(&player);
+            best = best.max(((to.x - from.x).powi(2) + (to.z - from.z).powi(2)).sqrt());
+        }
+        best
+    }
+
+    /// Debris Dark would simulate as a movable object - a gib - can only be
+    /// stood in for by an immovable kinematic box here, and an immovable box
+    /// touching the capsule in a narrow aisle is a permanent wedge: with no
+    /// depenetration pass every cast resolves to zero, in every direction
+    /// (hydro2 cold storage, #803). Retail shoves the debris aside instead;
+    /// not blocking the player is the closest stand-in.
+    ///
+    /// Negative-first: the `solid` half is the bug and still freezes.
+    #[test]
+    fn debris_in_a_narrow_aisle_never_wedges_the_player() {
+        let (_, stand_y) = debris_aisle_fixture(true);
+        let start = vec3(1.0, stand_y, 0.0);
+
+        // Solid debris leaves nothing but the sideways play of the aisle
+        // itself: the player cannot get anywhere, in any direction.
+        let pinned = best_walk_in_aisle(true, start);
+        assert!(
+            pinned < 0.5,
+            "solid debris should still pin the capsule in the aisle, best walk was {pinned}"
+        );
+
+        let walked = best_walk_in_aisle(false, start);
+        assert!(
+            walked > 1.0,
+            "debris that is not solid to the player must leave the aisle walkable, moved {walked}"
+        );
     }
 
     /// An authored placement (a QBR marker, a teleport trap) is used verbatim
