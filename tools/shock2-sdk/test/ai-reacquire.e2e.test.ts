@@ -165,9 +165,15 @@ test(
 
 // The reopened half of #791 (campaign iteration 22): the AI above is looked at
 // while it can already see the player. The hydro2 Midwife that reopened the
-// issue never could - it takes up its post facing a ledge wall 1.6 units away,
-// so with a fixed heading no line of sight to it can ever exist and the fix
-// above is never reached. A calm creature has to look around.
+// issue never could - it holds one heading, so with no line of sight to it the
+// fix above is never reached. A calm creature has to look around.
+//
+// The subject is MidwifeLucy rather than the Midwife from the report: that one
+// is authored `P$AI_Patrol` with a route beside its post, so since #807 it
+// walks that route instead of holding a post, and a patroller is not what this
+// test is about. Lucy carries no patrol flag - she really is posted - and
+// reproduces the same failure shape: a fixed heading, a player with clear line
+// of sight 90 degrees off it.
 test(
   "a calm native AI scans until it finds a player outside its cone (#791)",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -179,13 +185,13 @@ test(
 
     await game.step({ frames: 60 });
 
-    // The Midwife from the issue, found by its stable template id (runtime
-    // entity ids are reassigned every launch).
+    // Found by stable template id (runtime entity ids are reassigned every
+    // launch).
     const listed = await game.entities.list({ filter: "Midwife", limit: 50 });
-    const midwife = listed.entities.find((e) => e.template_id === 1676);
-    assert.ok(midwife, "expected hydro2's Midwife (template 1676)");
+    const midwife = listed.entities.find((e) => e.template_id === 2156);
+    assert.ok(midwife, "expected hydro2's MidwifeLucy (template 2156)");
 
-    // Never engaged: fully calm, and posted facing the ledge (-X).
+    // Never engaged: fully calm, and posted facing -X.
     let detail = await game.entities.detail(midwife.id);
     assert.equal(aiProp(detail, "AIAlertness"), "Lowest");
     assert.equal(aiProp(detail, "AIBehavior"), "Idle");
@@ -195,16 +201,17 @@ test(
       "setup: the Midwife must start unable to see the player",
     );
 
-    // A control: another native Midwife across the deck, out of sight.
+    // A control: another posted native Midwife ~60 units across the deck,
+    // behind geometry (and likewise not a patroller, so it stays put).
     const control = listed.entities.find(
-      (e) => e.template_id === 2156, // MidwifeLucy, ~40 units away behind geometry
+      (e) => e.template_id === 1711, // Midwife_ChemRoom
     );
-    assert.ok(control, "expected MidwifeLucy for the control");
+    assert.ok(control, "expected Midwife_ChemRoom for the control");
 
-    // Stand due north of it: clear line of sight, but 90 degrees off its
-    // heading - outside the 60-degree FOV half-angle. Nothing but scanning
+    // Stand 5 units due south of it: clear line of sight, but 90 degrees off
+    // its heading - outside the 60-degree FOV half-angle. Nothing but scanning
     // can bring the player into view.
-    await game.player.teleport({ x: 80, y: -1, z: 37 });
+    await game.player.teleport({ x: -3, y: 0.3, z: -46.4 });
     await game.step({ frames: 30 });
     const player = await game.player.position();
     detail = await game.entities.detail(midwife.id);
