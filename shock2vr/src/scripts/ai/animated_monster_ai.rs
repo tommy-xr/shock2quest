@@ -256,11 +256,16 @@ impl AnimatedMonsterAI {
         Some(MonsterConfig { alert_cap, timings })
     }
 
-    /// Get the appropriate behavior for the current alertness level
+    /// Get the appropriate behavior for the current alertness level.
+    ///
+    /// `physics` is optional because `initialize` has none: without it the
+    /// High arm falls back to its chase, which is where a High AI out of
+    /// reach belongs anyway - the attack swap happens on arrival, through
+    /// `ChaseBehavior::next_behavior`.
     fn behavior_for_alertness(
         &self,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: Option<&PhysicsWorld>,
         entity_id: EntityId,
     ) -> Box<RefCell<dyn Behavior>> {
         match self.alertness.current_level {
@@ -272,7 +277,8 @@ impl AnimatedMonsterAI {
                 // distance (ChaseBehavior::next_behavior escalates back to
                 // an attack on arrival via the same shared helper). Without
                 // the range check, a far-away High AI stood still swinging.
-                attack_behavior_for_distance(world, _physics, entity_id)
+                physics
+                    .and_then(|physics| attack_behavior_for_distance(world, physics, entity_id))
                     .unwrap_or_else(|| Box::new(RefCell::new(ChaseBehavior::new())))
             }
         }
@@ -500,7 +506,7 @@ impl AnimatedMonsterAI {
         self.alertness.visible_time = 0.0;
         self.alertness.hidden_time = 0.0;
 
-        self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
+        self.current_behavior = self.behavior_for_alertness(world, Some(physics), entity_id);
         alertness::sync_alertness_effect(entity_id, &self.alertness)
     }
 
@@ -733,23 +739,6 @@ impl Script for AnimatedMonsterAI {
         // Load alertness configuration from entity properties
         self.config = Self::build_config(world, entity_id);
 
-        // Choose the calm behavior now, not just on the first alertness
-        // transition. A behavior is otherwise only picked when alertness
-        // CHANGES level, and both constructors seed a plain `IdleBehavior`, so
-        // a creature that spawns calm and is never alerted keeps that idle for
-        // the whole mission - including one flagged to patrol, which then
-        // never takes a step of its authored route (#807). Spawn alertness is
-        // always the `Lowest` clamp below (no shipped object authors
-        // `P$AI_AlertCap`, and its default `min_level` is `Lowest`), which is
-        // exactly what `idle_behavior` covers - the calm arm of
-        // `behavior_for_alertness`, minus its physics dependency, which
-        // `initialize` has no access to.
-        //
-        // This is also what holds a creature excluded from awareness entirely
-        // (an apparition - see `build_config`) still: `idle_behavior` gives it
-        // the non-scanning idle rather than the constructor's scanning one.
-        self.current_behavior = self.idle_behavior(world, entity_id);
-
         // Initialize alertness state
         let alertness_effect = if let Some(config) = &self.config {
             let initial_level = alertness::clamp_level(AIAlertLevel::Lowest, &config.alert_cap);
@@ -758,6 +747,23 @@ impl Script for AnimatedMonsterAI {
         } else {
             Effect::NoEffect
         };
+
+        // Pick the behavior matching that starting alertness now, rather than
+        // only on the first transition. A behavior is otherwise chosen only
+        // when alertness CHANGES level, and both constructors seed a plain
+        // `IdleBehavior`, so a creature that spawns calm and is never alerted
+        // keeps that idle for the whole mission - including one flagged to
+        // patrol, which then never takes a step of its authored route (#807).
+        // (Selecting AFTER seeding alertness also keeps the two in step for a
+        // hypothetical `P$AI_AlertCap` whose `min_level` is above `Lowest`;
+        // no shipped object authors that property, so in practice every
+        // creature starts on the calm arm.)
+        //
+        // This also holds a creature excluded from awareness entirely (an
+        // apparition - see `build_config`) still, which the previous
+        // `config.is_none()` special case did: `idle_behavior` gives it the
+        // non-scanning idle rather than the constructor's scanning one.
+        self.current_behavior = self.behavior_for_alertness(world, None, entity_id);
 
         let is_locomotion = self.current_behavior.borrow().is_locomotion();
         let selection_strategy = self.next_selection(is_locomotion);
@@ -919,10 +925,12 @@ impl Script for AnimatedMonsterAI {
                             Some(goal) => Some(Box::new(RefCell::new(SearchBehavior::new(goal)))),
                             // Never actually saw the player (e.g. aggroed by
                             // damage from behind) - nothing to investigate
-                            None => Some(self.behavior_for_alertness(world, physics, entity_id)),
+                            None => {
+                                Some(self.behavior_for_alertness(world, Some(physics), entity_id))
+                            }
                         }
                     } else {
-                        Some(self.behavior_for_alertness(world, physics, entity_id))
+                        Some(self.behavior_for_alertness(world, Some(physics), entity_id))
                     };
                     // Fully calmed: a sighting from this engagement must not
                     // trigger a cross-map search minutes later
@@ -1021,19 +1029,20 @@ impl Script for AnimatedMonsterAI {
         // are) hands control back to the alertness-appropriate behavior. This
         // runs every frame, so it also covers sequences ended by the
         // watchdog, where no further AnimationCompleted may ever arrive.
-        let handback_effect =
-            if self.current_behavior.borrow().scripted_state() == ScriptedState::Finished {
-                self.current_behavior = self.behavior_for_alertness(world, physics, entity_id);
-                let is_locomotion = self.current_behavior.borrow().is_locomotion();
-                let selection_strategy = self.next_selection(is_locomotion);
-                Effect::PlayAnimationBySchema {
-                    entity_id,
-                    motion_queries: self.current_behavior.borrow().animation_queries(),
-                    selection_strategy,
-                }
-            } else {
-                Effect::NoEffect
-            };
+        let handback_effect = if self.current_behavior.borrow().scripted_state()
+            == ScriptedState::Finished
+        {
+            self.current_behavior = self.behavior_for_alertness(world, Some(physics), entity_id);
+            let is_locomotion = self.current_behavior.borrow().is_locomotion();
+            let selection_strategy = self.next_selection(is_locomotion);
+            Effect::PlayAnimationBySchema {
+                entity_id,
+                motion_queries: self.current_behavior.borrow().animation_queries(),
+                selection_strategy,
+            }
+        } else {
+            Effect::NoEffect
+        };
 
         let sensor_effect = self.try_tickle_sensor(world, physics, entity_id);
 
@@ -1635,7 +1644,8 @@ mod tests {
     /// A creature excluded from awareness entirely (an apparition - see
     /// `build_config`) holds its authored mark even when it is flagged to
     /// patrol and a route exists: leaving the mark is exactly what its
-    /// scripted performance must not do.
+    /// scripted performance must not do. It must get the STILL idle, not
+    /// merely a non-patrol one, so it doesn't scan off its mark either.
     #[test]
     fn apparition_holds_its_mark_even_when_flagged_to_patrol() {
         let (mut world, entity_id) =
@@ -1647,6 +1657,16 @@ mod tests {
 
         assert!(monster.config.is_none(), "apparitions process no alertness");
         assert_eq!(monster.current_behavior.borrow().name(), "Idle");
+
+        // Well past the idle scan's dwell and a full sweep.
+        for _ in 0..200 {
+            let effects = step(&mut monster, &world, entity_id);
+            let heading = commanded_heading(&effects).expect("the AI steers every frame");
+            assert!(
+                (heading.0.abs() - 180.0).abs() < 1.0,
+                "an apparition must hold its authored heading, got {heading:?}",
+            );
+        }
     }
 
     /// The counterpart: sight still gates the turn. A creature facing away has

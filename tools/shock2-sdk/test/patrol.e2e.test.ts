@@ -22,6 +22,13 @@ function distXZ(
   return Math.hypot(a[0] - b[0], a[2] - b[2]);
 }
 
+function dist3(
+  a: [number, number, number],
+  b: [number, number, number],
+): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+}
+
 // eng1's native AI archetypes that carry patrol flags
 const CREATURE_NAMES = ["OG-Pipe", "OG-Shotgun", "Blue Monkey"];
 
@@ -148,23 +155,29 @@ test(
       `medsci1 should have its native patroller (object ${MEDSCI1_PATROLLER_OBJ})`,
     );
 
-    // Its authored route: the marker it is posted on, plus whatever its
-    // AIPatrol link chains to - the route as the mission authored it, not a
-    // guess from proximity (medsci1 has unrelated markers on the walkway
-    // above).
-    const first = (await game.entities.list({ limit: 5000 })).entities
-      .filter((e) => e.name === "Patrol Path")
-      .sort(
-        (a, b) =>
-          distXZ(a.position, patroller.position) -
-          distXZ(b.position, patroller.position),
-      )[0];
-    assert.ok(first, "medsci1 should have a patrol network");
-    const firstDetail = await game.entities.detail(first.id);
+    // Its authored route, resolved the way ai_util::nearest_patrol_point
+    // does: the 3D-nearest marker that actually has an outgoing AIPatrol link
+    // (so the chain can be walked from it), then whatever that link chains to.
+    // Following the link matters - medsci1 has unrelated markers on the
+    // walkway above that a proximity guess would pick up.
+    const candidates = await Promise.all(
+      (await game.entities.list({ limit: 5000 })).entities
+        .filter((e) => e.name === "Patrol Path")
+        .sort(
+          (a, b) =>
+            dist3(a.position, patroller.position) -
+            dist3(b.position, patroller.position),
+        )
+        .slice(0, 8)
+        .map((e) => game.entities.detail(e.id)),
+    );
+    const firstDetail = candidates.find((d) =>
+      d.outgoing_links.some((l) => l.link_type === "AIPatrol"),
+    );
+    assert.ok(firstDetail, "medsci1 should have a patrol network beside it");
     const nextId = firstDetail.outgoing_links.find(
       (l) => l.link_type === "AIPatrol",
-    )?.target_id;
-    assert.ok(nextId, "the route point should chain to the next one");
+    )!.target_id;
     const markers = [firstDetail, await game.entities.detail(nextId)];
 
     let detail = await game.entities.detail(patroller.id);
