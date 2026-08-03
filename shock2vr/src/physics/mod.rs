@@ -41,10 +41,10 @@ const PLAYER_CROUCH_HEIGHT: f32 = 2.8;
 const PLAYER_CROUCH_RADIUS: f32 = 0.8;
 
 /// Widening search used to rescue an obstructed authored placement (a respawn
-/// or teleport marker whose standing capsule does not fit). The step is one
-/// standing radius, so the first ring already clears a capsule-deep overlap,
-/// and the search reaches `STEPS * STEP` = 6 SS2 ft - roughly one player
-/// height - before giving up and using the authored pose unchanged.
+/// marker whose capsule does not fit). The step is one standing radius, so two
+/// rings clear a full capsule-diameter overlap, and the search reaches
+/// `STEPS * STEP` = 6 SS2 ft - one player height - before giving up and using
+/// the authored pose unchanged.
 const PLAYER_PLACEMENT_SEARCH_STEP: f32 = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 const PLAYER_PLACEMENT_SEARCH_STEPS: u32 = 5;
 const PLAYER_PLACEMENT_SEARCH_DIRECTIONS: u32 = 8;
@@ -2459,6 +2459,21 @@ impl PhysicsWorld {
         ))
     }
 
+    /// Whether a body's collider is solid to the player capsule. Membership
+    /// alone does not say - it is the collider's *filter* that this turns on
+    /// and off (see `CollisionGroup::non_solid_to_player`).
+    #[cfg(test)]
+    pub(crate) fn collider_blocks_player(&self, handle: RigidBodyHandle) -> bool {
+        let Some(body) = self.rigid_body_set.get(handle) else {
+            return false;
+        };
+        body.colliders().iter().any(|collider_handle| {
+            self.collider_set.get(*collider_handle).is_some_and(|c| {
+                c.collision_groups().filter.bits() & InternalCollisionGroups::PLAYER.bits != 0
+            })
+        })
+    }
+
     pub fn remove_impulse_joint(&mut self, handle: ImpulseJointHandle) {
         self.impulse_joint_set.remove(handle, true);
     }
@@ -2502,16 +2517,21 @@ impl PhysicsWorld {
         self.refresh_player_support(player_handle);
     }
 
-    /// Place the player at an authored pose, stepping aside only when the
-    /// standing capsule does not fit there.
+    /// Place the player at an authored pose, stepping aside only when their
+    /// capsule does not fit there.
     ///
-    /// Respawn and scripted-teleport markers are authored coordinates, so the
-    /// authored pose is used verbatim whenever it is free - this never
-    /// second-guesses level data. It exists because a marker that *is*
-    /// obstructed leaves the player permanently immobile: the character
-    /// controller has no depenetration pass, so every cast from inside a
-    /// collider returns a zero-length move in every direction and no input can
-    /// recover (#801). Returns the position actually used.
+    /// A respawn marker is an authored coordinate, so it is used verbatim
+    /// whenever it is free - this never second-guesses level data. It exists
+    /// because a marker that *is* obstructed leaves the player permanently
+    /// immobile: the character controller has no depenetration pass, so every
+    /// cast from inside a collider returns a zero-length move in every
+    /// direction and no input can recover (#801). Returns the position
+    /// actually used.
+    ///
+    /// Only QBR reconstruction routes through here. Scripted teleports and the
+    /// debug teleport still write the body directly: those are triggered, and
+    /// a player who walks into a bad trap can at least reload - reconstruction
+    /// is the relocation they cannot decline.
     pub fn set_player_translation_unobstructed(
         &mut self,
         position: Vector3<f32>,
@@ -2537,33 +2557,60 @@ impl PhysicsWorld {
         placed
     }
 
-    /// Whether the standing player capsule fits at `position` without
-    /// overlapping blocking geometry (the player's own body excluded).
-    pub fn standing_player_pose_is_clear(
+    /// Whether the player's *current* capsule - crouched or standing, since
+    /// nothing uncrouches them on the way to a respawn - fits at `position`
+    /// without overlapping blocking geometry (their own body excluded).
+    fn player_pose_is_clear(&self, position: Vector3<f32>, player_handle: &PlayerHandle) -> bool {
+        let capsule = if player_handle.is_crouched {
+            crouched_player_capsule()
+        } else {
+            standing_player_capsule()
+        };
+        self.pose_is_clear(position, player_handle, &capsule)
+    }
+
+    /// Whether the STANDING capsule fits at `position`, whatever the player is
+    /// doing right now. Used where the pose has to be valid for an upright
+    /// player later (the climb top-out's saved pose), and by the tests.
+    fn standing_player_pose_is_clear(
         &self,
         position: Vector3<f32>,
         player_handle: &PlayerHandle,
     ) -> bool {
-        let standing = standing_player_capsule();
+        self.pose_is_clear(position, player_handle, &standing_player_capsule())
+    }
+
+    fn pose_is_clear(
+        &self,
+        position: Vector3<f32>,
+        player_handle: &PlayerHandle,
+        shape: &dyn Shape,
+    ) -> bool {
         let queries = self.broad_phase.as_query_pipeline(
             self.narrow_phase.query_dispatcher(),
             &self.rigid_body_set,
             &self.collider_set,
             player_pose_filter(player_handle.character_handle),
         );
-        !shape_intersects(&queries, vec_to_nvec(position), &standing)
+        !shape_intersects(&queries, vec_to_nvec(position), shape)
     }
 
     /// Whether a *substitute* pose is somewhere the player can actually be
     /// left: the capsule fits AND there is ground within one player height
     /// below it. The clearance test alone is happy in mid-air and over a
     /// void, which would trade one stranding for another.
+    ///
+    /// There is deliberately no "is the route there clear" test: the only
+    /// geometry between an obstructed marker and any escape from it is the
+    /// obstruction itself, so such a test would reject every candidate it was
+    /// meant to vet. The bounded search radius is what keeps a substitute
+    /// near the marker instead.
     fn placement_candidate_is_usable(
         &self,
         position: Vector3<f32>,
         player_handle: &PlayerHandle,
     ) -> bool {
-        if !self.standing_player_pose_is_clear(position, player_handle) {
+        if !self.player_pose_is_clear(position, player_handle) {
             return false;
         }
         let queries = self.broad_phase.as_query_pipeline(
@@ -2573,7 +2620,11 @@ impl PhysicsWorld {
             player_pose_filter(player_handle.character_handle),
         );
         let down = Ray::new(Point::from(vec_to_nvec(position)), -Vector::y());
-        let to_feet = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR;
+        let to_feet = if player_handle.is_crouched {
+            PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+        } else {
+            PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+        };
         queries
             .cast_ray(&down, to_feet + PLAYER_PLACEMENT_MAX_DROP, true)
             .is_some()
@@ -2591,7 +2642,7 @@ impl PhysicsWorld {
         position: Vector3<f32>,
         player_handle: &PlayerHandle,
     ) -> Option<Vector3<f32>> {
-        if self.standing_player_pose_is_clear(position, player_handle) {
+        if self.player_pose_is_clear(position, player_handle) {
             return Some(position);
         }
         // A single small lift covers the common near-miss - a marker sunk into
@@ -7332,8 +7383,8 @@ mod tests {
     /// Build a floor whose top face is flush with the bottom of a walk-in
     /// fixture's model-bounds box - hydro2's Resurrection Station casing sits
     /// on the alcove floor exactly like this - and return the world plus the
-    /// box's -x/-z corner in world coordinates.
-    fn frob_box_fixture(solid: bool) -> (PhysicsWorld, f32, f32, f32) {
+    /// y a standing capsule rests at on that floor.
+    fn frob_box_fixture(solid: bool) -> (PhysicsWorld, f32) {
         let mut world = PhysicsWorld::new();
         // Floor: 40x40, 1 thick, centred on the origin -> top face at y = 0.5.
         world.add_kinematic(
@@ -7375,7 +7426,7 @@ mod tests {
             },
             false,
         );
-        (world, 0.9, -1.25, 1.7)
+        (world, 1.7)
     }
 
     /// Furthest the player gets from `start` over `HEADINGS` compass
@@ -7386,7 +7437,7 @@ mod tests {
         let mut best: f32 = 0.0;
         for heading in 0..HEADINGS {
             let angle = std::f32::consts::TAU * heading as f32 / HEADINGS as f32;
-            let (mut world, _, _, _) = frob_box_fixture(solid);
+            let (mut world, _) = frob_box_fixture(solid);
             let mut player = world.create_player(start, EntityId::from_inner(2000).unwrap());
             for _ in 0..30 {
                 world.update(vec3(0.0, 0.0, 0.0), &mut player);
@@ -7414,7 +7465,7 @@ mod tests {
     /// `non_solid_to_player` half changes behavior.
     #[test]
     fn a_non_solid_frob_box_never_wedges_the_player() {
-        let (_, _, _, stand_y) = frob_box_fixture(true);
+        let (_, stand_y) = frob_box_fixture(true);
         // Poses inside the slot, the way the reported wedge sat between the
         // casing and the alcove's step.
         let starts = [
@@ -7429,7 +7480,7 @@ mod tests {
             .fold(f32::INFINITY, f32::min);
         assert!(
             worst_when_solid < 0.25,
-            "a solid frob box should still pin the capsule in the slot, best walk {worst_when_solid}"
+            "at least one slot pose should still be pinned by a solid frob box, best walk over all of them was {worst_when_solid}"
         );
 
         for start in starts {
@@ -7447,7 +7498,7 @@ mod tests {
     /// above - so reconstruction would end the run outright (#801).
     #[test]
     fn an_obstructed_authored_placement_steps_aside() {
-        let (mut world, _, _, stand_y) = frob_box_fixture(true);
+        let (mut world, stand_y) = frob_box_fixture(true);
         let mut player = world.create_player(
             vec3(-8.0, stand_y, 0.0),
             EntityId::from_inner(2000).unwrap(),

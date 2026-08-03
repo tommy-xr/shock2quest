@@ -26,16 +26,13 @@ const RESURRECTION_TARGET = 570;
 const RESURRECTION_COST = 10;
 const RESPAWN_DELAY_FRAMES = 5 * 60;
 
-// The wedge reported in #801, and a control one metre away on the pad where
-// movement always worked.
+// The wedge reported in #801, and the reconstruction pad one metre away. The
+// pad is NOT an outside-the-box control - it is the box's own x/z centre. It
+// moved fine even on main because a capsule buried deep inside a convex box
+// finds no contact at all; only poses straddling a face freeze. Asserting both
+// keeps the fix honest in either regime.
 const WEDGE = { x: 43.72, y: 3.69, z: 31.32 };
 const PAD = { x: 44.8, y: 3.7, z: 32.4 };
-
-type LifeState = "alive" | "dead" | "respawning";
-
-function lifeState(player: object): LifeState | undefined {
-  return (player as { life_state?: LifeState }).life_state;
-}
 
 function planarDistance(
   a: [number, number, number],
@@ -100,10 +97,12 @@ test(
       "the Resurrection Station must keep its frob collider",
     );
     // ...and that collider must still answer the mask the frob/selection ray
-    // uses, or the machine would become impossible to interact with.
+    // uses, or the machine would become impossible to interact with. Cast from
+    // just outside its -x face (past the Regen_Hologram, which is a typeless
+    // frobbable too and would otherwise be hit first) into the casing.
     const hit = await game.raycast({
-      start: [station.position[0] - 4, station.position[1], station.position[2]],
-      end: [station.position[0] + 1, station.position[1], station.position[2]],
+      start: [43.4, station.position[1], station.position[2]],
+      end: [station.position[0], station.position[1], station.position[2]],
       collision_groups: ["entity", "selectable", "world", "ui", "raycast"],
       ignore_sensors: true,
     });
@@ -116,7 +115,7 @@ test(
     const padWalk = await bestWalkDistance(game, PAD);
     assert.ok(
       padWalk > 1,
-      `the reconstruction pad has always been walkable: moved ${padWalk}`,
+      `the reconstruction pad must stay walkable: moved ${padWalk}`,
     );
 
     const wedgeWalk = await bestWalkDistance(game, WEDGE);
@@ -166,11 +165,11 @@ test(
       amount: (before.player.hit_points ?? 0) + 100,
     });
     await game.step({ frames: 1 });
-    assert.equal(lifeState((await game.info()).player), "respawning");
+    assert.equal((await game.info()).player.life_state, "respawning");
 
     await game.step({ frames: RESPAWN_DELAY_FRAMES });
     const revived = await game.info();
-    assert.equal(lifeState(revived.player), "alive");
+    assert.equal(revived.player.life_state, "alive");
     // The authored marker is free, so reconstruction must use it verbatim -
     // in all three axes, so a vertical nudge cannot pass unnoticed. (The
     // tolerance covers the settling that follows reconstruction, not a

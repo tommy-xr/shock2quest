@@ -1223,6 +1223,83 @@ mod tests {
 
     const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
 
+    /// A wall fixture the player can frob but never pick up or move - a
+    /// console, a card slot, the Resurrection Station casing. `phys_type` is
+    /// `None` for the shipped case that has no `P$PhysType` in its chain.
+    fn add_wall_fixture(world: &mut World, phys_type: Option<PhysicsModelType>) -> EntityId {
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropHUDSelect(false),
+            PropImmobile(true),
+        ));
+        if let Some(phys_type) = phys_type {
+            world.add_component(
+                entity_id,
+                PropPhysType {
+                    phys_type,
+                    num_submodels: 1,
+                    remove_on_sleep: false,
+                    is_special: false,
+                },
+            );
+        }
+        entity_id
+    }
+
+    /// A frobbable fixture's collider comes from its model bounding box, not
+    /// from an authored collision volume. Dark only builds a physics model for
+    /// an object that carries a `PhysType`, so one without any must not be
+    /// solid to the player - hydro2's Resurrection Station is a 2.2 x 4.0 x
+    /// 2.5 box around the pad the player has to stand on, and a capsule
+    /// overlapping it has no direction left to resolve into (#801). It still
+    /// gets the collider: frob and selection raycasts need it.
+    ///
+    /// Negative-first: before the fix the typeless case also blocked.
+    #[test]
+    fn a_frobbable_without_phys_type_does_not_block_the_player() {
+        for (phys_type, should_block) in [
+            (None, false),
+            (Some(PhysicsModelType::ORIENTED_BOUNDING_BOX), true),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_wall_fixture(&mut world, phys_type);
+            let model = ladder_model();
+
+            let handle =
+                create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                    .expect("a frobbable fixture should always get a frob collider");
+
+            assert_eq!(
+                physics.collider_blocks_player(handle),
+                should_block,
+                "phys_type {phys_type:?} should{} block the player",
+                if should_block { "" } else { " not" }
+            );
+            // Either way it stays in the world and keeps its selectable /
+            // entity membership, so nothing about frobbing changes.
+            let bodies = physics.debug_list_bodies();
+            assert_eq!(bodies.len(), 1, "expected exactly one body in the world");
+            assert!(
+                bodies[0]
+                    .collision_groups
+                    .iter()
+                    .any(|g| g == "entity" || g == "selectable"),
+                "a frob collider must stay raycastable, got {:?}",
+                bodies[0].collision_groups
+            );
+        }
+    }
+
     /// Model scale is a render transform, while `P$PhysDims` is the separately
     /// authored collision volume. Shodan's long window strips make the
     /// distinction observable: applying their visual z-scale to the OBB grows
