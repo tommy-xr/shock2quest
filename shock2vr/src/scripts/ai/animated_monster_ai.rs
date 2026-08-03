@@ -282,6 +282,14 @@ impl AnimatedMonsterAI {
     /// it is flagged to and a route exists, otherwise stand idle. Falls back to
     /// idle when the mission has no patrol network reachable from here.
     fn idle_behavior(&self, world: &World, entity_id: EntityId) -> Box<RefCell<dyn Behavior>> {
+        // A creature excluded from awareness entirely (an apparition - see
+        // `build_config`) can never see the player, so it has nothing to
+        // look around for and no reason to leave its mark: it holds the
+        // heading its authored performance was staged with. This also covers
+        // the handback after a scripted sequence finishes.
+        if self.config.is_none() {
+            return Box::new(RefCell::new(IdleBehavior::holding_post()));
+        }
         if is_patroller(world, entity_id) {
             let (position, _) = get_position_and_forward(world, entity_id);
             if let Some((point, goal)) = nearest_patrol_point(world, position.to_vec()) {
@@ -724,6 +732,14 @@ impl Script for AnimatedMonsterAI {
 
         // Load alertness configuration from entity properties
         self.config = Self::build_config(world, entity_id);
+
+        // A creature with no config is excluded from awareness entirely (an
+        // apparition - see `build_config`). It never runs an alertness
+        // transition, so it would otherwise sit in the constructor's
+        // scanning idle for its whole life; `idle_behavior` holds it still.
+        if self.config.is_none() {
+            self.current_behavior = self.idle_behavior(world, entity_id);
+        }
 
         // Initialize alertness state
         let alertness_effect = if let Some(config) = &self.config {
@@ -1513,6 +1529,27 @@ mod tests {
             (heading.0 - 45.0).abs() < 1.0,
             "an apparition must hold its authored heading, got {heading:?}",
         );
+    }
+
+    /// ...and it must keep holding it: the idle scan that lets a posted
+    /// creature look around (#791) must not reach a creature excluded from
+    /// awareness, or a ghost slowly swings off its authored mark.
+    #[test]
+    fn apparition_holds_its_heading_instead_of_scanning() {
+        let (world, entity_id) =
+            world_with_creature_and_player(Deg(180.0), "creaturetype apparition");
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        // Well past the idle scan's dwell and a full sweep.
+        for _ in 0..200 {
+            let effects = step(&mut monster, &world, entity_id);
+            let heading = commanded_heading(&effects).expect("the AI steers every frame");
+            assert!(
+                (heading.0.abs() - 180.0).abs() < 1.0,
+                "an apparition must hold its authored heading, got {heading:?}",
+            );
+        }
     }
 
     /// The counterpart: sight still gates the turn. A creature facing away has

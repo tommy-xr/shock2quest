@@ -42,8 +42,18 @@ const SCAN_HALF_ARC_DEGREES: f32 = 90.0;
 /// itself is relaxed - the creature still only ever sees what is genuinely
 /// in front of it and unoccluded.
 pub struct IdleBehavior {
+    /// Whether this creature looks around at all. Creatures excluded from
+    /// awareness entirely never do - see `holding_post`.
+    scans: bool,
     /// The heading the creature took its post with. Latched on the first
     /// steer, because the script - not the behavior - owns the heading.
+    ///
+    /// Not persisted across save/load (the script persists no behavior state
+    /// at all today - alertness and last-known position reset too), so a
+    /// reloaded creature re-anchors on whatever heading it was saved
+    /// mid-sweep with, rotating which wedge behind it is blind. It keeps its
+    /// post position and still sweeps 300 degrees, so it is never blind in
+    /// one direction forever - see #791 follow-up.
     post_heading: Option<Deg<f32>>,
     /// Current sweep offset from `post_heading`, in degrees.
     offset: f32,
@@ -69,6 +79,7 @@ impl IdleBehavior {
             -1.0
         };
         IdleBehavior {
+            scans: true,
             post_heading: None,
             offset: 0.0,
             target: direction * SCAN_HALF_ARC_DEGREES,
@@ -77,9 +88,30 @@ impl IdleBehavior {
         }
     }
 
+    /// Standing still: holds the heading it is given and never looks around.
+    ///
+    /// For creatures excluded from awareness entirely - apparitions, which
+    /// have no alertness config at all (see
+    /// `AnimatedMonsterAI::build_config`). They can never see the player, so
+    /// they have nothing to look for, and swinging them off the heading
+    /// their authored performance was staged with would face a ghost away
+    /// from its mark.
+    pub fn holding_post() -> IdleBehavior {
+        IdleBehavior {
+            scans: false,
+            post_heading: None,
+            offset: 0.0,
+            target: 0.0,
+            dwell: 0.0,
+        }
+    }
+
     /// Advance the scan by `delta` seconds, returning the offset from the
     /// post heading to face.
     fn advance(&mut self, delta: f32) -> f32 {
+        if !self.scans {
+            return 0.0;
+        }
         if self.dwell > 0.0 {
             self.dwell -= delta;
             return self.offset;
@@ -132,15 +164,19 @@ impl Behavior for IdleBehavior {
 mod tests {
     use super::*;
 
-    fn steer_for(behavior: &mut IdleBehavior, post: Deg<f32>, seconds: f32) -> f32 {
-        let world = World::new();
-        let physics = PhysicsWorld::new();
+    fn steer_for(
+        behavior: &mut IdleBehavior,
+        world: &World,
+        physics: &PhysicsWorld,
+        post: Deg<f32>,
+        seconds: f32,
+    ) -> f32 {
         let time = Time {
             elapsed: std::time::Duration::from_secs_f32(seconds),
             total: std::time::Duration::from_secs_f32(seconds),
         };
         behavior
-            .steer(post, &world, &physics, EntityId::dead(), &time)
+            .steer(post, world, physics, EntityId::dead(), &time)
             .expect("idle always steers")
             .0
             .desired_heading
@@ -167,6 +203,7 @@ mod tests {
     /// everything outside that one direction permanently invisible to it.
     #[test]
     fn idle_sweeps_its_heading_to_both_sides_of_its_post() {
+        let (world, physics) = (World::new(), PhysicsWorld::new());
         let mut behavior = IdleBehavior::new();
         let post = Deg(30.0);
 
@@ -174,7 +211,7 @@ mod tests {
         let mut max_offset: f32 = 0.0;
         // Two full sweeps' worth of dwell + travel, at 60Hz.
         for _ in 0..1200 {
-            let offset = steer_for(&mut behavior, post, 1.0 / 60.0) - post.0;
+            let offset = steer_for(&mut behavior, &world, &physics, post, 1.0 / 60.0) - post.0;
             min_offset = min_offset.min(offset);
             max_offset = max_offset.max(offset);
         }
@@ -193,14 +230,32 @@ mod tests {
     /// drifts off the heading it was left with.
     #[test]
     fn idle_sweep_stays_within_its_arc() {
+        let (world, physics) = (World::new(), PhysicsWorld::new());
         let mut behavior = IdleBehavior::new();
         let post = Deg(-140.0);
 
         for _ in 0..1800 {
-            let offset = steer_for(&mut behavior, post, 1.0 / 60.0) - post.0;
+            let offset = steer_for(&mut behavior, &world, &physics, post, 1.0 / 60.0) - post.0;
             assert!(
                 offset.abs() <= SCAN_HALF_ARC_DEGREES + 0.01,
                 "idle swept {offset} degrees off its post",
+            );
+        }
+    }
+
+    /// A creature excluded from awareness never looks around: it holds the
+    /// heading its authored performance was staged with.
+    #[test]
+    fn a_still_idle_holds_its_heading_forever() {
+        let (world, physics) = (World::new(), PhysicsWorld::new());
+        let mut behavior = IdleBehavior::holding_post();
+        let post = Deg(-15.0);
+
+        for _ in 0..1200 {
+            let heading = steer_for(&mut behavior, &world, &physics, post, 1.0 / 60.0);
+            assert!(
+                (heading - post.0).abs() < f32::EPSILON,
+                "a still idle must not turn, got {heading}",
             );
         }
     }
@@ -210,10 +265,11 @@ mod tests {
     /// beat instead of immediately turning away.
     #[test]
     fn idle_holds_its_post_before_the_first_sweep() {
+        let (world, physics) = (World::new(), PhysicsWorld::new());
         let mut behavior = IdleBehavior::new();
         let post = Deg(75.0);
 
-        let heading = steer_for(&mut behavior, post, 0.1);
+        let heading = steer_for(&mut behavior, &world, &physics, post, 0.1);
         assert!(
             (heading - post.0).abs() < f32::EPSILON,
             "the first frame should hold the post heading, got {heading}",

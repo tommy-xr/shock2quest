@@ -219,10 +219,12 @@ test(
       "setup: the player must start unseen",
     );
 
-    // One full scan cycle is well under 20 sim-seconds.
+    // A worst-case cycle is ~10s of scanning (the first sweep may go the
+    // other way) plus 1.5s of held sight to reach a pursuing level.
     const trace: string[] = [];
     let reacquired: EntityDetailResult | undefined;
-    for (let tick = 0; tick < 40 && !reacquired; tick++) {
+    let controlSawPlayer: string | undefined;
+    for (let tick = 0; tick < 60 && !reacquired; tick++) {
       await game.step({ frames: 30 }); // 0.5 sim-seconds
       const d = await game.entities.detail(midwife.id);
       trace.push(
@@ -230,13 +232,35 @@ test(
           ` vis=${aiProp(d, "AITargetVisible")} facing=${facingErrorDeg(d, player).toFixed(0)}deg`,
       );
       if (PURSUING.has(aiProp(d, "AIBehavior") ?? "")) reacquired = d;
+      // The control scans too, so check it at every heading it takes, not
+      // just at the end.
+      const c = await game.entities.detail(control.id);
+      if (aiProp(c, "AITargetVisible") === "true") {
+        controlSawPlayer ??= `at ${((tick + 1) * 0.5).toFixed(1)}s`;
+      }
     }
     assert.ok(
       reacquired,
       `the posted AI never scanned around to find the player: ${trace.join(", ")}`,
     );
 
-    // Still no omniscience: the AI across the deck saw nothing.
+    // Give the control a full scan cycle of its own (the main loop stops as
+    // soon as the Midwife re-acquires, which can be well before the control
+    // has swept its whole arc).
+    for (let tick = 0; tick < 34; tick++) {
+      await game.step({ frames: 30 });
+      const c = await game.entities.detail(control.id);
+      if (aiProp(c, "AITargetVisible") === "true") {
+        controlSawPlayer ??= `after ${(tick * 0.5).toFixed(1)}s of its own sweep`;
+      }
+    }
+
+    // Still no omniscience: scanning only changes where an AI looks, so one
+    // with no line of sight to the player never sees it, at any heading.
+    assert.ok(
+      !controlSawPlayer,
+      `an AI behind geometry must never see the player, but did ${controlSawPlayer}`,
+    );
     assert.equal(
       aiProp(await game.entities.detail(control.id), "AIAlertness"),
       "Lowest",
