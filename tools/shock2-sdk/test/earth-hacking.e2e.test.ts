@@ -77,10 +77,10 @@ test(
       y: keypadY - 1,
       z: keypadZ + 3.25,
     });
-    // Earth spawns facing the opposite body heading from the accepted manual
-    // route; -154.5deg is the same world ray as that route's +25.5deg head
-    // yaw after its 180deg body turn.
-    await game.input.set("head.look", [-154.5, 10]);
+    // Aim through the production look-at (it accounts for Earth's authored
+    // body heading and reads the live camera height) rather than a fixed
+    // pitch tuned to one camera position.
+    await game.input.lookAtWorldPoint(keypadDetail.position);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 2 });

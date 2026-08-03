@@ -29,6 +29,11 @@ use self::debug_render_pipeline::DebugRenderer;
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
+/// The standing collider's radius in world units, for callers that must place
+/// something outside the player's own body (the camera sits on the capsule
+/// axis, so "in front of the eye" is only outside the collider beyond this).
+pub const PLAYER_STANDING_RADIUS_WORLD: f32 = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
+
 /// Height of the player's head sphere above the body origin (SS2 ft), the
 /// original engine's `PLAYER_HEAD_POS = (PLAYER_HEIGHT / 2) - PLAYER_RADIUS`
 /// (`src/physics/physapi.h`). Dark places the first-person camera at exactly
@@ -4996,13 +5001,18 @@ mod tests {
         world.add_collider(EntityId::from_inner(2199).unwrap(), collider);
     }
 
-    /// The eye is the head sphere's center, so it is always inside the standing
-    /// collider. A camera above the crown is outside every room whose ceiling
-    /// the body itself clears.
+    /// The standing eye is the original engine's `PLAYER_HEAD` sphere center,
+    /// which is inside the collider by construction - a camera above the crown
+    /// would be outside every room whose ceiling the body itself clears.
     #[test]
-    fn standing_eye_stays_inside_the_standing_collider() {
-        let crown = PLAYER_STANDING_HEIGHT / 2.0;
+    fn standing_eye_is_the_head_sphere_inside_the_collider() {
         let eye = crate::player_eye_height_for(false);
+        assert_eq!(
+            eye,
+            PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS,
+            "the standing eye must be Dark's PLAYER_HEAD_POS"
+        );
+        let crown = PLAYER_STANDING_HEIGHT / 2.0;
         assert!(
             eye <= crown,
             "the standing eye ({eye} ft) must not sit above the collider crown ({crown} ft)"
@@ -5045,6 +5055,13 @@ mod tests {
         assert!(
             (body.y - PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR).abs() < 0.2,
             "the standing player should fit in a seven-foot room; got {body:?}"
+        );
+
+        // Fixture precondition: this room must actually be one the old 4.0 ft
+        // eye escaped, or the test would pass on the buggy build too.
+        assert!(
+            body.y + 4.0 / SCALE_FACTOR > ROOM_HEIGHT,
+            "the pre-fix eye must be above this ceiling for the repro to bite"
         );
 
         let eye = point3(

@@ -13,7 +13,8 @@ export interface EarthWorldUseStaging {
 
 const DEFAULT_STAGING: EarthWorldUseStaging = {
   horizontalOffset: 0.1,
-  verticalOffset: -1.6,
+  // Stage the body so the CAMERA lands level with the item.
+  verticalOffset: -PLAYER_EYE_HEIGHT_WORLD,
   // Ignored unless `pitchDeg` is given explicitly - the aim is computed from the
   // measured camera position instead. See below.
   pitchDeg: undefined,

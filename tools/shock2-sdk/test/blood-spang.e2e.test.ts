@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
+import { GameServer } from "../src/index.js";
 
 // End-to-end test for data-driven impact spangs: a projectile spawns the spang
 // its authored links say, not a hardcoded effect.
@@ -64,9 +64,7 @@ test(
     );
     assert.ok(og, `expected the corridor OG-Pipe near the anchor (got: ${JSON.stringify(ogs.map((e) => e.position))})`);
 
-    // Stand ~4.5 units south (+z) of it, then aim at its chest from the live
-    // positions. Empirical debug-runtime look mapping: yaw 0 faces -x, yaw 90
-    // faces -z (yaw = atan2(-dz, -dx)); positive pitch aims down.
+    // Stand ~4.5 units south (+z) of it, then aim at its torso.
     await game.player.teleport({
       x: og.position[0],
       y: og.position[1] + 0.8,
@@ -74,23 +72,11 @@ test(
     });
     await game.step({ frames: 15 }); // settle on the floor
 
-    const player = (await game.info()).player;
-    const target = (await game.entities.detail(og.id)).position;
-    const eye = [
-      player.position[0],
-      player.position[1] + PLAYER_EYE_HEIGHT_WORLD,
-      player.position[2],
-    ];
-    const d = [
-      target[0] - eye[0],
-      target[1] + 0.7 - eye[1], // chest height above the entity origin
-      target[2] - eye[2],
-    ];
-    const yawDeg = (Math.atan2(-d[2], -d[0]) * 180) / Math.PI;
-    const pitchDeg =
-      (Math.atan2(-d[1], Math.hypot(d[0], d[2])) * 180) / Math.PI;
 
-    await game.input.set("head.look", [yawDeg, pitchDeg]);
+    const target = (await game.entities.detail(og.id)).position;
+    // Production aim at the live torso proxy (reads the runtime camera
+    // height, so it survives changes to the player eye).
+    await game.player.aimAt(og.id, { hitbox: "torso" });
     await game.step({ frames: 3 });
     await game.input.set("right_hand.trigger", 1.0);
     await game.step({ frames: 2 });
