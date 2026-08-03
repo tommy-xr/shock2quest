@@ -218,6 +218,20 @@ pub struct PropExp(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropStackCount(pub i32);
 
+/// The version of a piece of software (`P$SoftLevel`, 1..=3). Authored on the
+/// `Softs` base archetype as 1 and overridden by the V2/V3 archetypes, so a
+/// V1 soft inherits the base value. Read by the `AutoInstallSoft` script.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropSoftLevel(pub i32);
+
+/// Which software slot a soft installs into (`P$SoftType`). Authored on the
+/// four soft class archetypes: 1 = Hack, 2 = Modify, 3 = Repair, 4 = Research
+/// (the `PDA Soft` archetype carries 0, i.e. no slot). The numbering matches
+/// the `SoftUpgrade0..3` message order in `res/strings/MISC.STR`, offset by
+/// one.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropSoftType(pub i32);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropLimbModel(pub String);
 
@@ -1300,6 +1314,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$StackCoun",
             |reader, _len| read_i32(reader),
             PropStackCount,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SoftLevel",
+            |reader, _len| read_i32(reader),
+            PropSoftLevel,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SoftType",
+            |reader, _len| read_i32(reader),
+            PropSoftType,
             accumulator::latest,
         ),
         define_prop("P$Spawn", PropSpawn::read, identity, accumulator::latest),
