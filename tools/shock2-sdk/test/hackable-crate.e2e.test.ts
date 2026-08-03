@@ -104,18 +104,26 @@ async function playHackBoardToWin(game: GameServer): Promise<UiPanel> {
       "a critical failure ruined the crate; max Hack skill should leave no mines",
     );
 
-    // Deal a board: START before the first deal, RESET after a burned-out
-    // one. Both charge the authored cost, exactly as retail does.
-    const deal = panel.elements.find(
-      (element) =>
-        element.label === "start-hack" || element.label === "reset-hack",
+    // Deal a board only when one is not already in play - the caller's paid
+    // START must not be thrown away by an immediate RESET. A burned-out board
+    // is re-dealt with RESET, which charges the authored cost again, exactly
+    // as retail does.
+    const inPlay = panel.elements.some(
+      (element) => element.label === "reset-hack",
     );
-    assert.ok(deal, "an unwon board should offer START/RESET");
-    await clickUiElement(game, deal);
-    assert.ok(
-      !hasTexture(await activePanel(game), "payh.pcx"),
-      "the test wallet should always cover the authored hack cost",
-    );
+    const burnedOut = hasTexture(panel, "failh.pcx");
+    if (!inPlay || burnedOut) {
+      const deal = panel.elements.find(
+        (element) =>
+          element.label === "start-hack" || element.label === "reset-hack",
+      );
+      assert.ok(deal, "an unwon board should offer START/RESET");
+      await clickUiElement(game, deal);
+      assert.ok(
+        !hasTexture(await activePanel(game), "payh.pcx"),
+        "the test wallet should always cover the authored hack cost",
+      );
+    }
 
     for (const label of routes[attempt % routes.length]) {
       panel = await activePanel(game);

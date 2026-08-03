@@ -26,8 +26,7 @@
 //! held item is released onto a target - via [`Gui::on_provide_for_consumption`],
 //! so the pick opens the crate instead of being deposited into it.
 
-use cgmath::Vector2;
-use dark::properties::{ObjectState, PropHackDiff, PropObjState, PropScripts};
+use dark::properties::{ObjectState, PropScripts};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
@@ -35,7 +34,10 @@ use crate::gui::{Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::scripts::Effect;
 
 use super::container::{ContainerGui, ContainerGuiMsg, ContainerGuiState};
-use super::keypad::{HackOutcomeEffects, HackState, KeyPadMsg, draw_hack_board, handle_hack_msg};
+use super::keypad::{
+    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+    handle_hack_msg, object_state,
+};
 
 /// The ICE Pick's authored script name (`P$Scripts` on gamesys template -73).
 /// Identifying the tool by its authored script - not by a hardcoded template
@@ -72,21 +74,6 @@ pub enum HackableCrateMsg {
     Loot(ContainerGuiMsg),
 }
 
-fn object_state(world: &World, entity_id: EntityId) -> ObjectState {
-    world
-        .borrow::<View<PropObjState>>()
-        .ok()
-        .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
-        .unwrap_or(ObjectState::Normal)
-}
-
-fn hack_diff(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
-    world
-        .borrow::<View<PropHackDiff>>()
-        .ok()
-        .and_then(|diffs| diffs.get(entity_id).ok().copied())
-}
-
 /// A critical failure ruined the crate: its loot is gone and it never opens
 /// again.
 fn is_ruined(world: &World, entity_id: EntityId) -> bool {
@@ -96,22 +83,19 @@ fn is_ruined(world: &World, entity_id: EntityId) -> bool {
     )
 }
 
-/// Whether the crate's contents are reachable. A hacked crate is open; so is
-/// a crate an author left unlocked (no `Locked` state), which is then just a
-/// plain container.
-fn is_open(world: &World, entity_id: EntityId) -> bool {
-    !matches!(
-        object_state(world, entity_id),
-        ObjectState::Locked | ObjectState::Broken | ObjectState::Destroyed
-    )
+/// Whether the crate is still sealed behind a hack: authored `Locked`, with an
+/// authored difficulty to hack against. A `Locked` crate with no `P$HackDiff`
+/// could never be opened by anything, so it is not treated as sealed.
+fn can_hack(world: &World, entity_id: EntityId) -> bool {
+    object_state(world, entity_id) == ObjectState::Locked && hack_diff(world, entity_id).is_some()
 }
 
-/// Whether the crate can still be hacked: still locked, not ruined, and with
-/// an authored difficulty to hack against.
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
-    !is_open(world, entity_id)
-        && !is_ruined(world, entity_id)
-        && hack_diff(world, entity_id).is_some()
+/// Whether the crate's contents are reachable. A hacked crate is open; so is a
+/// crate an author left unlocked, which is then just a plain container. This is
+/// the single predicate that drawing, input handling, and tool use all agree
+/// on, so the panel can never show loot it refuses to hand over.
+fn is_open(world: &World, entity_id: EntityId) -> bool {
+    !is_ruined(world, entity_id) && !can_hack(world, entity_id)
 }
 
 fn crate_hack_success(entity_id: EntityId, _world: &World) -> Effect {
@@ -152,9 +136,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         world: &World,
         state: &HackableCrateState,
     ) -> Vec<GuiComponent<HackableCrateMsg>> {
-        // An open crate is an ordinary loot panel. A still-locked (or
-        // just-ruined) one shows the HRM board - a ruined crate keeps it open
-        // long enough to render the LOSEH result of the hack that broke it.
+        // An open crate is an ordinary loot panel; a sealed one is the board.
         if is_open(world, entity_id) {
             return self
                 .loot
@@ -164,26 +146,33 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                 .collect();
         }
 
-        match hack_diff(world, entity_id) {
-            Some(diff) => draw_hack_board(&state.hack, diff, HackableCrateMsg::Hack),
-            // No authored difficulty to hack against: fall back to the plain
-            // container behavior rather than a dead panel.
-            None => self
-                .loot
-                .get_components(cursor, entity_id, world, &state.loot)
-                .into_iter()
-                .map(|component| component.map(HackableCrateMsg::Loot))
-                .collect(),
-        }
+        let Some(diff) = hack_diff(world, entity_id) else {
+            // Ruined with no authored difficulty: there is nothing to present
+            // and nothing to hack. Unreachable with shipped data (every crate
+            // inherits HackDiff from -1886).
+            return Vec::new();
+        };
+
+        // A ruined crate shows the terminal failure face. Drive it from the
+        // durable `ObjState` rather than the in-memory hack phase, so the
+        // "destroyed" feedback survives a save/load (which resets the phase)
+        // instead of redrawing a live-looking START the crate would refuse.
+        let hack = if is_ruined(world, entity_id) {
+            HackState {
+                phase: HackPhase::Lost,
+                ..state.hack.clone()
+            }
+        } else {
+            state.hack.clone()
+        };
+        draw_hack_board(&hack, diff, HackableCrateMsg::Hack)
     }
 
     fn get_config(&self) -> GuiConfig {
         // The HRM board and the loot panel share the retail 188x296 MFD
-        // canvas, so one config covers both faces of the crate.
-        GuiConfig {
-            world_offset: self.loot.get_config().world_offset,
-            screen_size_in_pixels: Vector2::new(188.0, 296.0),
-        }
+        // canvas, so the loot panel's own config covers both faces of the
+        // crate - and stays in step with it if that panel ever changes.
+        self.loot.get_config()
     }
 
     /// A crate ruined by a critical failure is finished: frobbing it does
@@ -201,14 +190,14 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
     ) -> (HackableCrateState, Effect) {
         match msg {
             HackableCrateMsg::Hack(hack_msg) => {
-                let Some(diff) = hack_diff(world, entity_id) else {
-                    return (state.clone(), Effect::NoEffect);
-                };
                 // An already-open or ruined crate has nothing left to hack;
                 // ignore stale board input against it.
                 if !can_hack(world, entity_id) {
                     return (state.clone(), Effect::NoEffect);
                 }
+                let Some(diff) = hack_diff(world, entity_id) else {
+                    return (state.clone(), Effect::NoEffect);
+                };
                 let (hack, effect) = handle_hack_msg(
                     entity_id,
                     world,
@@ -248,41 +237,59 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
     }
 
     /// An ICE Pick applied to a still-hackable crate opens it outright and is
-    /// consumed. Anything else (and a pick offered to an already-open or
-    /// ruined crate) falls through to the ordinary deposit path.
+    /// consumed. Any other item offered to a *sealed* crate is refused (a
+    /// sealed crate is not a container - depositing there would lose the item
+    /// permanently); an open crate takes the ordinary deposit path.
     fn on_provide_for_consumption(
         &self,
         entity_id: EntityId,
         world: &World,
         provided_entity_id: EntityId,
     ) -> Option<Effect> {
-        if !can_hack(world, entity_id) || !is_free_hack_tool(world, provided_entity_id) {
-            return None;
+        if can_hack(world, entity_id) && is_free_hack_tool(world, provided_entity_id) {
+            return Some(Effect::combine(vec![
+                crate_hack_success(entity_id, world),
+                Effect::DestroyEntity {
+                    entity_id: provided_entity_id,
+                },
+                Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    name: "hack_success".to_owned(),
+                },
+            ]));
         }
-        Some(Effect::combine(vec![
-            crate_hack_success(entity_id, world),
-            Effect::DestroyEntity {
-                entity_id: provided_entity_id,
-            },
-            Effect::PlaySound {
-                handle: AudioHandle::new(),
-                name: "hack_success".to_owned(),
-            },
-        ]))
+        // A sealed crate - still locked, or ruined - is not a container.
+        // Refuse the offer outright rather than letting the default deposit
+        // path swallow the item into a `Contains` link nothing can ever reach
+        // again. An open crate falls through and accepts the deposit normally.
+        (!is_open(world, entity_id)).then_some(Effect::NoEffect)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::keypad::{HackNode, board_index};
     use super::*;
     use crate::scripts::MessagePayload;
-    use dark::properties::{Link, Links, PropObjIcon, ToLink, WrappedEntityId};
+    use cgmath::{Quaternion, vec3};
+    use dark::properties::{
+        FrobFlag, Link, Links, PropFrobInfo, PropObjIcon, ToLink, WrappedEntityId,
+    };
+    use dark::properties::{PropHackDiff, PropObjState};
 
     /// The shipped hydro1 crate 325: locked, authored HackDiff, one Small HE
-    /// Clip on a `Contains` link.
+    /// Clip on a `Contains` link - plus the player backpack the loot path
+    /// transfers into, so taking an item can be asserted end to end.
     fn crate_world() -> (World, EntityId, EntityId) {
         let mut world = World::new();
-        let clip = world.add_entity(PropObjIcon("icn_bull".to_owned()));
+        let clip = world.add_entity((
+            PropObjIcon("icn_bull".to_owned()),
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
         let security_crate = world.add_entity((
             PropObjState(ObjectState::Locked),
             PropHackDiff {
@@ -298,6 +305,16 @@ mod tests {
                 }],
             },
         ));
+        let player = world.add_entity(());
+        let inventory = world.add_entity(Links::empty());
+        world.add_unique(crate::mission::PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
         (world, security_crate, clip)
     }
 
@@ -306,17 +323,6 @@ mod tests {
             scripts: vec!["FreeHack".to_owned()],
             inherits: false,
         })
-    }
-
-    /// Flatten a returned effect into its leaves, so an assertion can look
-    /// for one specific effect regardless of how it was combined.
-    fn flatten(effect: Effect) -> Vec<Effect> {
-        match effect {
-            Effect::Multiple(effects) | Effect::Combined { effects } => {
-                effects.into_iter().flat_map(flatten).collect()
-            }
-            other => vec![other],
-        }
     }
 
     fn has_texture<T: Clone>(components: &[GuiComponent<T>], texture: &str) -> bool {
@@ -379,32 +385,108 @@ mod tests {
         );
     }
 
-    /// Winning the board is what opens the crate: the success outcome is a
-    /// persistent `Hacked` state, and a critical failure ruins it (the
-    /// archetype's own HackText: "Critical failure destroys it").
-    #[test]
-    fn hack_outcomes_set_the_persistent_crate_state() {
-        let (world, security_crate, _clip) = crate_world();
+    /// A live board with two nodes already lit, so lighting `target` decides
+    /// the round. `success_chance` drives the per-node roll (the no-HRM-params
+    /// fallback clamps it to 0..=85, so 0 always fails and 85 nearly always
+    /// succeeds).
+    fn board_one_node_from_the_end(
+        target_is_mine: bool,
+        rng_state: u64,
+    ) -> (HackState, PropHackDiff) {
+        let mut nodes = super::super::keypad::base_hack_board();
+        nodes[board_index(2, 0)] = HackNode::Lit;
+        nodes[board_index(3, 0)] = HackNode::Lit;
+        nodes[board_index(4, 0)] = if target_is_mine {
+            HackNode::Mine
+        } else {
+            HackNode::Free
+        };
+        let diff = PropHackDiff {
+            success_chance: if target_is_mine { 0 } else { 85 },
+            critical_chance: 0,
+            cost: 5.0,
+        };
+        (
+            HackState {
+                phase: HackPhase::Playing,
+                nodes,
+                rng_state,
+            },
+            diff,
+        )
+    }
 
+    /// Playing the winning node through the real `handle_msg` path opens the
+    /// crate persistently. This drives the actual `HackOutcomeEffects` wiring,
+    /// so swapping the success and critical-failure handlers fails it.
+    #[test]
+    fn winning_the_board_persistently_opens_the_crate() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let gui = HackableCrateGui::new();
+
+        let mut wins = 0;
+        for rng_state in 1..=32u64 {
+            let (hack, diff) = board_one_node_from_the_end(false, rng_state);
+            world.add_component(security_crate, diff);
+            let (_after, effect) = gui.handle_msg(
+                security_crate,
+                &world,
+                &HackableCrateState {
+                    hack,
+                    ..HackableCrateState::default()
+                },
+                &HackableCrateMsg::Hack(KeyPadMsg::PlayNode { x: 4, y: 0 }),
+            );
+            let effects = Effect::flatten(vec![effect]);
+            assert!(
+                !effects.iter().any(|effect| matches!(
+                    effect,
+                    Effect::SetObjectState {
+                        state: ObjectState::Broken,
+                        ..
+                    }
+                )),
+                "a mine-free board must never ruin the crate (seed {rng_state})"
+            );
+            if effects.iter().any(|effect| matches!(
+                effect,
+                Effect::SetObjectState { entity_id, state: ObjectState::Hacked } if *entity_id == security_crate
+            )) {
+                wins += 1;
+            }
+        }
         assert!(
-            matches!(
-                crate_hack_success(security_crate, &world),
-                Effect::SetObjectState {
-                    entity_id,
-                    state: ObjectState::Hacked,
-                } if entity_id == security_crate
-            ),
-            "a won hack should persistently open the crate"
+            wins > 0,
+            "connecting the third node should open the crate on at least one seed"
         );
+    }
+
+    /// Hitting a mine ruins the crate for good - the archetype's own HackText:
+    /// "Critical failure destroys it". With a 0% node chance every roll fails,
+    /// so this is deterministic.
+    #[test]
+    fn hitting_a_mine_persistently_ruins_the_crate() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let gui = HackableCrateGui::new();
+        let (hack, diff) = board_one_node_from_the_end(true, 7);
+        world.add_component(security_crate, diff);
+
+        let (_after, effect) = gui.handle_msg(
+            security_crate,
+            &world,
+            &HackableCrateState {
+                hack,
+                ..HackableCrateState::default()
+            },
+            &HackableCrateMsg::Hack(KeyPadMsg::PlayNode { x: 4, y: 0 }),
+        );
+        let effects = Effect::flatten(vec![effect]);
         assert!(
-            matches!(
-                crate_hack_critical_failure(security_crate, &world),
-                Effect::SetObjectState {
-                    entity_id,
-                    state: ObjectState::Broken,
-                } if entity_id == security_crate
-            ),
-            "a critical failure should persistently ruin the crate"
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::SetObjectState { entity_id, state: ObjectState::Broken } if *entity_id == security_crate
+            )),
+            "a critical failure should persistently ruin the crate: {effects:?}"
         );
     }
 
@@ -458,7 +540,7 @@ mod tests {
             .on_provide_for_consumption(security_crate, &world, pick)
             .expect("an ICE Pick should be claimed as a tool, not deposited");
 
-        let effects = flatten(effect);
+        let effects = Effect::flatten(vec![effect]);
         assert!(
             effects.iter().any(|effect| matches!(
                 effect,
@@ -481,37 +563,141 @@ mod tests {
         );
     }
 
-    /// Only an authored `FreeHack` tool opens a crate; an ordinary item
-    /// offered to it still takes the normal deposit path.
+    /// Only an authored `FreeHack` tool opens a crate: any other item offered
+    /// to a locked one must leave it locked and must not be destroyed.
     #[test]
     fn an_ordinary_item_is_not_a_free_hack() {
         let (mut world, security_crate, _clip) = crate_world();
         let wrench = world.add_entity(PropObjIcon("icn_wrench".to_owned()));
         let gui = HackableCrateGui::new();
 
-        assert!(
+        let effects = Effect::flatten(vec![
             gui.on_provide_for_consumption(security_crate, &world, wrench)
-                .is_none(),
-            "a non-tool item must fall through to the ordinary deposit path"
+                .unwrap_or(Effect::NoEffect),
+        ]);
+        assert!(
+            effects.is_empty(),
+            "a non-tool item must neither open the crate nor be consumed: {effects:?}"
         );
     }
 
     /// A second pick is not wasted on an already-open crate, and no pick can
-    /// resurrect one a critical failure ruined.
+    /// resurrect one a critical failure ruined. An open crate is a normal
+    /// container, so the pick falls through to the ordinary deposit; a ruined
+    /// crate is sealed, so the offer is refused outright.
     #[test]
     fn ice_pick_is_not_consumed_by_an_open_or_ruined_crate() {
         let (mut world, security_crate, _clip) = crate_world();
         let pick = ice_pick(&mut world);
         let gui = HackableCrateGui::new();
 
-        for state in [ObjectState::Hacked, ObjectState::Broken] {
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        assert!(
+            gui.on_provide_for_consumption(security_crate, &world, pick)
+                .is_none(),
+            "an open crate is a container: the pick is deposited, not spent"
+        );
+
+        world.add_component(security_crate, PropObjState(ObjectState::Broken));
+        assert!(
+            matches!(
+                gui.on_provide_for_consumption(security_crate, &world, pick),
+                Some(Effect::NoEffect)
+            ),
+            "a ruined crate must refuse the pick outright, not consume it"
+        );
+    }
+
+    /// A sealed crate is NOT a container: an item offered to a locked or
+    /// ruined crate must be refused, never swallowed into a `Contains` link
+    /// the player could never reach again (a quest item dropped on a ruined
+    /// crate would otherwise be lost for good).
+    #[test]
+    fn a_sealed_crate_refuses_a_deposit_instead_of_swallowing_it() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let keycard = world.add_entity(PropObjIcon("icn_card".to_owned()));
+        let gui = HackableCrateGui::new();
+
+        for state in [ObjectState::Locked, ObjectState::Broken] {
             world.add_component(security_crate, PropObjState(state));
             assert!(
-                gui.on_provide_for_consumption(security_crate, &world, pick)
-                    .is_none(),
-                "an ICE Pick must not be spent on a {state:?} crate"
+                matches!(
+                    gui.on_provide_for_consumption(security_crate, &world, keycard),
+                    Some(Effect::NoEffect)
+                ),
+                "a {state:?} crate must refuse a deposit, not swallow the item"
             );
         }
+
+        // ...while an opened crate accepts deposits like any container.
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        assert!(
+            gui.on_provide_for_consumption(security_crate, &world, keycard)
+                .is_none(),
+            "an opened crate should take the ordinary deposit path"
+        );
+    }
+
+    /// A `Locked` crate with no authored `P$HackDiff` can never be hacked by
+    /// anything, so it must behave as a plain container rather than show a
+    /// panel full of loot it refuses to hand over.
+    #[test]
+    fn a_locked_crate_without_a_hack_difficulty_is_a_plain_container() {
+        let (mut world, security_crate, clip) = crate_world();
+        world.delete_component::<PropHackDiff>(security_crate);
+        let gui = HackableCrateGui::new();
+
+        let components = gui.get_components(
+            &None,
+            security_crate,
+            &world,
+            &HackableCrateState::default(),
+        );
+        assert!(
+            button_for(&components, clip),
+            "a crate with nothing to hack should present its contents"
+        );
+
+        let (_after, effect) = gui.handle_msg(
+            security_crate,
+            &world,
+            &HackableCrateState::default(),
+            &HackableCrateMsg::Loot(ContainerGuiMsg::Take(clip)),
+        );
+        assert!(
+            matches!(effect, Effect::DropEntityInfo { dropped_entity_id, .. } if dropped_entity_id == clip),
+            "and it should actually hand them over, got {effect:?}"
+        );
+    }
+
+    /// A ruined crate's terminal face is driven by the durable `ObjState`, not
+    /// the in-memory hack phase - so after a save/load (which resets the
+    /// phase) it still reads as destroyed instead of offering a live START the
+    /// crate would silently refuse.
+    #[test]
+    fn a_ruined_crate_shows_its_failure_face_after_state_is_reset() {
+        let (mut world, security_crate, _clip) = crate_world();
+        world.add_component(security_crate, PropObjState(ObjectState::Broken));
+        let gui = HackableCrateGui::new();
+
+        // Default state = the freshly-loaded panel (HackPhase::Unpaid).
+        let components = gui.get_components(
+            &None,
+            security_crate,
+            &world,
+            &HackableCrateState::default(),
+        );
+        assert!(
+            has_texture(&components, "loseh.pcx"),
+            "a ruined crate should still read as destroyed"
+        );
+        assert!(
+            !components.iter().any(|component| matches!(
+                component,
+                GuiComponent::Button { label: Some(label), .. } if label == "start-hack"
+            )),
+            "and must not offer a START it would refuse"
+        );
     }
 
     /// Board input against an already-open crate is inert (no second charge,
@@ -551,6 +737,21 @@ mod tests {
             matches!(effect, Effect::NoEffect),
             "a locked crate must not yield its loot, got {effect:?}"
         );
+
+        // Control: the identical click transfers once the crate is opened, so
+        // the refusal above is the lock and not an unrelated container guard.
+        let mut world = world;
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        let (_after, effect) = gui.handle_msg(
+            security_crate,
+            &world,
+            &HackableCrateState::default(),
+            &HackableCrateMsg::Loot(ContainerGuiMsg::Take(clip)),
+        );
+        assert!(
+            matches!(effect, Effect::DropEntityInfo { dropped_entity_id, .. } if dropped_entity_id == clip),
+            "an opened crate should hand the same item over, got {effect:?}"
+        );
     }
 
     /// The whole point of the panel: frobbing a crate must actually route
@@ -563,7 +764,7 @@ mod tests {
         let physics = crate::physics::PhysicsWorld::new();
 
         let effect = script.handle_message(security_crate, &world, &physics, &MessagePayload::Frob);
-        let effects = flatten(effect);
+        let effects = Effect::flatten(vec![effect]);
         assert!(
             effects.iter().any(
                 |effect| matches!(effect, Effect::OpenPanel { entity } if *entity == security_crate)

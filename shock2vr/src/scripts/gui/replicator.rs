@@ -1,7 +1,5 @@
 use cgmath::{Vector2, Vector3, vec2, vec3};
-use dark::properties::{
-    ObjectState, PropHackDiff, PropObjState, PropReplicatorContents, PropReplicatorHackedContents,
-};
+use dark::properties::{ObjectState, PropReplicatorContents, PropReplicatorHackedContents};
 use engine::audio::AudioHandle;
 use num_traits::ToPrimitive;
 
@@ -20,7 +18,8 @@ use crate::scripts::{Effect, script_util::*};
 
 use super::{
     keypad::{
-        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, handle_hack_msg,
+        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+        handle_hack_msg, object_state,
     },
     traits::TRAIT_REPLICATOR_EXPERT,
 };
@@ -54,14 +53,6 @@ struct ReplicatorInventory {
     object_names: [String; 6],
 }
 
-fn object_state(world: &World, entity_id: EntityId) -> ObjectState {
-    world
-        .borrow::<View<PropObjState>>()
-        .ok()
-        .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
-        .unwrap_or(ObjectState::Normal)
-}
-
 fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInventory> {
     match object_state(world, entity_id) {
         ObjectState::Broken | ObjectState::Destroyed => None,
@@ -90,13 +81,6 @@ fn active_inventory(world: &World, entity_id: EntityId) -> Option<ReplicatorInve
                     })
             }),
     }
-}
-
-fn hack_diff(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
-    world
-        .borrow::<View<PropHackDiff>>()
-        .ok()
-        .and_then(|diffs| diffs.get(entity_id).ok().copied())
 }
 
 fn can_hack(world: &World, entity_id: EntityId) -> bool {
@@ -455,6 +439,7 @@ mod tests {
     use dark::properties::{
         Link, Links, PropObjIcon, PropPosition, PropStackCount, ToLink, WrappedEntityId,
     };
+    use dark::properties::{PropHackDiff, PropObjState};
 
     fn creates_template(effect: &Effect) -> bool {
         match effect {

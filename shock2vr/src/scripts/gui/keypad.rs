@@ -1,5 +1,5 @@
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{PropHackDiff, PropKeypadCode, PropTemplateId};
+use dark::properties::{ObjectState, PropHackDiff, PropKeypadCode, PropObjState, PropTemplateId};
 use engine::audio::AudioHandle;
 
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -141,6 +141,26 @@ fn board_with_mines(
         nodes[free.remove(selected)] = HackNode::Mine;
     }
     nodes
+}
+
+/// An object's persistent `P$ObjState`, defaulting to `Normal`. Every hackable
+/// object keys its post-hack behavior off this (the replicator's hacked
+/// inventory, the crate's opened lid), and it is a registered Dark property, so
+/// the result survives save/load.
+pub(crate) fn object_state(world: &World, entity_id: EntityId) -> ObjectState {
+    world
+        .borrow::<View<PropObjState>>()
+        .ok()
+        .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
+        .unwrap_or(ObjectState::Normal)
+}
+
+/// An object's authored `P$HackDiff` - the terms this object is hacked on.
+pub(crate) fn hack_diff(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
+    world
+        .borrow::<View<PropHackDiff>>()
+        .ok()
+        .and_then(|diffs| diffs.get(entity_id).ok().copied())
 }
 
 fn hack_cost(diff: PropHackDiff) -> i32 {

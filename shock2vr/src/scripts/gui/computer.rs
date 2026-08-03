@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use cgmath::{Vector2, Vector3, vec2};
 use dark::{
     properties::{
-        Link, Links, ObjectState, PropHackDiff, PropHackText, PropObjState, PropTemplateId, ToLink,
+        Link, Links, ObjectState, PropHackDiff, PropHackText, PropTemplateId, ToLink,
         WrappedEntityId,
     },
     ss2_entity_info::SystemShock2EntityInfo,
@@ -17,7 +17,8 @@ use crate::{
 };
 
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, handle_hack_msg,
+    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+    handle_hack_msg, object_state,
 };
 
 const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
@@ -128,21 +129,6 @@ pub struct ComputerState {
 #[derive(Clone)]
 pub enum ComputerMsg {
     Hack(KeyPadMsg),
-}
-
-fn object_state(world: &World, entity_id: EntityId) -> ObjectState {
-    world
-        .borrow::<View<PropObjState>>()
-        .ok()
-        .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
-        .unwrap_or(ObjectState::Normal)
-}
-
-fn hack_diff(world: &World, entity_id: EntityId) -> Option<PropHackDiff> {
-    world
-        .borrow::<View<PropHackDiff>>()
-        .ok()
-        .and_then(|diffs| diffs.get(entity_id).ok().copied())
 }
 
 fn can_hack(world: &World, entity_id: EntityId) -> bool {
@@ -297,6 +283,7 @@ mod tests {
     use shipyard::World;
 
     use super::*;
+    use dark::properties::PropObjState;
 
     fn flatten(effect: &Effect) -> Vec<&Effect> {
         match effect {
