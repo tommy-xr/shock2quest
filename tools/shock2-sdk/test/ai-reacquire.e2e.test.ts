@@ -162,3 +162,85 @@ test(
     );
   },
 );
+
+// The reopened half of #791 (campaign iteration 22): the AI above is looked at
+// while it can already see the player. The hydro2 Midwife that reopened the
+// issue never could - it takes up its post facing a ledge wall 1.6 units away,
+// so with a fixed heading no line of sight to it can ever exist and the fix
+// above is never reached. A calm creature has to look around.
+test(
+  "a calm native AI scans until it finds a player outside its cone (#791)",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT_SCAN ?? 8593),
+    });
+
+    await game.step({ frames: 60 });
+
+    // The Midwife from the issue, found by its stable template id (runtime
+    // entity ids are reassigned every launch).
+    const listed = await game.entities.list({ filter: "Midwife", limit: 50 });
+    const midwife = listed.entities.find((e) => e.template_id === 1676);
+    assert.ok(midwife, "expected hydro2's Midwife (template 1676)");
+
+    // Never engaged: fully calm, and posted facing the ledge (-X).
+    let detail = await game.entities.detail(midwife.id);
+    assert.equal(aiProp(detail, "AIAlertness"), "Lowest");
+    assert.equal(aiProp(detail, "AIBehavior"), "Idle");
+    assert.notEqual(
+      aiProp(detail, "AITargetVisible"),
+      "true",
+      "setup: the Midwife must start unable to see the player",
+    );
+
+    // A control: another native Midwife across the deck, out of sight.
+    const control = listed.entities.find(
+      (e) => e.template_id === 2156, // MidwifeLucy, ~40 units away behind geometry
+    );
+    assert.ok(control, "expected MidwifeLucy for the control");
+
+    // Stand due north of it: clear line of sight, but 90 degrees off its
+    // heading - outside the 60-degree FOV half-angle. Nothing but scanning
+    // can bring the player into view.
+    await game.player.teleport({ x: 80, y: -1, z: 37 });
+    await game.step({ frames: 30 });
+    const player = await game.player.position();
+    detail = await game.entities.detail(midwife.id);
+    const initialFacing = facingErrorDeg(detail, player);
+    assert.ok(
+      initialFacing > 60,
+      `setup: the player must start outside the FOV cone, got ${initialFacing.toFixed(0)} degrees`,
+    );
+    assert.notEqual(
+      aiProp(detail, "AITargetVisible"),
+      "true",
+      "setup: the player must start unseen",
+    );
+
+    // One full scan cycle is well under 20 sim-seconds.
+    const trace: string[] = [];
+    let reacquired: EntityDetailResult | undefined;
+    for (let tick = 0; tick < 40 && !reacquired; tick++) {
+      await game.step({ frames: 30 }); // 0.5 sim-seconds
+      const d = await game.entities.detail(midwife.id);
+      trace.push(
+        `${((tick + 1) * 0.5).toFixed(1)}s ${aiProp(d, "AIAlertness")}/${aiProp(d, "AIBehavior")}` +
+          ` vis=${aiProp(d, "AITargetVisible")} facing=${facingErrorDeg(d, player).toFixed(0)}deg`,
+      );
+      if (PURSUING.has(aiProp(d, "AIBehavior") ?? "")) reacquired = d;
+    }
+    assert.ok(
+      reacquired,
+      `the posted AI never scanned around to find the player: ${trace.join(", ")}`,
+    );
+
+    // Still no omniscience: the AI across the deck saw nothing.
+    assert.equal(
+      aiProp(await game.entities.detail(control.id), "AIAlertness"),
+      "Lowest",
+      "an AI that cannot see the player must stay calm",
+    );
+  },
+);

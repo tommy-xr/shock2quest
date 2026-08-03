@@ -172,7 +172,7 @@ impl AnimatedMonsterAI {
             handoff_emitted: false,
             death_impact: None,
             took_damage: false,
-            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_behavior: Box::new(RefCell::new(IdleBehavior::new())),
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
@@ -196,7 +196,7 @@ impl AnimatedMonsterAI {
             death_impact: None,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
-            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_behavior: Box::new(RefCell::new(IdleBehavior::new())),
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
@@ -288,7 +288,7 @@ impl AnimatedMonsterAI {
                 return Box::new(RefCell::new(PatrolBehavior::new(point, goal)));
             }
         }
-        Box::new(RefCell::new(IdleBehavior))
+        Box::new(RefCell::new(IdleBehavior::new()))
     }
 
     fn apply_steering_output(

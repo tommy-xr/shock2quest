@@ -113,7 +113,7 @@ impl Behavior for PatrolBehavior {
         _entity_id: EntityId,
     ) -> NextBehavior {
         if self.finished {
-            NextBehavior::Next(Box::new(RefCell::new(IdleBehavior)))
+            NextBehavior::Next(Box::new(RefCell::new(IdleBehavior::new())))
         } else {
             NextBehavior::Stay
         }

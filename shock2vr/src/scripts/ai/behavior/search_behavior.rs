@@ -143,7 +143,7 @@ impl Behavior for SearchBehavior {
             .ok()
             .and_then(|v| v.get(entity_id).ok().map(|a| a.level));
         if matches!(level, Some(AIAlertLevel::Lowest)) {
-            NextBehavior::Next(Box::new(RefCell::new(IdleBehavior)))
+            NextBehavior::Next(Box::new(RefCell::new(IdleBehavior::new())))
         } else {
             NextBehavior::Next(Box::new(RefCell::new(WanderBehavior::new())))
         }
