@@ -1109,11 +1109,15 @@ pub fn create_physics_representation(
             // character controller has no depenetration pass and resolves a
             // penetrating pose to zero movement in every direction (#803).
             // Not stopping the player is the closest this collider gets to
-            // being pushed aside. `Immobile` is what keeps ladders (whose leaf
-            // templates say SPHERE) and other fixtures solid.
+            // being pushed aside. An authored `P$Immobile` (the same
+            // presence test the dynamic path below already uses) is what keeps
+            // level fixtures solid, and climbable is excluded outright: the
+            // climb probe queries as `PLAYER` too, so a non-solid ladder would
+            // also be an unclimbable one.
             let is_unsimulated_debris = phys_type.phys_type == PhysicsModelType::SPHERE
                 && maybe_dimensions.is_none()
-                && !immobile;
+                && !immobile
+                && !is_climbable;
             let group = if is_unsimulated_debris {
                 group.non_solid_to_player()
             } else {
@@ -1526,7 +1530,10 @@ mod tests {
 
     /// A non-immobile climbable object with no dimensions must not become a
     /// dynamic body: there is no authored radius for the SPHERE path, so the
-    /// fallback builds static geometry, never a gravity-driven prop.
+    /// fallback builds static geometry, never a gravity-driven prop. It also
+    /// stays solid to the player: the climb probe queries as `PLAYER`, so a
+    /// ladder taken out of the player's collision filter as debris would be
+    /// unclimbable as well as walk-through.
     #[test]
     fn dimensionless_sphere_never_becomes_dynamic() {
         let mut world = World::new();
@@ -1535,12 +1542,17 @@ mod tests {
         world.remove::<(PropImmobile,)>(entity_id);
         let model = ladder_model();
 
-        create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
-            .expect("climbable entity without dimensions should still get a collider");
+        let handle =
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("climbable entity without dimensions should still get a collider");
 
         let bodies = physics.debug_list_bodies();
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0].body_type, "kinematic");
+        assert!(
+            physics.collider_blocks_player(handle),
+            "a climbable must stay solid to the player"
+        );
     }
 
     /// `PhysType::NONE` means the archetype deliberately disables physical
