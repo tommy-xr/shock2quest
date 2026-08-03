@@ -733,13 +733,22 @@ impl Script for AnimatedMonsterAI {
         // Load alertness configuration from entity properties
         self.config = Self::build_config(world, entity_id);
 
-        // A creature with no config is excluded from awareness entirely (an
-        // apparition - see `build_config`). It never runs an alertness
-        // transition, so it would otherwise sit in the constructor's
-        // scanning idle for its whole life; `idle_behavior` holds it still.
-        if self.config.is_none() {
-            self.current_behavior = self.idle_behavior(world, entity_id);
-        }
+        // Choose the calm behavior now, not just on the first alertness
+        // transition. A behavior is otherwise only picked when alertness
+        // CHANGES level, and both constructors seed a plain `IdleBehavior`, so
+        // a creature that spawns calm and is never alerted keeps that idle for
+        // the whole mission - including one flagged to patrol, which then
+        // never takes a step of its authored route (#807). Spawn alertness is
+        // always the `Lowest` clamp below (no shipped object authors
+        // `P$AI_AlertCap`, and its default `min_level` is `Lowest`), which is
+        // exactly what `idle_behavior` covers - the calm arm of
+        // `behavior_for_alertness`, minus its physics dependency, which
+        // `initialize` has no access to.
+        //
+        // This is also what holds a creature excluded from awareness entirely
+        // (an apparition - see `build_config`) still: `idle_behavior` gives it
+        // the non-scanning idle rather than the constructor's scanning one.
+        self.current_behavior = self.idle_behavior(world, entity_id);
 
         // Initialize alertness state
         let alertness_effect = if let Some(config) = &self.config {
@@ -1550,6 +1559,94 @@ mod tests {
                 "an apparition must hold its authored heading, got {heading:?}",
             );
         }
+    }
+
+    /// Flag `entity_id` as a patroller and (when `with_route`) lay down a
+    /// two-point `AIPatrol` loop 10 units down +X for it to walk.
+    fn make_patroller(world: &mut World, entity_id: EntityId, with_route: bool) {
+        world.add_component(entity_id, dark::properties::PropAIPatrol(true));
+        if !with_route {
+            return;
+        }
+        let mut point = |x: f32| {
+            world.add_entity((
+                crate::runtime_props::RuntimePropTransform(cgmath::Matrix4::from_translation(
+                    vec3(x, 0.0, 0.0),
+                )),
+                dark::properties::Links::empty(),
+            ))
+        };
+        let first = point(10.0);
+        let second = point(20.0);
+        let mut v_links = world
+            .borrow::<shipyard::ViewMut<dark::properties::Links>>()
+            .unwrap();
+        for (from, to) in [(first, second), (second, first)] {
+            (&mut v_links)
+                .get(from)
+                .unwrap()
+                .to_links
+                .push(dark::properties::ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(dark::properties::WrappedEntityId(to)),
+                    link: Link::AIPatrol,
+                });
+        }
+    }
+
+    /// #807: a creature flagged to patrol must walk its authored route from
+    /// spawn. Behavior is otherwise only chosen on an alertness LEVEL CHANGE,
+    /// so a patroller that is never alerted stood on its spawn point for the
+    /// whole mission - patrol only ever started after an alert had come and
+    /// gone.
+    #[test]
+    fn patroller_starts_its_route_without_ever_being_alerted() {
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(180.0));
+        make_patroller(&mut world, entity_id, true);
+
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        assert_eq!(
+            monster.alertness.current_level,
+            AIAlertLevel::Lowest,
+            "the patroller must not need an alert first",
+        );
+        assert_eq!(
+            monster.current_behavior.borrow().name(),
+            "Patrol",
+            "a flagged patroller with a reachable route patrols from spawn",
+        );
+    }
+
+    /// ...but the flag alone is not enough: a mission with no patrol network
+    /// leaves the creature on the ordinary idle (which, post-#791, scans).
+    #[test]
+    fn a_patroller_with_no_route_stands_idle() {
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(180.0));
+        make_patroller(&mut world, entity_id, false);
+
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        assert_eq!(monster.current_behavior.borrow().name(), "Idle");
+    }
+
+    /// A creature excluded from awareness entirely (an apparition - see
+    /// `build_config`) holds its authored mark even when it is flagged to
+    /// patrol and a route exists: leaving the mark is exactly what its
+    /// scripted performance must not do.
+    #[test]
+    fn apparition_holds_its_mark_even_when_flagged_to_patrol() {
+        let (mut world, entity_id) =
+            world_with_creature_and_player(Deg(180.0), "creaturetype apparition");
+        make_patroller(&mut world, entity_id, true);
+
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        assert!(monster.config.is_none(), "apparitions process no alertness");
+        assert_eq!(monster.current_behavior.borrow().name(), "Idle");
     }
 
     /// The counterpart: sight still gates the turn. A creature facing away has
