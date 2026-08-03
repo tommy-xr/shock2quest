@@ -772,7 +772,7 @@ pub fn create_physics_representation(
     let (
         v_pos,
         v_phys_attr,
-        _v_phys_type,
+        v_phys_type,
         _v_phys_dimensions,
         v_frob_info,
         v_hud_select,
@@ -926,6 +926,18 @@ pub fn create_physics_representation(
                 if hud_select.0 {
                     group = CollisionGroup::selectable();
                 }
+            }
+            // This collider is the *model bounding box*, built only so the
+            // object can be frobbed and raycast - it is not an authored
+            // collision volume. Dark makes an object physical by giving it a
+            // `PhysType`; without one there is no physics model at all and
+            // the object is walk-through (its solidity in retail is the
+            // brushwork behind it). Leaving the box solid to the player fills
+            // walk-in fixtures - the hydro2 Resurrection Station alcove is a
+            // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
+            // the capsule against its faces with no way out (#801).
+            if v_phys_type.get(entity_id).is_err() {
+                group = group.non_solid_to_player();
             }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
