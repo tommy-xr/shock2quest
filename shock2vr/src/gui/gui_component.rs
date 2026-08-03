@@ -414,6 +414,61 @@ where
             other => other,
         }
     }
+
+    /// Re-tag this component's events into another panel's message type, so an
+    /// existing panel's components can be embedded inside a composite panel
+    /// (the hackable crate reuses the whole loot panel once the crate is
+    /// open). Only buttons carry events; everything else is pure art.
+    pub fn map<TOut: Clone>(self, f: impl Fn(TEvent) -> TOut) -> GuiComponent<TOut> {
+        match self {
+            Self::Image {
+                position,
+                size,
+                texture,
+                alpha,
+            } => GuiComponent::Image {
+                position,
+                size,
+                texture,
+                alpha,
+            },
+            Self::Text {
+                position,
+                size,
+                font,
+                text,
+                alpha,
+            } => GuiComponent::Text {
+                position,
+                size,
+                font,
+                text,
+                alpha,
+            },
+            Self::Inventory { inventory } => GuiComponent::Inventory { inventory },
+            Self::Button {
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                alpha,
+                entity,
+                label,
+            } => GuiComponent::Button {
+                position,
+                size,
+                texture,
+                on_click: on_click.map(&f),
+                on_grab: on_grab.map(|(left, right)| (f(left), f(right))),
+                hover,
+                alpha,
+                entity,
+                label,
+            },
+        }
+    }
 }
 
 pub fn image<TMsg: Clone>(texture: &str) -> GuiComponent<TMsg> {

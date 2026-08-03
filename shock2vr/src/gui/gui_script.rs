@@ -92,10 +92,16 @@ where
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::ProvideForConsumption { entity } => Effect::DropEntityInfo {
-                parent_entity_id: entity_id,
-                dropped_entity_id: *entity,
-            },
+            // An offered item is a deposit by default (it goes into the
+            // container), but a panel may claim it as a tool instead - see
+            // `Gui::on_provide_for_consumption`.
+            MessagePayload::ProvideForConsumption { entity } => self
+                .gui
+                .on_provide_for_consumption(entity_id, world, *entity)
+                .unwrap_or(Effect::DropEntityInfo {
+                    parent_entity_id: entity_id,
+                    dropped_entity_id: *entity,
+                }),
             // Frobbing a GUI-bearing entity opens its panel as a flat-mode MFD
             // (the original's frob-script -> overlay flow). VR ignores the
             // OpenPanel effect - its panels are world quads driven by `Hover` -
