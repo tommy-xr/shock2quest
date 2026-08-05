@@ -89,7 +89,7 @@ pub use effect::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use shipyard::{EntityId, World};
-use tracing::{Level, info, span, warn};
+use tracing::{Level, info, span, trace, warn};
 
 use crate::util::debug_entity;
 use crate::vr_config::Handedness;
@@ -795,7 +795,7 @@ impl Script for NoopScript {
         _physics: &PhysicsWorld,
         _msg: &MessagePayload,
     ) -> Effect {
-        warn!("message {:?} sent to NoopScript, unhandled", _msg);
+        trace!("message {:?} sent to NoopScript, unhandled", _msg);
         Effect::NoEffect
     }
 }

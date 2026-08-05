@@ -15,7 +15,7 @@ use cgmath::Vector3;
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::HashSet, net::SocketAddr, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, thread, time::Duration};
 use tokio::{signal, sync::mpsc, sync::oneshot};
 use tracing::info;
 
@@ -157,6 +157,15 @@ static INSTANCE_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::n
 /// time-based stepping advance a deterministic, wall-clock-independent amount of
 /// simulation time (60 Hz, matching the game's target frame rate).
 const FIXED_STEP_DT: f32 = 1.0 / 60.0;
+
+/// How long to sleep at the end of an idle loop iteration (paused, no step in
+/// progress). Without this the loop spins as fast as possible - no swap
+/// interval is set anywhere and the window is hidden, so `swap_buffers` never
+/// blocks - pinning a CPU core even when nothing is happening (see #784). The
+/// sleep only delays how soon the next iteration polls the command channel,
+/// so it caps `/v1/step` and `/v1/screenshot` latency at this duration; a few
+/// ms is a no-op for automation but returns the core the rest of the time.
+const IDLE_SLEEP: Duration = Duration::from_millis(4);
 
 /// Head rotation for a yaw/pitch (degrees), matching the desktop runtime's
 /// camera convention (`camera_forward` / `camera_rotation`): at `yaw=pitch=0`
@@ -562,7 +571,9 @@ fn run_game_blocking(
         // Process commands from HTTP server. Step and Screenshot replies are
         // deferred (see below) so callers observe a complete, post-render frame;
         // every other command is handled synchronously here.
+        let mut had_command_this_iteration = false;
         while let Ok(command) = command_rx.try_recv() {
+            had_command_this_iteration = true;
             match command {
                 RuntimeCommand::Step(step_spec, reply) => {
                     if pending_step_reply.is_some() {
@@ -635,6 +646,36 @@ fn run_game_blocking(
                     );
                 }
             }
+        }
+
+        // Throttle: paused, no step in progress, no command arrived this
+        // iteration, nothing queued to render for, and no deferred level
+        // transition (--experimental loading_screen) needs frames pumped.
+        // Without this the loop spins as fast as possible - no swap interval
+        // is set anywhere and the window is hidden, so `swap_buffers` never
+        // blocks - pinning a CPU core running an unchanged frame's
+        // update/render even when nothing is happening (see #784). Skipping
+        // straight back to the top (rather than sleeping and still
+        // rendering) also means an idle runtime does no GL work at all until
+        // there's something to do. `/v1/step` and `/v1/screenshot` are
+        // unaffected: both arrive as a command, which sets
+        // `had_command_this_iteration` and falls through to the normal
+        // update/render path below in the same iteration they land in.
+        // Stepping (fixed timestep) and any future free-running mode are
+        // also unaffected - both keep `step_requested` or `is_paused` out of
+        // this condition so they always fall through. The pending-transition
+        // check matters because `pending_transition.frames_shown` only
+        // advances inside `game.update` - without it, a transition that's
+        // still in flight when stepping ends (back to paused) would freeze
+        // instead of finishing.
+        if is_paused
+            && !step_requested
+            && !had_command_this_iteration
+            && pending_screenshots.is_empty()
+            && !game.has_pending_transition()
+        {
+            thread::sleep(IDLE_SLEEP);
+            continue;
         }
 
         // Only update the game if not paused or if step was requested
