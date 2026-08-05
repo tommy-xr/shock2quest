@@ -102,6 +102,53 @@ impl SkillLevels {
     }
 }
 
+/// The four kinds of software the player can install, in the original's
+/// `P$SoftType` order (1 = Hack, 2 = Modify, 3 = Repair, 4 = Research). The
+/// same order indexes the `SoftUpgrade0..3` strings in `res/strings/MISC.STR`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Software {
+    Hack,
+    Modify,
+    Repair,
+    Research,
+}
+
+impl Software {
+    /// Resolve the authored `P$SoftType` value. `0` (the unused `PDA Soft`
+    /// archetype) and anything out of range have no slot.
+    pub fn from_soft_type(soft_type: i32) -> Option<Software> {
+        match soft_type {
+            1 => Some(Software::Hack),
+            2 => Some(Software::Modify),
+            3 => Some(Software::Repair),
+            4 => Some(Software::Research),
+            _ => None,
+        }
+    }
+}
+
+/// Installed software versions, one per [`Software`] slot. `0` means no
+/// software of that kind is installed; installing only ever raises the value
+/// (a V2 soft supersedes V1, a V1 soft found after V2 is redundant).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftwareVersions {
+    pub hack: i32,
+    pub modify: i32,
+    pub repair: i32,
+    pub research: i32,
+}
+
+impl SoftwareVersions {
+    fn get_mut(&mut self, software: Software) -> &mut i32 {
+        match software {
+            Software::Hack => &mut self.hack,
+            Software::Modify => &mut self.modify,
+            Software::Repair => &mut self.repair,
+            Software::Research => &mut self.research,
+        }
+    }
+}
+
 /// The player's persistent character sheet: primary stats, trained skills, and
 /// mastered psi disciplines, plus the set of training years already granted
 /// (so a tour reward applies exactly once per year even if a tour marker
@@ -141,6 +188,11 @@ pub struct PlayerStats {
     /// `scripts::gui::traits` for names and which traits have live effects.
     #[serde(default)]
     pub os_traits: Vec<u8>,
+    /// Installed software versions (hack/modify/repair/research), raised by
+    /// picking up a soft (`scripts::auto_install_soft`). `#[serde(default)]`
+    /// keeps saves written before this field existed loadable.
+    #[serde(default)]
+    pub software: SoftwareVersions,
 }
 
 /// The player has four O/S trait slots (one per single-use machine in the game).
@@ -163,6 +215,7 @@ impl Default for PlayerStats {
             cyber_modules: 0,
             psi_tier: 0,
             os_traits: Vec::new(),
+            software: SoftwareVersions::default(),
         }
     }
 }
@@ -231,6 +284,18 @@ impl PlayerStats {
     /// Raise a trainable skill by one level (a trainer purchase).
     pub fn raise_skill(&mut self, skill: Skill) {
         *self.skills.get_mut(skill) += 1;
+    }
+
+    /// Install a soft. The original keeps the higher of the installed and
+    /// picked-up version (a V2 supersedes V1); a version at or below the
+    /// installed one is redundant. Returns `true` when the sheet was raised.
+    pub fn install_software(&mut self, software: Software, level: i32) -> bool {
+        let slot = self.software.get_mut(software);
+        if level <= *slot {
+            return false;
+        }
+        *slot = level;
+        true
     }
 
     /// Whether an O/S trait (retail id 1..=16) is owned.
@@ -543,6 +608,56 @@ mod tests {
         let legacy = r#"{"strength":1,"endurance":1,"agility":1,"psionic_ability":1,"cyber_affinity":1,"skills":{"standard_weapons":0,"energy_weapons":0,"heavy_weapons":0,"exotic_weapons":0,"hack":0,"repair":0,"modify":0,"maintenance":0,"research":0},"psi_disciplines":[],"granted_years":[]}"#;
         let loaded: PlayerStats = serde_json::from_str(legacy).unwrap();
         assert_eq!(loaded.cyber_modules, 0);
+    }
+
+    #[test]
+    fn installing_software_keeps_the_higher_version() {
+        let mut stats = PlayerStats::new();
+        assert_eq!(stats.software.hack, 0);
+
+        // A V2 soft installs over nothing...
+        assert!(stats.install_software(Software::Hack, 2));
+        assert_eq!(stats.software.hack, 2);
+        // ...a V1 found afterwards is redundant...
+        assert!(!stats.install_software(Software::Hack, 1));
+        // ...as is a second copy of the same version...
+        assert!(!stats.install_software(Software::Hack, 2));
+        assert_eq!(stats.software.hack, 2);
+        // ...and a V3 supersedes it.
+        assert!(stats.install_software(Software::Hack, 3));
+        assert_eq!(stats.software.hack, 3);
+
+        // Slots are independent.
+        assert!(stats.install_software(Software::Research, 1));
+        assert_eq!(stats.software.research, 1);
+        assert_eq!(stats.software.hack, 3);
+        assert_eq!(stats.software.modify, 0);
+        assert_eq!(stats.software.repair, 0);
+    }
+
+    #[test]
+    fn soft_type_maps_to_the_authored_software_slots() {
+        // P$SoftType on the four soft class archetypes (-321..-324); the
+        // unused PDA Soft archetype authors 0 (no slot).
+        assert_eq!(Software::from_soft_type(1), Some(Software::Hack));
+        assert_eq!(Software::from_soft_type(2), Some(Software::Modify));
+        assert_eq!(Software::from_soft_type(3), Some(Software::Repair));
+        assert_eq!(Software::from_soft_type(4), Some(Software::Research));
+        assert_eq!(Software::from_soft_type(0), None);
+        assert_eq!(Software::from_soft_type(5), None);
+    }
+
+    #[test]
+    fn software_survives_serde_and_defaults_for_old_saves() {
+        let mut stats = PlayerStats::new();
+        stats.install_software(Software::Repair, 3);
+        let back: PlayerStats =
+            serde_json::from_str(&serde_json::to_string(&stats).unwrap()).expect("round trip");
+        assert_eq!(back.software.repair, 3);
+        // A save written before this field existed loads with no software.
+        let legacy = r#"{"strength":1,"endurance":1,"agility":1,"psionic_ability":1,"cyber_affinity":1,"skills":{"standard_weapons":0,"energy_weapons":0,"heavy_weapons":0,"exotic_weapons":0,"hack":0,"repair":0,"modify":0,"maintenance":0,"research":0},"psi_disciplines":[],"granted_years":[]}"#;
+        let loaded: PlayerStats = serde_json::from_str(legacy).unwrap();
+        assert_eq!(loaded.software, SoftwareVersions::default());
     }
 
     #[test]

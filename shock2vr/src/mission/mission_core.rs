@@ -3562,6 +3562,47 @@ impl MissionCore {
                     }
                 }
 
+                Effect::InstallSoftware {
+                    entity_id,
+                    software,
+                    level,
+                } => {
+                    // Two frobs of the same soft can be queued before either
+                    // effect runs (both VR hands in one frame); the second must
+                    // not report the soft it already installed as redundant.
+                    let is_alive = self
+                        .world
+                        .borrow::<EntitiesView>()
+                        .is_ok_and(|entities| entities.is_alive(entity_id));
+                    if !is_alive {
+                        continue;
+                    }
+                    // Atomic compare-and-install against live state: the sheet
+                    // keeps the higher version, so a soft picked up after a
+                    // better one is redundant (retail MISC.STR `SoftUseless`).
+                    // Either way the soft is consumed - it never occupies
+                    // inventory.
+                    let installed = self
+                        .world
+                        .borrow::<UniqueViewMut<QuestInfo>>()
+                        .unwrap()
+                        .player_stats_mut()
+                        .install_software(software, level);
+                    if installed {
+                        // Retail reports MISC.STR `SoftUpgrade0..3` here and
+                        // `SoftUseless` below; the port has no player-facing
+                        // message facility yet, so both go to the game log.
+                        game_log!(INFO, "{:?} software upgraded to level {}", software, level);
+                        effects.push_front(Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            name: "boot_sw".to_owned(),
+                        });
+                    } else {
+                        game_log!(INFO, "Redundant software not installed.");
+                    }
+                    self.destroy_entity(entity_id);
+                }
+
                 Effect::ActivatePsiPower {
                     template_id,
                     name,

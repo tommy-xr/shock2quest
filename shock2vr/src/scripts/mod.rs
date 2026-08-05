@@ -4,6 +4,7 @@ pub mod speech_registry;
 pub mod speech_util;
 
 mod apparition;
+mod auto_install_soft;
 mod base_button;
 mod base_elevator;
 mod base_monster;
@@ -115,6 +116,7 @@ use self::reduce_psi::ReducePsi;
 use self::reroute_elevator_button::RerouteElevatorButton;
 use self::trap_signal::TrapSignal;
 use self::{
+    auto_install_soft::AutoInstallSoft,
     base_button::BaseButton,
     base_elevator::BaseElevator,
     base_monster::BaseMonster,
@@ -1023,8 +1025,8 @@ impl ScriptWorld {
             "medkitscript" => Box::new(UnimplementedScript::new(&script_name)), // cyber modules
             "speedpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
             "radpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
-            "autoinstallsoft" => Box::new(UnimplementedScript::new(&script_name)), // auto install software
-            "strboost" => Box::new(UnimplementedScript::new(&script_name)),        // strength boost
+            "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
+            "strboost" => Box::new(UnimplementedScript::new(&script_name)), // strength boost
             "intboost" => Box::new(UnimplementedScript::new(&script_name)),
             "statboostimplant" => Box::new(UnimplementedScript::new(&script_name)),
 

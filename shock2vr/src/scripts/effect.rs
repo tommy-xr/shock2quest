@@ -210,6 +210,18 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Install a soft on the character sheet and consume the object it came
+    /// from. Emitted by `scripts::auto_install_soft` when a soft is frobbed in
+    /// the world or taken from a container. The applier does the atomic
+    /// compare (installing only ever raises the version) so a redundant soft
+    /// is reported rather than downgrading the sheet; either way the object is
+    /// consumed - softs never occupy inventory.
+    InstallSoftware {
+        entity_id: EntityId,
+        software: crate::player_stats::Software,
+        level: i32,
+    },
+
     /// Activate (or refresh) a sustained psi power on the player for
     /// `duration_secs` (`ActivePsiPowers` unique). Emitted by the psi amp
     /// when a sustained (activation type 1) power is cast; a per-frame tick

@@ -412,6 +412,18 @@ export interface PlayerStats {
   /** O/S upgrade traits acquired at trait machines, by retail trait id
    * (1..=16, TRAITS.STR order), in acquisition order; at most 4. */
   os_traits: number[];
+  /** Installed software versions, raised by picking up a soft (softs
+   * auto-install and never enter inventory). 0 = none installed. */
+  software: SoftwareVersions;
+}
+
+/** Installed software versions, one per soft class. Installing keeps the
+ * higher of the installed and picked-up version (a V2 supersedes a V1). */
+export interface SoftwareVersions {
+  hack: number;
+  modify: number;
+  repair: number;
+  research: number;
 }
 
 export interface FrameSnapshot {
