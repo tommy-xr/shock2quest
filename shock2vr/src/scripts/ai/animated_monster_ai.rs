@@ -78,6 +78,34 @@ fn default_alert_cap() -> PropAIAlertCap {
     }
 }
 
+/// Whether a creature that can currently see the player should turn to face
+/// it, overriding the heading its own behavior asked for.
+///
+/// Sight is the only thing that escalates alertness, but the behaviors an
+/// unaware creature runs steer by their own agenda - wander picks a random
+/// destination, patrol follows its route, search walks to a stale position -
+/// so a creature that spots the player promptly turns away, loses the
+/// contact before it can escalate, and decays back to calm. It then stands
+/// facing wherever it stopped, permanently blind to a player outside that
+/// cone: the "never re-acquires after alertness decays" loop of #791.
+/// Orienting on what it can see lets the normal escalation ladder finish.
+///
+/// Pursuing levels (Moderate and up) are excluded because their behaviors
+/// already steer at their target, a running scripted sequence owns its
+/// actor's heading, and a creature with no alertness config at all (an
+/// apparition - see `build_config`) must never notice the player.
+fn should_orient_on_target(
+    processes_alertness: bool,
+    level: AIAlertLevel,
+    is_visible: bool,
+    scripted: ScriptedState,
+) -> bool {
+    processes_alertness
+        && is_visible
+        && matches!(level, AIAlertLevel::Lowest | AIAlertLevel::Low)
+        && scripted != ScriptedState::Running
+}
+
 /// Forward-speed multiplier for a given heading error: 1.0 facing the
 /// travel direction, ramping down to a third by 60 degrees of error and
 /// flooring there. The floor is never zero - steering chains (collision
@@ -144,7 +172,7 @@ impl AnimatedMonsterAI {
             handoff_emitted: false,
             death_impact: None,
             took_damage: false,
-            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_behavior: Box::new(RefCell::new(IdleBehavior::new())),
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
@@ -168,7 +196,7 @@ impl AnimatedMonsterAI {
             death_impact: None,
             took_damage: false,
             // Start with IdleBehavior - alertness will drive behavior changes
-            current_behavior: Box::new(RefCell::new(IdleBehavior)),
+            current_behavior: Box::new(RefCell::new(IdleBehavior::new())),
             current_heading: Deg(0.0),
             animation_seq: 0,
             locomotion_seq: 0,
@@ -254,13 +282,21 @@ impl AnimatedMonsterAI {
     /// it is flagged to and a route exists, otherwise stand idle. Falls back to
     /// idle when the mission has no patrol network reachable from here.
     fn idle_behavior(&self, world: &World, entity_id: EntityId) -> Box<RefCell<dyn Behavior>> {
+        // A creature excluded from awareness entirely (an apparition - see
+        // `build_config`) can never see the player, so it has nothing to
+        // look around for and no reason to leave its mark: it holds the
+        // heading its authored performance was staged with. This also covers
+        // the handback after a scripted sequence finishes.
+        if self.config.is_none() {
+            return Box::new(RefCell::new(IdleBehavior::holding_post()));
+        }
         if is_patroller(world, entity_id) {
             let (position, _) = get_position_and_forward(world, entity_id);
             if let Some((point, goal)) = nearest_patrol_point(world, position.to_vec()) {
                 return Box::new(RefCell::new(PatrolBehavior::new(point, goal)));
             }
         }
-        Box::new(RefCell::new(IdleBehavior))
+        Box::new(RefCell::new(IdleBehavior::new()))
     }
 
     fn apply_steering_output(
@@ -697,6 +733,14 @@ impl Script for AnimatedMonsterAI {
         // Load alertness configuration from entity properties
         self.config = Self::build_config(world, entity_id);
 
+        // A creature with no config is excluded from awareness entirely (an
+        // apparition - see `build_config`). It never runs an alertness
+        // transition, so it would otherwise sit in the constructor's
+        // scanning idle for its whole life; `idle_behavior` holds it still.
+        if self.config.is_none() {
+            self.current_behavior = self.idle_behavior(world, entity_id);
+        }
+
         // Initialize alertness state
         let alertness_effect = if let Some(config) = &self.config {
             let initial_level = alertness::clamp_level(AIAlertLevel::Lowest, &config.alert_cap);
@@ -945,6 +989,21 @@ impl Script for AnimatedMonsterAI {
                 Steering::from_current(self.current_heading),
                 Effect::NoEffect,
             ));
+
+        // Keep looking at a player this creature can actually see, so the
+        // sighting survives long enough to escalate (see
+        // `should_orient_on_target`). The behavior's own steering effects
+        // still apply - only the heading is overridden.
+        let steering_output = if should_orient_on_target(
+            self.config.is_some(),
+            self.alertness.current_level,
+            is_visible,
+            self.current_behavior.borrow().scripted_state(),
+        ) {
+            orient_toward_player(world, entity_id).unwrap_or(steering_output)
+        } else {
+            steering_output
+        };
 
         let rotation_effect = self.apply_steering_output(steering_output, time, entity_id);
 
@@ -1342,6 +1401,16 @@ impl Script for AnimatedMonsterAI {
     }
 }
 
+/// Steering that faces the player's current position.
+fn orient_toward_player(world: &World, entity_id: EntityId) -> Option<SteeringOutput> {
+    let player_pos = world.borrow::<UniqueView<PlayerInfo>>().ok()?.pos;
+    let (position, _) = get_position_and_forward(world, entity_id);
+    Some(Steering::turn_to_point(
+        position,
+        crate::util::vec3_to_point3(player_pos),
+    ))
+}
+
 fn player_is_within_watch_obj(world: &World, entity_id: EntityId, radius: f32) -> bool {
     let u_player = world.borrow::<shipyard::UniqueView<PlayerInfo>>().unwrap();
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
@@ -1367,6 +1436,191 @@ fn is_attack_animation(motion_query_items: &[MotionQueryItem]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A live monster at the origin, turned `heading` degrees off +Z, with the
+    /// player standing 10 units down +Z. The physics world is empty, so
+    /// line-of-sight is always clear and only the FOV cone gates visibility.
+    fn world_with_monster_and_player(heading: Deg<f32>) -> (World, EntityId) {
+        world_with_creature_and_player(heading, "creaturetype hybrid")
+    }
+
+    fn world_with_creature_and_player(heading: Deg<f32>, class_tag: &str) -> (World, EntityId) {
+        let mut world = World::new();
+        let rotation = Quaternion::from_angle_y(heading);
+        let entity_id = world.add_entity((
+            dark::properties::PropHitPoints { hit_points: 12 },
+            dark::properties::PropClassTag::from_string(class_tag),
+            dark::properties::PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation,
+                cell: 0,
+            },
+            crate::runtime_props::RuntimePropTransform(cgmath::Matrix4::from(rotation)),
+        ));
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 10.0),
+            rotation: Quaternion::from_angle_y(Deg(0.0)),
+            entity_id: EntityId::dead(),
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: EntityId::dead(),
+        });
+        (world, entity_id)
+    }
+
+    /// The yaw (degrees off +Z) the monster asked the world to set this frame.
+    fn commanded_heading(effects: &[Effect]) -> Option<Deg<f32>> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::SetRotation { rotation, .. } => {
+                Some(Deg(2.0 * rotation.v.y.atan2(rotation.s).to_degrees()))
+            }
+            _ => None,
+        })
+    }
+
+    fn step(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId) -> Vec<Effect> {
+        let physics = PhysicsWorld::new();
+        let time = Time {
+            elapsed: std::time::Duration::from_millis(100),
+            total: std::time::Duration::from_millis(100),
+        };
+        Effect::flatten(vec![monster.update(entity_id, world, &physics, &time)])
+    }
+
+    /// #791: a calm creature that can see the player must turn to look at it.
+    /// Its idle/wander/patrol steering has its own agenda, so without this the
+    /// sighting is dropped before alertness can escalate and the creature ends
+    /// up parked facing away, unable to ever re-acquire.
+    #[test]
+    fn calm_monster_turns_toward_a_visible_player() {
+        // 45 degrees off the player: inside the 60-degree FOV half-angle, so
+        // the player is plainly visible.
+        let (world, entity_id) = world_with_monster_and_player(Deg(45.0));
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+        assert_eq!(monster.alertness.current_level, AIAlertLevel::Lowest);
+
+        let effects = step(&mut monster, &world, entity_id);
+
+        // 100ms at the 180 deg/s turn speed closes 18 of the 45 degrees.
+        let heading = commanded_heading(&effects).expect("the AI steers every frame");
+        assert!(
+            (26.0..28.0).contains(&heading.0),
+            "a calm AI that sees the player should turn toward it (0 degrees), got {heading:?}",
+        );
+    }
+
+    /// Apparitions replay an authored performance and are excluded from
+    /// alertness entirely (`build_config` returns no config for them), so the
+    /// player they "see" must not turn their head either - a ghost that
+    /// tracked the player would face away from its mark.
+    #[test]
+    fn apparition_does_not_track_a_visible_player() {
+        let (world, entity_id) =
+            world_with_creature_and_player(Deg(45.0), "creaturetype apparition");
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+        assert!(monster.config.is_none(), "apparitions process no alertness");
+
+        let effects = step(&mut monster, &world, entity_id);
+
+        let heading = commanded_heading(&effects).expect("the AI steers every frame");
+        assert!(
+            (heading.0 - 45.0).abs() < 1.0,
+            "an apparition must hold its authored heading, got {heading:?}",
+        );
+    }
+
+    /// ...and it must keep holding it: the idle scan that lets a posted
+    /// creature look around (#791) must not reach a creature excluded from
+    /// awareness, or a ghost slowly swings off its authored mark.
+    #[test]
+    fn apparition_holds_its_heading_instead_of_scanning() {
+        let (world, entity_id) =
+            world_with_creature_and_player(Deg(180.0), "creaturetype apparition");
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        // Well past the idle scan's dwell and a full sweep.
+        for _ in 0..200 {
+            let effects = step(&mut monster, &world, entity_id);
+            let heading = commanded_heading(&effects).expect("the AI steers every frame");
+            assert!(
+                (heading.0.abs() - 180.0).abs() < 1.0,
+                "an apparition must hold its authored heading, got {heading:?}",
+            );
+        }
+    }
+
+    /// The counterpart: sight still gates the turn. A creature facing away has
+    /// no idea the player is there and must not swivel onto them.
+    #[test]
+    fn calm_monster_ignores_a_player_outside_its_fov() {
+        // Turned 180 degrees from the player - well outside the FOV cone.
+        let (world, entity_id) = world_with_monster_and_player(Deg(180.0));
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        let effects = step(&mut monster, &world, entity_id);
+
+        let heading = commanded_heading(&effects).expect("the AI steers every frame");
+        assert!(
+            (heading.0.abs() - 180.0).abs() < 1.0,
+            "an AI that cannot see the player must hold its heading, got {heading:?}",
+        );
+    }
+
+    #[test]
+    fn orienting_on_target_needs_sight_and_a_non_pursuing_unscripted_ai() {
+        use ScriptedState::*;
+        // Sighted while unaware or merely suspicious: look at it.
+        assert!(should_orient_on_target(
+            true,
+            AIAlertLevel::Lowest,
+            true,
+            NotScripted
+        ));
+        assert!(should_orient_on_target(
+            true,
+            AIAlertLevel::Low,
+            true,
+            NotScripted
+        ));
+        // No sight, no turn.
+        assert!(!should_orient_on_target(
+            true,
+            AIAlertLevel::Lowest,
+            false,
+            NotScripted
+        ));
+        // Pursuing behaviors steer at their own target.
+        assert!(!should_orient_on_target(
+            true,
+            AIAlertLevel::Moderate,
+            true,
+            NotScripted
+        ));
+        assert!(!should_orient_on_target(
+            true,
+            AIAlertLevel::High,
+            true,
+            NotScripted
+        ));
+        // A running scripted sequence owns its actor's heading.
+        assert!(!should_orient_on_target(
+            true,
+            AIAlertLevel::Lowest,
+            true,
+            Running
+        ));
+        // A creature that processes no alertness notices nothing.
+        assert!(!should_orient_on_target(
+            false,
+            AIAlertLevel::Lowest,
+            true,
+            NotScripted
+        ));
+    }
 
     #[test]
     fn killed_monster_initializes_inert_without_replaying_death_effects() {
