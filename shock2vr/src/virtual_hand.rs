@@ -35,6 +35,7 @@ pub struct VirtualHand {
     handedness: Handedness,
 }
 
+#[derive(Debug)]
 pub enum VirtualHandEffect {
     OutMessage {
         message: Message,
@@ -62,11 +63,20 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
-    /// Flat-only world pickup of ordinary loot into the player backpack.
-    /// VR preserves its physical hand-grab path and never emits this.
+    /// Flat-only: move an item into the player's backpack - a world pickup of
+    /// ordinary loot, or the weapon a wield swap displaced. VR preserves its
+    /// physical hand-grab path and never emits this.
+    ///
+    /// Storing an item that was HELD must be paired with a preceding
+    /// `MessagePayload::Drop` to it (see `FlatPlayerController::wield`): unlike
+    /// `DropItem`, this variant does not dispatch one, so the world-model
+    /// restore and psi-charge cancel would otherwise be skipped.
     StoreItem {
         entity_id: EntityId,
     },
+    /// Eject an item into the world (it regains physics + its world model).
+    /// This is an explicit drop only: VR opening its hand. Losing an item to a
+    /// wield swap is a `StoreItem`, not a drop (#777).
     DropItem {
         entity_id: EntityId,
     },

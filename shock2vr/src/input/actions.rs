@@ -32,7 +32,7 @@ pub enum InputAction {
     /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)
     DebugHitboxCyclePose,
 
-    /// Wield the next player weapon (debug: spawn-and-wield, dropping the
+    /// Wield the next player weapon (debug: spawn-and-wield, holstering the
     /// previous). Cycles the full SS2 weapon roster for flat-mode aim/viewmodel
     /// testing.
     CycleWeapon,

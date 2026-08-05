@@ -3,7 +3,7 @@
 //! The dedicated flatscreen analog of `VirtualHand`: it wields a single weapon
 //! as a first-person viewmodel, fires it on the trigger, and uses/frobs/picks
 //! up the object under the crosshair. It produces the same `VirtualHandEffect`s
-//! the VR hands do (`HoldItem`, `DropItem`, `SetPositionRotation`,
+//! the VR hands do (`HoldItem`, `StoreItem`, `SetPositionRotation`,
 //! `OutMessage { TriggerPull/Release/Frob }`), so `mission_core` processes VR
 //! and flat through one shared path, and the weapon/frob scripts run unchanged.
 //!
@@ -103,12 +103,19 @@ impl FlatPlayerController {
     }
 
     /// Wield `entity_id` as the first-person weapon. Any previously-wielded
-    /// weapon is dropped back into the world (regains physics + world model).
+    /// weapon is holstered back into the player's backpack, as the original
+    /// does - a swap never costs you the weapon (#777). Only an explicit drop
+    /// (the use-mode throw) puts a carried weapon back in the world.
     pub fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
         let mut effects = Vec::new();
         if let Some(prev) = self.wielded_entity {
             if prev != entity_id {
-                effects.push(VirtualHandEffect::DropItem { entity_id: prev });
+                // `Drop` is what tells the weapon it left the hand: it restores
+                // the world model over the first-person `_h` mesh and cancels a
+                // charging psi amp. The item then goes to the backpack instead
+                // of gaining physics presence at the viewmodel's position.
+                effects.push(out_message(prev, MessagePayload::Drop));
+                effects.push(VirtualHandEffect::StoreItem { entity_id: prev });
             }
         }
         self.wielded_entity = Some(entity_id);
@@ -354,6 +361,70 @@ mod tests {
                 [VirtualHandEffect::HoldItem { entity_id }] if *entity_id == weapon
             ),
             "weapon pickup should preserve flat auto-wield"
+        );
+    }
+
+    /// #777: swapping the wielded weapon used to eject the previous one onto
+    /// the floor. The original returns it to the backpack; only an explicit
+    /// drop takes a weapon out of the player's possession.
+    #[test]
+    fn wielding_another_weapon_stores_the_displaced_one_instead_of_dropping_it() {
+        let mut world = World::new();
+        let wrench = world.add_entity(pistol());
+        let shotgun = world.add_entity(pistol());
+        let mut controller = FlatPlayerController::new();
+        controller.wield(wrench);
+
+        let effects = controller.wield(shotgun);
+
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, VirtualHandEffect::DropItem { .. })),
+            "a wield swap must never eject the displaced weapon into the world"
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::StoreItem { entity_id } if *entity_id == wrench
+            )),
+            "the displaced weapon should go back to the backpack, got {effects:?}"
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Drop,
+                    },
+                } if *to == wrench
+            )),
+            "the displaced weapon must still be told it left the hand (world \
+             model restore, psi-charge cancel), got {effects:?}"
+        );
+    }
+
+    /// The world-pickup auto-wield is the path the campaign session lost a
+    /// weapon on: it applies the controller's effects directly, with no
+    /// `Effect::GrabEntity` recovery behind it.
+    #[test]
+    fn world_pickup_of_a_second_weapon_stores_the_wielded_one() {
+        let mut world = World::new();
+        let carried = world.add_entity(pistol());
+        let on_the_floor = world.add_entity(pistol());
+        let mut controller = FlatPlayerController::new();
+        controller.wield(carried);
+
+        let effects = controller.pick_up(&world, on_the_floor);
+
+        assert_eq!(controller.wielded_entity(), Some(on_the_floor));
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::StoreItem { entity_id } if *entity_id == carried
+            )),
+            "picking a weapon up must holster the previous one, got {effects:?}"
         );
     }
 
