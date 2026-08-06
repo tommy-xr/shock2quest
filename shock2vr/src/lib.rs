@@ -4,7 +4,6 @@ pub mod hand_pose;
 pub mod input;
 pub mod input_context;
 pub mod inventory;
-pub mod map_renderer;
 pub mod save_load;
 pub mod scenes;
 pub mod teleport;
