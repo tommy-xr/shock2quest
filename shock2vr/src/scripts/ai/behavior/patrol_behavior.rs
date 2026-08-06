@@ -1,4 +1,4 @@
-use cgmath::{Deg, Vector3};
+use cgmath::{Deg, EuclideanSpace, Vector3};
 use dark::SCALE_FACTOR;
 use dark::motion::MotionQueryItem;
 use shipyard::{EntityId, World};
@@ -25,6 +25,23 @@ const PATROL_ARRIVE_DISTANCE: f32 = 4.0 / SCALE_FACTOR;
 /// ...and within this height difference (patrol markers sit near the floor).
 /// Standing under a marker on a walkway above is not arrival.
 const PATROL_ARRIVE_HEIGHT: f32 = 6.0 / SCALE_FACTOR;
+/// The route point the AI happens to be nearest is not always one it can
+/// walk to: A* can report no route at all (the point sits in a disconnected
+/// part of the navigation graph), and the fallback whisker steering then just
+/// presses the body into the geometry in between. Giving up after this long
+/// without covering ground - the patrol-scale counterpart of the path
+/// follower's own per-waypoint stall watchdog, which cannot see a route that
+/// never existed - keeps the route moving instead of walking into a wall for
+/// the rest of the mission.
+const PATROL_STALL_SECONDS: f32 = 5.0;
+/// Ground covered (XZ, 2 Dark feet) that counts as progress and re-anchors
+/// the stall watchdog. A patrolling AI clears this in a fraction of a second,
+/// so only a body that is genuinely going nowhere trips the timer.
+const PATROL_STALL_PROGRESS: f32 = 2.0 / SCALE_FACTOR;
+/// Points skipped in a row, without reaching one in between, after which the
+/// AI stops patrolling altogether and hands back to idle - rather than
+/// shuffling forever between points it has no route to.
+const PATROL_MAX_SKIPPED_POINTS: u32 = 3;
 
 /// Walk an authored patrol route: head to the current patrol point, and on
 /// arrival advance to the next one along the `AIPatrol` link chain. Routes are
@@ -39,8 +56,15 @@ pub struct PatrolBehavior {
     steering_strategy: Box<dyn SteeringStrategy>,
     /// Set when the route dead-ends (a chain that isn't a loop): the AI has
     /// reached the final point and there is nowhere further to go, so it stops
-    /// patrolling and hands back to idle.
+    /// patrolling and hands back to idle. Also set once the AI has skipped
+    /// PATROL_MAX_SKIPPED_POINTS unreachable points in a row.
     finished: bool,
+    /// Stall watchdog: where the AI was when the timer was last re-anchored,
+    /// and how long it has been stuck within PATROL_STALL_PROGRESS of it.
+    stall_anchor: Option<Vector3<f32>>,
+    stall_seconds: f32,
+    /// Points given up on since the last one actually reached.
+    skipped_points: u32,
 }
 
 impl PatrolBehavior {
@@ -50,6 +74,9 @@ impl PatrolBehavior {
             goal,
             steering_strategy: Self::steering_to(goal),
             finished: false,
+            stall_anchor: None,
+            stall_seconds: 0.0,
+            skipped_points: 0,
         }
     }
 
@@ -62,12 +89,44 @@ impl PatrolBehavior {
         ])
     }
 
-    fn arrived(&self, world: &World, entity_id: EntityId) -> bool {
-        let (position, _) = ai_util::get_position_and_forward(world, entity_id);
+    fn arrived(&self, position: Vector3<f32>) -> bool {
         let dx = position.x - self.goal.x;
         let dz = position.z - self.goal.z;
         (dx * dx + dz * dz).sqrt() < PATROL_ARRIVE_DISTANCE
             && (position.y - self.goal.y).abs() < PATROL_ARRIVE_HEIGHT
+    }
+
+    /// Advance to the next point on the route; a closed loop repeats. A
+    /// dead-end (no next link) ends the patrol.
+    fn advance(&mut self, world: &World) {
+        match ai_util::next_patrol_point(world, self.target_point) {
+            Some((next, goal)) => {
+                self.target_point = next;
+                self.goal = goal;
+                self.steering_strategy = Self::steering_to(goal);
+                self.stall_anchor = None;
+                self.stall_seconds = 0.0;
+            }
+            None => self.finished = true,
+        }
+    }
+
+    /// Whether the AI has failed to cover ground for PATROL_STALL_SECONDS.
+    /// Re-anchors (and reports false) as soon as it moves.
+    fn stalled(&mut self, position: Vector3<f32>, time: &Time) -> bool {
+        let moved = self
+            .stall_anchor
+            .map(|anchor| {
+                (position.x - anchor.x).hypot(position.z - anchor.z) >= PATROL_STALL_PROGRESS
+            })
+            .unwrap_or(true);
+        if moved {
+            self.stall_anchor = Some(position);
+            self.stall_seconds = 0.0;
+            return false;
+        }
+        self.stall_seconds += time.elapsed.as_secs_f32();
+        self.stall_seconds >= PATROL_STALL_SECONDS
     }
 }
 
@@ -84,17 +143,23 @@ impl Behavior for PatrolBehavior {
         entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
-        if !self.finished && self.arrived(world, entity_id) {
-            // Advance to the next point on the route; a closed loop repeats.
-            // A dead-end (no next link) ends the patrol - stop and hand back to
-            // idle via next_behavior, rather than walking in place forever.
-            match ai_util::next_patrol_point(world, self.target_point) {
-                Some((next, goal)) => {
-                    self.target_point = next;
-                    self.goal = goal;
-                    self.steering_strategy = Self::steering_to(goal);
+        if !self.finished {
+            let (position, _) = ai_util::get_position_and_forward(world, entity_id);
+            let position = position.to_vec();
+            if self.arrived(position) {
+                self.skipped_points = 0;
+                self.advance(world);
+            } else if self.stalled(position, time) {
+                // Going nowhere: give up on this point and try the next one.
+                // Enough of those in a row and the whole route is out of
+                // reach, so stop patrolling and hand back to idle via
+                // next_behavior rather than walking in place forever.
+                self.skipped_points += 1;
+                if self.skipped_points >= PATROL_MAX_SKIPPED_POINTS {
+                    self.finished = true;
+                } else {
+                    self.advance(world);
                 }
-                None => self.finished = true,
             }
         }
 
@@ -131,5 +196,111 @@ impl Behavior for PatrolBehavior {
 
     fn is_locomotion(&self) -> bool {
         !self.finished
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_props::RuntimePropTransform;
+    use cgmath::{Matrix4, vec3};
+    use dark::properties::{Link, Links, ToLink, WrappedEntityId};
+    use shipyard::{Get, ViewMut};
+
+    /// A world with a creature pinned at the origin and a three-point
+    /// `AIPatrol` loop 100 units away that it can never reach.
+    fn world_with_unreachable_route() -> (World, EntityId, EntityId, Vector3<f32>) {
+        let mut world = World::new();
+        let creature = world.add_entity(RuntimePropTransform(Matrix4::from_scale(1.0)));
+        let points: Vec<EntityId> = (0..3)
+            .map(|i| {
+                world.add_entity((
+                    RuntimePropTransform(Matrix4::from_translation(vec3(
+                        100.0 + i as f32,
+                        0.0,
+                        100.0,
+                    ))),
+                    Links::empty(),
+                ))
+            })
+            .collect();
+        {
+            let mut v_links = world.borrow::<ViewMut<Links>>().unwrap();
+            for (index, point) in points.iter().enumerate() {
+                (&mut v_links).get(*point).unwrap().to_links.push(ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(points[(index + 1) % points.len()])),
+                    link: Link::AIPatrol,
+                });
+            }
+        }
+        (world, creature, points[0], vec3(100.0, 0.0, 100.0))
+    }
+
+    /// A patroller that cannot reach its route must not walk into the
+    /// geometry forever. The nearest point is chosen geometrically, so it can
+    /// sit in a disconnected part of the navigation graph - A* then returns
+    /// no route at all, which the path follower's own per-waypoint watchdog
+    /// cannot see, and the whisker fallback just presses the body onward.
+    #[test]
+    fn a_patroller_that_cannot_reach_its_route_gives_up() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(first, goal);
+
+        // 20 simulated seconds without the body ever moving - four times the
+        // stall window, so every point on the loop gets its turn.
+        let mut elapsed = 0.0;
+        for _ in 0..200 {
+            let time = Time {
+                elapsed: std::time::Duration::from_millis(100),
+                total: std::time::Duration::from_millis(0),
+            };
+            patrol.steer(Deg(0.0), &world, &physics, creature, &time);
+            elapsed += 0.1;
+            if patrol.finished {
+                break;
+            }
+        }
+
+        assert!(
+            patrol.finished,
+            "a patroller going nowhere should give up, still patrolling after {elapsed}s",
+        );
+        assert!(
+            matches!(
+                patrol.next_behavior(&world, &physics, creature),
+                NextBehavior::Next(_)
+            ),
+            "giving up should hand back to idle",
+        );
+    }
+
+    /// ...but only when it is genuinely going nowhere: an AI that keeps
+    /// covering ground toward a point it has not reached yet stays on route.
+    #[test]
+    fn a_patroller_making_progress_keeps_its_route() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(first, goal);
+
+        for step in 0..200 {
+            // Walk 1 unit per tick toward the goal (never arriving).
+            world.run(|mut v_xform: ViewMut<RuntimePropTransform>| {
+                (&mut v_xform).get(creature).unwrap().0 =
+                    Matrix4::from_translation(vec3(step as f32, 0.0, 0.0));
+            });
+            let time = Time {
+                elapsed: std::time::Duration::from_millis(100),
+                total: std::time::Duration::from_millis(0),
+            };
+            patrol.steer(Deg(0.0), &world, &physics, creature, &time);
+        }
+
+        assert!(
+            !patrol.finished,
+            "a moving patroller must stay on its route"
+        );
+        assert_eq!(patrol.target_point, first, "and keep the same point");
     }
 }
