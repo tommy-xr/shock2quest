@@ -14,8 +14,6 @@
 //! driven by `progress`: `new_demo()` sweeps it for visual inspection via the
 //! `debug_loading` scene; real background loading (PR 3) calls `set_progress`.
 
-use std::collections::HashMap;
-
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::{
@@ -29,9 +27,7 @@ use crate::{
     GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
-    inventory::PlayerInventoryEntity,
-    mission::{GlobalContext, GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
-    quest_info::QuestInfo,
+    mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{Rect, ScaleMode, UiCanvas},
@@ -97,29 +93,7 @@ impl LoadingScene {
     }
 
     fn build(demo: bool) -> Self {
-        // Mirror `MainMenuScene`'s minimal world so the transition machinery
-        // (`switch_mission` -> `to_save_data` on the outgoing scene) has the uniques
-        // it expects.
-        let mut world = World::new();
-        let player_entity = world.add_entity(());
-        let inventory_entity = PlayerInventoryEntity::create(&mut world);
-        PlayerInventoryEntity::set_position_rotation(
-            &mut world,
-            vec3(0.0, -1000.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        );
-        world.add_unique(PlayerInfo {
-            pos: vec3(0.0, 0.0, 0.0),
-            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            entity_id: player_entity,
-            left_hand_entity_id: None,
-            right_hand_entity_id: None,
-            inventory_entity_id: inventory_entity,
-        });
-        world.add_unique(QuestInfo::new());
-        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
-        world.add_unique(GlobalEntityMetadata(HashMap::new()));
-        world.add_unique(Time::default());
+        let world = super::ui_scene_world();
 
         Self {
             world,

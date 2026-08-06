@@ -51,6 +51,10 @@ pub enum GlobalEffect {
     // Test the reload functionality (as if saving + loading)
     TestReload,
 
+    /// The player died with no reconstruction available: replace the mission
+    /// with the game-over screen, which offers the load/quit recovery path.
+    GameOver,
+
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 

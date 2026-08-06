@@ -33,6 +33,7 @@ pub mod debug_ragdoll;
 pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
+pub mod game_over;
 pub mod loading;
 pub mod main_menu;
 
@@ -50,8 +51,47 @@ pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
+pub use game_over::GameOverScene;
 pub use loading::LoadingScene;
 pub use main_menu::MainMenuScene;
+
+/// The minimal world a non-mission screen (menu, loading, game over) needs.
+///
+/// These scenes have no simulation, but the shared save/transition machinery
+/// still runs `to_save_data` on the outgoing scene's world, so the uniques it
+/// reads must exist.
+pub(crate) fn ui_scene_world() -> shipyard::World {
+    use cgmath::{Quaternion, vec3};
+
+    use crate::{
+        inventory::PlayerInventoryEntity,
+        mission::{GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
+        quest_info::QuestInfo,
+        time::Time,
+    };
+
+    let mut world = shipyard::World::new();
+    let player_entity = world.add_entity(());
+    let inventory_entity = PlayerInventoryEntity::create(&mut world);
+    PlayerInventoryEntity::set_position_rotation(
+        &mut world,
+        vec3(0.0, -1000.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+    );
+    world.add_unique(PlayerInfo {
+        pos: vec3(0.0, 0.0, 0.0),
+        rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        entity_id: player_entity,
+        left_hand_entity_id: None,
+        right_hand_entity_id: None,
+        inventory_entity_id: inventory_entity,
+    });
+    world.add_unique(QuestInfo::new());
+    world.add_unique(GlobalTemplateIdMap(HashMap::new()));
+    world.add_unique(GlobalEntityMetadata(HashMap::new()));
+    world.add_unique(Time::default());
+    world
+}
 
 pub struct SceneInitResult {
     pub scene: Box<dyn GameScene>,

@@ -149,15 +149,24 @@ pub struct PlayerInfo {
 
 /// The live player's death/reconstruction lifecycle.
 ///
-/// This is mission-local runtime state: a dead game cannot be saved (see
+/// This is runtime state, never serialized: a dead game cannot be saved (see
 /// `player_save_position`), so only the player's persistent vitals and an
-/// activated station's authored model state need serialization.
+/// activated station's authored model state need serialization. Missions own
+/// the full state machine; the game-over screen carries the terminal
+/// `GameOver` value so automation still sees the loss after the mission is
+/// gone.
 #[derive(Unique, Clone, Debug, PartialEq)]
 pub enum PlayerLifeState {
     Alive,
-    /// No activated/affordable QBR exists in this mission. The player remains
-    /// terminally dead until a load or level restart replaces the scene.
-    Dead,
+    /// No activated/affordable QBR exists in this mission. The authored death
+    /// sequence plays out for [`PLAYER_DEATH_SEQUENCE_SECONDS`], then the
+    /// mission is replaced by the game-over screen.
+    Dead {
+        elapsed_seconds: f32,
+    },
+    /// The death sequence finished and the game-over screen has been
+    /// requested, so it is never requested twice.
+    GameOver,
     /// The retail five-second death pause before a QBR reconstruction.
     Respawning {
         elapsed_seconds: f32,
@@ -170,7 +179,8 @@ impl PlayerLifeState {
     pub fn as_str(&self) -> &'static str {
         match self {
             PlayerLifeState::Alive => "alive",
-            PlayerLifeState::Dead => "dead",
+            PlayerLifeState::Dead { .. } => "dead",
+            PlayerLifeState::GameOver => "game_over",
             PlayerLifeState::Respawning { .. } => "respawning",
         }
     }
@@ -182,6 +192,19 @@ impl PlayerLifeState {
 
 const PLAYER_RESPAWN_DELAY_SECONDS: f32 = 5.0;
 const PLAYER_RESPAWN_NANITE_COST: i32 = 10;
+/// How long terminal death lingers in the mission before the game-over screen
+/// takes over - the beat where the authored death vocalization plays and the
+/// player sees where they fell.
+const PLAYER_DEATH_SEQUENCE_SECONDS: f32 = 3.0;
+/// The retail player death vocalizations (`PlayerDeath0..4`, SPEECH_TRIGGERS
+/// schemas in the gamesys); one is chosen per death, as the original does.
+const PLAYER_DEATH_SCHEMAS: [&str; 5] = [
+    "PlayerDeath0",
+    "PlayerDeath1",
+    "PlayerDeath2",
+    "PlayerDeath3",
+    "PlayerDeath4",
+];
 
 /// Resolve the active QBR's authored teleport trap. `ResurrectMachine` uses
 /// the scanner's model tweq as its durable activation state: the initial
@@ -1177,11 +1200,13 @@ impl MissionCore {
 
     /// Enter the death state once. An active QBR is usable only when the
     /// player can atomically pay the retail 10-nanite reconstruction cost;
-    /// otherwise death is terminal and the scene remains available for an
-    /// explicit quick-load/restart.
-    fn begin_player_death(&mut self) {
+    /// otherwise death is terminal and runs the death sequence that ends in
+    /// the game-over screen.
+    ///
+    /// Returns the death feedback to play (the authored death vocalization).
+    fn begin_player_death(&mut self) -> Vec<Effect> {
         if !self.player_is_alive() {
-            return;
+            return Vec::new();
         }
 
         let paid_respawn = active_resurrection_target(&self.world).and_then(|target| {
@@ -1207,19 +1232,36 @@ impl MissionCore {
             }
         } else {
             info!("Player died: no activated and affordable QBR");
-            PlayerLifeState::Dead
+            PlayerLifeState::Dead {
+                elapsed_seconds: 0.0,
+            }
         };
 
         *self
             .world
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = next_state;
+
+        vec![Effect::PlaySound {
+            handle: AudioHandle::new(),
+            name: PLAYER_DEATH_SCHEMAS
+                .choose(&mut thread_rng())
+                .expect("player death schemas are never empty")
+                .to_string(),
+        }]
     }
 
-    /// Advance the retail death pause and perform the reconstruction when its
-    /// five seconds have elapsed.
-    fn update_player_life_state(&mut self, elapsed_seconds: f32) {
-        let respawn = {
+    /// Advance the death pause: perform the QBR reconstruction once its retail
+    /// five seconds elapse, or hand a terminal death off to the game-over
+    /// screen once its death sequence elapses.
+    fn update_player_life_state(&mut self, elapsed_seconds: f32) -> Vec<Effect> {
+        enum DeathPause {
+            Pending,
+            Reconstruct(Vector3<f32>, Quaternion<f32>),
+            GameOver,
+        }
+
+        let pause = {
             let mut life = self
                 .world
                 .borrow::<UniqueViewMut<PlayerLifeState>>()
@@ -1231,15 +1273,37 @@ impl MissionCore {
                     rotation,
                 } => {
                     *elapsed += elapsed_seconds;
-                    (*elapsed + f32::EPSILON >= PLAYER_RESPAWN_DELAY_SECONDS)
-                        .then_some((*position, *rotation))
+                    if *elapsed + f32::EPSILON >= PLAYER_RESPAWN_DELAY_SECONDS {
+                        DeathPause::Reconstruct(*position, *rotation)
+                    } else {
+                        DeathPause::Pending
+                    }
                 }
-                PlayerLifeState::Alive | PlayerLifeState::Dead => None,
+                PlayerLifeState::Dead {
+                    elapsed_seconds: elapsed,
+                } => {
+                    *elapsed += elapsed_seconds;
+                    if *elapsed + f32::EPSILON >= PLAYER_DEATH_SEQUENCE_SECONDS {
+                        DeathPause::GameOver
+                    } else {
+                        DeathPause::Pending
+                    }
+                }
+                PlayerLifeState::Alive | PlayerLifeState::GameOver => DeathPause::Pending,
             }
         };
 
-        let Some((position, rotation)) = respawn else {
-            return;
+        let (position, rotation) = match pause {
+            DeathPause::Pending => return Vec::new(),
+            DeathPause::GameOver => {
+                info!("Player death is terminal: showing the game-over screen");
+                *self
+                    .world
+                    .borrow::<UniqueViewMut<PlayerLifeState>>()
+                    .unwrap() = PlayerLifeState::GameOver;
+                return vec![Effect::GlobalEffect(GlobalEffect::GameOver)];
+            }
+            DeathPause::Reconstruct(position, rotation) => (position, rotation),
         };
 
         self.physics
@@ -1272,6 +1336,7 @@ impl MissionCore {
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = PlayerLifeState::Alive;
         info!("Player reconstructed at QBR {:?}", position);
+        Vec::new()
     }
 
     pub fn update(
@@ -1301,10 +1366,11 @@ impl MissionCore {
                 })
                 .unwrap_or(false)
         };
+        let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
-            self.begin_player_death();
+            life_state_effects.append(&mut self.begin_player_death());
         }
-        self.update_player_life_state(time.elapsed.as_secs_f32());
+        life_state_effects.append(&mut self.update_player_life_state(time.elapsed.as_secs_f32()));
 
         // A dead player's physical head can still look around in VR, but all
         // actionable movement, hand, trigger, crouch, and pointer channels are
@@ -1418,7 +1484,10 @@ impl MissionCore {
                 }
             }
         }
-        let mut effects = command_effects;
+        // Life-state effects go first so a scene-replacing GameOver cannot
+        // clobber a same-frame quick-load arriving in `command_effects`.
+        let mut effects = life_state_effects;
+        effects.extend(command_effects);
 
         let player = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -3281,7 +3350,9 @@ impl MissionCore {
                             hp
                         );
                         if entity_id == player_entity && previous > 0 && hp == 0 {
-                            self.begin_player_death();
+                            for death_effect in self.begin_player_death() {
+                                effects.push_back(death_effect);
+                            }
                         }
                     }
                 }

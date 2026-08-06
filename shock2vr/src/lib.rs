@@ -36,8 +36,8 @@ mod vr_config;
 pub mod zip_asset_path;
 
 use scenes::{
-    CutscenePlayerScene, SceneInitResult, create_initial_scene, load_mission_from_save_data,
-    resolve_ending_cutscene,
+    CutscenePlayerScene, GameOverScene, SceneInitResult, create_initial_scene,
+    load_mission_from_save_data, resolve_ending_cutscene,
 };
 
 pub use mission::SpawnLocation;
@@ -283,7 +283,7 @@ pub fn resource_path(str: &str) -> String {
 /// reloaded in a later launch (frontier persistence for automated play-through
 /// loops).
 pub fn save_file_path(name: &str) -> std::path::PathBuf {
-    paths::data_root().join("saves").join(format!("{name}.sav"))
+    save_load::save_directory().join(format!("{name}.sav"))
 }
 
 /// How the game is presented and controlled.
@@ -1189,12 +1189,23 @@ impl Game {
                 file_name
             ));
         };
+        // Saves live in `<data_root>/saves`, which may not exist yet on a fresh
+        // install - a quicksave must create it rather than fail (and a failure
+        // must not take the game down).
+        let path = Path::new(&file_name);
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("Unable to create '{}': {}", parent.display(), error))?;
+        }
         let mut zip_file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(file_name)
-            .unwrap();
+            .open(path)
+            .map_err(|error| format!("Unable to save '{}': {}", file_name, error))?;
         save_data.write(&mut zip_file);
         Ok(())
     }
@@ -1355,6 +1366,14 @@ impl Game {
                 } else {
                     self.switch_mission(level_name, spawn_loc, PlayerVitalsTransition::Preserve);
                 }
+            }
+            GlobalEffect::GameOver => {
+                // The run is over, so the dead mission is deliberately NOT
+                // written back to the in-memory level ledger: the only way
+                // forward is the screen's own recovery path (reload a save),
+                // which replaces the ledger wholesale.
+                self.pending_transition = None;
+                self.active_game_scene = Box::new(GameOverScene::new());
             }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state
