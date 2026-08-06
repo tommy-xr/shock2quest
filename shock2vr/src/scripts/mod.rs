@@ -104,8 +104,8 @@ use self::choose_service::ChooseServiceScript;
 /// read them at draw time.
 pub use self::gui::ElevatorContext;
 use self::gui::{
-    ComputerGui, ContainerGui, ElevatorGui, GamePigGui, KeyPadGui, MapGui, MediaGui, ReplicatorGui,
-    TrainerGui, TrainerMode, TraitGui,
+    ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
+    MediaGui, ReplicatorGui, TrainerGui, TrainerMode, TraitGui,
 };
 use self::internal_frob_move::InternalFrobMove;
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
@@ -1044,7 +1044,7 @@ impl ScriptWorld {
             "psikitscript" => Box::new(PsiKitScript::new()),
             "computer" => gui_script(Box::new(ComputerGui)),
             "lightsoundon" => Box::new(NoopScript::new()),
-            "hackablecrate" => Box::new(UnimplementedScript::new(&script_name)),
+            "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
@@ -1089,7 +1089,10 @@ impl ScriptWorld {
 
             // hydro2
             "trapparticle" => Box::new(UnimplementedScript::new(&script_name)),
-            "freehack" => Box::new(UnimplementedScript::new(&script_name)),
+            // The ICE Pick. It carries no behavior of its own: the object it
+            // is applied to claims it off the tool channel (see
+            // `HackableCrateGui::on_provide_for_consumption`).
+            "freehack" => Box::new(NoopScript::new()),
 
             // hydro3
             "poweredarmor" => Box::new(UnimplementedScript::new(&script_name)),

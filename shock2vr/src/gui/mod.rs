@@ -100,4 +100,19 @@ where
             *state = TState::default();
         }
     }
+
+    /// An item was offered to this panel's entity (the port's tool channel:
+    /// releasing a held item onto a target in VR, or a `ToolConsumable`
+    /// touching it). `None` - the default - takes the ordinary deposit path,
+    /// dropping the item into the entity as a container. A panel returns
+    /// `Some(effect)` to consume the item as a *tool* instead: the hackable
+    /// crate opens itself for an ICE Pick rather than swallowing it.
+    fn on_provide_for_consumption(
+        &self,
+        _entity_id: EntityId,
+        _world: &World,
+        _provided_entity_id: EntityId,
+    ) -> Option<crate::Effect> {
+        None
+    }
 }
