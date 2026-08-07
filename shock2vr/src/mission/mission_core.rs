@@ -1306,8 +1306,14 @@ impl MissionCore {
             DeathPause::Reconstruct(position, rotation) => (position, rotation),
         };
 
-        self.physics
-            .set_player_translation(position, &mut self.player_handle);
+        // The authored marker is used verbatim whenever the standing capsule
+        // fits there. Reconstruction is the one relocation the player cannot
+        // decline, so an obstructed marker would end the run outright: the
+        // character controller cannot walk out of a pose it starts inside
+        // (#801). Step aside in that case rather than strand them.
+        let position = self
+            .physics
+            .set_player_translation_unobstructed(position, &mut self.player_handle);
         let player_entity = {
             let mut player = self.world.borrow::<UniqueViewMut<PlayerInfo>>().unwrap();
             player.pos = position;
