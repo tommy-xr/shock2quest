@@ -428,6 +428,10 @@ pub struct GlobalTrainerCosts(pub Option<dark::gamesys::TrainerCostTables>);
 #[derive(Unique, Clone)]
 pub struct GlobalHrmParams(pub Option<dark::gamesys::HrmParams>);
 
+/// Retail research-speed tuning from `SKILLPARAM`.
+#[derive(Unique, Clone)]
+pub struct GlobalSkillParams(pub Option<dark::gamesys::SkillParams>);
+
 impl GlobalTemplateHierarchy {
     /// Whether `template_id` is `class_template_id` or inherits from it.
     pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
@@ -675,6 +679,7 @@ impl MissionCore {
             game_entity_info.trainer_costs().cloned(),
         ));
         world.add_unique(GlobalHrmParams(game_entity_info.hrm_params().cloned()));
+        world.add_unique(GlobalSkillParams(game_entity_info.skill_params().cloned()));
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         // Player-facing discipline names come from the psihelp string table;
         // a data install without it just keeps the gamesys symbolic names.
@@ -776,6 +781,12 @@ impl MissionCore {
         let left_hand_entity = held_instantiation.left_hand_entity_id;
         let right_hand_entity = held_instantiation.right_hand_entity_id;
         let maybe_inventory_entity = held_instantiation.inventory_entity_id;
+        let held_entities: Vec<_> = held_instantiation.entity_id_map.values().copied().collect();
+        crate::research::backfill_legacy_held_research_components(
+            &mut world,
+            &held_entities,
+            &entity_info_rc,
+        );
         let held_script_entity_id_map = held_instantiation.entity_id_map;
         let held_saved_script_states = held_instantiation.script_states;
 
@@ -1700,6 +1711,8 @@ impl MissionCore {
                     }
                 });
             });
+
+        effects.extend(update_research(&self.world, time.elapsed.as_secs_f32()));
 
         let (player_pos, player_rot) = {
             let player_info = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
@@ -3509,6 +3522,70 @@ impl MissionCore {
                     // flow). VR ignores it - panels are world quads there.
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_ui.open(entity);
+                    }
+                }
+
+                Effect::BeginResearch { entity_id } => {
+                    let carried = crate::scripts::script_util::player_carried_items(&self.world);
+                    if !carried.contains(&entity_id) {
+                        continue;
+                    }
+                    let Some(template_id) = crate::scripts::script_util::entity_class_template_id(
+                        &self.world,
+                        entity_id,
+                    ) else {
+                        continue;
+                    };
+                    let required = self
+                        .world
+                        .borrow::<View<dark::properties::PropBaseTechDesc>>()
+                        .unwrap()
+                        .get(entity_id)
+                        .map(|skills| skills.0.research().max(1))
+                        .unwrap_or(1);
+                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let skill = quests
+                        .player_stats()
+                        .skill_level(crate::player_stats::Skill::Research);
+                    let result = quests.research_mut().begin(template_id, required, skill);
+                    drop(quests);
+                    match result {
+                        crate::research::BeginResearchResult::Started => {
+                            game_log!(INFO, "Research started");
+                        }
+                        crate::research::BeginResearchResult::SkillRequired(required) => {
+                            game_log!(INFO, "Research skill {} required", required);
+                        }
+                        crate::research::BeginResearchResult::AlreadyComplete => {
+                            self.world.add_component(
+                                entity_id,
+                                PropObjState(dark::properties::ObjectState::Normal),
+                            );
+                        }
+                    }
+                }
+
+                Effect::UseResearchChemical { entity_id } => {
+                    if apply_research_chemical(&self.world, entity_id) {
+                        let stack = self
+                            .world
+                            .borrow::<View<dark::properties::PropStackCount>>()
+                            .ok()
+                            .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
+                        if stack.unwrap_or(1) > 1 {
+                            let mut stacks = self
+                                .world
+                                .borrow::<ViewMut<dark::properties::PropStackCount>>()
+                                .unwrap();
+                            if let Ok(stack) = (&mut stacks).get(entity_id) {
+                                stack.0 -= 1;
+                            }
+                        } else {
+                            self.destroy_entity(entity_id);
+                        }
+                        game_log!(INFO, "Research chemical consumed");
+                    } else {
+                        game_log!(INFO, "That chemical is not needed");
                     }
                 }
 
@@ -5959,6 +6036,136 @@ fn option_to_vec<T>(option: Option<T>) -> Vec<T> {
         None => vec![],
         Some(v) => vec![v],
     }
+}
+
+fn carried_research_entity(world: &World, template_id: i32) -> Option<EntityId> {
+    crate::scripts::script_util::player_carried_items(world)
+        .into_iter()
+        .find(|entity| {
+            crate::scripts::script_util::entity_class_template_id(world, *entity)
+                == Some(template_id)
+        })
+}
+
+/// Advance the one active campaign research project from its carried object's
+/// live authored metadata. Keeping this central avoids multiplying progress by
+/// the number of copies/scripts in the world.
+fn update_research(world: &World, real_seconds: f32) -> Vec<Effect> {
+    if real_seconds <= 0.0 {
+        return Vec::new();
+    }
+    let active_template = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .ok()
+        .and_then(|quests| quests.research().active_template_id());
+    let Some(template_id) = active_template else {
+        return Vec::new();
+    };
+    let Some(entity_id) = carried_research_entity(world, template_id) else {
+        if let Ok(mut quests) = world.borrow::<UniqueViewMut<QuestInfo>>() {
+            quests.research_mut().suspend();
+        }
+        return Vec::new();
+    };
+
+    let total = world
+        .borrow::<View<dark::properties::PropResearchTime>>()
+        .ok()
+        .and_then(|view| view.get(entity_id).ok().map(|time| time.0 as f32));
+    let Some(total) = total else {
+        return Vec::new();
+    };
+    let chemicals = world
+        .borrow::<View<dark::properties::PropChemicalNeeded>>()
+        .ok()
+        .and_then(|view| view.get(entity_id).ok().cloned());
+    let report_mask = world
+        .borrow::<View<dark::properties::PropResearchReport>>()
+        .ok()
+        .and_then(|view| view.get(entity_id).ok().map(|report| report.0))
+        .unwrap_or(0);
+    let research_factor = world
+        .borrow::<UniqueView<GlobalSkillParams>>()
+        .ok()
+        .and_then(|params| params.0.as_ref().map(|params| params.research_factor))
+        .unwrap_or(1.0);
+
+    let outcome = {
+        let mut quests = world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+        let skill = quests
+            .player_stats()
+            .skill_level(crate::player_stats::Skill::Research);
+        quests.research_mut().advance(
+            template_id,
+            real_seconds,
+            skill,
+            research_factor,
+            total,
+            chemicals.as_ref(),
+            report_mask,
+        )
+    };
+
+    if outcome != crate::research::AdvanceResearchResult::Completed {
+        return Vec::new();
+    }
+    game_log!(INFO, "Research complete");
+    // Research belongs to the archetype, not one inventory instance. A legacy
+    // campaign can already carry multiple Toxin-A vials when the project
+    // completes, so normalize every live copy immediately; newly created
+    // copies are covered by ResearchableScript::initialize.
+    let canonical = world
+        .borrow::<View<crate::runtime_props::RuntimePropCanonicalTemplateId>>()
+        .unwrap();
+    let mut effects = (&canonical)
+        .iter()
+        .with_id()
+        .filter(|(_, canonical)| canonical.0 == template_id)
+        .map(|(entity_id, _)| Effect::SetObjectState {
+            entity_id,
+            state: dark::properties::ObjectState::Normal,
+        })
+        .collect::<Vec<_>>();
+    if let Some(quest_bit) = crate::scripts::script_util::set_quest_bit_effect(world, entity_id) {
+        effects.push(quest_bit);
+    }
+    effects
+}
+
+fn apply_research_chemical(world: &World, chemical_entity: EntityId) -> bool {
+    if !crate::scripts::script_util::player_carried_items(world).contains(&chemical_entity) {
+        return false;
+    }
+    let chemical_name = world
+        .borrow::<View<dark::properties::PropSymName>>()
+        .ok()
+        .and_then(|names| names.get(chemical_entity).ok().map(|name| name.0.clone()));
+    let Some(chemical_name) = chemical_name else {
+        return false;
+    };
+    let active_template = world
+        .borrow::<UniqueView<QuestInfo>>()
+        .ok()
+        .and_then(|quests| quests.research().active_template_id());
+    let Some(active_entity) = active_template.and_then(|id| carried_research_entity(world, id))
+    else {
+        return false;
+    };
+    let needed = world
+        .borrow::<View<dark::properties::PropChemicalNeeded>>()
+        .ok()
+        .and_then(|view| view.get(active_entity).ok().cloned());
+    let Some(needed) = needed else {
+        return false;
+    };
+    world
+        .borrow::<UniqueViewMut<QuestInfo>>()
+        .map(|mut quests| {
+            quests
+                .research_mut()
+                .provide_chemical(&chemical_name, &needed)
+        })
+        .unwrap_or(false)
 }
 
 /// Remove every `Contains` link in `links` that points at `target` - used when

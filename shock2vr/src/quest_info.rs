@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use shipyard::Unique;
 
 use crate::player_stats::PlayerStats;
+use crate::research::ResearchState;
 
 /// One audio log the player has collected (frobbed), keyed by its per-deck
 /// identity - the original stored these as `Logs<deck>` bitmasks; we keep the
@@ -43,6 +44,9 @@ pub struct QuestInfo {
     /// its reveal state. `#[serde(default)]` keeps older saves loadable.
     #[serde(default)]
     explored_maps: HashMap<String, BTreeSet<i32>>,
+    /// Campaign-wide research progress, keyed by stable gamesys archetype.
+    #[serde(default)]
+    research: ResearchState,
 }
 
 impl QuestInfo {
@@ -54,7 +58,16 @@ impl QuestInfo {
             player_stats: PlayerStats::new(),
             collected_logs: Vec::new(),
             explored_maps: HashMap::new(),
+            research: ResearchState::default(),
         }
+    }
+
+    pub fn research(&self) -> &ResearchState {
+        &self.research
+    }
+
+    pub fn research_mut(&mut self) -> &mut ResearchState {
+        &mut self.research
     }
 
     /// Mark an automap location explored for `mission` (lowercase level file

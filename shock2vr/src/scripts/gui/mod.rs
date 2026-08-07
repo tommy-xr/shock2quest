@@ -7,6 +7,7 @@ mod keypad;
 mod map;
 mod media;
 mod replicator;
+mod research;
 mod trainer;
 mod traits;
 
@@ -19,5 +20,6 @@ pub use keypad::*;
 pub use map::*;
 pub use media::*;
 pub use replicator::*;
+pub use research::*;
 pub use trainer::*;
 pub use traits::*;

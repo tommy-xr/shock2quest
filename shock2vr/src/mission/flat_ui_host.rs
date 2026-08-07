@@ -415,8 +415,14 @@ impl FlatUiHost {
                 .borrow::<EntitiesView>()
                 .map(|entities| entities.is_alive(panel))
                 .unwrap_or(false);
+            // Inventory-item MFDs (research reports, readable media) remain
+            // bound while carried. Their inherited/last world position may be
+            // on the other side of the level and is no longer meaningful.
+            let carried =
+                alive && crate::scripts::script_util::player_carried_items(world).contains(&panel);
             let too_far = alive
                 && !self.sticky_panel
+                && !carried
                 && (|| {
                     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
                     let v_pos = world

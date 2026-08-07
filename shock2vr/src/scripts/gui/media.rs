@@ -72,7 +72,7 @@ pub enum MediaGuiMsg {
 /// Greedy word-wrap that honors explicit `\n` paragraph breaks. A single word
 /// longer than `max_chars` stays on its own (over-long) line rather than being
 /// split mid-token, so codes like "45100" are never broken.
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+pub(super) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
         if paragraph.trim().is_empty() {

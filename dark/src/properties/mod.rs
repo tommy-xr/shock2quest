@@ -32,6 +32,7 @@ mod prop_psi;
 mod prop_quest_bit;
 mod prop_render_type;
 mod prop_replicator;
+mod prop_research;
 mod prop_room_gravity;
 mod prop_service;
 mod prop_spawn;
@@ -73,6 +74,7 @@ pub use prop_psi::*;
 pub use prop_quest_bit::*;
 pub use prop_render_type::*;
 pub use prop_replicator::*;
+pub use prop_research::*;
 pub use prop_room_gravity::*;
 pub use prop_service::*;
 pub use prop_spawn::*;
@@ -1257,6 +1259,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$ChemNeede",
+            PropChemicalNeeded::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$Creature",
             |reader, _len| read_u32(reader),
             PropCreature,
@@ -1352,6 +1360,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$BaseGunDe",
             PropBaseGunDesc::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$BaseTechD",
+            PropBaseTechDesc::read,
             identity,
             accumulator::latest,
         ),
@@ -1523,6 +1537,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ObjName",
             read_variable_length_string,
             PropObjName,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ObjLookS",
+            PropObjLookString::read,
+            identity,
             accumulator::latest,
         ),
         define_prop(
@@ -1735,6 +1755,30 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$RepHacked",
             PropReplicatorHackedContents::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ReqTechDe",
+            PropRequiredTechDesc::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RsrchRep",
+            PropResearchReport::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RsrchTime",
+            PropResearchTime::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RsrchTxt",
+            PropResearchText::read,
             identity,
             accumulator::latest,
         ),

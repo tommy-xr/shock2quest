@@ -5,7 +5,9 @@
  *
  */
 use dark::properties::{
-    Link, Links, PropEcoState, PropEcoType, PropEcology, PropSpawn, WrappedEntityId,
+    Link, Links, PropBaseTechDesc, PropChemicalNeeded, PropEcoState, PropEcoType, PropEcology,
+    PropObjLookString, PropRequiredTechDesc, PropResearchReport, PropResearchText,
+    PropResearchTime, PropSpawn, WrappedEntityId,
 };
 use shipyard::{Get, View, ViewMut, World};
 use std::collections::HashMap;
@@ -36,7 +38,7 @@ impl EntityPopulator for SaveFileEntityPopulator {
     ) -> EntityPopulation {
         let world_entity_data = &self.save_data;
         let (template_to_entity, entity_id_map) = world_entity_data.instantiate(world);
-        restore_newly_parsed_authored_ecology(
+        restore_newly_parsed_authored_data(
             gamesys_entity_info,
             level_entity_info,
             obj_name_map,
@@ -51,17 +53,17 @@ impl EntityPopulator for SaveFileEntityPopulator {
     }
 }
 
-/// Backfill retail ecology data omitted by saves written before these chunks
-/// were understood.
+/// Backfill retail data omitted by saves written before these chunks were
+/// understood.
 ///
 /// Saves deliberately own mutable runtime state, so loading cannot generally
-/// reapply the mission file over a restored entity. These four properties and
-/// `SpawnPoint` links are different: old builds could neither deserialize nor
+/// reapply the mission file over a restored entity. The ecology and research
+/// properties below are different: old builds could neither deserialize nor
 /// mutate them, and therefore could not have serialized them. Restore only a
 /// missing component/link, only for a concrete mission object which still
 /// exists in the save. Deleted generators/ecologies stay deleted, while newer
-/// saves retain their live supply, state, and spawned-child graph.
-fn restore_newly_parsed_authored_ecology(
+/// saves retain their live values and spawned-child graph.
+fn restore_newly_parsed_authored_data(
     gamesys_entity_info: &SystemShock2EntityInfo,
     level_entity_info: &SystemShock2EntityInfo,
     obj_name_map: &HashMap<i32, String>,
@@ -142,6 +144,13 @@ fn restore_newly_parsed_authored_ecology(
     restore_missing_component!(PropEcoType);
     restore_missing_component!(PropEcoState);
     restore_missing_component!(PropSpawn);
+    restore_missing_component!(PropBaseTechDesc);
+    restore_missing_component!(PropChemicalNeeded);
+    restore_missing_component!(PropObjLookString);
+    restore_missing_component!(PropRequiredTechDesc);
+    restore_missing_component!(PropResearchReport);
+    restore_missing_component!(PropResearchText);
+    restore_missing_component!(PropResearchTime);
 
     let authored_spawn_points = {
         let authored_links = authored_world.borrow::<View<Links>>().unwrap();
@@ -192,5 +201,70 @@ fn restore_newly_parsed_authored_ecology(
     }
     for (entity, links) in missing_link_components {
         world.add_component(entity, links);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use dark::properties::{PropResearchReport, PropResearchText, PropResearchTime};
+
+    use super::*;
+
+    #[test]
+    fn legacy_unlooted_researchable_backfills_newly_parsed_metadata() {
+        let mut merged_entity_info = SystemShock2EntityInfo::empty();
+        merged_entity_info.entity_to_properties.insert(
+            675,
+            vec![
+                Arc::new(Box::new(PropResearchTime(600))),
+                Arc::new(Box::new(PropResearchReport(0x10))),
+                Arc::new(Box::new(PropResearchText("AATText".to_owned()))),
+            ],
+        );
+        let mut level_entity_info = SystemShock2EntityInfo::empty();
+        level_entity_info.entity_to_properties.insert(675, vec![]);
+
+        let mut world = World::new();
+        let toxin = world.add_entity(PropResearchReport(0x20));
+        let template_to_entity = HashMap::from([(675, WrappedEntityId(toxin))]);
+
+        restore_newly_parsed_authored_data(
+            &merged_entity_info,
+            &level_entity_info,
+            &HashMap::new(),
+            &template_to_entity,
+            &mut world,
+        );
+
+        assert_eq!(
+            world
+                .borrow::<View<PropResearchTime>>()
+                .unwrap()
+                .get(toxin)
+                .unwrap()
+                .0,
+            600
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropResearchText>>()
+                .unwrap()
+                .get(toxin)
+                .unwrap()
+                .0,
+            "AATText"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropResearchReport>>()
+                .unwrap()
+                .get(toxin)
+                .unwrap()
+                .0,
+            0x20,
+            "serialized live values must win over authored defaults"
+        );
     }
 }

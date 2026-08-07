@@ -9,6 +9,7 @@ mod base_button;
 mod base_elevator;
 mod base_monster;
 mod camera_alert;
+mod chemical;
 mod choose_mission;
 mod choose_service;
 mod core_room;
@@ -40,6 +41,7 @@ mod psi_amp_script;
 mod psi_kit;
 mod reduce_psi;
 mod reroute_elevator_button;
+mod researchable;
 mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
@@ -97,6 +99,7 @@ use crate::{physics::PhysicsWorld, time::Time};
 
 use crate::gui::gui_script;
 
+use self::chemical::ChemicalScript;
 use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
 /// Preloaded elevator floor labels (from MISC.STR) + current mission, added as
@@ -105,7 +108,7 @@ use self::choose_service::ChooseServiceScript;
 pub use self::gui::ElevatorContext;
 use self::gui::{
     ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
-    MediaGui, ReplicatorGui, TrainerGui, TrainerMode, TraitGui,
+    MediaGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
 };
 use self::internal_frob_move::InternalFrobMove;
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
@@ -114,6 +117,7 @@ use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
 use self::reduce_psi::ReducePsi;
 use self::reroute_elevator_button::RerouteElevatorButton;
+use self::researchable::ResearchableScript;
 use self::trap_signal::TrapSignal;
 use self::{
     auto_install_soft::AutoInstallSoft,
@@ -1135,12 +1139,15 @@ impl ScriptWorld {
             "censor" => Box::new(UnimplementedScript::new(&script_name)),
             "censorme" => Box::new(UnimplementedScript::new(&script_name)),
             "creaturecontainer" => gui_script(Box::new(ContainerGui::loot_creature())),
-            "chemical" => Box::new(NoopScript::new()),
+            "chemical" => Box::new(ChemicalScript::new()),
             "chooseservice" => Box::new(ChooseServiceScript::new()),
             "infocomputer" => Box::new(UnimplementedScript::new(&script_name)),
             "reducepsi" => Box::new(ReducePsi::new()),
             "replicatorscript" => gui_script(Box::new(ReplicatorGui)),
-            "researchablescript" => Box::new(UnimplementedScript::new(&script_name)),
+            "researchablescript" => Box::new(CompositeScript::new(vec![
+                Box::new(ResearchableScript::new()),
+                gui_script(Box::new(ResearchGui)),
+            ])),
             "setupinitialdebrief" => {
                 Box::new(setup_initial_debrief::SetupInitialDebriefScript::new())
             }
