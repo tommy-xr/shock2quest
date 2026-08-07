@@ -298,9 +298,11 @@ pub enum Effect {
         model_name: String,
     },
     CreateEntityByTemplateName {
+        source_entity_id: EntityId,
         template_name: String,
         position: Point3<f32>,
         orientation: Quaternion<f32>,
+        initial_velocity: Vector3<f32>,
     },
 
     CreateEntity {

@@ -267,6 +267,12 @@ pub struct RuntimePropFlatAim {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
 
+/// Marks an object created through Dark's `launchProjectile` path. Its
+/// authored physics model owns idle velocity; an empty skeletal animation
+/// must not zero the launch, and save/load must recreate it as a dynamic body.
+#[derive(Component, Clone, Copy)]
+pub struct RuntimePropLaunchedProjectile;
+
 // RuntimePropMapData - the automap page data for the current mission, attached
 // to the synthetic map-panel entity at mission init: the mission's level file
 // name (for the per-level `intrface/<LEVEL>/english/` art paths) and the decal
