@@ -356,7 +356,7 @@ impl AnimatedMonsterAI {
 
         let _direction = forward + down_vector;
 
-        let maybe_hit_result = physics.ray_cast2(
+        let maybe_hit_result = physics.ray_cast2_as_actor(
             position,
             forward + down_vector,
             distance,

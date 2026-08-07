@@ -1096,12 +1096,12 @@ impl MissionCore {
             // A crossing rarely stacks more than a couple of pass-through
             // entities; bail as blocked beyond that
             for _ in 0..4 {
-                let Some(hit) = physics.ray_cast2(
+                let Some(hit) = physics.ray_cast2_as_actor(
                     origin,
                     direction,
                     remaining,
                     crate::physics::InternalCollisionGroups::WORLD
-                        | crate::physics::InternalCollisionGroups::ENTITY,
+                        | crate::physics::InternalCollisionGroups::ENTITIES,
                     None,
                     true,
                 ) else {
@@ -6541,7 +6541,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             for group_name in &mask.groups {
                 match group_name.as_str() {
                     "world" => groups |= crate::physics::InternalCollisionGroups::WORLD,
-                    "entity" => groups |= crate::physics::InternalCollisionGroups::ENTITY,
+                    "entity" => groups |= crate::physics::InternalCollisionGroups::ENTITIES,
                     "selectable" => groups |= crate::physics::InternalCollisionGroups::SELECTABLE,
                     "player" => groups |= crate::physics::InternalCollisionGroups::PLAYER,
                     "ui" => groups |= crate::physics::InternalCollisionGroups::UI,
@@ -6673,6 +6673,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     angular_velocity: info.angular_velocity,
                     collision_groups: info.collision_groups,
                     blocks_player: info.blocks_player,
+                    blocks_actor: info.blocks_actor,
                     is_sensor: info.is_sensor,
                     is_enabled: info.is_enabled,
                     is_sleeping: info.is_sleeping,
@@ -6712,6 +6713,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             angular_damping: info.angular_damping,
             collision_groups: info.collision_groups,
             blocks_player: info.blocks_player,
+            blocks_actor: info.blocks_actor,
             is_sensor: info.is_sensor,
             is_enabled: info.is_enabled,
             is_sleeping: info.is_sleeping,

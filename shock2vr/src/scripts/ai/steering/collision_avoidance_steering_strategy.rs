@@ -93,7 +93,7 @@ impl SteeringStrategy for CollisionAvoidanceSteeringStrategy {
             let forward = rotation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize();
             let end_point = position + forward * distance;
 
-            let main_whisker_hit_result = physics.ray_cast2(
+            let main_whisker_hit_result = physics.ray_cast2_as_actor(
                 position,
                 forward,
                 distance,

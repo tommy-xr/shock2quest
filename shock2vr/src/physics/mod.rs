@@ -1811,7 +1811,16 @@ bitflags! {
         // e.g. ladders). Nothing filters on it for collision - it exists so the
         // player movement code can query "am I touching a ladder?" cheaply.
         const CLIMBABLE = 1 << 7;
-        const ALL_COLLIDABLE = Self::WORLD.bits | Self::ENTITY.bits | Self::PLAYER.bits | Self::SELECTABLE.bits;
+        // Living creature capsules need a distinct membership from ordinary
+        // physical entities: interaction-only/model-bounds stand-ins can then
+        // let characters pass while remaining solid to projectiles and props.
+        const ACTOR = 1 << 8;
+        /// Every physical ECS object, including living creature actors. Use
+        /// this for entity queries/filters; use `ENTITY` or `ACTOR` for an
+        /// individual collider's membership.
+        const ENTITIES = Self::ENTITY.bits | Self::ACTOR.bits;
+        const CHARACTERS = Self::PLAYER.bits | Self::ACTOR.bits;
+        const ALL_COLLIDABLE = Self::WORLD.bits | Self::ENTITIES.bits | Self::PLAYER.bits | Self::SELECTABLE.bits;
         const ALL = Self::ALL_COLLIDABLE.bits | Self::UI.bits | Self::HITBOX.bits | Self::RAYCAST.bits;
     }
 }
@@ -1863,11 +1872,20 @@ impl CollisionGroup {
     pub fn entity() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: InternalCollisionGroups::ENTITY.bits.into(),
-            filter: (InternalCollisionGroups::WORLD.bits
-                | InternalCollisionGroups::PLAYER.bits
-                | InternalCollisionGroups::SELECTABLE.bits
-                | InternalCollisionGroups::ENTITY.bits)
-                .into(),
+            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Collision behavior for a living creature capsule. It collides exactly
+    /// like an ordinary physical entity, but its distinct membership lets
+    /// interaction-only fixtures and unsimulated movable debris opt out of
+    /// blocking characters without also becoming transparent to physical
+    /// projectiles and movable props.
+    pub fn actor() -> CollisionGroup {
+        CollisionGroup(InteractionGroups {
+            memberships: InternalCollisionGroups::ACTOR.bits.into(),
+            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
         })
     }
@@ -1880,11 +1898,7 @@ impl CollisionGroup {
             memberships: (InternalCollisionGroups::ENTITY.bits
                 | InternalCollisionGroups::CLIMBABLE.bits)
                 .into(),
-            filter: (InternalCollisionGroups::WORLD.bits
-                | InternalCollisionGroups::PLAYER.bits
-                | InternalCollisionGroups::SELECTABLE.bits
-                | InternalCollisionGroups::ENTITY.bits)
-                .into(),
+            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
         })
     }
@@ -1897,8 +1911,8 @@ impl CollisionGroup {
         })
     }
 
-    /// The same membership as this group, with `PLAYER` dropped from the
-    /// filter so the player capsule never collides with it.
+    /// The same membership as this group, with living characters dropped from
+    /// its filter so neither the player nor creature capsules collide with it.
     ///
     /// Dark only instantiates a physics model for an object that carries a
     /// `PhysType` (`phprop.cpp`'s PhysType listener is what creates the
@@ -1907,9 +1921,9 @@ impl CollisionGroup {
     /// Resurrection Station's own casing - is therefore never solid in
     /// retail; its physical presence is the brushwork behind it. This engine
     /// still needs a collider there so the object stays frobbable and
-    /// raycastable, so keep the collider and only take the player out of it.
-    pub fn non_solid_to_player(self) -> CollisionGroup {
-        let filter = self.0.filter.bits() & !InternalCollisionGroups::PLAYER.bits;
+    /// raycastable, so keep the collider and only take characters out of it.
+    pub fn non_solid_to_characters(self) -> CollisionGroup {
+        let filter = self.0.filter.bits() & !InternalCollisionGroups::CHARACTERS.bits;
         CollisionGroup(InteractionGroups {
             memberships: self.0.memberships,
             filter: filter.into(),
@@ -1925,7 +1939,7 @@ impl CollisionGroup {
     /// joint level (`contacts_enabled(false)`), not here - otherwise adjacent
     /// bodies that spawn slightly overlapping get violently ejected (the original
     /// ragdoll "explosion"). The filter still excludes the leftover creature
-    /// capsule (`ENTITY`) and per-joint hitboxes (`HITBOX`).
+    /// capsule (`ACTOR`) and per-joint hitboxes (`HITBOX`).
     pub fn ragdoll() -> CollisionGroup {
         CollisionGroup(InteractionGroups {
             memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
@@ -2459,16 +2473,15 @@ impl PhysicsWorld {
         ))
     }
 
-    /// Whether a body's collider is solid to the player capsule. Membership
-    /// alone does not say - it is the collider's *filter* that
-    /// `CollisionGroup::non_solid_to_player` turns off - which is why
-    /// `DebugBodyInfo` reports this separately from `collision_groups`.
-    ///
-    /// Mirrors `player_movement_filter`: every player cast excludes sensors
-    /// and asks for `PLAYER` against `ALL_COLLIDABLE`, so a sensor, a disabled
-    /// collider or a `HITBOX`/`RAYCAST`-only membership never stops the
-    /// capsule however its filter reads.
-    pub(crate) fn collider_blocks_player(&self, handle: RigidBodyHandle) -> bool {
+    /// Whether any collider on a body is solid to the given character
+    /// membership. Mirrors the player/actor movement queries: disabled bodies,
+    /// disabled colliders, sensors, and non-collidable memberships never stop a
+    /// character however their filters read.
+    fn collider_blocks_character(
+        &self,
+        handle: RigidBodyHandle,
+        character: InternalCollisionGroups,
+    ) -> bool {
         let Some(body) = self.rigid_body_set.get(handle) else {
             return false;
         };
@@ -2480,10 +2493,18 @@ impl PhysicsWorld {
                 let groups = c.collision_groups();
                 c.is_enabled()
                     && !c.is_sensor()
-                    && groups.filter.bits() & InternalCollisionGroups::PLAYER.bits != 0
+                    && groups.filter.bits() & character.bits != 0
                     && groups.memberships.bits() & InternalCollisionGroups::ALL_COLLIDABLE.bits != 0
             })
         })
+    }
+
+    pub(crate) fn collider_blocks_player(&self, handle: RigidBodyHandle) -> bool {
+        self.collider_blocks_character(handle, InternalCollisionGroups::PLAYER)
+    }
+
+    pub(crate) fn collider_blocks_actor(&self, handle: RigidBodyHandle) -> bool {
+        self.collider_blocks_character(handle, InternalCollisionGroups::ACTOR)
     }
 
     pub fn remove_impulse_joint(&mut self, handle: ImpulseJointHandle) {
@@ -4101,6 +4122,50 @@ impl PhysicsWorld {
         entity_to_ignore: Option<EntityId>,
         ignore_sensors: bool,
     ) -> Option<RayCastResult> {
+        self.ray_cast2_with_memberships(
+            InternalCollisionGroups::ALL,
+            start_point,
+            direction,
+            max_toi,
+            collision_groups,
+            entity_to_ignore,
+            ignore_sensors,
+        )
+    }
+
+    /// Raycast using a living actor's collision membership. Unlike a generic
+    /// interaction/visibility ray (whose membership is `ALL`), this respects
+    /// colliders that explicitly opt out of blocking creature movement.
+    pub fn ray_cast2_as_actor(
+        &self,
+        start_point: Point3<f32>,
+        direction: Vector3<f32>,
+        max_toi: f32,
+        collision_groups: InternalCollisionGroups,
+        entity_to_ignore: Option<EntityId>,
+        ignore_sensors: bool,
+    ) -> Option<RayCastResult> {
+        self.ray_cast2_with_memberships(
+            InternalCollisionGroups::ACTOR,
+            start_point,
+            direction,
+            max_toi,
+            collision_groups,
+            entity_to_ignore,
+            ignore_sensors,
+        )
+    }
+
+    fn ray_cast2_with_memberships(
+        &self,
+        query_memberships: InternalCollisionGroups,
+        start_point: Point3<f32>,
+        direction: Vector3<f32>,
+        max_toi: f32,
+        collision_groups: InternalCollisionGroups,
+        entity_to_ignore: Option<EntityId>,
+        ignore_sensors: bool,
+    ) -> Option<RayCastResult> {
         // Guard against degenerate rays. A zero-length direction normalizes to
         // NaN, and a NaN/zero ray direction sends parry's `clip_aabb_line` down
         // its `near_side == 0` path (see parry3d clip_aabb_line.rs): when the
@@ -4161,7 +4226,7 @@ impl PhysicsWorld {
         filter = filter.predicate(&binding);
 
         filter = filter.groups(InteractionGroups::new(
-            InternalCollisionGroups::ALL.bits.into(),
+            query_memberships.bits.into(),
             collision_groups.bits.into(),
             Default::default(),
         ));
@@ -4419,7 +4484,7 @@ impl PhysicsWorld {
         let filter = QueryFilter::default()
             .exclude_sensors()
             .groups(InteractionGroups::new(
-                InternalCollisionGroups::ALL.bits.into(),
+                InternalCollisionGroups::ACTOR.bits.into(),
                 InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
                 Default::default(),
             ))
@@ -5003,6 +5068,7 @@ impl PhysicsWorld {
             angular_damping: body.angular_damping(),
             collision_groups,
             blocks_player: self.collider_blocks_player(handle),
+            blocks_actor: self.collider_blocks_actor(handle),
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
@@ -5093,6 +5159,9 @@ pub struct DebugBodyInfo {
     /// membership only, so a body that keeps its `entity` membership while
     /// dropping `PLAYER` from its filter looks identical there.
     pub blocks_player: bool,
+    /// Whether this body stops a living creature capsule. Like
+    /// `blocks_player`, this comes from the filter rather than membership.
+    pub blocks_actor: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
@@ -5110,6 +5179,7 @@ fn collision_group_names(bits: u32) -> Vec<String> {
         (InternalCollisionGroups::HITBOX, "hitbox"),
         (InternalCollisionGroups::RAYCAST, "raycast"),
         (InternalCollisionGroups::CLIMBABLE, "climbable"),
+        (InternalCollisionGroups::ACTOR, "actor"),
     ];
     for (group, name) in candidates {
         if bits & group.bits != 0 {
@@ -5129,6 +5199,90 @@ mod tests {
 
     fn identity_quat() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A collider deliberately made non-solid to characters must not remain an
+    /// immovable obstacle to the live creature that follows the player through
+    /// it, while ordinary physical objects and interaction rays still hit it.
+    ///
+    /// Negative-first: before the actor group split, live creatures shared
+    /// `ENTITY` with ordinary props, so #805/#810's player-only filter still
+    /// collided here.
+    #[test]
+    fn non_solid_character_obstacles_do_not_block_live_creatures() {
+        let obstacle = CollisionGroup::entity().non_solid_to_characters();
+        let live_creature = CollisionGroup::actor();
+        let physical_entity = CollisionGroup::entity();
+        let generic_entity_ray = InteractionGroups::new(
+            InternalCollisionGroups::ALL.bits.into(),
+            InternalCollisionGroups::ENTITIES.bits.into(),
+            Default::default(),
+        );
+
+        assert!(
+            !obstacle.0.test(live_creature.0),
+            "a player-passable collider must not stop a pursuing creature"
+        );
+        assert!(
+            physical_entity.0.test(live_creature.0),
+            "ordinary props must remain solid to creatures"
+        );
+        assert!(
+            obstacle.0.test(physical_entity.0),
+            "slow physical projectiles and movable props must still hit the obstacle"
+        );
+        assert!(
+            obstacle.0.test(generic_entity_ray),
+            "selection/projectile rays must still hit the obstacle"
+        );
+    }
+
+    /// AI movement probes must use the actor membership, not a generic ray:
+    /// the latter intentionally keeps seeing interaction-only geometry so
+    /// frobbing, shooting, and line-of-sight behavior do not change.
+    #[test]
+    fn actor_movement_ray_ignores_character_passable_obstacles() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(42).unwrap(),
+            vec3(0.0, 2.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            CollisionGroup::entity().non_solid_to_characters(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(43).unwrap());
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let origin = point3(-3.0, 2.0, 0.0);
+        let direction = Vector3::unit_x();
+        let generic_hit = world.ray_cast2(
+            origin,
+            direction,
+            10.0,
+            InternalCollisionGroups::ENTITIES,
+            None,
+            true,
+        );
+        let actor_hit = world.ray_cast2_as_actor(
+            origin,
+            direction,
+            10.0,
+            InternalCollisionGroups::ENTITIES,
+            None,
+            true,
+        );
+
+        assert!(
+            generic_hit.is_some(),
+            "generic interaction rays must still hit the obstacle"
+        );
+        assert!(
+            actor_hit.is_none(),
+            "AI movement probes must pass through the obstacle"
+        );
     }
 
     /// A world with a large static floor whose top surface is at `y = 0`, plus a
@@ -5707,7 +5861,7 @@ mod tests {
                 height: 1.0,
                 radius: 0.5,
             },
-            CollisionGroup::entity(),
+            CollisionGroup::actor(),
             false,
             DynamicPhysicsOptions::default(),
         );
@@ -5728,6 +5882,19 @@ mod tests {
         for _ in 0..frames {
             world.update(vec3(0.0, 0.0, 0.0), player);
             world.recover_live_creatures_swept_off_support(living_creatures);
+        }
+    }
+
+    fn drive_creature_horizontally(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        creature_id: EntityId,
+        frames: usize,
+    ) {
+        for _ in 0..frames {
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            world.set_velocity(creature_id, vec3(1.0, y_velocity, 0.0));
+            step_creature_test(world, player, &[creature_id], 1);
         }
     }
 
@@ -5795,18 +5962,37 @@ mod tests {
     #[test]
     fn live_creature_locomotion_advances_normally_on_static_support() {
         let (mut world, mut player, creature_id, creature) = live_creature_test_world(2120, 40.0);
-
-        for _ in 0..120 {
-            let y_velocity = world.get_velocity(creature_id).unwrap().y;
-            world.set_velocity(creature_id, vec3(1.0, y_velocity, 0.0));
-            world.update(vec3(0.0, 0.0, 0.0), &mut player);
-            world.recover_live_creatures_swept_off_support(&[creature_id]);
-        }
+        drive_creature_horizontally(&mut world, &mut player, creature_id, 120);
 
         let end = world.get_position(creature).unwrap();
         assert!(
             end.x > 1.5 && end.y > 0.5,
             "live locomotion should advance smoothly across static support: {end:?}"
+        );
+    }
+
+    /// A living creature driven by the same repeated velocity updates as the
+    /// AI must cross an unsimulated debris/frob stand-in while that collider
+    /// remains present for physical props and interaction rays.
+    #[test]
+    fn live_creature_locomotion_crosses_character_passable_obstacle() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2125, 40.0);
+        world.add_kinematic(
+            EntityId::from_inner(2128).unwrap(),
+            vec3(1.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 3.0, 3.0),
+            CollisionGroup::entity().non_solid_to_characters(),
+            false,
+        );
+
+        drive_creature_horizontally(&mut world, &mut player, creature_id, 180);
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.x > 2.0 && end.y > 0.5,
+            "live creature should cross the character-passable obstacle: {end:?}"
         );
     }
 
@@ -7439,7 +7625,7 @@ mod tests {
             if solid {
                 casing
             } else {
-                casing.non_solid_to_player()
+                casing.non_solid_to_characters()
             },
             false,
         );
@@ -7479,7 +7665,7 @@ mod tests {
     /// Station alcove, #801).
     ///
     /// Negative-first: the `solid` half is the bug and still freezes; only the
-    /// `non_solid_to_player` half changes behavior.
+    /// `non_solid_to_characters` half changes behavior.
     #[test]
     fn a_non_solid_frob_box_never_wedges_the_player() {
         let (_, stand_y) = frob_box_fixture(true);

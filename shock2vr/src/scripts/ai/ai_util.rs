@@ -660,7 +660,7 @@ pub fn has_line_of_fire(
         direction,
         distance,
         InternalCollisionGroups::WORLD
-            | InternalCollisionGroups::ENTITY
+            | InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::SELECTABLE,
         Some(from_entity),
         true,

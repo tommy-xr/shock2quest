@@ -281,6 +281,8 @@ pub struct PhysicsBodySummary {
     /// Whether this body stops the player capsule (the collider's filter),
     /// which `collision_groups` - membership only - cannot show.
     pub blocks_player: bool,
+    /// Whether this body stops a living creature capsule.
+    pub blocks_actor: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
@@ -363,6 +365,8 @@ pub struct PhysicsBodyDetailResult {
     pub collision_groups: Vec<String>,
     /// See `PhysicsBodySummary::blocks_player`.
     pub blocks_player: bool,
+    /// See `PhysicsBodySummary::blocks_actor`.
+    pub blocks_actor: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,

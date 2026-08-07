@@ -95,7 +95,7 @@ impl DebugRenderBackend for DebugRenderer {
                 } else if c
                     .collision_groups()
                     .memberships
-                    .contains(InternalCollisionGroups::ENTITY.bits.into())
+                    .intersects(InternalCollisionGroups::ENTITIES.bits.into())
                 {
                     vcolor = vec3(
                         OrderedFloat::from(1.0),

@@ -161,7 +161,7 @@ impl FlatPlayerController {
             .ray_cast(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
                 forward,
-                InternalCollisionGroups::ENTITY
+                InternalCollisionGroups::ENTITIES
                     | InternalCollisionGroups::SELECTABLE
                     | InternalCollisionGroups::WORLD
                     | InternalCollisionGroups::UI

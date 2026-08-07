@@ -171,7 +171,7 @@ fn projectile_ray_cast(
     let mut maybe_hit_spot = physics.ray_cast(
         start_point,
         forward * distance,
-        InternalCollisionGroups::ENTITY
+        InternalCollisionGroups::ENTITIES
             // Sometimes, the hitbox can stick out past the bounding box...
             // so we should still check for it here
             | InternalCollisionGroups::HITBOX
