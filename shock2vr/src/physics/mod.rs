@@ -599,6 +599,9 @@ struct ClimbTopOut {
     save_pose: Vector<Real>,
     reversing: bool,
     is_crouched: bool,
+    /// Dark atomically collapses an ordinary mantle's sphere stack at the
+    /// existing head sphere; ladder recovery continues to sweep normally.
+    instant_compression: bool,
 }
 
 struct PlayerMovement {
@@ -760,6 +763,54 @@ fn shape_intersects(queries: &QueryPipeline, position: Vector<Real>, shape: &dyn
         )
         .next()
         .is_some()
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ShapeObstruction {
+    Collider(ColliderHandle),
+    TrimeshFace(ColliderHandle, u32),
+}
+
+/// Actual surface features touched by `shape`.
+///
+/// A whole closed level trimesh reports a solid-volume intersection even when
+/// the shape is in empty room space. Enumerating its triangle BVH and testing
+/// the candidate triangles distinguishes those volume false positives from
+/// real surface contact and, crucially, identifies every face involved.
+fn shape_obstructions(
+    queries: &QueryPipeline,
+    position: Vector<Real>,
+    shape: &dyn Shape,
+) -> HashSet<ShapeObstruction> {
+    let shape_position = Isometry::translation(position.x, position.y, position.z);
+    let shape_aabb = shape.compute_aabb(&shape_position);
+    let mut obstructions = HashSet::new();
+    for (handle, collider) in queries.intersect_aabb_conservative(shape_aabb) {
+        if let Some(mesh) = collider.shape().as_trimesh() {
+            let shape_in_collider = collider.position().inv_mul(&shape_position);
+            let local_aabb = shape.compute_aabb(&shape_in_collider);
+            for face in mesh.bvh().intersect_aabb(&local_aabb) {
+                let triangle = mesh.triangle(face);
+                if queries
+                    .dispatcher
+                    .intersection_test(&shape_in_collider, &triangle, shape)
+                    == Ok(true)
+                {
+                    obstructions.insert(ShapeObstruction::TrimeshFace(handle, face));
+                }
+            }
+        } else {
+            let shape_to_collider = shape_position.inv_mul(collider.position());
+            if queries
+                .dispatcher
+                .intersection_test(&shape_to_collider, shape, collider.shape())
+                == Ok(true)
+            {
+                obstructions.insert(ShapeObstruction::Collider(handle));
+            }
+        }
+    }
+    obstructions
 }
 
 /// Whether an expanded player shape is genuinely resting on walkable
@@ -1163,6 +1214,7 @@ fn plan_climb_top_out(
             save_pose: pos.translation.vector,
             reversing: false,
             is_crouched: false,
+            instant_compression: false,
         }),
         slope_displacement: Vector::zeros(),
     })
@@ -1220,11 +1272,70 @@ fn plan_jump_mantle(
     let max_rise =
         (PLAYER_JUMP_SPEED * PLAYER_JUMP_SPEED) / (2.0 * PLAYER_JUMP_GRAVITY * SCALE_FACTOR);
     let minimum_forward = (2.0 * body_radius + 2.0 * PLAYER_CONTACT_OFFSET) / SCALE_FACTOR;
+    let compressed = Ball::new(body_radius / SCALE_FACTOR);
+    // Dark does not sweep the collapsed body from the player's center to the
+    // head. `UpdateMantling` moves the one remaining player sphere directly
+    // to the existing head sphere and zeroes the other sphere offsets in the
+    // same operation. Every intermediate sphere on this vertical segment was
+    // already contained by the valid standing/crouched capsule, so validate
+    // that the exact compressed endpoint introduces no new all-collider
+    // obstruction. A level face the current capsule already straddles is the
+    // existing bounded jump-through overlap, not a new endpoint bypass.
+    // Horizontal, raised, and forward mantle travel remains fully swept.
+    let head_obstructions = shape_obstructions(validation_queries, head, &compressed);
+    let current_obstructions =
+        shape_obstructions(validation_queries, pos.translation.vector, shape);
+    if !head_obstructions.is_subset(&current_obstructions) {
+        return None;
+    }
+    let simulate_waypoint = |mut simulated: Vector<Real>, waypoint: Vector<Real>| {
+        for _ in 0..512 {
+            if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                break;
+            }
+            let movement = slide_toward(
+                controller,
+                scripted_queries,
+                &compressed,
+                simulated,
+                waypoint,
+                dt,
+            )?;
+            simulated += movement.translation;
+        }
+        ((waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON).then_some(simulated)
+    };
+    let preflight_transition = |raised: Vector<Real>,
+                                raised_simulated: Vector<Real>,
+                                raised_forward: Vector<Real>,
+                                final_standing: Vector<Real>|
+     -> Option<[Vector<Real>; 7]> {
+        let final_head = final_standing + Vector::y() * head_offset;
+        let waypoints = [
+            head,
+            raised,
+            raised_forward,
+            raised_forward,
+            final_head,
+            final_head,
+            final_standing,
+        ];
+        let mut simulated = raised_simulated;
+        for waypoint in waypoints.into_iter().skip(2) {
+            simulated = simulate_waypoint(simulated, waypoint)?;
+        }
+        Some(waypoints)
+    };
     let mut transition = None;
     let mut lower_transition = None;
+    let mut lower_transition_considered = false;
     let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
     while rise_ss2 <= max_rise * SCALE_FACTOR + 1.0e-4 && transition.is_none() {
         let raised = head + Vector::y() * (rise_ss2 / SCALE_FACTOR);
+        let Some(raised_simulated) = simulate_waypoint(head, raised) else {
+            rise_ss2 += PLAYER_JUMP_MANTLE_PROBE_STEP;
+            continue;
+        };
         let mut forward_ss2 = minimum_forward * SCALE_FACTOR;
         while forward_ss2 <= PLAYER_JUMP_MANTLE_FORWARD + 1.0e-4 {
             let forward = forward_ss2 / SCALE_FACTOR;
@@ -1348,18 +1459,38 @@ fn plan_jump_mantle(
                     .then(|| pos.translation.vector + direction * forward);
                 if let Some(final_standing) = elevated_standing.or(same_height_standing) {
                     if !shape_intersects(validation_queries, final_standing, &final_shape) {
-                        transition = Some((raised, raised_forward, final_standing));
-                        break;
+                        let planned = preflight_transition(
+                            raised,
+                            raised_simulated,
+                            raised_forward,
+                            final_standing,
+                        );
+                        if let Some(waypoints) = planned {
+                            transition = Some(waypoints);
+                            break;
+                        } else if is_crouched {
+                            // Preserve the existing crouched-jump contract:
+                            // its first body-valid mantle candidate is
+                            // authoritative, and a blocked scripted route
+                            // falls back to the ordinary crouched jump.
+                            return None;
+                        }
                     }
                 }
                 // A lower landing is a fallback for stacked geometry, never
                 // competition for an elevated/same-height mantle farther
                 // along the bounded search. Remember the first valid one and
                 // use it only if the preferred search is exhausted.
-                if lower_transition.is_none() {
+                if !lower_transition_considered {
                     if let Some(final_standing) = lower_standing {
                         if !shape_intersects(validation_queries, final_standing, &final_shape) {
-                            lower_transition = Some((raised, raised_forward, final_standing));
+                            lower_transition_considered = true;
+                            lower_transition = preflight_transition(
+                                raised,
+                                raised_simulated,
+                                raised_forward,
+                                final_standing,
+                            );
                         }
                     }
                 }
@@ -1368,53 +1499,17 @@ fn plan_jump_mantle(
         }
         rise_ss2 += PLAYER_JUMP_MANTLE_PROBE_STEP;
     }
-    let (raised, raised_forward, final_standing) = transition.or(lower_transition)?;
-    let final_head = final_standing + Vector::y() * head_offset;
-    let waypoints = [
-        head,
-        raised,
-        raised_forward,
-        raised_forward,
-        final_head,
-        final_head,
-        final_standing,
-    ];
-
-    // Preflight the exact fixed-timestep route against every parented entity
-    // blocker. Parentless level terrain is the one Dark jump-through
-    // exception; the destination itself was validated against all colliders.
-    let compressed = Ball::new(body_radius / SCALE_FACTOR);
-    let mut simulated = pos.translation.vector;
-    let mut first_movement = None;
-    for waypoint in waypoints {
-        for _ in 0..512 {
-            if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
-                break;
-            }
-            let movement = slide_toward(
-                controller,
-                scripted_queries,
-                &compressed,
-                simulated,
-                waypoint,
-                dt,
-            )?;
-            first_movement.get_or_insert(movement.translation);
-            simulated += movement.translation;
-        }
-        if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
-            return None;
-        }
-    }
+    let waypoints = transition.or(lower_transition)?;
 
     Some(PlayerMovement {
-        movement: scripted_character_movement(first_movement?),
+        movement: scripted_character_movement(head - pos.translation.vector),
         top_out: Some(ClimbTopOut {
             waypoints,
-            next_waypoint: 0,
+            next_waypoint: 1,
             save_pose: pos.translation.vector,
             reversing: false,
             is_crouched,
+            instant_compression: true,
         }),
         slope_displacement: Vector::zeros(),
     })
@@ -1440,6 +1535,33 @@ fn advance_climb_top_out(
         standing_player_capsule()
     };
     let target = loop {
+        if top_out.reversing && top_out.next_waypoint == 0 && top_out.instant_compression {
+            let save_pose_has_parented_obstruction =
+                shape_obstructions(validation_queries, top_out.save_pose, &final_shape)
+                    .into_iter()
+                    .any(|obstruction| {
+                        let handle = match obstruction {
+                            ShapeObstruction::Collider(handle)
+                            | ShapeObstruction::TrimeshFace(handle, _) => handle,
+                        };
+                        validation_queries
+                            .colliders
+                            .get(handle)
+                            .is_some_and(|collider| collider.parent().is_some())
+                    });
+            if save_pose_has_parented_obstruction {
+                return (scripted_character_movement(Vector::zeros()), Some(top_out));
+            }
+            // This is the exact inverse of the bounded vertical compression,
+            // not a general unswept move: Dark restores the sphere stack at
+            // its saved pose in one operation. Any parented blocker that can
+            // move there keeps recovery compressed; a parentless terrain face
+            // the launch capsule already straddled is immutable and unchanged.
+            return (
+                scripted_character_movement(top_out.save_pose - pos.translation.vector),
+                None,
+            );
+        }
         let target = if top_out.reversing {
             match top_out.next_waypoint.checked_sub(1) {
                 Some(index) => top_out.waypoints[index],
@@ -6250,6 +6372,111 @@ mod tests {
     }
 
     #[test]
+    fn jump_mantle_reversal_atomically_restores_its_valid_save_pose() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(1).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let save_pose = vector![0.0, 1.0, 0.0];
+        let compressed_head = vector![0.0, 1.72, 0.0];
+        let pos = Isometry::translation(compressed_head.x, compressed_head.y, compressed_head.z);
+        let top_out = ClimbTopOut {
+            waypoints: [compressed_head; 7],
+            next_waypoint: 0,
+            save_pose,
+            reversing: true,
+            is_crouched: false,
+            instant_compression: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        let (movement, active) =
+            advance_climb_top_out(&controller, &queries, &queries, &pos, top_out, 1.0 / 60.0);
+
+        assert_eq!(movement.translation, save_pose - compressed_head);
+        assert!(
+            active.is_none(),
+            "a clear full-capsule endpoint should atomically invert Dark's head compression"
+        );
+    }
+
+    #[test]
+    fn jump_mantle_reversal_stays_compressed_when_save_pose_is_blocked() {
+        let mut world = PhysicsWorld::new();
+        let save_pose = vector![0.0, 1.0, 0.0];
+        world.add_kinematic(
+            EntityId::from_inner(1).unwrap(),
+            vec3(save_pose.x, save_pose.y, save_pose.z),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 3.0, 3.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let compressed_head = vector![0.0, 1.72, 0.0];
+        let pos = Isometry::translation(compressed_head.x, compressed_head.y, compressed_head.z);
+        let top_out = ClimbTopOut {
+            waypoints: [compressed_head; 7],
+            next_waypoint: 0,
+            save_pose,
+            reversing: true,
+            is_crouched: false,
+            instant_compression: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        let (movement, active) =
+            advance_climb_top_out(&controller, &queries, &queries, &pos, top_out, 1.0 / 60.0);
+
+        assert_eq!(movement.translation, Vector::zeros());
+        assert!(
+            active.is_some_and(|top_out| top_out.reversing && top_out.instant_compression),
+            "a newly-blocked full-capsule endpoint must keep recovery compressed and active"
+        );
+    }
+
+    #[test]
+    fn jump_mantle_reversal_restores_across_immutable_launch_overlap() {
+        let mut world = PhysicsWorld::new();
+        let save_pose = vector![0.0, 1.0, 0.0];
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.05, 1.5, 1.5)
+                .translation(save_pose)
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let compressed_head = vector![0.0, 1.72, 0.0];
+        let pos = Isometry::translation(compressed_head.x, compressed_head.y, compressed_head.z);
+        let top_out = ClimbTopOut {
+            waypoints: [compressed_head; 7],
+            next_waypoint: 0,
+            save_pose,
+            reversing: true,
+            is_crouched: false,
+            instant_compression: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        let (movement, active) =
+            advance_climb_top_out(&controller, &queries, &queries, &pos, top_out, 1.0 / 60.0);
+
+        assert_eq!(movement.translation, save_pose - compressed_head);
+        assert!(
+            active.is_none(),
+            "an immutable parentless face at the unchanged launch pose must not pin reversal"
+        );
+    }
+
+    #[test]
     fn climb_top_out_reverses_when_a_parented_blocker_appears() {
         let mut world = PhysicsWorld::new();
         let mut player =
@@ -6263,6 +6490,7 @@ mod tests {
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
             is_crouched: false,
+            instant_compression: false,
         };
         let first = {
             let queries = query_pipeline(&world, QueryFilter::default());
@@ -6316,6 +6544,7 @@ mod tests {
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
             is_crouched: false,
+            instant_compression: false,
         };
         world.add_kinematic(
             EntityId::from_inner(2).unwrap(),
@@ -6369,6 +6598,7 @@ mod tests {
             save_pose: Vector::zeros(),
             reversing: false,
             is_crouched: true,
+            instant_compression: false,
         };
 
         let (movement, active) =
@@ -6407,6 +6637,7 @@ mod tests {
             save_pose,
             reversing: true,
             is_crouched: false,
+            instant_compression: false,
         });
         assert_eq!(
             world.get_player_save_translation(&player),
@@ -7116,6 +7347,78 @@ mod tests {
         assert!(
             jumped.x > 1.0 && jumped_rise > 2.0,
             "jump should arc over the low wall, ended {jumped:?}, rose {jumped_rise}"
+        );
+    }
+
+    /// Hydro2's Sector C railing is an entity OBB just outside the valid
+    /// standing capsule but inside the character controller's contact offset.
+    /// Dark collapses its sphere stack at the existing head in one operation;
+    /// sweeping that purely vertical collapse falsely catches the rail face.
+    #[test]
+    fn jump_mantle_atomically_collapses_at_head_beside_a_low_obb_rail() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(-0.575, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        let start = world.get_player_translation(&player);
+
+        // The 0.515-unit exact separation from the near face exceeds the
+        // 0.48-unit player radius, while remaining inside that radius plus the
+        // controller's 0.04-unit contact offset. Vertical placement and the
+        // thin 0.12-unit cross-section match the campaign obstruction.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.0, start.y + 0.587, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.12, 0.12, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+
+        world.update_with_facing_and_jump(
+            vec3(0.1, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        let compressed = world.get_player_translation(&player);
+
+        let top_out = player
+            .top_out
+            .expect("the low OBB rail should start Dark's bounded atomic compression");
+        assert!(
+            top_out.instant_compression && top_out.next_waypoint == 1,
+            "the low OBB rail should start Dark's bounded atomic compression: {start:?} -> {compressed:?}, grounded={}, jump={:?}",
+            player.is_grounded,
+            player.jump_velocity,
+        );
+        let expected_head_offset =
+            (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+        let chosen_rise = top_out.waypoints[1].y - (start.y + expected_head_offset);
+        let maximum_rise =
+            (PLAYER_JUMP_SPEED * PLAYER_JUMP_SPEED) / (2.0 * PLAYER_JUMP_GRAVITY * SCALE_FACTOR);
+        assert!(
+            chosen_rise > PLAYER_JUMP_MANTLE_PROBE_STEP / SCALE_FACTOR + 1.0e-4
+                && chosen_rise <= maximum_rise,
+            "the first point-ray-valid rise must be rejected in favor of a higher bounded route, got {chosen_rise}"
+        );
+        assert!(
+            (compressed.x - start.x).abs() < 1.0e-4
+                && (compressed.y - start.y - expected_head_offset).abs() < 1.0e-4
+                && (compressed.z - start.z).abs() < 1.0e-4,
+            "the first mantle frame must only collapse vertically to the existing head: {start:?} -> {compressed:?}"
         );
     }
 
@@ -8034,6 +8337,7 @@ mod tests {
             save_pose,
             reversing: false,
             is_crouched: false,
+            instant_compression: false,
         });
 
         let result = world.move_player_validated(vec3(f32::NAN, 0.5, 0.0), &mut player);

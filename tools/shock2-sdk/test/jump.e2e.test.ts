@@ -11,6 +11,112 @@ async function pulseJump(game: GameServer): Promise<void> {
   await game.input.setJump(false);
 }
 
+// Fresh Hydro campaign `hydro -> ops -> rec -> command -> rick -> many ->
+// shodan · seed 1378752978` reached the authored Sector C ladder approach at
+// this exact pose. Two adjacent Railing Terminator OBBs (stable mission ids
+// 228/1701) span the route at x=56.7. Dark's jump-held mantle compresses its
+// sphere-stack player to cross low OBB lips; the continuous production capsule
+// instead jumps in place against the rail and cannot reach the required ladder.
+test(
+  "ordinary jump vaults Hydro2's Sector C ladder-approach railing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_HYDRO_CLEARANCE_PORT ?? 8256),
+    });
+    await game.step({ frames: 5 });
+
+    const railings = (await game.entities.list({ filter: "Railing Terminator" }))
+      .entities.filter(
+        (entity) => entity.template_id === 228 || entity.template_id === 1701,
+      );
+    assert.equal(
+      railings.length,
+      2,
+      "hydro2 should retain both stable railing objects across the ladder approach",
+    );
+
+    // Setup only: stage at the cold-verified campaign frontier. The crossing
+    // itself uses only production look, locomotion, and jump input.
+    await game.player.teleport({
+      x: 56.125435,
+      y: -0.756035,
+      z: 24.1012,
+    });
+    await game.step({ frames: 30 });
+    const before = await game.player.position();
+
+    await game.input.lookAtWorldPoint([59.6, before.y + 1.6, 22.77]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await pulseJump(game);
+    let crossed: Awaited<ReturnType<typeof game.player.position>> | undefined;
+    for (let frame = 0; frame < 80; frame += 1) {
+      await game.step({ frames: 1 });
+      const sample = await game.player.position();
+      if (sample.x > 57.15) {
+        crossed = sample;
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      crossed &&
+        crossed.x < 58 &&
+        crossed.z > 22.5 &&
+        crossed.z < 24,
+      `production jump should cross the rail inside its authored span, not ` +
+        `bypass an endpoint (${JSON.stringify(before)} -> ${JSON.stringify(crossed)})`,
+    );
+
+    // Release every input and prove the apparent crossing is a real landing
+    // on the corridor floor, not a transient scripted or ballistic sample.
+    await game.step({ frames: 600 });
+    const landed = await game.player.position();
+    await game.step({ frames: 120 });
+    const supported = await game.player.position();
+    const inLadderCorridor = (sample: typeof landed): boolean =>
+      sample.x > 57.1 &&
+      sample.x < 58 &&
+      sample.y > -1 &&
+      sample.y < -0.5 &&
+      sample.z > 22.5 &&
+      sample.z < 24;
+    assert.ok(
+      inLadderCorridor(landed) &&
+        inLadderCorridor(supported) &&
+        Math.hypot(
+          supported.x - landed.x,
+          supported.y - landed.y,
+          supported.z - landed.z,
+        ) < 0.05,
+      `vault should remain supported in the finite ladder corridor ` +
+        `(${JSON.stringify(landed)} -> ${JSON.stringify(supported)})`,
+    );
+
+    // Continue from that production landing to the ladder base. This proves
+    // the vault opens the mandatory route rather than reaching an isolated
+    // pocket on the far side of the railing.
+    await game.input.lookAtWorldPoint([59.6, supported.y + 1.6, 22.77]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let ladderApproach = supported;
+    for (let frame = 0; frame < 30; frame += 1) {
+      await game.step({ frames: 1 });
+      ladderApproach = await game.player.position();
+      if (ladderApproach.x > 58.5) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      ladderApproach.x > 58.5 &&
+        ladderApproach.x < 59.5 &&
+        ladderApproach.z > 22.3 &&
+        ladderApproach.z < 23.5,
+      `production locomotion should continue to the Sector C ladder base, got ` +
+        JSON.stringify(ladderApproach),
+    );
+  },
+);
+
 // Issue #708: shodan.mis's mandatory final descent begins behind a low
 // non-climbable barrier at z=32. Ordinary walking, crouching, and the
 // collision-valid move endpoint all stop at its face; retail expects the
