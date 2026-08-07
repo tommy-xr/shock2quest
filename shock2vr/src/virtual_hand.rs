@@ -214,7 +214,7 @@ impl VirtualHand {
             // TODO: Two raycasts...
             // One for hit damage:
             //InternalCollisionGroups::HITBOX
-            InternalCollisionGroups::ENTITY
+            InternalCollisionGroups::ENTITIES
                 | InternalCollisionGroups::SELECTABLE
                 | InternalCollisionGroups::WORLD
                 | InternalCollisionGroups::UI
@@ -417,7 +417,7 @@ fn handle_empty_hand_state(
         // TODO: Two raycasts...
         // One for hit damage,
         //InternalCollisionGroups::HITBOX
-        InternalCollisionGroups::ENTITY
+        InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::SELECTABLE
             | InternalCollisionGroups::WORLD
             | InternalCollisionGroups::UI

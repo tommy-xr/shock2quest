@@ -281,6 +281,8 @@ pub struct DebugPhysicsBodySummary {
     /// membership only, which cannot distinguish a body that keeps its
     /// `entity` membership while dropping the player from its filter.
     pub blocks_player: bool,
+    /// Whether this body stops a living creature capsule; also filter-derived.
+    pub blocks_actor: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
@@ -306,6 +308,8 @@ pub struct DebugPhysicsBodyDetail {
     pub collision_groups: Vec<String>,
     /// See `DebugPhysicsBodySummary::blocks_player`.
     pub blocks_player: bool,
+    /// See `DebugPhysicsBodySummary::blocks_actor`.
+    pub blocks_actor: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,

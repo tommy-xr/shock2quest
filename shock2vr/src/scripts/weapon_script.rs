@@ -236,7 +236,7 @@ fn melee_swing(
     let hit = physics.ray_cast(
         aim.origin,
         aim.forward.normalize() * MELEE_RANGE,
-        InternalCollisionGroups::ENTITY
+        InternalCollisionGroups::ENTITIES
             | InternalCollisionGroups::HITBOX
             | InternalCollisionGroups::SELECTABLE,
     );

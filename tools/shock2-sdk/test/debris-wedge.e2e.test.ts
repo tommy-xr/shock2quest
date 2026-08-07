@@ -15,7 +15,8 @@ import type { PhysicsBodySummary } from "../src/types.js";
 // move. In hydro2's cold storage, where the pods block aisles the player MUST
 // smash through, that is a softlock.
 //
-// Negative-first: on main every spawned gib body reports blocks_player: true.
+// Negative-first: on #810 every spawned gib still reports blocks_actor: true,
+// because living creatures and ordinary props share the `entity` membership.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // Stable mission-object id (`template_id`), not a runtime entity id: the Floor
@@ -27,7 +28,7 @@ function gibBodies(bodies: PhysicsBodySummary[]): PhysicsBodySummary[] {
 }
 
 test(
-  "hydro2: gibs from a smashed Floor Pod are never solid to the player",
+  "hydro2: gibs from a smashed Floor Pod are never solid to characters",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -58,9 +59,14 @@ test(
         false,
         `gib ${gib.body_id} at ${JSON.stringify(gib.position)} must not be solid to the player`,
       );
-      // Only the player is taken out of the collider's filter: the gib keeps
-      // its body and its `entity` membership, so it is still raycastable,
-      // shootable and solid to everything else.
+      assert.equal(
+        gib.blocks_actor,
+        false,
+        `gib ${gib.body_id} at ${JSON.stringify(gib.position)} must not be solid to living actors`,
+      );
+      // Characters are taken out of the collider's filter, but the gib keeps
+      // its body and `entity` membership: it remains raycastable, shootable,
+      // and solid to physical projectiles and ordinary movable props.
       assert.equal(gib.body_type, "kinematic");
       assert.equal(gib.is_sensor, false);
       assert.ok(

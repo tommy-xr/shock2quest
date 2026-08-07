@@ -300,6 +300,8 @@ export interface PhysicsBodySummary {
    * connected to runtimes predating this field.
    */
   blocks_player?: boolean;
+  /** Whether this body stops a living creature capsule. */
+  blocks_actor?: boolean;
   is_sensor: boolean;
   is_enabled: boolean;
   is_sleeping: boolean;

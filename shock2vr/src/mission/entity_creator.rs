@@ -900,7 +900,7 @@ pub fn create_physics_representation(
                 creature_shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                CollisionGroup::entity(),
+                CollisionGroup::actor(),
                 false,
                 dynamics_options,
             );
@@ -932,12 +932,12 @@ pub fn create_physics_representation(
             // collision volume. Dark makes an object physical by giving it a
             // `PhysType`; without one there is no physics model at all and
             // the object is walk-through (its solidity in retail is the
-            // brushwork behind it). Leaving the box solid to the player fills
+            // brushwork behind it). Leaving the box solid to characters fills
             // walk-in fixtures - the hydro2 Resurrection Station alcove is a
             // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
             // the capsule against its faces with no way out (#801).
             if v_phys_type.get(entity_id).is_err() {
-                group = group.non_solid_to_player();
+                group = group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
@@ -1103,13 +1103,11 @@ pub fn create_physics_representation(
             // carry an OBB or are `Immobile`. Without authored `P$PhysDims`
             // there is no radius to simulate with, so the collider here is the
             // immovable kinematic model-bounds box of the #597 fallback - the
-            // exact opposite of a body that yields. Retail shoves debris out
-            // of the player's way; this stand-in cannot move at all, and a gib
-            // resting against the capsule wedges it permanently, because the
-            // character controller has no depenetration pass and resolves a
-            // penetrating pose to zero movement in every direction (#803).
-            // Not stopping the player is the closest this collider gets to
-            // being pushed aside. An authored `P$Immobile` (the same
+            // exact opposite of a body that yields. Retail actors shove debris
+            // out of their way; this stand-in cannot move at all, and a gib
+            // resting against a capsule can stop it permanently. Not stopping
+            // either player or creature capsules is the closest this collider
+            // gets to being pushed aside. An authored `P$Immobile` (the same
             // presence test the dynamic path below already uses) is what keeps
             // level fixtures solid, and climbable is excluded outright: the
             // climb probe queries as `PLAYER` too, so a non-solid ladder would
@@ -1119,7 +1117,7 @@ pub fn create_physics_representation(
                 && !immobile
                 && !is_climbable;
             let group = if is_unsimulated_debris {
-                group.non_solid_to_player()
+                group.non_solid_to_characters()
             } else {
                 group
             };
@@ -1285,14 +1283,14 @@ mod tests {
     /// A frobbable fixture's collider comes from its model bounding box, not
     /// from an authored collision volume. Dark only builds a physics model for
     /// an object that carries a `PhysType`, so one without any must not be
-    /// solid to the player - hydro2's Resurrection Station is a 2.2 x 4.0 x
+    /// solid to characters - hydro2's Resurrection Station is a 2.2 x 4.0 x
     /// 2.5 box around the pad the player has to stand on, and a capsule
     /// overlapping it has no direction left to resolve into (#801). It still
     /// gets the collider: frob and selection raycasts need it.
     ///
     /// Negative-first: before the fix the typeless case also blocked.
     #[test]
-    fn a_frobbable_without_phys_type_does_not_block_the_player() {
+    fn a_frobbable_without_phys_type_does_not_block_characters() {
         for (phys_type, should_block) in [
             (None, false),
             (Some(PhysicsModelType::ORIENTED_BOUNDING_BOX), true),
@@ -1312,6 +1310,12 @@ mod tests {
                 "phys_type {phys_type:?} should{} block the player",
                 if should_block { "" } else { " not" }
             );
+            assert_eq!(
+                physics.collider_blocks_actor(handle),
+                should_block,
+                "phys_type {phys_type:?} should{} block actors",
+                if should_block { "" } else { " not" }
+            );
             // Either way it stays in the world and keeps its selectable /
             // entity membership, so nothing about frobbing changes.
             let bodies = physics.debug_list_bodies();
@@ -1324,6 +1328,8 @@ mod tests {
                 "a frob collider must stay raycastable, got {:?}",
                 bodies[0].collision_groups
             );
+            assert_eq!(bodies[0].blocks_player, should_block);
+            assert_eq!(bodies[0].blocks_actor, should_block);
         }
     }
 
@@ -1372,13 +1378,13 @@ mod tests {
     /// can only stand in an immovable kinematic box, which never yields, so a
     /// gib that comes to rest against the player capsule wedges it forever:
     /// the character controller has no depenetration pass (#803). Such debris
-    /// must therefore not be solid to the player. `Immobile` objects - ladder
+    /// must therefore not be solid to characters. `Immobile` objects - ladder
     /// leaves that say SPHERE, level furniture - stay solid, as does anything
     /// with the static OBB model.
     ///
     /// Negative-first: before the fix the debris case blocked too.
     #[test]
-    fn dimensionless_movable_debris_does_not_block_the_player() {
+    fn dimensionless_movable_debris_does_not_block_characters() {
         for (phys_type, immobile, should_block) in [
             (PhysicsModelType::SPHERE, false, false),
             (PhysicsModelType::SPHERE, true, true),
@@ -1399,8 +1405,14 @@ mod tests {
                 "{phys_type:?} (immobile: {immobile}) should{} block the player",
                 if should_block { "" } else { " not" }
             );
+            assert_eq!(
+                physics.collider_blocks_actor(handle),
+                should_block,
+                "{phys_type:?} (immobile: {immobile}) should{} block actors",
+                if should_block { "" } else { " not" }
+            );
             // Debris keeps its collider and its `entity` membership: it is
-            // still shootable, selectable and solid to everything else.
+            // still shootable, selectable, and solid to physical props.
             let bodies = physics.debug_list_bodies();
             assert_eq!(bodies.len(), 1, "expected exactly one body in the world");
             assert_eq!(bodies[0].body_type, "kinematic");
@@ -1410,6 +1422,7 @@ mod tests {
                 bodies[0].collision_groups
             );
             assert_eq!(bodies[0].blocks_player, should_block);
+            assert_eq!(bodies[0].blocks_actor, should_block);
         }
     }
 
