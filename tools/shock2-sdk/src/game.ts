@@ -42,12 +42,13 @@ import type {
 
 /**
  * Standing eye height above the player's body position, in world units:
- * the Rust `PLAYER_EYE_HEIGHT` (the original engine's `PLAYER_HEAD` sphere,
- * `(PLAYER_HEIGHT / 2) - PLAYER_RADIUS` = 1.8 SS2 ft) divided by
- * `dark::SCALE_FACTOR` (2.5). Only a fallback: aiming prefers the live
- * `camera_offset` the runtime reports in `/v1/info`.
+ * the Rust `PLAYER_EYE_HEIGHT` (head sphere at `(PLAYER_HEIGHT / 2) -
+ * PLAYER_RADIUS` = 1.8 SS2 ft, plus the original game's 0.8 ft eye offset =
+ * 2.6 SS2 ft, i.e. 5.6 ft above the floor) divided by `dark::SCALE_FACTOR`
+ * (2.5). Only a fallback: aiming prefers the live `camera_offset` the runtime
+ * reports in `/v1/info`.
  */
-export const PLAYER_EYE_HEIGHT_WORLD = 0.72;
+export const PLAYER_EYE_HEIGHT_WORLD = 1.04;
 
 /** Error thrown when the game reports a command failed (success: false). */
 export class CommandError extends Error {

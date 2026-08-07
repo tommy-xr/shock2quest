@@ -34,13 +34,21 @@ const PLAYER_STANDING_RADIUS: f32 = 1.2;
 /// axis, so "in front of the eye" is only outside the collider beyond this).
 pub const PLAYER_STANDING_RADIUS_WORLD: f32 = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 
-/// Height of the player's head sphere above the body origin (SS2 ft), the
-/// original engine's `PLAYER_HEAD_POS = (PLAYER_HEIGHT / 2) - PLAYER_RADIUS`
-/// (`src/physics/physapi.h`). Dark places the first-person camera at exactly
-/// this submodel, so it is also the eye height ([`crate::PLAYER_EYE_HEIGHT`]);
-/// deriving it here keeps the camera tied to the collision profile, inside the
-/// capsule rather than above its crown.
+/// Height of the player's head sphere above the body origin (SS2 ft),
+/// `(PLAYER_HEIGHT / 2) - PLAYER_RADIUS` in the original game's collision
+/// profile. The original's first-person camera is anchored to this submodel,
+/// so deriving it here keeps the camera tied to the collision profile rather
+/// than floating free of it.
 pub const PLAYER_HEAD_POS: f32 = PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS;
+
+/// Eye offset above the head sphere center (SS2 ft). The original game does
+/// not put the camera at the head sphere center: after locating the head it
+/// raises the viewpoint by this default eye offset (configurable as
+/// "eyeloc"; our data ships no override). Head sphere (1.8) + this (0.8) puts
+/// the standing eye 2.6 ft above the body center - 5.6 ft above the floor -
+/// and still 0.4 ft below the capsule crown, so the camera stays inside the
+/// collider by construction. See [`crate::PLAYER_EYE_HEIGHT`].
+pub const PLAYER_EYE_OFFSET: f32 = 0.8;
 
 /// Crouched capsule height (SS2 ft). The original engine's crouched COLLISION
 /// profile (a stack of two 1.2 ft spheres, body-bottom -1.8 to head-top +1.0
@@ -5001,21 +5009,21 @@ mod tests {
         world.add_collider(EntityId::from_inner(2199).unwrap(), collider);
     }
 
-    /// The standing eye is the original engine's `PLAYER_HEAD` sphere center,
-    /// which is inside the collider by construction - a camera above the crown
-    /// would be outside every room whose ceiling the body itself clears.
+    /// The standing eye is the head sphere center plus the original game's eye
+    /// offset, which stays inside the collider by construction - a camera above
+    /// the crown would be outside every room whose ceiling the body clears.
     #[test]
-    fn standing_eye_is_the_head_sphere_inside_the_collider() {
+    fn standing_eye_is_the_head_sphere_plus_eye_offset_inside_the_collider() {
         let eye = crate::player_eye_height_for(false);
         assert_eq!(
             eye,
-            PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS,
-            "the standing eye must be Dark's PLAYER_HEAD_POS"
+            PLAYER_HEAD_POS + PLAYER_EYE_OFFSET,
+            "the standing eye must be the head sphere plus the eye offset"
         );
         let crown = PLAYER_STANDING_HEIGHT / 2.0;
         assert!(
-            eye <= crown,
-            "the standing eye ({eye} ft) must not sit above the collider crown ({crown} ft)"
+            eye < crown,
+            "the standing eye ({eye} ft) must sit below the collider crown ({crown} ft)"
         );
     }
 
