@@ -549,6 +549,24 @@ const _: fn() = || {
     assert_send_sync::<GlobalContext>();
 };
 
+fn restore_saved_script_namespaces(
+    script_world: &mut ScriptWorld,
+    mission_states: &[scripts::SavedScriptState],
+    mission_entity_ids: &HashMap<EntityId, EntityId>,
+    held_states: &[scripts::SavedScriptState],
+    held_entity_ids: &HashMap<EntityId, EntityId>,
+) {
+    script_world
+        .restore_states(mission_states, mission_entity_ids)
+        .unwrap_or_else(|error| panic!("unable to restore mission script state: {error}"));
+    // A revisited mission and the carried inventory were serialized from
+    // different ECS worlds, so their saved EntityId values may legitimately
+    // overlap. Keep their remap domains separate while hydrating scripts.
+    script_world
+        .restore_states(held_states, held_entity_ids)
+        .unwrap_or_else(|error| panic!("unable to restore held-item script state: {error}"));
+}
+
 pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
     pub song_params: SongParams,
@@ -743,8 +761,8 @@ impl MissionCore {
             &mut world,
         );
         let template_to_entity_id = population.template_to_entity_id;
-        let mut script_entity_id_map = population.entity_id_map;
-        let mut saved_script_states = population.script_states;
+        let mission_script_entity_id_map = population.entity_id_map;
+        let mission_saved_script_states = population.script_states;
 
         // Instantiate held items
         let mut interaction: Box<dyn PlayerInteraction> =
@@ -758,15 +776,8 @@ impl MissionCore {
         let left_hand_entity = held_instantiation.left_hand_entity_id;
         let right_hand_entity = held_instantiation.right_hand_entity_id;
         let maybe_inventory_entity = held_instantiation.inventory_entity_id;
-        for (old_entity, new_entity) in held_instantiation.entity_id_map {
-            assert!(
-                script_entity_id_map
-                    .insert(old_entity, new_entity)
-                    .is_none(),
-                "saved entity ID appears in both mission and held-item data: {old_entity:?}"
-            );
-        }
-        saved_script_states.extend(held_instantiation.script_states);
+        let held_script_entity_id_map = held_instantiation.entity_id_map;
+        let held_saved_script_states = held_instantiation.script_states;
 
         // Instantiate inventory
         // TODO: This should be move into the held_item_save_data
@@ -913,9 +924,13 @@ impl MissionCore {
             );
         }
 
-        script_world
-            .restore_states(&saved_script_states, &script_entity_id_map)
-            .unwrap_or_else(|error| panic!("unable to restore script state: {error}"));
+        restore_saved_script_namespaces(
+            &mut script_world,
+            &mission_saved_script_states,
+            &mission_script_entity_id_map,
+            &held_saved_script_states,
+            &held_script_entity_id_map,
+        );
 
         // If the player is holding anything, we should un-physical it.
         // NB: these grabs discard their effects (there is no `self` yet to run
@@ -7445,6 +7460,83 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         self.script_world.dispatch(Message { to: id, payload });
         true
+    }
+}
+
+#[cfg(test)]
+mod saved_script_namespace_tests {
+    use super::*;
+
+    const STATE_KEY: &str = "test.saved-namespace";
+
+    struct NamespaceStateScript(u32);
+
+    impl scripts::Script for NamespaceStateScript {
+        fn script_state_key(&self) -> Option<&'static str> {
+            Some(STATE_KEY)
+        }
+
+        fn save_state(&self) -> Result<scripts::ScriptState, scripts::ScriptStateError> {
+            scripts::ScriptState::encode(1, &self.0, STATE_KEY)
+        }
+
+        fn restore_state(
+            &mut self,
+            state: &scripts::ScriptState,
+            _context: &scripts::ScriptRestoreContext<'_>,
+        ) -> Result<(), scripts::ScriptStateError> {
+            self.0 = state.decode(1, STATE_KEY)?;
+            Ok(())
+        }
+    }
+
+    fn source_state(value: u32) -> (EntityId, Vec<scripts::SavedScriptState>) {
+        let mut world = World::new();
+        let old_entity = world.add_entity(());
+        let mut scripts = ScriptWorld::new();
+        scripts.add_entity2(old_entity, Box::new(NamespaceStateScript(value)));
+        (old_entity, scripts.save_states().unwrap())
+    }
+
+    fn saved_value(states: &[scripts::SavedScriptState], entity: EntityId) -> u32 {
+        states
+            .iter()
+            .find(|state| state.entity_id == entity.inner())
+            .unwrap()
+            .state
+            .decode(1, STATE_KEY)
+            .unwrap()
+    }
+
+    #[test]
+    fn overlapping_saved_ids_restore_in_their_own_namespaces() {
+        // Mission and inventory snapshots come from separate ECS worlds, where
+        // each allocator can legitimately assign the same saved EntityId.
+        let (old_mission, mission_states) = source_state(11);
+        let (old_held, held_states) = source_state(22);
+        assert_eq!(
+            old_mission, old_held,
+            "the regression needs an exact ID overlap"
+        );
+
+        let mut loaded_world = World::new();
+        let new_mission = loaded_world.add_entity(());
+        let new_held = loaded_world.add_entity(());
+        let mut loaded_scripts = ScriptWorld::new();
+        loaded_scripts.add_entity2(new_mission, Box::new(NamespaceStateScript(0)));
+        loaded_scripts.add_entity2(new_held, Box::new(NamespaceStateScript(0)));
+
+        restore_saved_script_namespaces(
+            &mut loaded_scripts,
+            &mission_states,
+            &HashMap::from([(old_mission, new_mission)]),
+            &held_states,
+            &HashMap::from([(old_held, new_held)]),
+        );
+
+        let restored = loaded_scripts.save_states().unwrap();
+        assert_eq!(saved_value(&restored, new_mission), 11);
+        assert_eq!(saved_value(&restored, new_held), 22);
     }
 }
 
