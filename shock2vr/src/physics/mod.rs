@@ -2460,16 +2460,28 @@ impl PhysicsWorld {
     }
 
     /// Whether a body's collider is solid to the player capsule. Membership
-    /// alone does not say - it is the collider's *filter* that this turns on
-    /// and off (see `CollisionGroup::non_solid_to_player`).
-    #[cfg(test)]
+    /// alone does not say - it is the collider's *filter* that
+    /// `CollisionGroup::non_solid_to_player` turns off - which is why
+    /// `DebugBodyInfo` reports this separately from `collision_groups`.
+    ///
+    /// Mirrors `player_movement_filter`: every player cast excludes sensors
+    /// and asks for `PLAYER` against `ALL_COLLIDABLE`, so a sensor, a disabled
+    /// collider or a `HITBOX`/`RAYCAST`-only membership never stops the
+    /// capsule however its filter reads.
     pub(crate) fn collider_blocks_player(&self, handle: RigidBodyHandle) -> bool {
         let Some(body) = self.rigid_body_set.get(handle) else {
             return false;
         };
+        if !body.is_enabled() {
+            return false;
+        }
         body.colliders().iter().any(|collider_handle| {
             self.collider_set.get(*collider_handle).is_some_and(|c| {
-                c.collision_groups().filter.bits() & InternalCollisionGroups::PLAYER.bits != 0
+                let groups = c.collision_groups();
+                c.is_enabled()
+                    && !c.is_sensor()
+                    && groups.filter.bits() & InternalCollisionGroups::PLAYER.bits != 0
+                    && groups.memberships.bits() & InternalCollisionGroups::ALL_COLLIDABLE.bits != 0
             })
         })
     }
@@ -4990,6 +5002,7 @@ impl PhysicsWorld {
             linear_damping: body.linear_damping(),
             angular_damping: body.angular_damping(),
             collision_groups,
+            blocks_player: self.collider_blocks_player(handle),
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
@@ -5076,6 +5089,10 @@ pub struct DebugBodyInfo {
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub collision_groups: Vec<String>,
+    /// Whether this body stops the player capsule. `collision_groups` reports
+    /// membership only, so a body that keeps its `entity` membership while
+    /// dropping `PLAYER` from its filter looks identical there.
+    pub blocks_player: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,

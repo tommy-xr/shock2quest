@@ -278,6 +278,9 @@ pub struct PhysicsBodySummary {
     pub velocity: [f32; 3],
     pub angular_velocity: [f32; 3],
     pub collision_groups: Vec<String>,
+    /// Whether this body stops the player capsule (the collider's filter),
+    /// which `collision_groups` - membership only - cannot show.
+    pub blocks_player: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
@@ -358,6 +361,8 @@ pub struct PhysicsBodyDetailResult {
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub collision_groups: Vec<String>,
+    /// See `PhysicsBodySummary::blocks_player`.
+    pub blocks_player: bool,
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,

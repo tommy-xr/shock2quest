@@ -293,6 +293,13 @@ export interface PhysicsBodySummary {
   velocity: Vec3;
   angular_velocity: Vec3;
   collision_groups: string[];
+  /**
+   * Whether this body stops the player capsule. `collision_groups` reports
+   * membership only, so debris that keeps `entity` membership while dropping
+   * the player from its collider filter looks identical there. Optional when
+   * connected to runtimes predating this field.
+   */
+  blocks_player?: boolean;
   is_sensor: boolean;
   is_enabled: boolean;
   is_sleeping: boolean;
