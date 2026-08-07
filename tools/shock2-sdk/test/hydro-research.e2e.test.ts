@@ -16,6 +16,8 @@ import { teleportVerified } from "./helpers/teleport.js";
 // `/v1/ui.active_panel` null. The first research-panel assertion therefore
 // fails before the implementation.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
+const TOXIN_DESKS = [675, 713];
+const CHEMICAL_DESK = 354;
 
 async function ensureUseMode(game: GameServer): Promise<void> {
   if ((await game.ui.state()).mode !== "use") {
@@ -48,6 +50,48 @@ async function useInventoryItem(
     "second click should use the item and clear the cursor",
   );
   await game.step({ frames: 5 });
+}
+
+async function lootContainerItems(
+  game: GameServer,
+  containerTemplateId: number,
+  itemNames: string[],
+): Promise<void> {
+  const containers = await game.entities.byTemplate(containerTemplateId);
+  assert.equal(
+    containers.length,
+    1,
+    `expected one authored container ${containerTemplateId}`,
+  );
+  const container = containers[0];
+  await teleportVerified(game, {
+    x: container.position[0] + 1.0,
+    y: container.position[1] + 0.5,
+    z: container.position[2] + 1.0,
+  });
+  await game.entities.sendMessage(container.id, { type: "Frob" });
+  await game.step({ frames: 5 });
+
+  for (const itemName of itemNames) {
+    const panel = (await game.ui.state()).active_panel;
+    assert.equal(
+      panel?.entity_id,
+      container.id,
+      `container ${containerTemplateId} should open its loot MFD`,
+    );
+    const item = panel.elements.find(
+      (element) => element.kind === "button" && element.label === itemName,
+    );
+    assert.ok(item, `container ${containerTemplateId} should contain ${itemName}`);
+    await clickUiElement(game, item);
+  }
+
+  const close = (await game.ui.state()).active_panel?.elements.find(
+    (element) => element.label === "close",
+  );
+  if (close) {
+    await clickUiElement(game, close);
+  }
 }
 
 function panelTexts(ui: UiState): string[] {
@@ -89,41 +133,34 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Pick up an authored Hydro 2 vial, then prove Hydro 1's real regulator
-    // refuses it while its Dark object state is still Unresearched.
-    const authoredToxins = (
-      await game.entities.list({ filter: "Anti-Annelid Toxin", limit: 20 })
-    ).entities.slice(0, 2);
-    assert.equal(
-      authoredToxins.length,
-      2,
-      "Hydro 2 should contain both authored Toxin-A vials",
-    );
-    for (const authoredToxin of authoredToxins) {
-      await game.player.give(authoredToxin.id);
+    // Loot two authored Hydro 2 vials, then prove Hydro 2's real regulator
+    // refuses them while their Dark object state is still Unresearched.
+    for (const desk of TOXIN_DESKS) {
+      await lootContainerItems(game, desk, ["Anti-Annelid Toxin"]);
     }
-    await game.transitionLevel("hydro1.mis");
-    await game.step({ frames: 5 });
-    const acr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
-      (entity) => entity.name === "ACR1",
+    assert.equal(
+      (await carriedItemsNamed(game, "Anti-Annelid Toxin")).length,
+      2,
+      "two authored Toxin-A vials should be looted from Hydro 2 desks",
     );
-    assert.ok(acr1, "Hydro 1 should contain the authored ACR1 regulator");
-    await game.entities.sendMessage(acr1.id, { type: "Frob" });
+    const acr2 = (await game.entities.list({ filter: "ACR2", limit: 30 })).entities.find(
+      (entity) => entity.name === "ACR2",
+    );
+    assert.ok(acr2, "Hydro 2 should contain the authored ACR2 regulator");
+    await game.entities.sendMessage(acr2.id, { type: "Frob" });
     await game.step({ frames: 30 });
     assert.ok(
       (await carriedItemsNamed(game, "Anti-Annelid Toxin")).length === 2,
-      "ACR1 must not consume either unresearched toxin",
+      "ACR2 must not consume either unresearched toxin",
     );
     assert.notEqual(
-      await game.quests.get("ACR1"),
+      await game.quests.get("ACR2"),
       "complete",
       "rejected toxin must not advance the ACR objective",
     );
 
-    await game.transitionLevel("hydro2.mis");
-    await game.step({ frames: 5 });
     let toxin = await carriedNamed(game, "Anti-Annelid Toxin");
-    assert.ok(toxin, "Toxin-A should remain carried after returning to Hydro 2");
+    assert.ok(toxin, "Toxin-A should remain carried after ACR2 rejects it");
 
     // Double-click through the production inventory. With no Research skill,
     // the MFD opens but explicitly refuses to begin.
@@ -173,20 +210,18 @@ test(
 
     // Carry the actual authored Hydro chemical objects. Wrong Vanadium is
     // refused and remains; Antimony is consumed, reaching the second gate.
-    const antimonyWorld = (
-      await game.entities.list({ filter: "Chem #4", limit: 30 })
-    ).entities.slice(0, 2);
-    const vanadiumWorld = (
-      await game.entities.list({ filter: "Chem #2", limit: 30 })
-    ).entities[0];
-    assert.equal(antimonyWorld.length, 2, "Hydro 2 should author two Antimony doses");
-    assert.ok(vanadiumWorld, "Hydro 2 should author a Vanadium dose");
-    for (const chemical of [...antimonyWorld, vanadiumWorld]) {
-      await game.player.give(chemical.id);
-    }
+    await lootContainerItems(game, CHEMICAL_DESK, ["Chem #2"]);
+    await lootContainerItems(game, CHEMICAL_DESK, ["Chem #4"]);
+    await lootContainerItems(game, CHEMICAL_DESK, ["Chem #4"]);
+    toxin = await carriedNamed(game, "Anti-Annelid Toxin");
+    assert.ok(toxin);
+    await useInventoryItem(game, toxin.entity_id);
 
     let vanadium = await carriedNamed(game, "Chem #2");
-    assert.ok(vanadium);
+    assert.ok(
+      vanadium,
+      `the authored Vanadium should be carried; got ${JSON.stringify((await game.player.inventory()).items)}`,
+    );
     await useInventoryItem(game, vanadium.entity_id);
     assert.ok(await carriedNamed(game, "Chem #2"), "wrong chemical must remain carried");
 
@@ -272,55 +307,55 @@ test(
     );
 
     // Both vials predated completion, so both must be normalized to researched
-    // and accepted by Hydro's two independent, cross-deck regulators.
-    await game.transitionLevel("hydro1.mis");
-    await game.step({ frames: 5 });
-    const liveAcr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
-      (entity) => entity.name === "ACR1",
-    );
-    assert.ok(liveAcr1);
+    // and accepted by Hydro's two independent, cross-deck regulators. Use ACR2
+    // before leaving Hydro 2, keeping transition-revisit coverage isolated in
+    // its dedicated #770 regression test.
     let carriedToxins = await carriedItemsNamed(game, "Anti-Annelid Toxin");
     assert.equal(carriedToxins.length, 2, "both preexisting vials survive research");
-    await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
+    const liveAcr2 = (await game.entities.list({ filter: "ACR2", limit: 30 })).entities.find(
+      (entity) => entity.name === "ACR2",
+    );
+    assert.ok(liveAcr2, "Hydro 2 should still contain the authored ACR2 regulator");
+    await game.entities.sendMessage(liveAcr2.id, { type: "Frob" });
     await game.step({ frames: 600 });
     carriedToxins = await carriedItemsNamed(game, "Anti-Annelid Toxin");
     assert.equal(
       carriedToxins.length,
       1,
-      "ACR1 consumes one researched preexisting vial",
-    );
-    assert.equal(
-      await game.quests.get("ACR1"),
-      "incomplete",
-      "the authored ACR1-Activate trap marks this regulator active",
-    );
-
-    // ACR2 is the second real regulator in Hydro 2, not another Hydro 1
-    // object. Follow the authored cross-deck objective before using it.
-    await game.transitionLevel("hydro2.mis");
-    await game.step({ frames: 5 });
-    const liveAcr2 = (await game.entities.list({ filter: "ACR2", limit: 30 })).entities.find(
-      (entity) => entity.name === "ACR2",
-    );
-    assert.ok(liveAcr2, "Hydro 2 should contain the authored ACR2 regulator");
-    await game.entities.sendMessage(liveAcr2.id, { type: "Frob" });
-    await game.step({ frames: 600 });
-    assert.equal(
-      (await carriedItemsNamed(game, "Anti-Annelid Toxin")).length,
-      0,
-      "ACR2 consumes the other researched preexisting vial",
+      "ACR2 consumes one researched preexisting vial",
     );
     assert.equal(
       await game.quests.get("ACR2"),
       "incomplete",
-      "the authored ACR2-Activate trap marks the second regulator active",
+      "the authored ACR2-Activate trap marks this regulator active",
+    );
+
+    // Follow the authored cross-deck objective to Hydro 1 and consume the
+    // remaining researched vial in the independent ACR1 regulator.
+    await game.transitionLevel("hydro1.mis");
+    await game.step({ frames: 5 });
+    const liveAcr1 = (await game.entities.list({ filter: "ACR1", limit: 30 })).entities.find(
+      (entity) => entity.name === "ACR1",
+    );
+    assert.ok(liveAcr1, "Hydro 1 should contain the authored ACR1 regulator");
+    await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
+    await game.step({ frames: 600 });
+    assert.equal(
+      (await carriedItemsNamed(game, "Anti-Annelid Toxin")).length,
+      0,
+      "ACR1 consumes the other researched preexisting vial",
+    );
+    assert.equal(
+      await game.quests.get("ACR1"),
+      "incomplete",
+      "the authored ACR1-Activate trap marks the second regulator active",
     );
 
     // After its authored model tweq reaches the used frame, another researched
     // vial is left untouched by an already-used regulator.
     const secondToxin = await game.player.spawnItem(-1341);
     await game.step({ frames: 5 });
-    await game.entities.sendMessage(liveAcr2.id, { type: "Frob" });
+    await game.entities.sendMessage(liveAcr1.id, { type: "Frob" });
     await game.step({ frames: 30 });
     assert.ok(
       (await game.player.inventory()).items.some(

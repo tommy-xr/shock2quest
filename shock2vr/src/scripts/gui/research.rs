@@ -9,10 +9,13 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor},
+    mission::GlobalEntityMetadata,
     player_stats::Skill,
     quest_info::QuestInfo,
     scripts::{Effect, script_util::entity_class_template_id},
 };
+
+use super::media::wrap_text;
 
 const PANEL_W: f32 = 188.0;
 const PANEL_H: f32 = 296.0;
@@ -126,7 +129,7 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
         } else if let Some(chemical) = &status.needed_chemical {
             format!(
                 "Research paused. Required chemical: {}.",
-                chemical_display_name(chemical)
+                chemical_display_name(world, chemical)
             )
         } else if status.complete && state.show_report {
             property_fallback(world, entity_id, true)
@@ -246,32 +249,47 @@ fn localized_fallback(value: &str) -> String {
         .replace("\\n", "\n")
 }
 
-fn chemical_display_name(sym_name: &str) -> String {
-    match sym_name.to_ascii_lowercase().as_str() {
-        "chem #2" => "Vanadium (V)".to_owned(),
-        "chem #4" => "Antimony (Sb)".to_owned(),
-        _ => sym_name.to_owned(),
-    }
+fn chemical_display_name(world: &World, sym_name: &str) -> String {
+    let key = sym_name.to_ascii_lowercase();
+    world
+        .borrow::<UniqueView<GlobalEntityMetadata>>()
+        .ok()
+        .and_then(|metadata| {
+            metadata
+                .0
+                .get(&key)
+                .and_then(|chemical| chemical.obj_short_name.as_deref())
+                .map(localized_fallback)
+        })
+        .unwrap_or_else(|| sym_name.to_owned())
 }
 
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
-        let mut current = String::new();
-        for word in paragraph.split_whitespace() {
-            if current.is_empty() {
-                current = word.to_owned();
-            } else if current.len() + word.len() < max_chars {
-                current.push(' ');
-                current.push_str(word);
-            } else {
-                lines.push(std::mem::take(&mut current));
-                current = word.to_owned();
-            }
-        }
-        if !current.is_empty() {
-            lines.push(current);
-        }
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::mission::EntityMetadata;
+
+    use super::*;
+
+    #[test]
+    fn wrapping_preserves_blank_paragraphs() {
+        assert_eq!(wrap_text("first\n\nsecond", 20), ["first", "", "second"]);
     }
-    lines
+
+    #[test]
+    fn chemical_name_comes_from_authored_short_name() {
+        let world = World::new();
+        world.add_unique(GlobalEntityMetadata(HashMap::from([(
+            "chem #7".to_owned(),
+            EntityMetadata {
+                template_id: -144,
+                obj_icon: None,
+                obj_short_name: Some("Chem_p7: \"Californium (Cf)\"".to_owned()),
+                obj_name: None,
+            },
+        )])));
+
+        assert_eq!(chemical_display_name(&world, "Chem #7"), "Californium (Cf)");
+    }
 }

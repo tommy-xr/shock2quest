@@ -1,5 +1,5 @@
-use dark::properties::{ObjectState, PropObjState};
-use shipyard::{EntityId, Get, World};
+use dark::properties::ObjectState;
+use shipyard::{EntityId, World};
 
 use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
 
@@ -31,19 +31,7 @@ impl Script for ResearchableScript {
                 state: ObjectState::Normal,
             }
         } else {
-            let unresearched = world
-                .borrow::<shipyard::View<PropObjState>>()
-                .ok()
-                .and_then(|states| states.get(entity_id).ok().map(|state| state.0))
-                == Some(ObjectState::Unresearched);
-            if unresearched {
-                Effect::NoEffect
-            } else {
-                Effect::SetObjectState {
-                    entity_id,
-                    state: ObjectState::Unresearched,
-                }
-            }
+            Effect::NoEffect
         }
     }
 
@@ -55,5 +43,28 @@ impl Script for ResearchableScript {
         _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dark::properties::{ObjectState, PropObjState};
+
+    use crate::runtime_props::RuntimePropCanonicalTemplateId;
+
+    use super::*;
+
+    #[test]
+    fn incomplete_research_preserves_authored_object_state() {
+        let mut world = World::new();
+        let entity_id = world.add_entity((
+            RuntimePropCanonicalTemplateId(-1341),
+            PropObjState(ObjectState::Normal),
+        ));
+        world.add_unique(QuestInfo::new());
+
+        let effect = ResearchableScript::new().initialize(entity_id, &world);
+
+        assert!(matches!(effect, Effect::NoEffect));
     }
 }
