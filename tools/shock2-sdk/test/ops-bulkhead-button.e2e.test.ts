@@ -19,6 +19,117 @@ import { GameServer } from "../src/index.js";
 // stable *mission object id*, reported in the `template_id` field.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
+// The player pose observed in #827 immediately before the ordinary production
+// squeeze. The button position itself comes from the runtime entity so the
+// interaction follows the authored mission object rather than a debug Frob.
+const OPS4_BUTTON_PLAYER_POSE = {
+  x: 53.47933,
+  y: -7.8612247,
+  z: -6.4060183,
+};
+
+async function squeezeVisibleOps4Button(game: GameServer): Promise<void> {
+  const [button] = await game.entities.byTemplate(404);
+  assert.ok(button, "expected the visible ops2 Ops 4 bulkhead button");
+
+  await game.player.teleport(OPS4_BUTTON_PLAYER_POSE);
+  await game.step({ frames: 2 });
+  await game.input.lookAtWorldPoint(button.position);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.squeeze_value", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.squeeze_value", 0);
+  await game.step({ frames: 30 });
+}
+
+test(
+  "ops2: the visible Ops 4 button cannot directly select its hidden pre-reveal relay",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "ops2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8128),
+    });
+    await game.step({ frames: 2 });
+    assert.equal(await game.quests.get("ShodanRoom"), "unknown");
+
+    // ops2 object 999 is the NoRender, PickBias=-2000 level-change relay.
+    // Dark never offers NoRender objects to the render-driven pick system, so
+    // an object with no authored PhysType must not gain a synthetic frob body.
+    const [hiddenRelay] = await game.entities.byTemplate(999);
+    assert.ok(hiddenRelay, "expected the hidden ops2 Ops 4 relay");
+    assert.equal(
+      (await game.physics.bodies({ entityId: hiddenRelay.id })).total_count,
+      0,
+      "the NoRender relay must remain script-addressable without becoming a direct interaction target",
+    );
+
+    await squeezeVisibleOps4Button(game);
+
+    assert.equal(
+      (await game.info()).mission.toLowerCase(),
+      "ops2.mis",
+      "the visible button's authored QB filter must block Ops 4 before the SHODAN reveal",
+    );
+  },
+);
+
+test(
+  "ops1 reveal keeps its NoRender sensor and unlocks the visible ops2 Ops 4 button",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "ops1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8129),
+    });
+    await game.step({ frames: 2 });
+
+    // Enter the real reveal tripwire (ops1 object 204). It is also NoRender,
+    // but unlike the hidden relay it has an authored PhysType and therefore
+    // must keep the sensor body that drives TrapNewTripwire.
+    const [revealTripwire] = await game.entities.byTemplate(204);
+    assert.ok(revealTripwire, "expected the ops1 SHODAN reveal tripwire");
+    const revealBodies = await game.physics.bodies({
+      entityId: revealTripwire.id,
+    });
+    assert.ok(
+      revealBodies.bodies.some((body) => body.is_sensor),
+      "the authored NoRender reveal sensor must remain physical",
+    );
+
+    await game.player.teleport({
+      x: revealTripwire.position[0] + 2,
+      y: revealTripwire.position[1],
+      z: revealTripwire.position[2],
+    });
+    await game.step({ frames: 2 });
+    await game.player.teleport({
+      x: revealTripwire.position[0],
+      y: revealTripwire.position[1],
+      z: revealTripwire.position[2],
+    });
+    await game.step({ frames: 5 });
+    assert.equal(
+      await game.quests.get("ShodanRoom"),
+      "incomplete",
+      "entering the authored reveal tripwire should establish ShodanRoom",
+    );
+
+    // Preserve the quest state while returning to ops2; the interaction below
+    // is still the ordinary production aim/squeeze and the hidden changer is
+    // reached only through visible button -> QB filter -> SwitchLink.
+    await game.transitionLevel("ops2.mis");
+    await game.step({ frames: 2 });
+    await squeezeVisibleOps4Button(game);
+
+    assert.equal(
+      (await game.info()).mission.toLowerCase(),
+      "ops4.mis",
+      "after the genuine reveal flow, the authored visible-button relay chain should reach Ops 4",
+    );
+  },
+);
+
 test(
   "ops2: frobbing the visible bulkhead button relays TurnOn and transitions to ops3",
   { skip: !e2eEnabled, timeout: 600_000 },

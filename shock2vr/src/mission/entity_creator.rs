@@ -776,6 +776,7 @@ pub fn create_physics_representation(
         _v_phys_dimensions,
         v_frob_info,
         v_hud_select,
+        v_render_type,
         v_creature,
         v_creature_pose,
         v_death_pose,
@@ -787,6 +788,7 @@ pub fn create_physics_representation(
             View<PropPhysDimensions>,
             View<PropFrobInfo>,
             View<PropHUDSelect>,
+            View<PropRenderType>,
             View<PropCreature>,
             View<PropCreaturePose>,
             View<RuntimePropDeathPose>,
@@ -851,6 +853,21 @@ pub fn create_physics_representation(
 
     // Frobbable item, let's see what we can do...
     if let (Ok(pos), Ok(frob_info)) = (v_pos.get(entity_id), v_frob_info.get(entity_id)) {
+        // Dark chooses frob targets from the objects submitted by its render
+        // pipeline. A NoRender object is never submitted, regardless of an
+        // inherited FrobInfo or model, so it cannot be picked directly. Keep
+        // authored invisible physics (tripwires and other sensors have an
+        // explicit PhysType), but do not invent the model-bounds selection
+        // collider that exists here only to make a visible, typeless object
+        // raycastable. Otherwise hidden switch relays can eclipse their
+        // co-located visible control and bypass the authored link chain (#827).
+        let is_no_render = v_render_type
+            .get(entity_id)
+            .is_ok_and(|render_type| render_type.0 == RenderType::NoRender);
+        if is_no_render && v_phys_type.get(entity_id).is_err() {
+            return None;
+        }
+
         let qrotation = pos.rotation;
 
         let _is_sensor = true;
@@ -1330,6 +1347,39 @@ mod tests {
             );
             assert_eq!(bodies[0].blocks_player, should_block);
             assert_eq!(bodies[0].blocks_actor, should_block);
+        }
+    }
+
+    /// Dark's pick pass weighs only objects submitted by the renderer. A
+    /// NoRender relay with inherited FrobInfo must therefore remain callable
+    /// by scripts/links without gaining this engine's synthetic frob body.
+    /// Authored invisible physics is independent and must survive: tripwires
+    /// use NoRender + PhysType for their sensor volumes.
+    #[test]
+    fn no_render_frob_collider_requires_authored_phys_type() {
+        for (phys_type, should_have_body) in [
+            (None, false),
+            (Some(PhysicsModelType::ORIENTED_BOUNDING_BOX), true),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_wall_fixture(&mut world, phys_type);
+            world.add_component(entity_id, PropRenderType(RenderType::NoRender));
+            let model = ladder_model();
+
+            let handle =
+                create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id);
+
+            assert_eq!(
+                handle.is_some(),
+                should_have_body,
+                "NoRender fixture with PhysType {phys_type:?} should{} keep a body",
+                if should_have_body { "" } else { " not" }
+            );
+            assert_eq!(
+                physics.debug_list_bodies().len(),
+                usize::from(should_have_body)
+            );
         }
     }
 
