@@ -84,7 +84,8 @@ use crate::{
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
+        RuntimePropTransform, RuntimePropVhots,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -356,7 +357,7 @@ pub struct GlobalAsyncPathfinding(
     pub Option<Arc<crate::pathfinding::async_queries::AsyncPathfinding>>,
 );
 
-#[derive(Unique, Clone)]
+#[derive(Unique, Clone, Default)]
 pub struct EffectQueue {
     effects: Vec<Effect>,
 }
@@ -2282,7 +2283,13 @@ impl MissionCore {
                         .borrow::<View<RuntimePropDeathPose>>()
                         .unwrap()
                         .contains(*id);
-                if !holds_terminal_death_pose {
+                let launched_with_no_root_motion = velocity.magnitude2() <= f32::EPSILON
+                    && self
+                        .world
+                        .borrow::<View<RuntimePropLaunchedProjectile>>()
+                        .unwrap()
+                        .contains(*id);
+                if !holds_terminal_death_pose && !launched_with_no_root_motion {
                     self.physics.set_velocity(*id, scaled);
                 }
             }
@@ -2514,6 +2521,23 @@ impl MissionCore {
         position: Point3<f32>,
         orientation: Quaternion<f32>,
     ) -> Option<EntityCreationInfo> {
+        self.create_entity_by_template_name_with_options(
+            asset_cache,
+            template_name,
+            position,
+            orientation,
+            CreateEntityOptions::default(),
+        )
+    }
+
+    fn create_entity_by_template_name_with_options(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_name: &str,
+        position: Point3<f32>,
+        orientation: Quaternion<f32>,
+        options: CreateEntityOptions,
+    ) -> Option<EntityCreationInfo> {
         let template_name_lowercase = template_name.to_ascii_lowercase();
         let maybe_template_id = self
             .template_name_to_template_id
@@ -2527,7 +2551,7 @@ impl MissionCore {
                 position,
                 orientation,
                 Matrix4::identity(),
-                CreateEntityOptions::default(),
+                options,
             ))
         } else {
             None
@@ -3736,16 +3760,30 @@ impl MissionCore {
                 }
 
                 Effect::CreateEntityByTemplateName {
+                    source_entity_id,
                     template_name,
                     position,
                     orientation,
+                    initial_velocity,
                 } => {
-                    self.create_entity_by_template_name(
+                    if let Some(created) = self.create_entity_by_template_name_with_options(
                         asset_cache,
                         &template_name,
                         position,
                         orientation,
-                    );
+                        CreateEntityOptions {
+                            launch_projectile: true,
+                            ..CreateEntityOptions::default()
+                        },
+                    ) {
+                        self.physics
+                            .set_velocity(created.entity_id, initial_velocity);
+                    } else {
+                        warn!(
+                            "Tweq emitter {:?} could not resolve authored template {:?}",
+                            source_entity_id, template_name
+                        );
+                    }
                 }
 
                 Effect::CreateEntity {

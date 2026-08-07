@@ -148,6 +148,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, RuntimePropProjectileRayOrigin(origin));
     }
 
+    if additional_options.launch_projectile {
+        world.add_component(entity_id, RuntimePropLaunchedProjectile);
+    }
+
     create_entity_core(
         entity_id,
         template_id,
@@ -218,7 +222,7 @@ pub fn create_entity_core(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     _template_to_entity_id: &HashMap<i32, WrappedEntityId>, // realized entities from level start
     obj_map: &HashMap<i32, String>,
-    _additional_options: CreateEntityOptions,
+    additional_options: CreateEntityOptions,
 ) -> EntityCreationInfo {
     // Add template id
     world.add_component(entity_id, PropTemplateId { template_id });
@@ -272,7 +276,13 @@ pub fn create_entity_core(
 
     // Create physics representation
     let rigid_body = if has_refs(world, entity_id) {
-        create_physics_representation(world, physics, &maybe_just_model.as_ref(), entity_id)
+        create_physics_representation_with_options(
+            world,
+            physics,
+            &maybe_just_model.as_ref(),
+            entity_id,
+            additional_options.launch_projectile,
+        )
     } else {
         None
     };
@@ -755,6 +765,16 @@ pub fn create_physics_representation(
     maybe_model: &Option<&Model>,
     entity_id: EntityId,
 ) -> Option<RigidBodyHandle> {
+    create_physics_representation_with_options(world, physics, maybe_model, entity_id, false)
+}
+
+fn create_physics_representation_with_options(
+    world: &mut World,
+    physics: &mut PhysicsWorld,
+    maybe_model: &Option<&Model>,
+    entity_id: EntityId,
+    launch_projectile: bool,
+) -> Option<RigidBodyHandle> {
     // A door the authors left permanently open (no travel between its open and
     // closed endpoints, authored open) has nowhere to retract to: a collider
     // for it is a slab welded across the doorway that nothing can ever move,
@@ -769,11 +789,18 @@ pub fn create_physics_representation(
         return None;
     }
 
+    // Keep this storage out of the main borrow tuple: Shipyard 0.6 supports
+    // tuples through arity ten, and launch handling only needs membership.
+    let launched_object_is_immobile = world
+        .borrow::<View<PropImmobile>>()
+        .unwrap()
+        .contains(entity_id);
+
     let (
         v_pos,
         v_phys_attr,
         v_phys_type,
-        _v_phys_dimensions,
+        v_phys_dimensions,
         v_frob_info,
         v_hud_select,
         v_render_type,
@@ -848,6 +875,45 @@ pub fn create_physics_representation(
             physics.set_enabled_rotations(entity_id, false, false, false);
             physics.sleep_body(rigid_body_handle);
             return Some(rigid_body_handle);
+        }
+    }
+
+    // Dark's Tweq emitter hands the fresh object to launchProjectile. Preserve
+    // that explicit creation mode here: frobbable emitted objects (Ops4's Grub
+    // is one) would otherwise take the selectable-fixture branch below and
+    // replace their authored moving sphere with a kinematic model-bounds box.
+    let launched_projectile = launch_projectile
+        || world
+            .borrow::<View<RuntimePropLaunchedProjectile>>()
+            .unwrap()
+            .contains(entity_id);
+    if launched_projectile && !launched_object_is_immobile {
+        if let (Ok(pos), Ok(phys_type), Ok(dimensions)) = (
+            v_pos.get(entity_id),
+            v_phys_type.get(entity_id),
+            v_phys_dimensions.get(entity_id),
+        ) {
+            let maybe_shape = match phys_type.phys_type {
+                PhysicsModelType::ORIENTED_BOUNDING_BOX => {
+                    Some(PhysicsShape::Cuboid(dimensions.size))
+                }
+                PhysicsModelType::SPHERE => Some(PhysicsShape::Sphere(
+                    dimensions.radius0.abs().max(dimensions.radius1.abs()),
+                )),
+                _ => None,
+            };
+            if let Some(shape) = maybe_shape {
+                return Some(physics.add_dynamic(
+                    entity_id,
+                    pos.position,
+                    pos.rotation,
+                    dimensions.offset0,
+                    shape,
+                    CollisionGroup::entity(),
+                    false,
+                    dynamics_options,
+                ));
+            }
         }
     }
 
@@ -1200,6 +1266,10 @@ pub struct CreateEntityOptions {
     /// projectile. Flat firing supplies the camera origin while retaining the
     /// forward spawn clearance needed by slow physics projectiles.
     pub projectile_raycast_origin: Option<Point3<f32>>,
+    /// Create the authored physics model as a launched dynamic body. Dark's
+    /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
+    /// archetypes from being reduced to kinematic selection colliders.
+    pub launch_projectile: bool,
 }
 
 impl Default for CreateEntityOptions {
@@ -1209,6 +1279,7 @@ impl Default for CreateEntityOptions {
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
+            launch_projectile: false,
         }
     }
 }
@@ -1381,6 +1452,59 @@ mod tests {
                 usize::from(should_have_body)
             );
         }
+    }
+
+    /// Dark's Tweq emitter launches its created object. Ops4's Grub is
+    /// frobbable for targeting, but also authors a moving sphere; the launch
+    /// path must win over the ordinary kinematic selection-collider fallback.
+    #[test]
+    fn launched_frobbable_sphere_uses_authored_dynamic_physics() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(1.0, 2.0, 3.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropHUDSelect(true),
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: true,
+            },
+            PropPhysDimensions {
+                radius0: 0.2,
+                radius1: 0.0,
+                offset0: vec3(0.0, 0.36, 0.0),
+                offset1: Vector3::zero(),
+                size: Vector3::zero(),
+                unk1: 0,
+                unk2: 0,
+            },
+        ));
+
+        create_physics_representation_with_options(
+            &mut world,
+            &mut physics,
+            &None,
+            entity_id,
+            true,
+        )
+        .expect("an authored launched sphere should get a body");
+        physics.set_velocity(entity_id, vec3(-10.0, 0.0, 0.0));
+
+        let bodies = physics.debug_list_bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].body_type, "dynamic");
+        assert_eq!(bodies[0].linear_velocity, [-10.0, 0.0, 0.0]);
+        assert!(bodies[0].collision_groups.iter().any(|g| g == "entity"));
     }
 
     /// A non-frobbable object with a physics type but no `P$PhysDims` - the

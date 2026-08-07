@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, World};
 
 use crate::runtime_props::{
-    RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropSelectedAmmo,
+    RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropLaunchedProjectile,
+    RuntimePropSelectedAmmo,
 };
 use crate::scripts::SavedScriptState;
 
@@ -33,6 +34,11 @@ pub struct EntitySaveData {
     /// positive, mission-local object ID.
     #[serde(default)]
     pub canonical_template_ids: HashMap<u64 /* entity id */, i32>,
+    /// Entities created through Dark's `launchProjectile` path. The marker
+    /// restores dynamic authored physics and keeps empty animation players
+    /// from taking velocity ownership after load.
+    #[serde(default)]
+    pub launched_projectiles: Vec<u64 /* entity id */>,
     /// Opt-in private state owned by scripts on these entities. Registered ECS
     /// properties and links remain in their existing fields above; this is only
     /// for runtime modes, timers, latches, and similar script internals.
@@ -50,6 +56,7 @@ impl EntitySaveData {
             death_poses: HashMap::new(),
             selected_ammo: HashMap::new(),
             canonical_template_ids: HashMap::new(),
+            launched_projectiles: Vec::new(),
             script_states: Vec::new(),
         }
     }
@@ -113,6 +120,12 @@ impl EntitySaveData {
                     *new_entity_id,
                     RuntimePropCanonicalTemplateId(*canonical_template_id),
                 );
+            }
+        }
+        for old_entity_id in &self.launched_projectiles {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(*new_entity_id, RuntimePropLaunchedProjectile);
             }
         }
         (template_to_entity_id, old_entity_id_to_new_entity_id)
@@ -212,6 +225,7 @@ mod tests {
 
         assert!(data.selected_ammo.is_empty());
         assert!(data.canonical_template_ids.is_empty());
+        assert!(data.launched_projectiles.is_empty());
         assert!(data.script_states.is_empty());
     }
 
@@ -231,6 +245,24 @@ mod tests {
             .borrow::<View<RuntimePropCanonicalTemplateId>>()
             .unwrap();
         assert_eq!(canonical.get(new_entity).unwrap().0, -1358);
+    }
+
+    #[test]
+    fn instantiate_restores_launched_projectile_marker_on_the_remapped_entity() {
+        let old_entity = EntityId::new_from_index_and_gen(10, 2);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(old_entity.inner());
+        data.launched_projectiles.push(old_entity.inner());
+        let mut world = World::new();
+
+        let (_, entity_map) = data.instantiate(&mut world);
+
+        let new_entity = entity_map[&old_entity];
+        let launched = world
+            .borrow::<View<RuntimePropLaunchedProjectile>>()
+            .unwrap();
+        assert!(launched.contains(new_entity));
+        assert!(!launched.contains(old_entity));
     }
 
     #[test]

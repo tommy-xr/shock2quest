@@ -188,6 +188,10 @@ pub struct PropTweqEmitterConfig {
     pub animation_config: TweqAnimationConfig,
     pub halt: TweqHalt,
 
+    /// Dark's `TWEQ_MC_RELVEL`: rotate the authored launch vector by the
+    /// emitter object's facing before launching it.
+    pub relative_velocity: bool,
+
     pub rate: Duration,
     pub max_frames: u32,
     pub emit_what: String,
@@ -205,7 +209,7 @@ impl PropTweqEmitterConfig {
         let halt_bits = read_u8(reader);
         let halt: TweqHalt = num_traits::FromPrimitive::from_u8(halt_bits).unwrap();
 
-        let _misc = read_u16(reader);
+        let misc = read_u16(reader);
         let rate = read_u16(reader);
 
         let max_frames = read_u32(reader);
@@ -216,6 +220,7 @@ impl PropTweqEmitterConfig {
         PropTweqEmitterConfig {
             animation_config,
             halt,
+            relative_velocity: misc & (1 << 8) != 0,
             rate: Duration::from_millis(rate.into()),
             max_frames,
             emit_what,
@@ -259,7 +264,7 @@ impl PropTweqDeleteConfig {
 mod tests {
     use std::io::Cursor;
 
-    use super::{PropTweqModelState, TweqAnimationState};
+    use super::{PropTweqEmitterConfig, PropTweqModelState, TweqAnimationState};
 
     #[test]
     fn model_state_reads_the_authored_frame_number() {
@@ -274,5 +279,29 @@ mod tests {
 
         assert!(state.animation_state.contains(TweqAnimationState::REVERSE));
         assert_eq!(state.frame, 4);
+    }
+
+    #[test]
+    fn emitter_config_reads_relative_velocity_misc_flag() {
+        let mut raw = vec![
+            0x00, // type
+            0x00, // curve
+            0x02, // anim config: Sim
+            0x00, // halt: DestroyObject
+            0x00, 0x01, // misc: TWEQ_MC_RELVEL (1 << 8)
+            0xf4, 0x01, // rate: 500 ms
+            0x03, 0x00, 0x00, 0x00, // max frames
+        ];
+        raw.extend_from_slice(b"grub\0\0\0\0\0\0\0\0\0\0\0\0");
+        for component in [-25.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0] {
+            raw.extend_from_slice(&component.to_le_bytes());
+        }
+        let mut bytes = Cursor::new(raw);
+
+        let config = PropTweqEmitterConfig::read(&mut bytes, 64);
+
+        assert!(config.relative_velocity);
+        // `read_vec3` converts raw Dark (-X, Y, Z) into runtime (X, Z, Y).
+        assert_eq!(config.velocity, cgmath::vec3(25.0, 0.0, 0.0));
     }
 }

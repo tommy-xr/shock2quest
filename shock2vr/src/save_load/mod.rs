@@ -24,7 +24,7 @@ use crate::{
     mission::{GlobalTemplateIdMap, PlayerInfo},
     runtime_props::{
         RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
-        RuntimePropSelectedAmmo,
+        RuntimePropLaunchedProjectile, RuntimePropSelectedAmmo,
     },
     scripts::{ScriptWorld, script_util},
     util::partition_map,
@@ -130,6 +130,9 @@ pub fn to_save_data_with_scripts(
     let v_canonical_templates = world
         .borrow::<View<RuntimePropCanonicalTemplateId>>()
         .unwrap();
+    let v_launched_projectiles = world
+        .borrow::<View<RuntimePropLaunchedProjectile>>()
+        .unwrap();
     let v_entities = world.borrow::<EntitiesView>().unwrap();
 
     let (all_properties, _, _) = dark::properties::get::<File>();
@@ -210,6 +213,18 @@ pub fn to_save_data_with_scripts(
         partition_map(raw_canonical_templates, |entity_id| {
             held_entities.contains(entity_id)
         });
+    let mut world_launched_projectiles = Vec::new();
+    let mut held_launched_projectiles = Vec::new();
+    for (entity_id, _) in v_launched_projectiles.iter().with_id() {
+        if entities_to_filter.contains(&entity_id.inner()) {
+            continue;
+        }
+        if held_entities.contains(&entity_id.inner()) {
+            held_launched_projectiles.push(entity_id.inner());
+        } else {
+            world_launched_projectiles.push(entity_id.inner());
+        }
+    }
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
@@ -218,6 +233,7 @@ pub fn to_save_data_with_scripts(
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
         canonical_template_ids: world_canonical_templates,
+        launched_projectiles: world_launched_projectiles,
         script_states: world_script_states,
     };
 
@@ -229,6 +245,7 @@ pub fn to_save_data_with_scripts(
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
         canonical_template_ids: held_canonical_templates,
+        launched_projectiles: held_launched_projectiles,
         script_states: held_script_states,
     };
 
