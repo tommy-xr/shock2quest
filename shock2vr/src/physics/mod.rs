@@ -1180,10 +1180,11 @@ fn plan_climb_top_out(
 /// standing pose must fit against *all* colliders, and every scripted substep
 /// still collides with parented entities. Same-height and lower landings
 /// require a genuinely clear all-world point probe above the lip, so
-/// full-height walls remain solid. An elevated landing may use Dark's
-/// parentless-terrain jump-through probe: that is what permits authored
-/// stacked corridors such as shodan's log platforms, whose upper floor is a
-/// ceiling to the lower cell.
+/// full-height walls remain solid. An elevated landing may cross the local
+/// platform lip with Dark's parentless-terrain jump-through probe, but its
+/// initial vertical rise must remain clear against all world geometry. That
+/// is what permits authored stacked corridors such as shodan's log platforms
+/// without treating a room ceiling directly overhead as an exterior landing.
 fn plan_jump_mantle(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -1225,6 +1226,7 @@ fn plan_jump_mantle(
     let mut rise_ss2 = PLAYER_JUMP_MANTLE_PROBE_STEP;
     while rise_ss2 <= max_rise * SCALE_FACTOR + 1.0e-4 && transition.is_none() {
         let raised = head + Vector::y() * (rise_ss2 / SCALE_FACTOR);
+        let vertical_probe_clear = ray_segment_is_clear(validation_queries, head, raised);
         let mut forward_ss2 = minimum_forward * SCALE_FACTOR;
         while forward_ss2 <= PLAYER_JUMP_MANTLE_FORWARD + 1.0e-4 {
             let forward = forward_ss2 / SCALE_FACTOR;
@@ -1246,12 +1248,23 @@ fn plan_jump_mantle(
                 let nearest_floor = validation_queries
                     .cast_ray_and_get_normal(&down_ray, 2.0 * max_rise, true)
                     .map(|(_, ground)| (ground.normal.y, raised_forward.y - ground.time_of_impact));
-                let elevated_floor = nearest_floor
+                let elevated_floor = vertical_probe_clear
+                    .then_some(nearest_floor)
+                    .flatten()
                     .filter(|(normal_y, _)| *normal_y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
                     .map(|(_, floor_y)| floor_y)
                     .filter(|floor_y| {
-                        *floor_y - current_feet_y
-                            > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                        let rise = *floor_y - current_feet_y;
+                        rise > (PLAYER_STEP_HEIGHT + PLAYER_CONTACT_OFFSET) / SCALE_FACTOR
+                            // The compressed body models Dark's discontinuous
+                            // sphere stack crossing a terrain lip; it does not
+                            // add vertical reach. Require the player's feet to
+                            // be able to reach the landing within the ordinary
+                            // ballistic apex. Otherwise an open lift shaft can
+                            // turn the room ceiling ahead into an "elevated
+                            // floor" and script the player onto its exterior
+                            // roof (#744).
+                            && rise <= max_rise
                     });
                 // A same-height floor visible above the lower candidate is the
                 // stacked-terrain signature: the continuous capsule cannot
@@ -7157,6 +7170,101 @@ mod tests {
         assert!(
             end.x > 0.0 && end.y > 4.4,
             "jump should mantle onto the elevated platform, ended {end:?}"
+        );
+    }
+
+    /// The compressed compatibility body may cross a local terrain lip, but it
+    /// must not add vertical reach beyond the ordinary ballistic jump. A roof
+    /// above that apex is not a mantle landing even when its top is visible to
+    /// the elevated-floor probe (#744).
+    #[test]
+    fn jump_mantle_rejects_a_platform_above_the_ballistic_apex() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.5, 10.0)
+                .translation(vector![0.0, -0.5, 0.0])
+                .build(),
+        );
+        // Top at y=4.5: 4.4 world units above the player's resting feet,
+        // beyond the 3.92-world-unit / 9.8-SS2-foot ballistic apex.
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            ColliderBuilder::cuboid(10.0, 2.25, 3.0)
+                .translation(vector![8.5, 2.25, 0.0])
+                .build(),
+        );
+        let mut player = world.create_player(
+            vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+
+        for frame in 0..180 {
+            world.update_with_facing_and_jump(
+                vec3(0.1, 0.0, 0.0),
+                Vector3::unit_x(),
+                frame == 0,
+                &mut player,
+            );
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.y < 4.5,
+            "an above-apex platform must not become a scripted mantle landing, ended {end:?}"
+        );
+    }
+
+    /// A parented body can block a corridor without making the parentless room
+    /// ceiling above it a valid mantle destination. This is the deterministic
+    /// equivalent of the campaign's retained-body choke: the initial rise must
+    /// remain collision-checked against world geometry before the narrow lip
+    /// exception is allowed for the later horizontal crossing (#744).
+    #[test]
+    fn dynamic_obstacle_does_not_turn_the_world_ceiling_into_a_mantle() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.5, 10.0)
+                .translation(vector![0.0, -0.5, 0.0])
+                .build(),
+        );
+        // Parentless room slab: underside y=3.6, exterior roof y=3.8. The roof
+        // is within the ballistic apex, so the vertical-clearance invariant is
+        // what distinguishes it from a genuine elevated platform ahead.
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.1, 10.0)
+                .translation(vector![0.0, 3.7, 0.0])
+                .build(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1002).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.8, 2.0, 3.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(-2.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+
+        for frame in 0..180 {
+            world.update_with_facing_and_jump(
+                vec3(0.1, 0.0, 0.0),
+                Vector3::unit_x(),
+                frame == 0,
+                &mut player,
+            );
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            end.y < 3.6,
+            "an obstacle below a world ceiling must not script the player onto its exterior, ended {end:?}"
         );
     }
 
