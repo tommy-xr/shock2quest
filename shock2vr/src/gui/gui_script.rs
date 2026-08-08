@@ -178,6 +178,10 @@ where
             _ => Effect::NoEffect,
         }
     }
+
+    fn accepts_tool(&self, entity_id: EntityId, world: &World, tool: EntityId) -> bool {
+        self.gui.accepts_tool(entity_id, world, tool)
+    }
 }
 
 pub fn gui_script<TState: Default + 'static, TMsg: Clone + 'static>(

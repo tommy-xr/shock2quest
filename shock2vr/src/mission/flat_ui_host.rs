@@ -74,11 +74,13 @@ const CURSOR_ITEM_SIZE: Vector2<f32> = Vector2::new(35.0, 32.0);
 /// cursor), so it is always reachable and serializes correctly on
 /// save/transition. Only committing the drag reaches the world: **Throw**
 /// detaches it and gives it world presence with an impulse along the view ray;
+/// **Apply** offers it to an explicitly accepting crosshair target;
 /// **Wield** equips/uses it (a double-click) via the same effect as a backpack
 /// click, acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
     Throw(EntityId),
+    Apply(EntityId),
     Wield(EntityId),
     /// Cycle the empty wielded weapon's ammo type (the AMMOFULL cycle button
     /// was clicked). Not tied to a cursor item - the caller maps it to
@@ -146,6 +148,7 @@ pub struct FlatUiHost {
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
     last_pointer_pressed: bool,
+    last_secondary_pointer_pressed: bool,
     /// Last known render-target size, for pointer->canvas letterbox mapping
     /// (updated every rendered frame; 4:3 default until the first render).
     screen_size: Vector2<f32>,
@@ -175,6 +178,7 @@ impl FlatUiHost {
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
+            last_secondary_pointer_pressed: false,
             screen_size: CANVAS_SIZE,
         }
     }
@@ -382,11 +386,12 @@ impl FlatUiHost {
 
     /// Per-frame pointer processing while in flat presentation. Returns the
     /// `GUIHover` messages to dispatch to the strip/panel entity plus any
-    /// cursor-drag [`FlatUiDragAction`]s (lift/place/throw) for the caller to
+    /// cursor-drag [`FlatUiDragAction`]s (lift/place/apply/throw) for the caller to
     /// apply. Handles the close gestures (close button, LMB on the bare view,
     /// walk-away, entity gone) and the cursor-is-the-item drag (§1.5/§2.4):
     /// LMB on a strip item lifts it onto the cursor, LMB on another slot
-    /// places/swaps, LMB on the bare view throws it into the world. A
+    /// places/swaps, LMB on the bare view throws it into the world, and RMB
+    /// on the bare view offers it to the crosshair target. A
     /// bare-view click closes the MFD panel but never the strip - use mode is
     /// left by Tab (projects/flat-ui.md §5.2).
     pub fn update(
@@ -397,6 +402,9 @@ impl FlatUiHost {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
+        let secondary_pressed = pointer.map(|p| p.secondary_pressed).unwrap_or(false);
+        let secondary_pressed_edge = secondary_pressed && !self.last_secondary_pointer_pressed;
+        self.last_secondary_pointer_pressed = secondary_pressed;
 
         // Age out the double-click window since the last lift.
         if let Some(mark) = self.last_lift.as_mut() {
@@ -459,8 +467,13 @@ impl FlatUiHost {
         }
 
         // A press fully outside the canvas (letterbox bars) is a bare-view
-        // click: throw a held item, else close the panel.
+        // click: RMB applies a held item, LMB throws it (or closes the panel).
         let Some(canvas_pos) = canvas_pos else {
+            if secondary_pressed_edge {
+                if let Some(held) = self.cursor_item.as_ref() {
+                    return (Vec::new(), vec![FlatUiDragAction::Apply(held.entity)]);
+                }
+            }
             if pressed_edge {
                 if let Some(held) = self.cursor_item.take() {
                     return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
@@ -489,10 +502,16 @@ impl FlatUiHost {
             .unwrap_or(false);
 
         // --- Cursor-is-the-item drag: while an item rides the cursor, LMB
-        // places/swaps/throws it and never routes to a GuiScript (protecting
-        // the held item - the original blocks losing `drag_obj`). ---
+        // places/swaps/throws it. RMB over the bare view asks mission_core to
+        // apply it to the crosshair target, but deliberately keeps it on the
+        // cursor until the target actually consumes/destroys it. ---
         if self.cursor_item.is_some() {
             self.hover_close = false;
+            if secondary_pressed_edge && !over_strip && !over_panel && !over_ammo {
+                let held = self.cursor_item.as_ref().unwrap().entity;
+                self.last_lift = None;
+                return (Vec::new(), vec![FlatUiDragAction::Apply(held)]);
+            }
             if !pressed_edge {
                 return (Vec::new(), Vec::new());
             }
@@ -1156,6 +1175,7 @@ mod tests {
         let bare_view_pressed = Pointer2D {
             position: vec2(0.9, 0.9),
             pressed: true,
+            secondary_pressed: false,
         };
         host.update(&world, Some(bare_view_pressed));
         assert!(
@@ -1168,6 +1188,7 @@ mod tests {
             Some(Pointer2D {
                 position: vec2(0.9, 0.9),
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         host.update(&world, Some(bare_view_pressed));
@@ -1249,6 +1270,7 @@ mod tests {
         let over_strip = Pointer2D {
             position: vec2(0.5, 0.125),
             pressed: false,
+            secondary_pressed: false,
         };
         let (msgs, _) = host.update(&world, Some(over_strip));
         assert_eq!(msgs.len(), 1);
@@ -1258,6 +1280,7 @@ mod tests {
         let over_panel = Pointer2D {
             position: vec2(96.0 / 640.0, 272.0 / 480.0),
             pressed: false,
+            secondary_pressed: false,
         };
         let (msgs, _) = host.update(&world, Some(over_panel));
         assert_eq!(msgs.len(), 1);
@@ -1294,6 +1317,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         host.update(
@@ -1301,6 +1325,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: true,
+                secondary_pressed: false,
             }),
         );
         assert!(
@@ -1319,6 +1344,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         host.update(
@@ -1326,6 +1352,7 @@ mod tests {
             Some(Pointer2D {
                 position: bare,
                 pressed: true,
+                secondary_pressed: false,
             }),
         );
         assert_eq!(host.strip_entity(), Some(inventory));
@@ -1421,6 +1448,7 @@ mod tests {
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
                 pressed: false,
+                secondary_pressed: false,
             }),
         );
         let (_msgs, actions) = host.update(
@@ -1428,6 +1456,31 @@ mod tests {
             Some(Pointer2D {
                 position: norm(canvas.0, canvas.1),
                 pressed: true,
+                secondary_pressed: false,
+            }),
+        );
+        actions
+    }
+
+    fn secondary_press_edge(
+        host: &mut FlatUiHost,
+        world: &World,
+        canvas: (f32, f32),
+    ) -> Vec<FlatUiDragAction> {
+        host.update(
+            world,
+            Some(Pointer2D {
+                position: norm(canvas.0, canvas.1),
+                pressed: false,
+                secondary_pressed: false,
+            }),
+        );
+        let (_msgs, actions) = host.update(
+            world,
+            Some(Pointer2D {
+                position: norm(canvas.0, canvas.1),
+                pressed: false,
+                secondary_pressed: true,
             }),
         );
         actions
@@ -1587,6 +1640,21 @@ mod tests {
         let actions = press_edge(&mut host, &world, (320.0, 300.0));
         assert_eq!(actions, vec![FlatUiDragAction::Throw(wrench)]);
         assert!(host.cursor_debug().is_none(), "throwing clears the cursor");
+    }
+
+    #[test]
+    fn secondary_clicking_the_bare_view_offers_but_keeps_the_item() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        press_edge(&mut host, &world, (23.5, 34.0)); // lift
+
+        let actions = secondary_press_edge(&mut host, &world, (320.0, 300.0));
+
+        assert_eq!(actions, vec![FlatUiDragAction::Apply(wrench)]);
+        assert_eq!(
+            host.cursor_debug().map(|cursor| cursor.entity_id),
+            Some(wrench.inner() as i32),
+            "application keeps the item until a target actually consumes it",
+        );
     }
 
     #[test]

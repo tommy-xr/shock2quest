@@ -498,6 +498,14 @@ pub trait Script {
         Effect::NoEffect
     }
 
+    /// Whether this target explicitly handles an item on the tool channel.
+    /// Flat mode asks before dispatching `ProvideForConsumption`, so an RMB
+    /// application never falls into a container's ordinary deposit behavior
+    /// and never steals an item from a target that ignores it.
+    fn accepts_tool(&self, _entity_id: EntityId, _world: &World, _tool: EntityId) -> bool {
+        false
+    }
+
     /// Stable opt-in identity for private runtime state. Entity properties and
     /// links do not belong here: they are already serialized by the ECS save
     /// layer. Return a key only for state owned exclusively by this script.
@@ -679,6 +687,12 @@ impl Script for CompositeScript {
             .collect();
 
         Effect::combine(effects)
+    }
+
+    fn accepts_tool(&self, entity_id: EntityId, world: &World, tool: EntityId) -> bool {
+        self.scripts
+            .iter()
+            .any(|instance| instance.script.accepts_tool(entity_id, world, tool))
     }
 
     fn initialize_after_hydration(
@@ -1186,6 +1200,16 @@ impl ScriptWorld {
         self.message_queue.push(message);
     }
 
+    /// Query the target's scripts without mutating either target or tool.
+    /// Only an explicit opt-in makes flat RMB send the tool message.
+    pub fn accepts_tool(&self, target: EntityId, world: &World, tool: EntityId) -> bool {
+        self.entity_to_scripts.get(&target).is_some_and(|scripts| {
+            scripts
+                .iter()
+                .any(|instance| instance.script.accepts_tool(target, world, tool))
+        })
+    }
+
     /// Snapshot all opting-in private script state. The output is sorted so
     /// identical worlds produce reviewable, deterministic save JSON despite
     /// `HashMap` iteration order.
@@ -1392,6 +1416,30 @@ mod script_state_tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+
+    struct ToolAcceptance(bool);
+
+    impl Script for ToolAcceptance {
+        fn accepts_tool(&self, _entity_id: EntityId, _world: &World, _tool: EntityId) -> bool {
+            self.0
+        }
+    }
+
+    #[test]
+    fn tool_application_requires_an_explicit_target_script_opt_in() {
+        let mut world = World::new();
+        let accepting = world.add_entity(());
+        let refusing = world.add_entity(());
+        let unscripted = world.add_entity(());
+        let tool = world.add_entity(());
+        let mut scripts = ScriptWorld::new();
+        scripts.add_entity2(accepting, Box::new(ToolAcceptance(true)));
+        scripts.add_entity2(refusing, Box::new(ToolAcceptance(false)));
+
+        assert!(scripts.accepts_tool(accepting, &world, tool));
+        assert!(!scripts.accepts_tool(refusing, &world, tool));
+        assert!(!scripts.accepts_tool(unscripted, &world, tool));
+    }
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
     struct TestState {

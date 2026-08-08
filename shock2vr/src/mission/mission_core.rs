@@ -2787,7 +2787,9 @@ impl MissionCore {
     /// Apply a cursor-is-the-item drag action from the `FlatUiHost` (§1.5/§2.4).
     /// Lift/place/swap never reach here: a lifted item stays in the backpack
     /// container (the host just hides it from the strip), so only committing
-    /// the drag touches the world. `Throw` detaches + launches; `Wield`
+    /// the drag touches the world. `Throw` detaches + launches; `Apply`
+    /// offers the held item to an explicitly accepting crosshair target;
+    /// `Wield`
     /// produces the same effect a backpack click does (returned for the normal
     /// effect pipeline, which has `asset_cache` for the grab).
     fn apply_flat_drag_action(
@@ -2799,6 +2801,24 @@ impl MissionCore {
             FlatUiDragAction::Throw(entity_id) => {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
+            }
+            FlatUiDragAction::Apply(entity_id) => {
+                let Some(target) = self.interaction.highlighted_entities().into_iter().next()
+                else {
+                    return Vec::new();
+                };
+                if !self
+                    .script_world
+                    .accepts_tool(target, &self.world, entity_id)
+                {
+                    return Vec::new();
+                }
+                vec![Effect::Send {
+                    msg: Message {
+                        payload: MessagePayload::ProvideForConsumption { entity: entity_id },
+                        to: target,
+                    },
+                }]
             }
             // The AMMOFULL cycle button: advance the wielded weapon's ammo type
             // via the same effect as the CycleAmmo key/action.

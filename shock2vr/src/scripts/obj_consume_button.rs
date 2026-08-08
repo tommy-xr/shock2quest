@@ -104,6 +104,11 @@ impl Script for ObjConsumeButton {
         }
     }
 
+    fn accepts_tool(&self, entity_id: EntityId, world: &World, tool: EntityId) -> bool {
+        (!receptor_has_final_model(world, entity_id) || self.one_shot_phase == OneShotPhase::Idle)
+            && can_consume_entity(world, entity_id, tool)
+    }
+
     fn update(
         &mut self,
         entity_id: EntityId,
