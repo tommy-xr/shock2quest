@@ -2162,6 +2162,10 @@ pub struct PhysicsWorld {
     physics_pipeline: PhysicsPipeline,
     island_manager: IslandManager,
     broad_phase: DefaultBroadPhase,
+    /// Whether the pipeline has stepped at least once. Rapier builds the
+    /// broad-phase BVH inside `PhysicsPipeline::step`, so until this is true
+    /// every spatial query against this world matches nothing at all.
+    has_stepped: bool,
     narrow_phase: NarrowPhase,
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
@@ -3478,7 +3482,21 @@ impl PhysicsWorld {
                     },
                 )
                 .is_some();
-            let blocked = overlaps_final_pose || blocked_by_crown_sweep;
+            // Both probes above are spatial queries, and Rapier only builds the
+            // broad-phase BVH inside `PhysicsPipeline::step`. On a world that
+            // has never been stepped they therefore match nothing and report
+            // "clear" everywhere, which is not an answer - it is the absence of
+            // one. Refuse to expand into geometry we cannot see yet: the very
+            // next frame has a populated broad phase and re-decides normally.
+            //
+            // This is exactly the load frame. `Game::load_from_file` rebuilds
+            // the world, re-applies the saved crouch, and then runs a frame
+            // whose crouch input is released - which used to stand the player
+            // up inside the ceiling they had saved under (hydro2's "Low Head
+            // Room" ledge, issue #773). A standing capsule embedded in level
+            // geometry is unrecoverable: the character controller resolves zero
+            // movement in every direction for the rest of the session.
+            let blocked = !self.has_stepped || overlaps_final_pose || blocked_by_crown_sweep;
 
             if !blocked {
                 self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
@@ -3526,6 +3544,7 @@ impl PhysicsWorld {
             physics_pipeline,
             island_manager,
             broad_phase,
+            has_stepped: false,
             narrow_phase,
             impulse_joint_set,
             multibody_joint_set,
@@ -3731,6 +3750,7 @@ impl PhysicsWorld {
                 &self.events,
             )
         });
+        self.has_stepped = true;
 
         // Update character controller
         let desired_movement = vec_to_nvec(desired_movement);
@@ -5688,6 +5708,9 @@ mod tests {
         world.set_player_translation(vec3(1.0, 2.0, 3.0), &mut player);
         assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
 
+        // Standing up runs a headroom query, which only has an answer once the
+        // pipeline has stepped and built its broad phase.
+        step(&mut world, &mut player, 1);
         assert!(!world.set_player_crouch(false, &mut player));
         assert_player_capsule_dimensions(&world, &player, 6.0, 2.4);
     }
@@ -8777,6 +8800,114 @@ mod tests {
         assert!(
             crouched_world.set_player_crouch(false, &mut crouched_player),
             "standing must be refused under the five-foot ceiling"
+        );
+    }
+
+    /// A crawlspace whose 3.875 ft clearance admits the 2.8 ft crouched body
+    /// but not the 6 ft standing one, entered at the standing-equivalent
+    /// collider centre a save file stores (`GlobalData::position`).
+    fn world_with_low_ceiling_crawlspace() -> (PhysicsWorld, PlayerHandle) {
+        let mut world = PhysicsWorld::new();
+        for (entity, y) in [(1000u64, 0.0), (1001, 1.55)] {
+            world.add_collider(
+                EntityId::from_inner(entity).unwrap(),
+                ColliderBuilder::trimesh(
+                    vec![
+                        point![-50.0, y, -50.0],
+                        point![50.0, y, -50.0],
+                        point![50.0, y, 50.0],
+                        point![-50.0, y, 50.0],
+                    ],
+                    vec![[0u32, 1, 2], [0, 2, 3]],
+                )
+                .expect("crawlspace trimesh")
+                .build(),
+            );
+        }
+        let player = world.create_player(
+            vec3(0.0, PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        (world, player)
+    }
+
+    /// Loading a save taken while crouched must not expand the player into the
+    /// ceiling they were crouched under on the very first frame.
+    ///
+    /// `Game::load_from_file` builds a fresh world, re-applies the saved crouch
+    /// (`Mission::restore_saved_crouch`) and then runs a frame whose crouch
+    /// input is released, so the stand-up headroom probes run before the world
+    /// has ever been stepped - i.e. against a broad phase Rapier has not built.
+    ///
+    /// Negative-first: those probes used to report "clear" (they match nothing
+    /// at all), standing the 6 ft capsule up inside a 3.875 ft clearance. An
+    /// embedded capsule is unrecoverable - the character controller resolves
+    /// zero movement in every direction - which is the permanently stuck hydro2
+    /// "Low Head Room" pose reported in issue #773.
+    #[test]
+    fn first_frame_after_load_keeps_a_crouch_the_ceiling_requires() {
+        let (mut world, mut player) = world_with_low_ceiling_crawlspace();
+        // What `Mission::restore_saved_crouch` does at load, on a world the
+        // physics pipeline has not stepped yet.
+        assert!(
+            world.set_player_crouch(true, &mut player),
+            "the saved crouch must shrink the collider"
+        );
+        // Frame 1: the crouch key is not held.
+        assert!(
+            world.set_player_crouch(false, &mut player),
+            "standing must stay refused before the world can answer a query"
+        );
+
+        // ...and the player is still free to crawl back out.
+        step(&mut world, &mut player, 10);
+        let start = world.get_player_translation(&player);
+        for _ in 0..60 {
+            world.update(vec3(-10.0 / 60.0, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            start.x - end.x > 2.0,
+            "a loaded crouched player must still move, went {start:?} -> {end:?}"
+        );
+        assert!(
+            player.is_crouched(),
+            "the ceiling must still refuse standing once the world is queryable"
+        );
+    }
+
+    /// The same first-frame load against the real hydro2 geometry and the exact
+    /// pose stored in the issue #773 save (`(84.37742, 4.044117, 20.42488)`,
+    /// `is_crouched: true`): the "Low Head Room" ledge under the Sector C
+    /// window row, where the brush ceiling sits 1.55 wu above the y=2.8 floor.
+    /// Skipped when the game data is absent (CI); the synthetic fixture above
+    /// covers the same regression there.
+    #[test]
+    fn hydro2_low_head_room_save_pose_stays_crouched_on_load() {
+        let Some(level) = try_load_level("hydro2.mis") else {
+            return;
+        };
+        let mut world = PhysicsWorld::new();
+        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        let mut player = world.create_player(
+            vec3(84.37742, 4.044117, 20.42488),
+            EntityId::from_inner(2).unwrap(),
+        );
+        assert!(world.set_player_crouch(true, &mut player));
+        assert!(
+            world.set_player_crouch(false, &mut player),
+            "the hydro2 ledge has no standing headroom, so the load frame must stay crouched"
+        );
+
+        step(&mut world, &mut player, 10);
+        let start = world.get_player_translation(&player);
+        for _ in 0..90 {
+            world.update(vec3(-10.0 / 60.0, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        assert!(
+            start.x - end.x > 2.0,
+            "the loaded player must be able to crawl back along the ledge, went {start:?} -> {end:?}"
         );
     }
 
