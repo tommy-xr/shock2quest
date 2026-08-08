@@ -72,6 +72,13 @@ pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS + physics::PLAYER_EY
 /// cannot poke through a low ceiling the collider clears.
 pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 
+/// Real-world meters per world unit: 1 world unit is `dark::SCALE_FACTOR`
+/// (2.5) SS2 feet, and an SS2 foot is a real foot (0.3048 m). VR runtimes
+/// divide floor-relative tracked poses (meters) by this before feeding them
+/// to the game so the world renders at true scale and a tracked eye N meters
+/// above the physical floor lands the equivalent height above the game floor.
+pub const METERS_PER_WORLD_UNIT: f32 = 0.3048 * dark::SCALE_FACTOR;
+
 /// The single mapping from crouch state to eye height. The render camera and
 /// the flat controller's shot/viewmodel origin must both go through this (or
 /// [`Game::player_eye_height`], which wraps it) so shots stay on the
@@ -1432,6 +1439,14 @@ impl Game {
     /// view matches the flat controller's shot origin.
     pub fn player_eye_height(&self) -> f32 {
         player_eye_height_for(self.active_game_scene.player_is_crouched())
+    }
+
+    /// Height (world units) of the player collider's center above the surface
+    /// it stands on, for the current stance. VR runtimes subtract this from
+    /// the pawn position returned by [`Game::render`] to anchor floor-relative
+    /// tracked poses at the player's feet instead of the collider center.
+    pub fn player_center_above_floor(&self) -> f32 {
+        physics::player_center_above_floor(self.active_game_scene.player_is_crouched())
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {

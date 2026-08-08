@@ -91,6 +91,19 @@ pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
 }
 
+/// Height (world units) of the collider CENTER above the surface the player
+/// stands on, per stance: half the capsule height plus the resting gap the
+/// character controller maintains. VR runtimes subtract this from the body
+/// position to get the feet/floor anchor for floor-relative tracked poses.
+pub fn player_center_above_floor(crouched: bool) -> f32 {
+    let height = if crouched {
+        PLAYER_CROUCH_HEIGHT
+    } else {
+        PLAYER_STANDING_HEIGHT
+    };
+    (height / 2.0 + PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR
+}
+
 /// The player's standing collision capsule, in world units.
 fn standing_player_capsule() -> Capsule {
     Capsule::new_y(
