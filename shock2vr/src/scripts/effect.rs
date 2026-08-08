@@ -488,6 +488,14 @@ pub enum Effect {
         duration_secs: f32,
     },
 
+    /// Apply the retail global security-hack window. The authored
+    /// `SecurityComputer` duration has already been scaled by Cyber; while the
+    /// window is active, camera-class security devices cannot detect the
+    /// player.
+    ActivateSecurityHack {
+        duration_seconds: f32,
+    },
+
     /// Set the psi amp's hold-to-overload meter state
     /// (`RuntimePropPsiCharge`) on the amp entity - drives the HUD meter and
     /// debug introspection while a charge is in progress or flashing its

@@ -3243,6 +3243,11 @@ impl MissionCore {
     ) -> Vec<Effect> {
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
+        if time.elapsed.as_secs_f32() > 0.0
+            && let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>()
+        {
+            quests.advance_security_hack(time.elapsed.as_secs_f32());
+        }
 
         // Old saves can legitimately restore a zero-HP player even though
         // PlayerLifeState itself is runtime-only. Enter death on the first
@@ -7354,6 +7359,18 @@ impl MissionCore {
                         });
                         game_log!(INFO, "Psi power active: {} ({}s)", name, duration_secs);
                     }
+                }
+
+                Effect::ActivateSecurityHack { duration_seconds } => {
+                    self.world
+                        .borrow::<UniqueViewMut<QuestInfo>>()
+                        .unwrap()
+                        .activate_security_hack(duration_seconds);
+                    game_log!(
+                        INFO,
+                        "Security devices disabled for {} seconds.",
+                        duration_seconds
+                    );
                 }
 
                 Effect::AwardXP { amount } => {

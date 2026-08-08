@@ -11,6 +11,7 @@ use super::{
     alertness::{self, AlertnessState, AlertnessTimings},
     steering::{ChasePlayerSteeringStrategy, SteeringStrategy},
 };
+use crate::scripts::security_computer;
 
 pub enum TurretState {
     Closed,
@@ -235,13 +236,14 @@ impl Script for TurretAI {
         // Turret FOV is 30 degrees half-angle (matches FovDebugConfig::turret())
         // Turret uses joint transforms for rotation, negate heading to match visual direction
         const TURRET_FOV_HALF_ANGLE: f32 = 30.0;
-        let is_visible = ai_util::is_player_visible_in_fov(
-            entity_id,
-            world,
-            physics,
-            self.initial_yaw - self.current_heading,
-            TURRET_FOV_HALF_ANGLE,
-        );
+        let is_visible = security_computer::security_devices_can_detect_player(world)
+            && ai_util::is_player_visible_in_fov(
+                entity_id,
+                world,
+                physics,
+                self.initial_yaw - self.current_heading,
+                TURRET_FOV_HALF_ANGLE,
+            );
 
         // Update alertness state
         let alertness_effect = if let Some(config) = &self.config {

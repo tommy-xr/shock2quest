@@ -53,6 +53,12 @@ pub struct QuestInfo {
     /// Campaign-wide research progress, keyed by stable gamesys archetype.
     #[serde(default)]
     research: ResearchState,
+    /// Remaining global security-hack window in seconds. Retail stores the
+    /// absolute expiration on the player (`HackTime`) and makes that player
+    /// invisible to camera-class device vision; remaining time is the
+    /// save/load-safe equivalent for this runtime's reset-on-load clock.
+    #[serde(default)]
+    security_hack_seconds_remaining: f32,
 }
 
 impl QuestInfo {
@@ -65,7 +71,25 @@ impl QuestInfo {
             collected_logs: Vec::new(),
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
+            security_hack_seconds_remaining: 0.0,
         }
+    }
+
+    pub fn activate_security_hack(&mut self, duration_seconds: f32) {
+        self.security_hack_seconds_remaining = duration_seconds.max(0.0);
+    }
+
+    pub fn advance_security_hack(&mut self, elapsed_seconds: f32) {
+        self.security_hack_seconds_remaining =
+            (self.security_hack_seconds_remaining - elapsed_seconds.max(0.0)).max(0.0);
+    }
+
+    pub fn security_hack_seconds_remaining(&self) -> f32 {
+        self.security_hack_seconds_remaining
+    }
+
+    pub fn security_hack_active(&self) -> bool {
+        self.security_hack_seconds_remaining > 0.0
     }
 
     pub fn research(&self) -> &ResearchState {
@@ -331,5 +355,40 @@ mod log_tests {
                 read: false
             }
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QuestInfo;
+
+    #[test]
+    fn security_hack_timer_expires_after_its_remaining_duration() {
+        let mut quests = QuestInfo::new();
+        quests.activate_security_hack(12.0);
+        quests.advance_security_hack(4.5);
+        assert_eq!(quests.security_hack_seconds_remaining(), 7.5);
+        assert!(quests.security_hack_active());
+
+        quests.advance_security_hack(8.0);
+        assert_eq!(quests.security_hack_seconds_remaining(), 0.0);
+        assert!(!quests.security_hack_active());
+    }
+
+    #[test]
+    fn security_hack_timer_survives_save_round_trip_and_old_saves_default_inactive() {
+        let mut quests = QuestInfo::new();
+        quests.activate_security_hack(42.25);
+        let encoded = serde_json::to_value(&quests).unwrap();
+        let restored: QuestInfo = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(restored.security_hack_seconds_remaining(), 42.25);
+
+        let mut legacy = encoded;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("security_hack_seconds_remaining");
+        let restored: QuestInfo = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.security_hack_active());
     }
 }
