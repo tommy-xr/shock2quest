@@ -43,10 +43,10 @@ impl DesktopInputMapper {
             Binding {
                 key: Key::B,
                 modifier: Modifier::None,
-                action: InputAction::CycleWeapon,
+                action: InputAction::DebugCycleWeapon,
             },
             // Original System Shock 2 direct weapon bindings. These select a
-            // matching carried item; unlike CycleWeapon they never spawn one.
+            // matching carried item; unlike DebugCycleWeapon they never spawn one.
             Binding {
                 key: Key::Num1,
                 modifier: Modifier::None,

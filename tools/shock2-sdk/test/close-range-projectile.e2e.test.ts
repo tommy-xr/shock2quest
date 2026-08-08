@@ -191,7 +191,7 @@ test(
     // The fourth debug weapon is the laser pistol; Laser Shot velocity 40
     // follows the slow physical-projectile path rather than fast raycasting.
     for (let i = 0; i < 4; i++) {
-      await game.input.trigger("CycleWeapon");
+      await game.input.trigger("DebugCycleWeapon");
       await game.step({ frames: 3 });
     }
     const player = await game.player.position();

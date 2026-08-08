@@ -91,7 +91,7 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::DebugHitboxCyclePose) {
             effects.push(Effect::DebugCycleHitboxPose);
         }
-        if state.just_triggered(InputAction::CycleWeapon) {
+        if state.just_triggered(InputAction::DebugCycleWeapon) {
             effects.push(Effect::DebugCycleWeapon {
                 head_rotation: input_context.head.rotation,
             });
@@ -222,6 +222,18 @@ mod tests {
                 }] if *actual == class_template_id
             ));
         }
+    }
+
+    #[test]
+    fn debug_weapon_cycle_maps_to_the_spawning_effect() {
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::DebugCycleWeapon);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::DebugCycleWeapon { .. }]
+        ));
     }
 
     #[test]

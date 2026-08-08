@@ -112,7 +112,7 @@ Done:
   camera, so shots land on the crosshair and the debug-runtime camera matches
   desktop (was rendering ~1 world unit low).
 - **Tooling**: debug-runtime controllable input over HTTP (`head.look` + hand
-  trigger; the render camera now honors the input head rotation), a `CycleWeapon`
+  trigger; the render camera now honors the input head rotation), a `DebugCycleWeapon`
   action (`B` / HTTP) over the 11-weapon roster, and the `debug_weapons` scene (a
   wall straight ahead) for headless aim verification.
 
@@ -156,7 +156,7 @@ Remaining (follow-ups):
   pose. Reusable for later attached effects (shell ejection, smoke).
 - **Melee weapons** — Wrench / Electro Shock / Crystal Shard / PsiSword.
   - Done: render their `PropLimbModel` FP mesh in the flat viewmodel (they have
-    no `PropPlayerGun`), added to the CycleWeapon roster, a flat swing
+    no `PropPlayerGun`), added to the DebugCycleWeapon roster, a flat swing
     (no-projectile branch in `WeaponScript`: short raycast along the crosshair
     ray + `MELEE_DAMAGE`, damage verified on a live enemy), a closer melee
     viewmodel offset, the **idle pose**, and the **swing animation**. VR melee

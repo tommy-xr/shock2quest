@@ -30,7 +30,7 @@ test(
     // Cycle to the laser pistol (4th roster entry).
     await game.step({ frames: 5 });
     for (let i = 0; i < 4; i++) {
-      await game.input.trigger("CycleWeapon");
+      await game.input.trigger("DebugCycleWeapon");
       await game.step({ frames: 3 });
     }
     await game.step({ frames: 5 });
