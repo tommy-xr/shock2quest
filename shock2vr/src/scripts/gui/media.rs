@@ -6,9 +6,9 @@
 //! host's single-slot MFD), and reads its presentation strings from
 //! `RuntimePropLogData` - attached by the `Effect::CollectLog` handler when the
 //! disc is frobbed (that handler also records the log into the persistent
-//! `QuestInfo` collection and plays its audio). Deliberate deviation from the
-//! original's destroy-on-pickup: the disc survives so the reader stays bound and
-//! the code is readable in-fiction (research gap #6).
+//! `QuestInfo` collection and retires the physical pickup). The ECS entity stays
+//! alive only as reader backing state so the entity-bound panel remains valid
+//! after the retail-faithful one-shot pickup disappears from the world.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropLog;
@@ -264,9 +264,9 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             log,
         };
         // The original destroyed the disc after its first frob, so its
-        // SwitchLinks fired exactly once. The disc now survives for re-reading -
-        // keep that one-shot contract by firing the links only on the frob that
-        // first collects the log (replaying audio / reopening is fine).
+        // SwitchLinks fired exactly once. The backing entity remains alive but
+        // loses all world/container presence; keep the one-shot contract even
+        // for direct debug-message replays against that internal entity.
         let already_collected = world
             .borrow::<UniqueView<QuestInfo>>()
             .map(|q| q.has_collected_log(deck, log))

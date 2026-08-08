@@ -2764,6 +2764,22 @@ impl MissionCore {
         }
     }
 
+    /// Consume an audio-log pickup while retaining its ECS entity as the
+    /// backing object for the currently open reader panel. Retail SS2 destroys
+    /// the disc after copying its log identity into the player's PDA; the
+    /// reader in this port is entity-bound, so removing its world presence is
+    /// the equivalent transition without invalidating the panel mid-frob.
+    ///
+    /// `PropHasRefs(false)` persists through mission save/load, removing the
+    /// model from rendering on both the current and reconstructed mission. The
+    /// physics body and any container link must also go immediately so neither
+    /// a world ray nor a corpse/locker loot panel can frob the disc again.
+    fn consume_log_pickup(&mut self, entity_id: EntityId) {
+        self.remove_incoming_contains_links(entity_id);
+        self.world.add_component(entity_id, PropHasRefs(false));
+        self.make_un_physical(entity_id);
+    }
+
     pub fn make_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_some() {
@@ -3627,6 +3643,10 @@ impl MissionCore {
                             },
                         );
                     }
+                    // Retail copies the entry into the PDA and destroys the
+                    // pickup. Keep only the entity-bound reader state; retire
+                    // the disc from the rendered, physical, frobbable world.
+                    self.consume_log_pickup(entity_id);
                 }
 
                 Effect::ToggleMap => {
