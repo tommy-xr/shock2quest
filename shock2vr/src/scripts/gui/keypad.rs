@@ -260,6 +260,7 @@ fn draw_number(num: u32) -> Vec<GuiComponent<KeyPadMsg>> {
             size: vec2(numeral_width, numeral_height),
             texture: get_texture_for_char(ch),
             alpha: 0.5,
+            transparent_index_0: false,
         });
         x += numeral_width + padding;
     }

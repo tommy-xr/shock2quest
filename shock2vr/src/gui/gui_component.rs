@@ -9,55 +9,16 @@ use engine::{
 };
 use shipyard::EntityId;
 
-use crate::{inventory::Inventory, vr_config::Handedness};
+use crate::{
+    ui::{HAlign, UiElement, VAlign},
+    vr_config::Handedness,
+};
 
-#[derive(Clone, Debug)]
-pub enum ButtonHoverBehavior {
-    None,
-    Texture(String),
-}
+pub use crate::ui::ButtonHoverBehavior;
 
-#[derive(Clone, Debug)]
-pub enum GuiComponent<TEvent>
-where
-    TEvent: Clone,
-{
-    Image {
-        position: Vector2<f32>,
-        size: Vector2<f32>,
-        texture: String,
-        alpha: f32,
-    },
-    Button {
-        position: Vector2<f32>,
-        size: Vector2<f32>,
-        texture: String,
-        on_click: Option<TEvent>,
-        on_grab: Option<(TEvent, TEvent)>,
-        hover: ButtonHoverBehavior,
-        alpha: f32,
-        /// The world entity this button stands for (e.g. a contained item in
-        /// a loot panel), carried through to the render info so debug
-        /// introspection (`GET /v1/ui`) can label the element semantically.
-        entity: Option<EntityId>,
-        /// An explicit semantic label for this button (e.g. an elevator floor
-        /// name), carried through to the render info so `GET /v1/ui` can report
-        /// what the button *means* - the generic labeling mechanism panels use
-        /// when their art name is not self-describing (unlike the keypad's
-        /// `key<c>.pcx` digits). `None` falls back to entity/art-derived labels.
-        label: Option<String>,
-    },
-    Text {
-        position: Vector2<f32>,
-        size: Vector2<f32>,
-        font: String,
-        text: String,
-        alpha: f32,
-    },
-    Inventory {
-        inventory: Inventory,
-    },
-}
+/// Compatibility name for the interaction framework. GUI panels and
+/// screen-space canvases now author the same [`UiElement`] description.
+pub type GuiComponent<TEvent> = UiElement<TEvent>;
 
 impl<TEvent> GuiComponent<TEvent>
 where
@@ -66,49 +27,69 @@ where
     pub fn with_position(self, new_position: Vector2<f32>) -> GuiComponent<TEvent> {
         match self {
             Self::Image {
-                alpha,
                 size,
                 texture,
+                alpha,
+                transparent_index_0,
                 ..
             } => Self::Image {
-                alpha,
                 position: new_position,
                 size,
                 texture,
-            },
-            Self::Inventory { inventory } => Self::Inventory { inventory },
-            Self::Button {
                 alpha,
+                transparent_index_0,
+            },
+            Self::Bar {
+                size,
+                texture,
+                fill,
+                alpha,
+                ..
+            } => Self::Bar {
+                position: new_position,
+                size,
+                texture,
+                fill,
+                alpha,
+            },
+            Self::Button {
                 size,
                 texture,
                 on_click,
                 on_grab,
                 hover,
+                alpha,
                 entity,
                 label,
                 ..
             } => Self::Button {
-                alpha,
                 position: new_position,
                 size,
                 texture,
                 on_click,
                 on_grab,
                 hover,
+                alpha,
                 entity,
                 label,
             },
             Self::Text {
-                alpha,
                 size,
-                font,
                 text,
+                font,
+                font_size,
+                h,
+                v,
+                alpha,
                 ..
             } => Self::Text {
-                size,
-                font,
-                text,
                 position: new_position,
+                size,
+                text,
+                font,
+                font_size,
+                h,
+                v,
                 alpha,
             },
         }
@@ -116,50 +97,70 @@ where
 
     pub fn with_size(self, new_size: Vector2<f32>) -> GuiComponent<TEvent> {
         match self {
-            Self::Inventory { inventory } => Self::Inventory { inventory },
             Self::Image {
-                alpha,
                 position,
                 texture,
+                alpha,
+                transparent_index_0,
                 ..
             } => Self::Image {
-                alpha,
                 position,
                 size: new_size,
                 texture,
+                alpha,
+                transparent_index_0,
+            },
+            Self::Bar {
+                position,
+                texture,
+                fill,
+                alpha,
+                ..
+            } => Self::Bar {
+                position,
+                size: new_size,
+                texture,
+                fill,
+                alpha,
             },
             Self::Button {
-                alpha,
                 position,
                 texture,
                 on_click,
                 on_grab,
                 hover,
+                alpha,
                 entity,
                 label,
                 ..
             } => Self::Button {
-                alpha,
                 position,
                 size: new_size,
                 texture,
                 on_click,
-                hover,
                 on_grab,
+                hover,
+                alpha,
                 entity,
                 label,
             },
             Self::Text {
                 position,
-                font,
                 text,
+                font,
+                font_size,
+                h,
+                v,
                 alpha,
                 ..
             } => Self::Text {
                 position,
                 size: new_size,
-                font,
                 text,
+                font,
+                font_size,
+                h,
+                v,
                 alpha,
             },
         }
@@ -188,31 +189,7 @@ where
                 entity,
                 label,
             },
-            Self::Image {
-                alpha,
-                position,
-                size,
-                texture,
-            } => Self::Image {
-                alpha,
-                position,
-                size,
-                texture,
-            },
-            Self::Text {
-                position,
-                size,
-                font,
-                text,
-                alpha,
-            } => Self::Text {
-                position,
-                size,
-                font,
-                text,
-                alpha,
-            },
-            Self::Inventory { inventory } => Self::Inventory { inventory },
+            other => other,
         }
     }
 
@@ -222,15 +199,28 @@ where
                 position,
                 size,
                 texture,
+                transparent_index_0,
                 ..
             } => Self::Image {
                 position,
                 size,
                 texture,
                 alpha,
+                transparent_index_0,
             },
-
-            Self::Inventory { inventory } => Self::Inventory { inventory },
+            Self::Bar {
+                position,
+                size,
+                texture,
+                fill,
+                ..
+            } => Self::Bar {
+                position,
+                size,
+                texture,
+                fill,
+                alpha,
+            },
             Self::Button {
                 position,
                 size,
@@ -255,14 +245,20 @@ where
             Self::Text {
                 position,
                 size,
-                font,
                 text,
+                font,
+                font_size,
+                h,
+                v,
                 ..
             } => Self::Text {
                 position,
                 size,
-                font,
                 text,
+                font,
+                font_size,
+                h,
+                v,
                 alpha,
             },
         }
@@ -270,19 +266,6 @@ where
 
     pub fn with_hover(self, hover: ButtonHoverBehavior) -> GuiComponent<TEvent> {
         match self {
-            Self::Image {
-                position,
-                size,
-                texture,
-                alpha,
-                ..
-            } => Self::Image {
-                alpha,
-                position,
-                size,
-                texture,
-            },
-            Self::Inventory { inventory } => Self::Inventory { inventory },
             Self::Button {
                 alpha,
                 position,
@@ -304,20 +287,7 @@ where
                 entity,
                 label,
             },
-            Self::Text {
-                position,
-                size,
-                font,
-                text,
-                alpha,
-                ..
-            } => Self::Text {
-                position,
-                size,
-                font,
-                text,
-                alpha,
-            },
+            other => other,
         }
     }
 
@@ -327,14 +297,28 @@ where
                 alpha,
                 position,
                 size,
+                transparent_index_0,
                 ..
             } => Self::Image {
                 alpha,
                 position,
                 size,
                 texture: image.to_owned(),
+                transparent_index_0,
             },
-            Self::Inventory { inventory } => Self::Inventory { inventory },
+            Self::Bar {
+                alpha,
+                position,
+                size,
+                fill,
+                ..
+            } => Self::Bar {
+                alpha,
+                position,
+                size,
+                fill,
+                texture: image.to_owned(),
+            },
             Self::Button {
                 alpha,
                 position,
@@ -430,26 +414,46 @@ where
                 size,
                 texture,
                 alpha,
+                transparent_index_0,
             } => GuiComponent::Image {
                 position,
                 size,
                 texture,
                 alpha,
+                transparent_index_0,
             },
             Self::Text {
                 position,
                 size,
                 font,
                 text,
+                font_size,
+                h,
+                v,
                 alpha,
             } => GuiComponent::Text {
                 position,
                 size,
                 font,
                 text,
+                font_size,
+                h,
+                v,
                 alpha,
             },
-            Self::Inventory { inventory } => GuiComponent::Inventory { inventory },
+            Self::Bar {
+                position,
+                size,
+                texture,
+                fill,
+                alpha,
+            } => GuiComponent::Bar {
+                position,
+                size,
+                texture,
+                fill,
+                alpha,
+            },
             Self::Button {
                 position,
                 size,
@@ -481,6 +485,7 @@ pub fn image<TMsg: Clone>(texture: &str) -> GuiComponent<TMsg> {
         size: vec2(30.0, 30.0),
         texture: texture.to_owned(),
         alpha: 0.5,
+        transparent_index_0: false,
     }
 }
 
@@ -518,10 +523,19 @@ pub fn text<TMsg: Clone>(text: &str) -> GuiComponent<TMsg> {
         size: vec2(30.0, 30.0),
         text: text.to_owned(),
         font: "mainfont.fon".to_owned(),
+        font_size: 0.0,
+        h: HAlign::Left,
+        v: VAlign::Middle,
         alpha: 1.0,
     }
 }
 
+/// Normalized, event-free presentation data emitted in `Effect::SetUI`.
+///
+/// This is compiled render input rather than a second authoring language:
+/// panels and ordinary canvases both originate as [`UiElement`]. Keeping the
+/// normalized snapshot lets the existing effect boundary remain cloneable and
+/// keeps UI scripts pure.
 #[derive(Clone, Debug)]
 pub enum GuiComponentRenderInfo {
     Image {
@@ -645,13 +659,6 @@ pub struct GuiInputInfo {
     pub(crate) hand: Handedness,
 }
 
-fn is_in_bounds(position: &Vector2<f32>, size: &Vector2<f32>, cursor: Point2<f32>) -> bool {
-    cursor.x >= position.x
-        && cursor.y >= position.y
-        && cursor.x <= position.x + size.x
-        && cursor.y <= position.y + size.y
-}
-
 impl<TEvent> GuiComponent<TEvent>
 where
     TEvent: Clone,
@@ -662,13 +669,13 @@ where
         screen_space_cursor: Point2<f32>,
     ) -> GuiComponentRenderInfo {
         match self {
-            GuiComponent::Inventory { inventory: _ } => todo!("not implemented"),
             GuiComponent::Text {
                 position,
                 size,
                 font,
                 text,
                 alpha,
+                ..
             } => GuiComponentRenderInfo::Text {
                 position: vec2(position.x / screen_size.x, (-position.y) / screen_size.y),
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
@@ -681,6 +688,22 @@ where
                 size,
                 texture,
                 alpha,
+                transparent_index_0: _,
+            } => GuiComponentRenderInfo::Image {
+                position: vec2(position.x / screen_size.x, position.y / screen_size.y),
+                size: vec2(size.x / screen_size.x, size.y / screen_size.y),
+                texture: texture.clone(),
+                alpha: *alpha,
+                interactive: false,
+                entity: None,
+                label: None,
+            },
+            GuiComponent::Bar {
+                position,
+                size,
+                texture,
+                alpha,
+                ..
             } => GuiComponentRenderInfo::Image {
                 position: vec2(position.x / screen_size.x, position.y / screen_size.y),
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
@@ -701,7 +724,9 @@ where
                 entity,
                 label,
             } => {
-                let is_hovered = is_in_bounds(position, size, screen_space_cursor);
+                let is_hovered = self
+                    .rect()
+                    .contains(vec2(screen_space_cursor.x, screen_space_cursor.y));
 
                 let position = vec2(position.x / screen_size.x, position.y / screen_size.y);
                 let size = vec2(size.x / screen_size.x, size.y / screen_size.y);
@@ -734,33 +759,22 @@ where
         current_input: &GuiInputInfo,
     ) -> Option<TEvent> {
         match self {
-            GuiComponent::Inventory { inventory: _ } => todo!("not implemented"),
             GuiComponent::Text { .. } => None,
             GuiComponent::Image { .. } => None,
-            GuiComponent::Button {
-                on_click,
-                on_grab,
-                position,
-                size,
-                ..
-            } => {
+            GuiComponent::Bar { .. } => None,
+            GuiComponent::Button { on_click, .. } => {
                 let is_pressed = !last_input.is_pressed && current_input.is_pressed;
                 let is_grabbed = current_input.is_grabbed;
 
                 if is_pressed || is_grabbed {
-                    if is_in_bounds(position, size, current_input.cursor_position) {
+                    if self.rect().contains(vec2(
+                        current_input.cursor_position.x,
+                        current_input.cursor_position.y,
+                    )) {
                         if is_pressed {
                             on_click.clone()
                         } else if is_grabbed {
-                            if let Some((left_grab, right_grab)) = on_grab {
-                                if current_input.hand == Handedness::Left {
-                                    Some(left_grab.clone())
-                                } else {
-                                    Some(right_grab.clone())
-                                }
-                            } else {
-                                None
-                            }
+                            self.grab_event(current_input.hand).cloned()
                         } else {
                             None
                         }
@@ -778,6 +792,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gui_buttons_are_canvas_elements() {
+        let element = button("clicked")
+            .with_position(vec2(10.0, 20.0))
+            .with_size(vec2(30.0, 40.0));
+        let canvas = crate::ui::UiCanvas::from_elements(vec2(100.0, 100.0), vec![element]);
+
+        assert_eq!(canvas.click_at(vec2(25.0, 40.0)), Some("clicked"));
+        assert_eq!(canvas.click_at(vec2(5.0, 5.0)), None);
+    }
 
     #[test]
     fn entity_backed_object_icons_use_palette_index_zero_transparency() {
