@@ -620,19 +620,73 @@ export interface TransitionsResult {
   count: number;
 }
 
-/** One resolved-and-played environmental sound (GET /v1/audio/recent). */
+/**
+ * Stable identity of the entity a sound came from. Runtime entity ids are
+ * reassigned every launch, so only the name and template id are reported.
+ */
+export interface SoundSourceEntity {
+  name: string;
+  template_id: number | null;
+}
+
+/** One resolved-and-played sound (GET /v1/audio/recent). */
 export interface PlayedSound {
   /** Monotonically increasing id - diff against a snapshot to find new plays. */
   sequence: number;
+  /** Simulation time (seconds) at which the sound started. */
+  sim_time: number;
+  /** `sim_time` in fixed 60 Hz frames. */
+  frame: number;
   /** Resolved schema sample name without extension (e.g. "bulmet2"). */
   sample: string;
   /** The schema query's (tag, value) pairs (e.g. ["event", "collision"]). */
   tags: [string, string][];
   position: [number, number, number];
+  /** Clip length in seconds, when the decoder reports one. */
+  duration_secs: number | null;
+  /** The entity that caused the sound, when known. */
+  source_entity: SoundSourceEntity | null;
+  /** Audio handle id - correlates a play with the StopSound that ends it. */
+  handle: number | null;
+  /** Simulation time at which a StopSound cut the play short. */
+  stopped_at_sim_time: number | null;
+  /**
+   * Derived from simulation time (`sim_time + duration_secs > now`, and not
+   * stopped), NOT from live audio-device state - stepping is decoupled from
+   * the wall clock. False when the duration is unknown.
+   */
+  still_playing: boolean;
 }
 
 export interface RecentAudioResult {
   sounds: PlayedSound[];
+}
+
+/** A message endpoint in the script message trace. */
+export interface TracedMessageEntity {
+  name: string;
+  /** Only meaningful within one run - ids are reassigned every launch. */
+  entity_id: number;
+  template_id: number | null;
+}
+
+/** One delivered script message (GET /v1/messages/recent). */
+export interface TracedMessage {
+  /** Monotonically increasing id - diff against a snapshot to find new ones. */
+  sequence: number;
+  /** Simulation time (seconds) at which the message was delivered. */
+  sim_time: number;
+  /** `sim_time` in fixed 60 Hz frames. */
+  frame: number;
+  to: TracedMessageEntity;
+  /** Payload variant name (e.g. "TurnOn", "Frob"). */
+  payload: string;
+  /** Sender, for payloads that carry one (TurnOn/TurnOff/Alarm/Reset). */
+  from: TracedMessageEntity | null;
+}
+
+export interface RecentMessagesResult {
+  messages: TracedMessage[];
 }
 
 export interface WaitForOptions {

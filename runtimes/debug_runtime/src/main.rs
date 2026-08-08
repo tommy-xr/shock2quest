@@ -328,6 +328,7 @@ async fn start_http_server(
         )
         .route("/v1/input/actions", get(list_input_actions))
         .route("/v1/audio/recent", get(get_recent_audio))
+        .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx);
 
@@ -379,7 +380,10 @@ async fn start_http_server(
         "  POST /v1/input/action     - Trigger a discrete input action (e.g. PathfindingTestCycle)"
     );
     info!("  GET  /v1/input/actions    - List available input actions");
-    info!("  GET  /v1/audio/recent     - Recently played environmental sounds (sample + tags)");
+    info!(
+        "  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)"
+    );
+    info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
     info!("Test with: curl http://{}/v1/health", addr);
@@ -3510,6 +3514,15 @@ async fn list_input_actions() -> Json<Value> {
 /// schema. Reads a process-wide log, so no game-loop round-trip is needed.
 async fn get_recent_audio() -> Json<Value> {
     Json(serde_json::json!({ "sounds": shock2vr::audio_log::recent() }))
+}
+
+/// HTTP handler for the recently delivered script messages (receiver, payload
+/// variant, and sender where the payload carries one). Pairs with
+/// `/v1/audio/recent` for debugging "why did all of this fire at once".
+/// High-frequency payloads (hover, sensor/collision) are filtered out. Reads a
+/// process-wide log, so no game-loop round-trip is needed.
+async fn get_recent_messages() -> Json<Value> {
+    Json(serde_json::json!({ "messages": shock2vr::message_trace::recent() }))
 }
 
 /// Wait for shutdown signal (Ctrl+C)

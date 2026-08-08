@@ -4,6 +4,7 @@ pub mod hand_pose;
 pub mod input;
 pub mod input_context;
 pub mod inventory;
+pub mod message_trace;
 pub mod save_load;
 pub mod scenes;
 pub mod teleport;
@@ -1107,6 +1108,11 @@ impl Game {
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
         trace!("delta_time: {}", delta_time);
+
+        // Publish the simulation clock for the diagnostics ring buffers
+        // (audio log / message trace), so their entries can be stamped
+        // without threading `Time` through every record site.
+        audio_log::set_sim_time(time.total.as_secs_f64());
 
         // Drive a background transition: the loading screen animates while the parse
         // runs on its worker thread. Once the parse has finished AND the loading screen

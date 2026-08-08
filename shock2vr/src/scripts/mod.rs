@@ -1300,6 +1300,16 @@ impl ScriptWorld {
                 slayed_entities.insert(to_entity_id);
             }
 
+            // Observability: trace the delivery so headless tooling (the debug
+            // runtime's GET /v1/messages/recent) can see what drove scripts on
+            // a given frame. High-frequency payloads are filtered out there.
+            crate::message_trace::record(
+                world,
+                time.total.as_secs_f64(),
+                to_entity_id,
+                &msg.payload,
+            );
+
             let mut is_turn_on = false;
             match msg.payload {
                 MessagePayload::TurnOn { from: _ } => is_turn_on = true,

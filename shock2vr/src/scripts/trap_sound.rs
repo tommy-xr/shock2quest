@@ -34,6 +34,7 @@ impl Script for TrapSound {
                     Effect::PlaySound {
                         handle,
                         name: sound.name.to_owned(),
+                        source: Some(entity_id),
                     }
                 } else {
                     Effect::NoEffect

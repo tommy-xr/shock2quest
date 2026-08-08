@@ -44,6 +44,7 @@ impl Script for Apparition {
                 let sound_effect = match v_sound.get(entity_id) {
                     Ok(sound) => Effect::PlaySound {
                         handle: self.audio_handle.clone(),
+                        source: Some(entity_id),
                         name: sound.name.clone(),
                     },
                     Err(_) => Effect::NoEffect,

@@ -51,6 +51,27 @@ pub fn debug_entity(world: &World, id: EntityId) -> String {
     )
 }
 
+/// Stable-ish identity of an entity for diagnostics: its symbolic name and
+/// template id. (Runtime entity ids are reassigned every launch, so the
+/// template id is the durable handle.)
+pub fn entity_ident(world: &World, id: EntityId) -> (String, Option<i32>) {
+    world.run(
+        |v_template_id: View<dark::properties::PropTemplateId>,
+         v_symname: View<dark::properties::PropSymName>,
+         v_objname: View<dark::properties::PropObjName>,
+         v_objshortname: View<dark::properties::PropObjShortName>| {
+            let template_id = v_template_id.get(id).map(|t| t.template_id).ok();
+            let name = v_symname
+                .get(id)
+                .map(|s| s.0.clone())
+                .or_else(|_| v_objname.get(id).map(|o| o.0.clone()))
+                .or_else(|_| v_objshortname.get(id).map(|o| o.0.clone()))
+                .unwrap_or_else(|_| "Unknown".to_string());
+            (name, template_id)
+        },
+    )
+}
+
 pub fn vec3_to_point3(v: Vector3<f32>) -> Point3<f32> {
     point3(v.x, v.y, v.z)
 }

@@ -15,7 +15,7 @@ impl UseSound {
 impl Script for UseSound {
     fn handle_message(
         &mut self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         _world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
@@ -33,6 +33,7 @@ impl Script for UseSound {
                 Effect::PlaySound {
                     handle,
                     name: "TELEPHON".to_owned(),
+                    source: Some(entity_id),
                 }
                 // } else {
                 //     Effect::NoEffect

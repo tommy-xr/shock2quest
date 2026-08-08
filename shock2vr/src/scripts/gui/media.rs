@@ -256,6 +256,7 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         };
         let audio = Effect::PlaySound {
             handle: AudioHandle::new(),
+            source: Some(entity_id),
             name: format!("LOG{deck:02}{log:02}"),
         };
         let collect = Effect::CollectLog {
