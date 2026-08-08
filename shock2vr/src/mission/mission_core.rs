@@ -80,7 +80,7 @@ use crate::{
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
     mission::{SpatialQueryEngine, entity_populator::EntityPopulator},
-    physics::{self, PlayerHandle},
+    physics::{self, CollisionGroup, PlayerHandle},
     quest_info::QuestInfo,
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
@@ -4442,15 +4442,18 @@ impl MissionCore {
                     }
                 }
                 Effect::SpawnCorpseRagdoll { entity_id, impact } => {
-                    // Death-crumple handoff (AI deaths): once the death
-                    // animation has finished, replace the animated corpse with
-                    // a physics ragdoll seeded from its final pose. Gated on
-                    // the `ragdoll` experimental flag - without it the
-                    // animated corpse entity persists exactly as before.
+                    // Death-crumple handoff (AI deaths): shortly after the
+                    // animation starts, replace the animated corpse with a
+                    // physics ragdoll seeded from its current pose. Without
+                    // the experimental flag, keep the animated corpse but
+                    // narrow its capsule to world/selectable collision: it
+                    // remains grounded and lootable without blocking the
+                    // player.
                     // (Known experimental limitations: the ragdoll corpse is
-                    // not serialized, so it vanishes on save/load; and the
-                    // creature entity is removed, which will matter once
-                    // corpse looting (`creaturecontainer`) is implemented.)
+                    // not serialized, so it vanishes on save/load; and removing
+                    // the creature entity also removes its creaturecontainer
+                    // loot target.)
+                    let mut spawned_ragdoll = false;
                     if game_options.experimental_features.contains("ragdoll") {
                         let ragdoll_id = self.spawn_ragdoll(
                             entity_id,
@@ -4461,6 +4464,7 @@ impl MissionCore {
                             // overlapping.
                             true,
                         );
+                        spawned_ragdoll = ragdoll_id.is_some();
                         // Seed the corpse with the killing blow: the struck
                         // limb gets a shove along the shot's direction, so the
                         // corpse reacts to HOW it died instead of collapsing
@@ -4472,6 +4476,14 @@ impl MissionCore {
                                 &mut self.physics,
                             );
                         }
+                    }
+                    // A successful ragdoll spawn removes the original creature
+                    // and its capsule. In the normal path (or when a model
+                    // cannot make a ragdoll), retain the corpse entity but
+                    // exclude its capsule from player/entity collision.
+                    if !spawned_ragdoll {
+                        self.physics
+                            .set_collision_group(entity_id, CollisionGroup::corpse());
                     }
                 }
                 Effect::StopSound { handle } => {

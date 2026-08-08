@@ -1924,6 +1924,18 @@ impl CollisionGroup {
         })
     }
 
+    /// Collision behavior for a retained non-ragdoll creature corpse. Keep the
+    /// body supported by authored world geometry and in selectable raycasts,
+    /// but do not leave its old creature capsule solid to players, living AIs,
+    /// moving terrain, or loose props.
+    pub fn corpse() -> CollisionGroup {
+        CollisionGroup(InteractionGroups {
+            memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
+            filter: InternalCollisionGroups::WORLD.bits.into(),
+            test_mode: Default::default(),
+        })
+    }
+
     /// Same collision behavior as `entity()`, plus the `CLIMBABLE` marker
     /// membership so player movement can detect ladder contact (see
     /// `PropPhysAttr.climbable`).
@@ -1991,11 +2003,7 @@ impl CollisionGroup {
     /// positions in a single step. Floor contact is what matters for a lying
     /// corpse; limb self-collision is cosmetic in that pose.
     pub fn ragdoll_no_self() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
-            memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
-            filter: InternalCollisionGroups::WORLD.bits.into(),
-            test_mode: Default::default(),
-        })
+        Self::corpse()
     }
 }
 
@@ -2475,6 +2483,24 @@ impl PhysicsWorld {
             &mut self.multibody_joint_set,
             true,
         );
+    }
+
+    /// Replace the collision groups on every collider owned by an entity's
+    /// primary body. This preserves the body's pose, material, sleep state,
+    /// and world contacts while changing which actors it can obstruct.
+    pub fn set_collision_group(&mut self, entity_id: EntityId, group: CollisionGroup) {
+        let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
+            return;
+        };
+        let Some(body) = self.rigid_body_set.get(handle) else {
+            return;
+        };
+        let collider_handles = body.colliders().to_vec();
+        for collider_handle in collider_handles {
+            if let Some(collider) = self.collider_set.get_mut(collider_handle) {
+                collider.set_collision_groups(group.0);
+            }
+        }
     }
 
     /// Resize every cuboid collider attached to a kinematic body. GUI panels
@@ -5289,6 +5315,64 @@ mod tests {
             obstacle.0.test(generic_entity_ray),
             "selection/projectile rays must still hit the obstacle"
         );
+    }
+
+    #[test]
+    fn corpse_body_stays_grounded_and_selectable_without_blocking_characters() {
+        let mut world = PhysicsWorld::new();
+        let corpse_id = EntityId::from_inner(1).unwrap();
+        let handle = world.add_dynamic(
+            corpse_id,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 1.0,
+                radius: 0.5,
+            },
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+
+        world.set_collision_group(corpse_id, CollisionGroup::corpse());
+
+        let collider = &world.collider_set[world.rigid_body_set[handle].colliders()[0]];
+        let corpse = collider.collision_groups();
+        let player = InteractionGroups::new(
+            InternalCollisionGroups::PLAYER.bits.into(),
+            InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            Default::default(),
+        );
+        let live_creature = CollisionGroup::actor().0;
+        let terrain = InteractionGroups::new(
+            InternalCollisionGroups::WORLD.bits.into(),
+            InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            Default::default(),
+        );
+        let selectable_query = InteractionGroups::new(
+            InternalCollisionGroups::ALL.bits.into(),
+            InternalCollisionGroups::SELECTABLE.bits.into(),
+            Default::default(),
+        );
+
+        assert!(
+            !corpse.test(player),
+            "corpse capsule must not block the player"
+        );
+        assert!(
+            !corpse.test(live_creature),
+            "corpse capsule must not block living creatures"
+        );
+        assert!(
+            corpse.test(terrain),
+            "corpse must remain supported by terrain"
+        );
+        assert!(
+            corpse.test(selectable_query),
+            "corpse must remain selectable for looting"
+        );
+        assert!(!collider.is_sensor(), "world support uses a solid collider");
     }
 
     /// AI movement probes must use the actor membership, not a generic ray:

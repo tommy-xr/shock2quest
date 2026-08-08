@@ -869,7 +869,8 @@ fn create_physics_representation_with_options(
     // SCALE_FACTOR/6 (0.4167 world units) and make it visibly settle after
     // every load. Preserve the live creature's dynamic capsule geometry and
     // material, place it at the exact saved transform, then start it asleep.
-    // Contacts and impulses can still wake/push it.
+    // The corpse group keeps it on the world and selectable for looting without
+    // leaving a player-blocking creature capsule behind.
     if v_death_pose.get(entity_id).is_ok() {
         if let (Ok(pos), Ok(creature_type)) = (v_pos.get(entity_id), v_creature.get(entity_id)) {
             let creature_def = get_creature_definition(creature_type.0).unwrap();
@@ -885,7 +886,7 @@ fn create_physics_representation_with_options(
                 pos.rotation,
                 vec3(0.0, -creature_def.physics_offset_height, 0.0),
                 creature_shape,
-                CollisionGroup::entity(),
+                CollisionGroup::corpse(),
                 false,
                 dynamics_options,
             );

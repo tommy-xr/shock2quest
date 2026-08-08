@@ -797,9 +797,10 @@ impl Script for AnimatedMonsterAI {
                 self.death_elapsed += time.elapsed.as_secs_f32();
             }
             // Near-instant handoff: once the death animation has had a few
-            // frames, offer the corpse to physics (no-op without the
-            // `ragdoll` experimental flag; a successful spawn removes this
-            // entity, so at most one emission ever matters).
+            // frames, offer the corpse to physics. With ragdolls disabled the
+            // handler makes the animated capsule non-blocking; a successful
+            // ragdoll spawn removes this entity, so at most one emission ever
+            // matters.
             let handoff_effect = if self.is_dead
                 && !self.handoff_emitted
                 && self.death_elapsed >= CRUMPLE_HANDOFF_SECONDS
