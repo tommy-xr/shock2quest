@@ -673,7 +673,7 @@ impl FlatUiHost {
             // arrow (the original's `SCM_DRAGOBJ`, §2.4). Fall back to the
             // arrow when the held item has no icon or nothing is held.
             match self.cursor_item.as_ref().and_then(|c| c.icon.as_deref()) {
-                Some(icon) => canvas.image(
+                Some(icon) => canvas.object_icon(
                     Rect::new(cursor.x, cursor.y, CURSOR_ITEM_SIZE.x, CURSOR_ITEM_SIZE.y),
                     icon,
                 ),
@@ -891,7 +891,11 @@ fn draw_components(
             // alpha is a VR world-quad translucency, deliberately not
             // applied here.
             GuiComponentRenderInfo::Image { texture, .. } => {
-                canvas.image(r, texture);
+                if component.transparent_index_0() {
+                    canvas.object_icon(r, texture);
+                } else {
+                    canvas.image(r, texture);
+                }
             }
             GuiComponentRenderInfo::Text { text, font, .. } => {
                 // Render at the font's native pixel height (the Dark engine

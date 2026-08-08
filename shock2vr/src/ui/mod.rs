@@ -143,6 +143,7 @@ enum UiElement {
         rect: Rect,
         texture: String,
         opacity: f32,
+        transparent_index_0: bool,
     },
     /// Horizontally-filling bar; `fill` (0..1) clips the texture from the left.
     Bar {
@@ -199,6 +200,19 @@ impl UiCanvas {
             rect,
             texture: texture.to_owned(),
             opacity: 1.0,
+            transparent_index_0: false,
+        });
+        self
+    }
+
+    /// Add paletted object-icon art using Dark's palette-index-0 transparency.
+    /// Ordinary UI images remain opaque through [`Self::image`].
+    pub fn object_icon(&mut self, rect: Rect, texture: &str) -> &mut Self {
+        self.elements.push(UiElement::Image {
+            rect,
+            texture: texture.to_owned(),
+            opacity: 1.0,
+            transparent_index_0: true,
         });
         self
     }
@@ -277,8 +291,16 @@ impl UiCanvas {
                     rect,
                     texture,
                     opacity,
+                    transparent_index_0,
                 } => {
-                    let tex = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
+                    let tex = asset_cache.get_ext(
+                        &TEXTURE_IMPORTER,
+                        texture,
+                        &TextureOptions {
+                            wrap: false,
+                            transparent_index_0: *transparent_index_0,
+                        },
+                    );
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
                         vec2(rect.x * scale.x + offset.x, rect.y * scale.y + offset.y),
@@ -435,5 +457,26 @@ mod tests {
             ScaleMode::PreserveAspect,
         );
         assert_eq!(p, Some(vec2(320.0, 120.0)));
+    }
+
+    #[test]
+    fn object_icon_marks_palette_index_zero_as_transparent() {
+        let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+        canvas.image(Rect::new(0.0, 0.0, 640.0, 120.0), "invback.pcx");
+        canvas.object_icon(Rect::new(0.0, 0.0, 32.0, 32.0), "passkey.pcx");
+
+        assert!(matches!(
+            canvas.elements.as_slice(),
+            [
+                UiElement::Image {
+                    transparent_index_0: false,
+                    ..
+                },
+                UiElement::Image {
+                    transparent_index_0: true,
+                    ..
+                }
+            ]
+        ));
     }
 }
