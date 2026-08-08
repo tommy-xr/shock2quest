@@ -346,8 +346,11 @@ campaign just launches mission 0 with no frontier to load, which is harmless.
    and creates the ledger on the first iteration, keeps the roll after), then
    `show` → read the frontier + NEXT action (goal, tweak, `DARK_ASSET_PATH`).
 2. **Resume:** build the runtime from the **`fix_branch`** (so accrued fixes are
-   in), launch it **with the campaign's `DARK_ASSET_PATH`**, and `POST /v1/load
-   {file: frontier.save}` — or launch the first mission fresh at iteration 0.
+   in), launch it **with the campaign's `DARK_ASSET_PATH`** on a stable,
+   campaign-owned port via `GameServer.launch({ mission, port, reapPrevious:
+   true })`, and `POST /v1/load {file: frontier.save}` — or launch the first
+   mission fresh at iteration 0. The exact-ID reap prevents a dead iteration's
+   runtime from accumulating without touching another checkout's runtime.
 3. **Playtest** from here toward the goal (the `playtest` primitive), passing the
    campaign goal + the tweak instructions into the playtest prompt → `data.json`.
 4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.

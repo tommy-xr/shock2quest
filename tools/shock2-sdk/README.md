@@ -126,6 +126,11 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;
   pass `repoRoot` to override. First launch may take minutes while cargo
   compiles; the default readiness timeout is 5 minutes.
+- Long-lived automation should use a stable dedicated port and pass
+  `reapPrevious: true`. Before launch, the SDK then reaps only a prior runtime
+  whose checkout-local lease, requested port, and live random instance ID all
+  match. The option is off by default so concurrent tests asking for the same
+  port continue to use separate free ports rather than stopping each other.
 - Injected actions apply on the next game update, which runs even while
   paused (with zero delta time).
 - `game.logs()` returns recent runtime output (also included in launch

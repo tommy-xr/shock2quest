@@ -27,8 +27,11 @@ manager validates, files, and delegates its fix in parallel. Continue to record
 the finding in the final `data.json`.
 
 ## Reach the start state
-- **Fresh:** launch the runtime on the mission (SDK `GameServer.launch`, or
-  `cargo dbgr --mission <m>.mis --port <p>`), `step 5` to settle.
+- **Fresh:** launch the runtime on the mission with a stable, session-owned port
+  and stale-instance reaping
+  (`GameServer.launch({ mission, port, reapPrevious: true })`), then `step 5` to
+  settle. Prefer this SDK lifecycle over raw `cargo dbgr` for agent sessions:
+  reaping requires the SDK's checkout-local lease and exact runtime instance ID.
 - **Resume at a frontier** (the manager passes one): warp with
   `POST /v1/control/transition-level {level, loc}` and/or `teleport {x,y,z}` to
   where the last session stalled, so you don't replay solved parts. (`QuickLoad`

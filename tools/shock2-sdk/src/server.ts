@@ -1,8 +1,17 @@
-import { type ChildProcess, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 import { HttpClient } from "./client.js";
 import { Game } from "./game.js";
@@ -32,6 +41,13 @@ export interface LaunchOptions {
   rustLog?: string;
   /** Echo runtime output to this process's stderr (default false). */
   echoLogs?: boolean;
+  /**
+   * Reap a prior SDK-owned runtime on the requested port before launching.
+   * Ownership must be proven by this checkout's lease and the runtime's exact
+   * instance id. Disabled by default so concurrent callers keep independent
+   * runtimes and use the next free port as usual.
+   */
+  reapPrevious?: boolean;
 }
 
 /** Walk up from a directory until a cargo workspace root is found. */
@@ -39,7 +55,10 @@ export function findRepoRoot(startDir: string): string | undefined {
   let dir = startDir;
   for (;;) {
     const manifest = join(dir, "Cargo.toml");
-    if (existsSync(manifest) && readFileSync(manifest, "utf8").includes("[workspace]")) {
+    if (
+      existsSync(manifest) &&
+      readFileSync(manifest, "utf8").includes("[workspace]")
+    ) {
       return dir;
     }
     const parent = dirname(dir);
@@ -58,6 +77,190 @@ const MAX_LOG_LINES = 2000;
  * but whose child hasn't bound yet (cargo may compile for minutes first).
  */
 const reservedPorts = new Set<number>();
+
+interface RuntimeLease {
+  port: number;
+  instanceId: string;
+  pid: number;
+}
+
+function canonicalRepoRoot(repoRoot: string): string {
+  try {
+    return realpathSync.native(repoRoot);
+  } catch {
+    return resolve(repoRoot);
+  }
+}
+
+function runtimeLeaseDirectory(repoRoot: string, port: number): string {
+  const checkout = createHash("sha256")
+    .update(canonicalRepoRoot(repoRoot))
+    .digest("hex")
+    .slice(0, 24);
+  return join(tmpdir(), "shock2-sdk-runtime-leases", checkout, String(port));
+}
+
+/** @internal Exported for ownership-safety tests. */
+export function runtimeLeasePath(
+  repoRoot: string,
+  port: number,
+  instanceId: string,
+): string {
+  return join(runtimeLeaseDirectory(repoRoot, port), `${instanceId}.json`);
+}
+
+function writeRuntimeLease(repoRoot: string, lease: RuntimeLease): string {
+  const path = runtimeLeasePath(repoRoot, lease.port, lease.instanceId);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(lease)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  return path;
+}
+
+function removeRuntimeLease(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") throw error;
+  }
+}
+
+function readRuntimeLeases(
+  repoRoot: string,
+  port: number,
+): Array<{
+  lease: RuntimeLease;
+  path: string;
+}> {
+  const directory = runtimeLeaseDirectory(repoRoot, port);
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return [];
+    throw error;
+  }
+
+  const leases: Array<{ lease: RuntimeLease; path: string }> = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const path = join(directory, name);
+    try {
+      const value = JSON.parse(
+        readFileSync(path, "utf8"),
+      ) as Partial<RuntimeLease>;
+      if (
+        value.port === port &&
+        typeof value.instanceId === "string" &&
+        Number.isSafeInteger(value.pid) &&
+        (value.pid ?? 0) > 0
+      ) {
+        leases.push({ lease: value as RuntimeLease, path });
+      }
+    } catch {
+      // A corrupt lease cannot prove ownership, so leave it untouched.
+    }
+  }
+  return leases;
+}
+
+async function runtimeInstanceId(port: number): Promise<string | undefined> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/health`, {
+      signal: AbortSignal.timeout(1_000),
+    });
+    if (!response.ok) return undefined;
+    const health = (await response.json()) as { instance_id?: unknown };
+    return typeof health.instance_id === "string"
+      ? health.instance_id
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForPortToBeFree(
+  port: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    if (await portIsFree(port)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } while (Date.now() < deadline);
+  return false;
+}
+
+function killLeasedProcessTree(pid: number): void {
+  if (process.platform === "win32") {
+    const result = spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
+    if (result.error !== undefined || result.status !== 0) {
+      throw result.error ?? new Error(`taskkill exited with ${result.status}`);
+    }
+    return;
+  }
+  // launch() creates a detached process group whose leader is this pid.
+  process.kill(-pid, "SIGKILL");
+}
+
+export type ReapResult = "none" | "preserved" | "reaped";
+
+/**
+ * Reap the prior runtime only when a checkout-local lease and live instance id
+ * agree. A port occupied by any other instance is deliberately preserved.
+ */
+export async function reapPreviousRuntime(
+  repoRoot: string,
+  port: number,
+): Promise<ReapResult> {
+  const leases = readRuntimeLeases(repoRoot, port);
+  if (leases.length === 0) return "none";
+
+  const liveInstanceId = await runtimeInstanceId(port);
+  const owned = leases.find(({ lease }) => lease.instanceId === liveInstanceId);
+  if (owned === undefined) {
+    if (liveInstanceId === undefined && (await portIsFree(port))) {
+      for (const entry of leases) removeRuntimeLease(entry.path);
+      return "none";
+    }
+    return "preserved";
+  }
+
+  try {
+    await fetch(`http://127.0.0.1:${port}/v1/shutdown`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instance_id: owned.lease.instanceId }),
+      signal: AbortSignal.timeout(2_000),
+    });
+  } catch {
+    // The runtime can close the connection while processing shutdown. Treat
+    // this as ambiguous and check the port before deciding whether to escalate.
+  }
+  if (!(await waitForPortToBeFree(port, 2_000))) {
+    // Recheck immediately before terminating the recorded process tree. This
+    // prevents a stale lease from targeting a runtime that replaced it.
+    if ((await runtimeInstanceId(port)) !== owned.lease.instanceId) {
+      return "preserved";
+    }
+    killLeasedProcessTree(owned.lease.pid);
+    if (!(await waitForPortToBeFree(port, 5_000))) {
+      throw new Error(
+        `owned debug_runtime ${owned.lease.instanceId} on port ${port} did not exit`,
+      );
+    }
+  }
+
+  for (const entry of leases) removeRuntimeLease(entry.path);
+  return "reaped";
+}
 
 /** Children that must not outlive this process (see hookSignalCleanup). */
 const liveServers = new Set<GameServer>();
@@ -147,6 +350,7 @@ export class GameServer extends Game implements AsyncDisposable {
     private readonly logLines: string[],
     private readonly instanceId: string | undefined,
     private readonly port: number | undefined,
+    private readonly leasePath: string | undefined,
   ) {
     super(client);
   }
@@ -164,6 +368,9 @@ export class GameServer extends Game implements AsyncDisposable {
       reservedPorts.delete(this.port);
     }
     liveServers.delete(this);
+    if (this.leasePath !== undefined) {
+      removeRuntimeLease(this.leasePath);
+    }
   }
 
   /** Recent stdout/stderr from the spawned runtime (ring buffer). */
@@ -178,7 +385,14 @@ export class GameServer extends Game implements AsyncDisposable {
 
   /** Connect to an already-running debug runtime. shutdown() will stop it; dispose will not spawn-kill anything. */
   static async connect(baseUrl = "http://127.0.0.1:8080"): Promise<GameServer> {
-    const server = new GameServer(new HttpClient(baseUrl), undefined, [], undefined, undefined);
+    const server = new GameServer(
+      new HttpClient(baseUrl),
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+    );
     await server.health();
     return server;
   }
@@ -191,10 +405,19 @@ export class GameServer extends Game implements AsyncDisposable {
    */
   static async launch(options: LaunchOptions): Promise<GameServer> {
     const hint = options.port ?? 8080;
+    const repoRoot = options.repoRoot ?? findRepoRoot(process.cwd());
+    if (repoRoot === undefined) {
+      throw new Error(
+        "Could not find cargo workspace root; pass repoRoot explicitly",
+      );
+    }
+    if (options.reapPrevious) {
+      await reapPreviousRuntime(repoRoot, hint);
+    }
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await GameServer.launchOnce(options, hint + attempt);
+        return await GameServer.launchOnce(options, repoRoot, hint + attempt);
       } catch (error) {
         lastError = error;
         const message = String(error);
@@ -214,15 +437,10 @@ export class GameServer extends Game implements AsyncDisposable {
 
   private static async launchOnce(
     options: LaunchOptions,
+    repoRoot: string,
     portHint: number,
   ): Promise<GameServer> {
     const port = await findFreePort(portHint);
-    const repoRoot = options.repoRoot ?? findRepoRoot(process.cwd());
-    if (repoRoot === undefined) {
-      throw new Error(
-        "Could not find cargo workspace root; pass repoRoot explicitly",
-      );
-    }
 
     // Identifies OUR runtime: /v1/health echoes it, and readiness checks
     // reject a different instance on the same port (e.g. another agent's
@@ -265,6 +483,28 @@ export class GameServer extends Game implements AsyncDisposable {
       detached: true,
     });
 
+    let leasePath: string;
+    try {
+      if (child.pid === undefined) {
+        throw new Error("spawned debug_runtime has no process id");
+      }
+      leasePath = writeRuntimeLease(repoRoot, {
+        port,
+        instanceId,
+        pid: child.pid,
+      });
+    } catch (error) {
+      if (child.pid !== undefined) {
+        try {
+          killLeasedProcessTree(child.pid);
+        } catch {
+          // Preserve the lease error, which is the actionable launch failure.
+        }
+      }
+      reservedPorts.delete(port);
+      throw error;
+    }
+
     const capture = (chunk: Buffer) => {
       for (const line of chunk.toString().split("\n")) {
         if (line.length === 0) continue;
@@ -282,6 +522,7 @@ export class GameServer extends Game implements AsyncDisposable {
       logLines,
       instanceId,
       port,
+      leasePath,
     );
     liveServers.add(server);
     hookSignalCleanup();
