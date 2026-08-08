@@ -1236,6 +1236,9 @@ impl Game {
         if was_crouched {
             mission.mission_core.restore_saved_crouch();
         }
+        mission
+            .mission_core
+            .schedule_loaded_player_overlap_recovery();
         self.active_game_scene = Box::new(mission);
         self.mission_to_save_data = level_map;
         self.campaign_completed = false;
