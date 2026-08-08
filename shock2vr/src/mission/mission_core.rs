@@ -4446,6 +4446,19 @@ impl MissionCore {
                         self.world.add_component(entity_id, PropObjState(state));
                     }
                 }
+                Effect::SetReplicatorHackedContents {
+                    entity_id,
+                    contents,
+                } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world.add_component(entity_id, contents);
+                    }
+                }
                 Effect::SetEcologyState { entity_id, state } => {
                     let is_alive = self
                         .world

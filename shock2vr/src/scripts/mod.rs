@@ -39,6 +39,7 @@ mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
+mod put_bomb_in_replicator;
 mod reduce_psi;
 mod reroute_elevator_button;
 mod researchable;
@@ -115,6 +116,7 @@ use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
+use self::put_bomb_in_replicator::PutBombInReplicator;
 use self::reduce_psi::ReducePsi;
 use self::reroute_elevator_button::RerouteElevatorButton;
 use self::researchable::ResearchableScript;
@@ -1119,7 +1121,7 @@ impl ScriptWorld {
             "trapcollideoff" => Box::new(NoopScript::new()),
             "tweqbutton" => Box::new(NoopScript::new()),
             "tweqtrap" => Box::new(NoopScript::new()),
-            "putbombinreplicator" => Box::new(NoopScript::new()),
+            "putbombinreplicator" => Box::new(PutBombInReplicator::new()),
             "trapunref" => Box::new(NoopScript::new()),
 
             // shodan
@@ -1473,6 +1475,28 @@ mod script_state_tests {
 
     fn tick(scripts: &mut ScriptWorld, world: &World) {
         scripts.update(world, &PhysicsWorld::new(), &Time::default());
+    }
+
+    #[test]
+    fn put_bomb_in_replicator_turn_on_is_not_a_noop() {
+        let mut world = World::new();
+        let replicator = world.add_entity(dark::properties::PropReplicatorHackedContents {
+            costs: [100, 75, 100, 45, 0, 0],
+            object_names: std::array::from_fn(|_| String::new()),
+        });
+        let mut script = ScriptWorld::create_script("PutBombInReplicator".to_owned());
+
+        let effect = script.handle_message(
+            replicator,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TurnOn { from: replicator },
+        );
+
+        assert!(
+            !matches!(effect, Effect::NoEffect),
+            "the Command objective relay must add the resonator to the hacked catalog"
+        );
     }
 
     #[test]
