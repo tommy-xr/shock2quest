@@ -582,6 +582,7 @@ mod tests {
 
     fn pointer_at(x: f32, y: f32, pressed: bool) -> Option<Pointer2D> {
         Some(Pointer2D {
+            secondary_pressed: false,
             position: vec2(x, y),
             pressed,
         })
