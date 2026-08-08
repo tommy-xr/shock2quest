@@ -826,10 +826,14 @@ fn create_physics_representation_with_options(
 
     let min_size = 0.5 / SCALE_FACTOR;
     let min_size_vec = vec3(min_size, min_size, min_size);
-    let dimensions = maybe_model
+    let (dimensions, model_center) = maybe_model
         .as_ref()
-        .and_then(|model| model.bounding_box().map(|bbox| bbox.max - bbox.min))
-        .unwrap_or(default_size_vec);
+        .and_then(|model| model.bounding_box())
+        .map(|bbox| {
+            let size = bbox.max - bbox.min;
+            (size, bbox.min.to_vec() + size / 2.0)
+        })
+        .unwrap_or((default_size_vec, Vector3::zero()));
     let abs_dimensions = vec3(
         dimensions.x.abs().max(min_size_vec.x),
         dimensions.y.abs().max(min_size_vec.y),
@@ -1026,7 +1030,7 @@ fn create_physics_representation_with_options(
                 entity_id,
                 pos.position,
                 qrotation,
-                Vector3::zero(),
+                model_center,
                 abs_dimensions,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1334,6 +1338,16 @@ mod tests {
         )
     }
 
+    /// A deliberately asymmetric model box, like `medica3.bin`'s Med Bed:
+    /// its object origin is not at the center of the rendered geometry.
+    fn asymmetric_fixture_model() -> Model {
+        Model::from_glb(
+            vec![],
+            Aabb3::new(Point3::new(-1.0, -0.5, -0.25), Point3::new(1.0, 1.5, 1.75)),
+            None,
+        )
+    }
+
     const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
 
     /// A wall fixture the player can frob but never pick up or move - a
@@ -1419,6 +1433,27 @@ mod tests {
             assert_eq!(bodies[0].blocks_player, should_block);
             assert_eq!(bodies[0].blocks_actor, should_block);
         }
+    }
+
+    /// A model-bounds selection collider must cover the model's actual local
+    /// bounds when the object origin is off-center. Otherwise part of the
+    /// visible object cannot be selected or frobbed (the shipped Med Bed,
+    /// Partial Med Bed, and Rick Turret models all have asymmetric bounds).
+    #[test]
+    fn frobbable_model_bounds_collider_uses_the_model_center() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, None);
+        let model = asymmetric_fixture_model();
+
+        create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+            .expect("a frobbable fixture should get a selection collider");
+
+        let collider_bounds = physics
+            .get_aabb2(entity_id)
+            .expect("the selection collider should have world bounds");
+        assert_eq!(collider_bounds.min, Point3::new(-1.0, -0.5, -0.25));
+        assert_eq!(collider_bounds.max, Point3::new(1.0, 1.5, 1.75));
     }
 
     /// Dark's pick pass weighs only objects submitted by the renderer. A
