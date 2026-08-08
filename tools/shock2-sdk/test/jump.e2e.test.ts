@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -52,7 +52,7 @@ test(
     // then press ordinary forward locomotion through the jump.
     await game.input.lookAtWorldPoint([
       restored.x,
-      restored.y + 1.6,
+      restored.y + PLAYER_EYE_HEIGHT_WORLD,
       restored.z + 4,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -86,7 +86,7 @@ test(
     // mandatory route wraps under its east lip onto a finite lower side ring;
     // a continuous standing capsule cannot expose that ring through an
     // ordinary ballistic edge fall.
-    await game.input.lookAtWorldPoint([31, supported.y + 1.6, 28.5]);
+    await game.input.lookAtWorldPoint([31, supported.y + PLAYER_EYE_HEIGHT_WORLD, 28.5]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.step({ frames: 24 });
@@ -101,7 +101,7 @@ test(
     // Walk to the real east lip and align over the narrow z=30..32 side ring.
     // There is no setup placement after the initial campaign frontier: every
     // pose in the crossing is reached through production locomotion.
-    await game.input.lookAtWorldPoint([35, position.y + 1.6, 31]);
+    await game.input.lookAtWorldPoint([35, position.y + PLAYER_EYE_HEIGHT_WORLD, 31]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await game.step({ frames: 29 });
     await game.input.set("right_hand.thumbstick", [0, 0]);
@@ -125,7 +125,7 @@ test(
     // A forward jump at the parentless lip uses the bounded sparse-body
     // transition to the first all-collider-valid crouched pose below. Before
     // the downward transition this pulse simply landed back on y=-19.2.
-    await game.input.lookAtWorldPoint([40, position.y + 1.6, position.z]);
+    await game.input.lookAtWorldPoint([40, position.y + PLAYER_EYE_HEIGHT_WORLD, position.z]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.input.set("right_hand.thumbstick", [0, 0]);
@@ -161,7 +161,7 @@ test(
     // the real route rather than merely finding an isolated point below.
     await game.input.lookAtWorldPoint([
       position.x,
-      position.y + 1.6,
+      position.y + PLAYER_EYE_HEIGHT_WORLD,
       28,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -254,7 +254,7 @@ test(
     // beyond them, then keep ordinary forward locomotion active for the jump.
     await game.input.lookAtWorldPoint([
       lowerSmallCrate.position[0],
-      before.y + 1.6,
+      before.y + PLAYER_EYE_HEIGHT_WORLD,
       -195.8,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -351,7 +351,7 @@ test(
     let position = await game.player.position();
 
     // First authored platform: cross its south lip toward world +Z.
-    await game.input.lookAtWorldPoint([5, position.y + 1.6, 13]);
+    await game.input.lookAtWorldPoint([5, position.y + PLAYER_EYE_HEIGHT_WORLD, 13]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     await pulseJump(game);
     await game.step({ frames: 90 });
@@ -367,7 +367,7 @@ test(
     // the y=6 authored floor without teleporting between platforms.
     await game.input.lookAtWorldPoint([
       log.position[0],
-      position.y + 1.6,
+      position.y + PLAYER_EYE_HEIGHT_WORLD,
       log.position[2],
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);

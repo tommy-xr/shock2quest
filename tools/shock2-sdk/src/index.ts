@@ -8,6 +8,7 @@ export {
   headRotationForWorldPoint,
   InputApi,
   PathfindingTestApi,
+  PLAYER_EYE_HEIGHT_WORLD,
   PlayerApi,
   UiApi,
 } from "./game.js";

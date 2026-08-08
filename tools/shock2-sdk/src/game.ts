@@ -40,6 +40,16 @@ import type {
   Vec3,
 } from "./types.js";
 
+/**
+ * Standing eye height above the player's body position, in world units:
+ * the Rust `PLAYER_EYE_HEIGHT` (head sphere at `(PLAYER_HEIGHT / 2) -
+ * PLAYER_RADIUS` = 1.8 SS2 ft, plus the original game's 0.8 ft eye offset =
+ * 2.6 SS2 ft, i.e. 5.6 ft above the floor) divided by `dark::SCALE_FACTOR`
+ * (2.5). Only a fallback: aiming prefers the live `camera_offset` the runtime
+ * reports in `/v1/info`.
+ */
+export const PLAYER_EYE_HEIGHT_WORLD = 1.04;
+
 /** Error thrown when the game reports a command failed (success: false). */
 export class CommandError extends Error {
   constructor(public readonly result: CommandResult) {
@@ -120,7 +130,8 @@ export class PlayerApi {
       this.client.get<EntityDetailResult>(`/v1/entities/${entityId}`),
       this.client.get<FrameSnapshot>("/v1/info"),
     ]);
-    const eyeHeight = options?.eyeHeight ?? 1.6;
+    const eyeHeight =
+      options?.eyeHeight ?? snapshot.player.camera_offset?.[1] ?? PLAYER_EYE_HEIGHT_WORLD;
     const eye: Vec3 = [
       snapshot.player.position[0],
       snapshot.player.position[1] + eyeHeight,
@@ -430,7 +441,8 @@ export class InputApi {
       this.client.get<{ position: Vec3 }>("/v1/player/position"),
       this.client.get<FrameSnapshot>("/v1/info"),
     ]);
-    const eyeHeight = options?.eyeHeight ?? 1.6;
+    const eyeHeight =
+      options?.eyeHeight ?? snapshot.player.camera_offset?.[1] ?? PLAYER_EYE_HEIGHT_WORLD;
     const localHeadRotation = headRotationForWorldPoint(
       position,
       snapshot.player.rotation,
@@ -482,7 +494,7 @@ export function headRotationForWorldPoint(
   playerPosition: Vec3,
   playerRotation: Quat,
   target: Vec3,
-  eyeHeight = 1.6,
+  eyeHeight = PLAYER_EYE_HEIGHT_WORLD,
 ): Quat {
   const worldLook = lookQuat([
     target[0] - playerPosition[0],

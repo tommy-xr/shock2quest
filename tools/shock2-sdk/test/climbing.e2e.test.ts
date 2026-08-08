@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 import type { EntitySummary } from "../src/index.js";
 
 // End-to-end test for flat (desktop-style) ladder climbing.
@@ -265,7 +265,7 @@ test(
     // room using only ordinary locomotion.
     await game.input.lookAtWorldPoint([
       stable.x,
-      stable.y + 1.6,
+      stable.y + PLAYER_EYE_HEIGHT_WORLD,
       ladder.z + 4,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -282,7 +282,7 @@ test(
 
     await game.input.lookAtWorldPoint([
       deckSide.x + 8,
-      deckSide.y + 1.6,
+      deckSide.y + PLAYER_EYE_HEIGHT_WORLD,
       deckSide.z,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);

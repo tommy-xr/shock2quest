@@ -1,3 +1,4 @@
+import { PLAYER_EYE_HEIGHT_WORLD } from "../../src/index.js";
 import type { GameServer } from "../../src/index.js";
 import type { EntitySummary } from "../../src/types.js";
 
@@ -12,15 +13,15 @@ export interface EarthWorldUseStaging {
 
 const DEFAULT_STAGING: EarthWorldUseStaging = {
   horizontalOffset: 0.1,
-  verticalOffset: -1.6,
+  // Stage the body so the CAMERA lands level with the item.
+  verticalOffset: -PLAYER_EYE_HEIGHT_WORLD,
   // Ignored unless `pitchDeg` is given explicitly - the aim is computed from the
   // measured camera position instead. See below.
   pitchDeg: undefined,
 };
 
-/** Eye height above the player's body position, in world units:
- * `PLAYER_EYE_HEIGHT` (4.0) divided by `dark::SCALE_FACTOR` (2.5). */
-const EYE_HEIGHT = 1.6;
+/** Eye height above the player's body position, in world units. */
+const EYE_HEIGHT = PLAYER_EYE_HEIGHT_WORLD;
 
 /**
  * Aim at and world-use an authored entity through the normal flat crosshair

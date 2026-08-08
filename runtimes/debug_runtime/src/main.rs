@@ -2015,7 +2015,9 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
                     .as_ref()
                     .map(|s| s.life_state.clone())
                     .unwrap_or_else(|| "alive".to_owned()),
-                camera_offset: [0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0],
+                // The LIVE eye height, not the standing constant: automation
+                // aims from this, and a crouched player's camera is lower.
+                camera_offset: [0.0, game.player_eye_height() / SCALE_FACTOR, 0.0],
                 camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
                 wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
                 right_hand_entity_id: state.as_ref().and_then(|s| s.right_hand_entity_id),

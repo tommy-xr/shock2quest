@@ -2848,7 +2848,10 @@ impl MissionCore {
     /// frozen mid-air.
     fn throw_entity_into_world(&mut self, entity_id: EntityId) {
         /// How far ahead of the camera the item materializes (world units).
-        const THROW_SPAWN_DISTANCE: f32 = 0.5;
+        /// The eye sits on the standing capsule's axis, so this must clear the
+        /// capsule's radius or a downward throw spawns the item inside the
+        /// player's own collider and gets ejected.
+        const THROW_SPAWN_DISTANCE: f32 = crate::physics::PLAYER_STANDING_RADIUS_WORLD + 0.2;
         /// Launch speed along the view ray (world units/sec).
         const THROW_SPEED: f32 = 6.0;
 
