@@ -411,7 +411,7 @@ fn wav_duration(bytes: &[u8]) -> Option<std::time::Duration> {
             data_len = Some(size.min(bytes.len().saturating_sub(body)));
         }
         // Chunks are word-aligned.
-        offset = body + size + (size & 1);
+        offset = body.saturating_add(size).saturating_add(size & 1);
     }
 
     match (avg_bytes_per_sec, data_len) {
@@ -439,13 +439,14 @@ pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-) {
+) -> Vec<u64> {
     let position = (context.last_left_ear_position + context.last_right_ear_position) / 2.0;
 
     let id = handle.id;
-    let sink = play_audio_core(context, position, handle, maybe_channel, audio_clip);
+    let (sink, preempted) = play_audio_core(context, position, handle, maybe_channel, audio_clip);
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
+    preempted
 }
 
 pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
@@ -454,14 +455,16 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-) {
+) -> Vec<u64> {
     let id = handle.id;
     let scaled_position = position / SOUND_SCALE_FACTOR;
-    let sink = play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
+    let (sink, preempted) =
+        play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
 
     context
         .handle_to_sink
         .insert(id, SinkAdapter::positional(sink));
+    preempted
 }
 
 pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
@@ -470,15 +473,22 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-) -> SpatialSink {
+) -> (SpatialSink, Vec<u64>) {
+    // Handles whose playback this play cuts short. Reported back so callers
+    // (the audio log) can mark them stopped - these preemptions never go
+    // through `stop_audio`.
+    let mut preempted = Vec::new();
+
     if let Some(channel) = maybe_channel {
         let maybe_previous_audio = context.channel_to_last_handle.get(&channel.name);
         if let Some(audio) = maybe_previous_audio {
-            let maybe_sink = context.handle_to_sink.remove(audio);
+            let previous_id = *audio;
+            let maybe_sink = context.handle_to_sink.remove(&previous_id);
 
             if let Some(sink) = maybe_sink {
                 if !sink.empty() {
                     sink.stop();
+                    preempted.push(previous_id);
                 }
             }
         }
@@ -491,6 +501,7 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     if let Some(current_channel) = context.handle_to_sink.get(&handle.id) {
         if !current_channel.empty() {
             current_channel.stop();
+            preempted.push(handle.id);
         }
     }
 
@@ -513,7 +524,7 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     audio_clip.add_to_spatial_sink(&sink);
 
     //context.handle_to_sink.insert(handle.id, sink);
-    sink
+    (sink, preempted)
 
     //context.spatial_sinks.push(sink);
 }

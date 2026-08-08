@@ -1,11 +1,15 @@
-//! Ring buffer of recently *delivered* script messages, so headless tooling
+//! Ring buffer of recently *dispatched* script messages, so headless tooling
 //! (the debug runtime's `GET /v1/messages/recent`) can see what actually drove
 //! script behavior on a given frame - e.g. which entities got a `TurnOn`
 //! immediately before a burst of audio.
 //!
 //! Modeled on [`crate::audio_log`]: a process-global ring buffer, written from
-//! the single delivery point in `ScriptWorld::update`, read straight out of
-//! the static by the HTTP handler (no game-loop round trip).
+//! the message-dispatch points in `ScriptWorld::update`, read straight out of
+//! the static by the HTTP handler (no game-loop round trip). An entry means
+//! the message was dispatched to the entity - an entity with no script for it
+//! is still traced, which is usually what you want to see when debugging a
+//! chain that went nowhere. The buffer is never cleared, so it can span a
+//! level transition; `template_id` is the only identity that survives one.
 //!
 //! **Filtering.** Per-frame, high-frequency payloads are dropped so the buffer
 //! holds useful history instead of one second of churn: `Hover`, `GUIHover`,
@@ -21,20 +25,19 @@ use std::sync::Mutex;
 use serde::Serialize;
 use shipyard::{EntityId, World};
 
+use crate::audio_log::frame_of;
 use crate::scripts::MessagePayload;
 use crate::util::entity_ident;
 
 const MAX_ENTRIES: usize = 256;
 
-/// The debug runtime steps at a fixed 60 Hz.
-const FRAMES_PER_SECOND: f64 = 60.0;
-
 /// Identity of a message endpoint. `entity_id` is only meaningful within one
-/// run; `template_id` is the stable handle across launches.
+/// run (and matches the id space of the debug runtime's entity endpoints);
+/// `template_id` is the stable handle across launches.
 #[derive(Clone, Debug, Serialize)]
 pub struct MessageEntity {
     pub name: String,
-    pub entity_id: u64,
+    pub entity_id: i32,
     pub template_id: Option<i32>,
 }
 
@@ -95,12 +98,12 @@ fn describe(world: &World, id: EntityId) -> MessageEntity {
     let (name, template_id) = entity_ident(world, id);
     MessageEntity {
         name,
-        entity_id: id.inner(),
+        entity_id: id.inner() as i32,
         template_id,
     }
 }
 
-/// Record one delivered script message. Filtered payloads are ignored.
+/// Record one dispatched script message. Filtered payloads are ignored.
 pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &MessagePayload) {
     if !is_traced(payload) {
         return;
@@ -109,7 +112,7 @@ pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &Messa
     let mut entry = TracedMessage {
         sequence: 0,
         sim_time,
-        frame: (sim_time * FRAMES_PER_SECOND).round().max(0.0) as u64,
+        frame: frame_of(sim_time),
         to: describe(world, to),
         payload: payload_name(payload),
         from: sender_of(payload).map(|from| describe(world, from)),
@@ -125,7 +128,7 @@ pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &Messa
     }
 }
 
-/// The most recently delivered messages, oldest first.
+/// The most recently dispatched messages, oldest first.
 pub fn recent() -> Vec<TracedMessage> {
     RECENT.lock().unwrap().1.iter().cloned().collect()
 }

@@ -11,10 +11,14 @@
 //!
 //! `still_playing` is derived at *query* time from simulation time
 //! (`sim_time + duration_secs > now`, and not explicitly stopped) rather than
-//! from live rodio sink state: rodio plays on its own thread against the wall
-//! clock, so sink state is nondeterministic when the debug runtime steps
-//! frames faster (or slower) than real time. Entries whose duration is unknown
-//! report `still_playing: false`.
+//! from live rodio sink state (`engine::audio::AudioContext`'s
+//! `handle_to_sink`, which it retains while `!sink.empty()`): rodio plays on
+//! its own thread against the wall clock, so that state is nondeterministic
+//! when the debug runtime steps frames faster (or slower) than real time.
+//! Entries whose duration is unknown report `still_playing: false`, and a
+//! looping sound's duration is one iteration, so it can read as finished while
+//! still audible. The buffer is process-global and never cleared, so it can
+//! span a level transition; `sim_time` stays monotonic across one.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -27,7 +31,7 @@ const MAX_ENTRIES: usize = 64;
 
 /// The debug runtime steps at a fixed 60 Hz, so a frame number is a faithful
 /// index into a stepped session.
-const FRAMES_PER_SECOND: f64 = 60.0;
+pub(crate) const FRAMES_PER_SECOND: f64 = 60.0;
 
 /// Stable identity of the entity that caused a sound. Runtime entity ids
 /// differ every launch, so callers get the symbolic name and template id.
@@ -84,11 +88,13 @@ pub fn set_sim_time(total_secs: f64) {
 }
 
 /// The most recently published simulation time, in seconds.
-pub fn sim_time() -> f64 {
+fn sim_time() -> f64 {
     f64::from_bits(SIM_TIME_BITS.load(Ordering::Relaxed))
 }
 
-fn frame_of(sim_time: f64) -> u64 {
+/// `sim_time` expressed in fixed 60 Hz frames. Shared with
+/// [`crate::message_trace`], which stamps its entries the same way.
+pub(crate) fn frame_of(sim_time: f64) -> u64 {
     (sim_time * FRAMES_PER_SECOND).round().max(0.0) as u64
 }
 
@@ -116,6 +122,15 @@ pub fn record(record: SoundRecord) {
     }
 }
 
+/// Mark several handles stopped at once - used for the plays a new play
+/// preempts (a single-slot channel, or a reused handle), which never reach
+/// `Effect::StopSound`.
+pub fn record_stops(handles: &[u64]) {
+    for handle in handles {
+        record_stop(*handle);
+    }
+}
+
 /// Mark the most recent (not yet stopped) play of `handle` as stopped, so
 /// `still_playing` stops reporting it even though its duration has not elapsed.
 pub fn record_stop(handle: u64) {
@@ -131,6 +146,15 @@ pub fn record_stop(handle: u64) {
     }
 }
 
+/// Whether an entry is still audible at simulation time `now`: it has a known
+/// duration that has not elapsed, and nothing stopped it early.
+fn resolve_still_playing(entry: &PlayedSound, now: f64) -> bool {
+    entry.stopped_at_sim_time.is_none()
+        && entry
+            .duration_secs
+            .is_some_and(|duration| entry.sim_time + duration > now)
+}
+
 /// The most recent played sounds, oldest first, with `still_playing` resolved
 /// against the current simulation time.
 pub fn recent() -> Vec<PlayedSound> {
@@ -142,10 +166,7 @@ pub fn recent() -> Vec<PlayedSound> {
         .iter()
         .cloned()
         .map(|mut entry| {
-            entry.still_playing = entry.stopped_at_sim_time.is_none()
-                && entry
-                    .duration_secs
-                    .is_some_and(|duration| entry.sim_time + duration > now);
+            entry.still_playing = resolve_still_playing(&entry, now);
             entry
         })
         .collect()
@@ -155,52 +176,67 @@ pub fn recent() -> Vec<PlayedSound> {
 mod tests {
     use super::*;
 
-    /// The buffer is process-global, so tests share it; they assert on their
-    /// own freshly-recorded entries (by handle) rather than on the whole log.
+    fn entry(sim_time: f64, duration_secs: Option<f64>) -> PlayedSound {
+        PlayedSound {
+            sequence: 1,
+            sim_time,
+            frame: frame_of(sim_time),
+            sample: "test".to_owned(),
+            tags: vec![],
+            position: [0.0, 0.0, 0.0],
+            duration_secs,
+            source_entity: None,
+            handle: Some(1),
+            stopped_at_sim_time: None,
+            still_playing: false,
+        }
+    }
+
+    // Deliberately pure: the ring buffer and the simulation clock are
+    // process-global, so the derivation is tested without touching either.
     #[test]
-    fn still_playing_tracks_duration_and_stop() {
-        set_sim_time(10.0);
-        record(SoundRecord {
-            sample: "test_long",
-            tags: vec![],
-            position: [0.0, 0.0, 0.0],
-            duration: Some(Duration::from_secs(5)),
-            source_entity: None,
-            handle: Some(9_000_001),
-        });
-        record(SoundRecord {
-            sample: "test_unknown",
-            tags: vec![],
-            position: [0.0, 0.0, 0.0],
-            duration: None,
-            source_entity: None,
-            handle: Some(9_000_002),
-        });
+    fn a_clip_plays_until_its_duration_elapses() {
+        let sound = entry(10.0, Some(5.0));
+        assert_eq!(sound.frame, 600);
+        assert!(resolve_still_playing(&sound, 14.9));
+        assert!(!resolve_still_playing(&sound, 15.0));
+    }
 
-        let find = |handle: u64| {
-            recent()
-                .into_iter()
-                .find(|entry| entry.handle == Some(handle))
-                .expect("entry recorded")
-        };
+    #[test]
+    fn an_unknown_duration_never_reports_playing() {
+        assert!(!resolve_still_playing(&entry(10.0, None), 10.1));
+    }
 
-        let long = find(9_000_001);
-        assert_eq!(long.frame, 600);
-        assert_eq!(long.duration_secs, Some(5.0));
-        assert!(long.still_playing);
-        // Unknown duration is reported as not playing.
-        assert!(!find(9_000_002).still_playing);
+    #[test]
+    fn a_stop_retires_a_clip_mid_duration() {
+        let mut sound = entry(10.0, Some(5.0));
+        sound.stopped_at_sim_time = Some(11.0);
+        assert!(!resolve_still_playing(&sound, 11.5));
+    }
 
-        // Past the clip's end, it is no longer playing.
-        set_sim_time(16.0);
-        assert!(!find(9_000_001).still_playing);
+    #[test]
+    fn record_stop_marks_the_latest_unstopped_play_of_a_handle() {
+        // A handle unique to this test - the buffer is process-global.
+        let handle = 9_000_017;
+        set_sim_time(3.0);
+        for _ in 0..2 {
+            record(SoundRecord {
+                sample: "test",
+                tags: vec![],
+                position: [0.0, 0.0, 0.0],
+                duration: Some(Duration::from_secs(5)),
+                source_entity: None,
+                handle: Some(handle),
+            });
+        }
+        record_stop(handle);
 
-        // A stop cuts it short even mid-duration.
-        set_sim_time(11.0);
-        assert!(find(9_000_001).still_playing);
-        record_stop(9_000_001);
-        let stopped = find(9_000_001);
-        assert_eq!(stopped.stopped_at_sim_time, Some(11.0));
-        assert!(!stopped.still_playing);
+        let mine: Vec<_> = recent()
+            .into_iter()
+            .filter(|entry| entry.handle == Some(handle))
+            .collect();
+        assert_eq!(mine.len(), 2);
+        assert_eq!(mine[0].stopped_at_sim_time, None);
+        assert!(mine[1].stopped_at_sim_time.is_some());
     }
 }

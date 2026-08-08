@@ -4219,14 +4219,17 @@ impl MissionCore {
                             asset_cache.get(&AUDIO_IMPORTER, &format!("{email_file}.wav"));
                         let duration = audio_clip.total_duration();
                         let handle = AudioHandle::new();
-                        engine::audio::play_audio(
+                        let preempted = engine::audio::play_audio(
                             audio_context,
                             handle.clone(),
                             Some(AudioChannel::new("email".to_owned())),
                             audio_clip,
                         );
                         // Observability: record the email so the headless e2e
-                        // can assert it played (and only once).
+                        // can assert it played (and only once). Anything this
+                        // play cut short (the email channel is single-slot) is
+                        // marked stopped first, so `still_playing` stays honest.
+                        crate::audio_log::record_stops(&preempted);
                         crate::audio_log::record(crate::audio_log::SoundRecord {
                             sample: &email_file,
                             tags: vec![("kind".to_string(), "email".to_string())],
@@ -4252,10 +4255,12 @@ impl MissionCore {
                         info!("Playing clip: {} handle: {:?}", name, &handle);
                         let duration = audio_clip.total_duration();
                         let handle_id = handle.id();
-                        engine::audio::play_audio(audio_context, handle, None, audio_clip);
+                        let preempted =
+                            engine::audio::play_audio(audio_context, handle, None, audio_clip);
                         // Observability: record scripted one-shot sounds (audio
                         // logs, keypad beeps, ...) so headless tooling can assert
                         // a schema actually resolved and played.
+                        crate::audio_log::record_stops(&preempted);
                         crate::audio_log::record(crate::audio_log::SoundRecord {
                             sample: &audio_file,
                             tags: vec![("kind".to_string(), "sound".to_string())],
@@ -4287,17 +4292,18 @@ impl MissionCore {
                             let duration = audio_clip.total_duration();
                             let handle_id = handle.id();
                             let maybe_position = get_entity_position(&self.world, entity_id);
-                            if let Some(position) = maybe_position {
+                            let preempted = if let Some(position) = maybe_position {
                                 engine::audio::play_spatial_audio(
                                     audio_context,
                                     position,
                                     handle,
                                     None,
                                     audio_clip,
-                                );
+                                )
                             } else {
-                                engine::audio::play_audio(audio_context, handle, None, audio_clip);
-                            }
+                                engine::audio::play_audio(audio_context, handle, None, audio_clip)
+                            };
+                            crate::audio_log::record_stops(&preempted);
                             // Observability: speech is the loudest source of
                             // overlapping audio, so trace it like the rest.
                             let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
@@ -6346,15 +6352,24 @@ fn play_environmental_sound(
         );
         // Log the resolved play so headless tooling (debug runtime
         // /v1/audio/recent) can assert a schema actually played.
+        let duration = audio_clip.total_duration();
+        let handle_id = audio_handle.id();
+        let preempted = engine::audio::play_spatial_audio(
+            audio_context,
+            position,
+            audio_handle,
+            None,
+            audio_clip,
+        );
+        crate::audio_log::record_stops(&preempted);
         crate::audio_log::record(crate::audio_log::SoundRecord {
             sample: &audio_file,
             tags: query.tag_values(),
             position: [position.x, position.y, position.z],
-            duration: audio_clip.total_duration(),
+            duration,
             source_entity: None,
-            handle: Some(audio_handle.id()),
+            handle: Some(handle_id),
         });
-        engine::audio::play_spatial_audio(audio_context, position, audio_handle, None, audio_clip);
     }
 }
 

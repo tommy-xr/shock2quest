@@ -5,8 +5,11 @@ import { GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-// Stable earth.mis mission-object id of a Sound Trap (S$TrapSound). Runtime
-// entity ids are rediscovered every launch and must never be hardcoded.
+// Stable earth.mis mission-object id of a Sound Trap (S$TrapSound). Entity
+// instantiation stores the positive mission-object id as PropTemplateId, so it
+// is both what `entities.byTemplate` matches and what the diagnostics report as
+// `template_id`. (dark_query prints the gamesys template, -1247, for the same
+// object.) Runtime entity ids are rediscovered every launch, never hardcoded.
 const SOUND_TRAP_OBJ = 449;
 
 test(
@@ -47,11 +50,16 @@ test(
     // ...and the resulting play must be in the audio log, with the timing and
     // provenance the diagnostics added.
     const played = (await game.audio.recent()).sounds.filter(
-      (sound) => sound.sequence > lastAudioSequence,
+      (sound) =>
+        sound.sequence > lastAudioSequence &&
+        sound.source_entity?.template_id === SOUND_TRAP_OBJ,
     );
-    assert.equal(played.length, 1, `expected exactly one new play; got ${JSON.stringify(played)}`);
+    assert.equal(
+      played.length,
+      1,
+      `expected exactly one new sound-trap play; got ${JSON.stringify(played)}`,
+    );
     const sound = played[0];
-    assert.equal(sound.source_entity?.template_id, SOUND_TRAP_OBJ);
     assert.ok(sound.handle !== null, "plays carry their audio handle");
     assert.ok(
       sound.duration_secs !== null && sound.duration_secs > 1,
@@ -67,13 +75,25 @@ test(
     const afterEnd = (await game.audio.recent()).sounds.find(
       (entry) => entry.sequence === sound.sequence,
     );
-    assert.equal(afterEnd?.still_playing, false, "the clip must retire once its duration elapsed");
+    // The 64-entry ring may have evicted it while the mission ran; eviction is
+    // not a failure, reporting it as still playing is.
+    assert.notEqual(
+      afterEnd?.still_playing,
+      true,
+      "the clip must retire once its duration elapsed",
+    );
 
     // A TurnOff stops the trap: a fresh play is marked stopped even though its
     // duration has not elapsed.
+    const beforeRestart = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     await game.entities.sendMessage(trap.id, { type: "TurnOn" });
     await game.step({ frames: 5 });
-    const restarted = (await game.audio.recent()).sounds.at(-1)!;
+    const restarted = (await game.audio.recent()).sounds.find(
+      (entry) =>
+        entry.sequence > beforeRestart &&
+        entry.source_entity?.template_id === SOUND_TRAP_OBJ,
+    )!;
+    assert.ok(restarted, "the trap must play again on a second TurnOn");
     assert.equal(restarted.still_playing, true);
 
     await game.entities.sendMessage(trap.id, { type: "TurnOff" });

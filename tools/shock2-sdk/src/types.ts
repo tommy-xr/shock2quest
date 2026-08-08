@@ -665,7 +665,10 @@ export interface RecentAudioResult {
 /** A message endpoint in the script message trace. */
 export interface TracedMessageEntity {
   name: string;
-  /** Only meaningful within one run - ids are reassigned every launch. */
+  /**
+   * Matches the id space of the entity endpoints, but is only meaningful
+   * within one run - ids are reassigned every launch.
+   */
   entity_id: number;
   template_id: number | null;
 }
