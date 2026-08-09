@@ -1796,12 +1796,46 @@ fn plan_climb_top_out(
     }
     let lip_exit_allowance = CLIMB_TOP_OUT_LOCAL_LIP_EXIT_ALLOWANCE
         + ladder_exit_geometry.map_or(0.0, |(_, _, thickness)| thickness);
-    let down_ray = Ray::new(Point::from(probe_ahead), -Vector::y());
-    let mantle_hit = probe_queries
-        .cast_ray_and_get_normal(&down_ray, CLIMB_TOP_OUT_MAX_DROP, true)
-        .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
+    // Prefer Dark's fixed two-radius mantle probe, but authored ladder wells
+    // can be deeper than that while the grip-derived exit distance already
+    // reaches the adjacent floor. Sample that bounded route endpoint as a
+    // fallback; the complete compressed route and final standing pose remain
+    // validated against all colliders below.
+    let mantle_probe = |origin| {
+        let down_ray = Ray::new(Point::from(origin), -Vector::y());
+        probe_queries
+            .cast_ray_and_get_normal(&down_ray, CLIMB_TOP_OUT_MAX_DROP, true)
+            .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+            .map(|(handle, landing)| (origin, handle, landing))
+    };
+    let fixed_mantle_hit = mantle_probe(probe_ahead);
+    let route_mantle_hit = fixed_mantle_hit
+        .is_none()
+        .then(|| mantle_probe(route_ahead))
+        .flatten();
+    let same_mantle_slab = match (up_hit, route_mantle_hit) {
+        (Some((up_handle, up)), Some((origin, floor_handle, floor)))
+            if up_handle == floor_handle
+                && (origin - probe_ahead).norm() > CLIMB_TOP_OUT_RECOVERY_RETREAT =>
+        {
+            let underside_y = head.y + up.time_of_impact;
+            let floor_y = origin.y - floor.time_of_impact;
+            up.normal.y < -CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+                && floor_y + 1.0e-4 >= underside_y
+                && floor_y - underside_y
+                    <= CLIMB_TOP_OUT_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
+        }
+        _ => false,
+    };
+    let mantle_hit = fixed_mantle_hit.or_else(|| {
+        if same_mantle_slab {
+            route_mantle_hit
+        } else {
+            None
+        }
+    });
     let mantle_floor =
-        mantle_hit.map(|(_, landing)| probe_ahead - Vector::y() * landing.time_of_impact);
+        mantle_hit.map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
     if up_obstruction.is_some_and(|(_, obstruction_y)| {
         // A lip can have a thin underside above its adjacent landing. Treat
         // surfaces within one compressed radius plus the solver gap on both
@@ -1882,7 +1916,7 @@ fn plan_climb_top_out(
     let lip_forward_end = cross_end + direction * lip_exit_allowance;
     let mantle_feature = ladder_exit_hit
         .map(|(handle, hit)| (handle, hit.feature))
-        .or_else(|| mantle_hit.map(|(handle, hit)| (handle, hit.feature)));
+        .or_else(|| mantle_hit.map(|(_, handle, hit)| (handle, hit.feature)));
     let mantle_point = ladder_exit_hit
         .map(|(_, hit)| raised + direction * hit.time_of_impact)
         .unwrap_or_else(|| mantle_floor.unwrap_or(probe_ahead));
@@ -1900,7 +1934,7 @@ fn plan_climb_top_out(
         &lip_corridor,
         ladder_exit_hit.is_some(),
     );
-    if ladder_exit_hit.is_some() {
+    if ladder_exit_hit.is_some() || same_mantle_slab {
         let up_feature = up_hit.map(|(handle, hit)| (handle, hit.feature));
         let up_point = up_hit
             .map(|(_, hit)| head + Vector::y() * hit.time_of_impact)
@@ -1913,6 +1947,8 @@ fn plan_climb_top_out(
                 lip_patch.faces.extend(up_patch.faces);
             }
         }
+    }
+    if ladder_exit_hit.is_some() {
         let far_feature = ladder_far_hit.map(|(handle, hit)| (handle, hit.feature));
         let far_point = ladder_far_hit
             .map(|(_, hit)| route_ahead - direction * hit.time_of_impact)
@@ -2251,10 +2287,21 @@ fn plan_climb_top_out(
             .map(|(_, validated)| validated)
     })
     .flatten();
-    let forward_landing = direct_with_egress
-        .or(deep_with_egress.flatten())
-        .or(direct_fallback)
-        .or(deep_fallback);
+    let forward_landing = if same_mantle_slab {
+        // Once the upward and downward samples identify opposite faces of the
+        // same slab, a direct supported pose on its top is the authored exit.
+        // Do not carry the player across that landing and down a later opening
+        // merely because the lower floor offers a longer egress stride.
+        direct_with_egress
+            .or(direct_fallback)
+            .or(deep_with_egress.flatten())
+            .or(deep_fallback)
+    } else {
+        direct_with_egress
+            .or(deep_with_egress.flatten())
+            .or(direct_fallback)
+            .or(deep_fallback)
+    };
     // Prefer the held-direction result unless it needs more lateral steering
     // than the straight approach-side route. This preserves ordinary forward
     // top-outs and uses the recessed-floor alternative only when it avoids a
