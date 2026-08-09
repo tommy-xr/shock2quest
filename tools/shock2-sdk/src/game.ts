@@ -720,6 +720,9 @@ export class Game {
    * separators - e.g. "frontier"). Persists the active mission, player
    * position/rotation, quest bits, and held items. The save survives across
    * runtime relaunches, so a later `load(file)` in a fresh session resumes it.
+   * Rejects with HTTP 409 while the live player is dead, unsupported/falling,
+   * or in transient locomotion that cannot be represented safely. That JSON
+   * error body includes `error_code`, `reason`, and the exact `player_pose`.
    */
   async save(file: string): Promise<SaveLoadResult> {
     return this.client.post<SaveLoadResult>("/v1/save", { file });

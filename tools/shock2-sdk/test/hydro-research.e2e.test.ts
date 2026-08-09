@@ -132,6 +132,7 @@ test(
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8233),
     });
     await game.step({ frames: 5 });
+    const supportedSavePosition = await game.player.position();
 
     // Loot two authored Hydro 2 vials, then prove Hydro 2's real regulator
     // refuses them while their Dark object state is still Unresearched.
@@ -236,7 +237,11 @@ test(
     );
 
     // Save/load while paused at a chemical gate, then reopen the carried item:
-    // active partial progress and the pending chemical must survive.
+    // active partial progress and the pending chemical must survive. The
+    // interaction helpers intentionally stage beside data-authored objects,
+    // including spots outside playable cell geometry; return to the supported
+    // mission spawn before exercising the production save guard.
+    await game.player.teleport(supportedSavePosition);
     assert.equal((await game.save(saveName)).success, true);
     assert.equal((await game.load(saveName)).success, true);
     await game.step({ frames: 5 });

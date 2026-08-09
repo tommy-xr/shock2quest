@@ -481,6 +481,16 @@ export interface SaveLoadResult {
   /** Active scene after the operation, e.g. "medsci1.mis". */
   mission: string;
   message: string;
+  /** Stable machine-readable failure code; absent on success. */
+  error_code?: string;
+  /** Human-readable failure reason; absent on success. */
+  reason?: string;
+  /** Exact live player pose when save safety refused the request. */
+  player_pose?: {
+    position: Vec3;
+    rotation: Quat;
+    is_crouched: boolean;
+  };
 }
 
 /** The 3-state value of a quest bit (objective flag). */

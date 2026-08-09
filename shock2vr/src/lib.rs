@@ -458,6 +458,32 @@ pub struct PlayerStateSnapshot {
     pub explored_map_locations: Vec<i32>,
 }
 
+/// Live player pose attached to a save refusal so automation can diagnose and
+/// recover from the exact state that could not be persisted.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SavePlayerPose {
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub is_crouched: bool,
+}
+
+/// A save failure with a stable machine-readable code and, for unsafe player
+/// state, the live pose that was refused.
+#[derive(Clone, Debug)]
+pub struct SaveGameError {
+    pub error_code: &'static str,
+    pub reason: String,
+    pub player_pose: Option<SavePlayerPose>,
+}
+
+impl std::fmt::Display for SaveGameError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Unable to save: {}", self.reason)
+    }
+}
+
+impl std::error::Error for SaveGameError {}
+
 impl Game {
     /// True while a deferred level transition (`--experimental loading_screen`)
     /// is in flight. `update` is what advances it (`pending_transition.frames_shown`
@@ -820,7 +846,7 @@ impl Game {
     /// exact current/maximum player vitals.
     /// Returns the scene name that was saved so the caller can report it, or
     /// an error when transient locomotion has no collision-valid standing pose.
-    pub fn save_game(&mut self, file: String) -> Result<String, String> {
+    pub fn save_game(&mut self, file: String) -> Result<String, SaveGameError> {
         let path = save_file_path(&file);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1191,13 +1217,8 @@ impl Game {
         }
     }
 
-    fn save_to_file(&self, file_name: String) -> Result<(), String> {
-        let Some(save_data) = self.build_save_data() else {
-            return Err(format!(
-                "Unable to save '{}': no collision-valid standing player pose is currently available",
-                file_name
-            ));
-        };
+    fn save_to_file(&self, file_name: String) -> Result<(), SaveGameError> {
+        let save_data = self.build_save_data()?;
         // Saves live in `<data_root>/saves`, which may not exist yet on a fresh
         // install - a quicksave must create it rather than fail (and a failure
         // must not take the game down).
@@ -1206,15 +1227,22 @@ impl Game {
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("Unable to create '{}': {}", parent.display(), error))?;
+            std::fs::create_dir_all(parent).map_err(|error| SaveGameError {
+                error_code: "save_io_error",
+                reason: format!("unable to create '{}': {}", parent.display(), error),
+                player_pose: None,
+            })?;
         }
         let mut zip_file = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(path)
-            .map_err(|error| format!("Unable to save '{}': {}", file_name, error))?;
+            .map_err(|error| SaveGameError {
+                error_code: "save_io_error",
+                reason: format!("unable to write '{}': {}", file_name, error),
+                player_pose: None,
+            })?;
         save_data.write(&mut zip_file);
         Ok(())
     }
@@ -1261,10 +1289,21 @@ impl Game {
     /// Player transform with the center normalized to a collision-valid
     /// standing pose. Both persistent saves and debug reloads recreate a
     /// standing capsule, so neither may use a transient compressed mantle pose.
-    /// `None` defers the operation when a live blocker has occupied the
+    /// An error defers the operation when a live blocker has occupied the
     /// mantle's cached recovery pose.
-    fn player_standing_transform(&self) -> Option<(Vector3<f32>, Quaternion<f32>)> {
-        let safe_position = self.active_game_scene.player_save_position()?;
+    fn player_standing_transform(&self) -> Result<(Vector3<f32>, Quaternion<f32>), SaveGameError> {
+        let safe_position = self
+            .active_game_scene
+            .player_save_position()
+            .map_err(|error| SaveGameError {
+                error_code: error.code(),
+                reason: error.reason().to_owned(),
+                player_pose: self.player_state().map(|state| SavePlayerPose {
+                    position: state.position,
+                    rotation: state.rotation,
+                    is_crouched: self.active_game_scene.player_is_crouched(),
+                }),
+            })?;
         let (position, rotation) = {
             let player_info = self
                 .active_game_scene
@@ -1278,10 +1317,10 @@ impl Game {
         } else {
             position
         };
-        Some((position, rotation))
+        Ok((position, rotation))
     }
 
-    fn build_save_data(&self) -> Option<SaveData> {
+    fn build_save_data(&self) -> Result<SaveData, SaveGameError> {
         let mut level_data = self.mission_to_save_data.clone();
 
         let (save_data, held_items) = save_load::to_save_data_with_scripts(
@@ -1311,7 +1350,7 @@ impl Game {
             is_crouched,
         };
 
-        Some(SaveData {
+        Ok(SaveData {
             global_data,
             level_data,
         })
@@ -1357,11 +1396,12 @@ impl Game {
                 }
             }
             GlobalEffect::TestReload => {
-                let Some((position, rotation)) = self.player_standing_transform() else {
-                    warn!(
-                        "Unable to reload level: no collision-valid standing player pose is currently available"
-                    );
-                    return;
+                let (position, rotation) = match self.player_standing_transform() {
+                    Ok(transform) => transform,
+                    Err(error) => {
+                        warn!("Unable to reload level: {}", error.reason);
+                        return;
+                    }
                 };
                 let level_name = self.active_game_scene.scene_name().to_string();
                 let spawn_loc = SpawnLocation::PositionRotation(position, rotation);

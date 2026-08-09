@@ -17,6 +17,44 @@ use crate::{
     time::Time,
 };
 
+/// Why the player's current state cannot be represented by a durable save.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlayerSavePoseError {
+    NoPlayer,
+    PlayerNotAlive,
+    TransientSlopeMotion,
+    BlockedRecoveryPose,
+    UnsupportedPose,
+}
+
+impl PlayerSavePoseError {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::NoPlayer => "no_player_pose",
+            Self::PlayerNotAlive => "player_not_alive",
+            Self::TransientSlopeMotion => "transient_player_motion",
+            Self::BlockedRecoveryPose => "blocked_recovery_pose",
+            Self::UnsupportedPose => "unsupported_player_pose",
+        }
+    }
+
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Self::NoPlayer => "the active scene has no player pose",
+            Self::PlayerNotAlive => "the player is not alive",
+            Self::TransientSlopeMotion => {
+                "the player is still carrying transient slope displacement"
+            }
+            Self::BlockedRecoveryPose => {
+                "the player's last collision-valid recovery pose is blocked"
+            }
+            Self::UnsupportedPose => {
+                "the player pose has no walkable support and is outside the authored level cells"
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AmbientAudioState {
     pub player_position: Vector3<f32>,
@@ -98,10 +136,11 @@ pub trait GameScene {
         false
     }
 
-    /// Collision-valid standing position to serialize for the player. Mission
-    /// scenes override this while transient locomotion compresses the collider.
-    fn player_save_position(&self) -> Option<Vector3<f32>> {
-        None
+    /// Collision-valid, supported position to serialize for the player.
+    /// Mission scenes return a specific refusal reason while transient
+    /// locomotion, death, or unsupported space makes a durable save unsafe.
+    fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
+        Err(PlayerSavePoseError::NoPlayer)
     }
 
     /// Get lighting information for VR enhancement

@@ -355,7 +355,9 @@ async fn start_http_server(
     info!("  POST /v1/player/teleport  - Teleport player to coordinates (raw, unbounded)");
     info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
     info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
-    info!("  POST /v1/save             - Save the game to a named file {{file}}");
+    info!(
+        "  POST /v1/save             - Save {{file}}; 409 JSON reports reason + player_pose when dead, unsupported, or transient"
+    );
     info!(
         "  POST /v1/load             - Load a named save (restores mission/player/quests) {{file}}"
     );
@@ -1032,13 +1034,22 @@ fn process_command(
                     message: format!("Saved '{}' ({})", file, mission),
                     file,
                     mission,
+                    error_code: None,
+                    reason: None,
+                    player_pose: None,
                 },
-                Ok(Err(error)) => commands::SaveLoadResult {
-                    success: false,
-                    message: error,
-                    file,
-                    mission: String::new(),
-                },
+                Ok(Err(error)) => {
+                    let message = error.to_string();
+                    commands::SaveLoadResult {
+                        success: false,
+                        message,
+                        file,
+                        mission: game.scene_name().to_owned(),
+                        error_code: Some(error.error_code.to_owned()),
+                        reason: Some(error.reason),
+                        player_pose: error.player_pose,
+                    }
+                }
                 Err(_) => {
                     tracing::error!("Save of '{}' panicked (caught to keep runtime alive)", file);
                     commands::SaveLoadResult {
@@ -1046,6 +1057,9 @@ fn process_command(
                         message: format!("Failed to save '{}' (see runtime log)", file),
                         file,
                         mission: String::new(),
+                        error_code: Some("save_internal_error".to_owned()),
+                        reason: Some("the save operation failed unexpectedly".to_owned()),
+                        player_pose: None,
                     }
                 }
             };
@@ -1070,6 +1084,9 @@ fn process_command(
                     message: format!("Loaded '{}' ({})", file, mission),
                     file,
                     mission,
+                    error_code: None,
+                    reason: None,
+                    player_pose: None,
                 },
                 Ok(Err(error)) => {
                     tracing::error!("Failed to load '{}': {}", file, error);
@@ -1078,6 +1095,9 @@ fn process_command(
                         message: format!("Failed to load '{}': {}", file, error),
                         file,
                         mission: String::new(),
+                        error_code: None,
+                        reason: None,
+                        player_pose: None,
                     }
                 }
                 Err(_) => {
@@ -1090,6 +1110,9 @@ fn process_command(
                         ),
                         file,
                         mission: String::new(),
+                        error_code: None,
+                        reason: None,
+                        player_pose: None,
                     }
                 }
             };
@@ -2602,35 +2625,92 @@ fn validate_save_name(file: &str) -> Result<String, (StatusCode, String)> {
     Ok(file.to_string())
 }
 
+fn save_error_result(
+    file: String,
+    mission: String,
+    error_code: &str,
+    reason: String,
+) -> commands::SaveLoadResult {
+    commands::SaveLoadResult {
+        success: false,
+        message: format!("Unable to save: {reason}"),
+        file,
+        mission,
+        error_code: Some(error_code.to_owned()),
+        reason: Some(reason),
+        player_pose: None,
+    }
+}
+
 /// HTTP handler for saving the current game to a named file. Persists a
 /// "frontier" save that a later runtime launch can reload to resume - the core
 /// of the automated play-through loop's cross-launch resume.
 async fn save_game(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
     LenientJson(request): LenientJson<SaveLoadRequest>,
-) -> Result<Json<commands::SaveLoadResult>, (StatusCode, String)> {
-    let file = validate_save_name(&request.file)?;
+) -> Result<Json<commands::SaveLoadResult>, (StatusCode, Json<commands::SaveLoadResult>)> {
+    let file = match validate_save_name(&request.file) {
+        Ok(file) => file,
+        Err((status, reason)) => {
+            return Err((
+                status,
+                Json(save_error_result(
+                    request.file,
+                    String::new(),
+                    "invalid_save_name",
+                    reason,
+                )),
+            ));
+        }
+    };
 
     let (reply_tx, reply_rx) = oneshot::channel();
     if command_tx
         .send(RuntimeCommand::SaveGame {
-            file,
+            file: file.clone(),
             reply: reply_tx,
         })
         .is_err()
     {
         tracing::error!("Failed to send SaveGame command - game loop receiver dropped");
-        return Err(game_loop_unavailable());
+        let (status, reason) = game_loop_unavailable();
+        return Err((
+            status,
+            Json(save_error_result(
+                file,
+                String::new(),
+                "game_loop_unavailable",
+                reason,
+            )),
+        ));
     }
 
     match reply_rx.await {
         Ok(result) if result.success => Ok(Json(result)),
-        // The save path unwrapped (I/O error, or a scene without player state);
-        // the game loop caught it and stayed alive, so surface a 500 here.
-        Ok(result) => Err((StatusCode::INTERNAL_SERVER_ERROR, result.message)),
+        Ok(result) => {
+            let internal_error = matches!(
+                result.error_code.as_deref(),
+                Some("save_io_error" | "save_internal_error")
+            );
+            let status = if internal_error {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::CONFLICT
+            };
+            Err((status, Json(result)))
+        }
         Err(_) => {
             tracing::error!("Failed to receive save result - sender dropped");
-            Err(game_loop_unavailable())
+            let (status, reason) = game_loop_unavailable();
+            Err((
+                status,
+                Json(save_error_result(
+                    file,
+                    String::new(),
+                    "game_loop_unavailable",
+                    reason,
+                )),
+            ))
         }
     }
 }

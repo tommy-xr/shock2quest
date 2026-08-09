@@ -264,7 +264,7 @@ impl GameScene for DebugScene {
         self.core.player_is_crouched()
     }
 
-    fn player_save_position(&self) -> Option<Vector3<f32>> {
+    fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
         self.core.player_save_position()
     }
 
@@ -484,7 +484,7 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
         self.core.player_is_crouched()
     }
 
-    fn player_save_position(&self) -> Option<Vector3<f32>> {
+    fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
         self.core.player_save_position()
     }
 
