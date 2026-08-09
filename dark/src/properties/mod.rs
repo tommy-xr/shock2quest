@@ -103,7 +103,7 @@ use std::{
 };
 
 use crate::{SCALE_FACTOR, ss2_common::*};
-use cgmath::{Deg, InnerSpace, Quaternion, Rotation3, Vector3, vec3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rad, Rotation, Rotation3, Vector3, vec3};
 use shipyard::{
     Component, EntityId, Get, IntoIter, IntoWithId, TupleAddComponent, View, ViewMut, World,
 };
@@ -1134,6 +1134,135 @@ pub struct PropTranslatingDoor {
     pub base_location: Vector3<f32>,
 }
 
+/// Optional automatic-close delay for doors, in seconds.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropDoorTimer(pub i32);
+
+/// Dark's `P$RotDoor` (`sRotDoorProp`, version 1001).
+///
+/// A rotating door can also inherit `P$TransDoor` from its door archetype.
+/// Looking Glass's `GetDoorProperty` deliberately preferred RotDoor in that
+/// case; runtime door code must do the same or the inherited zero translating
+/// endpoints can move the object to world origin (#861).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRotatingDoor {
+    pub door_type: i32,
+    /// Authored angle in degrees at the closed endpoint.
+    pub closed: f32,
+    /// Authored angle in degrees at the open endpoint.
+    pub open: f32,
+    /// Angular speed in radians per second (not a world-space distance).
+    pub speed: f32,
+    pub axis: i32,
+    /// Dark's DOOR_STATE: 0=closed, 1=open, 2=closing, 3=opening, 4=halted.
+    pub state: i32,
+    pub clockwise: bool,
+    pub base_closed_location: Vector3<f32>,
+    pub base_open_location: Vector3<f32>,
+    /// Authored base position used to derive the endpoint physics locations.
+    pub base_location: Vector3<f32>,
+    /// Authored base orientation around which the hinge axis is transformed.
+    pub base_rotation: Quaternion<f32>,
+    pub base_closed_rotation: Quaternion<f32>,
+    pub base_open_rotation: Quaternion<f32>,
+    /// Normalized closed-to-open progress, persisted with the property by this
+    /// runtime. The retail payload has no explicit progress field.
+    #[serde(default)]
+    pub progress: f32,
+}
+
+impl PropRotatingDoor {
+    /// Signed opening travel, following Dark's clockwise flag. Rotating doors
+    /// can deliberately take the long way around through the 0/360 seam.
+    pub fn travel_degrees(&self) -> f32 {
+        let mut travel = self.open - self.closed;
+        if travel.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        if self.clockwise {
+            while travel > 0.0 {
+                travel -= 360.0;
+            }
+        } else {
+            while travel < 0.0 {
+                travel += 360.0;
+            }
+        }
+        travel
+    }
+
+    pub fn has_travel(&self) -> bool {
+        self.travel_degrees().abs() > 1e-4
+    }
+
+    pub fn initial_pose(&self) -> (Vector3<f32>, Quaternion<f32>) {
+        match self.state {
+            0 => (self.base_closed_location, self.base_closed_rotation),
+            1 => (self.base_open_location, self.base_open_rotation),
+            _ => (self.base_location, self.base_rotation),
+        }
+    }
+
+    /// Pose the door along the authored hinge arc. Endpoint locations already
+    /// encode Dark's physics center-of-gravity offset. Recovering the fixed
+    /// pivot from those two endpoints keeps the intermediate center on the
+    /// same circular arc without coupling the script to physics internals.
+    pub fn pose_at_progress(&self, progress: f32) -> (Vector3<f32>, Quaternion<f32>) {
+        let progress = progress.clamp(0.0, 1.0);
+        if progress <= f32::EPSILON || !self.has_travel() {
+            return (self.base_closed_location, self.base_closed_rotation);
+        }
+        if (1.0 - progress) <= f32::EPSILON {
+            return (self.base_open_location, self.base_open_rotation);
+        }
+
+        let total_angle = Rad(self.travel_degrees().to_radians());
+        let local_axis = rotating_door_local_axis(self.axis);
+        let world_axis = self.base_rotation.rotate_vector(local_axis).normalize();
+        let displacement = self.base_open_location - self.base_closed_location;
+        let axial = world_axis * displacement.dot(world_axis);
+        let perpendicular = displacement - axial;
+        let alpha = total_angle.0.cos() - 1.0;
+        let beta = total_angle.0.sin();
+        let denominator = alpha * alpha + beta * beta;
+
+        let position = if denominator > 1e-6 {
+            let radius =
+                (perpendicular * alpha - world_axis.cross(perpendicular) * beta) / denominator;
+            let partial = Quaternion::from_axis_angle(world_axis, total_angle * progress);
+            self.base_closed_location + partial.rotate_vector(radius) - radius + axial * progress
+        } else {
+            // Degenerate/full-circle authored motion has no unique pivot from
+            // its coincident endpoints. Preserve endpoints and interpolate the
+            // tiny residual instead of producing an unstable huge radius.
+            self.base_closed_location + displacement * progress
+        };
+        let rotation = Quaternion::from_axis_angle(world_axis, total_angle * progress)
+            * self.base_closed_rotation;
+        (position, rotation.normalize())
+    }
+}
+
+fn rotating_door_local_axis(axis: i32) -> Vector3<f32> {
+    // Dark angle vectors map (x,y,z) to this runtime's (-x,z,y).
+    match axis {
+        0 => vec3(-1.0, 0.0, 0.0),
+        1 => vec3(0.0, 0.0, 1.0),
+        2 => vec3(0.0, 1.0, 0.0),
+        _ => vec3(0.0, 1.0, 0.0),
+    }
+}
+
+fn rotating_door_rotation(
+    base_rotation: Quaternion<f32>,
+    axis: i32,
+    angle_degrees: f32,
+) -> Quaternion<f32> {
+    (base_rotation
+        * Quaternion::from_axis_angle(rotating_door_local_axis(axis), Deg(angle_degrees)))
+    .normalize()
+}
+
 impl PropTranslatingDoor {
     /// The world position this door should occupy at load time, per its
     /// authored state. In-motion/halted states resume from the authored
@@ -2038,6 +2167,18 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$RotDoor",
+            read_prop_rotating_door,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$DoorTimer",
+            |reader, _len| read_i32(reader),
+            PropDoorTimer,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$TransDoor",
             read_prop_translating_door,
             identity,
@@ -2192,6 +2333,68 @@ fn read_prop_translating_door<T: io::Read + io::Seek>(
         base_location,
         axis,
         speed,
+    }
+}
+
+fn read_prop_rotating_door<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> PropRotatingDoor {
+    let door_type = read_i32(reader);
+    let closed = read_single(reader);
+    let open = read_single(reader);
+    let speed = read_single(reader);
+    let axis = read_i32(reader);
+    let state = read_i32(reader);
+    let _hard_limits = read_bool(reader);
+    let _sound_blocking = read_single(reader);
+    let _vision_blocking = read_bool(reader);
+    let _push_mass = read_single(reader);
+    let base_closed_location = read_vec3(reader) / SCALE_FACTOR;
+    let base_open_location = read_vec3(reader) / SCALE_FACTOR;
+    let base_location = read_vec3(reader) / SCALE_FACTOR;
+    let base_rotation = quat_from_facing_vector(read_u16_vec3(reader));
+    let _base = read_single(reader);
+    let _room1 = read_i32(reader);
+    let _room2 = read_i32(reader);
+    let clockwise = read_bool(reader);
+
+    // Version 1001 appended the two endpoint facings (6 bytes each). Older
+    // version-1000 payloads stop at byte 98; derive equivalent facings from
+    // the authored base angle and endpoint angles in that case.
+    let (base_closed_rotation, base_open_rotation, consumed) = if len >= 110 {
+        (
+            quat_from_facing_vector(read_u16_vec3(reader)),
+            quat_from_facing_vector(read_u16_vec3(reader)),
+            110,
+        )
+    } else {
+        (
+            rotating_door_rotation(base_rotation, axis, closed),
+            rotating_door_rotation(base_rotation, axis, open),
+            98,
+        )
+    };
+    if len > consumed {
+        read_bytes(reader, (len - consumed) as usize);
+    }
+
+    let progress = match state {
+        1 => 1.0,
+        _ => 0.0,
+    };
+    PropRotatingDoor {
+        door_type,
+        closed,
+        open,
+        speed,
+        axis,
+        state,
+        clockwise,
+        base_closed_location,
+        base_open_location,
+        base_location,
+        base_rotation,
+        base_closed_rotation,
+        base_open_rotation,
+        progress,
     }
 }
 
@@ -2633,6 +2836,72 @@ mod tests {
 
         assert!(property.active);
         assert!(!property.previous_active);
+    }
+
+    fn rotating_door_definition() -> Box<dyn PropertyDefinition<Box<dyn ReadAndSeek>>> {
+        let (properties, _, _) = get::<Box<dyn ReadAndSeek>>();
+        properties
+            .into_iter()
+            .find(|property| property.name() == "P$RotDoor")
+            .expect("P$RotDoor must be a registered Dark property")
+    }
+
+    #[test]
+    fn rotating_door_reads_version_1001_payload() {
+        // eng1 Floor Hatch obj 85 authors this 110-byte layout. Leaving it
+        // unparsed makes its inherited zero P$TransDoor win and StdDoor moves
+        // the hatch to world origin (#861).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // rotating
+        bytes.extend_from_slice(&0.0f32.to_le_bytes()); // closed angle
+        bytes.extend_from_slice(&90.0f32.to_le_bytes()); // open angle
+        bytes.extend_from_slice(&45.0f32.to_le_bytes()); // raw angular speed
+        bytes.extend_from_slice(&1i32.to_le_bytes()); // Dark Y -> world Z
+        bytes.extend_from_slice(&0i32.to_le_bytes()); // closed state
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // hard limits
+        bytes.extend_from_slice(&0.75f32.to_le_bytes()); // sound blocking
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // vision blocking
+        bytes.extend_from_slice(&30.0f32.to_le_bytes()); // push mass
+        for file_vector in [
+            [-2.5f32, 7.5, 5.0],  // world (1,2,3), closed
+            [-2.5f32, 10.0, 5.0], // world (1,2,4), open
+            [-2.5f32, 7.5, 5.0],  // authored base/current
+        ] {
+            for value in file_vector {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        bytes.extend_from_slice(&[0; 6]); // base facing
+        bytes.extend_from_slice(&0.0f32.to_le_bytes()); // base angle scalar
+        bytes.extend_from_slice(&(-1i32).to_le_bytes()); // room 1
+        bytes.extend_from_slice(&(-1i32).to_le_bytes()); // room 2
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // counter-clockwise
+        bytes.extend_from_slice(&[0; 6]); // closed facing
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // open x
+        bytes.extend_from_slice(&0x4000u16.to_le_bytes()); // open Dark y = 90 degrees
+        bytes.extend_from_slice(&0u16.to_le_bytes()); // open z
+        assert_eq!(bytes.len(), 110);
+
+        let mut cursor: Box<dyn ReadAndSeek> = Box::new(Cursor::new(bytes));
+        let property = rotating_door_definition().read(&mut cursor, 110);
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        property.initialize(&mut world, entity);
+
+        let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+        let door = doors.get(entity).unwrap();
+        assert_eq!(door.door_type, 0);
+        assert_eq!(door.speed, 45.0, "angular speed must not be world-scaled");
+        assert_eq!(door.axis, 1);
+        assert!(!door.clockwise);
+        assert_eq!(door.base_closed_location, vec3(1.0, 2.0, 3.0));
+        assert_eq!(door.base_open_location, vec3(1.0, 2.0, 4.0));
+        assert_eq!(door.initial_pose().0, vec3(1.0, 2.0, 3.0));
+        let expected_open = Quaternion::from_angle_z(Deg(90.0));
+        assert!(
+            door.base_open_rotation.dot(expected_open).abs() > 0.9999,
+            "open facing should preserve Dark's angle-axis mapping"
+        );
     }
 
     #[test]
