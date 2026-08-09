@@ -3,7 +3,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 
-use super::{Effect, MessagePayload, Script, script_util::player_carried_items};
+use super::{Effect, MessagePayload, Script, script_util, script_util::player_carried_items};
 
 /// Implements the engine-level `PropFrobInfo.world_action = MOVE` behavior for
 /// ordinary pickup items that do not ask an authored script to handle Frob.
@@ -42,6 +42,14 @@ impl Script for InternalFrobMove {
             })
         };
         if !handles_move {
+            return Effect::NoEffect;
+        }
+
+        // Key sources (`MOVE`-only access cards) also carry a derived
+        // `internal_keycard` script, which registers them on the keyring and
+        // consumes the object. It owns the physical fate; transferring here as
+        // well would emit a backpack transfer and a destroy for one Frob.
+        if script_util::is_key_source(world, entity_id) {
             return Effect::NoEffect;
         }
 
@@ -127,6 +135,34 @@ mod tests {
                 dropped_entity_id,
             } if parent_entity_id == inventory && dropped_entity_id == item
         ));
+    }
+
+    /// A `MOVE`-only access card (the Rec2 crew card) also carries a derived
+    /// `internal_keycard` script, which registers it and consumes the object.
+    /// Transferring it here too would stash and destroy the same card.
+    #[test]
+    fn world_frob_leaves_a_key_source_to_its_keycard_script() {
+        let (mut world, item, _inventory) = pickup_world(FrobFlag::MOVE, false);
+        world.add_component(
+            item,
+            dark::properties::PropKeySrc(dark::properties::KeyCard {
+                is_master: false,
+                region_id: 32,
+                lock_id: 0,
+            }),
+        );
+
+        let effect = InternalFrobMove::new().handle_message(
+            item,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "a key source must not also be transferred to the backpack, got {effect:?}"
+        );
     }
 
     #[test]

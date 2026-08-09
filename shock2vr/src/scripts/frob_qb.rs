@@ -2,7 +2,7 @@ use shipyard::{EntityId, UniqueView, World};
 
 use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 
-use super::{Effect, MessagePayload, Script, script_util::set_quest_bit_effect};
+use super::{Effect, MessagePayload, Script, script_util, script_util::set_quest_bit_effect};
 
 pub struct FrobQB {}
 impl FrobQB {
@@ -40,7 +40,16 @@ impl Script for FrobQB {
                     // and leaving the object frobbable would let a second frob
                     // re-fire the other scripts attached to it - `BaseButton`
                     // resends every SwitchLink - after the bit is already set.
-                    if crate::virtual_hand::can_grab_item(world, entity_id) {
+                    //
+                    // A key source (the MedSci2 R&D card, obj 772: `MOVE |
+                    // SCRIPT` + `FrobQB` + a derived `internal_keycard`) is the
+                    // exception: its sibling keycard script registers it on the
+                    // keyring and consumes it, so awarding the bit here is all
+                    // this script does. Transferring it too would emit both a
+                    // backpack transfer and a destroy for one Frob.
+                    if crate::virtual_hand::can_grab_item(world, entity_id)
+                        && !script_util::is_key_source(world, entity_id)
+                    {
                         match world.borrow::<UniqueView<PlayerInfo>>() {
                             Ok(player) => Effect::combine(vec![
                                 quest_bit_effect,
@@ -144,6 +153,45 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::DestroyEntity { .. })),
             "a take-able object must not be destroyed, got {effects:?}"
+        );
+    }
+
+    /// The MedSci2 R&D card (obj 772) is `MOVE | SCRIPT` with `FrobQB` *and* a
+    /// derived `internal_keycard`. One Frob must award `rdgrab` once and leave
+    /// the card's fate to the keycard script (register-and-vanish) - emitting a
+    /// backpack transfer here would stash and destroy the same card.
+    #[test]
+    fn frobbing_a_quest_key_card_awards_its_bit_and_leaves_its_fate_to_the_keycard_script() {
+        let (mut world, object, _inventory) = quest_object_world(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        world.add_component(
+            object,
+            dark::properties::PropKeySrc(dark::properties::KeyCard {
+                is_master: false,
+                region_id: 4,
+                lock_id: 0,
+            }),
+        );
+
+        let effects = Effect::flatten(vec![FrobQB::new().handle_message(
+            object,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        )]);
+
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::SetQuestBit { quest_bit_name, .. } if quest_bit_name == "Note_1_10"
+            )),
+            "the quest bit must still be awarded, got {effects:?}"
+        );
+        assert!(
+            !effects.iter().any(|effect| matches!(
+                effect,
+                Effect::DropEntityInfo { .. } | Effect::DestroyEntity { .. }
+            )),
+            "a key source's fate belongs to internal_keycard, got {effects:?}"
         );
     }
 

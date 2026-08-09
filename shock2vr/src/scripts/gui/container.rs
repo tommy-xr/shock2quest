@@ -333,6 +333,21 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                         (state.clone(), Effect::NoEffect)
                     };
                 }
+                // A key source has derived `internal_keycard` behavior even
+                // when its authored frob flags otherwise look like ordinary
+                // MOVE loot. Dispatch Frob first so access and any authored
+                // quest scripts run; the keycard script owns the transfer.
+                if crate::virtual_hand::uses_scripted_world_frob(world, *ent) {
+                    return (
+                        state.clone(),
+                        Effect::Send {
+                            msg: Message {
+                                payload: MessagePayload::Frob,
+                                to: *ent,
+                            },
+                        },
+                    );
+                }
                 let inventory_entity = world
                     .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
                     .map(|player| player.inventory_entity_id)
@@ -358,17 +373,19 @@ mod tests {
     use crate::gui::GuiInputInfo;
     use crate::mission::PlayerInfo;
     use cgmath::{Quaternion, point2, vec3};
-    use dark::properties::{FrobFlag, Links, PropFrobInfo, ToLink, WrappedEntityId};
+    use dark::properties::{
+        FrobFlag, KeyCard, Links, PropFrobInfo, PropKeySrc, ToLink, WrappedEntityId,
+    };
 
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
     /// through.
-    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+    fn loot_world_with_action(world_action: FrobFlag) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let item = world.add_entity((
             PropObjIcon("icn_psi".to_owned()),
             PropFrobInfo {
-                world_action: FrobFlag::MOVE,
+                world_action,
                 inventory_action: FrobFlag::empty(),
                 tool_action: FrobFlag::empty(),
             },
@@ -391,6 +408,10 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, container, item, inventory)
+    }
+
+    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+        loot_world_with_action(FrobFlag::MOVE)
     }
 
     fn input_at(cursor: cgmath::Point2<f32>, pressed: bool) -> GuiInputInfo {
@@ -522,6 +543,44 @@ mod tests {
                 kinds
             );
         }
+    }
+
+    /// Rec2 card 996 is a grabbable `MOVE | SCRIPT` object inside corpse 419.
+    /// Taking it must dispatch Frob before transfer so both its authored
+    /// `FrobQB` and derived `internal_keycard` semantics run.
+    #[test]
+    fn loot_container_click_frobs_a_grabbable_keycard() {
+        let (mut world, container, item, _inventory) =
+            loot_world_with_action(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        world.add_component(
+            item,
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 32,
+                lock_id: 0,
+            }),
+        );
+        let gui = ContainerGui::loot_container();
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+
+        assert!(
+            matches!(
+                effect,
+                Effect::Send {
+                    msg: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                } if to == item
+            ),
+            "grabbable keycard loot must run its scripted Frob path, got {effect:?}"
+        );
     }
 
     /// Use-only objects can be contained too. Audio logs are the critical

@@ -352,6 +352,18 @@ pub fn get_first_link_of_type(
     all_links.get(0).copied()
 }
 
+/// Whether this object is a key source (`PropKeySrc`), which the runtime gives
+/// an `internal_keycard` script. Frobbing one registers it on the keyring and
+/// consumes the object, so `internal_keycard` owns its physical fate: the
+/// generic pickup paths (`FrobQB`, `internal_frob_move`) must not also transfer
+/// it to the backpack, or one Frob would both stash and destroy the same card.
+pub fn is_key_source(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropKeySrc>>()
+        .map(|key_sources| key_sources.get(entity_id).is_ok())
+        .unwrap_or(false)
+}
+
 /// Every item the player is currently carrying: each wielded/hand-held entity
 /// plus everything nested under it, and the backpack (inventory) entity's
 /// contents - following `Contains` links to depth 2 (mirrors the item set the

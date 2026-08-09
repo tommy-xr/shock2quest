@@ -568,12 +568,7 @@ pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bo
                 .is_ok_and(|frob_info| frob_info.world_action.contains(FrobFlag::SCRIPT))
         })
         .unwrap_or(false);
-    let has_derived_keycard_script = world
-        .borrow::<View<dark::properties::PropKeySrc>>()
-        .map(|keycards| keycards.get(entity_id).is_ok())
-        .unwrap_or(false);
-
-    has_authored_world_script || has_derived_keycard_script
+    has_authored_world_script || crate::scripts::script_util::is_key_source(world, entity_id)
 }
 
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
