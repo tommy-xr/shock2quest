@@ -182,12 +182,20 @@ pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
     }
 }
 
-/// Whether a translating door is closed (i.e. worth opening): normally that
-/// means it is nearer its closed endpoint than its open one, but a door with
-/// no travel - whose endpoints coincide, so position says nothing - answers
-/// from its authored state. `None` for entities that aren't translating doors.
+/// Whether a supported door is closed (i.e. worth opening). RotDoor takes
+/// precedence over an inherited TransDoor, matching Dark's GetDoorProperty.
 pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
     use cgmath::InnerSpace;
+    let v_rot_door = world
+        .borrow::<View<dark::properties::PropRotatingDoor>>()
+        .unwrap();
+    if let Ok(door) = v_rot_door.get(entity_id) {
+        if !door.has_travel() {
+            return Some(door.state != 1);
+        }
+        return Some(door.progress <= 0.5);
+    }
+
     // A door with no travel can never leave its authored pose, and both
     // endpoints sit on top of each other - the distance test below is
     // degenerate there (equal distances always read as "closed"). Answer from
@@ -254,18 +262,24 @@ pub fn door_open_progress(world: &World, entity_id: EntityId) -> Option<(f32, f3
 
 /// Whether a cell-gating entity is an obstacle A* must not cross.
 ///
-/// Closed-but-unlocked translating doors stay pathable because a pursuing AI
-/// opens them on arrival. Entities that are not translating doors cannot be
-/// operated by `StdDoor`, so they remain walls.
+/// Closed-but-unlocked runtime doors stay pathable because a pursuing AI opens
+/// them on arrival. Entities without a supported door property remain walls.
 pub fn door_blocks_pathfinding(world: &World, entity_id: EntityId) -> bool {
     match door_is_closed(world, entity_id) {
         Some(true) => {
             let permanently_closed = world
-                .borrow::<View<dark::properties::PropTranslatingDoor>>()
+                .borrow::<View<dark::properties::PropRotatingDoor>>()
                 .unwrap()
                 .get(entity_id)
-                .map(|door| door.is_permanently_closed())
-                .unwrap_or(false);
+                .map(|door| !door.has_travel())
+                .unwrap_or_else(|_| {
+                    world
+                        .borrow::<View<dark::properties::PropTranslatingDoor>>()
+                        .unwrap()
+                        .get(entity_id)
+                        .map(|door| door.is_permanently_closed())
+                        .unwrap_or(false)
+                });
             permanently_closed || is_entity_locked(world, entity_id)
         }
         Some(false) => false,
