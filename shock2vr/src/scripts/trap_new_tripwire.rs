@@ -166,6 +166,16 @@ impl Script for TrapNewTripwire {
             MessagePayload::SensorEndIntersect { with } => {
                 let had_keys_before = !self.entity_in_trap.is_empty();
                 let was_reconstructed_after_load = self.reconstructed_after_load.remove(with);
+                // A scripted teleport trap yanked the entity out of this box -
+                // that departure is not a gameplay EXIT edge, the mirror of the
+                // arrival suppression above. On earth.mis the training wires
+                // switch a teleport trap *and* an inverter fanning out to a
+                // dozen Sound Traps: emitting EXIT's TurnOff here inverts into
+                // a TurnOn broadcast that starts every narration at once (and
+                // re-fires the teleport). Presence is still cleared so a later
+                // genuine re-entry sees a clean edge.
+                let departed_by_scripted_teleport =
+                    teleport_source(world, *with) == Some(TeleportSource::ScriptedTrap);
 
                 self.entity_in_trap.remove(with);
 
@@ -183,6 +193,7 @@ impl Script for TrapNewTripwire {
                 // leaving the lobby sensor. Once removed, a later genuine
                 // enter/exit pair behaves normally.
                 if !was_reconstructed_after_load
+                    && !departed_by_scripted_teleport
                     && !has_keys_now
                     && had_keys_before
                     && self.trip_flags.contains(TripFlags::EXIT)

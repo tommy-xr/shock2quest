@@ -17,8 +17,15 @@ impl Script for TrapTeleportPlayer {
         entity_id: EntityId,
         world: &World,
         _physics: &PhysicsWorld,
-        _msg: &MessagePayload,
+        msg: &MessagePayload,
     ) -> Effect {
+        // Teleport on TurnOn only, like the original engine. Firing on any
+        // message meant an unrelated TurnOff (e.g. a tripwire's EXIT edge)
+        // teleported the player a second time.
+        if !matches!(msg, MessagePayload::TurnOn { .. }) {
+            return Effect::NoEffect;
+        }
+
         let v_position = world.borrow::<View<PropPosition>>().unwrap();
 
         let maybe_position = v_position.get(entity_id);
