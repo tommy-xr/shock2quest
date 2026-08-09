@@ -944,3 +944,121 @@ test(
     );
   },
 );
+
+// Issue #657: Engineering's upper Ladder 16' (mission object 945) reaches the
+// Engine Core through a thick authored floor/wall transition. The south face
+// is the real approach from the main-elevator corridor; holding ordinary
+// forward toward +Z must finish on supported core-side ground, not freeze in
+// the unsupported gap below the slab and fall back to the arrival floor.
+test(
+  "flat climbing: eng1 upper ladder 945 reaches supported core-side ground",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids change every launch. Mission object 945 and its authored
+    // name are the durable identity; derive the campaign-proven south-face
+    // contact from that object instead of hard-coding a world position.
+    const ladder = (
+      await game.entities.list({ filter: "Ladder 16'", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 945);
+    assert.ok(ladder, "eng1 should contain authored Ladder 16' object 945");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+    const startTarget = {
+      x: ladderX + 0.261,
+      y: ladderY - 1.956,
+      z: ladderZ - 0.883,
+    };
+
+    // Setup only: the production climb begins on the same supported south-face
+    // contact reached by ordinary movement in the accepted campaign replay.
+    // Do not step between relocation and input: a frame here can settle away
+    // from the narrow authored contact before the grip is evaluated.
+    await game.player.teleport(startTarget);
+    const start = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      start.x,
+      start.y + 8,
+      start.z + 20,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let landing = start;
+    let support: RayCastResult | null = null;
+    for (let elapsed = 0; elapsed < 480; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      if (landing.z <= ladderZ + 0.7 || landing.y <= ladderY + 3.5) {
+        continue;
+      }
+      support = await game.raycast({
+        start: [landing.x, landing.y, landing.z],
+        end: [landing.x, landing.y - 3, landing.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      if (
+        support.hit &&
+        support.distance !== null &&
+        support.distance > 0.5 &&
+        support.distance < 2 &&
+        support.hit_normal !== null &&
+        support.hit_normal[1] > 0.5
+      ) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      support?.hit &&
+        support.distance !== null &&
+        support.distance > 0.5 &&
+        support.distance < 2 &&
+        support.hit_normal !== null &&
+        support.hit_normal[1] > 0.5 &&
+        landing.z > ladderZ + 0.7 &&
+        landing.y > ladderY + 3.5,
+      `ordinary south-face input must reach supported core-side ground; ` +
+        `ladder=(${ladderX.toFixed(2)}, ${ladderY.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
+        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(support)}`,
+    );
+
+    // Releasing input does not cancel an in-flight top-out; let its bounded
+    // scripted waypoints finish, then prove the resulting pose itself remains
+    // still rather than mistaking an intermediate supported crossing for the
+    // landing.
+    await game.step({ frames: 180 });
+    const settled = await game.player.position();
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z > ladderZ + 0.7 &&
+        stable.y > ladderY + 3.5 &&
+        Math.hypot(stable.x - settled.x, stable.z - settled.z) < 0.05 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `release must remain stable on the core-side landing; ` +
+        `landing=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `settled=(${settled.x.toFixed(2)}, ${settled.y.toFixed(2)}, ${settled.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(stableSupport)}`,
+    );
+  },
+);
