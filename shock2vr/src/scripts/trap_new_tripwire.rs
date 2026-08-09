@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use dark::properties::{
-    PropLocalPlayer, PropTeleported, PropTranslatingDoor, PropTripFlags, TeleportSource, TripFlags,
+    PropLocalPlayer, PropRotatingDoor, PropTeleported, PropTranslatingDoor, PropTripFlags,
+    TeleportSource, TripFlags,
 };
 use shipyard::{EntityId, Get, View, World};
 use tracing::info;
@@ -82,11 +83,13 @@ impl TrapNewTripwire {
         let links = get_all_switch_links(world, entity_id);
 
         let v_simple_door = world.borrow::<View<PropTranslatingDoor>>().unwrap();
+        let v_rot_door = world.borrow::<View<PropRotatingDoor>>().unwrap();
 
         // Are there any links that are a simple door?
         // TODO: Make sure it is _simple_ - ie, not locked
-        // TODO: Handle rotating doors?
-        links.iter().any(|link| v_simple_door.get(*link).is_ok())
+        links
+            .iter()
+            .any(|link| v_rot_door.get(*link).is_ok() || v_simple_door.get(*link).is_ok())
     }
 }
 impl Script for TrapNewTripwire {
