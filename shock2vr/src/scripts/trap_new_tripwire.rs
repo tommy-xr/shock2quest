@@ -124,6 +124,12 @@ impl Script for TrapNewTripwire {
                     // present. Tracking it would make walking back out emit an
                     // unbalanced EXIT TurnOff and re-trigger the earth montage
                     // loop (#515).
+                    //
+                    // NOTE: this clear is an Effect, applied only after the
+                    // whole frame's message queue has run - the SOURCE
+                    // tripwire's same-frame SensorEndIntersect (below) must
+                    // still see the marker, so the clear must never move
+                    // before message processing.
                     Some(TeleportSource::ScriptedTrap) => {
                         return Effect::ClearTeleportedMarker { entity_id: *with };
                     }
@@ -173,7 +179,9 @@ impl Script for TrapNewTripwire {
                 // dozen Sound Traps: emitting EXIT's TurnOff here inverts into
                 // a TurnOn broadcast that starts every narration at once (and
                 // re-fires the teleport). Presence is still cleared so a later
-                // genuine re-entry sees a clean edge.
+                // genuine re-entry sees a clean edge - which deliberately
+                // leaves ENTER's TurnOn without a balancing TurnOff, the same
+                // trade the arrival suppression already makes.
                 let departed_by_scripted_teleport =
                     teleport_source(world, *with) == Some(TeleportSource::ScriptedTrap);
 

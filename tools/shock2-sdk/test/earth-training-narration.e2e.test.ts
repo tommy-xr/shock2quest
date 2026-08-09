@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
+import { teleportVerified } from "./helpers/teleport.js";
 
 // End-to-end regression for the earth.mis training-area audio cacophony.
 //
@@ -21,10 +23,13 @@ import { GameServer } from "../src/index.js";
 // intended one); post-fix exactly one plays.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-// Stable earth.mis mission-object id of a training tripwire that links a teleport
-// trap + the silence Inverter + the narration Trigger Delay. Runtime entity ids
-// are rediscovered every launch, never hardcoded.
+// Stable earth.mis mission-object ids (the runtime reports these as
+// `template_id`, which is why they are the argument to `byTemplate` - runtime
+// entity ids are rediscovered every launch, never hardcoded). 378 is a training
+// tripwire linking the teleport trap 377, the silence Inverter, and the
+// narration Trigger Delay; 377's own position is the teleport destination pad.
 const TRAINING_TRIPWIRE_OBJ = 378;
+const TELEPORT_TRAP_OBJ = 377;
 
 test(
   "earth training: entering a teleport tripwire plays exactly one narration",
@@ -36,24 +41,18 @@ test(
     });
     await game.step({ frames: 30 });
 
-    const [tripwire] = await game.entities.byTemplate(TRAINING_TRIPWIRE_OBJ);
-    assert.ok(
-      tripwire,
-      `expected the earth.mis training tripwire for obj ${TRAINING_TRIPWIRE_OBJ}`,
-    );
-
     const audioBefore = await game.audio.recent();
     const lastAudioSequence = audioBefore.sounds.at(-1)?.sequence ?? 0;
     const messagesBefore = await game.messages.recent();
     const lastMessageSequence = messagesBefore.messages.at(-1)?.sequence ?? 0;
 
-    // Walk-in equivalent: drop the player inside the tripwire's box. A debug
-    // teleport is locomotion, so ENTER fires exactly as it does on foot.
-    await game.player.teleport({
-      x: tripwire.position[0],
-      y: tripwire.position[1],
-      z: tripwire.position[2],
-    });
+    // Enter the sensor under collision (real SensorBeginIntersect path) and
+    // verify the linked teleport actually fired.
+    await crossEarthTrainingTripwire(
+      game,
+      TRAINING_TRIPWIRE_OBJ,
+      TELEPORT_TRAP_OBJ,
+    );
     // Well past the narration Trigger Delay (~1s) so the intended clip has started.
     await game.step({ frames: 180 });
 
@@ -101,6 +100,33 @@ test(
       ["TurnOn"],
       `the teleport trap must only see the ENTER TurnOn: ` +
         JSON.stringify(teleportTrapMessages),
+    );
+
+    // Direct coverage of the TurnOn-only gate: a TurnOff injected into the
+    // teleport trap must NOT move the player (pre-fix it teleported on any
+    // message); a TurnOn must.
+    const [teleportTrap] = await game.entities.byTemplate(TELEPORT_TRAP_OBJ);
+    assert.ok(teleportTrap, `expected teleport trap ${TELEPORT_TRAP_OBJ}`);
+    const [padX, padY, padZ] = teleportTrap.position;
+    await teleportVerified(game, { x: padX, y: padY + 0.5, z: padZ - 8 });
+    const parked = await game.player.position();
+
+    await game.entities.sendMessage(teleportTrap.id, { type: "TurnOff" });
+    await game.step({ frames: 30 });
+    const afterTurnOff = await game.player.position();
+    assert.ok(
+      Math.hypot(afterTurnOff.x - parked.x, afterTurnOff.z - parked.z) < 1,
+      `TurnOff must not teleport the player: parked=${JSON.stringify(parked)} ` +
+        `after=${JSON.stringify(afterTurnOff)}`,
+    );
+
+    await game.entities.sendMessage(teleportTrap.id, { type: "TurnOn" });
+    await game.step({ frames: 30 });
+    const afterTurnOn = await game.player.position();
+    assert.ok(
+      Math.hypot(afterTurnOn.x - padX, afterTurnOn.z - padZ) < 3,
+      `TurnOn must teleport the player to the pad: pad=[${padX},${padY},${padZ}] ` +
+        `after=${JSON.stringify(afterTurnOn)}`,
     );
   },
 );
