@@ -1,7 +1,7 @@
 use dark::properties::PropLog;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
-use crate::physics::PhysicsWorld;
+use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{
     Effect, MessagePayload, Script,
@@ -13,6 +13,23 @@ impl TrapEmail {
     pub fn new() -> TrapEmail {
         TrapEmail {}
     }
+}
+
+/// Whether the trap's authored objective effect would move existing campaign
+/// progress backwards. Late-arriving legacy saves can legitimately contain a
+/// completed objective while this one-shot email trap is still alive.
+fn is_quest_bit_downgrade(world: &World, effect: &Effect) -> bool {
+    let Effect::SetQuestBit {
+        quest_bit_name,
+        quest_bit_value,
+    } = effect
+    else {
+        return false;
+    };
+    world
+        .borrow::<UniqueView<QuestInfo>>()
+        .map(|quests| quests.read_quest_bit_value(quest_bit_name).bits() > quest_bit_value.bits())
+        .unwrap_or(false)
 }
 
 impl Script for TrapEmail {
@@ -38,8 +55,9 @@ impl Script for TrapEmail {
                 // The email trap also carries the objective it hands out
                 // (PropQuestBitName/PropQuestBitValue) - the email and the
                 // objective it describes are authored on the same entity.
-                let quest_bit_effect =
-                    set_quest_bit_effect(world, entity_id).unwrap_or(Effect::NoEffect);
+                let quest_bit_effect = set_quest_bit_effect(world, entity_id)
+                    .filter(|effect| !is_quest_bit_downgrade(world, effect))
+                    .unwrap_or(Effect::NoEffect);
 
                 let switchlink_effects = send_to_all_switch_links(
                     world,
@@ -47,12 +65,11 @@ impl Script for TrapEmail {
                     MessagePayload::TurnOn { from: entity_id },
                 );
 
-                // The trap is consumed once it fires. The tripwires that feed
-                // these traps fire on every crossing, and re-applying the quest
-                // bit would knock an already-COMPLETE objective back to
-                // INCOMPLETE (QuestInfo::set_quest_bit_value overwrites).
-                // has_played_email only suppresses the audio, not the objective
-                // or the switch-link relay.
+                // The trap is consumed once it fires. A late legacy save can
+                // already have completed this objective while the email trap
+                // remains alive, so suppress only the backward quest-bit write;
+                // the email, switch-link relay, and one-shot consumption still
+                // occur normally.
                 Effect::Combined {
                     effects: vec![
                         email_effect,
@@ -70,7 +87,11 @@ impl Script for TrapEmail {
 
 #[cfg(test)]
 mod tests {
-    use dark::properties::{PropQuestBitName, PropQuestBitValue, QuestBitValue};
+    use dark::properties::{
+        Link, Links, PropQuestBitName, PropQuestBitValue, QuestBitValue, ToLink, WrappedEntityId,
+    };
+
+    use crate::quest_info::QuestInfo;
 
     use super::*;
 
@@ -125,5 +146,57 @@ mod tests {
             plays_email(&effect),
             "the objective must be granted alongside the email, not instead of it"
         );
+    }
+
+    #[test]
+    fn completed_objective_is_not_downgraded_but_email_still_fires_and_consumes() {
+        let mut world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.set_quest_bit_value("Note_5_7", QuestBitValue::COMPLETE);
+        world.add_unique(quests);
+        let destination = world.add_entity(());
+        let entity_id = world.add_entity((
+            PropLog {
+                deck: 5,
+                email: 9,
+                log: 33,
+                note: 0,
+                video: 0,
+            },
+            PropQuestBitName("Note_5_7".to_owned()),
+            PropQuestBitValue(QuestBitValue::INCOMPLETE),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 27,
+                    to_entity_id: Some(WrappedEntityId(destination)),
+                    link: Link::SwitchLink,
+                }],
+            },
+        ));
+
+        let effect = TrapEmail::new().handle_message(
+            entity_id,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+        let flattened = Effect::flatten(vec![effect.clone()]);
+
+        assert!(
+            quest_bits(&effect).is_empty(),
+            "an arrival email must not regress a completed objective"
+        );
+        assert!(
+            plays_email(&effect),
+            "the late arrival email must still play"
+        );
+        assert!(
+            flattened
+                .iter()
+                .any(|effect| matches!(effect, Effect::Send { msg } if msg.to == destination))
+        );
+        assert!(flattened.iter().any(
+            |effect| matches!(effect, Effect::DestroyEntity { entity_id: destroyed } if *destroyed == entity_id)
+        ));
     }
 }
