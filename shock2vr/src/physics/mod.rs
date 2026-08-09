@@ -448,7 +448,7 @@ fn try_step_up(
             rapier3d::parry::query::ShapeCastOptions {
                 max_time_of_impact: max_dist,
                 target_distance: target,
-                stop_at_penetration: false,
+                stop_at_penetration: true,
                 compute_impact_geometry_on_penetration: true,
             },
         )
@@ -717,6 +717,42 @@ fn detect_support(
     })
 }
 
+/// Whether the complete character shape can follow `translation` without a
+/// raw geometric collision. The ordinary controller intentionally casts with
+/// its contact offset, but an already-supported passenger can begin inside
+/// that margin at a tight station lip. In that case a tangential platform
+/// carry is still physically clear and must not turn the margin into a
+/// sideways slide.
+fn raw_character_sweep_is_clear(
+    queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    translation: Vector<Real>,
+    moving_support: RigidBodyHandle,
+) -> bool {
+    let distance = translation.norm();
+    if distance <= Real::EPSILON {
+        return true;
+    }
+    let direction = translation / distance;
+    let not_moving_support =
+        |_handle: ColliderHandle, collider: &Collider| collider.parent() != Some(moving_support);
+    queries
+        .with_filter(queries.filter.predicate(&not_moving_support))
+        .cast_shape(
+            pos,
+            &direction,
+            shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: distance,
+                target_distance: 0.0,
+                stop_at_penetration: false,
+                compute_impact_geometry_on_penetration: true,
+            },
+        )
+        .is_none()
+}
+
 /// Distance along a horizontal ray at which it exits a climbable AABB expanded
 /// by the player's required clearance. `None` means the ray never crosses the
 /// expanded box.
@@ -810,6 +846,7 @@ fn shape_has_stable_support(
             &pose,
             Vector::zeros(),
             Vector::zeros(),
+            None,
             dt,
             -0.5 / SCALE_FACTOR,
             None,
@@ -1564,7 +1601,8 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
 /// (see [`PlayerSupport`]); it is applied first, so the player's own input and
 /// gravity are resolved from where the platform has taken them. A player
 /// gripping a ladder is holding the ladder, not riding the floor, so the climb
-/// branch above skips it.
+/// branch above skips it. `carry_support` identifies that owned body so a raw
+/// safety sweep can ignore the deck itself while retaining every other solid.
 ///
 /// `airborne_vertical` is one frame of an ordinary jump arc. While present it
 /// replaces the legacy constant gravity pass and disables ground snapping and
@@ -1576,6 +1614,7 @@ fn step_player_movement(
     pos: &Isometry<Real>,
     desired: Vector<Real>,
     carry: Vector<Real>,
+    carry_support: Option<RigidBodyHandle>,
     dt: Real,
     gravity: Real,
     slope_displacement: Option<Vector<Real>>,
@@ -1633,9 +1672,13 @@ fn step_player_movement(
     // along it instead of pushing them through it. Everything below then
     // resolves the player's own movement from where the platform left them.
     let carried = if carry != Vector::zeros() {
-        controller
+        let swept = controller
             .move_shape(dt, queries, shape, pos, carry, |_c| ())
-            .translation
+            .translation;
+        let raw_clear = carry_support.is_some_and(|support| {
+            raw_character_sweep_is_clear(queries, shape, pos, carry, support)
+        });
+        if raw_clear { carry } else { swept }
     } else {
         Vector::zeros()
     };
@@ -2964,6 +3007,7 @@ impl PhysicsWorld {
                     // has moved since the last one; the support is refreshed
                     // at the end of the hop instead.
                     Vector::zeros(),
+                    None,
                     dt,
                     gravity,
                     None,
@@ -3984,14 +4028,14 @@ impl PhysicsWorld {
         // advanced it to this frame's pose, so this is exactly the platform's
         // displacement for this frame. A support that has been removed simply
         // stops carrying.
-        let carry = player_handle
+        let (carry_support, carry) = player_handle
             .support
             .and_then(|support| {
                 self.rigid_body_set
                     .get(support.body)
-                    .map(|body| body.translation() - support.translation)
+                    .map(|body| (Some(support.body), body.translation() - support.translation))
             })
-            .unwrap_or_else(Vector::zeros);
+            .unwrap_or((None, Vector::zeros()));
 
         let player_movement = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             let queries = self.player_movement_queries(dispatcher, movement_filter);
@@ -4040,6 +4084,7 @@ impl PhysicsWorld {
                         &character_pos,
                         desired_movement,
                         carry,
+                        carry_support,
                         self.integration_parameters.dt,
                         gravity,
                         Some(player_handle.slope_displacement),
@@ -5966,6 +6011,91 @@ mod tests {
             (end.y - start.y - platform_travel).abs() < 0.02,
             "player should ride the lift all {platform_travel} units up: moved {} (from {start:?} to {end:?})",
             end.y - start.y,
+        );
+    }
+
+    /// A lift deck can be authored flush with a station opening whose shaft is
+    /// only just wider than the player's physical capsule.  Once the deck has
+    /// acquired the player as its support, rising through that opening must
+    /// preserve the support's exact translation instead of letting a grazing
+    /// controller contact with the stationary lip slide the passenger into a
+    /// wall and off the deck.
+    #[test]
+    fn vertical_platform_carries_player_through_a_tight_station_lip() {
+        let mut world = PhysicsWorld::new();
+        let platform = world.add_kinematic(
+            EntityId::from_inner(2000).unwrap(),
+            vec3(0.0, -0.1, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 0.2, 1.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2200).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        let player_start = world.get_player_translation(&player);
+        let platform_start = world.get_position(platform).unwrap();
+
+        // The lower edge of a slightly tilted shaft face is geometrically
+        // clear of the capsule but inside the controller offset. Upward carry
+        // approaches that face by less than the raw clearance in one frame;
+        // the exact endpoint still fits, while a contact-offset cast slides.
+        world.add_collider(
+            EntityId::from_inner(2100).unwrap(),
+            ColliderBuilder::cuboid(0.05, 0.2, 5.0)
+                .translation(vector![0.59, player_start.y, 0.0])
+                .rotation(vector![0.0, 0.0, 0.3])
+                .build(),
+        );
+
+        world.set_translation(platform, platform_start + vec3(0.0, 0.04, 0.0));
+        step(&mut world, &mut player, 1);
+        // One more frame lands at the kinematic next pose written above.
+        step(&mut world, &mut player, 1);
+
+        let player_end = world.get_player_translation(&player);
+        let platform_end = world.get_position(platform).unwrap();
+        let platform_travel = platform_end.y - platform_start.y;
+        assert!(
+            (player_end.y - player_start.y - platform_travel).abs() < 0.02,
+            "passenger must rise exactly with the deck through the station lip: player {player_start:?} -> {player_end:?}, platform moved {platform_travel}"
+        );
+        assert!(
+            player_end.x.abs() < 1.0e-5 && player_end.z.abs() < 1.0e-5,
+            "a geometrically clear station lip must not deflect the passenger sideways: {player_end:?}"
+        );
+    }
+
+    /// The zero-offset proof only bypasses the controller's contact margin;
+    /// it must not bypass an actual obstruction in the platform's path.
+    #[test]
+    fn moving_platform_does_not_carry_player_through_a_real_wall() {
+        let (mut world, mut player, platform) = world_with_kinematic_platform();
+        let player_start = world.get_player_translation(&player);
+        let platform_start = world.get_position(platform).unwrap();
+        let wall_near_face = player_start.x + 0.65;
+        world.add_collider(
+            EntityId::from_inner(2101).unwrap(),
+            ColliderBuilder::cuboid(0.1, 5.0, 5.0)
+                .translation(vector![wall_near_face + 0.1, player_start.y, 0.0])
+                .build(),
+        );
+
+        world.set_translation(platform, platform_start + vec3(0.4, 0.0, 0.0));
+        step(&mut world, &mut player, 2);
+
+        let player_end = world.get_player_translation(&player);
+        assert!(
+            player_end.x < player_start.x + 0.25,
+            "a real wall must clip platform carry instead of being bypassed: {player_start:?} -> {player_end:?}"
+        );
+        assert!(
+            player_end.x + PLAYER_STANDING_RADIUS_WORLD <= wall_near_face + 1.0e-4,
+            "the carried capsule must remain outside the wall: {player_end:?}, wall face {wall_near_face}"
         );
     }
 
