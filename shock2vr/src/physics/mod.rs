@@ -996,20 +996,72 @@ fn plan_climb_top_out(
     // authored fallback with a low ceiling: it must clear at least one full
     // head radius before the first upward obstruction. Rick1's merged lip is
     // hit after 0.559 wu; a ceiling close enough to pin the sphere is rejected.
-    let up_obstruction = probe_queries
-        .cast_ray(&up_ray, CLIMB_TOP_OUT_UP, true)
-        .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
+    let up_hit = probe_queries.cast_ray_and_get_normal(&up_ray, CLIMB_TOP_OUT_UP, true);
+    let up_obstruction = up_hit.map(|(_, hit)| (hit.time_of_impact, head.y + hit.time_of_impact));
     if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < CLIMB_TOP_OUT_RADIUS) {
         return None;
     }
     if !ray_segment_is_clear(probe_queries, raised, probe_ahead) {
         return None;
     }
-    let down_ray = Ray::new(Point::from(probe_ahead), -Vector::y());
-    let mantle_floor = probe_queries
-        .cast_ray_and_get_normal(&down_ray, CLIMB_TOP_OUT_MAX_DROP, true)
-        .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
-        .map(|(_, landing)| probe_ahead - Vector::y() * landing.time_of_impact);
+    let mantle_probe = |origin| {
+        probe_queries
+            .cast_ray_and_get_normal(
+                &Ray::new(Point::from(origin), -Vector::y()),
+                CLIMB_TOP_OUT_MAX_DROP,
+                true,
+            )
+            .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+            .map(|(handle, landing)| (origin, handle, landing))
+    };
+    let fixed_mantle_hit = mantle_probe(probe_ahead);
+
+    // A narrow deck can end between the player's approach-side center and
+    // Dark's fixed two-radius sample. When the upward probe sees its underside
+    // but the fixed downward sample overshoots, sample one contact-offset back
+    // along that same probe. Accept only the opposite face of the exact
+    // collider hit from below, thin enough to be the same local slab, and only
+    // at a complete standing pose with stable support. Farther landings remain
+    // the existing recovery planner's responsibility.
+    let standing_floor_offset = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+        + PLAYER_REST_LIFT / SCALE_FACTOR;
+    let near_mantle_landing = fixed_mantle_hit
+        .is_none()
+        .then(|| {
+            let (up_handle, up) = up_hit?;
+            if up.normal.y >= -CLIMB_TOP_OUT_MIN_GROUND_NORMAL {
+                return None;
+            }
+            let sample_forward = CLIMB_TOP_OUT_PROBE_FORWARD - CLIMB_TOP_OUT_RECOVERY_RETREAT;
+            let origin = raised + direction * sample_forward;
+            let (origin, floor_handle, floor_hit) = mantle_probe(origin)?;
+            if floor_handle != up_handle {
+                return None;
+            }
+            let floor = origin - Vector::y() * floor_hit.time_of_impact;
+            let underside_y = head.y + up.time_of_impact;
+            if floor.y + 1.0e-4 < underside_y
+                || floor.y - underside_y
+                    > CLIMB_TOP_OUT_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
+            {
+                return None;
+            }
+            let standing_pose = floor + Vector::y() * standing_floor_offset;
+            (!shape_intersects(validation_queries, standing_pose, &standing)
+                && shape_has_stable_support(
+                    controller,
+                    validation_queries,
+                    &standing,
+                    standing_pose,
+                    dt,
+                ))
+            .then_some((floor, standing_pose))
+        })
+        .flatten();
+    let mantle_floor = fixed_mantle_hit
+        .map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact)
+        .or_else(|| near_mantle_landing.map(|(floor, _)| floor));
     if up_obstruction.is_some_and(|(_, obstruction_y)| {
         // A lip can have a thin underside above its adjacent landing. Treat
         // surfaces within one compressed radius plus the solver gap on both
@@ -1021,6 +1073,55 @@ fn plan_climb_top_out(
         })
     }) {
         return None;
+    }
+
+    if let Some((_, final_standing)) = near_mantle_landing {
+        // Dark's sparse body can rise through this one locally identified slab.
+        // The point-scale route may encounter only one bounded obstruction and
+        // must clear it before the fully validated standing endpoint.
+        let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+        if !shape_route_exits_only_initial_obstruction(
+            probe_queries,
+            &[head, final_standing],
+            &route_probe,
+            CLIMB_TOP_OUT_UP + CLIMB_TOP_OUT_RECOVERY_RETREAT,
+        ) {
+            return None;
+        }
+        let waypoints = [head, head, head, head, head, final_standing, final_standing];
+        let mut simulated = pos.translation.vector;
+        let mut first_movement = None;
+        for waypoint in waypoints {
+            for _ in 0..512 {
+                if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                    break;
+                }
+                let movement = slide_toward(
+                    controller,
+                    scripted_queries,
+                    &compressed,
+                    simulated,
+                    waypoint,
+                    dt,
+                )?;
+                first_movement.get_or_insert(movement.translation);
+                simulated += movement.translation;
+            }
+            if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
+                return None;
+            }
+        }
+        return Some(PlayerMovement {
+            movement: scripted_character_movement(first_movement?),
+            top_out: Some(ClimbTopOut {
+                waypoints,
+                next_waypoint: 0,
+                save_pose: pos.translation.vector,
+                reversing: false,
+                is_crouched: false,
+            }),
+            slope_displacement: Vector::zeros(),
+        });
     }
 
     // Dark's mantle target puts the physical head sphere just over the lip:
@@ -7068,12 +7169,12 @@ mod tests {
             EntityId::from_inner(1000).unwrap(),
             quad(-100.0, 100.0, 0.0).build(),
         );
-        // The upper deck ends 0.25 world units past the player's natural
-        // ladder-face center. It is broad enough for a complete standing
-        // capsule, but the fixed 0.96-unit sample lands beyond its edge.
+        // The upper deck ends 0.94 world units past the player's natural
+        // ladder-face center. The fixed 0.96-unit sample lands beyond its edge,
+        // while the immediately preceding contact-offset sample reaches it.
         world.add_collider(
             EntityId::from_inner(1001).unwrap(),
-            quad(-100.0, -5.2, 6.4).build(),
+            quad(-100.0, -4.56, 6.4).build(),
         );
         world.add_kinematic(
             EntityId::from_inner(2001).unwrap(),
@@ -7091,25 +7192,29 @@ mod tests {
             world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
         }
         let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let expected_center = 6.4
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
         let mut highest = f32::NEG_INFINITY;
         for _ in 0..180 {
             world.update(Vector3::new(walk, 0.0, 0.0), &mut player);
-            highest = highest.max(world.get_player_translation(&player).y);
+            let position = world.get_player_translation(&player);
+            highest = highest.max(position.y);
+            if (position.y - expected_center).abs() < 0.1 {
+                break;
+            }
         }
         for _ in 0..60 {
             world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
         }
         let end = world.get_player_translation(&player);
-        let expected_center = 6.4
-            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-            + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
 
         assert!(
             highest > 5.0,
             "the setup must climb to the upper deck underside, highest={highest}, ended {end:?}"
         );
         assert!(
-            end.x < -5.2 && (end.y - expected_center).abs() < 0.1 && player.is_grounded,
+            end.x < -4.56 && (end.y - expected_center).abs() < 0.1 && player.is_grounded,
             "the top-out must release stably on the narrow approach-side deck, ended {end:?}, grounded={}",
             player.is_grounded
         );

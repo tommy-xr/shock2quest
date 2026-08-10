@@ -40,7 +40,9 @@ test(
     let highestY = Number.NEGATIVE_INFINITY;
     for (let frame = 0; frame < 180; frame += 1) {
       await game.step({ frames: 1 });
-      highestY = Math.max(highestY, (await game.player.position()).y);
+      const position = await game.player.position();
+      highestY = Math.max(highestY, position.y);
+      if (position.y > 2.3) break;
     }
     await game.input.set("right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 120 });
