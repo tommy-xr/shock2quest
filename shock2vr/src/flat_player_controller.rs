@@ -456,4 +456,26 @@ mod tests {
             "a MOVE-only PropKeySrc pickup must run its injected keycard Frob path"
         );
     }
+
+    #[test]
+    fn world_use_of_authored_move_and_script_dispatches_frob() {
+        let mut world = World::new();
+        let quest_item = world.add_entity(frob_info(FrobFlag::MOVE | FrobFlag::SCRIPT));
+        let mut controller = FlatPlayerController::new();
+
+        let effects = controller.pick_up(&world, quest_item);
+
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                }] if *to == quest_item
+            ),
+            "an authored MOVE | SCRIPT pickup must run its Frob path exactly once; got {effects:?}"
+        );
+    }
 }
