@@ -294,6 +294,20 @@ const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
 /// runtime advances at a fixed 60 Hz.
 const CLIMB_TOP_OUT_SUBSTEP: f32 = 10.0 / SCALE_FACTOR / 60.0;
 
+/// Begin a lower-end transfer only once the player's feet are within one
+/// scripted substep plus the controller gap of the ladder column's bottom.
+/// Unlike the broad top-out lookahead, this keeps the terrain-crossing
+/// exception pinned to the authored lower lip.
+const CLIMB_BOTTOM_OUT_BOTTOM_REACH: f32 =
+    CLIMB_TOP_OUT_SUBSTEP + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+/// A lower transfer may cross at most four authored feet. This covers one
+/// player footprint, the thin ladder body and its local terrain lip, but never
+/// searches across a room for unrelated support.
+const CLIMB_BOTTOM_OUT_MAX_FORWARD: f32 = 4.0 / SCALE_FACTOR;
+/// The destination floor must remain within two authored feet vertically of
+/// the player's lower-end approach.
+const CLIMB_BOTTOM_OUT_MAX_DROP: f32 = 2.0 / SCALE_FACTOR;
+
 /// Half-Life-style flat ladder movement: convert the into-ladder component of
 /// the desired movement into a vertical climb. `toward_ladder` is the
 /// horizontal unit normal from the player toward the climbable surface (from
@@ -608,6 +622,7 @@ fn try_step_up(
 struct ClimbPass<'a> {
     movement: Vector<Real>,
     top_out: Option<(Vector<Real>, Real)>,
+    bottom_out: Option<(Vector<Real>, Real, bool)>,
     validation_queries: QueryPipeline<'a>,
     probe_queries: QueryPipeline<'a>,
     scripted_queries: QueryPipeline<'a>,
@@ -1189,6 +1204,137 @@ fn plan_climb_top_out(
     })
 }
 
+/// Plan the supported transition at the bottom of a ladder column.
+///
+/// Dark's ladder release crosses the local ladder/lip before restoring the
+/// ordinary body on adjacent support. The continuous capsule cannot occupy
+/// that intermediate terrain, so use the same bounded scripted-transfer path
+/// as top-out: climbables and parentless terrain are omitted while crossing,
+/// parented blockers remain live, and the final crouched/standing pose is
+/// validated against every collider and must remain stably grounded.
+fn plan_climb_bottom_out(
+    controller: &KinematicCharacterController,
+    validation_queries: &QueryPipeline,
+    probe_queries: &QueryPipeline,
+    scripted_queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    direction: Vector<Real>,
+    minimum_clear_forward: Real,
+    dt: Real,
+    is_crouched: bool,
+) -> Option<PlayerMovement> {
+    let capsule = shape.as_capsule()?;
+    let body_half_height = capsule.half_height() + capsule.radius;
+    let origin = pos.translation.vector;
+
+    // A normal ladder whose floor continues beneath the approached face needs
+    // no special transfer: let the vertical pass settle and the existing
+    // blocked-climb walking fallback take over.
+    let direct_support = probe_queries
+        .cast_ray_and_get_normal(
+            &Ray::new(Point::from(origin), -Vector::y()),
+            body_half_height + CLIMB_BOTTOM_OUT_BOTTOM_REACH,
+            true,
+        )
+        .is_some_and(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
+    if direct_support {
+        return None;
+    }
+
+    let direction = vector![direction.x, 0.0, direction.z].try_normalize(1.0e-6)?;
+    let cross_distance = minimum_clear_forward + CLIMB_TOP_OUT_RECOVERY_RETREAT;
+    if cross_distance <= CLIMB_TOP_OUT_RECOVERY_RETREAT
+        || cross_distance > CLIMB_BOTTOM_OUT_MAX_FORWARD
+    {
+        return None;
+    }
+    let crossed = origin + direction * cross_distance;
+
+    // Find the nearest walkable floor on the far side, then restore the exact
+    // current body profile at its ordinary controller rest height.
+    let landing_probe = body_half_height + CLIMB_BOTTOM_OUT_MAX_DROP;
+    let (_, ground) = validation_queries.cast_ray_and_get_normal(
+        &Ray::new(Point::from(crossed), -Vector::y()),
+        landing_probe,
+        true,
+    )?;
+    if ground.normal.y <= CLIMB_TOP_OUT_MIN_GROUND_NORMAL {
+        return None;
+    }
+    let floor = crossed - Vector::y() * ground.time_of_impact;
+    let landing = floor
+        + Vector::y()
+            * (body_half_height
+                + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+                + PLAYER_REST_LIFT / SCALE_FACTOR);
+    if (landing.y - origin.y).abs() > CLIMB_BOTTOM_OUT_MAX_DROP
+        || shape_intersects(validation_queries, landing, shape)
+        || !shape_has_stable_support(controller, validation_queries, shape, landing, dt)
+    {
+        return None;
+    }
+
+    // Permit exactly one contiguous point-scale terrain obstruction inside the
+    // ladder-width bound. It must be exited before the landing, so this cannot
+    // tunnel through a second wall or end inside the local lip.
+    let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+    if !shape_route_exits_only_initial_obstruction(
+        probe_queries,
+        &[origin, crossed, landing],
+        &route_probe,
+        cross_distance + CLIMB_TOP_OUT_RECOVERY_RETREAT,
+    ) {
+        return None;
+    }
+
+    let waypoints = [origin, origin, origin, crossed, crossed, landing, landing];
+    let compressed_radius = if is_crouched {
+        PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+    } else {
+        CLIMB_TOP_OUT_RADIUS
+    };
+    let compressed = Ball::new(compressed_radius);
+    let mut simulated = origin;
+    let mut first_movement = None;
+    for waypoint in waypoints {
+        for _ in 0..512 {
+            if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
+                break;
+            }
+            let movement = slide_toward(
+                controller,
+                scripted_queries,
+                &compressed,
+                simulated,
+                waypoint,
+                dt,
+            )?;
+            first_movement.get_or_insert(movement.translation);
+            simulated += movement.translation;
+        }
+        if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
+            return None;
+        }
+    }
+    let first_step = first_movement?;
+
+    // Reuse the existing live-validated scripted climb state. Its waypoints,
+    // reversal, final-shape restoration and moving-blocker checks are endpoint
+    // agnostic even though the historical type name says `TopOut`.
+    Some(PlayerMovement {
+        movement: scripted_character_movement(first_step),
+        top_out: Some(ClimbTopOut {
+            waypoints,
+            next_waypoint: 0,
+            save_pose: origin,
+            reversing: false,
+            is_crouched,
+        }),
+        slope_displacement: Vector::zeros(),
+    })
+}
+
 /// Plan Dark's ordinary jump-through/mantle for a grounded player pressing
 /// into a non-climbable low obstacle.
 ///
@@ -1596,6 +1742,7 @@ fn step_player_movement(
     if let Some(ClimbPass {
         movement: climb,
         top_out,
+        bottom_out,
         validation_queries,
         probe_queries: climb_queries,
         scripted_queries,
@@ -1615,6 +1762,26 @@ fn step_player_movement(
                 )
             }) {
                 return top_out;
+            }
+        }
+        if climb.y < 0.0 {
+            if let Some(bottom_out) =
+                bottom_out.and_then(|(direction, minimum_clear_forward, is_crouched)| {
+                    plan_climb_bottom_out(
+                        controller,
+                        &validation_queries,
+                        &climb_queries,
+                        &scripted_queries,
+                        shape,
+                        pos,
+                        direction,
+                        minimum_clear_forward,
+                        dt,
+                        is_crouched,
+                    )
+                })
+            {
+                return bottom_out;
             }
         }
         let mvt = controller.move_shape(dt, &climb_queries, shape, pos, climb, |_c| ());
@@ -3896,12 +4063,23 @@ impl PhysicsWorld {
                     half_height + CLIMB_TOP_OUT_COLUMN_LOOKAHEAD,
                     capsule.radius + CLIMB_REACH
                 ]);
-                let column_top = queries
+                let column = queries
                     .intersect_shape(character_pos, &column_probe)
+                    .collect::<Vec<_>>();
+                let column_top = column
+                    .iter()
                     .map(|(_, collider)| collider.compute_aabb().maxs.y)
                     .fold(f32::NEG_INFINITY, f32::max);
+                let column_bottom = column
+                    .iter()
+                    .map(|(_, collider)| collider.compute_aabb().mins.y)
+                    .fold(f32::INFINITY, f32::min);
                 let character_top = character_pos.translation.vector.y + half_height;
+                let character_bottom = character_pos.translation.vector.y - half_height;
                 let near_column_top = column_top - character_top <= CLIMB_TOP_OUT_TOP_REACH;
+                let near_column_bottom = column_bottom.is_finite()
+                    && character_bottom <= column_bottom + CLIMB_BOTTOM_OUT_BOTTOM_REACH
+                    && character_bottom >= column_bottom - CLIMB_BOTTOM_OUT_MAX_DROP;
                 // Grip the closest climbable within reach, by contact distance,
                 // and take the contact's *face normal* as the climb direction.
                 // (The collider-center direction is wrong when the player is
@@ -3930,15 +4108,15 @@ impl PhysicsWorld {
                 }
                 nearest.and_then(|(_, toward)| {
                     climb_redirect(desired_movement, toward).map(|movement| {
+                        let capsule_clearance =
+                            capsule.radius + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
                         let top_out = if near_column_top && !player_handle.is_crouched {
                             climb_top_out_direction(desired_movement, facing).map(|direction| {
                                 // Stay compressed until projected facing has
                                 // exited every horizontally-expanded climbable
                                 // AABB in this ladder column.
-                                let capsule_clearance =
-                                    capsule.radius + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
-                                let minimum_clear_forward = queries
-                                    .intersect_shape(character_pos, &column_probe)
+                                let minimum_clear_forward = column
+                                    .iter()
                                     .filter_map(|(_, collider)| {
                                         climbable_aabb_exit_distance(
                                             character_pos.translation.vector,
@@ -3953,7 +4131,24 @@ impl PhysicsWorld {
                         } else {
                             None
                         };
-                        (movement, top_out)
+                        let bottom_out = (near_column_bottom && movement.y < 0.0).then(|| {
+                            // Exit the same ladder face the player is gripping.
+                            // The destination floor and complete route are
+                            // validated later before a transition may start.
+                            let minimum_clear_forward = column
+                                .iter()
+                                .filter_map(|(_, collider)| {
+                                    climbable_aabb_exit_distance(
+                                        character_pos.translation.vector,
+                                        toward,
+                                        &collider.compute_aabb(),
+                                        capsule_clearance,
+                                    )
+                                })
+                                .fold(0.0, f32::max);
+                            (toward, minimum_clear_forward, player_handle.is_crouched)
+                        });
+                        (movement, top_out, bottom_out)
                     })
                 })
             })
@@ -4044,9 +4239,10 @@ impl PhysicsWorld {
                         gravity,
                         Some(player_handle.slope_displacement),
                         airborne_vertical,
-                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                        climb_movement.map(|(movement, top_out, bottom_out)| ClimbPass {
                             movement,
                             top_out,
+                            bottom_out,
                             validation_queries: queries,
                             probe_queries: queries.with_filter(climb_pass_filter),
                             scripted_queries: queries.with_filter(scripted_top_out_filter),
@@ -7295,8 +7491,14 @@ mod tests {
         let descend = Vector3::new(-walk * 0.5, -walk * 0.866, 0.0);
         for _ in 0..180 {
             world.update(descend, &mut player);
+            if player.top_out.is_none()
+                && player.is_grounded
+                && world.get_player_translation(&player).x < -5.4
+            {
+                break;
+            }
         }
-        for _ in 0..60 {
+        for _ in 0..10 {
             world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
         }
         let landed = world.get_player_translation(&player);
