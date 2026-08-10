@@ -415,9 +415,9 @@ fn wav_duration(bytes: &[u8]) -> Option<std::time::Duration> {
     }
 
     match (avg_bytes_per_sec, data_len) {
-        (Some(rate), Some(len)) if rate > 0 => Some(std::time::Duration::from_secs_f64(
-            len as f64 / rate as f64,
-        )),
+        (Some(rate), Some(len)) if rate > 0 => {
+            Some(std::time::Duration::from_secs_f64(len as f64 / rate as f64))
+        }
         _ => None,
     }
 }

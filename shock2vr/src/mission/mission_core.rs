@@ -4307,9 +4307,10 @@ impl MissionCore {
                             // Observability: speech is the loudest source of
                             // overlapping audio, so trace it like the rest.
                             let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-                            let mut sound_tags =
-                                vec![("kind".to_string(), "speech".to_string()),
-                                     ("concept".to_string(), concept.clone())];
+                            let mut sound_tags = vec![
+                                ("kind".to_string(), "speech".to_string()),
+                                ("concept".to_string(), concept.clone()),
+                            ];
                             sound_tags.extend(tags.iter().cloned());
                             crate::audio_log::record(crate::audio_log::SoundRecord {
                                 sample: &sample_name,

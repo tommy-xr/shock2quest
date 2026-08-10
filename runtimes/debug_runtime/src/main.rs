@@ -380,9 +380,7 @@ async fn start_http_server(
         "  POST /v1/input/action     - Trigger a discrete input action (e.g. PathfindingTestCycle)"
     );
     info!("  GET  /v1/input/actions    - List available input actions");
-    info!(
-        "  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)"
-    );
+    info!("  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)");
     info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
