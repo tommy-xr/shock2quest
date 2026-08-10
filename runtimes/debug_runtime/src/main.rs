@@ -905,7 +905,7 @@ fn process_command(
                 let mask = RaycastMask {
                     groups: request
                         .collision_groups
-                        .unwrap_or_else(|| vec!["entity".to_string(), "level".to_string()]),
+                        .unwrap_or_else(|| vec!["world".to_string(), "entity".to_string()]),
                     ignore_sensors: request.ignore_sensors.unwrap_or(false),
                 };
 
@@ -2923,16 +2923,64 @@ async fn list_transitions(
 }
 
 /// HTTP handler for physics raycast
+fn normalize_raycast_collision_groups(
+    collision_groups: Option<Vec<String>>,
+) -> Result<Vec<String>, (StatusCode, String)> {
+    const VALID_GROUPS: [&str; 8] = [
+        "world",
+        "entity",
+        "selectable",
+        "player",
+        "ui",
+        "hitbox",
+        "raycast",
+        "all",
+    ];
+
+    let Some(collision_groups) = collision_groups else {
+        return Ok(vec!["world".to_string(), "entity".to_string()]);
+    };
+    if collision_groups.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "collision_groups must contain at least one group".to_string(),
+        ));
+    }
+
+    collision_groups
+        .into_iter()
+        .map(|group| {
+            if group == "level" {
+                Ok("world".to_string())
+            } else if VALID_GROUPS.contains(&group.as_str()) {
+                Ok(group)
+            } else {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "unknown collision group '{}'; expected one of: {} (level is an alias for world)",
+                        group,
+                        VALID_GROUPS.join(", ")
+                    ),
+                ))
+            }
+        })
+        .collect()
+}
+
 async fn perform_raycast(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
-    LenientJson(request): LenientJson<RayCastRequest>,
-) -> Json<RayCastResult> {
+    LenientJson(mut request): LenientJson<RayCastRequest>,
+) -> Result<Json<RayCastResult>, (StatusCode, String)> {
+    request.collision_groups = Some(normalize_raycast_collision_groups(
+        request.collision_groups,
+    )?);
     let (reply_tx, reply_rx) = oneshot::channel();
 
     // Send raycast command to game loop
     if let Err(_) = command_tx.send(RuntimeCommand::RayCast(request, reply_tx)) {
         tracing::error!("Failed to send RayCast command - game loop receiver dropped");
-        return Json(RayCastResult {
+        return Ok(Json(RayCastResult {
             hit: false,
             hit_point: None,
             hit_normal: None,
@@ -2942,15 +2990,15 @@ async fn perform_raycast(
             body_id: None,
             collision_group: None,
             is_sensor: false,
-        });
+        }));
     }
 
     // Wait for response
     match reply_rx.await {
-        Ok(result) => Json(result),
+        Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive raycast result - sender dropped");
-            Json(RayCastResult {
+            Ok(Json(RayCastResult {
                 hit: false,
                 hit_point: None,
                 hit_normal: None,
@@ -2960,7 +3008,7 @@ async fn perform_raycast(
                 body_id: None,
                 collision_group: None,
                 is_sensor: false,
-            })
+            }))
         }
     }
 }
@@ -3563,5 +3611,37 @@ mod shutdown_tests {
             command_rx.try_recv(),
             Ok(RuntimeCommand::Shutdown)
         ));
+    }
+
+    #[test]
+    fn raycast_collision_groups_default_to_world_and_entity() {
+        assert_eq!(
+            normalize_raycast_collision_groups(None).unwrap(),
+            ["world", "entity"]
+        );
+    }
+
+    #[test]
+    fn raycast_collision_groups_preserve_level_as_world_alias() {
+        assert_eq!(
+            normalize_raycast_collision_groups(Some(vec!["level".to_string()])).unwrap(),
+            ["world"]
+        );
+    }
+
+    #[test]
+    fn raycast_collision_groups_reject_unknown_and_empty_masks() {
+        let unknown =
+            normalize_raycast_collision_groups(Some(vec!["bogus".to_string()])).unwrap_err();
+        assert_eq!(unknown.0, StatusCode::BAD_REQUEST);
+        assert!(unknown.1.contains("unknown collision group 'bogus'"));
+
+        let empty = normalize_raycast_collision_groups(Some(vec![])).unwrap_err();
+        assert_eq!(empty.0, StatusCode::BAD_REQUEST);
+        assert!(
+            empty
+                .1
+                .contains("collision_groups must contain at least one group")
+        );
     }
 }

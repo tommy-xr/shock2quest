@@ -108,12 +108,21 @@ await game.waitFor(
 
 // Screenshots and physics
 await game.screenshot("test.png");
-await game.raycast({ start: [0, 0, 0], end: [10, 0, 0] });
+await game.raycast({
+  start: [0, 0, 0],
+  end: [10, 0, 0],
+  collision_groups: ["world", "entity"],
+});
 
 // Recently played environmental sounds (resolved schema sample + query tags) -
 // the headless way to assert audio, e.g. weapon impact sounds.
 const { sounds } = await game.audio.recent();
 ```
+
+Raycasts default to `world` and `entity`. Supported groups are `world`,
+`entity`, `selectable`, `player`, `ui`, `hitbox`, `raycast`, and `all`;
+`level` remains accepted as an alias for `world`. Unknown groups and explicit
+empty masks are rejected with HTTP 400 instead of being reported as clear rays.
 
 To attach to a runtime you started yourself (`cargo dbgr -- --mission ... --port 8080`):
 
