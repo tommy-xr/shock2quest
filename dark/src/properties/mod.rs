@@ -2492,6 +2492,37 @@ mod tests {
         assert!(links.to_links.is_empty());
     }
 
+    /// Dark stores chunk names in a fixed 12-byte field (see
+    /// `ss2_chunk_file_reader::read_table_of_contents`), so an editor property
+    /// name longer than 11 characters is truncated on disk. Chunk lookup is an
+    /// exact match, so a longer registered name silently never parses - which
+    /// is exactly how `P$AI_AlertCap` went unparsed for every entity.
+    #[test]
+    fn registered_chunk_names_fit_the_11_char_chunk_field() {
+        // `P$AI_AwrDel2` is the same bug (the real chunk is `P$AI_AwrDel`), but
+        // the one shipped entry - Security Camera, template -367 - stores
+        // to_two = -1, a sentinel `AlertnessTimings::from_aware_delay` would
+        // turn into a ~50-day escalation delay, so simply renaming it would
+        // stop cameras alerting. Left broken deliberately until the sentinel is
+        // handled; see the tracking issue.
+        const KNOWN_TRUNCATED: [&str; 1] = ["P$AI_AwrDel2"];
+
+        let (props, _, _) = get::<io::Cursor<Vec<u8>>>();
+        let too_long: Vec<String> = props
+            .iter()
+            .map(|p| p.name())
+            // `__`-prefixed names are internal runtime-only properties with no
+            // chunk on disk, so the field width does not apply to them.
+            .filter(|name| !name.starts_with("__"))
+            .filter(|name| name.len() > 11 && !KNOWN_TRUNCATED.contains(&name.as_str()))
+            .collect();
+        assert!(
+            too_long.is_empty(),
+            "these registered property names exceed the 11-character chunk-name \
+             field and can never match a chunk: {too_long:?}"
+        );
+    }
+
     #[test]
     fn deserialize_skips_values_json_cannot_round_trip() {
         // A live world can still hold non-finite floats (e.g. physics NaNs);

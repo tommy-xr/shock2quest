@@ -755,7 +755,9 @@ impl Script for AnimatedMonsterAI {
         // keeps that idle for the whole mission - including one flagged to
         // patrol, which then never takes a step of its authored route (#807).
         // (Selecting AFTER seeding alertness also keeps the two in step for a
-        // `P$AI_AlertC` whose `min_level` is above `Lowest`.)
+        // `P$AI_AlertC` whose `min_level` is above `Lowest`; every shipped
+        // entry has min_level = Lowest, so in practice every creature still
+        // starts on the calm arm.)
         //
         // This also holds a creature excluded from awareness entirely (an
         // apparition - see `build_config`) still, which the previous

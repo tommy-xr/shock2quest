@@ -239,7 +239,10 @@ pub fn clamp_level(level: AIAlertLevel, cap: &PropAIAlertCap) -> AIAlertLevel {
     let raw = level_to_u32(level);
     let min = level_to_u32(cap.min_level);
     let max = level_to_u32(cap.max_level);
-    let clamped = raw.clamp(min, max);
+    // `min.min(max)`, not `min`: `Ord::clamp` panics when min > max, and both
+    // bounds now come from mission bytes (an out-of-range level parses as
+    // `High` via `AIAlertLevel::from_raw`).
+    let clamped = raw.clamp(min.min(max), max);
     AIAlertLevel::from_u32(clamped).unwrap_or(cap.max_level)
 }
 
@@ -518,5 +521,20 @@ mod tests {
             clamp_level(AIAlertLevel::High, &cap),
             AIAlertLevel::Moderate
         );
+    }
+
+    /// Both bounds come from mission data now that `P$AI_AlertC` parses, and an
+    /// out-of-range level reads back as `High` - so an inverted cap must clamp
+    /// to `max_level` rather than panic inside `Ord::clamp`.
+    #[test]
+    fn test_clamp_level_with_inverted_cap_does_not_panic() {
+        let cap = PropAIAlertCap {
+            max_level: AIAlertLevel::Lowest,
+            min_level: AIAlertLevel::High,
+            min_relax: AIAlertLevel::Lowest,
+        };
+
+        assert_eq!(clamp_level(AIAlertLevel::High, &cap), AIAlertLevel::Lowest);
+        assert_eq!(clamp_level(AIAlertLevel::Lowest, &cap), AIAlertLevel::Lowest);
     }
 }

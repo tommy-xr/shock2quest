@@ -43,7 +43,6 @@ test(
       (e) => e.name.startsWith("OG-"),
     );
     assert.ok(hybrids.length >= 2, `expected hybrids in medsci1, got ${hybrids.length}`);
-    const probe = hybrids[0];
 
     // Baseline distances BEFORE pinning - convergence is measured from the
     // moment the pin lands, before anyone starts moving. (The pin phase runs
@@ -63,11 +62,21 @@ test(
     let detail: EntityDetailResult;
     await game.input.trigger("DebugForceChase");
     await game.step({ frames: 30 });
-    detail = await game.entities.detail(probe.id);
+    // Probe whichever hybrid actually took the pin, rather than the nearest:
+    // medsci1's scripted vent hybrid (mission object 613) authors an alert cap
+    // of Lowest (P$AI_AlertC), so it legitimately cannot be alerted at all.
+    const pinned = [];
+    for (const h of hybrids) {
+      const d = await game.entities.detail(h.id);
+      if (["Moderate", "High"].includes(aiProp(d, "AIAlertness") ?? "")) {
+        pinned.push(h);
+      }
+    }
     assert.ok(
-      ["Moderate", "High"].includes(aiProp(detail, "AIAlertness") ?? ""),
-      `expected pinned alertness, got ${aiProp(detail, "AIAlertness")}`,
+      pinned.length >= 2,
+      `expected at least 2 hybrids to take the pinned alertness, got ${pinned.length}`,
     );
+    const probe = pinned[0];
     await game.step({ frames: 600 });
     detail = await game.entities.detail(probe.id);
     assert.ok(
