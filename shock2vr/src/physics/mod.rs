@@ -244,6 +244,13 @@ fn player_character_controller() -> KinematicCharacterController {
 /// collider and the rungs, so the un-inflated shapes never intersect.
 const CLIMB_REACH: f32 = 1.0 / SCALE_FACTOR;
 
+/// How far ahead a downward-pitched approach may acquire a ladder.
+/// Hydro2 Sector C's office landing leaves about one player footprint between
+/// its edge and the nearest Rick Ladder grip. Looking down and walking toward
+/// it must preserve descent intent across that gap, before gravity wins the
+/// race to ordinary contact.
+const CLIMB_DESCENT_ACQUIRE_FORWARD: f32 = 2.0 * PLAYER_STANDING_RADIUS / SCALE_FACTOR;
+
 /// Climb speed as a fraction of walk speed (the into-ladder input component is
 /// redirected to vertical movement at this scale).
 const CLIMB_SPEED_SCALE: f32 = 0.6;
@@ -608,6 +615,7 @@ fn try_step_up(
 struct ClimbPass<'a> {
     movement: Vector<Real>,
     top_out: Option<(Vector<Real>, Real)>,
+    descent_approach: bool,
     validation_queries: QueryPipeline<'a>,
     probe_queries: QueryPipeline<'a>,
     scripted_queries: QueryPipeline<'a>,
@@ -1596,6 +1604,7 @@ fn step_player_movement(
     if let Some(ClimbPass {
         movement: climb,
         top_out,
+        descent_approach,
         validation_queries,
         probe_queries: climb_queries,
         scripted_queries,
@@ -1617,7 +1626,11 @@ fn step_player_movement(
                 return top_out;
             }
         }
-        let mvt = controller.move_shape(dt, &climb_queries, shape, pos, climb, |_c| ());
+        // Ground snapping belongs to ordinary stair/ledge walking. At a
+        // descent lip it can add a step-sized drop to the controlled redirect.
+        let mut climb_controller = *controller;
+        climb_controller.snap_to_ground = None;
+        let mvt = climb_controller.move_shape(dt, &climb_queries, shape, pos, climb, |_c| ());
         let climbed = mvt.translation.y * climb.y.signum();
         if climbed > CLIMB_MIN_PROGRESS_FRACTION * climb.y.abs() {
             return PlayerMovement {
@@ -1625,6 +1638,33 @@ fn step_player_movement(
                 top_out: None,
                 slope_displacement: Vector::zeros(),
             };
+        }
+        if descent_approach && climb.y < 0.0 {
+            // A descent probe can acquire the ladder while the capsule is
+            // still supported by the adjacent landing. Downward travel is
+            // blocked there, so preserve the grip (and suppress gravity) while
+            // collision-checked horizontal input carries the body to the lip.
+            // Once the floor clears, the vertical redirect above takes over.
+            let desired_h = vector![desired.x, 0.0, desired.z];
+            let approach_distance = desired_h.norm();
+            if approach_distance > 1.0e-6 {
+                let approach_mvt = climb_controller.move_shape(
+                    dt,
+                    &validation_queries,
+                    shape,
+                    pos,
+                    desired_h,
+                    |_c| (),
+                );
+                let progress = approach_mvt.translation.dot(&desired_h) / approach_distance;
+                if progress > CLIMB_MIN_PROGRESS_FRACTION * approach_distance {
+                    return PlayerMovement {
+                        movement: approach_mvt,
+                        top_out: None,
+                        slope_displacement: Vector::zeros(),
+                    };
+                }
+            }
         }
     }
     // Support motion first: the platform underfoot took the player with it
@@ -3907,58 +3947,73 @@ impl PhysicsWorld {
                 // (The collider-center direction is wrong when the player is
                 // off-center: it tilts away from the face, which under-reads
                 // the into-ladder push the grip test and climb speed use.)
-                let mut nearest: Option<(f32, Vector<Real>)> = None;
-                for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
-                    let contact = rapier3d::parry::query::contact(
-                        &character_pos,
-                        character_shape.as_ref(),
-                        collider.position(),
-                        collider.shape(),
-                        CLIMB_REACH,
-                    );
-                    if let Ok(Some(contact)) = contact {
-                        // normal1 points from the player toward the climbable.
-                        let toward_h = vector![contact.normal1.x, 0.0, contact.normal1.z];
-                        let toward_norm = toward_h.norm();
-                        // A mostly-vertical normal means the player is on top of
-                        // (or under) the surface - that's standing, not climbing.
-                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _)| contact.dist < d) {
-                            let toward = toward_h / toward_norm;
-                            nearest = Some((contact.dist, toward));
+                let nearest_at = |probe_pos: &Isometry<Real>| {
+                    let mut nearest: Option<(f32, Vector<Real>)> = None;
+                    for (_handle, collider) in queries.intersect_shape(*probe_pos, &inflated) {
+                        let contact = rapier3d::parry::query::contact(
+                            probe_pos,
+                            character_shape.as_ref(),
+                            collider.position(),
+                            collider.shape(),
+                            CLIMB_REACH,
+                        );
+                        if let Ok(Some(contact)) = contact {
+                            // normal1 points from the player toward the climbable.
+                            let toward_h = vector![contact.normal1.x, 0.0, contact.normal1.z];
+                            let toward_norm = toward_h.norm();
+                            // A mostly-vertical normal means the player is on top of
+                            // (or under) the surface - that's standing, not climbing.
+                            if toward_norm > 0.5 && nearest.is_none_or(|(d, _)| contact.dist < d) {
+                                let toward = toward_h / toward_norm;
+                                nearest = Some((contact.dist, toward));
+                            }
                         }
                     }
-                }
-                nearest.and_then(|(_, toward)| {
-                    climb_redirect(desired_movement, toward).map(|movement| {
-                        let top_out = if near_column_top && !player_handle.is_crouched {
-                            climb_top_out_direction(desired_movement, facing).map(|direction| {
-                                // Stay compressed until projected facing has
-                                // exited every horizontally-expanded climbable
-                                // AABB in this ladder column.
-                                let capsule_clearance =
-                                    capsule.radius + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
-                                let minimum_clear_forward = queries
-                                    .intersect_shape(character_pos, &column_probe)
-                                    .filter_map(|(_, collider)| {
-                                        climbable_aabb_exit_distance(
-                                            character_pos.translation.vector,
-                                            direction,
-                                            &collider.compute_aabb(),
-                                            capsule_clearance,
-                                        )
-                                    })
-                                    .fold(0.0, f32::max);
-                                (direction, minimum_clear_forward)
-                            })
-                        } else {
-                            None
-                        };
-                        (movement, top_out)
-                    })
+                    nearest
+                };
+
+                let direct_grip = nearest_at(&character_pos)
+                    .and_then(|(_, toward)| climb_redirect(desired_movement, toward));
+                let descent_grip = vector![desired_movement.x, 0.0, desired_movement.z]
+                    .try_normalize(1.0e-6)
+                    .and_then(|direction| {
+                        let probe_pos =
+                            Translation::from(direction * CLIMB_DESCENT_ACQUIRE_FORWARD)
+                                * character_pos;
+                        nearest_at(&probe_pos).and_then(|(_, toward)| {
+                            climb_redirect(desired_movement, toward)
+                                .filter(|movement| movement.y < 0.0)
+                        })
+                    });
+                let grip = direct_grip.or(descent_grip);
+                grip.map(|movement| {
+                    let top_out = if near_column_top && !player_handle.is_crouched {
+                        climb_top_out_direction(desired_movement, facing).map(|direction| {
+                            // Stay compressed until projected facing has
+                            // exited every horizontally-expanded climbable
+                            // AABB in this ladder column.
+                            let capsule_clearance =
+                                capsule.radius + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+                            let minimum_clear_forward = queries
+                                .intersect_shape(character_pos, &column_probe)
+                                .filter_map(|(_, collider)| {
+                                    climbable_aabb_exit_distance(
+                                        character_pos.translation.vector,
+                                        direction,
+                                        &collider.compute_aabb(),
+                                        capsule_clearance,
+                                    )
+                                })
+                                .fold(0.0, f32::max);
+                            (direction, minimum_clear_forward)
+                        })
+                    } else {
+                        None
+                    };
+                    (movement, top_out, movement.y < 0.0)
                 })
             })
         };
-
         // The climb cast collides with everything the walk does EXCEPT the
         // climbable surfaces themselves - see `ClimbPass`. Membership is checked
         // by predicate rather than by group filter because a ladder is also an
@@ -4044,9 +4099,10 @@ impl PhysicsWorld {
                         gravity,
                         Some(player_handle.slope_displacement),
                         airborne_vertical,
-                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                        climb_movement.map(|(movement, top_out, descent_approach)| ClimbPass {
                             movement,
                             top_out,
+                            descent_approach,
                             validation_queries: queries,
                             probe_queries: queries.with_filter(climb_pass_filter),
                             scripted_queries: queries.with_filter(scripted_top_out_filter),
@@ -7222,6 +7278,71 @@ mod tests {
         assert!(
             end.y < PLAYER_HALF_HEIGHT + 0.1,
             "the descent must carry the player to the shaft floor, ended {end:?}"
+        );
+    }
+
+    /// Issue #802: hydro2's lower Sector C office landing ends about one player
+    /// footprint before its Rick Ladder can qualify for an ordinary contact
+    /// grip. A downward approach must preserve descent intent across that lip,
+    /// instead of letting gravity accelerate the player before contact.
+    #[test]
+    fn player_acquires_hydro2_office_ladder_before_lip_fall() {
+        let quad = |z0: f32, z1: f32, y: f32| {
+            let verts = vec![
+                point![-100.0, y, z0],
+                point![100.0, y, z0],
+                point![100.0, y, z1],
+                point![-100.0, y, z1],
+            ];
+            ColliderBuilder::trimesh(verts, vec![[0u32, 1, 2], [0, 2, 3]]).expect("trimesh")
+        };
+
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            quad(-100.0, 100.0, -2.0).build(),
+        );
+        // Exact authored relationship from the returning office route: floor
+        // y=2.4, edge z=23.8, rung center z=22.2. The rung is wide on x, thin
+        // on z, and its zero authored height is clamped to 0.01.
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            quad(23.8, 100.0, 2.4).build(),
+        );
+        for rung in 0..11 {
+            world.add_kinematic(
+                EntityId::from_inner(2001 + rung).unwrap(),
+                vec3(0.0, -2.0 + 0.8 * rung as f32, 22.2),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(3.2, 0.01, 0.2),
+                CollisionGroup::climbable_entity(),
+                false,
+            );
+        }
+
+        let mut player =
+            world.create_player(vec3(0.0, 3.644, 24.0), EntityId::from_inner(3000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let descend = Vector3::new(0.0, -walk * 0.6, -walk * 0.8);
+        let start = world.get_player_translation(&player);
+        let mut previous = world.get_player_translation(&player);
+        let mut max_frame_drop = 0.0f32;
+        for _ in 0..60 {
+            world.update(descend, &mut player);
+            let current = world.get_player_translation(&player);
+            max_frame_drop = max_frame_drop.max(previous.y - current.y);
+            previous = current;
+        }
+        let acquired = world.get_player_translation(&player);
+
+        assert!(
+            start.y - acquired.y > 2.0 && (acquired.z - 22.2).abs() < 1.2 && max_frame_drop < 0.1,
+            "the office-lip approach must descend at climb speed instead of free-falling before contact, started {start:?}, ended {acquired:?}, max frame drop {max_frame_drop}"
         );
     }
 
