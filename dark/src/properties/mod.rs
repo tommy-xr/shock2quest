@@ -1175,7 +1175,9 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop("P$AI_Team", PropAITeam::read, identity, accumulator::latest),
         define_prop(
-            "P$AI_AlertCap",
+            // Dark truncates property chunk names to 11 characters, so the
+            // chunk in the game files is "P$AI_AlertC", not "P$AI_AlertCap".
+            "P$AI_AlertC",
             PropAIAlertCap::read,
             identity,
             accumulator::latest,
