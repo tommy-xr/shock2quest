@@ -34,6 +34,11 @@ const PLAYER_STANDING_RADIUS: f32 = 1.2;
 /// axis, so "in front of the eye" is only outside the collider beyond this).
 pub const PLAYER_STANDING_RADIUS_WORLD: f32 = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 
+/// Conservative living-creature radius used to vet synthesized navigation
+/// crossings. Three Dark feet covers the widest current creature capsule and
+/// matches path waypoint corner clearance.
+pub const NAV_ACTOR_SWEEP_RADIUS_WORLD: f32 = 3.0 / SCALE_FACTOR;
+
 /// Height of the player's head sphere above the body origin (SS2 ft),
 /// `(PLAYER_HEIGHT / 2) - PLAYER_RADIUS` in the original game's collision
 /// profile. The original's first-person camera is anchored to this submodel,
@@ -4210,6 +4215,106 @@ impl PhysicsWorld {
         )
     }
 
+    /// Populate Rapier's broad-phase acceleration structure without advancing
+    /// simulation time.
+    ///
+    /// Mission construction needs spatial queries after all colliders exist
+    /// but before the first physics frame. Rapier normally builds this index
+    /// inside `PhysicsPipeline::step`; inserting only the collider AABBs keeps
+    /// load-time validation read-only and leaves both collider changes and
+    /// collision-pair events for the normal first step.
+    pub fn prepare_spatial_queries(&mut self) {
+        let aabbs: Vec<_> = self
+            .collider_set
+            .iter()
+            .filter(|(_, collider)| collider.is_enabled())
+            .map(|(handle, collider)| {
+                (
+                    handle,
+                    collider.compute_broad_phase_aabb(
+                        &self.integration_parameters,
+                        &self.rigid_body_set,
+                    ),
+                )
+            })
+            .collect();
+        for (handle, aabb) in aabbs {
+            self.broad_phase
+                .set_aabb(&self.integration_parameters, handle, aabb);
+        }
+    }
+
+    /// Whether a creature-width sphere can move between two torso-height
+    /// points without hitting actor-solid world/entity geometry.
+    ///
+    /// `pass_through` excludes transient or operable blockers such as living
+    /// creatures and doors. Collision groups still use an ACTOR membership,
+    /// so interaction-only fixtures that opt out of character collision do
+    /// not reject a navigation crossing.
+    pub fn actor_sweep_is_clear(
+        &self,
+        start: Point3<f32>,
+        end: Point3<f32>,
+        radius: f32,
+        pass_through: impl Fn(EntityId) -> bool,
+    ) -> bool {
+        let delta = end - start;
+        let distance = delta.magnitude();
+        if !radius.is_finite()
+            || radius <= 0.0
+            || !distance.is_finite()
+            || !start.x.is_finite()
+            || !start.y.is_finite()
+            || !start.z.is_finite()
+        {
+            return false;
+        }
+
+        let predicate = |_handle: ColliderHandle, collider: &Collider| {
+            if collider.is_sensor()
+                || EntityId::from_inner(collider.user_data as u64).is_some_and(&pass_through)
+            {
+                return false;
+            }
+            let aabb = collider.compute_aabb();
+            aabb.mins.iter().all(|v| v.is_finite())
+                && aabb.extents().iter().all(|e| e.is_finite() && *e > 1.0e-5)
+        };
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::ACTOR.bits.into(),
+                (InternalCollisionGroups::WORLD.bits | InternalCollisionGroups::ENTITIES.bits)
+                    .into(),
+                Default::default(),
+            ))
+            .predicate(&predicate);
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        let shape = Ball::new(radius);
+        let position = Isometry::translation(start.x, start.y, start.z);
+        if distance <= 1.0e-6 {
+            return queries.intersect_shape(position, &shape).next().is_none();
+        }
+        queries
+            .cast_shape(
+                &position,
+                &vec_to_nvec(delta / distance),
+                &shape,
+                rapier3d::parry::query::ShapeCastOptions {
+                    max_time_of_impact: distance,
+                    target_distance: 0.0,
+                    stop_at_penetration: false,
+                    compute_impact_geometry_on_penetration: true,
+                },
+            )
+            .is_none()
+    }
+
     fn ray_cast2_with_memberships(
         &self,
         query_memberships: InternalCollisionGroups,
@@ -6003,6 +6108,46 @@ mod tests {
             (end.x - start.x).abs() < 0.02,
             "player must not be dragged along by a wall they only brush: moved {} in x",
             end.x - start.x,
+        );
+    }
+
+    #[test]
+    fn actor_sweep_catches_width_obstruction_that_a_center_ray_misses() {
+        let (mut world, _player) = world_with_floor();
+        let wall_id = EntityId::from_inner(2090).unwrap();
+        world.add_kinematic(
+            wall_id,
+            vec3(0.0, 1.4, 0.8),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 3.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.prepare_spatial_queries();
+        let start = point3(-2.0, 1.4, 0.0);
+        let end = point3(2.0, 1.4, 0.0);
+        assert!(
+            world
+                .ray_cast2_as_actor(
+                    start,
+                    end - start,
+                    (end - start).magnitude(),
+                    InternalCollisionGroups::WORLD | InternalCollisionGroups::ENTITIES,
+                    None,
+                    true,
+                )
+                .is_none(),
+            "the old point-ray validator must miss this off-center obstruction"
+        );
+        assert!(
+            !world.actor_sweep_is_clear(start, end, NAV_ACTOR_SWEEP_RADIUS_WORLD, |_| false),
+            "a creature-width sweep must reject the same crossing"
+        );
+        assert!(
+            world
+                .actor_sweep_is_clear(start, end, NAV_ACTOR_SWEEP_RADIUS_WORLD, |id| id == wall_id),
+            "operable/transient entities can be explicitly passed through"
         );
     }
 

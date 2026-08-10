@@ -380,7 +380,7 @@ export class EntitiesApi {
   }
 
   /**
-   * Inject a script message into an entity (damage, frob, AI signal).
+   * Inject a debug entity message (damage, frob, AI signal, lock state).
    *
    * The message is queued and delivered on the next step(); throws if the
    * entity is not found or not alive.
@@ -618,7 +618,9 @@ export class PathfindingApi {
    * Monotonic pathfinding query counters, or null when the scene has no
    * pathfinding data. Diff snapshots across steps to measure per-frame load.
    * Counts every find_path caller, including unbudgeted ones (e.g. the
-   * interactive pathfinding test).
+   * interactive pathfinding test). The number of graph searches is `queries +
+   * stressed_retries + partial_searches`; the last term counts the
+   * full-component Dijkstra fallback hidden behind an unreachable full route.
    */
   async stats(): Promise<PathfindingStats | null> {
     return this.client.get<PathfindingStats | null>("/v1/pathfinding/stats");

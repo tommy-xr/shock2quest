@@ -1104,57 +1104,31 @@ impl MissionCore {
         }
 
         let nav_bridges = game_options.experimental_features.contains("nav_bridges");
-        // Vet nav crossings (island bridges, relaxed blocking-cell
-        // traversal) against real geometry: a torso-height ray between the
-        // two points must be clear, so routes can't run through railings,
-        // thin walls (issue #481), or furniture spanning the corridor
-        // (issue #489). Doors and creatures don't count as blockers - doors
-        // open at runtime and creatures wander off - so the ray advances
-        // past those hits (bounded).
+        if nav_bridges {
+            // Rapier normally populates its spatial-query BVH on the first
+            // physics step. Bridge validation happens during construction, so
+            // prepare the index now without advancing the mission.
+            physics.prepare_spatial_queries();
+        }
+        // Vet synthesized island crossings against real geometry with a
+        // widest-creature sphere sweep over the exact measured gap. A point
+        // ray can pass beside a railing/wall that the creature's body still
+        // clips. Doors and creatures don't count as permanent blockers:
+        // doors open at runtime and creatures wander off.
         let nav_validator = |from: cgmath::Vector3<f32>, to: cgmath::Vector3<f32>| -> bool {
-            let delta = to - from;
-            let total = delta.magnitude();
-            if total <= f32::EPSILON {
-                return true;
-            }
-            let direction = delta / total;
-            let mut origin = Point3::new(from.x, from.y, from.z);
-            let mut remaining = total;
-            // A crossing rarely stacks more than a couple of pass-through
-            // entities; bail as blocked beyond that
-            for _ in 0..4 {
-                let Some(hit) = physics.ray_cast2_as_actor(
-                    origin,
-                    direction,
-                    remaining,
-                    crate::physics::InternalCollisionGroups::WORLD
-                        | crate::physics::InternalCollisionGroups::ENTITIES,
-                    None,
-                    true,
-                ) else {
-                    return true;
-                };
-                let pass_through = hit
-                    .maybe_entity_id
-                    .map(|id| {
-                        crate::scripts::ai::ai_util::is_entity_door(&world, id)
-                            || world
-                                .borrow::<View<PropCreature>>()
-                                .map(|v| v.contains(id))
-                                .unwrap_or(false)
-                    })
-                    .unwrap_or(false);
-                if !pass_through {
-                    return false;
-                }
-                let travelled = (hit.hit_point - origin).magnitude() + 0.05;
-                if travelled >= remaining {
-                    return true;
-                }
-                remaining -= travelled;
-                origin += direction * travelled;
-            }
-            false
+            physics.actor_sweep_is_clear(
+                Point3::new(from.x, from.y, from.z),
+                Point3::new(to.x, to.y, to.z),
+                crate::physics::NAV_ACTOR_SWEEP_RADIUS_WORLD,
+                |id| {
+                    id == player_entity
+                        || crate::scripts::ai::ai_util::is_entity_door(&world, id)
+                        || world
+                            .borrow::<View<PropCreature>>()
+                            .map(|v| v.contains(id))
+                            .unwrap_or(false)
+                },
+            )
         };
         let pathfinding_service = abstract_mission.path_database.as_ref().map(|db| {
             Arc::new(PathfindingService::with_nav_options(
@@ -6597,6 +6571,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .run(|v: View<dark::properties::PropMaxHitPoints>| {
                 v.get(id).ok().map(|hp| hp.hit_points)
             });
+        let locked = self
+            .world
+            .run(|v: View<dark::properties::PropLocked>| v.get(id).ok().map(|value| value.0));
+        let door_blocks_pathfinding = crate::scripts::script_util::door_is_closed(&self.world, id)
+            .map(|_| crate::scripts::script_util::door_blocks_pathfinding(&self.world, id));
         // Most ecologies author no explicit P$EcoState; they behave as Normal
         // until their script's first transition creates the component.
         let ecology_state = self.world.run(
@@ -6691,6 +6670,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "MaxHitPoints".to_string(),
                         value: max_hit_points.to_string(),
+                    });
+                }
+                if let Some(locked) = locked {
+                    properties.push(DebugPropertyInfo {
+                        name: "Locked".to_string(),
+                        value: locked.to_string(),
+                    });
+                }
+                if let Some(blocks) = door_blocks_pathfinding {
+                    properties.push(DebugPropertyInfo {
+                        name: "DoorBlocksPathfinding".to_string(),
+                        value: blocks.to_string(),
                     });
                 }
                 if let Some(state) = ecology_state {
@@ -7593,6 +7584,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 queries: stats.queries,
                 stressed_retries: stats.stressed_retries,
                 no_route: stats.no_route,
+                partial_searches: stats.partial_searches,
             }
         })
     }
@@ -7639,6 +7631,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return false;
         }
 
+        if let DebugEntityMessage::SetLocked { locked } = &message {
+            crate::scripts::script_util::set_entity_locked(&mut self.world, id, *locked);
+            return true;
+        }
+
         let payload = match message {
             DebugEntityMessage::Damage {
                 amount,
@@ -7676,6 +7673,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             DebugEntityMessage::SetAlertness { level } => {
                 MessagePayload::SetAlertness { level, pin: false }
             }
+            DebugEntityMessage::SetLocked { .. } => unreachable!("handled above"),
             // Debug injections have no real sender; use the target itself.
             DebugEntityMessage::TurnOn => MessagePayload::TurnOn { from: id },
             DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },
