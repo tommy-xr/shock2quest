@@ -73,14 +73,24 @@ test(
     // message would not prove an ordinary player can reach the feature.
     const [keypadX, keypadY, keypadZ] = keypadDetail.position;
     await teleportVerified(game, {
-      x: keypadX - 1.63,
+      // Preserve the existing clear approach vector while keeping the
+      // selectable surface inside retail's sqrt(50) / 2.5 frob reach.
+      x: keypadX - 0.98,
       y: keypadY - 1,
-      z: keypadZ + 3.25,
+      z: keypadZ + 1.95,
     });
     // Aim through the production look-at (it accounts for Earth's authored
     // body heading and reads the live camera height) rather than a fixed
     // pitch tuned to one camera position.
-    await game.input.lookAtWorldPoint(keypadDetail.position);
+    const keypadAim = await game.player.aimAt(keypad, {
+      hitbox: "center",
+      visibility: "required",
+    });
+    assert.equal(
+      keypadAim.target_confirmed,
+      true,
+      `keypad staging must expose its selectable surface: ${JSON.stringify(keypadAim)}`,
+    );
     await game.step({ frames: 2 });
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 2 });

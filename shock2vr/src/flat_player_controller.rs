@@ -24,7 +24,7 @@ use crate::{
     scripts::{Message, MessagePayload},
     util::resolve_proxy_entity,
     virtual_hand::{
-        VirtualHandEffect, can_grab_item, is_wieldable_weapon, uses_scripted_world_frob,
+        FROB_REACH, VirtualHandEffect, can_grab_item, is_wieldable_weapon, uses_scripted_world_frob,
     },
 };
 
@@ -158,14 +158,17 @@ impl FlatPlayerController {
         let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
         self.last_aim = Some((point3(camera_pos.x, camera_pos.y, camera_pos.z), forward));
         let highlighted = physics
-            .ray_cast(
+            .ray_cast2(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
                 forward,
+                FROB_REACH,
                 InternalCollisionGroups::ENTITIES
                     | InternalCollisionGroups::SELECTABLE
                     | InternalCollisionGroups::WORLD
                     | InternalCollisionGroups::UI
                     | InternalCollisionGroups::RAYCAST,
+                None,
+                true,
             )
             .and_then(|r| r.maybe_entity_id)
             .map(|e| resolve_proxy_entity(world, e))
@@ -299,6 +302,8 @@ fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
 mod tests {
     use super::*;
     use dark::properties::{FrobFlag, KeyCard, PropFrobInfo, PropKeySrc, PropPlayerGun};
+
+    use crate::physics::CollisionGroup;
 
     fn frob_info(world_action: FrobFlag) -> PropFrobInfo {
         PropFrobInfo {
@@ -476,6 +481,58 @@ mod tests {
                 }] if *to == quest_item
             ),
             "an authored MOVE | SCRIPT pickup must run its Frob path exactly once; got {effects:?}"
+        );
+    }
+
+    /// Retail `GAMEPARAM` authors `Frob Dist = 50`, which the original picker
+    /// treats as squared SS2 units. After this engine's 2.5 world-scale divide,
+    /// a surface farther than `sqrt(50) / 2.5` must not highlight or frob.
+    #[test]
+    fn crosshair_does_not_frob_a_visible_entity_beyond_retail_reach() {
+        let mut world = World::new();
+        let target = world.add_entity(frob_info(FrobFlag::SCRIPT));
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, -4.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let mut player = physics.create_player(
+            vec3(100.0, 100.0, 100.0),
+            EntityId::from_inner(1000).unwrap(),
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let ray_hit = physics
+            .ray_cast(
+                point3(0.0, 0.0, 0.0),
+                vec3(0.0, 0.0, -1.0),
+                InternalCollisionGroups::SELECTABLE,
+            )
+            .expect("the fixture target must remain visible to an unbounded ray");
+        assert_eq!(ray_hit.maybe_entity_id, Some(target));
+
+        let (effects, highlighted) = FlatPlayerController::new().update(
+            &Hand {
+                squeeze_value: 1.0,
+                ..Hand::default()
+            },
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            0.0,
+            &world,
+            &physics,
+        );
+
+        assert_eq!(highlighted, None, "out-of-reach objects must not highlight");
+        assert!(
+            effects.is_empty(),
+            "out-of-reach use must emit no frob effects, got {effects:?}"
         );
     }
 }
