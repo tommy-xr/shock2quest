@@ -4,7 +4,7 @@ use cgmath::{InnerSpace, Point3, point3};
 use collision::Sphere;
 pub use merge_maps::*;
 
-use std::{path::Path, rc::Rc};
+use std::{io::Read, path::Path, rc::Rc};
 
 use engine::{assets::asset_cache::AssetCache, texture::Texture};
 use tracing::trace;
@@ -54,6 +54,108 @@ pub fn resolve_texture_name(asset_cache: &AssetCache, requested: &str) -> Option
         trace!("texture {requested} resolved to {resolved}");
     }
     Some(resolved)
+}
+
+/// Resolve the diffuse texture used by a Dark LGMD object material.
+///
+/// 25th Anniversary replacement models can attach a `.mtl` render-material
+/// script to the material name. The primary pass may select a different
+/// texture from the same-named bitmap.
+pub fn resolve_object_material_texture_name(
+    asset_cache: &AssetCache,
+    requested: &str,
+) -> Option<String> {
+    let redirected = object_material_primary_texture(asset_cache, requested);
+    let texture_name = redirected.as_deref().unwrap_or(requested);
+    let resolved = resolve_texture_name(asset_cache, texture_name);
+
+    if redirected.is_some() && resolved.is_none() {
+        return resolve_texture_name(asset_cache, requested);
+    }
+
+    resolved
+}
+
+fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) -> Option<String> {
+    let stem = Path::new(requested).with_extension("");
+    let stem = stem.to_str()?.to_ascii_lowercase();
+    let candidates = [
+        format!("{TEXTURE_SUBDIR}/{stem}.mtl"),
+        format!("{stem}.mtl"),
+    ];
+    let script_name = asset_cache
+        .asset_paths()
+        .resolve_first(asset_cache.base_path().to_owned(), &candidates)?;
+
+    let reader = asset_cache.get_raw_reader(&script_name)?;
+    let mut script = String::new();
+    reader.borrow_mut().read_to_string(&mut script).ok()?;
+    let texture = primary_render_pass_texture(&script)?;
+    trace!("object material {requested} primary pass redirects to {texture}");
+    Some(texture)
+}
+
+fn primary_render_pass_texture(script: &str) -> Option<String> {
+    let mut in_render_pass = false;
+    let mut saw_open_brace = false;
+    let mut brace_depth = 0_i32;
+
+    for raw_line in script.lines() {
+        let line = raw_line
+            .split_once("//")
+            .map_or(raw_line, |(code, _)| code)
+            .trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if !in_render_pass {
+            let directive = line.split_whitespace().next()?;
+            if !directive.eq_ignore_ascii_case("render_pass") {
+                continue;
+            }
+            in_render_pass = true;
+        }
+
+        let mut fields = line.split_whitespace();
+        if fields
+            .next()
+            .is_some_and(|field| field.eq_ignore_ascii_case("texture"))
+        {
+            let texture = fields.next()?.trim_matches('"');
+            if texture.eq_ignore_ascii_case("$texture") {
+                return None;
+            }
+            return normalize_material_texture_reference(texture);
+        }
+
+        brace_depth += line.chars().filter(|character| *character == '{').count() as i32;
+        if line.contains('{') {
+            saw_open_brace = true;
+        }
+        brace_depth -= line.chars().filter(|character| *character == '}').count() as i32;
+        if saw_open_brace && brace_depth <= 0 {
+            return None;
+        }
+    }
+
+    None
+}
+
+fn normalize_material_texture_reference(reference: &str) -> Option<String> {
+    let normalized = reference.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    let relative = if lower.starts_with("obj/txt16/") {
+        &normalized["obj/txt16/".len()..]
+    } else if lower.starts_with("obj/") {
+        &normalized["obj/".len()..]
+    } else if lower.starts_with("fam/") {
+        &normalized["fam/".len()..]
+    } else {
+        &normalized
+    };
+
+    (!relative.is_empty()).then(|| relative.to_owned())
 }
 
 /// Family archives keep their textures in this subdirectory (`obj/txt16/...`,
@@ -175,4 +277,85 @@ pub fn compute_bounding_sphere(vertices: &Vec<Point3<f32>>) -> Sphere<f32> {
     }
 
     sphere
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, collections::HashMap, io::Cursor};
+
+    use engine::assets::{
+        asset_cache::AssetCache,
+        asset_paths::{AbstractAssetPath, ReadableAndSeekable},
+    };
+
+    use super::resolve_object_material_texture_name;
+
+    struct FakeAssetPath(HashMap<String, Vec<u8>>);
+
+    impl AbstractAssetPath for FakeAssetPath {
+        fn exists(&self, _base_path: String, asset_name: String) -> bool {
+            self.0.contains_key(&asset_name)
+        }
+
+        fn get_reader(
+            &self,
+            _base_path: String,
+            asset_name: String,
+        ) -> Option<RefCell<Box<dyn ReadableAndSeekable>>> {
+            let bytes = self.0.get(&asset_name)?.clone();
+            Some(RefCell::new(Box::new(Cursor::new(bytes))))
+        }
+    }
+
+    fn cache(assets: &[(&str, &[u8])]) -> AssetCache {
+        let assets = assets
+            .iter()
+            .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
+            .collect();
+        AssetCache::new(String::new(), Box::new(FakeAssetPath(assets)))
+    }
+
+    #[test]
+    fn object_material_uses_primary_mtl_render_pass_texture() {
+        let asset_cache = cache(&[
+            (
+                "txt16/nd-airlock_scr.mtl",
+                b"render_material_only 1\nrender_pass\n{\n texture OBJ\\TXT16\\ND-airlock_2\n shaded 0\n}\n",
+            ),
+            ("txt16/nd-airlock_scr.dds", b"magenta helper"),
+            ("txt16/nd-airlock_2.dds", b"opaque door atlas"),
+        ]);
+
+        assert_eq!(
+            resolve_object_material_texture_name(&asset_cache, "ND-airlock_scr"),
+            Some("txt16/nd-airlock_2.dds".to_owned())
+        );
+    }
+
+    #[test]
+    fn object_material_without_mtl_keeps_ordinary_opaque_texture() {
+        let asset_cache = cache(&[("txt16/panel.dds", b"opaque panel")]);
+
+        assert_eq!(
+            resolve_object_material_texture_name(&asset_cache, "PANEL.PCX"),
+            Some("txt16/panel.dds".to_owned())
+        );
+    }
+
+    #[test]
+    fn object_material_texture_macro_keeps_the_authored_default() {
+        let asset_cache = cache(&[
+            (
+                "txt16/panel.mtl",
+                b"render_pass\n{\n texture $TEXTURE\n}\nrender_pass\n{\n texture OBJ\\TXT16\\reflection\n}\n",
+            ),
+            ("txt16/panel.dds", b"opaque panel"),
+            ("txt16/reflection.dds", b"reflection map"),
+        ]);
+
+        assert_eq!(
+            resolve_object_material_texture_name(&asset_cache, "PANEL.PCX"),
+            Some("txt16/panel.dds".to_owned())
+        );
+    }
 }

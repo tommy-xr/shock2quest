@@ -24,13 +24,14 @@ use tracing::{trace, warn};
 
 use crate::{
     SCALE_FACTOR,
+    importers::TEXTURE_IMPORTER,
     ss2_bin_header::SystemShock2BinHeader,
     ss2_common::{
         self, read_array_u16, read_bytes, read_i16, read_i32, read_matrix, read_packed_normal,
         read_point3, read_single, read_string_with_size, read_u8, read_u16, read_u32, read_vec3,
     },
     ss2_skeleton::{Bone, Skeleton},
-    util::load_multiple_textures_for_model,
+    util::{load_multiple_textures_for_model, resolve_object_material_texture_name},
 };
 
 // Dark LGMD polygons use clockwise front faces.
@@ -164,16 +165,19 @@ pub fn to_scene_objects(
                 tex_path = "soft12 .pcx".to_owned();
             }
 
-            let maybe_texture = crate::util::load_texture_with_fallback(asset_cache, &tex_path);
-
-            if maybe_texture.is_none() {
+            let Some(resolved_tex_path) =
+                resolve_object_material_texture_name(asset_cache, &tex_path)
+            else {
                 // Dropping the slot here makes part (or all) of a prop silently
                 // vanish from the world, so it is worth surfacing.
                 warn!("no texture for material \"{tex_path}\"; dropping mesh slot {slot}");
                 return None;
-            }
+            };
 
-            let texture = maybe_texture.unwrap();
+            let Some(texture) = asset_cache.get_opt(&TEXTURE_IMPORTER, &resolved_tex_path) else {
+                warn!("could not load resolved texture \"{resolved_tex_path}\"; dropping mesh slot {slot}");
+                return None;
+            };
 
             let geometry: Rc<Box<dyn engine::scene::Geometry>> = if is_skinned {
                 Rc::new(Box::new(engine::scene::mesh::create(verts)))
