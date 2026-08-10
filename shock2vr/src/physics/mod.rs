@@ -7225,6 +7225,103 @@ mod tests {
         );
     }
 
+    /// Issue #880: Command's Generator shaft has a recessed lower floor behind
+    /// the ladder and one local terrain lip. A crouched east-face descent must
+    /// cross that bounded lip onto real support, then remain able to reverse
+    /// direction and climb out. The north/south closures make walking around
+    /// the ladder impossible, matching the authored shaft.
+    ///
+    /// Negative-first: the vertical climb pass consumed every horizontal
+    /// component and had no bottom-out transition. The player stayed east of
+    /// the lower floor and fell below it, unsupported.
+    #[test]
+    fn player_bottoms_out_onto_a_recessed_ladder_floor_and_can_reverse() {
+        let floor = |x0: f32, x1: f32, y: f32| {
+            let vertices = vec![
+                point![x0, y, -100.0],
+                point![x1, y, -100.0],
+                point![x1, y, 100.0],
+                point![x0, y, 100.0],
+            ];
+            ColliderBuilder::trimesh(vertices, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+        };
+
+        let mut world = PhysicsWorld::new();
+        // Lower support exists only west of the shaft lip at x=-5. Command's
+        // reachable descent is on the unsupported east side.
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            floor(-100.0, -5.0, 0.0).build(),
+        );
+        // The authored local lip and the shaft's north/south closures are
+        // immutable terrain, not ladder entities. The transition may cross
+        // the one ladder lip, but there is no tangent bypass.
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            ColliderBuilder::cuboid(0.01, 4.0, 0.68)
+                .translation(vector![-5.0, 4.0, 0.0])
+                .build(),
+        );
+        for (id, z) in [(1002, -0.7), (1003, 0.7)] {
+            world.add_collider(
+                EntityId::from_inner(id).unwrap(),
+                ColliderBuilder::cuboid(2.5, 4.0, 0.02)
+                    .translation(vector![-2.5, 4.0, z])
+                    .build(),
+            );
+        }
+
+        // Command-shaped 0.8-unit rung stack, 0.2 units west of the terrain
+        // lip. Its bottom is one tenth above the recessed floor.
+        for rung in 0..10 {
+            world.add_kinematic(
+                EntityId::from_inner(2001 + rung).unwrap(),
+                vec3(-5.2, 0.5 + 0.8 * rung as f32, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(0.1, 0.8, 0.9),
+                CollisionGroup::climbable_entity(),
+                false,
+            );
+        }
+
+        let mut player =
+            world.create_player(vec3(-4.64, 5.6, 0.0), EntityId::from_inner(3000).unwrap());
+        assert!(world.set_player_crouch(true, &mut player));
+
+        // Look down while pushing west into the reachable east face.
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let descend = Vector3::new(-walk * 0.5, -walk * 0.866, 0.0);
+        for _ in 0..180 {
+            world.update(descend, &mut player);
+        }
+        for _ in 0..60 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let landed = world.get_player_translation(&player);
+        let crouched_center = PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+            + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
+        assert!(
+            landed.x < -5.4 && (landed.y - crouched_center).abs() < 0.1 && player.is_grounded,
+            "the descent must bottom out west of the lip on stable lower support, ended {landed:?}, grounded={} ",
+            player.is_grounded
+        );
+
+        // The same authored ladder is the only retreat. Facing east/up from
+        // the lower floor and pushing into its west face must climb again.
+        let before_ascent = landed;
+        let ascend = Vector3::new(walk * 0.5, walk * 0.866, 0.0);
+        for _ in 0..40 {
+            world.update(ascend, &mut player);
+        }
+        let climbed = world.get_player_translation(&player);
+        assert!(
+            climbed.y - before_ascent.y > 1.0,
+            "the bottom-out must preserve reverse ascent, went {before_ascent:?} -> {climbed:?}"
+        );
+    }
+
     /// A grip whose climb cannot move the player must not pin them in place.
     /// Standing at a ladder's foot while looking down redirects the push into a
     /// DESCENT, which is cast straight into the floor; since a grip also
