@@ -7847,6 +7847,143 @@ mod tests {
         );
     }
 
+    /// Command's GravDown exit is exactly one crouched capsule plus the
+    /// controller's contact offsets tall. A horizontal-only cast fits, but a
+    /// separate downward-gravity pass lowers the capsule while its footprint
+    /// still crosses the wall plane, wedges it against the sill, and drops it
+    /// down the unsupported shaft instead of through the authored aperture.
+    ///
+    /// This fixture keeps the same essential topology without mission ids or
+    /// coordinates: solid chute sides, an exact-height south aperture,
+    /// unsupported space below the north approach, and a lower floor only on
+    /// the far side. Negative-first: ordinary crouched input never reaches the
+    /// lower floor on the baseline implementation.
+    #[test]
+    fn crouched_gravity_crosses_an_exact_height_aperture_to_lower_support() {
+        let mut world = PhysicsWorld::new();
+        let add_box = |world: &mut PhysicsWorld,
+                       entity: u64,
+                       center: Vector<Real>,
+                       half_extents: Vector<Real>| {
+            world.add_collider(
+                EntityId::from_inner(entity).unwrap(),
+                ColliderBuilder::cuboid(half_extents.x, half_extents.y, half_extents.z)
+                    .translation(center)
+                    .build(),
+            );
+        };
+
+        // Put every wall/tunnel polygon in one parentless trimesh, matching
+        // the monolithic WorldRep collider rather than giving Rapier one
+        // independently resolvable collider per face.
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        let mut add_quad = |points: [Point<Real>; 4], reverse: bool| {
+            let base = vertices.len() as u32;
+            vertices.extend(points);
+            if reverse {
+                indices.extend([[base, base + 2, base + 1], [base, base + 3, base + 2]]);
+            } else {
+                indices.extend([[base, base + 1, base + 2], [base, base + 2, base + 3]]);
+            }
+        };
+        // Level-style wall plane at z=0. Its opening is y=-0.6..0.6: exactly
+        // the 1.12 wu crouched body plus 0.04 wu contact offset at each end.
+        for (y0, y1) in [(-4.0, -0.6), (0.6, 4.0)] {
+            add_quad(
+                [
+                    point![-0.8, y0, 0.0],
+                    point![0.8, y0, 0.0],
+                    point![0.8, y1, 0.0],
+                    point![-0.8, y1, 0.0],
+                ],
+                false,
+            );
+        }
+        // The aperture opens into a two-unit low tunnel bounded by opposed
+        // level polygons at the same exact 1.20 wu separation. Gravity can
+        // settle the capsule onto the lower face, but the normal rest lift
+        // then consumes the upper contact offset and wedges the next frame.
+        for (y, reverse) in [(-0.6, false), (0.6, true)] {
+            add_quad(
+                [
+                    point![-0.8, y, 0.0],
+                    point![0.8, y, 0.0],
+                    point![0.8, y, -2.0],
+                    point![-0.8, y, -2.0],
+                ],
+                reverse,
+            );
+        }
+        world.add_collider(
+            EntityId::from_inner(2200).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("valid monolithic aperture world")
+                .build(),
+        );
+        // Solid east/west chute faces leave a 1.6 wu-wide center channel.
+        add_box(
+            &mut world,
+            2204,
+            vector![-1.0, 0.0, -0.5],
+            vector![0.2, 4.0, 3.0],
+        );
+        add_box(
+            &mut world,
+            2205,
+            vector![1.0, 0.0, -0.5],
+            vector![0.2, 4.0, 3.0],
+        );
+        // Only the south side is supported; its top is y=-4.
+        add_box(
+            &mut world,
+            2206,
+            vector![0.0, -4.1, -11.1],
+            vector![10.0, 0.1, 8.9],
+        );
+
+        let mut player =
+            world.create_player(vec3(0.0, 0.64, 0.8), EntityId::from_inner(2300).unwrap());
+        // Build Rapier's broad phase without letting the unsupported setup
+        // fall, then plant the authentic crouched profile at the aperture
+        // center and enable the ordinary downward gravity restored at the
+        // lower room-sensor boundary.
+        world.rigid_body_set[player.character_handle].set_gravity_scale(0.0, true);
+        step(&mut world, &mut player, 1);
+        assert!(world.set_player_crouch(true, &mut player));
+        // The Command route approaches 0.10353 wu above the opening's exact
+        // midpoint. The rounded capsule initially fits from that offset, but
+        // gravity changes the cross-section presented to the edge while the
+        // body is still spanning the wall plane. The lower slot begins just
+        // beyond the GravDown room sensor, so its exit event has restored
+        // ordinary world gravity by this point.
+        world.set_player_translation(vec3(0.0, 0.10353, 0.8), &mut player);
+        step(&mut world, &mut player, 1);
+        world.rigid_body_set[player.character_handle].set_gravity_scale(1.0, true);
+
+        // Production per-frame walk displacement. Stop driving once the body
+        // has fully cleared the wall, then let ordinary gravity find the far
+        // floor instead of masking a failure with continued movement.
+        for _ in 0..30 {
+            if world.get_player_translation(&player).z < -2.5 {
+                break;
+            }
+            world.update(vec3(0.0, 0.0, -25.0 / 60.0 / SCALE_FACTOR), &mut player);
+        }
+        let crossed = world.get_player_translation(&player);
+        assert!(
+            crossed.z < -2.5,
+            "ordinary crouched movement should clear the exact-height aperture route, got {crossed:?}"
+        );
+
+        step(&mut world, &mut player, 120);
+        let landed = world.get_player_translation(&player);
+        assert!(
+            landed.z < -2.5 && (-3.5..-3.2).contains(&landed.y),
+            "the crossing should land on the lower south support, got {landed:?}"
+        );
+    }
+
     /// Build a floor whose top face is flush with the bottom of a walk-in
     /// fixture's model-bounds box - hydro2's Resurrection Station casing sits
     /// on the alcove floor exactly like this - and return the world plus the
