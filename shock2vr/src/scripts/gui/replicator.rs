@@ -433,8 +433,11 @@ fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
 mod tests {
     use super::super::keypad::{HackNode, HackPhase, base_hack_board, board_index};
     use super::*;
+    use crate::gui::GuiScript;
     use crate::mission::PlayerInfo;
+    use crate::physics::PhysicsWorld;
     use crate::runtime_props::RuntimePropTransform;
+    use crate::scripts::{MessagePayload, Script};
     use cgmath::{Matrix4, Quaternion};
     use dark::properties::{
         Link, Links, PropObjIcon, PropPosition, PropStackCount, ToLink, WrappedEntityId,
@@ -447,6 +450,26 @@ mod tests {
             Effect::Combined { effects } => effects.iter().any(creates_template),
             _ => false,
         }
+    }
+
+    #[test]
+    fn replicator_refuses_an_offered_item_instead_of_containing_it() {
+        let mut world = World::new();
+        let replicator = world.add_entity(());
+        let resonator = world.add_entity(());
+        let mut script = GuiScript::new(Box::new(ReplicatorGui));
+
+        let effect = script.handle_message(
+            replicator,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::ProvideForConsumption { entity: resonator },
+        );
+
+        assert!(
+            matches!(effect, Effect::NoEffect),
+            "a replicator is a dispenser, not a container; got {effect:?}"
+        );
     }
 
     #[test]
