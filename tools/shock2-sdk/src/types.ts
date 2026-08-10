@@ -260,10 +260,23 @@ export interface ScreenshotResult {
   size_bytes: number;
 }
 
+export type RayCastCollisionGroup =
+  | "world"
+  | "entity"
+  | "selectable"
+  | "player"
+  | "ui"
+  | "hitbox"
+  | "raycast"
+  | "all"
+  /** Backward-compatible alias for `world`. */
+  | "level";
+
 export interface RayCastRequest {
   start: Vec3;
   end: Vec3;
-  collision_groups?: string[];
+  /** Defaults to `["world", "entity"]`; an explicit empty list is invalid. */
+  collision_groups?: RayCastCollisionGroup[];
   max_distance?: number;
   ignore_sensors?: boolean;
 }

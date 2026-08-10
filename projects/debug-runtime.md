@@ -144,10 +144,10 @@ const screenshot = await game.screenshot('test.png');
 console.log(`Saved to ${screenshot.fullPath}`);
 
 // Physics queries
-const hit = await game.physics.raycast({
+const hit = await game.raycast({
   start: [0, 0, 0],
   end: [10, 0, 0],
-  groups: ['entity', 'level'],
+  collision_groups: ['world', 'entity'],
 });
 
 // Cleanup
@@ -281,13 +281,18 @@ curl -X POST http://127.0.0.1:8080/v1/player/teleport \
 # Raycast
 curl -X POST http://127.0.0.1:8080/v1/physics/raycast \
   -H "Content-Type: application/json" \
-  -d '{"start": [0,0,0], "end": [10,0,0], "collision_groups": ["entity", "level"]}'
+  -d '{"start": [0,0,0], "end": [10,0,0], "collision_groups": ["world", "entity"]}'
 
 # Screenshot
 curl -X POST http://127.0.0.1:8080/v1/screenshot \
   -H "Content-Type: application/json" \
   -d '{"filename": "test.png"}'
 ```
+
+Omitting `collision_groups` defaults to `["world", "entity"]`. Supported
+names are `world`, `entity`, `selectable`, `player`, `ui`, `hitbox`, `raycast`,
+and `all`; the older documented name `level` is accepted as an alias for
+`world`. Unknown names and explicit empty masks return HTTP 400.
 
 ## Key Files
 
