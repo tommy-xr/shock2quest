@@ -2,7 +2,11 @@ use std::rc::Rc;
 
 use cgmath::{Deg, Matrix4, Point2, Vector2, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureTrait};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::SceneObject,
+    texture::{TextureOptions, TextureTrait},
+};
 use shipyard::EntityId;
 
 use crate::{inventory::Inventory, vr_config::Handedness};
@@ -563,6 +567,18 @@ impl GuiComponentRenderInfo {
         }
     }
 
+    /// Entity-backed images are inventory/loot object icons. Dark keys their
+    /// paletted PCX art on palette index 0, independent of that entry's RGB.
+    pub(crate) fn transparent_index_0(&self) -> bool {
+        matches!(
+            self,
+            Self::Image {
+                entity: Some(_),
+                ..
+            }
+        )
+    }
+
     pub fn render(&self, asset_cache: &mut AssetCache) -> SceneObject {
         let scene_object = match self {
             Self::Image {
@@ -572,8 +588,16 @@ impl GuiComponentRenderInfo {
                 alpha,
                 ..
             } => {
-                let texture: Rc<dyn TextureTrait> =
-                    asset_cache.get(&TEXTURE_IMPORTER, texture).clone();
+                let texture: Rc<dyn TextureTrait> = asset_cache
+                    .get_ext(
+                        &TEXTURE_IMPORTER,
+                        texture,
+                        &TextureOptions {
+                            transparent_index_0: self.transparent_index_0(),
+                            ..Default::default()
+                        },
+                    )
+                    .clone();
                 let comp_mat = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
                 let mut comp_obj =
                     SceneObject::new(comp_mat, Box::new(engine::scene::quad::create()));
@@ -748,5 +772,26 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entity_backed_object_icons_use_palette_index_zero_transparency() {
+        let entity = EntityId::from_inner(1).unwrap();
+        let component = grabbable((), ())
+            .with_entity(entity)
+            .with_image("passkey.pcx");
+
+        let render_info = component.to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5));
+
+        assert!(render_info.transparent_index_0());
+
+        let backdrop =
+            image::<()>("invback.pcx").to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5));
+        assert!(!backdrop.transparent_index_0());
     }
 }
