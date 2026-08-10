@@ -74,6 +74,7 @@ mod trap_trip_level;
 mod trap_tweq;
 mod trap_unlock;
 mod trigger_collide;
+mod trigger_damage;
 mod trigger_destroy;
 mod trigger_ecology;
 mod trigger_multi;
@@ -177,6 +178,7 @@ use self::{
     trap_tweq::TrapTweq,
     trap_unlock::TrapUnlock,
     trigger_collide::TriggerCollide,
+    trigger_damage::TriggerDamage,
     trigger_destroy::TriggerDestroy,
     trigger_ecology::TriggerEcology,
     trigger_multi::TriggerMulti,
@@ -883,7 +885,7 @@ impl ScriptWorld {
             "cs9_shodanscreen" => Box::new(CS9ShodanScreen::new()),
             "sitdownrightnowmp" => Box::new(SitDownRightNowMP::new()),
             "trapdestroyteleport" => Box::new(TrapDestroyTeleport::new()),
-            "triggerdamage" => Box::new(NoopScript::new()),
+            "triggerdamage" => Box::new(TriggerDamage::new()),
             // many.micontain
             "brain" => Box::new(NoopScript::new()),
             "wormheartimplant" => Box::new(NoopScript::new()),
