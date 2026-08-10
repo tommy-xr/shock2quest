@@ -69,6 +69,15 @@ test(
     assert.equal(sound.still_playing, true, "a clip this long is still playing");
     assert.equal(sound.stopped_at_sim_time, null);
 
+    // TrapSound narrations play spatially at their authored station, like the
+    // original engine's object sounds (pre-change the log recorded [0,0,0]).
+    const [tx, ty, tz] = trap.position;
+    const [px, py, pz] = sound.position;
+    assert.ok(
+      Math.hypot(px - tx, py - ty, pz - tz) < 0.5,
+      `the clip must play at the trap's position [${tx},${ty},${tz}], got [${px},${py},${pz}]`,
+    );
+
     // Stepping past the clip's duration retires it (derived from sim time, not
     // from live audio-device state).
     await game.step({ frames: Math.ceil(sound.duration_secs! * 60) + 60 });

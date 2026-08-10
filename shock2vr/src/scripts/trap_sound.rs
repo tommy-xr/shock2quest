@@ -35,6 +35,10 @@ impl Script for TrapSound {
                         handle,
                         name: sound.name.to_owned(),
                         source: Some(entity_id),
+                        // TrapSound(Amb) narrations are anchored at their
+                        // authored station - a stale montage segment two rooms
+                        // away should be distant, not at the player's ears.
+                        spatial: true,
                     }
                 } else {
                     Effect::NoEffect

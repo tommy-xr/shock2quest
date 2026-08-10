@@ -187,6 +187,7 @@ impl Script for BaseElevator {
                         handle: AudioHandle::new(),
                         source: Some(entity_id),
                         name: "Devices/DOOR1OP".to_owned(),
+                        spatial: false,
                     }
                 } else {
                     Effect::NoEffect
@@ -198,6 +199,7 @@ impl Script for BaseElevator {
                         handle: AudioHandle::new(),
                         source: Some(entity_id),
                         name: "Devices/DOOR1OP".to_owned(),
+                        spatial: false,
                     }
                 } else {
                     Effect::NoEffect

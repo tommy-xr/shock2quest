@@ -412,6 +412,12 @@ pub enum Effect {
         /// diagnostic (recorded in `audio_log`); `None` for sounds with no
         /// world source, e.g. cutscene schemas.
         source: Option<EntityId>,
+        /// Play positionally at `source`'s location (original-engine object
+        /// sound behavior). Only for diegetic emitters anchored in the world
+        /// (e.g. TrapSound narrations); non-diegetic audio that must stay at
+        /// constant volume - audio logs, cutscene narration, UI feedback -
+        /// keeps this false even when it has a `source` for attribution.
+        spatial: bool,
     },
     PlaySpeech {
         entity_id: EntityId,

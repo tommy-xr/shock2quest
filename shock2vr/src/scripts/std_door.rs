@@ -259,6 +259,7 @@ impl Script for StdDoor {
                             handle: AudioHandle::new(),
                             source: Some(entity_id),
                             name: "hackfail".to_owned(),
+                            spatial: false,
                         }
                     } else {
                         self.open(entity_id, world, &trans_door)

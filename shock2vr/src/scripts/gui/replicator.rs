@@ -324,6 +324,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                             handle: AudioHandle::new(),
                             source: Some(entity_id),
                             name: "repfail".to_owned(),
+                            spatial: false,
                         },
                     );
                 }
@@ -337,6 +338,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                             handle: AudioHandle::new(),
                             source: Some(entity_id),
                             name: "repfail".to_owned(),
+                            spatial: false,
                         },
                     );
                 }

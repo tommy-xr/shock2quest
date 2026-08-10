@@ -25,6 +25,7 @@ impl BaseButton {
             handle: AudioHandle::new(),
             source: Some(entity_id),
             name: "hackfail".to_owned(),
+            spatial: false,
         })
     }
 
