@@ -24,10 +24,15 @@ test(
     const [door] = await game.entities.byTemplate(839);
     const [pod] = await game.entities.byTemplate(1520);
     assert.ok(button && door && pod, "command1 route objects should remain authored");
-    assert.deepEqual(
-      pod.position.map((value) => Number(value.toFixed(4))),
-      [-288.2205, -7.6019, 87.6737],
-      "stable mission object 1520 should remain beside the reviewed portal",
+    assert.ok(
+      pod.position[0] > -288.3 &&
+        pod.position[0] < -288.1 &&
+        pod.position[1] > -8.2 &&
+        pod.position[1] < -7.5 &&
+        pod.position[2] > 87.5 &&
+        pod.position[2] < 87.8,
+      `stable mission object 1520 should remain beside the reviewed portal, got ` +
+        JSON.stringify(pod.position),
     );
 
     // Exercise the real control that admits the player to the ladder route.

@@ -3589,12 +3589,50 @@ impl PhysicsWorld {
         collision_groups: CollisionGroup,
         is_sensor: bool,
     ) -> RigidBodyHandle {
-        let size = sanitize_collider_size(entity_id, "add_kinematic", size);
         self.add_kinematic_shape(
             entity_id,
             pos,
             facing,
-            SharedShape::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0),
+            offset,
+            PhysicsShape::Cuboid(size),
+            collision_groups,
+            is_sensor,
+        )
+    }
+
+    /// Create a kinematic body with an explicit collider shape. `add_kinematic`
+    /// is the cuboid special case; authored sphere/capsule geometry (notably
+    /// immobile frobbable props) reaches physics through here so the exact
+    /// authored shape survives instead of being replaced by a bounding box.
+    pub fn add_kinematic_shape(
+        &mut self,
+        entity_id: EntityId,
+        pos: Vector3<f32>,
+        facing: Quaternion<f32>,
+        offset: Vector3<f32>,
+        shape: PhysicsShape,
+        collision_groups: CollisionGroup,
+        is_sensor: bool,
+    ) -> RigidBodyHandle {
+        let shape = match shape {
+            PhysicsShape::Capsule { height, radius } => {
+                assert!(height > 0.0 && radius > 0.0);
+                SharedShape::capsule_y(height / 2.0, radius)
+            }
+            PhysicsShape::Cuboid(size) => {
+                let size = sanitize_collider_size(entity_id, "add_kinematic", size);
+                SharedShape::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
+            }
+            PhysicsShape::Sphere(radius) => {
+                let radius = sanitize_collider_radius(entity_id, "add_kinematic", radius);
+                SharedShape::ball(radius)
+            }
+        };
+        self.add_kinematic_shared_shape(
+            entity_id,
+            pos,
+            facing,
+            shape,
             offset,
             collision_groups,
             is_sensor,
@@ -3606,7 +3644,7 @@ impl PhysicsWorld {
     /// use it so their collider is the *fitted* per-joint shape (capsule along
     /// the bone / box) shared with the ragdoll, which covers the body far
     /// better than a per-joint AABB.
-    pub fn add_kinematic_shape(
+    pub fn add_kinematic_shared_shape(
         &mut self,
         entity_id: EntityId,
         pos: Vector3<f32>,

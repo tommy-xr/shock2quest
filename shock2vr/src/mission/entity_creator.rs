@@ -1094,34 +1094,39 @@ fn create_physics_representation_with_options(
         }
 
         let qrotation = pos.rotation;
-
-        let _is_sensor = true;
-
-        // let dimensions = v_phys_dimensions
-        //     .get(id)
-        //     .map(|d| d.size)
-        //     .ok()
-        //     .or_else(|| {
-        //         id_to_model.get(&id).and_then(|model| {
-        //             model.bounding_box().map(|bbox| bbox.max - bbox.min)
-        //         })
-        //     })
-        //     .unwrap_or(default_size);
-
-        // TODO: Add dynamic rigid body for some items?
-        // let shape = if let (Ok(phys_type), Ok(dimensions)) =
-        //     (v_phys_type.get(entity_id), v_phys_dimensions.get(entity_id))
-        // {
-        //     match phys_type.phys_type {
-        //         PhysicsModelType::OrientedBoundingBox => PhysicsShape::Cuboid(abs_dimensions),
-        //         PhysicsModelType::Sphere => {
-        //             PhysicsShape::Sphere(dimensions.radius0.abs().max(dimensions.radius1.abs()))
-        //         }
-        //         _ => panic!("unhandled physics type: {:?}", phys_type),
-        //     }
-        // } else {
-        //     PhysicsShape::Cuboid(abs_dimensions)
-        // };
+        let authored_physics = match (
+            v_phys_type.get(entity_id).ok(),
+            v_phys_dimensions.get(entity_id).ok(),
+        ) {
+            (Some(phys_type), Some(dimensions)) => {
+                let shape = match phys_type.phys_type {
+                    PhysicsModelType::ORIENTED_BOUNDING_BOX => Some((
+                        PhysicsShape::Cuboid(vec3(
+                            dimensions.size.x.abs(),
+                            dimensions.size.y.abs(),
+                            dimensions.size.z.abs(),
+                        )),
+                        false,
+                    )),
+                    PhysicsModelType::SPHERE => Some((
+                        PhysicsShape::Sphere(
+                            dimensions.radius0.abs().max(dimensions.radius1.abs()),
+                        ),
+                        true,
+                    )),
+                    _ => None,
+                };
+                shape.map(|(shape, is_sphere)| (shape, dimensions.offset0, is_sphere))
+            }
+            _ => None,
+        };
+        let mut frob_group = CollisionGroup::entity();
+        if v_hud_select
+            .get(entity_id)
+            .is_ok_and(|hud_select| hud_select.0)
+        {
+            frob_group = CollisionGroup::selectable();
+        }
 
         let rigid_body_handle;
         // Is a creature - so we need special handling for their bounding box
@@ -1146,6 +1151,37 @@ fn create_physics_representation_with_options(
                 dynamics_options,
             );
             physics.set_enabled_rotations(entity_id, false, false, false);
+        } else if let Some((shape, offset, is_sphere)) = authored_physics {
+            // FrobInfo controls interaction, not collision geometry. When a
+            // visible prop also carries an explicit physical model, preserve
+            // that authored shape instead of replacing it with the render
+            // bounds used only for selection. SPHERE is Dark's simulated
+            // moving model unless the object is explicitly immobile; MOVE
+            // frobs likewise remain dynamic for either supported shape.
+            if frob_info.world_action.contains(FrobFlag::MOVE)
+                || (is_sphere && !launched_object_is_immobile)
+            {
+                rigid_body_handle = physics.add_dynamic(
+                    entity_id,
+                    pos.position,
+                    qrotation,
+                    offset,
+                    shape,
+                    frob_group,
+                    false,
+                    dynamics_options,
+                );
+            } else {
+                rigid_body_handle = physics.add_kinematic_shape(
+                    entity_id,
+                    pos.position,
+                    qrotation,
+                    offset,
+                    shape,
+                    frob_group,
+                    false,
+                );
+            }
         } else if frob_info.world_action.contains(FrobFlag::MOVE) {
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
@@ -1161,13 +1197,6 @@ fn create_physics_representation_with_options(
                 dynamics_options,
             );
         } else {
-            let mut group = CollisionGroup::entity();
-            if let Ok(hud_select) = v_hud_select.get(entity_id) {
-                // HACK: Remove pick bias around fluidics computer
-                if hud_select.0 {
-                    group = CollisionGroup::selectable();
-                }
-            }
             // This collider is the *model bounding box*, built only so the
             // object can be frobbed and raycast - it is not an authored
             // collision volume. Dark makes an object physical by giving it a
@@ -1178,7 +1207,7 @@ fn create_physics_representation_with_options(
             // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
             // the capsule against its faces with no way out (#801).
             if v_phys_type.get(entity_id).is_err() {
-                group = group.non_solid_to_characters();
+                frob_group = frob_group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
@@ -1188,7 +1217,7 @@ fn create_physics_representation_with_options(
                 abs_dimensions,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                group,
+                frob_group,
                 false,
             );
         }
@@ -2092,6 +2121,96 @@ mod tests {
         assert!((actual_offset - offset).magnitude() < 1.0e-5);
         assert!(physics.collider_blocks_player(handle));
         assert!(physics.collider_blocks_actor(handle));
+    }
+
+    /// Frob mode and immobility select body motion without changing an
+    /// explicitly authored collider. This protects wall-mounted spheres and
+    /// movable OBB inventory props alongside the ordinary Floor Pod case.
+    #[test]
+    fn frobbable_authored_shapes_preserve_geometry_and_mobility() {
+        for (phys_type, frob_action, immobile, expected_body_type) in [
+            (
+                PhysicsModelType::SPHERE,
+                FrobFlag::SCRIPT,
+                true,
+                "kinematic",
+            ),
+            (
+                PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                FrobFlag::SCRIPT,
+                true,
+                "kinematic",
+            ),
+            (
+                PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                FrobFlag::MOVE,
+                false,
+                "dynamic",
+            ),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let size = vec3(0.3, 0.4, 0.5);
+            let radius = 0.25;
+            let offset = vec3(0.1, -0.2, 0.3);
+            let entity_id = world.add_entity((
+                PropPosition {
+                    position: vec3(1.0, 2.0, 3.0),
+                    cell: 0,
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+                PropFrobInfo {
+                    world_action: frob_action,
+                    inventory_action: FrobFlag::empty(),
+                    tool_action: FrobFlag::empty(),
+                },
+                PropPhysType {
+                    phys_type,
+                    num_submodels: 1,
+                    remove_on_sleep: false,
+                    is_special: false,
+                },
+                PropPhysDimensions {
+                    radius0: radius,
+                    radius1: 0.0,
+                    offset0: offset,
+                    offset1: Vector3::zero(),
+                    size,
+                    unk1: 0,
+                    unk2: 0,
+                },
+            ));
+            if immobile {
+                world.add_component(entity_id, PropImmobile(true));
+            }
+
+            let handle = create_physics_representation(
+                &mut world,
+                &mut physics,
+                &Some(&ladder_model()),
+                entity_id,
+            )
+            .expect("an authored frobbable shape should get a body");
+            assert_eq!(
+                physics.debug_list_bodies()[0].body_type,
+                expected_body_type,
+                "unexpected mobility for {phys_type:?} / {frob_action:?} / immobile={immobile}"
+            );
+            match phys_type {
+                PhysicsModelType::SPHERE => assert!(
+                    (physics.sphere_radius(handle).unwrap() - radius).abs() < 1.0e-5,
+                    "authored sphere radius should survive"
+                ),
+                PhysicsModelType::ORIENTED_BOUNDING_BOX => assert!(
+                    (physics.cuboid_full_size(handle).unwrap() - size).magnitude() < 1.0e-5,
+                    "authored OBB dimensions should survive"
+                ),
+                _ => unreachable!(),
+            }
+            assert!(
+                (physics.collider_local_translation(handle).unwrap() - offset).magnitude() < 1.0e-5
+            );
+        }
     }
 
     /// A non-frobbable object with a physics type but no `P$PhysDims` - the
