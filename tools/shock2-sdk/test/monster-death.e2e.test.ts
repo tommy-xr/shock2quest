@@ -105,11 +105,21 @@ test(
     // measurement (observed 0.74 against a 0.5 threshold). Rest is a physics
     // fact, so ask the body. If it never sleeps, fall through and let the
     // assertion report the real motion rather than masking it.
+    let corpseBody:
+      | Awaited<ReturnType<typeof game.physics.bodies>>["bodies"][number]
+      | undefined;
     for (let i = 0; i < 60; i++) {
       const [body] = (await game.physics.bodies({ entityId: monster.id })).bodies;
+      corpseBody = body;
       if (body?.is_sleeping) break;
       await game.step({ frames: 10 });
     }
+    assert.ok(corpseBody, "corpse should retain its body for interaction");
+    assert.deepEqual(
+      corpseBody.collision_groups,
+      ["selectable"],
+      "a non-ragdoll corpse must stay selectable without entity/player collision",
+    );
     const deadPos = (await game.entities.detail(monster.id)).position;
     for (let i = 0; i < 5; i++) {
       await game.step({ frames: 120 });
@@ -182,6 +192,11 @@ test(
     );
     assert.ok(savedBody, "terminal corpse body should be sleeping");
     assert.equal(savedBody.body_type, "dynamic");
+    assert.deepEqual(
+      savedBody.collision_groups,
+      ["selectable"],
+      "a non-ragdoll corpse must stay selectable without entity/player collision",
+    );
     const savedCorpse = await game.entities.detail(monster.id);
     assert.equal(aiProp(savedCorpse, "AIBehavior"), "Dead");
     assert.equal(savedAnimation.clip, null, "death animation should be complete");
