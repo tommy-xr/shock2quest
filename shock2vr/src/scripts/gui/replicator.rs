@@ -109,6 +109,20 @@ fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effe
 }
 
 impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
+    fn on_provide_for_consumption(
+        &self,
+        _entity_id: EntityId,
+        _world: &World,
+        _provided_entity_id: EntityId,
+    ) -> Option<Effect> {
+        // A replicator is a dispenser, not a container or tool receptor. In
+        // particular, output spawned at its authored hopper marker can touch
+        // RepBase immediately; refusing that ToolConsumable offer leaves the
+        // item physical for the player to pick up instead of hiding it behind
+        // a runtime Contains link.
+        Some(Effect::NoEffect)
+    }
+
     fn get_components(
         &self,
         _cursor: &Option<GuiCursor>,
