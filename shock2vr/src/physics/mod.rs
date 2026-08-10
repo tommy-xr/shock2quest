@@ -121,6 +121,20 @@ fn crouched_player_shared_shape() -> SharedShape {
 /// and world geometry (`KinematicCharacterController::offset`).
 const PLAYER_CONTACT_OFFSET: f32 = 0.1;
 
+/// Numerical tolerance (world units) for recognizing a passage whose floor to
+/// ceiling clearance is exactly the player shape plus the controller offset
+/// on both faces. The authored Command gravshaft exit is exact to source-data
+/// precision; this tolerance covers only import/query float noise, not a
+/// visibly shorter or taller opening.
+const EXACT_APERTURE_CLEARANCE_EPSILON: f32 = 0.01;
+
+/// Number of horizontal samples used to find an exact-height passage around
+/// the moving capsule. The bounded interval starts one footprint behind the
+/// center (so gravity stays constrained until the trailing cap clears) and
+/// ends one footprint plus two ordinary walk substeps ahead (so the passage is
+/// discovered before gravity can carry the leading cap below its opening).
+const EXACT_APERTURE_SAMPLES: usize = 9;
+
 /// Extra height (SS2 ft) the player is lifted each grounded frame, keeping the
 /// resting gap a hair above `PLAYER_CONTACT_OFFSET`. Load-bearing: movement
 /// casts use `PLAYER_CONTACT_OFFSET` as their target distance, so a capsule
@@ -1542,6 +1556,94 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
     -0.5 / SCALE_FACTOR * character_body.gravity_scale()
 }
 
+/// Find the collision-derived center plane of an exact-height horizontal
+/// aperture the player is entering or leaving.
+///
+/// Dark's player is a sparse stack of spheres. It can begin crossing a slot
+/// while a gravity tick is pulling the stack toward the lower edge, then rest
+/// between the authored floor and ceiling. Our continuous capsule instead
+/// applies walk and gravity as separate full-shape casts: gravity can lower it
+/// before its footprint clears the edge, permanently wedging it outside. Keep
+/// the capsule centered only while nearby opposed, walkable floor/ceiling
+/// probes prove that exact authored passage exists. There are no mission ids,
+/// coordinates, or gravity-scale assumptions here.
+fn exact_aperture_center(
+    controller: &KinematicCharacterController,
+    queries: &QueryPipeline,
+    shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    gravity: Real,
+) -> Option<Real> {
+    if gravity >= 0.0 || desired.y.abs() > 1.0e-5 {
+        return None;
+    }
+    let horizontal = vector![desired.x, 0.0, desired.z];
+    let horizontal_len = horizontal.norm();
+    if horizontal_len <= 1.0e-5 {
+        return None;
+    }
+    let capsule = shape.as_capsule()?;
+    if (2.0 * (capsule.half_height() + capsule.radius) - PLAYER_CROUCH_HEIGHT / SCALE_FACTOR).abs()
+        > 1.0e-4
+    {
+        return None;
+    }
+    let CharacterLength::Absolute(contact_offset) = controller.offset else {
+        return None;
+    };
+    let shape_height = 2.0 * (capsule.half_height() + capsule.radius);
+    let required_clearance = shape_height + 2.0 * contact_offset;
+    let footprint = capsule.radius + contact_offset;
+    let direction = horizontal / horizontal_len;
+    let first_sample = -footprint;
+    let last_sample = 2.0 * footprint + 2.0 * horizontal_len;
+    let probe_distance = required_clearance + gravity.abs() + contact_offset;
+
+    for sample_index in 0..EXACT_APERTURE_SAMPLES {
+        let t = sample_index as Real / (EXACT_APERTURE_SAMPLES - 1) as Real;
+        let distance = first_sample + (last_sample - first_sample) * t;
+        let sample = pos.translation.vector + direction * distance;
+        let down_ray = Ray::new(Point::from(sample), -Vector::y());
+        let up_ray = Ray::new(Point::from(sample), Vector::y());
+        let Some((_, floor)) = queries
+            .cast_ray_and_get_normal(&down_ray, probe_distance, true)
+            .filter(|(_, hit)| hit.normal.y > PLAYER_MIN_WALKABLE_NORMAL)
+        else {
+            continue;
+        };
+        let Some((_, ceiling)) = queries
+            .cast_ray_and_get_normal(&up_ray, probe_distance, true)
+            .filter(|(_, hit)| hit.normal.y < -PLAYER_MIN_WALKABLE_NORMAL)
+        else {
+            continue;
+        };
+        let clearance = floor.time_of_impact + ceiling.time_of_impact;
+        if (clearance - required_clearance).abs() > EXACT_APERTURE_CLEARANCE_EPSILON {
+            continue;
+        }
+        let center = sample.y + (ceiling.time_of_impact - floor.time_of_impact) * 0.5;
+        // This is a one-gravity-step correction, not a mantle or teleport.
+        // Reject a remote parallel floor/ceiling pair even if its spacing
+        // happens to match the player's profile.
+        if (center - pos.translation.vector.y).abs() > gravity.abs() + contact_offset {
+            continue;
+        }
+        let centered_sample = vector![sample.x, center, sample.z];
+        if !shape_intersects(queries, centered_sample, shape)
+            && shape_sweep_is_clear(
+                queries,
+                pos.translation.vector,
+                vector![pos.translation.vector.x, center, pos.translation.vector.z],
+                shape,
+            )
+        {
+            return Some(center);
+        }
+    }
+    None
+}
+
 /// One frame of player locomotion: the character controller's walk pass, the
 /// gravity pass (with ground snapping and the resting lift), and the stair
 /// step-up probe. Shared by real player movement ([`PhysicsWorld::move_player`])
@@ -1769,6 +1871,41 @@ fn step_player_movement(
             Vector::zeros(),
         )
     };
+    // A zero-slack authored aperture cannot tolerate a separate gravity tick
+    // while the capsule's leading/trailing edge still spans its boundary.
+    // Probe only when the ordinary gravity result remains airborne; supported
+    // crouch-walking therefore stays on the established cheap path. When
+    // opposed probes prove the passage, combine the collision-valid center
+    // correction with this frame's horizontal input and suppress only this
+    // gravity pass. As soon as the bounded probes no longer see it, ordinary
+    // gravity resumes.
+    let leaving_support =
+        !fall.grounded || fall.translation.y < -PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    if airborne_vertical.is_none() && leaving_support {
+        if let Some(center) =
+            exact_aperture_center(controller, queries, shape, pos, desired, gravity)
+        {
+            let correction = center - pos.translation.vector.y;
+            let requested = desired + Vector::y() * correction;
+            let aperture = controller.move_shape(dt, queries, shape, pos, requested, |_c| ());
+            let desired_h = vector![desired.x, 0.0, desired.z];
+            let moved_h = vector![aperture.translation.x, 0.0, aperture.translation.z];
+            if moved_h.dot(&desired_h) >= 0.5 * desired_h.norm_squared()
+                && (pos.translation.vector.y + aperture.translation.y - center).abs()
+                    <= PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            {
+                return PlayerMovement {
+                    movement: EffectiveCharacterMovement {
+                        grounded: false,
+                        is_sliding_down_slope: false,
+                        translation: aperture.translation + carried,
+                    },
+                    top_out: None,
+                    slope_displacement: Vector::zeros(),
+                };
+            }
+        }
+    }
     mvt.translation += fall.translation;
     mvt.grounded = fall.grounded;
     if mvt.grounded {
