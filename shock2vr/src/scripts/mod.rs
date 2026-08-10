@@ -8,6 +8,7 @@ mod auto_install_soft;
 mod base_button;
 mod base_elevator;
 mod base_monster;
+mod base_room;
 mod camera_alert;
 mod chemical;
 mod choose_mission;
@@ -962,7 +963,7 @@ impl ScriptWorld {
             ])),
 
             // Rooms:
-            "baseroom" => Box::new(CoreRoom::new()),
+            "baseroom" => Box::new(base_room::BaseRoom::new()),
             "coreroom" => Box::new(CoreRoom::new()),
             "onceroom" => Box::new(OnceRoom::new()),
             "emailroom" => Box::new(TrapEmail::new()),
