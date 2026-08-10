@@ -7041,6 +7041,80 @@ mod tests {
         );
     }
 
+    /// Issue #882: Command's Generator ladder ends beneath a narrow upper
+    /// deck on the side the player climbs from. The fixed two-radius mantle
+    /// sample overshoots that deck, but a nearer sample along the same bounded
+    /// probe reaches its top. Ordinary forward climbing must release onto that
+    /// real support instead of treating the deck underside as a separate
+    /// ceiling and stalling forever.
+    ///
+    /// Negative-first: the climb reaches the underside and remains below the
+    /// deck because `plan_climb_top_out` only samples the fixed forward point.
+    #[test]
+    fn player_tops_out_onto_a_narrow_approach_side_deck() {
+        let quad = |x0: f32, x1: f32, y: f32| {
+            let vertices = vec![
+                point![x0, y, -100.0],
+                point![x1, y, -100.0],
+                point![x1, y, 100.0],
+                point![x0, y, 100.0],
+            ];
+            ColliderBuilder::trimesh(vertices, vec![[0u32, 1, 2], [0, 2, 3]])
+                .expect("floor trimesh")
+        };
+
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            quad(-100.0, 100.0, 0.0).build(),
+        );
+        // The upper deck ends 0.25 world units past the player's natural
+        // ladder-face center. It is broad enough for a complete standing
+        // capsule, but the fixed 0.96-unit sample lands beyond its edge.
+        world.add_collider(
+            EntityId::from_inner(1001).unwrap(),
+            quad(-100.0, -5.2, 6.4).build(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2001).unwrap(),
+            vec3(-5.0, 3.2, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.2, 6.4, 2.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+
+        let mut player =
+            world.create_player(vec3(-5.5, 1.0, 0.0), EntityId::from_inner(3000).unwrap());
+        for _ in 0..30 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        let mut highest = f32::NEG_INFINITY;
+        for _ in 0..180 {
+            world.update(Vector3::new(walk, 0.0, 0.0), &mut player);
+            highest = highest.max(world.get_player_translation(&player).y);
+        }
+        for _ in 0..60 {
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        let expected_center = 6.4
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + (PLAYER_CONTACT_OFFSET + PLAYER_REST_LIFT) / SCALE_FACTOR;
+
+        assert!(
+            highest > 5.0,
+            "the setup must climb to the upper deck underside, highest={highest}, ended {end:?}"
+        );
+        assert!(
+            end.x < -5.2 && (end.y - expected_center).abs() < 0.1 && player.is_grounded,
+            "the top-out must release stably on the narrow approach-side deck, ended {end:?}, grounded={}",
+            player.is_grounded
+        );
+    }
+
     /// Issue #603: a gripped ladder must be climbable DOWN, not just up. The
     /// player stands against the rung stack (at the resting gap a real approach
     /// leaves - `PLAYER_CONTACT_OFFSET`) and looks down: a downward-pitched
