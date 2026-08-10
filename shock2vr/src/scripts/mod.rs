@@ -31,6 +31,7 @@ mod internal_keycard_script;
 mod internal_simple_health;
 mod internal_switch_held_model;
 mod level_change_button;
+mod many_ride;
 mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
@@ -145,6 +146,7 @@ use self::{
     internal_keycard_script::KeyCardScript,
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
+    many_ride::{ParalyzePlayers, SitDownRightNow, StandUpAgain, WhiteOut},
     melee_weapon::MeleeWeapon,
     obj_consume_button::ObjConsumeButton,
     once_room::OnceRoom,
@@ -901,7 +903,7 @@ impl ScriptWorld {
             "trapmessage" => Box::new(NoopScript {}), // eng2 - installing override. What prop for message? Where to load string?
             "charmable" => Box::new(NoopScript::new()),
             "transientcorpse" => Box::new(NoopScript::new()),
-            "whiteout" => Box::new(NoopScript::new()),
+            "whiteout" => Box::new(WhiteOut::new()),
             "vaporizeinventory" => Box::new(VaporizeInventory::new()),
 
             // Internal
@@ -1084,9 +1086,9 @@ impl ScriptWorld {
             "manybrain" => Box::new(UnimplementedScript::new(&script_name)),
             "trapsuicide" => Box::new(UnimplementedScript::new(&script_name)),
             // many ride?
-            "paralyzeplayers" => Box::new(UnimplementedScript::new(&script_name)),
-            "standupagain" => Box::new(UnimplementedScript::new(&script_name)),
-            "sitdownrightnow" => Box::new(UnimplementedScript::new(&script_name)),
+            "paralyzeplayers" => Box::new(ParalyzePlayers::new()),
+            "standupagain" => Box::new(StandUpAgain::new()),
+            "sitdownrightnow" => Box::new(SitDownRightNow::new()),
 
             // hydro1
             "transluceinout" => Box::new(UnimplementedScript::new(&script_name)),
