@@ -168,6 +168,7 @@ impl CS9MasterControl {
             Cs9Action::TurnOffByName(name) => send_by_name(entity_id, world, name, false),
             Cs9Action::PlaySchema(schema) => Effect::PlaySound {
                 handle: AudioHandle::new(),
+                source: Some(entity_id),
                 name: schema.to_string(),
             },
             Cs9Action::ScreensOnFallback => self.fire_screens_on(entity_id, world),

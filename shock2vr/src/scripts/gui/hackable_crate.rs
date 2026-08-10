@@ -254,6 +254,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                 },
                 Effect::PlaySound {
                     handle: AudioHandle::new(),
+                    source: Some(entity_id),
                     name: "hack_success".to_owned(),
                 },
             ]));

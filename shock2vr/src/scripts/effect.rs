@@ -408,6 +408,10 @@ pub enum Effect {
     PlaySound {
         handle: AudioHandle,
         name: String,
+        /// The entity the sound belongs to, when the emitter knows it. Purely
+        /// diagnostic (recorded in `audio_log`); `None` for sounds with no
+        /// world source, e.g. cutscene schemas.
+        source: Option<EntityId>,
     },
     PlaySpeech {
         entity_id: EntityId,

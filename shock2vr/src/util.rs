@@ -29,24 +29,30 @@ pub fn log_entity(world: &World, id: EntityId) {
 }
 
 pub fn debug_entity(world: &World, id: EntityId) -> String {
+    let (name, template_id) = entity_ident(world, id);
+    let template_id = template_id
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| "None".to_string());
+    format!("{:?} | {} | {}", id, template_id, name)
+}
+
+/// Stable-ish identity of an entity for diagnostics: its symbolic name and
+/// template id. (Runtime entity ids are reassigned every launch, so the
+/// template id is the durable handle.)
+pub fn entity_ident(world: &World, id: EntityId) -> (String, Option<i32>) {
     world.run(
         |v_template_id: View<dark::properties::PropTemplateId>,
          v_symname: View<dark::properties::PropSymName>,
          v_objname: View<dark::properties::PropObjName>,
          v_objshortname: View<dark::properties::PropObjShortName>| {
-            let template_id = v_template_id
-                .get(id)
-                .map(|t| t.template_id.to_string())
-                .unwrap_or_else(|_| "None".to_string());
-
+            let template_id = v_template_id.get(id).map(|t| t.template_id).ok();
             let name = v_symname
                 .get(id)
                 .map(|s| s.0.clone())
                 .or_else(|_| v_objname.get(id).map(|o| o.0.clone()))
                 .or_else(|_| v_objshortname.get(id).map(|o| o.0.clone()))
                 .unwrap_or_else(|_| "Unknown".to_string());
-
-            format!("{:?} | {} | {}", id, template_id, name)
+            (name, template_id)
         },
     )
 }

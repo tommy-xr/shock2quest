@@ -405,6 +405,7 @@ pub(crate) fn handle_hack_msg(
                     new_state,
                     Effect::PlaySound {
                         handle: AudioHandle::new(),
+                        source: Some(entity_id),
                         name: "login".to_owned(),
                     },
                 );
@@ -429,6 +430,7 @@ pub(crate) fn handle_hack_msg(
                     payment,
                     Effect::PlaySound {
                         handle: AudioHandle::new(),
+                        source: Some(entity_id),
                         name: "start_hack".to_owned(),
                     },
                 ]),
@@ -444,6 +446,7 @@ pub(crate) fn handle_hack_msg(
                     new_state,
                     Effect::PlaySound {
                         handle: AudioHandle::new(),
+                        source: Some(entity_id),
                         name: "login".to_owned(),
                     },
                 );
@@ -468,6 +471,7 @@ pub(crate) fn handle_hack_msg(
                             (outcomes.success)(entity_id, world),
                             Effect::PlaySound {
                                 handle: AudioHandle::new(),
+                                source: Some(entity_id),
                                 name: "hack_success".to_owned(),
                             },
                         ]),
@@ -481,6 +485,7 @@ pub(crate) fn handle_hack_msg(
                         (outcomes.critical_failure)(entity_id, world),
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
+                            source: Some(entity_id),
                             name: "hack_critical".to_owned(),
                         },
                     ]),
@@ -496,6 +501,7 @@ pub(crate) fn handle_hack_msg(
                 new_state,
                 Effect::PlaySound {
                     handle: AudioHandle::new(),
+                    source: Some(entity_id),
                     name: "hacking".to_owned(),
                 },
             )
@@ -676,6 +682,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
 
         let press_effect = Effect::PlaySound {
             handle: AudioHandle::new(),
+            source: Some(entity_id),
             name: "bkeypad".to_owned(),
         };
 
@@ -716,6 +723,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
                     );
                     let sound_effect = Effect::PlaySound {
                         handle: AudioHandle::new(),
+                        source: Some(entity_id),
                         name: "hacksucc".to_owned(),
                     };
                     Effect::combine(vec![switch_link_effect, sound_effect])

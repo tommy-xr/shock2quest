@@ -322,6 +322,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                         },
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
+                            source: Some(entity_id),
                             name: "repfail".to_owned(),
                         },
                     );
@@ -334,6 +335,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                         },
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
+                            source: Some(entity_id),
                             name: "repfail".to_owned(),
                         },
                     );

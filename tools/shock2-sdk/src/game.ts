@@ -25,6 +25,7 @@ import type {
   QuestBitsResult,
   QuestBitValue,
   RecentAudioResult,
+  RecentMessagesResult,
   UiState,
   PlayerInventoryResult,
   PlayerStats,
@@ -600,13 +601,30 @@ export class AudioApi {
   constructor(private readonly client: HttpClient) {}
 
   /**
-   * The most recently played environmental sounds (oldest first): resolved
-   * schema sample, query tags, and world position. Snapshot the last
-   * `sequence` before an action, then filter for higher sequences to find
-   * the sounds that action played.
+   * The most recently played sounds (oldest first): resolved schema sample,
+   * query tags, world position, sim time/frame, clip duration, source entity
+   * and audio handle. Snapshot the last `sequence` before an action, then
+   * filter for higher sequences to find the sounds that action played.
    */
   async recent(): Promise<RecentAudioResult> {
     return this.client.get<RecentAudioResult>("/v1/audio/recent");
+  }
+}
+
+/**
+ * Script message trace - what actually drove script behavior on a frame.
+ * Pairs with {@link AudioApi} for debugging "why did all of this fire at once".
+ */
+export class MessagesApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /**
+   * The most recently delivered script messages (oldest first). High-frequency
+   * payloads (hover, sensor intersect, collision) are filtered out so the
+   * buffer holds useful event history.
+   */
+  async recent(): Promise<RecentMessagesResult> {
+    return this.client.get<RecentMessagesResult>("/v1/messages/recent");
   }
 }
 
@@ -651,6 +669,7 @@ export class Game {
   readonly quests: QuestsApi;
   readonly ui: UiApi;
   readonly audio: AudioApi;
+  readonly messages: MessagesApi;
 
   constructor(protected readonly client: HttpClient) {
     this.player = new PlayerApi(client);
@@ -662,6 +681,7 @@ export class Game {
     this.quests = new QuestsApi(client);
     this.ui = new UiApi(client);
     this.audio = new AudioApi(client);
+    this.messages = new MessagesApi(client);
   }
 
   get baseUrl(): string {

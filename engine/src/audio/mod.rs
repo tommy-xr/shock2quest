@@ -33,6 +33,12 @@ impl AudioHandle {
         let id = NEXT_HANDLE_ID.fetch_add(1, Ordering::SeqCst);
         AudioHandle { id }
     }
+
+    /// The opaque handle id - exposed so diagnostics (the audio log) can
+    /// correlate a play with the `StopSound` that ends it.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
 }
 
 pub struct AudioChannel {
@@ -326,9 +332,17 @@ enum SourceType {
 #[derive(Clone)]
 pub struct AudioClip {
     source: SourceType,
+    /// Total playback length, when the decoder can report it. Used by the
+    /// audio log to tell how long a played clip occupies its channel.
+    total_duration: Option<std::time::Duration>,
 }
 
 impl AudioClip {
+    /// Playback length of the clip, if the underlying source knows it.
+    pub fn total_duration(&self) -> Option<std::time::Duration> {
+        self.total_duration
+    }
+
     pub fn add_to_spatial_sink(&self, sink: &SpatialSink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
@@ -342,18 +356,69 @@ impl AudioClip {
         }
     }
     pub fn from_bytes(bytes: Vec<u8>) -> AudioClip {
+        // Most shipped SS2 samples are IMA ADPCM WAVs, which rodio decodes via
+        // symphonia - and that decoder never reports a length. Read it out of
+        // the RIFF header instead, falling back to the decoder for other formats.
+        let total_duration = wav_duration(&bytes);
         let buf = Cursor::new(bytes);
-        let source = rodio::Decoder::new(buf).unwrap().buffered();
+        let decoder = rodio::Decoder::new(buf).unwrap();
+        // Ask the decoder, not the `Buffered` wrapper: `Buffered` cannot know
+        // the length until the whole source has been consumed.
+        let total_duration = total_duration.or_else(|| decoder.total_duration());
+        let source = decoder.buffered();
         AudioClip {
             source: SourceType::Bytes(source),
+            total_duration,
         }
     }
 
     pub fn from_raw(channels: u16, sample_rate: u32, data: Vec<i16>) -> AudioClip {
-        let source = rodio::buffer::SamplesBuffer::new(channels, sample_rate, data).buffered();
+        let samples = rodio::buffer::SamplesBuffer::new(channels, sample_rate, data);
+        let total_duration = samples.total_duration();
+        let source = samples.buffered();
         AudioClip {
             source: SourceType::Raw(source),
+            total_duration,
         }
+    }
+}
+
+/// Playback length of a RIFF/WAVE buffer, from `nAvgBytesPerSec` and the
+/// `data` chunk size. Format-agnostic (works for the PCM and IMA ADPCM samples
+/// the game ships) and does not require decoding the clip.
+fn wav_duration(bytes: &[u8]) -> Option<std::time::Duration> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+
+    let read_u32 = |at: usize| -> Option<usize> {
+        bytes
+            .get(at..at + 4)
+            .and_then(|raw| raw.try_into().ok())
+            .map(|raw| u32::from_le_bytes(raw) as usize)
+    };
+
+    let mut avg_bytes_per_sec = None;
+    let mut data_len = None;
+    let mut offset = 12;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = read_u32(offset + 4)?;
+        let body = offset + 8;
+        if id == b"fmt " && size >= 12 && body + 12 <= bytes.len() {
+            avg_bytes_per_sec = Some(read_u32(body + 8)?);
+        } else if id == b"data" {
+            data_len = Some(size.min(bytes.len().saturating_sub(body)));
+        }
+        // Chunks are word-aligned.
+        offset = body.saturating_add(size).saturating_add(size & 1);
+    }
+
+    match (avg_bytes_per_sec, data_len) {
+        (Some(rate), Some(len)) if rate > 0 => {
+            Some(std::time::Duration::from_secs_f64(len as f64 / rate as f64))
+        }
+        _ => None,
     }
 }
 
@@ -374,13 +439,14 @@ pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-) {
+) -> Vec<u64> {
     let position = (context.last_left_ear_position + context.last_right_ear_position) / 2.0;
 
     let id = handle.id;
-    let sink = play_audio_core(context, position, handle, maybe_channel, audio_clip);
+    let (sink, preempted) = play_audio_core(context, position, handle, maybe_channel, audio_clip);
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
+    preempted
 }
 
 pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
@@ -389,14 +455,16 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-) {
+) -> Vec<u64> {
     let id = handle.id;
     let scaled_position = position / SOUND_SCALE_FACTOR;
-    let sink = play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
+    let (sink, preempted) =
+        play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
 
     context
         .handle_to_sink
         .insert(id, SinkAdapter::positional(sink));
+    preempted
 }
 
 pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
@@ -405,15 +473,22 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-) -> SpatialSink {
+) -> (SpatialSink, Vec<u64>) {
+    // Handles whose playback this play cuts short. Reported back so callers
+    // (the audio log) can mark them stopped - these preemptions never go
+    // through `stop_audio`.
+    let mut preempted = Vec::new();
+
     if let Some(channel) = maybe_channel {
         let maybe_previous_audio = context.channel_to_last_handle.get(&channel.name);
         if let Some(audio) = maybe_previous_audio {
-            let maybe_sink = context.handle_to_sink.remove(audio);
+            let previous_id = *audio;
+            let maybe_sink = context.handle_to_sink.remove(&previous_id);
 
             if let Some(sink) = maybe_sink {
                 if !sink.empty() {
                     sink.stop();
+                    preempted.push(previous_id);
                 }
             }
         }
@@ -426,6 +501,7 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     if let Some(current_channel) = context.handle_to_sink.get(&handle.id) {
         if !current_channel.empty() {
             current_channel.stop();
+            preempted.push(handle.id);
         }
     }
 
@@ -448,7 +524,49 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     audio_clip.add_to_spatial_sink(&sink);
 
     //context.handle_to_sink.insert(handle.id, sink);
-    sink
+    (sink, preempted)
 
     //context.spatial_sinks.push(sink);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wav_duration;
+
+    fn riff(avg_bytes_per_sec: u32, data_len: usize) -> Vec<u8> {
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes()); // wFormatTag
+        fmt.extend_from_slice(&1u16.to_le_bytes()); // nChannels
+        fmt.extend_from_slice(&22050u32.to_le_bytes()); // nSamplesPerSec
+        fmt.extend_from_slice(&avg_bytes_per_sec.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes()); // nBlockAlign
+        fmt.extend_from_slice(&8u16.to_le_bytes()); // wBitsPerSample
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WAVE");
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&(fmt.len() as u32).to_le_bytes());
+        body.extend_from_slice(&fmt);
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&(data_len as u32).to_le_bytes());
+        body.extend_from_slice(&vec![0u8; data_len]);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    #[test]
+    fn wav_duration_reads_avg_bytes_per_sec_and_data_size() {
+        let duration = wav_duration(&riff(22050, 11025)).expect("duration");
+        assert_eq!(duration.as_secs_f64(), 0.5);
+    }
+
+    #[test]
+    fn wav_duration_rejects_non_riff_buffers() {
+        assert!(wav_duration(b"not a wave file at all").is_none());
+        assert!(wav_duration(&[]).is_none());
+    }
 }

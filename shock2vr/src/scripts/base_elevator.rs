@@ -174,7 +174,7 @@ impl Script for BaseElevator {
 
     fn handle_message(
         &mut self,
-        _entity_id: EntityId,
+        entity_id: EntityId,
         world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
@@ -185,6 +185,7 @@ impl Script for BaseElevator {
                     self.move_to_next_target(world);
                     Effect::PlaySound {
                         handle: AudioHandle::new(),
+                        source: Some(entity_id),
                         name: "Devices/DOOR1OP".to_owned(),
                     }
                 } else {
@@ -195,6 +196,7 @@ impl Script for BaseElevator {
                 if self.reroute_to(*target_waypoint) {
                     Effect::PlaySound {
                         handle: AudioHandle::new(),
+                        source: Some(entity_id),
                         name: "Devices/DOOR1OP".to_owned(),
                     }
                 } else {

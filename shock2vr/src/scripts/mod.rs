@@ -1302,6 +1302,16 @@ impl ScriptWorld {
                 slayed_entities.insert(to_entity_id);
             }
 
+            // Observability: trace the delivery so headless tooling (the debug
+            // runtime's GET /v1/messages/recent) can see what drove scripts on
+            // a given frame. High-frequency payloads are filtered out there.
+            crate::message_trace::record(
+                world,
+                time.total.as_secs_f64(),
+                to_entity_id,
+                &msg.payload,
+            );
+
             let mut is_turn_on = false;
             match msg.payload {
                 MessagePayload::TurnOn { from: _ } => is_turn_on = true,
@@ -1355,6 +1365,15 @@ impl ScriptWorld {
             match eff {
                 Effect::Send { msg } if matches!(msg.payload, MessagePayload::Slay) => {
                     let entity_id = msg.to;
+                    // Slay is dispatched here instead of through the queue, so
+                    // trace it here too - otherwise it is the one event class
+                    // missing from GET /v1/messages/recent.
+                    crate::message_trace::record(
+                        world,
+                        time.total.as_secs_f64(),
+                        entity_id,
+                        &MessagePayload::Slay,
+                    );
                     let mut slay_effects = Vec::new();
                     if let Some(scripts) = self.entity_to_scripts.get_mut(&entity_id) {
                         for instance in scripts {

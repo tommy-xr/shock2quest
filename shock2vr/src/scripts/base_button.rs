@@ -23,6 +23,7 @@ impl BaseButton {
     pub fn locked_effect(&self, entity_id: EntityId, world: &World) -> Option<Effect> {
         self.is_locked(entity_id, world).then(|| Effect::PlaySound {
             handle: AudioHandle::new(),
+            source: Some(entity_id),
             name: "hackfail".to_owned(),
         })
     }

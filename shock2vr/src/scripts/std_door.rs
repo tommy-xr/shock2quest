@@ -257,6 +257,7 @@ impl Script for StdDoor {
                         // still gets a response without changing door state.
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
+                            source: Some(entity_id),
                             name: "hackfail".to_owned(),
                         }
                     } else {
