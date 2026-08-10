@@ -7,6 +7,33 @@ use shipyard::Component;
 use crate::ss2_common::{read_bytes, read_string_with_size, read_u32};
 use serde::{Deserialize, Serialize};
 
+#[repr(u32)]
+#[derive(Debug, FromPrimitive, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AITeam {
+    Good = 0,
+    Neutral = 1,
+    Bad1 = 2,
+    Bad2 = 3,
+    Bad3 = 4,
+    Bad4 = 5,
+    Bad5 = 6,
+}
+
+impl AITeam {
+    pub fn from_raw(raw: u32) -> AITeam {
+        AITeam::from_u32(raw).unwrap_or(AITeam::Bad1)
+    }
+}
+
+#[derive(Debug, Component, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PropAITeam(pub AITeam);
+
+impl PropAITeam {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropAITeam {
+        PropAITeam(AITeam::from_raw(read_u32(reader)))
+    }
+}
+
 #[derive(Debug, Component, Clone, Deserialize, Serialize)]
 pub struct PropAI(pub String);
 
@@ -146,5 +173,21 @@ impl PropAISignalResponse {
             priority,
             actions,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn ai_team_decodes_dark_team_enum() {
+        let mut good = Cursor::new(0_u32.to_le_bytes());
+        let mut bad4 = Cursor::new(5_u32.to_le_bytes());
+
+        assert_eq!(PropAITeam::read(&mut good, 4), PropAITeam(AITeam::Good));
+        assert_eq!(PropAITeam::read(&mut bad4, 4), PropAITeam(AITeam::Bad4));
+        assert_eq!(AITeam::from_raw(u32::MAX), AITeam::Bad1);
     }
 }

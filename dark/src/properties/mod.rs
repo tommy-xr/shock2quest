@@ -1173,6 +1173,7 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             |str| PropAI(str),
             accumulator::latest,
         ),
+        define_prop("P$AI_Team", PropAITeam::read, identity, accumulator::latest),
         define_prop(
             "P$AI_AlertCap",
             PropAIAlertCap::read,

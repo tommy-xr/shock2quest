@@ -13,7 +13,7 @@ use crate::{
     creature,
     mission::{PlayerInfo, entity_creator::CreateEntityOptions},
     physics::{InternalCollisionGroups, PhysicsWorld},
-    runtime_props::{RuntimePropJointTransforms, RuntimePropTransform},
+    runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
     scripts::{
         Effect,
         script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
@@ -268,7 +268,11 @@ fn find_first_entity_by_template_id(world: &World, ranged_weapon: i32) -> Option
 /// Handles firing a projectile from a ranged weapon, when that weapon is own directly by the creature.
 /// Used by most creatures (robots, hybrids, midwives, etc)
 ///
-pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
+pub fn fire_ranged_projectile(
+    world: &World,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+) -> Effect {
     let maybe_projectile =
         get_first_link_with_template_and_data(world, entity_id, |link| match link {
             Link::AIProjectile(data) => Some(*data),
@@ -299,6 +303,23 @@ pub fn fire_ranged_projectile(world: &World, entity_id: EntityId) -> Effect {
         let position = joint_transform.transform_point(point3(0.0, 0.0, 0.0));
         let muzzle_transform = transform * Matrix4::from_translation((position + forward).to_vec());
         let muzzle_position = muzzle_transform.transform_point(point3(0.0, 0.0, 0.0));
+        let Some((target_entity, target_position)) = world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .ok()
+            .map(|player| (player.entity_id, player.pos))
+        else {
+            return Effect::NoEffect;
+        };
+        if !has_line_of_fire_from(
+            entity_id,
+            muzzle_position,
+            target_entity,
+            world,
+            physics,
+            target_position,
+        ) {
+            return Effect::NoEffect;
+        }
         let projectile_transform =
             projectile_transform_aimed_at_player(world, muzzle_position, muzzle_transform);
 
@@ -632,10 +653,9 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
 /// because projectiles collide with those - an AI allowed to stop and
 /// shoot through a closed door or a crate stands rooted firing into it
 /// for as long as its target stays known (issue #481's stand-and-shoot
-/// freeze). A living creature as the first hit still counts as clear:
-/// allies wander off on their own, and refusing to stand behind one would
-/// flap the chase/attack transition every time the ally shifts (holding
-/// fire while an ally blocks the shot is #614).
+/// freeze). Living allies block the shot, while an enemy creature or the
+/// intended target counts as clear. This preserves pursuit/attack against
+/// enemies without letting converged ranged AIs shoot through their own side.
 pub fn has_line_of_fire(
     from_entity: EntityId,
     world: &World,
@@ -652,7 +672,35 @@ pub fn has_line_of_fire(
         return false;
     };
     let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+    let Some(target_entity) = world
+        .borrow::<UniqueView<PlayerInfo>>()
+        .ok()
+        .map(|player| player.entity_id)
+    else {
+        return false;
+    };
+    has_line_of_fire_from(
+        from_entity,
+        start_point,
+        target_entity,
+        world,
+        physics,
+        target,
+    )
+}
+
+fn has_line_of_fire_from(
+    from_entity: EntityId,
+    start_point: Point3<f32>,
+    target_entity: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    target: Vector3<f32>,
+) -> bool {
     let end_point = point3(0.0, 0.0, 0.0) + target;
+    if (end_point - start_point).magnitude2() <= 1.0e-12 {
+        return true;
+    }
     let direction = (end_point - start_point).normalize();
     let distance = (end_point - start_point).magnitude();
     let result = physics.ray_cast2(
@@ -670,13 +718,47 @@ pub fn has_line_of_fire(
         Some(hit) => hit
             .maybe_entity_id
             .map(|id| {
-                world
+                let id = world
+                    .borrow::<View<RuntimePropProxyEntity>>()
+                    .ok()
+                    .and_then(|v| v.get(id).ok().map(|proxy| proxy.0))
+                    .unwrap_or(id);
+                if target_entity == id {
+                    return true;
+                }
+
+                let is_creature = world
                     .borrow::<View<PropCreature>>()
                     .map(|v| v.contains(id))
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                if !is_creature {
+                    return false;
+                }
+                let is_living = world
+                    .borrow::<View<PropHitPoints>>()
+                    .ok()
+                    .and_then(|v| v.get(id).ok().map(|hp| hp.hit_points > 0))
+                    .unwrap_or(true);
+                if !is_living {
+                    return true;
+                }
+
+                ai_team(world, id) != ai_team(world, from_entity)
             })
             .unwrap_or(false),
     }
+}
+
+/// Dark defaults ordinary AIs to Bad 1; Good/Neutral/other Bad teams are
+/// explicit `P$AI_Team` overrides (including the shipped Good Guy and Charmed
+/// metaproperties). Equal teams are allies; a living creature on another team
+/// is a valid hostile obstruction and does not suppress the shot.
+fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
+    world
+        .borrow::<View<PropAITeam>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|team| team.0))
+        .unwrap_or(AITeam::Bad1)
 }
 
 /// Check if the player is visible from an entity within a field of view
@@ -857,5 +939,130 @@ mod projectile_aim_tests {
             (actual_forward - expected_forward).magnitude() < 1.0e-6,
             "projectile direction must include pitch toward the player's collider",
         );
+    }
+}
+
+#[cfg(test)]
+mod line_of_fire_tests {
+    use super::*;
+    use crate::{
+        mission::PlayerInfo, physics::CollisionGroup, runtime_props::RuntimePropTransform,
+    };
+
+    fn identity_rotation() -> Quaternion<f32> {
+        Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0))
+    }
+
+    fn line_of_fire_through(blocker_team: AITeam, blocker_hit_points: i32) -> bool {
+        let mut world = World::new();
+        let shooter = world.add_entity((
+            PropCreature(0),
+            PropAITeam(AITeam::Bad1),
+            PropHitPoints { hit_points: 10 },
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: identity_rotation(),
+            },
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 0.0, 0.0))),
+        ));
+        let blocker = world.add_entity((
+            PropCreature(0),
+            PropAITeam(blocker_team),
+            PropHitPoints {
+                hit_points: blocker_hit_points,
+            },
+            PropPosition {
+                position: vec3(0.0, 0.0, 5.0),
+                cell: 0,
+                rotation: identity_rotation(),
+            },
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 0.0, 5.0))),
+        ));
+        let player = world.add_entity(());
+        let inventory = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 10.0),
+            rotation: identity_rotation(),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            blocker,
+            vec3(0.0, 0.0, 5.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 2.0, 1.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player_handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        has_line_of_fire(shooter, &world, &physics, vec3(0.0, 0.0, 10.0))
+    }
+
+    #[test]
+    fn living_ally_blocks_line_of_fire() {
+        assert!(!line_of_fire_through(AITeam::Bad1, 10));
+    }
+
+    #[test]
+    fn living_enemy_does_not_block_line_of_fire() {
+        assert!(line_of_fire_through(AITeam::Good, 10));
+    }
+
+    #[test]
+    fn dead_ally_does_not_block_line_of_fire() {
+        assert!(line_of_fire_through(AITeam::Bad1, 0));
+    }
+
+    #[test]
+    fn intended_target_does_not_block_its_own_line_of_fire() {
+        let mut world = World::new();
+        let shooter = world.add_entity((
+            PropCreature(0),
+            PropAITeam(AITeam::Bad1),
+            PropHitPoints { hit_points: 10 },
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: identity_rotation(),
+            },
+        ));
+        let target = world.add_entity(());
+        let inventory = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 5.0),
+            rotation: identity_rotation(),
+            entity_id: target,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, 5.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 2.0, 1.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player_handle = physics.create_player(vec3(50.0, 50.0, 50.0), target);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        assert!(has_line_of_fire(
+            shooter,
+            &world,
+            &physics,
+            vec3(0.0, 0.0, 5.0),
+        ));
     }
 }

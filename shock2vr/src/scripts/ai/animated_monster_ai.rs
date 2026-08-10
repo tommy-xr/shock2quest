@@ -1392,7 +1392,7 @@ impl Script for AnimatedMonsterAI {
                     if self.is_dead || is_killed(entity_id, world) {
                         return Effect::NoEffect;
                     }
-                    fire_ranged_projectile(world, entity_id)
+                    fire_ranged_projectile(world, physics, entity_id)
                 } else if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) {
                     // The swing reached its authored contact frame - resolve
                     // the hit through the attacker's melee weapon archetype.
