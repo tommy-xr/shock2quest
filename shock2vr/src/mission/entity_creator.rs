@@ -2030,6 +2030,70 @@ mod tests {
         assert!(bodies[0].collision_groups.iter().any(|g| g == "entity"));
     }
 
+    /// Command1's Floor Pod 1520 is a SCRIPT-frobbable object with an
+    /// explicitly authored SPHERE model and radius. Selection must not replace
+    /// that small moving sphere with the much larger render-model bounds: the
+    /// synthetic box fills the only route through path cells 3799 -> 3798.
+    #[test]
+    fn ordinary_frobbable_sphere_uses_authored_dynamic_physics() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let radius = 0.391_980_92;
+        let offset = vec3(0.0, 0.125, -0.25);
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(-288.220_46, -7.601_908_7, 87.673_706),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropHUDSelect(true),
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: radius,
+                radius1: 0.0,
+                offset0: offset,
+                offset1: Vector3::zero(),
+                size: Vector3::zero(),
+                unk1: 0,
+                unk2: 0,
+            },
+        ));
+
+        let handle = create_physics_representation(
+            &mut world,
+            &mut physics,
+            &Some(&ladder_model()),
+            entity_id,
+        )
+        .expect("an authored frobbable sphere should get a body");
+
+        assert_eq!(
+            physics.debug_list_bodies()[0].body_type,
+            "dynamic",
+            "an authored SPHERE is Dark's simulated moving physics model"
+        );
+        let actual_radius = physics
+            .sphere_radius(handle)
+            .expect("authored sphere must not become a model-bounds cuboid");
+        assert!((actual_radius - radius).abs() < 1.0e-5);
+        let actual_offset = physics
+            .collider_local_translation(handle)
+            .expect("authored collider should remain attached to its body");
+        assert!((actual_offset - offset).magnitude() < 1.0e-5);
+        assert!(physics.collider_blocks_player(handle));
+        assert!(physics.collider_blocks_actor(handle));
+    }
+
     /// A non-frobbable object with a physics type but no `P$PhysDims` - the
     /// #597 model-bounds fallback. `immobile` separates level furniture (and
     /// the ladder leaves whose own template says SPHERE) from loose debris.

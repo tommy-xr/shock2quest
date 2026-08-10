@@ -2808,6 +2808,24 @@ impl PhysicsWorld {
         Some((capsule.radius, capsule.half_height() * 2.0))
     }
 
+    #[cfg(test)]
+    pub(crate) fn sphere_radius(&self, handle: RigidBodyHandle) -> Option<f32> {
+        let body = self.rigid_body_set.get(handle)?;
+        let collider = self.collider_set.get(*body.colliders().first()?)?;
+        collider.shape().as_ball().map(|ball| ball.radius)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn collider_local_translation(
+        &self,
+        handle: RigidBodyHandle,
+    ) -> Option<Vector3<f32>> {
+        let body = self.rigid_body_set.get(handle)?;
+        let collider = self.collider_set.get(*body.colliders().first()?)?;
+        let translation = collider.position_wrt_parent()?.translation.vector;
+        Some(vec3(translation.x, translation.y, translation.z))
+    }
+
     /// Whether any collider on a body is solid to the given character
     /// membership. Mirrors the player/actor movement queries: disabled bodies,
     /// disabled colliders, sensors, and non-collidable memberships never stop a
