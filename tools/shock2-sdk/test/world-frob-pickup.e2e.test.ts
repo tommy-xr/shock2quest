@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -45,10 +45,40 @@ test(
       );
     }
 
-    // The circuit board is MOVE | SCRIPT. Its existing FrobQB path must still
-    // both transfer the unique board and award the authored quest bit.
-    await game.entities.sendMessage(circuitBoard.id, { type: "Frob" });
+    // The circuit board is MOVE | SCRIPT. Take it through the production flat
+    // crosshair/squeeze path: the controller must route the authored SCRIPT
+    // action through FrobQB instead of bypassing it with a bare StoreItem.
+    assert.equal(await game.quests.get("note_1_10"), "unknown");
+    assert.equal(
+      (await game.physics.bodies({ entityId: circuitBoard.id })).bodies.length,
+      1,
+      "the authored circuit board should begin as a physical world item",
+    );
+    const modulesBefore = (await game.info()).player.stats?.cyber_modules;
+    assert.equal(modulesBefore, 0, "a fresh eng1 character starts with no modules");
+
+    const [boardX, boardY, boardZ] = (
+      await game.entities.detail(circuitBoard.id)
+    ).position;
+    await game.player.teleport({
+      x: boardX + 0.2,
+      y: boardY - PLAYER_EYE_HEIGHT_WORLD,
+      z: boardZ,
+    });
+    const aim = await game.player.aimAt(circuitBoard, {
+      hitbox: "center",
+      visibility: "required",
+    });
+    assert.equal(
+      aim.target_confirmed,
+      true,
+      `the circuit board should expose a selectable surface: ${JSON.stringify(aim)}`,
+    );
+    await game.input.set("right_hand.squeeze_value", 1);
     await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze_value", 0);
+    await game.step({ frames: 5 });
+
     const inventory = await game.player.inventory();
     assert.equal(
       inventory.items.find((entry) => entry.entity_id === circuitBoard.id)
@@ -60,6 +90,37 @@ test(
       await game.quests.get("note_1_10"),
       "complete",
       "circuit board FrobQB must still award note_1_10",
+    );
+    assert.equal(
+      (await game.info()).player.stats?.cyber_modules,
+      10,
+      "the same single Frob should relay the authored +10 module reward exactly once",
+    );
+    assert.equal(
+      (await game.physics.bodies({ entityId: circuitBoard.id })).bodies.length,
+      0,
+      "the collected circuit board should no longer have a world body",
+    );
+
+    const saveName = `world_frob_scripted_pickup_${Date.now()}`;
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 5 });
+
+    const [loadedBoard] = await game.entities.byTemplate(CIRCUIT_BOARD_OBJ);
+    assert.ok(loadedBoard, "save/load should restore the unique circuit board");
+    assert.equal(
+      (await game.player.inventory()).items.find(
+        (entry) => entry.entity_id === loadedBoard.id,
+      )?.location,
+      "inventory",
+      "save/load must preserve the scripted pickup in the backpack",
+    );
+    assert.equal(await game.quests.get("note_1_10"), "complete");
+    assert.equal(
+      (await game.info()).player.stats?.cyber_modules,
+      10,
+      "save/load must preserve one reward without replaying the pickup",
     );
   },
 );
