@@ -3,7 +3,8 @@ use dark::{
     EnvSoundQuery,
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
     properties::{
-        AIAlertLevel, AIMode, KeyCard, ObjectState, PropGunState, QuestBitValue, TeleportSource,
+        AIAlertLevel, AIMode, KeyCard, ObjectState, PropGunState, PropReplicatorHackedContents,
+        QuestBitValue, TeleportSource,
     },
 };
 use engine::audio::AudioHandle;
@@ -480,6 +481,14 @@ pub enum Effect {
     SetObjectState {
         entity_id: EntityId,
         state: ObjectState,
+    },
+
+    /// Persistently replace a replicator's hacked catalog. Retail's
+    /// `PutBombInReplicator` uses this to add the Command-deck objective item;
+    /// the registered Dark property makes the change survive save/load.
+    SetReplicatorHackedContents {
+        entity_id: EntityId,
+        contents: PropReplicatorHackedContents,
     },
 
     /// Persistently set Dark's `P$EcoState` on one live object - emitted by
