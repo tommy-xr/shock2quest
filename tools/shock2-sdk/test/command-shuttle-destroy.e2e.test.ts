@@ -16,7 +16,8 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const SHIELD_DESTROY_TRAP = 280;
 const SHUTTLE_SHIELD = 278;
 const SHUTTLE_B = 2392;
-const DIRECT_EXPLOSION_TWEQS = [157, 460, 482] as const;
+const EXPLOSION_TWEQS = [157, 460, 482, 632, 500, 524, 516, 499, 521] as const;
+const DELAYED_SLAY_TARGET = 808;
 const PISTOL_TEMPLATE = -17;
 const SMALL_AP_CLIP_TEMPLATE = -1360;
 
@@ -67,6 +68,7 @@ test(
     assert.equal(await game.quests.get("ShuttleBBoom"), "unknown");
     assert.equal(await game.quests.get("HackEXP"), "unknown");
     assert.equal(await game.quests.get("Note_6_6"), "unknown");
+    assert.equal(await game.quests.get("Note_6_7"), "unknown");
     const modulesBefore = (await game.info()).player.stats?.cyber_modules;
     assert.equal(modulesBefore, 0, "fresh Command character starts with no cyber modules");
 
@@ -84,9 +86,12 @@ test(
     );
 
     // The QB filter is conditional on the player being in the objective room.
-    // Establish only that authored precondition through the debug setup API;
-    // every action under test below is the production weapon/impact/script path.
+    // The later delayed filter likewise expects Shuttle A's preceding objective
+    // to be done. Establish only those authored campaign preconditions through
+    // the debug setup API; every action under test below is the production
+    // weapon/impact/script path.
     await game.quests.set("InRoom", "complete");
+    await game.quests.set("ShuttleABoom", "incomplete");
 
     const pistol = await game.player.spawnItem(PISTOL_TEMPLATE);
     await game.player.setStats({ skills: { standard_weapons: 6 } });
@@ -106,10 +111,22 @@ test(
     // refuses to transmute a loaded magazine. Empty it away from the objective,
     // provision a real AP clip, then select and reload AP through normal inputs.
     const standardAmmo = ammoOf(await game.entities.detail(pistol.entity_id));
+    const drainPosition = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      drainPosition.x,
+      drainPosition.y + 1.04,
+      drainPosition.z - 100,
+    ]);
+    await game.step({ frames: 1 });
     for (let round = 0; round < standardAmmo; round += 1) {
       await fireOnce(game);
     }
     assert.equal(ammoOf(await game.entities.detail(pistol.entity_id)), 0);
+    assert.equal(
+      (await game.entities.byTemplate(SHUTTLE_B)).length,
+      1,
+      "standard-magazine setup must fire away from Shuttle B",
+    );
     await game.player.spawnItem(SMALL_AP_CLIP_TEMPLATE);
     await game.input.trigger("CycleAmmo");
     await game.step({ frames: 2 });
@@ -121,7 +138,10 @@ test(
 
     // Teleport only stages the shooter on the supported bay floor. Acquisition
     // is visibility-checked and the hit itself comes from one real trigger edge.
-    await game.player.teleport({ x: -294.55, y: -7.796, z: 87.2 });
+    // This is the supported side-on firing lane from the accepted iteration27
+    // save; it keeps the pistol muzzle clear of the bay-floor lip as well as
+    // giving the camera ray an unobstructed shuttle surface.
+    await game.player.teleport({ x: -286.4, y: -7.156, z: 91.0 });
     await game.step({ frames: 10 });
     const aim = await game.player.aimAt(shuttle, {
       hitbox: "center",
@@ -129,6 +149,12 @@ test(
     });
     assert.equal(aim.entity_id, shuttle.id, JSON.stringify(aim));
     assert.equal(aim.visibility.state, "visible", JSON.stringify(aim));
+    // aimAt's ordinary-object acquisition deliberately picks the nearest
+    // selectable surface. Refine the production camera/weapon to the authored
+    // center after that visibility gate so the projectile ray continues
+    // through the hull instead of grazing a close surface edge.
+    await game.input.lookAtWorldPoint(shuttleDetail.position);
+    await game.step({ frames: 1 });
     await fireOnce(game);
     assert.equal(
       ammoOf(await game.entities.detail(pistol.entity_id)),
@@ -144,19 +170,34 @@ test(
     );
     assert.equal(await game.quests.get("ShuttleBBoom"), "incomplete");
     assert.equal(await game.quests.get("HackEXP"), "incomplete");
-    assert.equal(await game.quests.get("Note_6_6"), "incomplete");
+    const note66After = await game.quests.get("Note_6_6");
+    assert.notEqual(
+      note66After,
+      "unknown",
+      "the InRoom QB-filter branch must grant the authored shuttle email objective",
+    );
+    assert.equal(
+      await game.quests.get("Note_6_7"),
+      "complete",
+      "the two-second delay branch must reach its ShuttleABoom filter",
+    );
     assert.equal(
       (await game.info()).player.stats?.cyber_modules,
       modulesBefore + 20,
       "the InRoom QB-filter branch must award the authored 20 modules",
     );
-    for (const objectId of DIRECT_EXPLOSION_TWEQS) {
+    for (const objectId of EXPLOSION_TWEQS) {
       assert.equal(
         (await game.entities.byTemplate(objectId)).length,
         0,
-        `direct explosion Tweq${objectId} must have received the shuttle TurnOn`,
+        `direct or delayed explosion Tweq${objectId} must receive the shuttle TurnOn`,
       );
     }
+    assert.equal(
+      (await game.entities.byTemplate(DELAYED_SLAY_TARGET)).length,
+      0,
+      "the half-second delay branch must relay through TrapSlayer631 to Window808",
+    );
     assert.equal(
       (await game.entities.byTemplate(394)).length,
       1,
@@ -169,7 +210,8 @@ test(
     assert.equal((await game.entities.byTemplate(SHUTTLE_B)).length, 0);
     assert.equal(await game.quests.get("ShuttleBBoom"), "incomplete");
     assert.equal(await game.quests.get("HackEXP"), "incomplete");
-    assert.equal(await game.quests.get("Note_6_6"), "incomplete");
+    assert.equal(await game.quests.get("Note_6_6"), note66After);
+    assert.equal(await game.quests.get("Note_6_7"), "complete");
     assert.equal((await game.info()).player.stats?.cyber_modules, modulesBefore + 20);
   },
 );
