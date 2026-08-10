@@ -2073,6 +2073,17 @@ impl CollisionGroup {
         })
     }
 
+    /// Keep this collider visible to generic interaction/projectile rays while
+    /// removing it from every physical contact pair. Used for render-model
+    /// frob bounds that accompany a separate authored physics collider.
+    fn interaction_only(self) -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: self.collision.memberships,
+            filter: InternalCollisionGroups::RAYCAST.bits.into(),
+            test_mode: self.collision.test_mode,
+        })
+    }
+
     /// The same membership as this group, with living characters dropped from
     /// its filter so neither the player nor creature capsules collide with it.
     ///
@@ -2824,6 +2835,29 @@ impl PhysicsWorld {
         let collider = self.collider_set.get(*body.colliders().first()?)?;
         let translation = collider.position_wrt_parent()?.translation.vector;
         Some(vec3(translation.x, translation.y, translation.z))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn collider_count(&self, handle: RigidBodyHandle) -> usize {
+        self.rigid_body_set
+            .get(handle)
+            .map_or(0, |body| body.colliders().len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn secondary_cuboid_full_size(
+        &self,
+        handle: RigidBodyHandle,
+    ) -> Option<Vector3<f32>> {
+        let body = self.rigid_body_set.get(handle)?;
+        body.colliders().iter().skip(1).find_map(|handle| {
+            let cuboid = self.collider_set.get(*handle)?.shape().as_cuboid()?;
+            Some(vec3(
+                cuboid.half_extents.x * 2.0,
+                cuboid.half_extents.y * 2.0,
+                cuboid.half_extents.z * 2.0,
+            ))
+        })
     }
 
     /// Whether any collider on a body is solid to the given character
@@ -3709,6 +3743,37 @@ impl PhysicsWorld {
         let handle = self.rigid_body_set.insert(rigid_body);
         self.entity_id_to_body.insert(entity_id, handle);
         handle
+    }
+
+    /// Attach a massless, contact-free model-bounds cuboid used only by frob
+    /// and projectile rays. The body's first collider remains its authoritative
+    /// physical shape, so movement, support, mass, and debug solidity reports
+    /// continue to describe authored physics rather than selection geometry.
+    pub fn add_interaction_cuboid(
+        &mut self,
+        handle: RigidBodyHandle,
+        entity_id: EntityId,
+        offset: Vector3<f32>,
+        size: Vector3<f32>,
+        collision_groups: CollisionGroup,
+    ) -> bool {
+        if self.rigid_body_set.get(handle).is_none() {
+            return false;
+        }
+        let size = sanitize_collider_size(entity_id, "add_interaction_cuboid", size);
+        let mut collider = ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
+            .translation(vec_to_nvec(offset))
+            .density(0.0)
+            .build();
+        collider.set_enabled(true);
+        collider.set_sensor(false);
+        collider.user_data = entity_id.inner() as u128;
+        let interaction = collision_groups.interaction_only();
+        collider.set_collision_groups(interaction.collision);
+        collider.set_solver_groups(interaction.solver);
+        self.collider_set
+            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+        true
     }
 
     /// Attach one kinematic entity to another using Dark's PhysAttach
@@ -6612,6 +6677,25 @@ mod tests {
             "corpse must remain selectable for looting"
         );
         assert!(!collider.is_sensor(), "world support uses a solid collider");
+    }
+
+    #[test]
+    fn interaction_only_bounds_are_raycastable_without_physical_contacts() {
+        let bounds = CollisionGroup::selectable().interaction_only();
+        let generic_ray = InteractionGroups::new(
+            InternalCollisionGroups::ALL.bits.into(),
+            InternalCollisionGroups::SELECTABLE.bits.into(),
+            Default::default(),
+        );
+
+        assert!(bounds.collision.test(generic_ray));
+        assert!(!bounds.collision.test(CollisionGroup::entity().collision));
+        assert!(!bounds.collision.test(CollisionGroup::actor().collision));
+        assert!(!bounds.collision.test(InteractionGroups::new(
+            InternalCollisionGroups::PLAYER.bits.into(),
+            InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            Default::default(),
+        )));
     }
 
     /// AI movement probes must use the actor membership, not a generic ray:

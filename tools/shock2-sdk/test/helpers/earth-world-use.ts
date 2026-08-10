@@ -5,6 +5,9 @@ import type { EntitySummary } from "../../src/types.js";
 export interface EarthWorldUseStaging {
   horizontalOffset: number;
   verticalOffset: number;
+  /** Optional physics frames to settle before computing the live aim. Keep at
+   * zero for tests whose authored RNG depends on the exact frame count. */
+  settleFrames?: number;
   /** Fixed pitch, in degrees. Omit to aim at the item from wherever the camera
    * actually ends up, which is what you want unless you are specifically
    * testing a fixed-aim case. */
@@ -15,6 +18,7 @@ const DEFAULT_STAGING: EarthWorldUseStaging = {
   horizontalOffset: 0.1,
   // Stage the body so the CAMERA lands level with the item.
   verticalOffset: -PLAYER_EYE_HEIGHT_WORLD,
+  settleFrames: 0,
   // Ignored unless `pitchDeg` is given explicitly - the aim is computed from the
   // measured camera position instead. See below.
   pitchDeg: undefined,
@@ -68,12 +72,18 @@ export async function earthWorldUse(
     y: y + staging.verticalOffset,
     z,
   });
-  // Aim from where the camera actually is. Deliberately WITHOUT stepping first:
-  // an extra frame here advances the simulation, and the hacking tests' RNG is
-  // sequenced off the frame count, so a settle step silently changes their
-  // outcomes.
-  const pitchDeg = staging.pitchDeg ?? (await aimPitchDeg(game, item, staging));
-  await game.input.set("head.look", [0, pitchDeg]);
+  if ((staging.settleFrames ?? 0) > 0) {
+    await game.step({ frames: staging.settleFrames });
+  }
+  // Aim from where the camera actually is. The default deliberately avoids a
+  // settle step so the hacking tests' authored RNG sequence stays unchanged;
+  // callers that opted into settling use the full production aim helper.
+  if ((staging.settleFrames ?? 0) > 0 && staging.pitchDeg === undefined) {
+    await game.player.aimAt(item, { hitbox: "center", visibility: "required" });
+  } else {
+    const pitchDeg = staging.pitchDeg ?? (await aimPitchDeg(game, item, staging));
+    await game.input.set("head.look", [0, pitchDeg]);
+  }
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 1 });
   await game.input.set("right_hand.squeeze", 0);

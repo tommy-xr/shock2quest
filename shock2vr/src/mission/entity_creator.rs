@@ -1167,7 +1167,7 @@ fn create_physics_representation_with_options(
                     qrotation,
                     offset,
                     shape,
-                    frob_group,
+                    CollisionGroup::entity(),
                     false,
                     dynamics_options,
                 );
@@ -1178,10 +1178,22 @@ fn create_physics_representation_with_options(
                     qrotation,
                     offset,
                     shape,
-                    frob_group,
+                    CollisionGroup::entity(),
                     false,
                 );
             }
+            // Dark selects frobbable objects from rendered model geometry,
+            // independently of their physics model. Keep the model bounds as
+            // a massless ray-only collider on the same body: interaction keeps
+            // its broad visible surface, while contacts use only the authored
+            // sphere/OBB above.
+            physics.add_interaction_cuboid(
+                rigid_body_handle,
+                entity_id,
+                Vector3::zero(),
+                abs_dimensions,
+                frob_group,
+            );
         } else if frob_info.world_action.contains(FrobFlag::MOVE) {
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
@@ -2121,6 +2133,15 @@ mod tests {
         assert!((actual_offset - offset).magnitude() < 1.0e-5);
         assert!(physics.collider_blocks_player(handle));
         assert!(physics.collider_blocks_actor(handle));
+        assert_eq!(
+            physics.collider_count(handle),
+            2,
+            "authored physics and render-model selection need separate colliders"
+        );
+        let selection_size = physics
+            .secondary_cuboid_full_size(handle)
+            .expect("the model bounds should remain available for frob rays");
+        assert!((selection_size - vec3(LADDER_SIZE.x, LADDER_SIZE.y, 0.2)).magnitude() < 0.01);
     }
 
     /// Frob mode and immobility select body motion without changing an
