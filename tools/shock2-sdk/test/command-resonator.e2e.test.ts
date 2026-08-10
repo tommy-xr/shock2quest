@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 import type { UiElement, UiPanel } from "../src/types.js";
 import { clickUiElement } from "./helpers/ui.js";
 
@@ -164,10 +164,115 @@ test(
     );
     await clickUiElement(game, resonatorButton);
     await game.step({ frames: 10 });
+    const resonators = await game.entities.byTemplate(SYMPATHETIC_RESONATOR);
     assert.equal(
-      (await game.entities.byTemplate(SYMPATHETIC_RESONATOR)).length,
+      resonators.length,
       1,
       "the ordinary replicator purchase should dispense template -1671",
+    );
+
+    const resonator = resonators[0];
+    const worldDetail = await game.entities.detail(resonator.id);
+    const replicatorContainsResonator = (
+      await game.entities.detail(loadedReplicator.id)
+    ).outgoing_links.some(
+      (link) =>
+        link.link_type.startsWith("Contains") &&
+        link.target_id === resonator.id,
+    );
+    assert.equal(
+      replicatorContainsResonator,
+      false,
+      "the replicator must not author a runtime Contains link to its own output",
+    );
+    assert.equal(
+      worldDetail.incoming_links.filter((link) =>
+        link.link_type.startsWith("Contains"),
+      ).length,
+      0,
+      "the replicator hopper must not convert its dispensed item into hidden containment",
+    );
+    assert.notEqual(
+      worldDetail.properties
+        .find((property) => property.name === "HasRefs")
+        ?.value.toLowerCase(),
+      "false",
+      "the world item must retain references instead of being hidden as container contents",
+    );
+    assert.equal(
+      (await game.physics.bodies({ entityId: resonator.id })).bodies.length,
+      1,
+      "the dispensed resonator must retain its authored world collider",
+    );
+    assert.equal(
+      (await game.player.inventory()).items.some(
+        (item) => item.entity_id === resonator.id,
+      ),
+      false,
+      "the hopper item must remain in the world until the player picks it up",
+    );
+
+    await clickUiElement(game, button(await activePanel(game), "close"));
+    await game.step({ frames: 5 });
+    assert.equal(
+      (await game.ui.state()).active_panel,
+      null,
+      "closing the replicator MFD should return control to world interaction",
+    );
+
+    const [bombX, bombY, bombZ] = worldDetail.position;
+    await game.player.teleport({
+      x: bombX + 0.2,
+      y: bombY - PLAYER_EYE_HEIGHT_WORLD,
+      z: bombZ,
+    });
+    const aim = await game.player.aimAt(resonator, {
+      hitbox: "center",
+      visibility: "required",
+    });
+    assert.equal(
+      aim.target_confirmed,
+      true,
+      `the hopper item should expose a selectable surface: ${JSON.stringify(aim)}`,
+    );
+
+    await game.input.set("right_hand.squeeze_value", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze_value", 0);
+    await game.step({ frames: 5 });
+
+    const carried = (await game.player.inventory()).items.find(
+      (item) => item.entity_id === resonator.id,
+    );
+    assert.equal(
+      carried?.location,
+      "inventory",
+      `an ordinary visible world squeeze should pick up the resonator: ${JSON.stringify(carried)}`,
+    );
+    assert.equal(
+      (await game.physics.bodies({ entityId: resonator.id })).bodies.length,
+      0,
+      "the picked-up resonator should no longer retain a world body",
+    );
+
+    const pickupSave = `command_resonator_picked_up_${Date.now()}`;
+    assert.equal((await game.save(pickupSave)).success, true);
+    assert.equal((await game.load(pickupSave)).success, true);
+    await game.step({ frames: 5 });
+
+    const loadedResonators = await game.entities.byTemplate(SYMPATHETIC_RESONATOR);
+    assert.equal(
+      loadedResonators.length,
+      1,
+      "save/load must restore the unique purchased resonator",
+    );
+    const loadedInventory = await game.player.inventory();
+    assert.equal(
+      loadedInventory.items.find(
+        (item) => item.entity_id === loadedResonators[0].id,
+      )?.location,
+      "inventory",
+      `save/load must preserve the picked-up resonator: ${JSON.stringify(loadedInventory.items)}`,
     );
   },
 );
