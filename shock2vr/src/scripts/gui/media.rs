@@ -258,6 +258,7 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
             handle: AudioHandle::new(),
             source: Some(entity_id),
             name: format!("LOG{deck:02}{log:02}"),
+            spatial: false,
         };
         let collect = Effect::CollectLog {
             entity_id,

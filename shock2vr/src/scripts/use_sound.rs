@@ -34,6 +34,7 @@ impl Script for UseSound {
                     handle,
                     name: "TELEPHON".to_owned(),
                     source: Some(entity_id),
+                    spatial: false,
                 }
                 // } else {
                 //     Effect::NoEffect

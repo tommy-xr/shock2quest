@@ -1276,6 +1276,7 @@ impl MissionCore {
                 .choose(&mut thread_rng())
                 .expect("player death schemas are never empty")
                 .to_string(),
+            spatial: false,
         }]
     }
 
@@ -3797,6 +3798,7 @@ impl MissionCore {
                             handle: AudioHandle::new(),
                             source: None,
                             name: "boot_sw".to_owned(),
+                            spatial: false,
                         });
                     } else {
                         game_log!(INFO, "Redundant software not installed.");
@@ -4245,6 +4247,7 @@ impl MissionCore {
                     handle,
                     name,
                     source,
+                    spatial,
                 } => {
                     println!("Trying to play sound: {}", &name);
                     let audio_file = resolve_schema(global_context, &name.to_string());
@@ -4255,16 +4258,37 @@ impl MissionCore {
                         info!("Playing clip: {} handle: {:?}", name, &handle);
                         let duration = audio_clip.total_duration();
                         let handle_id = handle.id();
-                        let preempted =
-                            engine::audio::play_audio(audio_context, handle, None, audio_clip);
+                        // Spatial emitters (TrapSound narrations anchored at
+                        // their authored station) play at the source entity,
+                        // like the original engine's object sounds. Everything
+                        // else - UI feedback, audio logs, cutscene narration -
+                        // stays non-spatial at the ears even when it carries a
+                        // `source` for attribution.
+                        let maybe_position = if spatial {
+                            source.and_then(|id| get_entity_position(&self.world, id))
+                        } else {
+                            None
+                        };
+                        let preempted = if let Some(position) = maybe_position {
+                            engine::audio::play_spatial_audio(
+                                audio_context,
+                                position,
+                                handle,
+                                None,
+                                audio_clip,
+                            )
+                        } else {
+                            engine::audio::play_audio(audio_context, handle, None, audio_clip)
+                        };
                         // Observability: record scripted one-shot sounds (audio
                         // logs, keypad beeps, ...) so headless tooling can assert
                         // a schema actually resolved and played.
+                        let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
                         crate::audio_log::record_stops(&preempted);
                         crate::audio_log::record(crate::audio_log::SoundRecord {
                             sample: &audio_file,
                             tags: vec![("kind".to_string(), "sound".to_string())],
-                            position: [0.0, 0.0, 0.0],
+                            position: [position.x, position.y, position.z],
                             duration,
                             source_entity: source.map(|id| source_entity(&self.world, id)),
                             handle: Some(handle_id),
@@ -4610,6 +4634,7 @@ impl MissionCore {
                             handle: AudioHandle::new(),
                             source: None,
                             name: "repfail".to_owned(),
+                            spatial: false,
                         });
                     } else if let Some(exhausted) = debit_player_nanites(&self.world, cost) {
                         for entity_id in exhausted {
@@ -4629,6 +4654,7 @@ impl MissionCore {
                             handle: AudioHandle::new(),
                             source: None,
                             name: "replic2e".to_owned(),
+                            spatial: false,
                         });
                     } else {
                         info!(
@@ -4639,6 +4665,7 @@ impl MissionCore {
                             handle: AudioHandle::new(),
                             source: None,
                             name: "repfail".to_owned(),
+                            spatial: false,
                         });
                     }
                 }
@@ -6242,6 +6269,15 @@ pub fn make_un_physical2(
 }
 
 fn get_entity_position(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
+    // Prefer the live transform; PropPosition can lag for entities moved by
+    // animation/physics, and is frozen for held/contained entities.
+    if let Ok(transforms) = world.borrow::<View<RuntimePropTransform>>() {
+        if let Ok(xform) = transforms.get(entity_id) {
+            use cgmath::Transform;
+            let p = xform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+            return Some(vec3(p.x, p.y, p.z));
+        }
+    }
     if let Ok(positions) = world.borrow::<View<PropPosition>>() {
         if let Ok(prop) = positions.get(entity_id) {
             return Some(prop.position);

@@ -170,6 +170,7 @@ impl CS9MasterControl {
                 handle: AudioHandle::new(),
                 source: Some(entity_id),
                 name: schema.to_string(),
+                spatial: false,
             },
             Cs9Action::ScreensOnFallback => self.fire_screens_on(entity_id, world),
         }

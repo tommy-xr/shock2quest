@@ -46,6 +46,7 @@ impl Script for Apparition {
                         handle: self.audio_handle.clone(),
                         source: Some(entity_id),
                         name: sound.name.clone(),
+                        spatial: false,
                     },
                     Err(_) => Effect::NoEffect,
                 };

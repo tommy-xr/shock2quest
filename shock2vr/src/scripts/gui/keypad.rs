@@ -407,6 +407,7 @@ pub(crate) fn handle_hack_msg(
                         handle: AudioHandle::new(),
                         source: Some(entity_id),
                         name: "login".to_owned(),
+                        spatial: false,
                     },
                 );
             };
@@ -432,6 +433,7 @@ pub(crate) fn handle_hack_msg(
                         handle: AudioHandle::new(),
                         source: Some(entity_id),
                         name: "start_hack".to_owned(),
+                        spatial: false,
                     },
                 ]),
             )
@@ -448,6 +450,7 @@ pub(crate) fn handle_hack_msg(
                         handle: AudioHandle::new(),
                         source: Some(entity_id),
                         name: "login".to_owned(),
+                        spatial: false,
                     },
                 );
             }
@@ -473,6 +476,7 @@ pub(crate) fn handle_hack_msg(
                                 handle: AudioHandle::new(),
                                 source: Some(entity_id),
                                 name: "hack_success".to_owned(),
+                                spatial: false,
                             },
                         ]),
                     );
@@ -487,6 +491,7 @@ pub(crate) fn handle_hack_msg(
                             handle: AudioHandle::new(),
                             source: Some(entity_id),
                             name: "hack_critical".to_owned(),
+                            spatial: false,
                         },
                     ]),
                 );
@@ -503,6 +508,7 @@ pub(crate) fn handle_hack_msg(
                     handle: AudioHandle::new(),
                     source: Some(entity_id),
                     name: "hacking".to_owned(),
+                    spatial: false,
                 },
             )
         }
@@ -684,6 +690,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
             handle: AudioHandle::new(),
             source: Some(entity_id),
             name: "bkeypad".to_owned(),
+            spatial: false,
         };
 
         let new_state = match msg {
@@ -725,6 +732,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
                         handle: AudioHandle::new(),
                         source: Some(entity_id),
                         name: "hacksucc".to_owned(),
+                        spatial: false,
                     };
                     Effect::combine(vec![switch_link_effect, sound_effect])
                 } else {
