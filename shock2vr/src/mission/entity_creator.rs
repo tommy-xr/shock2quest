@@ -52,9 +52,13 @@ pub struct EntityCreationInfo {
 fn needs_internal_simple_health(
     has_hit_points: bool,
     is_creature: bool,
-    _authored_scripts: &[String],
+    authored_scripts: &[String],
 ) -> bool {
-    has_hit_points && !is_creature
+    !is_creature
+        && (has_hit_points
+            || authored_scripts
+                .iter()
+                .any(|script| script.eq_ignore_ascii_case("TriggerDestroy")))
 }
 
 pub fn create_entity_with_position(
@@ -328,8 +332,9 @@ pub fn create_entity_core(
 
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     let v_hp = world.borrow::<View<PropHitPoints>>().unwrap();
-    // If there is hitpoint, but the item is not a creature, just use the simple damage method...
-    // Otherwise, the hitbox / creature logic will take care of handling damage
+    // Ordinary HP-bearing props use simple health. Authored TriggerDestroy props
+    // without HP use its existing no-HP fallback (Damage -> Slay), so their
+    // destruction links can fire. Creatures keep damage ownership in hitboxes.
     if needs_internal_simple_health(
         v_hp.get(entity_id).is_ok(),
         v_creature.get(entity_id).is_ok(),
