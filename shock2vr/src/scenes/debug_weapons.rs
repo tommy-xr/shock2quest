@@ -1,8 +1,8 @@
 //! Debug scene for first-person weapon work (viewmodel framing + aim).
 //!
 //! A clean, controlled environment: the player stands on a floor facing a flat
-//! wall a known distance straight ahead. Cycle weapons with `CycleWeapon`
-//! (`B` on desktop / `POST /v1/input/action {"action":"CycleWeapon"}`) and fire;
+//! wall a known distance straight ahead. Cycle weapons with `DebugCycleWeapon`
+//! (`B` on desktop / `POST /v1/input/action {"action":"DebugCycleWeapon"}`) and fire;
 //! shots land on the wall as hit-spangs, so it's easy to see whether a weapon's
 //! barrel and its projectiles track the crosshair - without a real mission's
 //! cluttered geometry hiding the viewmodel or swallowing the shot.

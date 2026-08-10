@@ -36,7 +36,7 @@ test(
     assert.equal(await ammoType(game), null, "unarmed has no ammo type");
 
     // Wield the pistol (std / he / ap).
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
     assert.equal(await ammoType(game), "std", "pistol starts on its first ammo type");
     const pistolId = (await game.info()).player.wielded_entity_id;

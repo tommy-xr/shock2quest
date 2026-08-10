@@ -35,9 +35,9 @@ test(
       // the first-person fire loop.
     });
 
-    // debug_weapons starts unarmed; CycleWeapon spawns + wields the pistol.
+    // debug_weapons starts unarmed; DebugCycleWeapon spawns + wields the pistol.
     await game.step({ frames: 5 });
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
 
     const pistolId = (await game.entities.list({ limit: 60 })).entities.find(

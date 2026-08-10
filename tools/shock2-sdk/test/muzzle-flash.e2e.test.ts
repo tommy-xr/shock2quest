@@ -34,15 +34,15 @@ test(
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8094),
     });
 
-    // debug_weapons starts unarmed; CycleWeapon spawns and wields the pistol.
+    // debug_weapons starts unarmed; DebugCycleWeapon spawns and wields the pistol.
     await game.step({ frames: 5 });
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
 
     // The wielded-entity field (new /v1/info player data) should report the pistol.
     const before = (await game.entities.list({ limit: 60 })).entities;
     const pistolId = before.find((e) => e.name === "Pistol")?.id;
-    assert.ok(pistolId !== undefined, "the pistol should exist after CycleWeapon");
+    assert.ok(pistolId !== undefined, "the pistol should exist after DebugCycleWeapon");
     const info = await game.info();
     assert.equal(
       info.player.wielded_entity_id,

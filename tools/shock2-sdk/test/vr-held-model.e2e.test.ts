@@ -28,10 +28,10 @@ test(
       debugFlags: ["--vr"],
     });
 
-    // CycleWeapon spawns the pistol; VR wield is a no-op so it drops to the
+    // DebugCycleWeapon spawns the pistol; VR wield is a no-op so it drops to the
     // floor in front of the player.
     await game.step({ frames: 10 });
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 90 });
 
     const pistol = (await game.entities.list({ limit: 100 })).entities.find(
@@ -66,10 +66,10 @@ test(
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8103),
     });
 
-    // In flat, CycleWeapon spawns AND wields (sends Hold), which swaps the
+    // In flat, DebugCycleWeapon spawns AND wields (sends Hold), which swaps the
     // model to the atek_h viewmodel for the first-person weapon path.
     await game.step({ frames: 5 });
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 10 });
 
     const pistol = (await game.entities.list({ limit: 100 })).entities.find(

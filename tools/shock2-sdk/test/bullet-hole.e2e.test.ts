@@ -34,9 +34,9 @@ test(
         (e) => e.name === "Bullet Hit",
       );
 
-    // Wield the pistol (first CycleWeapon roster entry).
+    // Wield the pistol (first DebugCycleWeapon roster entry).
     await game.step({ frames: 5 });
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
 
     // Sanity: no decals before the shot.

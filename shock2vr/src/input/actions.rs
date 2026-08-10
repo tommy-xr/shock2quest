@@ -32,10 +32,9 @@ pub enum InputAction {
     /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)
     DebugHitboxCyclePose,
 
-    /// Wield the next player weapon (debug: spawn-and-wield, holstering the
-    /// previous). Cycles the full SS2 weapon roster for flat-mode aim/viewmodel
-    /// testing.
-    CycleWeapon,
+    /// Spawn and wield the next debug weapon, holstering the previous one.
+    /// Cycles the full SS2 weapon roster for flat-mode aim/viewmodel testing.
+    DebugCycleWeapon,
     /// Equip the matching weapon from the player's carried inventory. These
     /// mirror System Shock 2's original direct weapon bindings; they never
     /// create a weapon or drop the displaced weapon into the world.
@@ -98,7 +97,7 @@ impl InputAction {
             InputAction::SpawnDebugMonster,
             InputAction::MoveInventory,
             InputAction::DebugHitboxCyclePose,
-            InputAction::CycleWeapon,
+            InputAction::DebugCycleWeapon,
             InputAction::EquipWrench,
             InputAction::EquipPistol,
             InputAction::EquipShotgun,
@@ -134,7 +133,7 @@ impl InputAction {
             InputAction::SpawnDebugMonster => "SpawnDebugMonster",
             InputAction::MoveInventory => "MoveInventory",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
-            InputAction::CycleWeapon => "CycleWeapon",
+            InputAction::DebugCycleWeapon => "DebugCycleWeapon",
             InputAction::EquipWrench => "EquipWrench",
             InputAction::EquipPistol => "EquipPistol",
             InputAction::EquipShotgun => "EquipShotgun",
@@ -213,6 +212,15 @@ mod tests {
     fn from_str_rejects_unknown_action() {
         let result = "NotARealAction".parse::<InputAction>();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn spawning_weapon_cycle_requires_an_explicit_debug_name() {
+        assert!("CycleWeapon".parse::<InputAction>().is_err());
+        assert_eq!(
+            "DebugCycleWeapon".parse::<InputAction>().unwrap(),
+            InputAction::DebugCycleWeapon
+        );
     }
 
     #[test]

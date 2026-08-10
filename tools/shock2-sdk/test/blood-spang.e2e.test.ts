@@ -40,9 +40,9 @@ test(
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8100),
     });
 
-    // Wield the pistol (first CycleWeapon roster entry).
+    // Wield the pistol (first DebugCycleWeapon roster entry).
     await game.step({ frames: 5 });
-    await game.input.trigger("CycleWeapon");
+    await game.input.trigger("DebugCycleWeapon");
     await game.step({ frames: 5 });
 
     const spawn = (await game.info()).player.position;
