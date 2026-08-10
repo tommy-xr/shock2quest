@@ -36,7 +36,9 @@ test(
     const knownIds = new Set(before.entities.map((entity) => entity.id));
 
     await game.entities.sendMessage(droid.id, { type: "Damage", amount: 100 });
-    await game.step({ frames: 30 });
+    // HE_Harmless is a bitmap animation with kill_on_completion (~0.9s), so
+    // sample right after the kill rather than near its self-destruct.
+    await game.step({ frames: 2 });
 
     const after = await game.entities.list({ limit: 2000 });
     const spawned = after.entities.filter(
@@ -53,41 +55,7 @@ test(
   },
 );
 
-test(
-  "a killed organic still leaves a corpse",
-  { skip: !e2eEnabled, timeout: 600_000 },
-  async () => {
-    await using game = await GameServer.launch({
-      mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8131),
-    });
-
-    await game.step({ frames: 10 });
-
-    // Spawn a hybrid (OG-Pipe): organics author no Corpse/Flinderize links,
-    // so they must keep crumpling into a persistent body. Diff the list -
-    // medsci1 has native OG-Pipes too.
-    const preSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
-    const known = new Set(preSpawn.entities.map((entity) => entity.id));
-    await game.input.trigger("SpawnDebugMonster");
-    await game.step({ frames: 30 });
-    const postSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
-    const monster = postSpawn.entities.find(
-      (entity) => entity.name === "OG-Pipe" && !known.has(entity.id),
-    );
-    assert.ok(monster, "expected a newly spawned OG-Pipe");
-
-    await game.entities.sendMessage(monster.id, {
-      type: "Damage",
-      amount: 1000,
-    });
-    await game.step({ frames: 120 });
-
-    const detail = await game.entities.detail(monster.id);
-    assert.equal(
-      detail.properties.find((p) => p.name === "AIBehavior")?.value,
-      "Dead",
-      "an organic should crumple into a persistent corpse",
-    );
-  },
-);
+// The organic regression (no death links -> crumple into a persistent corpse)
+// is covered by monster-death.e2e.test.ts's "a killed monster dies and stays
+// dead" and by the `creature_without_death_links_crumples` unit test, so it
+// does not warrant a second runtime launch here.

@@ -553,16 +553,18 @@ impl AnimatedMonsterAI {
         // later than they were dealt).
         self.death_elapsed = 0.0;
 
-        // Robot-style death: a creature that authors Corpse/Flinderize links
-        // (droids link a `Corpse` explosion, plus `Flinderize` parts) is
-        // replaced by those links rather than leaving a body - the explosion
-        // is the death effect, so there is no crumple animation, no death
-        // speech (the explosion template carries its own `CreateSound`) and no
-        // ragdoll. Pre-mark the handoff so the removed entity is never offered
-        // to physics if it survives a frame.
+        // A creature that authors Corpse/Flinderize links bursts instead of
+        // leaving a body: droids link a `Corpse` explosion (plus `Flinderize`
+        // parts), and organics that gib - the Overlord's viral explosion and
+        // its limb/organ flinders - do the same. `Effect::SlayEntity` spawns
+        // those links, plays the death environmental sound and removes the
+        // entity (its handler skips the ragdoll for link deaths), so there is
+        // no crumple animation and no death speech either. Pre-mark the
+        // handoff so the removed entity is never offered to physics if it
+        // survives a frame.
         if crate::scripts::script_util::has_death_links(world, entity_id) {
             self.handoff_emitted = true;
-            return Effect::SlayIntoLinks { entity_id };
+            return Effect::SlayEntity { entity_id };
         }
 
         let death_sound_effect = if let Some(voice_index) =
@@ -1751,10 +1753,28 @@ mod tests {
         ));
     }
 
+    /// Deal a killing blow to a fresh monster and return it with the effects
+    /// its death produced.
+    fn kill(world: &World, entity_id: EntityId) -> (AnimatedMonsterAI, Vec<Effect>) {
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, world);
+        let physics = PhysicsWorld::new();
+        let effects = Effect::flatten(vec![monster.handle_message(
+            entity_id,
+            world,
+            &physics,
+            &MessagePayload::Damage {
+                amount: 100.0,
+                impact: None,
+            },
+        )]);
+        (monster, effects)
+    }
+
     /// A lethal blow on a creature that authors death links (droids link a
-    /// `Corpse` explosion and `Flinderize` parts) must spawn those links and
-    /// remove the creature - no crumple animation, death speech or ragdoll
-    /// handoff for a body that no longer exists.
+    /// `Corpse` explosion and `Flinderize` parts) must slay it into those
+    /// links - no crumple animation, death speech or ragdoll handoff for a
+    /// body that no longer exists.
     #[test]
     fn creature_with_death_links_slays_into_its_links() {
         let (mut world, entity_id) = world_with_monster_and_player(Deg(0.0));
@@ -1773,24 +1793,13 @@ mod tests {
                 }],
             },
         );
-        let mut monster = AnimatedMonsterAI::new();
-        monster.initialize(entity_id, &world);
 
-        let physics = PhysicsWorld::new();
-        let effects = Effect::flatten(vec![monster.handle_message(
-            entity_id,
-            &world,
-            &physics,
-            &MessagePayload::Damage {
-                amount: 100.0,
-                impact: None,
-            },
-        )]);
+        let (monster, effects) = kill(&world, entity_id);
 
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::SlayIntoLinks { .. })),
+                .any(|effect| matches!(effect, Effect::SlayEntity { .. })),
             "expected a link death, got {effects:?}"
         );
         assert!(
@@ -1807,24 +1816,13 @@ mod tests {
     #[test]
     fn creature_without_death_links_crumples() {
         let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
-        let mut monster = AnimatedMonsterAI::new();
-        monster.initialize(entity_id, &world);
 
-        let physics = PhysicsWorld::new();
-        let effects = Effect::flatten(vec![monster.handle_message(
-            entity_id,
-            &world,
-            &physics,
-            &MessagePayload::Damage {
-                amount: 100.0,
-                impact: None,
-            },
-        )]);
+        let (_monster, effects) = kill(&world, entity_id);
 
         assert!(
             effects
                 .iter()
-                .all(|effect| !matches!(effect, Effect::SlayIntoLinks { .. })),
+                .all(|effect| !matches!(effect, Effect::SlayEntity { .. })),
             "an organic must not slay into links, got {effects:?}"
         );
         assert!(

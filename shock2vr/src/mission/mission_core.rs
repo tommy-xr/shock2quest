@@ -91,7 +91,9 @@ use crate::{
     scripts::{
         self, Effect, GlobalEffect, Message, MessagePayload,
         internal_fast_projectile::InternalFastProjectileScript,
-        script_util::{get_all_links_with_template, get_environmental_sound_query},
+        script_util::{
+            get_all_links_with_template, get_environmental_sound_query, has_death_links,
+        },
         speech_registry::SpeechVoiceRegistry,
     },
     systems::{
@@ -4399,31 +4401,28 @@ impl MissionCore {
                         // multibody rig is the default; `ragdoll_impulse` falls back
                         // to the legacy impulse-joint rig. Without the flag (or for
                         // non-ragdoll-able entities), fall back to the plain removal.
-                        let spawned_ragdoll =
-                            game_options.experimental_features.contains("ragdoll")
-                                && self
-                                    .spawn_ragdoll(
-                                        entity_id,
-                                        !game_options
-                                            .experimental_features
-                                            .contains("ragdoll_impulse"),
-                                        // Slain mid-animation, usually upright -
-                                        // not a crumpled pose.
-                                        false,
-                                    )
-                                    .is_some();
+                        // An entity replaced by its own Corpse/Flinderize links
+                        // (a droid's explosion and parts, an Overlord's gibs)
+                        // never ragdolls: the spawned links are the body, and a
+                        // ragdoll on top would leave a corpse the explosion was
+                        // supposed to consume.
+                        let spawned_ragdoll = !has_death_links(&self.world, entity_id)
+                            && game_options.experimental_features.contains("ragdoll")
+                            && self
+                                .spawn_ragdoll(
+                                    entity_id,
+                                    !game_options
+                                        .experimental_features
+                                        .contains("ragdoll_impulse"),
+                                    // Slain mid-animation, usually upright -
+                                    // not a crumpled pose.
+                                    false,
+                                )
+                                .is_some();
                         if !spawned_ragdoll {
                             self.remove_entity(entity_id);
                         }
                     }
-                }
-                Effect::SlayIntoLinks { entity_id } => {
-                    // The dying entity's Corpse/Flinderize links replace it:
-                    // spawn them at its position (same machinery as
-                    // Effect::SlayEntity) and remove it. No ragdoll - the
-                    // spawned explosion and parts are the death effect.
-                    self.slay_entity(entity_id, asset_cache);
-                    self.remove_entity(entity_id);
                 }
                 Effect::SpawnCorpseRagdoll { entity_id, impact } => {
                     // Death-crumple handoff (AI deaths): once the death
