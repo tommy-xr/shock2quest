@@ -523,13 +523,25 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
 }
 
 /// Whether taking this world item must go through a script before the physical
-/// transfer. `PropKeySrc` items receive an `internal_keycard` script at runtime
-/// even when their authored world action is only `MOVE`.
+/// transfer. An authored `SCRIPT` world action owns its side effects and item
+/// fate (for example `FrobQB` awards a quest bit and moves the item exactly
+/// once). `PropKeySrc` items also receive an `internal_keycard` script at
+/// runtime even when their authored world action is only `MOVE`.
 pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bool {
-    world
+    let has_authored_world_script = world
+        .borrow::<View<PropFrobInfo>>()
+        .map(|frob_info| {
+            frob_info
+                .get(entity_id)
+                .is_ok_and(|frob_info| frob_info.world_action.contains(FrobFlag::SCRIPT))
+        })
+        .unwrap_or(false);
+    let has_derived_keycard_script = world
         .borrow::<View<dark::properties::PropKeySrc>>()
         .map(|keycards| keycards.get(entity_id).is_ok())
-        .unwrap_or(false)
+        .unwrap_or(false);
+
+    has_authored_world_script || has_derived_keycard_script
 }
 
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
