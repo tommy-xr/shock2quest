@@ -49,6 +49,18 @@ pub struct EntityCreationInfo {
     pub scripts: Vec<String>,
 }
 
+fn needs_internal_simple_health(
+    has_hit_points: bool,
+    is_creature: bool,
+    authored_scripts: &[String],
+) -> bool {
+    !is_creature
+        && (has_hit_points
+            || authored_scripts
+                .iter()
+                .any(|script| script.eq_ignore_ascii_case("TriggerDestroy")))
+}
+
 pub fn create_entity_with_position(
     template_id: i32,
     position: Point3<f32>,
@@ -320,9 +332,14 @@ pub fn create_entity_core(
 
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     let v_hp = world.borrow::<View<PropHitPoints>>().unwrap();
-    // If there is hitpoint, but the item is not a creature, just use the simple damage method...
-    // Otherwise, the hitbox / creature logic will take care of handling damage
-    if v_hp.get(entity_id).is_ok() && v_creature.get(entity_id).is_err() {
+    // Ordinary HP-bearing props use simple health. Authored TriggerDestroy props
+    // without HP use its existing no-HP fallback (Damage -> Slay), so their
+    // destruction links can fire. Creatures keep damage ownership in hitboxes.
+    if needs_internal_simple_health(
+        v_hp.get(entity_id).is_ok(),
+        v_creature.get(entity_id).is_ok(),
+        &processed_scripts,
+    ) {
         processed_scripts.push("internal_simple_health".to_owned());
     }
 
@@ -1335,6 +1352,28 @@ mod tests {
     }
 
     const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
+
+    #[test]
+    fn trigger_destroy_prop_without_hit_points_still_owns_weapon_damage() {
+        let trigger_destroy = vec!["TriggerDestroy".to_owned()];
+
+        assert!(
+            needs_internal_simple_health(false, false, &trigger_destroy),
+            "a non-creature TriggerDestroy prop must translate Damage into Slay"
+        );
+        assert!(
+            needs_internal_simple_health(true, false, &[]),
+            "ordinary HP-bearing props keep incremental simple health"
+        );
+        assert!(
+            !needs_internal_simple_health(false, false, &[]),
+            "ordinary non-creatures without HP or TriggerDestroy stay unaffected"
+        );
+        assert!(
+            !needs_internal_simple_health(true, true, &trigger_destroy),
+            "creatures retain ownership of their hitbox damage path"
+        );
+    }
 
     /// A wall fixture the player can frob but never pick up or move - a
     /// console, a card slot, the Resurrection Station casing. `phys_type` is
