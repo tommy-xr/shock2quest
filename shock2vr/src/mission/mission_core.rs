@@ -6596,6 +6596,36 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .or(v_ecology.get(id).ok().map(|_| 0))
             },
         );
+        // HasRefs defaults true in Dark when the property is absent. Container
+        // loot is explicitly false, which explains its intentional lack of a
+        // render object and physics body.
+        let has_refs = crate::util::has_refs(&self.world, id);
+        // Links are stored only on their source entity. Scan the live runtime
+        // links so detail for a contained item can identify its container.
+        let incoming_links = self.world.run(
+            |v_links: View<dark::properties::Links>,
+             v_sym_name: View<dark::properties::PropSymName>| {
+                let mut incoming = Vec::new();
+                for (source_id, links) in (&v_links).iter().with_id() {
+                    for link in &links.to_links {
+                        if matches!(link.link, dark::properties::Link::Contains(_))
+                            && link.to_entity_id.map(|target| target.0) == Some(id)
+                        {
+                            incoming.push(DebugLinkInfo {
+                                link_type: format!("{:?}", link.link),
+                                target_id: source_id.inner() as i32,
+                                target_name: v_sym_name
+                                    .get(source_id)
+                                    .map(|name| name.0.clone())
+                                    .unwrap_or_else(|_| format!("Entity_{}", source_id.inner())),
+                            });
+                        }
+                    }
+                }
+                incoming.sort_by_key(|link| link.target_id);
+                incoming
+            },
+        );
 
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
@@ -6748,7 +6778,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
                 // Build links
                 let mut outgoing_links = Vec::new();
-                let incoming_links = Vec::new();
 
                 if let Ok(links) = v_links.get(id) {
                     for link in &links.to_links {
@@ -6765,7 +6794,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                             });
                         }
                     }
-                    // TODO: Incoming links require scanning all entities - simplified for now
                 }
 
                 Some(DebugEntityDetail {
@@ -6778,10 +6806,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         position.position.z,
                     ],
                     rotation: rotation_array,
+                    has_refs,
                     inheritance_chain: vec![], // TODO: Implement inheritance chain lookup
                     properties,
                     outgoing_links,
-                    incoming_links,
+                    incoming_links: incoming_links.clone(),
                     aim_points: aim_points.clone(),
                 })
             },

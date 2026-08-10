@@ -1372,6 +1372,7 @@ fn process_command(
                         template_id: detail.template_id,
                         position: detail.position,
                         rotation: detail.rotation,
+                        has_refs: detail.has_refs,
                         inheritance_chain: detail.inheritance_chain,
                         properties: detail
                             .properties

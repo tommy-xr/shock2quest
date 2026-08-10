@@ -133,6 +133,8 @@ export interface EntityDetailResult {
   template_id: number;
   position: Vec3;
   rotation: Quat;
+  /** Whether the entity has world references; absent P$HasRefs defaults true. */
+  has_refs: boolean;
   inheritance_chain: string[];
   properties: PropertyInfo[];
   outgoing_links: LinkInfo[];

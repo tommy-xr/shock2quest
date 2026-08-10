@@ -603,6 +603,7 @@ pub struct EntityDetailResult {
     pub template_id: i32,
     pub position: [f32; 3],
     pub rotation: [f32; 4], // quaternion
+    pub has_refs: bool,
     pub inheritance_chain: Vec<String>,
     pub properties: Vec<PropertyInfo>,
     pub outgoing_links: Vec<LinkInfo>,
