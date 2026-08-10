@@ -4417,6 +4417,14 @@ impl MissionCore {
                         }
                     }
                 }
+                Effect::SlayIntoLinks { entity_id } => {
+                    // The dying entity's Corpse/Flinderize links replace it:
+                    // spawn them at its position (same machinery as
+                    // Effect::SlayEntity) and remove it. No ragdoll - the
+                    // spawned explosion and parts are the death effect.
+                    self.slay_entity(entity_id, asset_cache);
+                    self.remove_entity(entity_id);
+                }
                 Effect::SpawnCorpseRagdoll { entity_id, impact } => {
                     // Death-crumple handoff (AI deaths): once the death
                     // animation has finished, replace the animated corpse with

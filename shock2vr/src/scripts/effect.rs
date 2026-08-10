@@ -360,6 +360,14 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Death by `Corpse`/`Flinderize` links: spawn the linked explosion and
+    /// parts at the dying entity's position and remove it. Emitted by the AI
+    /// death path for creatures that author those links (droids), where the
+    /// spawned explosion replaces the body - no corpse, crumple or ragdoll.
+    SlayIntoLinks {
+        entity_id: EntityId,
+    },
+
     /// The death (crumple) animation finished: hand the corpse over to physics
     /// as a ragdoll, optionally seeded with the killing blow (so the corpse
     /// reacts at the struck limb, in the shot's direction). Emitted
