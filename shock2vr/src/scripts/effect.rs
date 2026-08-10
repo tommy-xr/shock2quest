@@ -453,6 +453,22 @@ pub enum Effect {
         source: TeleportSource,
     },
 
+    /// Set the player's pawn yaw, used by authored seating/cutscene markers.
+    SetPlayerRotation {
+        rotation: Quaternion<f32>,
+    },
+
+    /// Allow or suppress ordinary player movement and interaction channels.
+    /// Discrete recovery actions such as quick-load remain available.
+    SetPlayerControlsEnabled {
+        enabled: bool,
+    },
+
+    /// Full-screen white transition overlay (0.0 = clear, 1.0 = white).
+    SetScreenFade {
+        alpha: f32,
+    },
+
     /// Remove an entity's `PropTeleported` marker. Emitted by a tripwire once it
     /// has consumed a scripted-teleport arrival, so the ~1s marker can't also
     /// suppress a later walk-in to a *different* nearby tripwire (#515).

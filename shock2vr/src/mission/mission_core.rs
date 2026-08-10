@@ -10,7 +10,7 @@ use engine::assets::asset_paths::ReadableAndSeekable;
 use cgmath::{EuclideanSpace, Zero};
 use cgmath::{
     InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Rotation, Rotation3, SquareMatrix, Transform,
-    Vector2, Vector3, num_traits::ToPrimitive, vec3,
+    Vector2, Vector3, num_traits::ToPrimitive, vec2, vec3,
 };
 
 use crate::SpawnLocation;
@@ -56,7 +56,8 @@ use engine::{
     scene::{
         BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight, quad,
     },
-    texture::TextureTrait,
+    texture::{TextureOptions, TextureTrait, init_from_memory2},
+    texture_format::{PixelFormat, RawTextureData},
 };
 use physics::PhysicsWorld;
 use rand::{
@@ -531,6 +532,14 @@ pub struct MissionCore {
     /// canvas rendering, and the pointer -> GUIHover input mapping. Inert in
     /// VR (nothing opens a panel there). See `projects/flat-ui.md` §5.2.
     pub flat_ui: crate::mission::flat_ui_host::FlatUiHost,
+
+    /// Whether ordinary movement/hand/pointer input reaches the active player.
+    /// Authored sequences such as eng2's Many ride temporarily suppress it.
+    player_controls_enabled: bool,
+
+    /// White transition cover shared by both flat and per-eye VR rendering.
+    screen_fade_alpha: f32,
+    screen_fade_texture: Rc<dyn TextureTrait>,
 }
 
 pub struct GlobalContext {
@@ -611,6 +620,18 @@ impl MissionCore {
         let entity_info_rc = Arc::new(entity_info);
 
         let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info_rc);
+        let screen_fade_texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
+            RawTextureData {
+                width: 1,
+                height: 1,
+                bytes: vec![255, 255, 255, 255],
+                format: PixelFormat::RGBA,
+            },
+            &TextureOptions {
+                wrap: false,
+                ..Default::default()
+            },
+        ));
 
         let mut id_to_model = HashMap::new();
         let mut id_to_animation_player = HashMap::new();
@@ -1215,6 +1236,9 @@ impl MissionCore {
             flat_melee_anim: None,
             flat_use_mode: false,
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
+            player_controls_enabled: true,
+            screen_fade_alpha: 0.0,
+            screen_fade_texture,
         }
     }
 
@@ -1410,7 +1434,7 @@ impl MissionCore {
         // neutral until reconstruction. Discrete quick-load remains available
         // because it arrives separately in `command_effects`.
         let suppressed_input = InputContext::default();
-        let input_context = if self.player_is_alive() {
+        let input_context = if self.player_is_alive() && self.player_controls_enabled {
             input_context
         } else {
             &suppressed_input
@@ -4413,6 +4437,18 @@ impl MissionCore {
                             .add_component(player_entity, PropTeleported::with_source(source))
                     }
                 }
+                Effect::SetPlayerRotation { rotation } => {
+                    self.world
+                        .borrow::<UniqueViewMut<PlayerInfo>>()
+                        .unwrap()
+                        .rotation = rotation;
+                }
+                Effect::SetPlayerControlsEnabled { enabled } => {
+                    self.player_controls_enabled = enabled;
+                }
+                Effect::SetScreenFade { alpha } => {
+                    self.screen_fade_alpha = alpha.clamp(0.0, 1.0);
+                }
                 Effect::ClearTeleportedMarker { entity_id } => {
                     self.world.run(
                         |mut v_teleported: ViewMut<dark::properties::PropTeleported>| {
@@ -5332,6 +5368,22 @@ impl MissionCore {
             // canvas mapping needs.
             self.flat_ui.set_screen_size(screen_size);
             ret.extend(self.flat_ui.render(asset_cache, screen_size));
+        }
+
+        // WhiteOut is a view transition, so it covers the world, viewmodel,
+        // HUD, and flat UI and is rendered once per eye in VR.
+        if self.screen_fade_alpha > 0.0 {
+            let mut fade = SceneObject::screen_space_quad2(
+                self.screen_fade_texture.clone(),
+                vec2(0.0, 0.0),
+                screen_size,
+                self.screen_fade_alpha,
+            );
+            // Some HUD bars use an opaque screen material and write depth at
+            // the same Z as this quad. Clear that UI depth before the final
+            // transparent pass so full white covers those bars as well.
+            fade.set_clear_depth(true);
+            ret.push(fade);
         }
 
         ret
