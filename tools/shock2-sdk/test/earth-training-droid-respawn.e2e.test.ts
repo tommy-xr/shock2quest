@@ -73,5 +73,19 @@ test(
       "protonew",
       `the respawn should be a live protocol droid, got ${JSON.stringify(detail.properties)}`,
     );
+
+    // The respawn has to satisfy its ecology's population census, or every
+    // later period spawns another droid - on this stand and on the third
+    // training stand, whose authored droid is missed by the same census bug.
+    // Every stand clones "DopeyDroid", and the archetype object itself is
+    // parked off-map, so three more periods later the level must still hold
+    // exactly two: the parked archetype and this one respawn.
+    await game.step({ frames: 1500 });
+    const settled = await game.entities.byTemplate(DOPEY_DROID);
+    assert.equal(
+      settled.length,
+      2,
+      `the ecologies must stop at their authored population, got ${JSON.stringify(settled)}`,
+    );
   },
 );
