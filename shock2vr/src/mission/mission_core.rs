@@ -2437,7 +2437,10 @@ impl MissionCore {
                         spawn_position,
                         spawn_rotation,
                         Matrix4::identity(),
-                        CreateEntityOptions::default(),
+                        CreateEntityOptions {
+                            flinderize_debris: true,
+                            ..CreateEntityOptions::default()
+                        },
                     );
 
                     if created.rigid_body.is_some() {
