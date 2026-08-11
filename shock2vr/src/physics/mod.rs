@@ -29,6 +29,25 @@ use self::debug_render_pipeline::DebugRenderer;
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
+/// Collision envelope of Dark's rigid standing-player submodels, in SS2 ft.
+/// The original profile's body sphere is centered 0.6 ft below the object
+/// origin with radius 1.2 ft, and its foot collision point is at -3 ft. A
+/// conservative capsule enclosing both is 3.6 ft tall and centered 1.2 ft
+/// below our body origin. The separate head sphere is spring-driven rather
+/// than rigidly welded to that envelope (see `PhysCreateDefaultPlayer`).
+const PLAYER_RIGID_BODY_HEIGHT: f32 = 3.6;
+const PLAYER_RIGID_BODY_CENTER_DROP: f32 = 1.2;
+
+/// A spring-head compatibility pass is only valid for an entity band this
+/// thin vertically and along the direction of travel. Hydro2's authored
+/// Railing Terminator OBB is 0.3 ft in both dimensions; half a foot leaves a
+/// small data tolerance without treating ceiling slabs or walls as head rails.
+const PLAYER_SPRING_HEAD_MAX_BAND_THICKNESS: f32 = 0.5 / SCALE_FACTOR;
+/// Dark's head can yield under a short obstruction, but it cannot remain
+/// displaced under a corridor-length low ceiling. Require a clear standing
+/// endpoint within 3.5 ft (the Hydro2 band exits in about 2.9 ft from contact).
+const PLAYER_SPRING_HEAD_MAX_EXIT_DISTANCE: f32 = 3.5 / SCALE_FACTOR;
+
 /// The standing collider's radius in world units, for callers that must place
 /// something outside the player's own body (the camera sits on the capsule
 /// axis, so "in front of the eye" is only outside the collider beyond this).
@@ -1555,6 +1574,150 @@ fn player_gravity_step(character_body: &RigidBody) -> Real {
     -0.5 / SCALE_FACTOR * character_body.gravity_scale()
 }
 
+/// Reproduce the useful part of Dark's spring-mounted head collision without
+/// weakening the standing player's real six-foot endpoint footprint.
+///
+/// Dark's rigid body sphere clears a short band whose underside is above 3.6
+/// ft; only the independently sprung head meets it, so forward motion can carry
+/// the body through and the head catches back up on the other side. Our single
+/// continuous capsule otherwise turns that head-only contact into a full-body
+/// wall. When an ordinary grounded walk is stopped by one thin parented OBB,
+/// prove that the source-derived rigid-body envelope has a short clear route to
+/// a same-height, supported, full-standing endpoint. Only then return the lower
+/// envelope's horizontal movement for this frame. The visible/collidable body
+/// remains standing throughout and ordinary walls and WorldRep ceilings stay
+/// on the normal capsule path.
+fn spring_head_walk_translation(
+    controller: &KinematicCharacterController,
+    queries: &QueryPipeline,
+    standing_shape: &dyn Shape,
+    pos: &Isometry<Real>,
+    desired: Vector<Real>,
+    regular: &EffectiveCharacterMovement,
+    dt: Real,
+) -> Option<Vector<Real>> {
+    let standing = standing_shape.as_capsule()?;
+    let standing_half_height = standing.half_height() + standing.radius;
+    if (standing.radius - PLAYER_STANDING_RADIUS / SCALE_FACTOR).abs() > 1.0e-4
+        || (standing_half_height - PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR).abs() > 1.0e-4
+        || !regular.grounded
+        || desired.y.abs() > 1.0e-5
+    {
+        return None;
+    }
+
+    let desired_h = vector![desired.x, 0.0, desired.z];
+    let requested = desired_h.norm();
+    if requested <= 1.0e-5 {
+        return None;
+    }
+    let direction = desired_h / requested;
+    let regular_h = vector![regular.translation.x, 0.0, regular.translation.z];
+    if regular_h.dot(&direction) >= requested * 0.5 {
+        return None;
+    }
+
+    let center = pos.translation.vector;
+    let rigid_top =
+        center.y + (PLAYER_RIGID_BODY_HEIGHT / 2.0 - PLAYER_RIGID_BODY_CENTER_DROP) / SCALE_FACTOR;
+    let standing_top = center.y + standing_half_height;
+    let candidate = |_handle: ColliderHandle, collider: &Collider| {
+        let groups = collider.collision_groups().memberships;
+        let aabb = collider.compute_aabb();
+        let extents = aabb.extents();
+        let travel_thickness = direction.x.abs() * extents.x + direction.z.abs() * extents.z;
+        collider.parent().is_some()
+            && collider.shape().as_cuboid().is_some()
+            && groups.intersects(InternalCollisionGroups::ENTITY.bits.into())
+            && !groups.intersects(
+                (InternalCollisionGroups::ACTOR | InternalCollisionGroups::CLIMBABLE)
+                    .bits
+                    .into(),
+            )
+            && extents.y <= PLAYER_SPRING_HEAD_MAX_BAND_THICKNESS
+            && travel_thickness <= PLAYER_SPRING_HEAD_MAX_BAND_THICKNESS
+            && aabb.mins.y >= rigid_top
+            && aabb.maxs.y <= standing_top
+    };
+    let candidate_queries = queries.with_filter(queries.filter.predicate(&candidate));
+    let obstruction = candidate_queries
+        .intersect_shape(*pos, standing_shape)
+        .next()
+        .map(|(handle, _)| handle)
+        .or_else(|| {
+            candidate_queries
+                .cast_shape(
+                    pos,
+                    &direction,
+                    standing_shape,
+                    rapier3d::parry::query::ShapeCastOptions {
+                        max_time_of_impact: requested + PLAYER_CONTACT_OFFSET / SCALE_FACTOR,
+                        target_distance: 0.0,
+                        stop_at_penetration: false,
+                        compute_impact_geometry_on_penetration: true,
+                    },
+                )
+                .map(|(handle, _)| handle)
+        })?;
+    let obstruction_aabb = queries.colliders.get(obstruction)?.compute_aabb();
+    let clearance = standing.radius + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    let exit_distance =
+        climbable_aabb_exit_distance(center, direction, &obstruction_aabb, clearance)?
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+    if exit_distance > PLAYER_SPRING_HEAD_MAX_EXIT_DISTANCE {
+        return None;
+    }
+
+    let standing_exit = center + direction * exit_distance;
+    if shape_intersects(queries, standing_exit, standing_shape) {
+        return None;
+    }
+
+    // Keep both endpoints on the same walkable floor. This rules out a thin
+    // beam at the lip of a shaft: the lower envelope may sweep through it, but
+    // the standing player is never advanced toward an unsupported exit.
+    let support_distance = |at: Vector<Real>| {
+        let ray = Ray::new(Point::from(at), -Vector::y());
+        queries
+            .cast_ray_and_get_normal(&ray, standing_half_height + SUPPORT_PROBE_DISTANCE, true)
+            .and_then(|(_, hit)| {
+                (hit.normal.y >= SUPPORT_MIN_GROUND_NORMAL).then_some(hit.time_of_impact)
+            })
+    };
+    let start_support = support_distance(center)?;
+    let exit_support = support_distance(standing_exit)?;
+    if (start_support - exit_support).abs() > PLAYER_CONTACT_OFFSET / SCALE_FACTOR {
+        return None;
+    }
+
+    let rigid_shape = Capsule::new_y(
+        (PLAYER_RIGID_BODY_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR,
+        PLAYER_STANDING_RADIUS / SCALE_FACTOR,
+    );
+    let center_drop = Vector::y() * (PLAYER_RIGID_BODY_CENTER_DROP / SCALE_FACTOR);
+    let rigid_start = center - center_drop;
+    let rigid_exit = standing_exit - center_drop;
+    if !shape_sweep_is_clear(queries, rigid_start, rigid_exit, &rigid_shape) {
+        return None;
+    }
+
+    let rigid_pos = Isometry::translation(rigid_start.x, rigid_start.y, rigid_start.z);
+    let rigid_movement = controller.move_shape(
+        dt,
+        queries,
+        &rigid_shape,
+        &rigid_pos,
+        desired_h,
+        |_collision| (),
+    );
+    let rigid_h = vector![
+        rigid_movement.translation.x,
+        0.0,
+        rigid_movement.translation.z
+    ];
+    (rigid_h.dot(&direction) >= requested * 0.5).then_some(rigid_h)
+}
+
 /// One frame of player locomotion: the character controller's walk pass, the
 /// gravity pass (with ground snapping and the resting lift), and the stair
 /// step-up probe. Shared by real player movement ([`PhysicsWorld::move_player`])
@@ -1595,6 +1758,10 @@ fn step_player_movement(
     airborne_vertical: Option<Real>,
     climb: Option<ClimbPass<'_>>,
 ) -> PlayerMovement {
+    let allow_spring_head_walk = climb.is_none()
+        && airborne_vertical.is_none()
+        && carry == Vector::zeros()
+        && desired.y.abs() <= 1.0e-5;
     // Ladder: the climb vector replaces both the walk and the gravity pass.
     // Only if it actually moves the player, though - a climb consumes the
     // horizontal input, so a grip whose redirect is cast into solid geometry
@@ -1800,6 +1967,13 @@ fn step_player_movement(
         ) {
             mvt.translation += step;
         }
+    }
+    if allow_spring_head_walk
+        && let Some(horizontal) =
+            spring_head_walk_translation(controller, queries, shape, pos, desired, &mvt, dt)
+    {
+        mvt.translation.x = horizontal.x;
+        mvt.translation.z = horizontal.z;
     }
     // The caller applies one translation from the ORIGINAL pose, so fold the
     // platform's contribution back in only now that every pass above (which
@@ -8913,6 +9087,55 @@ mod tests {
         assert!(
             crouched_world.set_player_crouch(false, &mut crouched_player),
             "standing must be refused under the five-foot ceiling"
+        );
+    }
+
+    /// Hydro2's two `Railing Terminator` OBBs form a 0.3 ft-thick horizontal
+    /// band 4.43 ft above the corridor floor. Dark's rigid body sphere ends at
+    /// 3.6 ft and its independently-sprung head can yield under the short band,
+    /// so both standing and crouched locomotion traverse the authored AIPATH
+    /// route. A single continuous six-foot capsule instead stops standing at
+    /// the band while crouching passes (issue #808).
+    #[test]
+    fn standing_player_passes_under_a_thin_head_height_entity_band() {
+        fn world_with_railing_band() -> (PhysicsWorld, PlayerHandle) {
+            let (mut world, player) = world_with_floor();
+            world.add_kinematic(
+                EntityId::from_inner(2300).unwrap(),
+                vec3(0.0, 1.83, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                // The railterm OBB after its authored Hydro2 rotation: short
+                // across the corridor and vertically, long along the railing.
+                vec3(0.12, 0.12, 4.2),
+                CollisionGroup::entity(),
+                false,
+            );
+            (world, player)
+        }
+
+        let start = vec3(-1.5, PLAYER_HALF_HEIGHT + 0.1, 0.0);
+        let target = vec3(1.5, 0.0, 0.0);
+
+        let (mut crouched_world, mut crouched_player) = world_with_railing_band();
+        crouched_world.set_player_translation(start, &mut crouched_player);
+        step(&mut crouched_world, &mut crouched_player, 30);
+        assert!(crouched_world.set_player_crouch(true, &mut crouched_player));
+        walk_player_toward(&mut crouched_world, &mut crouched_player, target, 60);
+        let crouched_end = crouched_world.get_player_translation(&crouched_player);
+        assert!(
+            crouched_end.x > 1.0,
+            "fixture precondition: crouched player should cross the band; ended {crouched_end:?}"
+        );
+
+        let (mut standing_world, mut standing_player) = world_with_railing_band();
+        standing_world.set_player_translation(start, &mut standing_player);
+        step(&mut standing_world, &mut standing_player, 30);
+        walk_player_toward(&mut standing_world, &mut standing_player, target, 60);
+        let standing_end = standing_world.get_player_translation(&standing_player);
+        assert!(
+            standing_end.x > 1.0,
+            "standing player should cross the short head-height band; ended {standing_end:?}"
         );
     }
 
