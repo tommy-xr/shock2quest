@@ -91,6 +91,29 @@ pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
 }
 
+/// Clearance (SS2 ft) kept between a capped eye and the capsule crown, so the
+/// camera stays strictly inside the collider rather than sitting exactly on
+/// its surface where a coplanar ceiling could still catch it.
+const PLAYER_EYE_CAP_MARGIN: f32 = 0.2;
+
+/// Highest the eye may sit (world units) above the collider CENTER for a
+/// stance: the capsule crown less [`PLAYER_EYE_CAP_MARGIN`]. VR runtimes clamp
+/// tracked eye poses to this - a tracked head is a real body's head, not the
+/// game capsule's, and a physically crouched adult's eye is well above the
+/// short crouched capsule's crown. Uncapped, such a player sees over and
+/// through geometry the capsule itself clears. Crouched this is 1.2 ft above
+/// the center - 2.6 ft above the feet, exactly the flat runtime's
+/// [`crate::PLAYER_CROUCH_EYE_HEIGHT`]; standing it is 2.8 ft, which only an
+/// unusually tall player ever reaches, so tracking stays 1:1 in practice.
+pub fn player_eye_cap_above_center(crouched: bool) -> f32 {
+    let height = if crouched {
+        PLAYER_CROUCH_HEIGHT
+    } else {
+        PLAYER_STANDING_HEIGHT
+    };
+    (height / 2.0 - PLAYER_EYE_CAP_MARGIN) / SCALE_FACTOR
+}
+
 /// Height (world units) of the collider CENTER above the surface the player
 /// stands on, per stance: half the capsule height plus the resting gap the
 /// character controller maintains. VR runtimes subtract this from the body

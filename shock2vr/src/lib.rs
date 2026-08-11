@@ -1461,6 +1461,14 @@ impl Game {
         physics::player_center_above_floor(self.active_game_scene.player_is_crouched())
     }
 
+    /// Highest the eye may sit (world units) above the player collider's
+    /// center for the current stance. VR runtimes clamp the tracked eye to
+    /// this so the camera cannot leave the collider crown; see
+    /// [`physics::player_eye_cap_above_center`].
+    pub fn player_eye_cap_above_center(&self) -> f32 {
+        physics::player_eye_cap_above_center(self.active_game_scene.player_is_crouched())
+    }
+
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let (scene, pos, rot) = self
             .active_game_scene

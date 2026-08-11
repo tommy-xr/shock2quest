@@ -1116,7 +1116,7 @@ fn render_swapchain(
     let width = swapchain.width;
     let height = swapchain.height;
 
-    let head_offset = stage_to_pawn(
+    let mut head_offset = stage_to_pawn(
         cgmath::Vector3::new(
             view.pose.position.x,
             view.pose.position.y,
@@ -1124,6 +1124,15 @@ fn render_swapchain(
         ),
         game.player_center_above_floor() + tracked_pose_drop,
     );
+    // The tracked eye belongs to a real body, not to the game capsule, so it
+    // must be held inside the collider crown: a physically crouched adult's
+    // eye sits well above the short crouched capsule, and uncapped the player
+    // sees over and through the very geometry the capsule clears (looking out
+    // of the world from inside a duct). Only the view is capped - hand poses
+    // have no such clipping concern and clamping them would break reaching up.
+    // The cap binds essentially only while crouched (or button-latched);
+    // standing it sits above any realistic head, so tracking stays 1:1.
+    head_offset.y = head_offset.y.min(game.player_eye_cap_above_center());
     let head_rotation = cgmath::Quaternion::new(
         view.pose.orientation.w,
         view.pose.orientation.x,
