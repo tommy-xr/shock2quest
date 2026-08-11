@@ -190,6 +190,12 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 const PLAYER_JUMP_SPEED: f32 = 28.0;
 const PLAYER_JUMP_GRAVITY: f32 = 40.0;
 const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
+/// Dark's `BreakClimb` adds a short facing impulse to the ordinary jump that
+/// released the climb. Keep these in authored SS2 feet/second like the jump
+/// constants above; player velocity is converted to world units at launch.
+const CLIMB_JUMP_FORWARD_SPEED: f32 = 10.0;
+const CLIMB_JUMP_VERTICAL_BONUS: f32 = 0.5;
+const CLIMB_JUMP_REBOUND_SPEED: f32 = 5.0;
 /// Maximum forward search for a jump-through landing. This is deliberately a
 /// short body-scale transition, not a general wall bypass.
 const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
@@ -307,12 +313,6 @@ const CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
 /// needed when the compressed route fits beside a wall but the standing
 /// capsule must clear that wall before expanding.
 const CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY: f32 = 5.0 * CLIMB_TOP_OUT_RADIUS;
-/// A fixed mantle sample may land on a lower pipe or shelf while the player's
-/// head is already touching the underside of the actual deck. Only in that
-/// separate-ceiling case, sample the same bounded lateral offsets used by the
-/// landing search for a floor face locally connected to that exact underside.
-/// Crouching is the largest grid: eight radius steps on either side.
-const CLIMB_TOP_OUT_MAX_LATERAL_MANTLE_CANDIDATES: usize = 8 * 2;
 /// Only redirect a valid forward landing onto a recessed approach-side floor
 /// when the forward route needs at least a full compressed-body-width dogleg.
 /// A one-radius sidestep is ordinary ledge recovery and must keep the player's
@@ -417,6 +417,14 @@ fn climb_top_out_direction(desired: Vector<Real>, facing: Vector<Real>) -> Optio
     let desired = vector![desired.x, 0.0, desired.z].try_normalize(1.0e-6)?;
     let facing = vector![facing.x, 0.0, facing.z].try_normalize(1.0e-6)?;
     (desired.dot(&facing) >= MIN_CLIMB_GRIP_FRACTION).then_some(facing)
+}
+
+/// Dark's object-ladder BreakClimb gate compares the player's projected body
+/// center with the gripped OBB's own top, using a strict one-foot radius. This
+/// is intentionally separate from the mantle planner's much broader head
+/// lookahead across a stacked ladder column.
+fn break_climb_near_top(climbable_top: Real, player_center: Real) -> bool {
+    (climbable_top - player_center).abs() < 1.0 / SCALE_FACTOR
 }
 
 /// How much (SS2 ft) the step probe's clearance sweeps shrink the player
@@ -675,11 +683,48 @@ fn try_step_up(
 struct ClimbPass<'a> {
     movement: Vector<Real>,
     top_out: Option<(Vector<Real>, Real)>,
+    retained: RetainedClimb,
     allow_top_out_attempt: bool,
     is_crouched: bool,
     validation_queries: QueryPipeline<'a>,
     probe_queries: QueryPipeline<'a>,
     scripted_queries: QueryPipeline<'a>,
+}
+
+/// Climb contact sampled by the preceding movement frame. Dark evaluates a
+/// jump against the climb it was already holding before the newly turned
+/// player-facing is used for another grip query; that ordering is what lets a
+/// player turn away and jump off a ladder atomically.
+#[derive(Clone, Copy, Debug)]
+struct RetainedClimb {
+    toward_ladder: Vector<Real>,
+    climbable_top: Real,
+}
+
+/// Source-compatible facing impulse for an explicit jump from a retained
+/// climb, in authored SS2 feet/second. The caller adds the ordinary vertical
+/// jump shared with grounded movement and converts both components to world
+/// units.
+fn climb_jump_release(
+    retained: RetainedClimb,
+    facing: Vector<Real>,
+    player_center: Real,
+) -> Option<(Vector<Real>, Real)> {
+    let facing = vector![facing.x, 0.0, facing.z].try_normalize(1.0e-6)?;
+    if break_climb_near_top(retained.climbable_top, player_center) {
+        return Some((facing * CLIMB_JUMP_FORWARD_SPEED, CLIMB_JUMP_VERTICAL_BONUS));
+    }
+
+    // Away from the top, BreakClimb rebounds from the contacted face. Facing
+    // away keeps the full five-foot impulse; facing into it reflects and
+    // halves that direction before applying the same scale.
+    let away = -retained.toward_ladder;
+    let jump_direction = if facing.dot(&away) > 0.0 {
+        facing
+    } else {
+        (facing - away * (2.0 * facing.dot(&away))) * 0.5
+    };
+    Some((jump_direction * CLIMB_JUMP_REBOUND_SPEED, 0.0))
 }
 
 #[derive(Clone, Copy)]
@@ -697,6 +742,9 @@ struct ClimbTopOut {
 struct PlayerMovement {
     movement: EffectiveCharacterMovement,
     top_out: Option<ClimbTopOut>,
+    /// A grip this exact movement frame proved by vertical progress, or by an
+    /// intentional near-top cap stall that kept compatible ladder contact.
+    retained_climb: Option<RetainedClimb>,
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
     slope_displacement: Vector<Real>,
@@ -1534,80 +1582,6 @@ fn mantle_lip_patch(
     Some(MantleLipPatch { handle, faces })
 }
 
-/// Find a laterally offset mantle floor belonging to the exact local terrain
-/// slab currently obstructing the player's rise.
-///
-/// WorldRep is one mission-wide trimesh, so a shared collider handle and equal
-/// height are not proof of one surface. The downward floor sample must be
-/// connected to the canonical upward-hit face inside the same bounded probe
-/// corridor. This permits a ladder to exit beside a lower pipe without
-/// authorizing a disconnected ceiling or another island in WorldRep.
-fn lateral_same_slab_mantle_hit(
-    queries: &QueryPipeline,
-    up_hit: Option<(ColliderHandle, RayIntersection)>,
-    head: Vector<Real>,
-    probe_ahead: Vector<Real>,
-    lateral: Vector<Real>,
-    compressed_radius: Real,
-    lateral_steps: usize,
-) -> Option<(Vector<Real>, ColliderHandle, RayIntersection)> {
-    let (up_handle, up) = up_hit?;
-    let FeatureId::Face(up_face) = up.feature else {
-        return None;
-    };
-    if up.normal.y >= -CLIMB_TOP_OUT_MIN_GROUND_NORMAL {
-        return None;
-    }
-    let collider = queries.colliders.get(up_handle)?;
-    let mesh = collider.shape().as_trimesh()?;
-    let face_count = mesh.indices().len() as u32;
-    if face_count == 0 {
-        return None;
-    }
-    let canonical_up_face = up_face % face_count;
-    let underside = head + Vector::y() * up.time_of_impact;
-    let mut evaluated = 0;
-    for lateral_step in 1..=lateral_steps {
-        for side in [1.0, -1.0] {
-            if evaluated == CLIMB_TOP_OUT_MAX_LATERAL_MANTLE_CANDIDATES {
-                return None;
-            }
-            evaluated += 1;
-            let origin = probe_ahead + lateral * (side * lateral_step as Real * compressed_radius);
-            let Some((floor_handle, floor)) = queries
-                .cast_ray_and_get_normal(
-                    &Ray::new(Point::from(origin), -Vector::y()),
-                    CLIMB_TOP_OUT_MAX_DROP,
-                    true,
-                )
-                .filter(|(_, floor)| floor.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
-            else {
-                continue;
-            };
-            let floor_point = origin - Vector::y() * floor.time_of_impact;
-            if floor_handle != up_handle
-                || floor_point.y + 1.0e-4 < underside.y
-                || floor_point.y - underside.y > CLIMB_TOP_OUT_MAX_LOCAL_SLAB_THICKNESS + 1.0e-4
-            {
-                continue;
-            }
-            let floor_patch = mantle_lip_patch(
-                queries,
-                Some((floor_handle, floor.feature)),
-                floor_point,
-                &[underside, floor_point],
-                false,
-            );
-            if floor_patch.is_some_and(|patch| {
-                patch.handle == up_handle && patch.faces.contains(&canonical_up_face)
-            }) {
-                return Some((origin, floor_handle, floor));
-            }
-        }
-    }
-    None
-}
-
 /// Extend a floor-seeded mantle patch with only the underside faces crossed by
 /// the actual recovered rise.
 ///
@@ -2068,8 +2042,6 @@ fn plan_climb_top_out(
         )
     };
     let compressed_radius = body_radius / SCALE_FACTOR;
-    let lateral = vector![direction.z, 0.0, -direction.x];
-    let lateral_steps = (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / compressed_radius).ceil() as usize;
     let head_offset = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
     let raised = head + Vector::y() * CLIMB_TOP_OUT_UP;
@@ -2154,7 +2126,7 @@ fn plan_climb_top_out(
         .is_none()
         .then(|| mantle_probe(route_ahead))
         .flatten();
-    let route_same_mantle_slab = match (up_hit, route_mantle_hit) {
+    let same_mantle_slab = match (up_hit, route_mantle_hit) {
         (Some((up_handle, up)), Some((origin, floor_handle, floor)))
             if up_handle == floor_handle
                 && (origin - probe_ahead).norm() > CLIMB_TOP_OUT_RECOVERY_RETREAT =>
@@ -2168,44 +2140,26 @@ fn plan_climb_top_out(
         }
         _ => false,
     };
-    let initial_mantle_hit = fixed_mantle_hit.or_else(|| {
-        if route_same_mantle_slab {
+    let mantle_hit = fixed_mantle_hit.or_else(|| {
+        if same_mantle_slab {
             route_mantle_hit
         } else {
             None
         }
     });
-    let initial_mantle_floor = initial_mantle_hit
-        .map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
-    let separate_ceiling = up_obstruction.is_some_and(|(_, obstruction_y)| {
+    let mantle_floor =
+        mantle_hit.map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
+    if up_obstruction.is_some_and(|(_, obstruction_y)| {
         // A lip can have a thin underside above its adjacent landing. Treat
         // surfaces within one compressed radius plus the solver gap on both
         // faces as the same landing edge; a genuinely separate low ceiling
         // remains farther above the probed floor.
-        initial_mantle_floor.is_none_or(|floor| {
+        mantle_floor.is_none_or(|floor| {
             floor.y + compressed_radius + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
                 < obstruction_y
         })
-    });
-    let lateral_mantle_hit = (separate_ceiling && ladder_exit_hit.is_none())
-        .then(|| {
-            lateral_same_slab_mantle_hit(
-                probe_queries,
-                up_hit,
-                head,
-                probe_ahead,
-                lateral,
-                compressed_radius,
-                lateral_steps,
-            )
-        })
-        .flatten();
-    let lateral_mantle_slab = lateral_mantle_hit.is_some();
-    let mantle_hit = lateral_mantle_hit.or(initial_mantle_hit);
-    let same_mantle_slab = route_same_mantle_slab || lateral_mantle_slab;
-    let mantle_floor =
-        mantle_hit.map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
-    if separate_ceiling && lateral_mantle_hit.is_none() && ladder_exit_hit.is_none() {
+    }) && ladder_exit_hit.is_none()
+    {
         reject_top_out!("separate_ceiling");
     }
 
@@ -2538,6 +2492,8 @@ fn plan_climb_top_out(
     // recovery stays within four radii and lateral recovery within five. The
     // compressed route first reaches the geometry-derived `lip_clear` before
     // moving to the selected landing.
+    let lateral = vector![direction.z, 0.0, -direction.x];
+    let lateral_steps = (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / compressed_radius).ceil() as usize;
     let forward_steps = (CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY / compressed_radius).ceil() as usize;
     // Breadth-first by total recovery distance. Within an equal distance,
     // consider lateral recovery first so the fixed candidate budget reaches
@@ -2628,14 +2584,6 @@ fn plan_climb_top_out(
         let Some(landing) = landing_pose(candidate) else {
             continue;
         };
-        if lateral_mantle_slab
-            && mantle_floor.is_some_and(|floor| {
-                (landing.standing.y - standing_floor_offset - floor.y).abs()
-                    > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
-            })
-        {
-            continue;
-        }
         let Some(validated) = validated_landing(landing) else {
             continue;
         };
@@ -2895,6 +2843,7 @@ fn plan_climb_top_out(
             is_crouched,
             requires_final_support: true,
         }),
+        retained_climb: None,
         slope_displacement: Vector::zeros(),
     })
 }
@@ -3162,6 +3111,7 @@ fn plan_jump_mantle(
             is_crouched,
             requires_final_support: false,
         }),
+        retained_climb: None,
         slope_displacement: Vector::zeros(),
     })
 }
@@ -3342,6 +3292,7 @@ fn step_player_movement(
     if let Some(ClimbPass {
         movement: climb,
         top_out,
+        retained,
         allow_top_out_attempt,
         is_crouched,
         validation_queries,
@@ -3373,6 +3324,7 @@ fn step_player_movement(
             return PlayerMovement {
                 movement: mvt,
                 top_out: None,
+                retained_climb: Some(retained),
                 slope_displacement: Vector::zeros(),
             };
         }
@@ -3393,12 +3345,14 @@ fn step_player_movement(
                 return PlayerMovement {
                     movement: reposition,
                     top_out: None,
+                    retained_climb: Some(retained),
                     slope_displacement: Vector::zeros(),
                 };
             }
             return PlayerMovement {
                 movement: scripted_character_movement(Vector::zeros()),
                 top_out: None,
+                retained_climb: Some(retained),
                 slope_displacement: Vector::zeros(),
             };
         }
@@ -3571,6 +3525,7 @@ fn step_player_movement(
     PlayerMovement {
         movement: mvt,
         top_out: None,
+        retained_climb: None,
         slope_displacement: next_slope_displacement,
     }
 }
@@ -3906,6 +3861,13 @@ pub struct PlayerHandle {
     // A live ordinary jump's vertical velocity (world units / second).
     // `None` means the legacy constant-gravity walk/fall path is active.
     jump_velocity: Option<Real>,
+    // Prior-frame ladder contact, retained just long enough for an atomic
+    // turn+jump to release it before the new facing recomputes grip.
+    retained_climb: Option<RetainedClimb>,
+    // Horizontal part of a live BreakClimb jump (world units / second).
+    // Ordinary input cannot steer it; collision and gravity own the arc until
+    // the controller reports a supported landing.
+    climb_jump_velocity: Option<Vector<Real>>,
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
 }
@@ -4346,6 +4308,8 @@ impl PhysicsWorld {
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
+        player_handle.retained_climb = None;
+        player_handle.climb_jump_velocity = None;
         player_handle.top_out_retry_cooldown = 0;
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let shape = if player_handle.is_crouched {
@@ -5166,6 +5130,8 @@ impl PhysicsWorld {
             slope_displacement: Vector::zeros(),
             is_grounded: false,
             jump_velocity: None,
+            retained_climb: None,
+            climb_jump_velocity: None,
             jump_was_pressed: false,
         }
     }
@@ -5190,6 +5156,7 @@ impl PhysicsWorld {
             return player_handle.is_crouched;
         }
         player_handle.top_out_retry_cooldown = 0;
+        player_handle.retained_climb = None;
 
         let character_handle = player_handle.character_handle;
         let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
@@ -5492,11 +5459,12 @@ impl PhysicsWorld {
 
     /// Update player movement with facing and a held ordinary-jump button.
     ///
-    /// The button is edge-triggered inside [`PlayerHandle`], starts only from
-    /// controller-confirmed ground, and then follows a collision-cast ballistic
-    /// arc until landing. Keeping the request here (rather than as a debug
-    /// relocation/effect) means desktop, VR, and automated playtests all drive
-    /// the same production character controller.
+    /// The button is edge-triggered inside [`PlayerHandle`]. It starts from
+    /// controller-confirmed ground, or releases a climb retained by the prior
+    /// frame, then follows a collision-cast ballistic arc until landing.
+    /// Keeping the request here (rather than as a debug relocation/effect)
+    /// means desktop, VR, and automated playtests all drive the same production
+    /// character controller.
     pub fn update_with_facing_and_jump(
         &mut self,
         desired_movement: Vector3<f32>,
@@ -5615,9 +5583,34 @@ impl PhysicsWorld {
     ) -> (Vec<CollisionEvent>, &RigidBody) {
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
-        let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
+        // Consume the prior frame's grip before the freshly turned facing can
+        // fail the into-ladder query below. It is deliberately one-frame
+        // state: separation without a simultaneous edge cannot launch later.
+        let retained_climb = player_handle.retained_climb.take();
+        let player_center = self.rigid_body_set[player_handle.character_handle]
+            .translation()
+            .y;
+        let climb_jump = (jump_edge
+            && player_handle.top_out.is_none()
+            && player_handle.jump_velocity.is_none())
+        .then(|| {
+            retained_climb.and_then(|retained| climb_jump_release(retained, facing, player_center))
+        })
+        .flatten();
+        if let Some((horizontal_velocity, vertical_bonus)) = climb_jump {
+            player_handle.jump_velocity = Some((PLAYER_JUMP_SPEED + vertical_bonus) / SCALE_FACTOR);
+            player_handle.climb_jump_velocity = Some(horizontal_velocity / SCALE_FACTOR);
+            player_handle.slope_displacement = Vector::zeros();
+            player_handle.is_grounded = false;
+            player_handle.support = None;
+        }
+        let launch_jump = jump_edge
+            && climb_jump.is_none()
+            && player_handle.is_grounded
+            && player_handle.top_out.is_none();
         if launch_jump {
             player_handle.jump_velocity = Some(PLAYER_JUMP_SPEED / SCALE_FACTOR);
+            player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = false;
             // A jumping player has left their moving support. Its carry is
             // already represented by the first frame's body pose; do not keep
@@ -5693,7 +5686,7 @@ impl PhysicsWorld {
                 // (The collider-center direction is wrong when the player is
                 // off-center: it tilts away from the face, which under-reads
                 // the into-ladder push the grip test and climb speed use.)
-                let mut nearest: Option<(f32, Vector<Real>)> = None;
+                let mut nearest: Option<(f32, Vector<Real>, Real)> = None;
                 for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
                     let contact = rapier3d::parry::query::contact(
                         &character_pos,
@@ -5708,13 +5701,13 @@ impl PhysicsWorld {
                         let toward_norm = toward_h.norm();
                         // A mostly-vertical normal means the player is on top of
                         // (or under) the surface - that's standing, not climbing.
-                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _)| contact.dist < d) {
+                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _, _)| contact.dist < d) {
                             let toward = toward_h / toward_norm;
-                            nearest = Some((contact.dist, toward));
+                            nearest = Some((contact.dist, toward, collider.compute_aabb().maxs.y));
                         }
                     }
                 }
-                nearest.and_then(|(_, toward)| {
+                nearest.and_then(|(_, toward, climbable_top)| {
                     climb_redirect(desired_movement, toward).map(|movement| {
                         let top_out = if near_column_top {
                             climb_top_out_direction(desired_movement, facing).map(|direction| {
@@ -5739,15 +5732,21 @@ impl PhysicsWorld {
                         } else {
                             None
                         };
-                        (movement, top_out)
+                        (
+                            movement,
+                            top_out,
+                            RetainedClimb {
+                                toward_ladder: toward,
+                                climbable_top,
+                            },
+                        )
                     })
                 })
             })
         };
         let attempted_top_out = climb_movement
             .as_ref()
-            .is_some_and(|(_, top_out)| allow_top_out_attempt && top_out.is_some());
-
+            .is_some_and(|(_, top_out, _)| allow_top_out_attempt && top_out.is_some());
         // The climb cast collides with everything the walk does EXCEPT the
         // climbable surfaces themselves - see `ClimbPass`. Membership is checked
         // by predicate rather than by group filter because a ladder is also an
@@ -5797,6 +5796,7 @@ impl PhysicsWorld {
                 PlayerMovement {
                     movement,
                     top_out,
+                    retained_climb: None,
                     slope_displacement: Vector::zeros(),
                 }
             } else {
@@ -5820,6 +5820,11 @@ impl PhysicsWorld {
                 if let Some(jump_mantle) = jump_mantle {
                     jump_mantle
                 } else {
+                    let horizontal_movement = player_handle
+                        .climb_jump_velocity
+                        .map_or(desired_movement, |velocity| {
+                            velocity * self.integration_parameters.dt
+                        });
                     let airborne_vertical = player_handle
                         .jump_velocity
                         .map(|velocity| velocity * self.integration_parameters.dt);
@@ -5828,15 +5833,16 @@ impl PhysicsWorld {
                         &queries,
                         character_shape.as_ref(),
                         &character_pos,
-                        desired_movement,
+                        horizontal_movement,
                         carry,
                         self.integration_parameters.dt,
                         gravity,
                         Some(player_handle.slope_displacement),
                         airborne_vertical,
-                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                        climb_movement.map(|(movement, top_out, retained)| ClimbPass {
                             movement,
                             top_out,
+                            retained,
                             allow_top_out_attempt,
                             is_crouched: player_handle.is_crouched,
                             validation_queries: queries,
@@ -5855,6 +5861,7 @@ impl PhysicsWorld {
             };
         }
         let was_top_out = player_handle.top_out.is_some();
+        let next_retained_climb = player_movement.retained_climb;
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
@@ -5880,15 +5887,31 @@ impl PhysicsWorld {
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
+        // Rapier's broad `grounded` flag can be set while a falling capsule is
+        // sliding against a wall/pipe. That is sufficient for ordinary jumps,
+        // which start from a floor, but a BreakClimb release may first collide
+        // with a side face on its way to the arrival-side deck. Preserve its
+        // horizontal impulse until the resolved full-profile pose has genuine
+        // upward support underfoot.
+        let resolved_pose = character_pos.translation.vector + mvt.translation;
+        let climb_jump_has_support = player_handle.climb_jump_velocity.is_some() && {
+            let queries = self.player_movement_queries(dispatcher, movement_filter);
+            player_pose_matches_current_support(&queries, resolved_pose, player_handle.is_crouched)
+        };
 
         if is_top_out {
             player_handle.jump_velocity = None;
+            player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = false;
         } else if let Some(mut velocity) = player_handle.jump_velocity {
             let requested_vertical = velocity * self.integration_parameters.dt;
             let applied_vertical = mvt.translation.y - carry.y;
-            if mvt.grounded && requested_vertical <= 0.0 {
+            if mvt.grounded
+                && requested_vertical <= 0.0
+                && (player_handle.climb_jump_velocity.is_none() || climb_jump_has_support)
+            {
                 player_handle.jump_velocity = None;
+                player_handle.climb_jump_velocity = None;
                 player_handle.is_grounded = true;
             } else {
                 // A ceiling (or other overhead collision) consumes the upward
@@ -5903,8 +5926,14 @@ impl PhysicsWorld {
                 player_handle.is_grounded = false;
             }
         } else {
+            player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = mvt.grounded;
         }
+        player_handle.retained_climb = if is_top_out || player_handle.jump_velocity.is_some() {
+            None
+        } else {
+            next_retained_climb
+        };
 
         // Edges already observed along a swept `move_player_validated` hop come
         // first: they happened before this frame's pose. They also leave
@@ -8261,6 +8290,10 @@ mod tests {
             Some(ClimbPass {
                 movement: Vector::y() * 0.25,
                 top_out: Some((Vector::x(), CLIMB_TOP_OUT_PROBE_FORWARD)),
+                retained: RetainedClimb {
+                    toward_ladder: Vector::x(),
+                    climbable_top: 0.0,
+                },
                 allow_top_out_attempt: true,
                 is_crouched: false,
                 validation_queries: query_pipeline(&world, QueryFilter::default()),
@@ -8466,222 +8499,6 @@ mod tests {
             final_pose,
             &crouched_player_capsule(),
         ));
-    }
-
-    fn merged_cuboid_worldrep(parts: &[(Vector<Real>, Vector<Real>)]) -> PhysicsWorld {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        for (center, half_extents) in parts {
-            let (part_vertices, part_indices) = Cuboid::new(*half_extents).to_trimesh();
-            let base = vertices.len() as u32;
-            vertices.extend(
-                part_vertices
-                    .into_iter()
-                    .map(|vertex| Point::from(vertex + *center)),
-            );
-            indices.extend(
-                part_indices
-                    .into_iter()
-                    .map(|triangle| triangle.map(|index| index + base)),
-            );
-        }
-        let mut world = PhysicsWorld::new();
-        world.add_collider(
-            EntityId::from_inner(1).unwrap(),
-            ColliderBuilder::trimesh(vertices, indices)
-                .expect("merged WorldRep")
-                .build(),
-        );
-        let mut player =
-            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
-        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-        world
-    }
-
-    fn diagonal_slab_worldrep() -> PhysicsWorld {
-        let (vertices, indices) = Cuboid::new(vector![1.0, 0.05, 0.2]).to_trimesh();
-        let angle = -std::f32::consts::FRAC_PI_4;
-        let (sin, cos) = angle.sin_cos();
-        let vertices = vertices
-            .into_iter()
-            .map(|vertex| {
-                Point::new(
-                    0.48 + cos * vertex.x + sin * vertex.z,
-                    1.55 + vertex.y,
-                    0.48 - sin * vertex.x + cos * vertex.z,
-                )
-            })
-            .collect();
-        let mut world = PhysicsWorld::new();
-        world.add_collider(
-            EntityId::from_inner(1).unwrap(),
-            ColliderBuilder::trimesh(vertices, indices)
-                .expect("diagonal WorldRep slab")
-                .build(),
-        );
-        let mut player =
-            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
-        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-        world
-    }
-
-    fn diagonal_ribbon_worldrep(stations: &[(Real, Real)]) -> PhysicsWorld {
-        let along = vector![
-            std::f32::consts::FRAC_1_SQRT_2,
-            0.0,
-            std::f32::consts::FRAC_1_SQRT_2
-        ];
-        let across = vector![
-            std::f32::consts::FRAC_1_SQRT_2,
-            0.0,
-            -std::f32::consts::FRAC_1_SQRT_2
-        ];
-        let half_width = 0.3;
-        let mut vertices = Vec::new();
-        for &(distance, y) in stations {
-            let center = along * distance + Vector::y() * y;
-            vertices.push(Point::from(center - across * half_width));
-            vertices.push(Point::from(center + across * half_width));
-        }
-        let mut indices = Vec::new();
-        for segment in 0..stations.len() - 1 {
-            let left = (2 * segment) as u32;
-            let right = left + 1;
-            let next_left = left + 2;
-            let next_right = left + 3;
-            indices.push([left, next_left, next_right]);
-            indices.push([left, next_right, right]);
-        }
-        let mut world = PhysicsWorld::new();
-        world.add_collider(
-            EntityId::from_inner(1).unwrap(),
-            ColliderBuilder::trimesh(vertices, indices)
-                .expect("diagonal WorldRep ribbon")
-                .build(),
-        );
-        let mut player =
-            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
-        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-        world
-    }
-
-    fn lateral_slab_test_hit(world: &PhysicsWorld) -> Option<(Vector<Real>, Real)> {
-        let queries = query_pipeline(world, QueryFilter::default());
-        let head = vector![0.0, 0.72, 0.0];
-        let probe_ahead = vector![2.0 * CLIMB_TOP_OUT_RADIUS, 2.12, 0.0];
-        let up_hit = queries.cast_ray_and_get_normal(
-            &Ray::new(Point::from(head), Vector::y()),
-            CLIMB_TOP_OUT_UP,
-            true,
-        );
-        lateral_same_slab_mantle_hit(
-            &queries,
-            up_hit,
-            head,
-            probe_ahead,
-            Vector::z(),
-            CLIMB_TOP_OUT_RADIUS,
-            (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / CLIMB_TOP_OUT_RADIUS).ceil() as usize,
-        )
-        .map(|(origin, _, hit)| (origin, origin.y - hit.time_of_impact))
-    }
-
-    #[test]
-    fn lateral_mantle_finds_an_edge_connected_same_slab_floor() {
-        // A thin closed slab runs diagonally through U and T. Dark's fixed
-        // forward probe lies outside its near edge, while the second lateral
-        // sample reaches the top through that edge inside the local corridor.
-        let world = diagonal_slab_worldrep();
-        let (origin, floor_y) = lateral_slab_test_hit(&world)
-            .expect("the edge-connected lateral top should identify the rise's local slab");
-
-        assert!((origin.z - 2.0 * CLIMB_TOP_OUT_RADIUS).abs() < 1.0e-4);
-        assert!((floor_y - 1.6).abs() < 1.0e-4);
-    }
-
-    #[test]
-    fn lateral_mantle_rejects_a_disconnected_island_in_one_worldrep() {
-        // The same collider and same top height are insufficient: these two
-        // closed boxes are separated in x/z and have no local edge path.
-        let world = merged_cuboid_worldrep(&[
-            (vector![0.0, 1.55, 0.0], vector![0.2, 0.05, 0.2]),
-            (vector![0.96, 1.55, 0.96], vector![0.2, 0.05, 0.2]),
-        ]);
-
-        assert!(
-            lateral_slab_test_hit(&world).is_none(),
-            "mission-wide WorldRep identity must not connect a lateral island to the sampled underside"
-        );
-    }
-
-    #[test]
-    fn lateral_mantle_rejects_a_broad_ceiling_without_a_local_edge() {
-        // U and T are opposite sides of one same-height closed slab, but its
-        // nearest edge lies far outside the bounded probe corridor. Treating
-        // collider identity or thickness as sufficient would turn an ordinary
-        // room ceiling into a through-ceiling mantle.
-        let world = merged_cuboid_worldrep(&[(vector![0.0, 1.55, 0.0], vector![4.0, 0.05, 4.0])]);
-
-        assert!(
-            lateral_slab_test_hit(&world).is_none(),
-            "a broad solid ceiling must remain an obstruction when no slab edge is locally reachable"
-        );
-    }
-
-    #[test]
-    fn lateral_mantle_rejects_a_parented_floor_before_the_worldrep_top() {
-        let mut world = diagonal_slab_worldrep();
-        // Model the authored Pipe8x3 failure mode: a live parented OBB is the
-        // first downward floor hit at the otherwise-valid lateral sample.
-        world.add_kinematic(
-            EntityId::from_inner(3).unwrap(),
-            vec3(0.96, 1.86, 0.96),
-            identity_quat(),
-            vec3(0.0, 0.0, 0.0),
-            vec3(0.35, 0.1, 0.35),
-            CollisionGroup::entity(),
-            false,
-        );
-        let mut player =
-            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(4).unwrap());
-        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
-
-        assert!(
-            lateral_slab_test_hit(&world).is_none(),
-            "a parented pipe floor must not inherit the WorldRep underside exception"
-        );
-    }
-
-    #[test]
-    fn lateral_mantle_rejects_a_floor_below_the_sampled_underside() {
-        // One connected ribbon starts horizontal above the upward sample,
-        // slopes down, and becomes horizontal again under lateral T. Deleting
-        // the explicit T >= U gate would therefore make this negative pass.
-        let world = diagonal_ribbon_worldrep(&[(-0.3, 1.5), (0.3, 1.5), (1.0, 1.0), (1.7, 1.0)]);
-
-        assert!(
-            lateral_slab_test_hit(&world).is_none(),
-            "a lower shelf must not be paired with an unrelated overhead underside"
-        );
-    }
-
-    #[test]
-    fn lateral_mantle_rejects_an_edge_connected_floor_above_the_thin_slab_bound() {
-        // The same local ribbon stays connected but rises by 1.1 wu from U to
-        // T, just beyond the standing-profile slab bound of 1.04 wu. Its ramp
-        // is split into short faces so topology alone still reaches both ends.
-        let world = diagonal_ribbon_worldrep(&[
-            (-0.3, 1.0),
-            (0.2, 1.0),
-            (0.7, 1.55),
-            (1.1, 2.1),
-            (1.7, 2.1),
-        ]);
-
-        assert!(
-            lateral_slab_test_hit(&world).is_none(),
-            "a thick local shell must remain a ceiling rather than becoming a mantle slab"
-        );
     }
 
     #[test]
@@ -11000,6 +10817,400 @@ mod tests {
             max_y - start.y > 0.25,
             "the player should step onto the threshold under the ceiling, rose {}",
             max_y - start.y
+        );
+    }
+
+    #[test]
+    fn climb_jump_release_matches_dark_top_and_rebound_impulses() {
+        let toward_ladder = vector![1.0, 0.0, 0.0];
+        let (top_horizontal, top_bonus) = climb_jump_release(
+            RetainedClimb {
+                toward_ladder,
+                climbable_top: 0.0,
+            },
+            vector![0.6, 1.0, -0.8],
+            0.0,
+        )
+        .expect("a finite horizontal facing should release a climb");
+        assert!((top_horizontal - vector![6.0, 0.0, -8.0]).norm() < 1.0e-5);
+        assert_eq!(top_bonus, CLIMB_JUMP_VERTICAL_BONUS);
+
+        let below_top = RetainedClimb {
+            toward_ladder,
+            climbable_top: 10.0,
+        };
+        let (away, away_bonus) =
+            climb_jump_release(below_top, -Vector::x(), 0.0).expect("away-facing rebound");
+        assert!((away + Vector::x() * CLIMB_JUMP_REBOUND_SPEED).norm() < 1.0e-5);
+        assert_eq!(away_bonus, 0.0);
+        let (reflected, reflected_bonus) =
+            climb_jump_release(below_top, Vector::x(), 0.0).expect("into-face rebound");
+        assert!((reflected + Vector::x() * (0.5 * CLIMB_JUMP_REBOUND_SPEED)).norm() < 1.0e-5);
+        assert_eq!(reflected_bonus, 0.0);
+
+        let one_foot = 1.0 / SCALE_FACTOR;
+        assert!(break_climb_near_top(10.0, 10.0 - one_foot + 1.0e-4));
+        assert!(!break_climb_near_top(10.0, 10.0 - one_foot - 1.0e-4));
+        let top_boundary = RetainedClimb {
+            toward_ladder,
+            climbable_top: 10.0,
+        };
+        let (entered_band, entered_bonus) =
+            climb_jump_release(top_boundary, -Vector::x(), 10.0 - one_foot + 1.0e-4)
+                .expect("current pose just inside the band");
+        assert!((entered_band.x + CLIMB_JUMP_FORWARD_SPEED).abs() < 1.0e-4);
+        assert_eq!(entered_bonus, CLIMB_JUMP_VERTICAL_BONUS);
+        for current_center in [10.0 - one_foot - 1.0e-4, 10.0 + one_foot + 1.0e-4] {
+            let (left_band, left_bonus) =
+                climb_jump_release(top_boundary, -Vector::x(), current_center)
+                    .expect("current pose just outside the band");
+            assert!((left_band.x + CLIMB_JUMP_REBOUND_SPEED).abs() < 1.0e-4);
+            assert_eq!(left_bonus, 0.0);
+        }
+    }
+
+    fn flat_jump_world() -> (PhysicsWorld, PlayerHandle) {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        (world, player)
+    }
+
+    #[test]
+    fn near_top_climb_jump_keeps_its_impulse_after_input_is_neutral() {
+        let (mut world, mut player) = flat_jump_world();
+        let start = world.get_player_translation(&player);
+        player.retained_climb = Some(RetainedClimb {
+            toward_ladder: Vector::x(),
+            climbable_top: start.y,
+        });
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        let edge = world.get_player_translation(&player);
+        let first_velocity = player
+            .climb_jump_velocity
+            .expect("the BreakClimb horizontal impulse should remain live");
+        assert!((first_velocity.x - CLIMB_JUMP_FORWARD_SPEED / SCALE_FACTOR).abs() < 1.0e-5);
+        assert_eq!(
+            edge, start,
+            "kinematic next-position applies on the following physics step"
+        );
+
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        let in_flight = world.get_player_translation(&player);
+        assert!(
+            in_flight.x > start.x + 0.05 && in_flight.y > start.y + 0.1,
+            "the retained +X impulse, not fresh neutral input/facing, must own the arc: start={start:?}, edge={edge:?}, in_flight={in_flight:?}"
+        );
+
+        let horizontal_before_crouch = player.climb_jump_velocity;
+        let vertical_before_crouch = player.jump_velocity;
+        assert!(world.set_player_crouch(true, &mut player));
+        assert_eq!(
+            player.climb_jump_velocity, horizontal_before_crouch,
+            "changing posture during the arc must preserve horizontal momentum"
+        );
+        assert_eq!(
+            player.jump_velocity, vertical_before_crouch,
+            "changing posture during the arc must preserve vertical momentum"
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            -Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            -Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        let after_crouch = world.get_player_translation(&player);
+        assert!(
+            after_crouch.x > in_flight.x + 0.05,
+            "posture must not steer or cancel the retained release: in_flight={in_flight:?}, after={after_crouch:?}"
+        );
+    }
+
+    #[test]
+    fn climb_jump_requires_a_fresh_grip_and_is_one_edge() {
+        let (mut world, mut player) = flat_jump_world();
+        let center = world.get_player_translation(&player).y;
+        player.retained_climb = Some(RetainedClimb {
+            toward_ladder: Vector::x(),
+            climbable_top: center,
+        });
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        assert!(
+            player.retained_climb.is_none(),
+            "one separated frame must expire a prior grip"
+        );
+
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.climb_jump_velocity.is_none(),
+            "a stale grip must not become a BreakClimb launch"
+        );
+        let ordinary = player
+            .jump_velocity
+            .expect("the supported press should remain an ordinary jump");
+        assert!(ordinary < PLAYER_JUMP_SPEED / SCALE_FACTOR);
+
+        let before_held = ordinary;
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.jump_velocity.expect("jump remains airborne") < before_held,
+            "holding jump must not relaunch either ordinary or climb motion"
+        );
+    }
+
+    #[test]
+    fn a_blocked_below_top_redirect_does_not_arm_break_climb() {
+        let (mut world, mut player) = flat_jump_world();
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(1.0, 5.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.2, 10.0, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        world.update_with_facing_and_jump(
+            Vector3::new(walk, -walk, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        assert!(
+            player.retained_climb.is_none(),
+            "a descent redirect blocked by the floor must fall through to ordinary movement without arming a release"
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(-walk, 0.0, 0.0),
+            -Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.climb_jump_velocity.is_none(),
+            "the next away-facing edge must remain an ordinary grounded jump"
+        );
+    }
+
+    #[test]
+    fn climb_jump_retains_the_gripped_objects_top_not_an_adjacent_segment() {
+        let (mut world, mut player) = flat_jump_world();
+        let center_y = world.get_player_translation(&player).y;
+        // The nearer/taller collider is the object actually gripped. A second
+        // climbable is also inside the broad column/reach query and has a top
+        // inside Dark's one-foot band, but it is not the selected contact.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.75, 3.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 6.0, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1002).unwrap(),
+            vec3(0.92, center_y, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 0.2, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        world.update_with_facing_and_jump(
+            Vector3::new(walk, 0.0, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        let retained = player
+            .retained_climb
+            .expect("a real upward climb frame must retain its selected contact");
+        assert!(
+            (retained.climbable_top - 6.0).abs() < 1.0e-4,
+            "the nearest tall object, not the adjacent short segment/column, must supply the BreakClimb top: {retained:?}"
+        );
+
+        world.update_with_facing_and_jump(
+            Vector3::new(-walk, 0.0, 0.0),
+            -Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        let rebound = player
+            .climb_jump_velocity
+            .expect("the retained below-top grip should detach");
+        assert!(
+            (rebound.x + CLIMB_JUMP_REBOUND_SPEED / SCALE_FACTOR).abs() < 1.0e-4,
+            "an unrelated segment inside the top band must not upgrade the rebound to a ten-foot top release: {rebound:?}"
+        );
+    }
+
+    #[test]
+    fn climb_jump_keeps_new_world_and_parented_walls_solid() {
+        let run = |parented: bool| {
+            let (mut world, mut player) = flat_jump_world();
+            if parented {
+                world.add_kinematic(
+                    EntityId::from_inner(1001).unwrap(),
+                    vec3(0.7, 5.0, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.2, 10.0, 4.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            } else {
+                world.add_collider(
+                    EntityId::from_inner(1001).unwrap(),
+                    ColliderBuilder::cuboid(0.1, 5.0, 2.0)
+                        .translation(vector![0.7, 5.0, 0.0])
+                        .build(),
+                );
+            }
+            player.retained_climb = Some(RetainedClimb {
+                toward_ladder: Vector::x(),
+                climbable_top: world.get_player_translation(&player).y,
+            });
+            for frame in 0..120 {
+                world.update_with_facing_and_jump(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::unit_x(),
+                    frame == 0,
+                    &mut player,
+                );
+            }
+            world.get_player_translation(&player)
+        };
+
+        for (kind, end) in [("world", run(false)), ("parented", run(true))] {
+            assert!(
+                end.x < 0.2,
+                "a BreakClimb impulse must not suppress a newly met {kind} wall, ended {end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn climb_jump_survives_side_contact_and_clears_on_real_floor_support() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.7, 10.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.2, 20.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2000).unwrap());
+        player.retained_climb = Some(RetainedClimb {
+            toward_ladder: Vector::x(),
+            climbable_top: 3.0,
+        });
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+
+        let mut side_contact_frames = 0;
+        for _ in 0..360 {
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                -Vector3::unit_z(),
+                false,
+                &mut player,
+            );
+            let position = world.get_player_translation(&player);
+            if position.x > 0.04 && position.x < 0.2 && position.y > 2.0 {
+                side_contact_frames += 1;
+                assert!(
+                    player.climb_jump_velocity.is_some(),
+                    "side contact without underfoot support must not consume the horizontal release at {position:?}"
+                );
+            }
+            if player.jump_velocity.is_none() {
+                break;
+            }
+        }
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            -Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        let landed = world.get_player_translation(&player);
+        assert!(
+            side_contact_frames >= 3,
+            "the fixture must exercise a sustained airborne side contact"
+        );
+        let movement_filter = player_movement_filter(player.character_handle);
+        let queries =
+            world.player_movement_queries(world.narrow_phase.query_dispatcher(), movement_filter);
+        assert!(
+            player_pose_matches_current_support(&queries, vec_to_nvec(landed), false),
+            "the release should finish only on real floor support, ended {landed:?}"
+        );
+        assert!(
+            player.jump_velocity.is_none() && player.climb_jump_velocity.is_none(),
+            "both ballistic components must clear together on the supported landing"
         );
     }
 

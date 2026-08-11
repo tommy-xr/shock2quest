@@ -1130,12 +1130,14 @@ test(
   },
 );
 
-// Rick1 object532 is a tall south-face ladder whose authored exit is the y42
-// deck west of the column. A lower y38.8 floor also fits a standing capsule,
-// but it is a sealed pocket beneath that deck and cannot be accepted merely
-// because it is locally supported.
+// Rick1 object532 is a tall south-face ladder whose real progression exit uses
+// Dark's explicit BreakClimb jump back onto the y38.8 arrival-side corridor.
+// From there the authored U-route steps down to y38.4, physically opens the
+// Security door, and reaches the Control Station. The north pocket and y42
+// roof are disconnected traps; a locally supported landing alone is not
+// campaign progress.
 test(
-  "flat climbing: rick1 ladder 532 reaches the connected y42 deck",
+  "flat climbing: rick1 ladder 532 reaches Security Control Station",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -1149,6 +1151,35 @@ test(
     ).entities.find((entity) => entity.template_id === 532);
     assert.ok(ladder, "rick1 should contain authored ladder object 532");
     const [ladderX, ladderY, ladderZ] = ladder.position;
+
+    // Runtime ids vary every launch. Resolve the authored Security route gate
+    // and terminal by stable mission identities, then observe their live
+    // transforms so the test proves physical ENTER effects rather than
+    // coordinate proximity.
+    const tripwires = (
+      await game.entities.list({ filter: "Tripwire", limit: 200 })
+    ).entities;
+    const doors = (
+      await game.entities.list({ filter: "RD_Door_1", limit: 200 })
+    ).entities;
+    const securityTripwire = tripwires.find(
+      (entity) => entity.template_id === 842,
+    );
+    const securityDoor = doors.find((entity) => entity.template_id === 841);
+    const securityTerminal = (
+      await game.entities.list({ filter: "Security", limit: 200 })
+    ).entities.find((entity) => entity.template_id === 2110);
+    assert.ok(securityTripwire, "rick1 should contain authored tripwire 842");
+    assert.ok(securityDoor, "rick1 should contain authored door 841");
+    assert.ok(
+      securityTerminal,
+      "rick1 should contain Security Control Station terminal 2110",
+    );
+    const securityDoorClosedY = securityDoor.position[1];
+    const arrivalFloorY = securityTripwire.position[1] - 0.8;
+    const arrivalBodyY = arrivalFloorY + 1.244;
+    const lowerFloorY = securityTripwire.position[1] - 1.2;
+    const lowerBodyY = lowerFloorY + 1.244;
 
     // Geometry-relative setup reproduces the reachable supported south-face
     // stage. The climb and all post-setup movement use production controls.
@@ -1169,21 +1200,64 @@ test(
         `start=${JSON.stringify(start)}, camera=${JSON.stringify(startFrame.player.camera_offset)}`,
     );
 
+    // The walkthrough route climbs straight back up from the only reachable
+    // south face. Keep the held heading due north; the former NW aim was an
+    // invented oracle for the now-rejected west/roof landings.
     const horizontal = 10;
     await game.input.lookAtWorldPoint([
-      start.x - 0.35 * horizontal,
+      start.x,
       start.y + Math.tan(Math.PI / 3) * horizontal,
-      start.z + 0.94 * horizontal,
+      start.z + horizontal,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
     let peak = start;
-    let reachedUpperDeck = false;
+    let cap = start;
+    let previous = start;
+    let stalledFrames = 0;
+    for (let frame = 0; frame < 240; frame += 1) {
+      await game.step({ frames: 1 });
+      cap = await game.player.position();
+      if (cap.y > peak.y) peak = cap;
+      stalledFrames =
+        cap.y > start.y + 7 && Math.abs(cap.y - previous.y) < 1e-4
+          ? stalledFrames + 1
+          : 0;
+      previous = cap;
+      if (stalledFrames >= 3) break;
+    }
+    assert.ok(
+      stalledFrames >= 3,
+      `pure-north grip must reach a stable high cap before BreakClimb; start=${JSON.stringify(start)}, cap=${JSON.stringify(cap)}`,
+    );
+
+    // Dark exits an object ladder only through PhysPlayerJump/BreakClimb. At
+    // the stable cap, atomically turn back toward the arrival-side corridor
+    // and emit one jump edge. The launch impulse must persist independently of
+    // thumbstick input; neutralize immediately so ordinary collision, gravity,
+    // and the inherited release velocity alone choose the landing.
+    await game.input.lookAtWorldPoint([
+      cap.x + 0.342 * horizontal,
+      cap.y + Math.tan(Math.PI / 3) * horizontal,
+      cap.z - 0.94 * horizontal,
+    ]);
+    await game.input.setJump(true);
+    await game.step({ frames: 1 });
+    const jumpAt = await game.player.position();
+    await game.input.setJump(false);
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    let reachedArrivalSide = false;
     let landing = start;
     for (let frame = 0; frame < 360; frame += 1) {
       await game.step({ frames: 1 });
       const position = await game.player.position();
       if (position.y > peak.y) peak = position;
-      if (position.y > 43.1) {
+      if (
+        Math.abs(position.y - arrivalBodyY) < 0.12 &&
+        position.x > 35.5 &&
+        position.x < 38.5 &&
+        position.z > -12 &&
+        position.z < -9.7
+      ) {
         const support = await game.raycast({
           start: [position.x, position.y + 0.1, position.z],
           end: [position.x, position.y - 3, position.z],
@@ -1193,16 +1267,17 @@ test(
         if (
           support.hit_point !== null &&
           support.hit_normal !== null &&
-          Math.abs(support.hit_point[1] - 42) < 0.05 &&
+          Math.abs(
+            support.hit_point[1] - arrivalFloorY,
+          ) < 0.05 &&
           support.hit_normal[1] > 0.5
         ) {
-          reachedUpperDeck = true;
+          reachedArrivalSide = true;
           landing = position;
           break;
         }
       }
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
     await game.step({ frames: 60 });
     const stable = await game.player.position();
     const stableSupport = await game.raycast({
@@ -1212,50 +1287,185 @@ test(
       ignore_sensors: true,
     });
     assert.ok(
-      reachedUpperDeck &&
-        Math.abs(stable.y - 43.244) < 0.08 &&
-        stable.x < ladderX - 0.5 &&
+      reachedArrivalSide &&
+        Math.abs(stable.y - arrivalBodyY) < 0.08 &&
+        stable.x > 35.5 &&
+        stable.x < 38.5 &&
+        stable.z > -12 &&
+        stable.z < -9.7 &&
         stableSupport.hit &&
         stableSupport.hit_point !== null &&
-        Math.abs(stableSupport.hit_point[1] - 42) < 0.05 &&
+        Math.abs(
+          stableSupport.hit_point[1] - arrivalFloorY,
+        ) < 0.05 &&
         stableSupport.hit_normal !== null &&
         stableSupport.hit_normal[1] > 0.5,
-      `ordinary standing input must reject the lower pocket and settle on the connected y42 deck; ` +
-        `start=${JSON.stringify(start)}, peak=${JSON.stringify(peak)}, landing=${JSON.stringify(landing)}, ` +
+      `the explicit BreakClimb impulse must settle on the supported y38.8 arrival-side corridor; ` +
+        `start=${JSON.stringify(start)}, cap=${JSON.stringify(cap)}, jumpAt=${JSON.stringify(jumpAt)}, peak=${JSON.stringify(peak)}, landing=${JSON.stringify(landing)}, ` +
         `stable=${JSON.stringify(stable)}, support=${JSON.stringify(stableSupport)}`,
     );
 
-    await game.input.lookAtWorldPoint([
-      stable.x + 10,
-      stable.y + 1.6,
-      stable.z,
-    ]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    let egress = stable;
-    for (let frame = 0; frame < 180; frame += 1) {
-      await game.step({ frames: 1 });
-      egress = await game.player.position();
-      if (egress.x > stable.x + 0.75) break;
+    const walkTo = async (
+      target: [number, number],
+      label: string,
+      maxFrames = 240,
+      tolerance = 0.65,
+    ) => {
+      let position = await game.player.position();
+      const initialDistance = Math.hypot(
+        position.x - target[0],
+        position.z - target[1],
+      );
+      let bestDistance = initialDistance;
+      let stalledFrames = 0;
+      await game.input.lookAtWorldPoint([
+        target[0],
+        position.y + 1.04,
+        target[1],
+      ]);
+      await game.input.set("right_hand.thumbstick", [0, 1]);
+      for (let frame = 0; frame < maxFrames; frame += 1) {
+        if (frame > 0 && frame % 12 === 0) {
+          await game.input.lookAtWorldPoint([
+            target[0],
+            position.y + 1.04,
+            target[1],
+          ]);
+        }
+        await game.step({ frames: 1 });
+        position = await game.player.position();
+        const distance = Math.hypot(
+          position.x - target[0],
+          position.z - target[1],
+        );
+        if (distance < tolerance) {
+          break;
+        }
+        if (distance < bestDistance - 0.05) {
+          bestDistance = distance;
+          stalledFrames = 0;
+        } else {
+          stalledFrames += 1;
+        }
+        if (stalledFrames >= 90 || distance > initialDistance + 3) {
+          break;
+        }
+      }
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      assert.ok(
+        Math.hypot(position.x - target[0], position.z - target[1]) < tolerance,
+        `${label} must be reachable with ordinary input; target=${JSON.stringify(target)}, ` +
+          `ended=${JSON.stringify(position)}`,
+      );
+      return position;
+    };
+
+    // Follow the collision-supported arrival-side U-route from the y38.8
+    // landing. Crossing x=42 takes the authored small step down to y38.4;
+    // this is ordinary movement, not another top-out or relocation.
+    const arrivalSideRoute: [number, number][] = [
+      [36.4, -10.8],
+      [35.1, -14],
+      [34, -15.6],
+      [34.95, -16.4],
+    ];
+    for (const [index, waypoint] of arrivalSideRoute.entries()) {
+      await walkTo(waypoint, `arrival-side U-route waypoint ${index + 1}`);
     }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    await game.step({ frames: 60 });
-    egress = await game.player.position();
-    const egressSupport = await game.raycast({
-      start: [egress.x, egress.y + 0.1, egress.z],
-      end: [egress.x, egress.y - 3, egress.z],
+    const lowerStep = await walkTo([37, -18], "arrival-side lower-route step");
+    const lowerStepSupport = await game.raycast({
+      start: [lowerStep.x, lowerStep.y + 0.1, lowerStep.z],
+      end: [lowerStep.x, lowerStep.y - 3, lowerStep.z],
       collision_groups: ["world", "entity", "selectable"],
       ignore_sensors: true,
     });
     assert.ok(
-      egress.x > stable.x + 0.7 &&
-        Math.abs(egress.y - stable.y) < 0.08 &&
-        egressSupport.hit_point !== null &&
-        Math.abs(egressSupport.hit_point[1] - 42) < 0.05 &&
-        egressSupport.hit_normal !== null &&
-        egressSupport.hit_normal[1] > 0.5,
-      `the selected top-out must permit ordinary eastward egress on y42; ` +
-        `stable=${JSON.stringify(stable)}, egress=${JSON.stringify(egress)}, ` +
-        `support=${JSON.stringify(egressSupport)}`,
+      Math.abs(lowerStep.y - lowerBodyY) < 0.08 &&
+        lowerStepSupport.hit_point !== null &&
+        Math.abs(
+          lowerStepSupport.hit_point[1] - lowerFloorY,
+        ) < 0.05 &&
+        lowerStepSupport.hit_normal !== null &&
+        lowerStepSupport.hit_normal[1] > 0.5,
+      `ordinary movement must turn around the authored wall and step from y38.8 onto the connected y38.4 lower route; ` +
+        `position=${JSON.stringify(lowerStep)}, support=${JSON.stringify(lowerStepSupport)}`,
+    );
+    const lowerStepRoute: [number, number][] = [
+      [41.6, -18],
+      [42.2, -16.8],
+      [42.2, -15.1],
+    ];
+    for (const [index, waypoint] of lowerStepRoute.entries()) {
+      await walkTo(waypoint, `lower-route step waypoint ${index + 1}`);
+    }
+    const routeToSecurityGate: [number, number][] = [
+      [42.4, -14],
+      [44, -11.2],
+      [48, -11.2],
+      [51.2, -11.2],
+      [57.6, -11.2],
+      [61.2, -11.2],
+      [65.6, -12.8],
+      [65.6, -15.8],
+      [66.8, -17.2],
+    ];
+    for (const [index, waypoint] of routeToSecurityGate.entries()) {
+      await walkTo(waypoint, `Security route waypoint ${index + 1}`);
+    }
+
+    // Enter the real Security tripwire. The door's vertical travel is durable
+    // evidence that its sibling script received the physical ENTER event, and
+    // reaching the terminal beyond it matches the original game's route.
+    await walkTo(
+      [securityTripwire.position[0], securityTripwire.position[2]],
+      "tripwire842",
+    );
+    await game.step({ frames: 120 });
+    const openedSecurityDoor = await game.entities.detail(securityDoor.id);
+    assert.ok(
+      openedSecurityDoor.position[1] > securityDoorClosedY + 1,
+      `physical tripwire842 ENTER must open door841; ` +
+        `door-y=${securityDoorClosedY}->${openedSecurityDoor.position[1]}`,
+    );
+
+    const routeToSecurity: [number, number][] = [
+      [67.75, -18],
+      [68, -18],
+      [71, -15.6],
+      [72.6, -15.2],
+    ];
+    for (const [index, waypoint] of routeToSecurity.entries()) {
+      await walkTo(waypoint, `post-door Security waypoint ${index + 1}`);
+    }
+    const terminalApproach = await walkTo(
+      [securityTerminal.position[0], securityTerminal.position[2]],
+      "Security Control Station",
+      480,
+      1.2,
+    );
+    await game.step({ frames: 60 });
+    const terminalStable = await game.player.position();
+    const terminalSupport = await game.raycast({
+      start: [terminalStable.x, terminalStable.y + 0.1, terminalStable.z],
+      end: [terminalStable.x, terminalStable.y - 3, terminalStable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(
+        terminalApproach.x - securityTerminal.position[0],
+        terminalApproach.z - securityTerminal.position[2],
+      ) < 1.2 &&
+        Math.hypot(
+          terminalStable.x - securityTerminal.position[0],
+          terminalStable.z - securityTerminal.position[2],
+        ) < 1.5 &&
+        terminalSupport.hit &&
+        terminalSupport.hit_normal !== null &&
+        terminalSupport.hit_normal[1] > 0.5,
+      `ordinary input must cross open door841 and settle at Security Control Station; ` +
+        `approach=${JSON.stringify(terminalApproach)}, stable=${JSON.stringify(terminalStable)}, ` +
+        `support=${JSON.stringify(terminalSupport)}, terminal=${JSON.stringify(securityTerminal.position)}`,
     );
   },
 );
