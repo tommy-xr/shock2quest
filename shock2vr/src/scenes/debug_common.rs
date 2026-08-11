@@ -129,6 +129,7 @@ impl DebugSceneBuilder {
 
         let abstract_mission = AbstractMission {
             scene_objects,
+            animated_lightmaps: None,
             song_params: SongParams {
                 song: String::new(),
             },

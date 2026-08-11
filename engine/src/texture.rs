@@ -66,6 +66,35 @@ impl Texture {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    /// Replace one RGB rectangle without reallocating the texture. Animated
+    /// Dark lightmaps use this for rare switch transitions; the ordinary
+    /// render path keeps sampling the same shared texture object.
+    pub fn update_rgb_region(&self, x: u32, y: u32, width: u32, height: u32, pixels: &[u8]) {
+        assert!(x + width <= self.width);
+        assert!(y + height <= self.height);
+        assert_eq!(pixels.len(), (width * height * 3) as usize);
+
+        unsafe {
+            gl::BindTexture(gl::TEXTURE_2D, self.gl_id);
+            // RGB rows are not necessarily four-byte aligned (many Dark
+            // lightmaps are odd widths), so override OpenGL's default while
+            // this tightly-packed slice is uploaded.
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+            gl::TexSubImage2D(
+                gl::TEXTURE_2D,
+                0,
+                x as i32,
+                y as i32,
+                width as i32,
+                height as i32,
+                gl::RGB,
+                gl::UNSIGNED_BYTE,
+                pixels.as_ptr() as *const c_void,
+            );
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 4);
+        }
+    }
 }
 
 impl Drop for Texture {

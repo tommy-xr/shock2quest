@@ -10,10 +10,158 @@ use crate::{
     importers::TEXTURE_IMPORTER, properties::RenderType, util::load_multiple_textures_for_family,
 };
 
+/// GPU scene plus the sparse controller for authored switchable lightmaps.
+pub struct MissionScene {
+    pub objects: Vec<SceneObject>,
+    pub animated_lightmaps: AnimatedLightmapController,
+}
+
+struct AnimatedLightmapRegion {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    base_pixels: Vec<u8>,
+    layers: Vec<super::SwitchableLightmapLayer>,
+    dirty: bool,
+}
+
+/// Rare state changes update only the affected atlas rectangles. The ordinary
+/// frame shader remains the same single lightmap sample on desktop and Quest.
+pub struct AnimatedLightmapController {
+    texture: Rc<Texture>,
+    regions: Vec<AnimatedLightmapRegion>,
+    light_to_regions: HashMap<i16, Vec<usize>>,
+    intensities: HashMap<i16, f32>,
+    compose_scratch: Vec<u8>,
+}
+
+impl AnimatedLightmapController {
+    fn new(level: &crate::mission::SystemShock2Level, texture: Rc<Texture>) -> Self {
+        let mut regions = Vec::new();
+        let mut light_to_regions: HashMap<i16, Vec<usize>> = HashMap::new();
+
+        for light_info in level.cells.iter().flat_map(|cell| &cell.lights) {
+            let Some(base_pixels) = &light_info.base_pixels else {
+                continue;
+            };
+            if light_info.switchable_layers.is_empty() {
+                continue;
+            }
+
+            let placement = light_info.texture_pack_result;
+            let region_index = regions.len();
+            for layer in &light_info.switchable_layers {
+                light_to_regions
+                    .entry(layer.light_number)
+                    .or_default()
+                    .push(region_index);
+            }
+            regions.push(AnimatedLightmapRegion {
+                x: (placement.uv_offset_x * texture.width() as f32).round() as u32,
+                y: (placement.uv_offset_y * texture.height() as f32).round() as u32,
+                width: light_info.lx as u32,
+                height: light_info.ly as u32,
+                base_pixels: base_pixels.clone(),
+                layers: light_info.switchable_layers.clone(),
+                dirty: false,
+            });
+        }
+
+        tracing::debug!(
+            lights = light_to_regions.len(),
+            regions = regions.len(),
+            "prepared switchable lightmaps"
+        );
+        Self {
+            texture,
+            regions,
+            light_to_regions,
+            intensities: HashMap::new(),
+            compose_scratch: Vec::new(),
+        }
+    }
+
+    /// Queue one authored light value. Repeated effects in a script batch mark
+    /// rectangles only; [`flush`](Self::flush) recomposes each at most once.
+    pub fn set_light_intensity(&mut self, light_number: i16, intensity: f32) -> bool {
+        let Some(affected_regions) = self.light_to_regions.get(&light_number) else {
+            return false;
+        };
+        let intensity = intensity.clamp(0.0, 1.0);
+        if self.intensities.get(&light_number).copied() == Some(intensity) {
+            return true;
+        }
+
+        self.intensities.insert(light_number, intensity);
+        for &region_index in affected_regions {
+            self.regions[region_index].dirty = true;
+        }
+        true
+    }
+
+    /// Upload every dirty rectangle. Cost scales with the authored affected
+    /// pixels, not the 4096² atlas or the total entity count.
+    pub fn flush(&mut self) {
+        for region in &mut self.regions {
+            if !region.dirty {
+                continue;
+            }
+            compose_region(
+                &region.base_pixels,
+                &region.layers,
+                &self.intensities,
+                &mut self.compose_scratch,
+            );
+            self.texture.update_rgb_region(
+                region.x,
+                region.y,
+                region.width,
+                region.height,
+                &self.compose_scratch,
+            );
+            region.dirty = false;
+        }
+    }
+
+    pub fn light_count(&self) -> usize {
+        self.light_to_regions.len()
+    }
+
+    pub fn region_count(&self) -> usize {
+        self.regions.len()
+    }
+}
+
+fn compose_region(
+    base_pixels: &[u8],
+    layers: &[super::SwitchableLightmapLayer],
+    intensities: &HashMap<i16, f32>,
+    output: &mut Vec<u8>,
+) {
+    output.clear();
+    output.extend_from_slice(base_pixels);
+    for layer in layers {
+        let intensity = intensities
+            .get(&layer.light_number)
+            .copied()
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        if intensity <= 0.0 {
+            continue;
+        }
+        for (target, contribution) in output.iter_mut().zip(&layer.pixels) {
+            *target = (*target as f32 + *contribution as f32 * intensity)
+                .min(255.0)
+                .round() as u8;
+        }
+    }
+}
+
 pub fn to_scene(
     level: &crate::mission::SystemShock2Level,
     asset_cache: &mut AssetCache,
-) -> Vec<SceneObject> {
+) -> MissionScene {
     let lightmap_textures = level.lightmap_atlas.generate_textures();
     let tex = lightmap_textures.get(0).unwrap();
     let lightmap_texture = tex.clone();
@@ -116,5 +264,47 @@ pub fn to_scene(
         scene_objects.push(scene_object1)
     }
 
-    scene_objects
+    MissionScene {
+        objects: scene_objects,
+        animated_lightmaps: AnimatedLightmapController::new(level, lightmap_texture),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mission::SwitchableLightmapLayer;
+
+    #[test]
+    fn switchable_layers_add_to_static_light_and_saturate() {
+        let layers = vec![
+            SwitchableLightmapLayer {
+                light_number: 195,
+                pixels: vec![100, 20, 0],
+            },
+            SwitchableLightmapLayer {
+                light_number: 311,
+                pixels: vec![80, 80, 80],
+            },
+        ];
+        let intensities = HashMap::from([(195, 1.0), (311, 0.5)]);
+        let mut output = Vec::new();
+
+        compose_region(&[140, 200, 250], &layers, &intensities, &mut output);
+
+        assert_eq!(output, vec![255, 255, 255]);
+    }
+
+    #[test]
+    fn absent_light_intensity_leaves_static_pixels_unchanged() {
+        let layers = vec![SwitchableLightmapLayer {
+            light_number: 195,
+            pixels: vec![100, 100, 100],
+        }];
+        let mut output = Vec::new();
+
+        compose_region(&[10, 20, 30], &layers, &HashMap::new(), &mut output);
+
+        assert_eq!(output, vec![10, 20, 30]);
+    }
 }

@@ -7,6 +7,7 @@ mod apparition;
 mod auto_install_soft;
 mod base_button;
 mod base_elevator;
+mod base_light;
 mod base_monster;
 mod base_room;
 mod camera_alert;
@@ -128,6 +129,7 @@ use self::{
     auto_install_soft::AutoInstallSoft,
     base_button::BaseButton,
     base_elevator::BaseElevator,
+    base_light::BaseLight,
     base_monster::BaseMonster,
     camera_alert::CameraAlert,
     core_room::*,
@@ -1137,7 +1139,7 @@ impl ScriptWorld {
             // TODO: Handle keypad code
             "ammoscript" => Box::new(NoopScript::new()),
             //"BaseElevator" => Box::new(UnimplementedScript::new(&name)),
-            "baselight" => Box::new(NoopScript {}),
+            "baselight" => Box::new(BaseLight::new()),
             //"baseai" => Box::new(PanicOnLoadScript::new(&script_name)),
             "baseai" => Box::new(NoopScript::new()),
             "basemonster" => Box::new(BaseMonster::new()),

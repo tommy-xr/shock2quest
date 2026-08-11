@@ -37,7 +37,7 @@ use dark::{
     },
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropClassTag, PropCreature,
+        PropAIAlertness, PropAIMode, PropAmbientHacked, PropAnimLight, PropClassTag, PropCreature,
         PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
         PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
@@ -473,6 +473,7 @@ pub struct MissionCore {
     pub physics: PhysicsWorld,
     pub script_world: ScriptWorld,
     pub scene_objects: Vec<SceneObject>,
+    pub animated_lightmaps: Option<dark::mission::AnimatedLightmapController>,
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
     /// Failed-animation suppression state per entity: the failing key, a
     /// countdown (frames), and whether a suppressed request is owed a
@@ -584,6 +585,7 @@ fn restore_saved_script_namespaces(
 
 pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
+    pub animated_lightmaps: Option<dark::mission::AnimatedLightmapController>,
     pub song_params: SongParams,
     pub room_db: RoomDatabase,
     pub physics_geometry: Option<Collider>,
@@ -614,6 +616,7 @@ impl MissionCore {
         let start = SystemTime::now();
         info!("starting level load");
         let scene = abstract_mission.scene_objects;
+        let mut animated_lightmaps = abstract_mission.animated_lightmaps;
         let duration: Duration = start.elapsed().unwrap();
         info!("loading level took {}s", duration.as_secs_f32());
 
@@ -1201,6 +1204,18 @@ impl MissionCore {
         // Per-frame AI pathfind budget, refilled at the top of each update
         world.add_unique(crate::pathfinding::PathfindingFrameBudget::new());
 
+        // The atlas is initially packed with static lightmaps only. Restore
+        // every instantiated light's persisted value once at load, then later
+        // script effects update just the rectangles touched by a state change.
+        if let Some(controller) = &mut animated_lightmaps {
+            world.run(|lights: View<PropAnimLight>| {
+                for light in lights.iter() {
+                    controller.set_light_intensity(light.light_number, light.initial_intensity());
+                }
+            });
+            controller.flush();
+        }
+
         MissionCore {
             interaction,
             level_name: mission,
@@ -1215,6 +1230,7 @@ impl MissionCore {
             id_to_particle_system: HashMap::new(),
             template_name_to_template_id,
             scene_objects: scene,
+            animated_lightmaps,
             physics,
             world,
             id_to_physics,
@@ -4569,6 +4585,24 @@ impl MissionCore {
                         self.world.add_component(entity_id, PropObjState(state));
                     }
                 }
+                Effect::SetAnimatedLight {
+                    entity_id,
+                    intensity,
+                    inactive,
+                } => {
+                    let light_number =
+                        self.world
+                            .run(|mut lights: ViewMut<PropAnimLight>| -> Option<i16> {
+                                let light = (&mut lights).get(entity_id).ok()?;
+                                light.inactive = inactive;
+                                Some(light.light_number)
+                            });
+                    if let (Some(light_number), Some(controller)) =
+                        (light_number, &mut self.animated_lightmaps)
+                    {
+                        controller.set_light_intensity(light_number, intensity);
+                    }
+                }
                 Effect::SetReplicatorHackedContents {
                     entity_id,
                     contents,
@@ -5064,6 +5098,10 @@ impl MissionCore {
                     game_log!(WARN, "Unhandled effect: {effect:?}");
                 }
             }
+        }
+
+        if let Some(controller) = &mut self.animated_lightmaps {
+            controller.flush();
         }
 
         global_effects
@@ -6781,6 +6819,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .or(v_ecology.get(id).ok().map(|_| 0))
             },
         );
+        let animated_light = self.world.run(|v: View<PropAnimLight>| {
+            v.get(id)
+                .ok()
+                .map(|light| (light.light_number, light.initial_intensity()))
+        });
 
         self.world.run(
             |v_pos: View<dark::properties::PropPosition>,
@@ -6874,6 +6917,16 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                             2 => "Alert".to_string(),
                             other => format!("Unknown({other})"),
                         },
+                    });
+                }
+                if let Some((light_number, intensity)) = animated_light {
+                    properties.push(DebugPropertyInfo {
+                        name: "AnimLightNumber".to_string(),
+                        value: light_number.to_string(),
+                    });
+                    properties.push(DebugPropertyInfo {
+                        name: "AnimLightIntensity".to_string(),
+                        value: format!("{intensity:.3}"),
                     });
                 }
 
