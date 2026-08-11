@@ -583,6 +583,27 @@ fn restore_saved_script_namespaces(
         .unwrap_or_else(|error| panic!("unable to restore held-item script state: {error}"));
 }
 
+/// Reinstall the interaction controller's held-item state from a save.
+///
+/// Restoring both hands through a flat controller wields the second entity and
+/// produces effects that holster the displaced first entity. The caller must
+/// apply those effects after `PlayerInfo` has installed the backpack entity.
+fn restore_held_item_interaction(
+    interaction: &mut dyn PlayerInteraction,
+    world: &World,
+    left_hand_entity: Option<EntityId>,
+    right_hand_entity: Option<EntityId>,
+) -> Vec<VirtualHandEffect> {
+    let mut effects = Vec::new();
+    if let Some(entity_id) = left_hand_entity {
+        effects.extend(interaction.grab(world, entity_id, vr_config::Handedness::Left));
+    }
+    if let Some(entity_id) = right_hand_entity {
+        effects.extend(interaction.grab(world, entity_id, vr_config::Handedness::Right));
+    }
+    effects
+}
+
 pub struct AbstractMission {
     pub scene_objects: Vec<SceneObject>,
     pub animated_lightmaps: Option<dark::mission::AnimatedLightmapController>,
@@ -969,18 +990,21 @@ impl MissionCore {
             &held_script_entity_id_map,
         );
 
-        // If the player is holding anything, we should un-physical it.
-        // NB: these grabs discard their effects (there is no `self` yet to run
-        // them against), so a flat load of a VR two-handed save strands the
-        // displaced weapon - see #787.
+        // Restore the interaction controller now, but defer its effects until
+        // PlayerInfo below has installed the backpack they may store into.
+
+        let held_restore_effects = restore_held_item_interaction(
+            interaction.as_mut(),
+            &world,
+            left_hand_entity,
+            right_hand_entity,
+        );
 
         if let Some(entity_id) = left_hand_entity {
-            interaction.grab(&world, entity_id, vr_config::Handedness::Left);
             make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
         };
 
         if let Some(entity_id) = right_hand_entity {
-            interaction.grab(&world, entity_id, vr_config::Handedness::Right);
             make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
         };
 
@@ -1216,7 +1240,7 @@ impl MissionCore {
             controller.flush();
         }
 
-        MissionCore {
+        let mut mission_core = MissionCore {
             interaction,
             level_name: mission,
             entity_info: entity_info_rc.clone(),
@@ -1257,7 +1281,9 @@ impl MissionCore {
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
             screen_fade_texture,
-        }
+        };
+        mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
+        mission_core
     }
 
     fn player_is_alive(&self) -> bool {
@@ -7988,6 +8014,34 @@ mod saved_script_namespace_tests {
         let restored = loaded_scripts.save_states().unwrap();
         assert_eq!(saved_value(&restored, new_mission), 11);
         assert_eq!(saved_value(&restored, new_held), 22);
+    }
+}
+
+#[cfg(test)]
+mod held_item_restore_tests {
+    use super::*;
+
+    /// #787: flat mode only has one wield slot, so restoring a VR save with
+    /// two held items must retain the first grab's displacement effects. The
+    /// load path applies this batch after the backpack is available.
+    #[test]
+    fn flat_two_hand_restore_returns_effect_that_stores_displaced_item() {
+        let mut world = World::new();
+        let left = world.add_entity(());
+        let right = world.add_entity(());
+        let mut interaction = FlatInteraction::new();
+
+        let effects =
+            restore_held_item_interaction(&mut interaction, &world, Some(left), Some(right));
+
+        assert_eq!(interaction.held_entities(), (Some(right), None));
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::StoreItem { entity_id } if *entity_id == left
+            )),
+            "the displaced left-hand item must be returned to the backpack, got {effects:?}"
+        );
     }
 }
 
