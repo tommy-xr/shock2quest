@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { findRepoRoot, GameServer } from "../src/index.js";
 import type { EntitySummary, RayCastResult } from "../src/index.js";
 
 // End-to-end test for flat (desktop-style) ladder climbing.
@@ -16,6 +18,20 @@ import type { EntitySummary, RayCastResult } from "../src/index.js";
 // presses the player against the ladder collider (y stays at floor height), so
 // the ascent assertion fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
+
+function findSavePath(saveName: string): string | undefined {
+  const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
+  const roots = [
+    process.env.DARK_ASSET_PATH,
+    join(repoRoot, "Data"),
+    join(repoRoot, "..", "Data"),
+  ].filter((root): root is string => Boolean(root));
+  for (const root of roots) {
+    const path = join(root, "saves", `${saveName}.sav`);
+    if (existsSync(path)) return path;
+  }
+  return undefined;
+}
 
 type LadderColumn = { x: number; z: number; ys: number[] };
 
@@ -576,9 +592,14 @@ test(
 // player through the local lip, restore the crouched capsule on the y=38 deck,
 // and leave standing refused until the player crawls clear of the pipe.
 test(
-  "flat climbing: rick1 ladder 488 reaches supported deck toward ladder 499",
+  "flat climbing: rick1 ladder 488 route tops out ladder 499",
   { skip: !e2eEnabled, timeout: 600_000 },
-  async () => {
+  async (t) => {
+    const saveName = `rick1_ladder_488_to_499_${Date.now()}`;
+    t.after(() => {
+      const path = findSavePath(saveName);
+      if (path) rmSync(path, { force: true });
+    });
     await using game = await GameServer.launch({
       mission: "rick1.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
@@ -595,12 +616,32 @@ test(
     const nextLadder = ladders.find((entity) => entity.template_id === 499);
     assert.ok(ladder, "rick1 should contain authored ladder object 488");
     assert.ok(nextLadder, "rick1 should contain authored ladder object 499");
+    const longPipes = (
+      await game.entities.list({ filter: "RickPipe_2x16", limit: 100 })
+    ).entities;
+    const firstPipe = longPipes.find((entity) => entity.template_id === 640);
+    const secondPipe = longPipes.find((entity) => entity.template_id === 639);
+    const overheadPipe = (
+      await game.entities.list({ filter: "Pipe 24x4", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 633);
+    assert.ok(firstPipe, "rick1 should contain authored pipe object 640");
+    assert.ok(secondPipe, "rick1 should contain authored pipe object 639");
+    assert.ok(overheadPipe, "rick1 should contain authored overhead pipe 633");
+    for (const pipe of [overheadPipe, firstPipe, secondPipe]) {
+      const bodies = (await game.physics.bodies({ entityId: pipe.id })).bodies;
+      assert.ok(
+        bodies.length > 0 && bodies.every((body) => body.blocks_player),
+        `the authentic route must retain authored pipe collision; ` +
+          `pipe=${pipe.template_id}, bodies=${JSON.stringify(bodies)}`,
+      );
+    }
     const [ladderX, ladderY, ladderZ] = ladder.position;
 
     // Geometry-relative setup at the campaign's reachable south-face pose.
-    // All motion from here through the climb, release, and onward deck crawl is
-    // ordinary production input with no jump or direct relocation. Crouch is
-    // held explicitly: the planner must never silently shrink the player.
+    // All motion from here is ordinary production input with no direct
+    // relocation. The ladder top-out itself uses no jump; the authored onward
+    // route later uses explicit crouched jumps. Crouch is held explicitly: the
+    // planner must never silently shrink the player.
     await game.player.teleport({
       x: ladderX,
       y: ladderY - 2.48,
@@ -714,38 +755,377 @@ test(
     await game.input.set("crouch", 1);
     await game.step({ frames: 5 });
 
-    const [nextX, , nextZ] = nextLadder.position;
-    const distanceBefore = Math.hypot(
-      refusedStand.x - nextX,
-      refusedStand.z - nextZ,
-    );
-    await game.input.lookAtWorldPoint([nextX, refusedStand.y + 0.8, nextZ]);
-    await game.input.set("right_hand.thumbstick", [0, 1]);
-    let onward = refusedStand;
-    for (let elapsed = 0; elapsed < 90; elapsed += 1) {
-      await game.step({ frames: 1 });
-      onward = await game.player.position();
-      if (Math.hypot(onward.x - nextX, onward.z - nextZ) < distanceBefore - 1.5) {
-        break;
+    type RoutePose = typeof refusedStand;
+    const moveUntil = async (
+      target: [number, number, number],
+      reached: (position: RoutePose) => boolean,
+      maxFrames: number,
+      jump: boolean,
+    ): Promise<{ position: RoutePose; peak: RoutePose }> => {
+      let position = await game.player.position();
+      let peak = position;
+      await game.input.lookAtWorldPoint(target);
+      await game.input.set("right_hand.thumbstick", [0, 1]);
+      if (jump) {
+        await game.input.setJump(true);
+        await game.step({ frames: 2 });
+        await game.input.setJump(false);
       }
-    }
-    await game.input.set("right_hand.thumbstick", [0, 0]);
-    const distanceAfter = Math.hypot(onward.x - nextX, onward.z - nextZ);
-    const onwardSupport = await game.raycast({
-      start: [onward.x, onward.y, onward.z],
-      end: [onward.x, onward.y - 3, onward.z],
+      for (let elapsed = 0; elapsed < maxFrames; elapsed += 1) {
+        await game.step({ frames: 1 });
+        position = await game.player.position();
+        if (position.y > peak.y) peak = position;
+        if (reached(position)) break;
+      }
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      // Some route gates are crossed while the crouched body is still
+      // descending. Let the ordinary controller settle before asserting the
+      // exact supported floor offset at the new side of the obstacle.
+      await game.step({ frames: 60 });
+      return { position: await game.player.position(), peak };
+    };
+    const supportedCrouch = async (position: RoutePose) => {
+      const support = await game.raycast({
+        start: [position.x, position.y, position.z],
+        end: [position.x, position.y - 3, position.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      const frame = await game.info();
+      return {
+        support,
+        valid:
+          support.hit &&
+          support.distance !== null &&
+          Math.abs(support.distance - crouchedFloorOffset) < 0.08 &&
+          support.hit_normal !== null &&
+          support.hit_normal[1] > 0.5 &&
+          Math.abs(frame.player.camera_offset[1] - 0.48) < 0.02,
+      };
+    };
+
+    // The real route turns right/east through the steam pipes. Pipe 633 ends
+    // just north of the shared long-pipe centerline; a small southward offset
+    // derives the authored crouched-vault window while keeping every pipe
+    // collider live. This is ordinary input only, with no relocation after
+    // the initial ladder setup.
+    const vaultZ = firstPipe.position[2] - 0.25;
+    const southStage = await moveUntil(
+      [refusedStand.x, refusedStand.y + 0.5, vaultZ],
+      (position) => Math.abs(position.z - vaultZ) < 0.15,
+      240,
+      false,
+    );
+    const stageCeiling = await game.raycast({
+      start: [
+        southStage.position.x,
+        southStage.position.y,
+        southStage.position.z,
+      ],
+      end: [
+        southStage.position.x,
+        southStage.position.y + 4,
+        southStage.position.z,
+      ],
       collision_groups: ["world", "entity", "selectable"],
       ignore_sensors: true,
     });
     assert.ok(
-      distanceAfter < distanceBefore - 1 &&
-        onwardSupport.hit &&
-        onwardSupport.hit_normal !== null &&
-        onwardSupport.hit_normal[1] > 0.5,
-      `the recovered deck must permit ordinary movement toward ladder 499; ` +
-        `before=${distanceBefore.toFixed(2)}, after=${distanceAfter.toFixed(2)}, ` +
-        `stable=${JSON.stringify(refusedStand)}, onward=${JSON.stringify(onward)}, ` +
-        `support=${JSON.stringify(onwardSupport)}`,
+      Math.abs(southStage.position.z - vaultZ) < 0.2 &&
+        stageCeiling.hit &&
+        stageCeiling.distance !== null &&
+        stageCeiling.distance > 1.7,
+      `the ordinary route must reach the authored vault window south of pipe 633; ` +
+        `target_z=${vaultZ.toFixed(3)}, stage=${JSON.stringify(southStage.position)}, ` +
+        `ceiling=${JSON.stringify(stageCeiling)}`,
+    );
+
+    const firstThreshold = firstPipe.position[0] + 0.77;
+    const firstVault = await moveUntil(
+      [firstPipe.position[0] + 2, southStage.position.y + 0.8, vaultZ],
+      (position) => position.x >= firstThreshold,
+      120,
+      true,
+    );
+    const firstSupport = await supportedCrouch(firstVault.position);
+    assert.ok(
+      firstVault.position.x >= firstThreshold && firstSupport.valid,
+      `explicit crouched jump+forward must cross intact pipe 640 onto support; ` +
+        `threshold=${firstThreshold.toFixed(3)}, stage=${JSON.stringify(southStage.position)}, ` +
+        `peak=${JSON.stringify(firstVault.peak)}, landed=${JSON.stringify(firstVault.position)}, ` +
+        `support=${JSON.stringify(firstSupport.support)}`,
+    );
+
+    const secondStage = await moveUntil(
+      [secondPipe.position[0], firstVault.position.y + 0.5, vaultZ],
+      (position) =>
+        position.x >= secondPipe.position[0] - 0.88 &&
+        Math.abs(position.z - vaultZ) < 0.15,
+      240,
+      false,
+    );
+    const secondThreshold = secondPipe.position[0] + 0.77;
+    const secondVault = await moveUntil(
+      [secondPipe.position[0] + 2, secondStage.position.y + 0.8, vaultZ],
+      (position) => position.x >= secondThreshold,
+      120,
+      true,
+    );
+    const secondSupport = await supportedCrouch(secondVault.position);
+    assert.ok(
+      secondStage.position.x >= secondPipe.position[0] - 0.9 &&
+        secondVault.position.x >= secondThreshold &&
+        secondSupport.valid,
+      `explicit crouched jump+forward must cross intact pipe 639 onto support; ` +
+        `threshold=${secondThreshold.toFixed(3)}, stage=${JSON.stringify(secondStage.position)}, ` +
+        `peak=${JSON.stringify(secondVault.peak)}, landed=${JSON.stringify(secondVault.position)}, ` +
+        `support=${JSON.stringify(secondSupport.support)}`,
+    );
+
+    const [nextX, , nextZ] = nextLadder.position;
+    // Center just beyond Pipe639's east face before crossing the shaft. The
+    // floor strip on its far side is narrow, so carrying the vault's residual
+    // eastward offset into the jump can miss the authored lower corridor.
+    const shaftX = secondThreshold + 0.1;
+    const northEdge = await moveUntil(
+      [shaftX, secondVault.position.y + 0.5, nextZ],
+      (position) => position.z >= firstPipe.position[2] + 1.62,
+      240,
+      false,
+    );
+    const northJump = await moveUntil(
+      [shaftX, northEdge.position.y + 0.8, nextZ],
+      (position) => position.z >= nextZ - 0.65,
+      180,
+      true,
+    );
+    const corridorSupport = await supportedCrouch(northJump.position);
+    assert.ok(
+      northJump.position.z >= nextZ - 0.7 &&
+        corridorSupport.valid &&
+        corridorSupport.support.hit_point !== null &&
+        Math.abs(corridorSupport.support.hit_point[1] - 32.8) < 0.05,
+      `ordinary crouched jump must cross the north shaft onto the lower corridor; ` +
+        `edge=${JSON.stringify(northEdge.position)}, peak=${JSON.stringify(northJump.peak)}, ` +
+        `landed=${JSON.stringify(northJump.position)}, ` +
+        `support=${JSON.stringify(corridorSupport.support)}`,
+    );
+
+    // Traverse west along the supported lower corridor, staying south of the
+    // ladder's thin edge. Near 499, an explicit crouched hop carries the body
+    // onto the authored y34 strip at its north face.
+    const nextContactZ = northJump.position.z;
+    const westStage = await moveUntil(
+      [nextX, northJump.position.y + 0.8, nextContactZ],
+      (position) => Math.abs(position.x - nextX) < 0.15,
+      900,
+      false,
+    );
+    const lowerSupport = await supportedCrouch(westStage.position);
+    assert.ok(
+      lowerSupport.valid &&
+        lowerSupport.support.hit_point !== null &&
+        Math.abs(lowerSupport.support.hit_point[1] - 32.8) < 0.05,
+      `the west traverse must remain supported below 499; ` +
+        `stage=${JSON.stringify(westStage.position)}, support=${JSON.stringify(lowerSupport.support)}`,
+    );
+
+    // Crawl just over the south edge of the y34 strip. The resulting
+    // collision-resolved pose is intentionally not a landing: it is the
+    // authentic low starting edge for the explicit hop onto the strip.
+    await game.input.lookAtWorldPoint([
+      nextX,
+      westStage.position.y + 0.8,
+      nextZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 0.2]);
+    let hopStage = westStage.position;
+    for (let elapsed = 0; elapsed < 60; elapsed += 1) {
+      await game.step({ frames: 1 });
+      hopStage = await game.player.position();
+      if (hopStage.z <= nextZ - 0.56) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    hopStage = await game.player.position();
+    const hopStageFrame = await game.info();
+    assert.ok(
+      hopStage.z < nextZ - 0.55 &&
+        hopStage.z > nextZ - 0.8 &&
+        hopStage.y > 33.2 &&
+        hopStage.y < 33.5 &&
+        Math.abs(hopStageFrame.player.camera_offset[1] - 0.48) < 0.02,
+      `ordinary movement must reach the authentic crouched south edge for the y34 hop; ` +
+        `corridor=${JSON.stringify(westStage.position)}, edge=${JSON.stringify(hopStage)}, ` +
+        `camera=${JSON.stringify(hopStageFrame.player.camera_offset)}`,
+    );
+
+    // The strip begins at a sharp lip. A two-frame production jump from the
+    // lower edge has latched horizontal momentum: neutralize the analog input
+    // at the geometry-relative threshold, then let that ordinary momentum
+    // settle the crouched body on the north-side y34 support.
+    await game.input.lookAtWorldPoint([
+      nextX,
+      hopStage.y + 4,
+      nextZ + 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 0.35]);
+    await game.input.setJump(true);
+    await game.step({ frames: 2 });
+    await game.input.setJump(false);
+    let hopPeak = hopStage;
+    let neutralizedAt: RoutePose | null = null;
+    for (let elapsed = 0; elapsed < 60; elapsed += 1) {
+      await game.step({ frames: 1 });
+      const position = await game.player.position();
+      if (position.y > hopPeak.y) hopPeak = position;
+      if (position.z >= nextZ - 0.356) {
+        neutralizedAt = position;
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const ladderContact = {
+      position: await game.player.position(),
+      peak: hopPeak,
+    };
+    const contactSupport = await supportedCrouch(ladderContact.position);
+    const contactRay = await game.raycast({
+      start: [ladderContact.position.x, ladderContact.position.y, ladderContact.position.z],
+      end: [nextX, ladderContact.position.y, nextZ],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      neutralizedAt !== null &&
+        Math.abs(ladderContact.position.x - nextX) < 0.2 &&
+        ladderContact.position.z > nextZ &&
+        contactSupport.valid &&
+        contactSupport.support.hit_point !== null &&
+        Math.abs(contactSupport.support.hit_point[1] - 34) < 0.05 &&
+        contactRay.hit &&
+        contactRay.entity_id === nextLadder.id &&
+        contactRay.distance !== null &&
+        contactRay.distance < 0.8,
+      `the production route from ladder 488 must reach 499's physical north face; ` +
+        `corridor=${JSON.stringify(northJump.position)}, ` +
+        `edge=${JSON.stringify(hopStage)}, neutralized=${JSON.stringify(neutralizedAt)}, ` +
+        `peak=${JSON.stringify(ladderContact.peak)}, ` +
+        `contact=${JSON.stringify(ladderContact.position)}, ` +
+        `ladder=${JSON.stringify(nextLadder.position)}, ` +
+        `support=${JSON.stringify(contactSupport.support)}, ray=${JSON.stringify(contactRay)}`,
+    );
+
+    const preSaveFrame = await game.info();
+    assert.ok(
+      Math.abs(preSaveFrame.player.camera_offset[1] - 0.48) < 0.02,
+      `ladder 499 contact must retain the explicit crouch; frame=${JSON.stringify(preSaveFrame.player)}`,
+    );
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 10 });
+    const loaded = await game.player.position();
+    const loadedFrame = await game.info();
+    assert.ok(
+      Math.hypot(
+        loaded.x - ladderContact.position.x,
+        loaded.y - ladderContact.position.y,
+        loaded.z - ladderContact.position.z,
+      ) < 0.15 &&
+        Math.abs(loadedFrame.player.camera_offset[1] - 0.48) < 0.02,
+      `save/load must preserve the crouched ladder 499 contact; ` +
+        `before=${JSON.stringify(ladderContact.position)}, after=${JSON.stringify(loaded)}, ` +
+        `camera=${JSON.stringify(loadedFrame.player.camera_offset)}`,
+    );
+
+    const loadedLadders = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities;
+    const loadedNextLadder = loadedLadders.find(
+      (entity) => entity.template_id === 499,
+    );
+    assert.ok(loadedNextLadder, "rick1 should restore authored ladder object 499");
+    const [loadedNextX, loadedNextY, loadedNextZ] = loadedNextLadder.position;
+    await game.input.set("crouch", 1);
+    await game.input.lookAtWorldPoint([
+      loadedNextX,
+      loadedNextY + 8,
+      loadedNextZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let landing499 = loaded;
+    let landing499Support: RayCastResult | null = null;
+    let peak499 = loaded;
+    for (let elapsed = 0; elapsed < 900; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing499 = await game.player.position();
+      if (landing499.y > peak499.y) peak499 = landing499;
+      if (landing499.y < 38.45 || landing499.y > 38.75) continue;
+      landing499Support = await game.raycast({
+        start: [landing499.x, landing499.y, landing499.z],
+        end: [landing499.x, landing499.y - 3, landing499.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      if (
+        landing499Support.hit &&
+        landing499Support.distance !== null &&
+        Math.abs(landing499Support.distance - crouchedFloorOffset) < 0.05 &&
+        landing499Support.hit_point !== null &&
+        Math.abs(landing499Support.hit_point[1] - 38) < 0.05 &&
+        landing499Support.hit_normal !== null &&
+        landing499Support.hit_normal[1] > 0.5
+      ) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      landing499Support?.hit &&
+        landing499Support.hit_point !== null &&
+        Math.abs(landing499Support.hit_point[1] - 38) < 0.05 &&
+        Math.abs(landing499.y - (38 + crouchedFloorOffset)) < 0.06 &&
+        landing499.z < loadedNextZ - 0.05 &&
+        Math.abs(landing499.x - loadedNextX) > 0.7,
+      `ordinary input after save/load must complete 499's crouched top-out onto the y38 deck; ` +
+        `contact=${JSON.stringify(loaded)}, peak=${JSON.stringify(peak499)}, ` +
+        `landing=${JSON.stringify(landing499)}, support=${JSON.stringify(landing499Support)}, ` +
+        `ladder=${JSON.stringify(loadedNextLadder.position)}`,
+    );
+
+    await game.step({ frames: 60 });
+    const stable499 = await game.player.position();
+    const stable499Support = await supportedCrouch(stable499);
+    assert.ok(
+      stable499Support.valid &&
+        stable499Support.support.hit_point !== null &&
+        Math.abs(stable499Support.support.hit_point[1] - 38) < 0.05 &&
+        Math.hypot(
+          stable499.x - landing499.x,
+          stable499.z - landing499.z,
+        ) < 0.15 &&
+        Math.abs(stable499.y - landing499.y) < 0.08,
+      `neutral input must remain stably supported after ladder 499 top-out; ` +
+        `landing=${JSON.stringify(landing499)}, stable=${JSON.stringify(stable499)}, ` +
+        `support=${JSON.stringify(stable499Support.support)}`,
+    );
+
+    const westEgress = await moveUntil(
+      [stable499.x - 10, stable499.y + 0.5, stable499.z],
+      (position) => position.x < stable499.x - 0.75,
+      180,
+      false,
+    );
+    const westSupport = await supportedCrouch(westEgress.position);
+    assert.ok(
+      westEgress.position.x < stable499.x - 0.7 &&
+        westSupport.valid &&
+        westSupport.support.hit_point !== null &&
+        Math.abs(westSupport.support.hit_point[1] - 38) < 0.05,
+      `ordinary westward input must leave ladder 499 on its connected y38 deck; ` +
+        `stable=${JSON.stringify(stable499)}, egress=${JSON.stringify(westEgress.position)}, ` +
+        `support=${JSON.stringify(westSupport.support)}`,
     );
   },
 );

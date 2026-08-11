@@ -321,6 +321,12 @@ const CLIMB_TOP_OUT_MAX_APPROACH_RECOVERY: f32 = CLIMB_TOP_OUT_DEEP_DROP;
 /// landing. The three route bases, five forward offsets, and eleven signed
 /// lateral offsets cover the complete independently bounded recovery grid.
 const CLIMB_TOP_OUT_MAX_LANDING_CANDIDATES: usize = 3 * 5 * 11;
+/// A pre-lip side recovery is considered only after the ordinary forward grid
+/// fails. Retreat samples span at most one active-profile radius at the
+/// contact-offset interval; each may try both sides of the existing lateral
+/// distance bound. Crouching is the largest grid: sixteen retreat samples by
+/// eight lateral samples by two sides.
+const CLIMB_TOP_OUT_MAX_PRE_LIP_SIDE_CANDIDATES: usize = 16 * 8 * 2;
 /// Egress validation samples a full standing stride at contact-offset
 /// intervals. It is a landing preference, not a safety requirement, so limit
 /// it to the first few already-safe candidates in each support tier.
@@ -1866,6 +1872,86 @@ fn climb_top_out_recovery_start(
 /// matching Dark's jump-through transition. Parented entity colliders remain
 /// live blockers throughout, and the final standing pose is validated against
 /// every collider, including level terrain.
+#[derive(Clone, Copy)]
+struct SupportedLanding {
+    sphere: Vector<Real>,
+    standing: Vector<Real>,
+    direct: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_pre_lip_side_landing(
+    validation_queries: &QueryPipeline,
+    probe_queries: &QueryPipeline,
+    probe_cross_end: Vector<Real>,
+    direction: Vector<Real>,
+    lateral: Vector<Real>,
+    compressed: &Ball,
+    standing: &Capsule,
+    compressed_radius: Real,
+    lateral_steps: usize,
+    standing_floor_offset: Real,
+    mantle_floor: Vector<Real>,
+    lip_patch: Option<&MantleLipPatch>,
+) -> Option<(Vector<Real>, Vector<Real>, Vector<Real>)> {
+    let retreat_steps = (compressed_radius / (PROBE_SKIN / SCALE_FACTOR)).ceil() as usize;
+    let mut evaluated = 0;
+    for retreat_step in 1..=retreat_steps {
+        let retreat = -direction * (retreat_step as Real * PROBE_SKIN / SCALE_FACTOR);
+        for lateral_step in 1..=lateral_steps {
+            let lateral_offset = lateral_step as Real * compressed_radius;
+            for side in [1.0, -1.0] {
+                if evaluated == CLIMB_TOP_OUT_MAX_PRE_LIP_SIDE_CANDIDATES {
+                    return None;
+                }
+                evaluated += 1;
+                let candidate = probe_cross_end + retreat + lateral * (side * lateral_offset);
+                let Some((supported_standing, _)) = supported_standing_pose(
+                    validation_queries,
+                    candidate,
+                    CLIMB_TOP_OUT_DEEP_DROP,
+                    standing_floor_offset,
+                ) else {
+                    continue;
+                };
+                let floor_y = supported_standing.y - standing_floor_offset;
+                if (floor_y - mantle_floor.y).abs()
+                    > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
+                    || shape_intersects(validation_queries, supported_standing, standing)
+                    || scan_initial_route_obstruction(
+                        probe_queries,
+                        &[probe_cross_end, candidate],
+                        compressed,
+                        compressed_radius,
+                        CLIMB_TOP_OUT_RECOVERY_RETREAT,
+                        true,
+                        None,
+                        |hit| lip_patch.is_some_and(|patch| patch.contains(hit)),
+                    )
+                    .is_none()
+                    || !shape_sweep_is_clear(
+                        validation_queries,
+                        candidate,
+                        supported_standing,
+                        compressed,
+                    )
+                    || !has_supported_standing_egress(
+                        validation_queries,
+                        supported_standing,
+                        lateral * side,
+                        standing,
+                        standing_floor_offset,
+                    )
+                {
+                    continue;
+                }
+                return Some((candidate, candidate, supported_standing));
+            }
+        }
+    }
+    None
+}
+
 fn plan_climb_top_out(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -2328,12 +2414,6 @@ fn plan_climb_top_out(
         (cross_end, cross_end)
     };
 
-    #[derive(Clone, Copy)]
-    struct SupportedLanding {
-        sphere: Vector<Real>,
-        standing: Vector<Real>,
-        direct: bool,
-    }
     let landing_pose = |candidate: Vector<Real>| {
         let (supported_standing, support_drop) = supported_standing_pose(
             validation_queries,
@@ -2553,15 +2633,45 @@ fn plan_climb_top_out(
             .or(direct_fallback)
             .or(deep_fallback)
     };
+    // A narrow landing can lie immediately behind the climbable itself but
+    // before the terrain lip's geometry-derived exit. In that layout the
+    // ordinary grid correctly clears the lip, then cannot come back through
+    // its wall to the landing. Only after that grid fails, search the mantle-
+    // probe side of the lip: clear the ladder laterally while compressed,
+    // retreat by at most one active-profile radius from the sampled wall, and
+    // require the authored mantle floor, full-profile fit, all-collider
+    // restoration, and supported egress away from the ladder. The initial
+    // wall graze must belong to the bounded mantle patch, clear exactly once,
+    // and stay clear through the candidate.
+    let pre_lip_side_landing = (recovery_landing.is_none() && forward_landing.is_none())
+        .then(|| {
+            mantle_floor.and_then(|mantle_floor| {
+                find_pre_lip_side_landing(
+                    validation_queries,
+                    probe_queries,
+                    probe_cross_end,
+                    direction,
+                    lateral,
+                    &compressed,
+                    &standing,
+                    compressed_radius,
+                    lateral_steps,
+                    standing_floor_offset,
+                    mantle_floor,
+                    lip_patch.as_ref(),
+                )
+            })
+        })
+        .flatten();
     // Prefer the held-direction result unless it needs more lateral steering
     // than the straight approach-side route. This preserves ordinary forward
     // top-outs and uses the recessed-floor alternative only when it avoids a
     // wider sideways recovery.
     let selected_landing = if let Some(recovery) = recovery_landing {
-        Some((recovery, false, true))
+        Some((recovery, false, true, false))
     } else {
-        match (forward_landing, approach_with_egress) {
-            (Some(forward), Some(approach)) => {
+        match (forward_landing, pre_lip_side_landing, approach_with_egress) {
+            (Some(forward), _, Some(approach)) => {
                 let lateral_distance = |landing: &(Vector<Real>, Vector<Real>, Vector<Real>)| {
                     (landing.1 - lip_clear).dot(&lateral).abs()
                 };
@@ -2569,18 +2679,23 @@ fn plan_climb_top_out(
                 if forward_lateral + 1.0e-5 >= CLIMB_TOP_OUT_LARGE_LATERAL_DOGLEG
                     && lateral_distance(&approach) + 1.0e-5 < forward_lateral
                 {
-                    Some((approach, true, false))
+                    Some((approach, true, false, false))
                 } else {
-                    Some((forward, false, false))
+                    Some((forward, false, false, false))
                 }
             }
-            (Some(forward), None) => Some((forward, false, false)),
-            (None, Some(approach)) => Some((approach, true, false)),
-            (None, None) => None,
+            (Some(forward), _, None) => Some((forward, false, false, false)),
+            (None, Some(pre_lip), _) => Some((pre_lip, false, false, true)),
+            (None, None, Some(approach)) => Some((approach, true, false, false)),
+            (None, None, None) => None,
         }
     };
-    let Some(((landing_route, final_sphere, final_standing), approach_side, recovery_side)) =
-        selected_landing
+    let Some((
+        (landing_route, final_sphere, final_standing),
+        approach_side,
+        recovery_side,
+        pre_lip_side,
+    )) = selected_landing
     else {
         reject_top_out!("landing");
     };
@@ -2606,6 +2721,17 @@ fn plan_climb_top_out(
             head,
             head,
             head,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    } else if pre_lip_side {
+        [
+            head,
+            rise_start,
+            cross_start,
+            probe_cross_end,
+            landing_route,
             landing_route,
             final_sphere,
             final_standing,
@@ -8947,6 +9073,146 @@ mod tests {
         assert!(
             shape_sweep_is_clear(&validation_queries, cross_end, final_sphere, &compressed),
             "the full compressed sphere must have a clear lateral route"
+        );
+    }
+
+    fn pre_lip_side_test_world(block_side_routes: bool) -> PhysicsWorld {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(3.2, 0.05, 3.2)
+                .translation(vector![0.0, -0.05, 0.0])
+                .build(),
+        );
+        let (wall_vertices, wall_indices) = Cuboid::new(vector![0.01, 1.0, 3.2]).to_trimesh();
+        let wall_vertices = wall_vertices
+            .into_iter()
+            .map(|vertex| Point::from(vertex + vector![0.31, 1.0, 0.0]))
+            .collect();
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::trimesh(wall_vertices, wall_indices)
+                .expect("pre-lip WorldRep wall")
+                .build(),
+        );
+        // A live climbable centered on the route forces the compressed body
+        // to move laterally before its crouched profile can be restored.
+        world.add_kinematic(
+            EntityId::from_inner(3).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.08, 4.0, 0.9),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        if block_side_routes {
+            // These parented blockers begin just outside the initial head
+            // sphere but span both possible side routes. They must remain
+            // solid even though the local WorldRep wall is an attributed lip.
+            for (index, z) in [-1.15, 1.15].into_iter().enumerate() {
+                world.add_kinematic(
+                    EntityId::from_inner(4 + index as u64).unwrap(),
+                    vec3(-0.1, 1.64, z),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.5, 1.0, 1.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            }
+        }
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(6).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        world
+    }
+
+    fn find_crouched_pre_lip_side_test(
+        world: &PhysicsWorld,
+        mantle_floor_y: Real,
+    ) -> Option<(Vector<Real>, Vector<Real>, Vector<Real>)> {
+        let validation_queries = query_pipeline(world, QueryFilter::default());
+        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            !collider
+                .collision_groups()
+                .memberships
+                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+        };
+        let probe_queries =
+            validation_queries.with_filter(QueryFilter::default().predicate(&not_climbable));
+        let (wall_handle, _) = probe_queries
+            .cast_ray_and_get_normal(&Ray::new(point![0.0, 1.64, 0.0], Vector::x()), 1.0, true)
+            .expect("local WorldRep wall");
+        let wall = validation_queries.colliders[wall_handle]
+            .shape()
+            .as_trimesh()
+            .expect("wall trimesh");
+        let lip_patch = MantleLipPatch {
+            handle: wall_handle,
+            faces: (0..wall.indices().len() as u32).collect(),
+        };
+        find_pre_lip_side_landing(
+            &validation_queries,
+            &probe_queries,
+            vector![0.0, 1.64, 0.0],
+            Vector::x(),
+            -Vector::z(),
+            &Ball::new(PLAYER_CROUCH_RADIUS / SCALE_FACTOR),
+            &crouched_player_capsule(),
+            PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
+            (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / (PLAYER_CROUCH_RADIUS / SCALE_FACTOR)).ceil()
+                as usize,
+            PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+                + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+                + PLAYER_REST_LIFT / SCALE_FACTOR,
+            vector![0.0, mantle_floor_y, 0.0],
+            Some(&lip_patch),
+        )
+    }
+
+    #[test]
+    fn crouched_top_out_recovers_sideways_before_a_local_lip_wall() {
+        let world = pre_lip_side_test_world(false);
+        let (route, sphere, final_pose) = find_crouched_pre_lip_side_test(&world, 0.0)
+            .expect("the pre-lip deck should permit a supported side recovery");
+        let expected_y = PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+
+        assert!(
+            route.x < 0.0
+                && route.z.abs() >= 2.0 * PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+                && (route - sphere).norm() < 1.0e-5,
+            "the route must retreat before the lip and clear the climbable laterally: {route:?}"
+        );
+        assert!(
+            (final_pose.y - expected_y).abs() < 1.0e-4
+                && final_pose.x < 0.0
+                && final_pose.z.abs() >= 2.0 * PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
+            "the active crouched profile must restore on the selected y=0 deck: {final_pose:?}"
+        );
+    }
+
+    #[test]
+    fn pre_lip_side_recovery_rejects_parented_route_blockers() {
+        let world = pre_lip_side_test_world(true);
+        let landing = find_crouched_pre_lip_side_test(&world, 0.0);
+
+        assert!(
+            landing.is_none(),
+            "parented blockers across both lateral routes must not inherit the WorldRep lip exception: {landing:?}"
+        );
+    }
+
+    #[test]
+    fn pre_lip_side_recovery_rejects_the_wrong_mantle_floor() {
+        let world = pre_lip_side_test_world(false);
+        let landing = find_crouched_pre_lip_side_test(&world, 1.0);
+
+        assert!(
+            landing.is_none(),
+            "a side support at a different height must not replace the sampled mantle floor: {landing:?}"
         );
     }
 
