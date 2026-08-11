@@ -535,6 +535,9 @@ mod tests {
         };
 
         assert_eq!(clamp_level(AIAlertLevel::High, &cap), AIAlertLevel::Lowest);
-        assert_eq!(clamp_level(AIAlertLevel::Lowest, &cap), AIAlertLevel::Lowest);
+        assert_eq!(
+            clamp_level(AIAlertLevel::Lowest, &cap),
+            AIAlertLevel::Lowest
+        );
     }
 }
