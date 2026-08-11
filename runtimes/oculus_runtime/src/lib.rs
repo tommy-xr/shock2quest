@@ -608,16 +608,23 @@ fn main() {
             right_aim_location.pose.orientation.z,
         );
 
-        let right_hand_position = vec3(
-            right_aim_location.pose.position.x,
-            right_aim_location.pose.position.y,
-            right_aim_location.pose.position.z,
+        let center_above_floor = game.player_center_above_floor();
+        let right_hand_position = stage_to_pawn(
+            vec3(
+                right_aim_location.pose.position.x,
+                right_aim_location.pose.position.y,
+                right_aim_location.pose.position.z,
+            ),
+            center_above_floor,
         );
 
-        let left_hand_position = vec3(
-            left_aim_location.pose.position.x,
-            left_aim_location.pose.position.y,
-            left_aim_location.pose.position.z,
+        let left_hand_position = stage_to_pawn(
+            vec3(
+                left_aim_location.pose.position.x,
+                left_aim_location.pose.position.y,
+                left_aim_location.pose.position.z,
+            ),
+            center_above_floor,
         );
         let left_hand_rotation = cgmath::Quaternion::new(
             left_aim_location.pose.orientation.w,
@@ -1003,6 +1010,18 @@ fn create_projection_matrix(fov: &xr::Fovf, near_z: f32, far_z: f32) -> cgmath::
     )
 }
 
+/// Convert a floor-origin STAGE-space position (meters) into the game's pawn
+/// space (world units, origin at the player collider's center): scale meters
+/// to world units, then move the anchor from the physical floor up to the
+/// collider center, so a tracked eye or hand N meters above the real floor
+/// lands the equivalent height above the in-game floor. Without this the raw
+/// meters were added to the collider CENTER unscaled, placing the standing
+/// eye ~1.8 SS2 ft above the original game's eye line (and world scale ~31%
+/// large).
+fn stage_to_pawn(position_meters: Vector3<f32>, center_above_floor: f32) -> Vector3<f32> {
+    position_meters / shock2vr::METERS_PER_WORLD_UNIT - vec3(0.0, center_above_floor, 0.0)
+}
+
 fn render_swapchain(
     game: &mut Game,
     engine: &Box<dyn engine::Engine>,
@@ -1026,11 +1045,13 @@ fn render_swapchain(
     let width = swapchain.width;
     let height = swapchain.height;
 
-    let head_offset = cgmath::Vector3::new(
-        view.pose.position.x,
-        view.pose.position.y,
-        view.pose.position.z,
-        //0.0, 0.0, 5.0,
+    let head_offset = stage_to_pawn(
+        cgmath::Vector3::new(
+            view.pose.position.x,
+            view.pose.position.y,
+            view.pose.position.z,
+        ),
+        game.player_center_above_floor(),
     );
     let head_rotation = cgmath::Quaternion::new(
         view.pose.orientation.w,
