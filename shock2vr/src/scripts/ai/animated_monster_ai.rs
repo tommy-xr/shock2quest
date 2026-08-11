@@ -553,6 +553,20 @@ impl AnimatedMonsterAI {
         // later than they were dealt).
         self.death_elapsed = 0.0;
 
+        // A creature that authors Corpse/Flinderize links bursts instead of
+        // leaving a body: droids link a `Corpse` explosion (plus `Flinderize`
+        // parts), and organics that gib - the Overlord's viral explosion and
+        // its limb/organ flinders - do the same. `Effect::SlayEntity` spawns
+        // those links, plays the death environmental sound and removes the
+        // entity (its handler skips the ragdoll for link deaths), so there is
+        // no crumple animation and no death speech either. Pre-mark the
+        // handoff so the removed entity is never offered to physics if it
+        // survives a frame.
+        if crate::scripts::script_util::has_death_links(world, entity_id) {
+            self.handoff_emitted = true;
+            return Effect::SlayEntity { entity_id };
+        }
+
         let death_sound_effect = if let Some(voice_index) =
             crate::scripts::speech_util::resolve_entity_voice_index(world, entity_id)
         {
@@ -1738,6 +1752,86 @@ mod tests {
             true,
             NotScripted
         ));
+    }
+
+    /// Deal a killing blow to a fresh monster and return it with the effects
+    /// its death produced.
+    fn kill(world: &World, entity_id: EntityId) -> (AnimatedMonsterAI, Vec<Effect>) {
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, world);
+        let physics = PhysicsWorld::new();
+        let effects = Effect::flatten(vec![monster.handle_message(
+            entity_id,
+            world,
+            &physics,
+            &MessagePayload::Damage {
+                amount: 100.0,
+                impact: None,
+            },
+        )]);
+        (monster, effects)
+    }
+
+    /// A lethal blow on a creature that authors death links (droids link a
+    /// `Corpse` explosion and `Flinderize` parts) must slay it into those
+    /// links - no crumple animation, death speech or ragdoll handoff for a
+    /// body that no longer exists.
+    #[test]
+    fn creature_with_death_links_slays_into_its_links() {
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        world.add_component(
+            entity_id,
+            dark::properties::Links {
+                to_links: vec![dark::properties::ToLink {
+                    to_template_id: -1425,
+                    to_entity_id: None,
+                    link: dark::properties::Link::Flinderize(dark::properties::FlinderizeOptions {
+                        count: 1,
+                        impulse: 0.0,
+                        scatter: false,
+                        offset: vec3(0.0, 0.0, 0.0),
+                    }),
+                }],
+            },
+        );
+
+        let (monster, effects) = kill(&world, entity_id);
+
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::SlayEntity { .. })),
+            "expected a link death, got {effects:?}"
+        );
+        assert!(
+            effects.iter().all(|effect| !matches!(
+                effect,
+                Effect::PlayAnimationBySchema { .. } | Effect::PlaySpeech { .. }
+            )),
+            "a link death has no crumple or death speech, got {effects:?}"
+        );
+        assert!(monster.handoff_emitted, "a removed body must not ragdoll");
+    }
+
+    /// Organics author no death links: they keep the crumple + death speech.
+    #[test]
+    fn creature_without_death_links_crumples() {
+        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
+
+        let (_monster, effects) = kill(&world, entity_id);
+
+        assert!(
+            effects
+                .iter()
+                .all(|effect| !matches!(effect, Effect::SlayEntity { .. })),
+            "an organic must not slay into links, got {effects:?}"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::PlayAnimationBySchema { .. })),
+            "expected the crumple animation, got {effects:?}"
+        );
     }
 
     #[test]

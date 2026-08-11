@@ -152,6 +152,19 @@ pub fn get_all_links_with_template<TData>(
     linked_entities
 }
 
+/// True when the entity authors any `Corpse` or `Flinderize` link
+/// (inheritance-aware, like every other link lookup: the links are merged down
+/// the template hierarchy at instantiation). Objects that do - droids link a
+/// `Corpse` explosion, and often `Flinderize` parts - are replaced by those
+/// links when they die instead of leaving a body behind.
+pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
+    !get_all_links_with_template(world, entity_id, |link| match link {
+        Link::Corpse(_) | Link::Flinderize(_) => Some(()),
+        _ => None,
+    })
+    .is_empty()
+}
+
 /// A weapon's selectable `Projectile` links (its ammo types), filtered to the
 /// current gun setting and ordered by `ProjectileOptions.order`. This is the
 /// canonical ammo-type list - firing, ammo-type cycling, and the HUD all derive
