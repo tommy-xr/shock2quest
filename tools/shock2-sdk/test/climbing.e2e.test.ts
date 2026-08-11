@@ -570,6 +570,186 @@ test(
   },
 );
 
+// Issue #657's later Rick1 manifestation is a full-height ladder below a thin
+// upper-deck slab and an authored pipe with only 3.5 feet of headroom. Ordinary
+// +Z input from its reachable south face must carry an explicitly crouched
+// player through the local lip, restore the crouched capsule on the y=38 deck,
+// and leave standing refused until the player crawls clear of the pipe.
+test(
+  "flat climbing: rick1 ladder 488 reaches supported deck toward ladder 499",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "rick1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids vary on every launch. Resolve both authored ladders by their
+    // stable mission identities, then derive the contact and onward heading
+    // from their live positions.
+    const ladders = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities;
+    const ladder = ladders.find((entity) => entity.template_id === 488);
+    const nextLadder = ladders.find((entity) => entity.template_id === 499);
+    assert.ok(ladder, "rick1 should contain authored ladder object 488");
+    assert.ok(nextLadder, "rick1 should contain authored ladder object 499");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+
+    // Geometry-relative setup at the campaign's reachable south-face pose.
+    // All motion from here through the climb, release, and onward deck crawl is
+    // ordinary production input with no jump or direct relocation. Crouch is
+    // held explicitly: the planner must never silently shrink the player.
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderY - 2.48,
+      z: ladderZ - 0.6884,
+    });
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const startSupport = await game.raycast({
+      start: [start.x, start.y, start.z],
+      end: [start.x, start.y - 3, start.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(start.x - ladderX, start.z - (ladderZ - 0.6884)) < 0.05 &&
+        startSupport.hit &&
+        startSupport.distance !== null &&
+        startSupport.distance > 0.5 &&
+        startSupport.distance < 2 &&
+        startSupport.hit_normal !== null &&
+        startSupport.hit_normal[1] > 0.5,
+      `expected supported south-face contact; ladder=${JSON.stringify(ladder.position)}, ` +
+        `start=${JSON.stringify(start)}, support=${JSON.stringify(startSupport)}`,
+    );
+
+    await game.input.setJump(false);
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 10 });
+    const crouchedStart = await game.player.position();
+    assert.ok(
+      start.y - crouchedStart.y > 0.5 && start.y - crouchedStart.y < 0.75,
+      `the fixture must enter the explicit crouched profile before climbing; ` +
+        `standing=${JSON.stringify(start)}, crouched=${JSON.stringify(crouchedStart)}`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      ladderY + 8,
+      ladderZ + 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    const crouchedFloorOffset = 0.604;
+    let landing = crouchedStart;
+    let landingSupport: RayCastResult | null = null;
+    let supportedDeckReached = false;
+    for (let elapsed = 0; elapsed < 720; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      if (landing.y < ladderY + 5.5) continue;
+      landingSupport = await game.raycast({
+        start: [landing.x, landing.y, landing.z],
+        end: [landing.x, landing.y - 3, landing.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      supportedDeckReached =
+        landingSupport.hit &&
+        landingSupport.distance !== null &&
+        Math.abs(landingSupport.distance - crouchedFloorOffset) < 0.05 &&
+        landingSupport.hit_point !== null &&
+        Math.abs(landingSupport.hit_point[1] - 38) < 0.05 &&
+        landingSupport.hit_normal !== null &&
+        landingSupport.hit_normal[1] > 0.5;
+      if (supportedDeckReached) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      supportedDeckReached,
+      `ordinary south-face input while crouched must reach supported crouch on the upper deck; ` +
+        `ladder=${JSON.stringify(ladder.position)}, start=${JSON.stringify(start)}, ` +
+        `ended=${JSON.stringify(landing)}, support=${JSON.stringify(landingSupport)}`,
+    );
+
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.abs(stable.y - landing.y) < 0.1 &&
+        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        Math.abs(stableSupport.distance - crouchedFloorOffset) < 0.05 &&
+        stableSupport.hit_point !== null &&
+        Math.abs(stableSupport.hit_point[1] - 38) < 0.05 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `release must remain stable on ladder 488's upper deck; ` +
+        `landing=${JSON.stringify(landing)}, stable=${JSON.stringify(stable)}, ` +
+        `support=${JSON.stringify(stableSupport)}`,
+    );
+
+    // The pipe above this exact landing is authored collision, not a planner
+    // exception. Releasing crouch must therefore keep the feet-planted center
+    // unchanged (standing would raise it by 0.64 world units).
+    await game.input.set("crouch", 0);
+    await game.step({ frames: 20 });
+    const refusedStand = await game.player.position();
+    assert.ok(
+      Math.abs(refusedStand.y - stable.y) < 0.1 &&
+        Math.hypot(refusedStand.x - stable.x, refusedStand.z - stable.z) < 0.1,
+      `standing under the authored pipe must be refused; ` +
+        `crouched=${JSON.stringify(stable)}, released=${JSON.stringify(refusedStand)}`,
+    );
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 5 });
+
+    const [nextX, , nextZ] = nextLadder.position;
+    const distanceBefore = Math.hypot(
+      refusedStand.x - nextX,
+      refusedStand.z - nextZ,
+    );
+    await game.input.lookAtWorldPoint([nextX, refusedStand.y + 0.8, nextZ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let onward = refusedStand;
+    for (let elapsed = 0; elapsed < 90; elapsed += 1) {
+      await game.step({ frames: 1 });
+      onward = await game.player.position();
+      if (Math.hypot(onward.x - nextX, onward.z - nextZ) < distanceBefore - 1.5) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const distanceAfter = Math.hypot(onward.x - nextX, onward.z - nextZ);
+    const onwardSupport = await game.raycast({
+      start: [onward.x, onward.y, onward.z],
+      end: [onward.x, onward.y - 3, onward.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      distanceAfter < distanceBefore - 1 &&
+        onwardSupport.hit &&
+        onwardSupport.hit_normal !== null &&
+        onwardSupport.hit_normal[1] > 0.5,
+      `the recovered deck must permit ordinary movement toward ladder 499; ` +
+        `before=${distanceBefore.toFixed(2)}, after=${distanceAfter.toFixed(2)}, ` +
+        `stable=${JSON.stringify(refusedStand)}, onward=${JSON.stringify(onward)}, ` +
+        `support=${JSON.stringify(onwardSupport)}`,
+    );
+  },
+);
+
 // Issue #657's Eng1 blocker is a different Dark BreakClimb shape from Rick1:
 // authored ladder 317 ends under a thick terrain slab. The player must rise
 // through the slab's two locally sampled wall planes, then descend to the
