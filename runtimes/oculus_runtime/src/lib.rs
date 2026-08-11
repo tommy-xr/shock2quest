@@ -342,6 +342,10 @@ fn main() {
         .create_action::<bool>("jump", "Jump", &[])
         .unwrap();
 
+    let crouch_action = action_set
+        .create_action::<bool>("crouch", "Crouch Toggle", &[])
+        .unwrap();
+
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
     // interaction profile
@@ -417,6 +421,12 @@ fn main() {
                         .string_to_path("/user/hand/right/input/thumbstick/click")
                         .unwrap(),
                 ),
+                xr::Binding::new(
+                    &crouch_action,
+                    xr_instance
+                        .string_to_path("/user/hand/left/input/thumbstick/click")
+                        .unwrap(),
+                ),
             ],
         )
         .unwrap();
@@ -463,6 +473,12 @@ fn main() {
     let mut action_state = shock2vr::input::InputActionState::new();
     let mut vr_crouch = VrCrouchDetector::default();
     let mut pending_stage_change_time = None;
+    // Button-crouch alternative to the physical detector: left thumbstick
+    // click toggles a latched crouch request (mirroring jump on the right
+    // stick). Either source requests the crouch; the game's headroom-gated
+    // stand-up still decides when standing is actually possible.
+    let mut crouch_toggled = false;
+    let mut crouch_button_was_pressed = false;
 
     let _camera_pos = vec3(0.0, 5.0, 10.0);
 
@@ -598,6 +614,14 @@ fn main() {
             .state(&session, xr::Path::NULL)
             .unwrap()
             .current_state;
+        let crouch_pressed = crouch_action
+            .state(&session, xr::Path::NULL)
+            .unwrap()
+            .current_state;
+        if crouch_pressed && !crouch_button_was_pressed {
+            crouch_toggled = !crouch_toggled;
+        }
+        crouch_button_was_pressed = crouch_pressed;
 
         let left_trigger_value = left_trigger
             .state(&session, xr::Path::NULL)
@@ -631,14 +655,32 @@ fn main() {
             right_aim_location.pose.orientation.z,
         );
 
-        let center_above_floor = game.player_center_above_floor();
+        // Feed the detector before the poses are transformed so this frame's
+        // physical stance decides both the crouch request and the button-latch
+        // view drop below.
+        let tracked_head_position = head_location.location_flags.contains(
+            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
+        );
+        let physically_crouched =
+            vr_crouch.update(tracked_head_position.then_some(head_location.pose.position.y));
+        // Button-crouch while physically standing: drop the tracked poses by
+        // the capsule's stand/crouch height delta so the eye lands inside the
+        // crouched collider instead of poking through the ceiling it just
+        // gained clearance under. Physical crouch needs no drop - the head
+        // already moved.
+        let tracked_pose_drop = if crouch_toggled && !physically_crouched {
+            shock2vr::player_stand_crouch_drop()
+        } else {
+            0.0
+        };
+        let pose_anchor = game.player_center_above_floor() + tracked_pose_drop;
         let right_hand_position = stage_to_pawn(
             vec3(
                 right_aim_location.pose.position.x,
                 right_aim_location.pose.position.y,
                 right_aim_location.pose.position.z,
             ),
-            center_above_floor,
+            pose_anchor,
         );
 
         let left_hand_position = stage_to_pawn(
@@ -647,7 +689,7 @@ fn main() {
                 left_aim_location.pose.position.y,
                 left_aim_location.pose.position.z,
             ),
-            center_above_floor,
+            pose_anchor,
         );
         let left_hand_rotation = cgmath::Quaternion::new(
             left_aim_location.pose.orientation.w,
@@ -672,11 +714,9 @@ fn main() {
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
         input_context.jump = jump_pressed;
-        let tracked_head_position = head_location.location_flags.contains(
-            xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
-        );
-        input_context.crouch =
-            vr_crouch.update(tracked_head_position.then_some(head_location.pose.position.y));
+        // The detector was already fed exactly once above (it keeps its
+        // standing calibration warm even while the button latch is active).
+        input_context.crouch = physically_crouched || crouch_toggled;
         let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
         let update_elapsed = update_started.elapsed();
@@ -864,6 +904,7 @@ fn main() {
             true,
             &scene,
             false,
+            tracked_pose_drop,
         );
         let left_eye_elapsed = left_eye_started.elapsed();
         let right_eye_started = Instant::now();
@@ -878,6 +919,7 @@ fn main() {
             true,
             &scene,
             true,
+            tracked_pose_drop,
         );
         let right_eye_elapsed = right_eye_started.elapsed();
 
@@ -1061,6 +1103,7 @@ fn render_swapchain(
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
+    tracked_pose_drop: f32,
 ) -> () {
     let mut xr_swapchain = swapchain.handle.borrow_mut();
     let image_index1 = xr_swapchain.acquire_image().unwrap();
@@ -1079,7 +1122,7 @@ fn render_swapchain(
             view.pose.position.y,
             view.pose.position.z,
         ),
-        game.player_center_above_floor(),
+        game.player_center_above_floor() + tracked_pose_drop,
     );
     let head_rotation = cgmath::Quaternion::new(
         view.pose.orientation.w,
