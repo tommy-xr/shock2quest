@@ -36,7 +36,7 @@ use cgmath::Vector4;
 use cgmath::vec4;
 use engine::assets::asset_paths::AbstractAssetPath;
 use engine::scene::VertexPositionTextureLightmapAtlasNormal;
-pub use scene_builder::to_scene;
+pub use scene_builder::{AnimatedLightmapController, MissionScene, to_scene};
 
 use crate::properties::PropertyDefinition;
 use crate::ss2_chunk_file_reader;

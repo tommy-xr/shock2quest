@@ -86,7 +86,7 @@ impl Mission {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> Mission {
-        let scene_objects = dark::mission::to_scene(&level, asset_cache);
+        let mission_scene = dark::mission::to_scene(&level, asset_cache);
         let song_params = level.song_params.clone();
         let room_db = level.room_database.clone();
         let physics_geometry = create_physics_collider(&level);
@@ -94,7 +94,8 @@ impl Mission {
         let obj_map = level.obj_map.clone();
 
         let abstract_mission = AbstractMission {
-            scene_objects,
+            scene_objects: mission_scene.objects,
+            animated_lightmaps: Some(mission_scene.animated_lightmaps),
             song_params,
             room_db,
             physics_geometry,

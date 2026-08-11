@@ -332,10 +332,12 @@ fn read_lights<T: io::Read>(
     num_lightmaps: u8,
     light_size: u8,
 ) -> Vec<LightInfo> {
-    // Read lights
-    for _ in 0..num_lights {
-        let _ = reader.read_i16::<byteorder::LittleEndian>().unwrap();
-    }
+    // Cell-local order for the animated-light bits on each face. A set bit in
+    // `LightInfo::animation_flags` means the following layer belongs to the
+    // light number at the same index in this table.
+    let animated_light_numbers = (0..num_lights)
+        .map(|_| reader.read_i16::<byteorder::LittleEndian>().unwrap())
+        .collect::<Vec<_>>();
 
     let mut light_infos: Vec<LightInfo> = Vec::new();
     for _ in 0..num_lightmaps {
@@ -353,26 +355,25 @@ fn read_lights<T: io::Read>(
             let mut bytes = vec![0_u8; lm_size as usize];
             reader.read_exact(&mut bytes).unwrap();
 
+            let img = decode_lightmap(&bytes, li.lx, li.ly, light_size);
+
             if idx == 0 {
-                let img = image::ImageBuffer::from_fn(li.lx as u32, li.ly as u32, |x, y| {
-                    if x >= li.lx as u32 || y >= li.ly as u32 {
-                        image::Rgb([255, 255, 0])
-                    } else {
-                        let pos = ((y * (2 * li.lx as u32)) + x * 2) as usize;
-                        let b0 = bytes[pos] as u16;
-                        let b1 = bytes[pos + 1] as u16;
-
-                        // Two bits (u16) encoded to have R,G,B each taking 5 bits:
-                        let pix: u16 = (b1 << 8) + b0;
-                        let r = (pix & 0b0001_1111) << 3;
-                        let g = ((pix >> 5) & 0b0001_1111) << 3;
-                        let b = ((pix >> 10) & 0b0001_1111) << 3;
-
-                        image::Rgb([r as u8, g as u8, b as u8])
-                    }
-                });
-
                 li.texture_pack_result = packer.pack(&img);
+                if lm_count > 1 {
+                    li.base_pixels = Some(img.into_raw());
+                }
+            } else {
+                let layer_number = idx - 1;
+                let bit_index = set_bit_indices(li.animation_flags)
+                    .nth(layer_number as usize)
+                    .expect("animated lightmap layer must have a corresponding flag bit");
+                let light_number = *animated_light_numbers
+                    .get(bit_index)
+                    .expect("animated lightmap flag must index the cell light table");
+                li.switchable_layers.push(SwitchableLightmapLayer {
+                    light_number,
+                    pixels: img.into_raw(),
+                });
             }
         }
     }
@@ -383,6 +384,36 @@ fn read_lights<T: io::Read>(
     }
 
     light_infos
+}
+
+fn set_bit_indices(flags: u32) -> impl Iterator<Item = usize> {
+    (0..u32::BITS as usize).filter(move |bit| flags & (1 << bit) != 0)
+}
+
+fn decode_lightmap(bytes: &[u8], width: u16, height: u8, light_size: u8) -> image::RgbImage {
+    image::ImageBuffer::from_fn(width as u32, height as u32, |x, y| {
+        let pixel_index = (y * width as u32 + x) as usize;
+        match light_size {
+            1 => {
+                let value = bytes[pixel_index];
+                image::Rgb([value, value, value])
+            }
+            _ => {
+                let pos = pixel_index * light_size as usize;
+                let pix = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+                let r = (pix & 0b0001_1111) << 3;
+                let g = ((pix >> 5) & 0b0001_1111) << 3;
+                let b = ((pix >> 10) & 0b0001_1111) << 3;
+                image::Rgb([r as u8, g as u8, b as u8])
+            }
+        }
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct SwitchableLightmapLayer {
+    pub light_number: i16,
+    pub pixels: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -397,6 +428,9 @@ pub struct LightInfo {
     pub dynamic_lightmap_pointer: u32,
     pub animation_flags: u32,
     pub texture_pack_result: TexturePackResult,
+    /// Static pixels retained only for faces that have switchable layers.
+    pub base_pixels: Option<Vec<u8>>,
+    pub switchable_layers: Vec<SwitchableLightmapLayer>,
 }
 
 fn read_light_info<T: io::Read>(debug_idx: u32, reader: &mut T) -> LightInfo {
@@ -422,5 +456,30 @@ fn read_light_info<T: io::Read>(debug_idx: u32, reader: &mut T) -> LightInfo {
         dynamic_lightmap_pointer,
         animation_flags,
         texture_pack_result: TexturePackResult::DEFAULT,
+        base_pixels: None,
+        switchable_layers: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn animation_flags_follow_cell_light_number_order() {
+        let flags = 0b1010;
+        assert_eq!(set_bit_indices(flags).collect::<Vec<_>>(), vec![1, 3]);
+        let cell_light_numbers = [12, 195, 27, 311];
+        let mapped = set_bit_indices(flags)
+            .map(|bit| cell_light_numbers[bit])
+            .collect::<Vec<_>>();
+        assert_eq!(mapped, vec![195, 311]);
+    }
+
+    #[test]
+    fn rgb16_lightmaps_decode_to_rgb888() {
+        let white = 0b0111_1111_1111_1111u16.to_le_bytes();
+        let image = decode_lightmap(&white, 1, 1, 2);
+        assert_eq!(image.get_pixel(0, 0).0, [248, 248, 248]);
     }
 }

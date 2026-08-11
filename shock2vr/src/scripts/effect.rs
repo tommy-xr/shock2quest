@@ -509,6 +509,16 @@ pub enum Effect {
         state: ObjectState,
     },
 
+    /// Persistently switch one authored animated light and update the matching
+    /// world-representation lightmap layers. `intensity` is normalized against
+    /// the light's authored maximum; `inactive` is stored in `P$AnimLight` so
+    /// the state survives mission save/load.
+    SetAnimatedLight {
+        entity_id: EntityId,
+        intensity: f32,
+        inactive: bool,
+    },
+
     /// Persistently replace a replicator's hacked catalog. Retail's
     /// `PutBombInReplicator` uses this to add the Command-deck objective item;
     /// the registered Dark property makes the change survive save/load.
