@@ -294,6 +294,7 @@ pub fn create_entity_core(
             &maybe_just_model.as_ref(),
             entity_id,
             additional_options.launch_projectile,
+            additional_options.flinderize_debris,
         )
     } else {
         None
@@ -782,7 +783,7 @@ pub fn create_physics_representation(
     maybe_model: &Option<&Model>,
     entity_id: EntityId,
 ) -> Option<RigidBodyHandle> {
-    create_physics_representation_with_options(world, physics, maybe_model, entity_id, false)
+    create_physics_representation_with_options(world, physics, maybe_model, entity_id, false, false)
 }
 
 fn create_physics_representation_with_options(
@@ -791,6 +792,7 @@ fn create_physics_representation_with_options(
     maybe_model: &Option<&Model>,
     entity_id: EntityId,
     launch_projectile: bool,
+    flinderize_debris: bool,
 ) -> Option<RigidBodyHandle> {
     // A door the authors left permanently open (no travel between its open and
     // closed endpoints, authored open) has nowhere to retract to: a collider
@@ -1213,11 +1215,11 @@ fn create_physics_representation_with_options(
             // level fixtures solid, and climbable is excluded outright: the
             // climb probe queries as `PLAYER` too, so a non-solid ladder would
             // also be an unclimbable one.
-            let is_unsimulated_debris = phys_type.phys_type == PhysicsModelType::SPHERE
+            let is_movable_dimensionless_sphere = phys_type.phys_type == PhysicsModelType::SPHERE
                 && maybe_dimensions.is_none()
                 && !immobile
                 && !is_climbable;
-            let group = if is_unsimulated_debris {
+            let group = if is_movable_dimensionless_sphere {
                 group.non_solid_to_characters()
             } else {
                 group
@@ -1229,15 +1231,20 @@ fn create_physics_representation_with_options(
                 (None, None) => Vector3::zero(),
             };
 
-            // Only an object with authored dimensions takes the dynamic path.
-            // A dimension-less SPHERE has no authored radius, so a dynamic
-            // body would be a model-box-shaped prop falling under gravity -
-            // the fallback exists to make static geometry solid, not to
-            // animate it.
-            let rigid_body_handle = if !immobile
+            // Ordinary model-bounds fallbacks remain conservative kinematic
+            // stand-ins: their box is not an authored collision volume. A
+            // Flinderize target is different because the creation itself
+            // carries an impulse and means the debris must be simulated. Use
+            // its bounded model box for mass/inertia only in that explicit
+            // mode; authored-dimension spheres keep their existing dynamic
+            // path. Sensors stay kinematic so their trigger volume cannot
+            // drift away from its authored location.
+            let is_authored_dynamic_sphere = !immobile
                 && maybe_dimensions.is_some()
-                && phys_type.phys_type == PhysicsModelType::SPHERE
-            {
+                && phys_type.phys_type == PhysicsModelType::SPHERE;
+            let is_dynamic_flinder =
+                flinderize_debris && is_movable_dimensionless_sphere && !is_sensor;
+            let rigid_body_handle = if is_authored_dynamic_sphere || is_dynamic_flinder {
                 physics_log!(DEBUG, "Creating dynamic hitbox entity");
                 physics.add_dynamic(
                     entity_id,
@@ -1288,6 +1295,10 @@ pub struct CreateEntityOptions {
     /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
     /// archetypes from being reduced to kinematic selection colliders.
     pub launch_projectile: bool,
+    /// This entity was created as a Flinderize target. Keeping this separate
+    /// from the general model-bounds fallback lets only launched debris turn a
+    /// dimension-less moving sphere into a simulated body.
+    pub flinderize_debris: bool,
 }
 
 impl Default for CreateEntityOptions {
@@ -1298,6 +1309,7 @@ impl Default for CreateEntityOptions {
             transient_fx: false,
             projectile_raycast_origin: None,
             launch_projectile: false,
+            flinderize_debris: false,
         }
     }
 }
@@ -1536,6 +1548,7 @@ mod tests {
             &None,
             entity_id,
             true,
+            false,
         )
         .expect("an authored launched sphere should get a body");
         physics.set_velocity(entity_id, vec3(-10.0, 0.0, 0.0));
@@ -1637,6 +1650,43 @@ mod tests {
             );
             assert_eq!(bodies[0].blocks_player, should_block);
             assert_eq!(bodies[0].blocks_actor, should_block);
+        }
+    }
+
+    /// A dimension-less moving sphere only becomes simulated when it was
+    /// explicitly spawned by Flinderize. Ordinary model-bounds fallbacks keep
+    /// the conservative kinematic policy established by #597/#767.
+    ///
+    /// Negative-first: before #815, both cases were kinematic and ignored the
+    /// Flinderize impulse and gravity.
+    #[test]
+    fn only_flinderized_dimensionless_debris_becomes_dynamic() {
+        for (flinderize_debris, expected_body_type) in [(false, "kinematic"), (true, "dynamic")] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_dimensionless_object(&mut world, PhysicsModelType::SPHERE, false);
+            let model = gib_model();
+
+            create_physics_representation_with_options(
+                &mut world,
+                &mut physics,
+                &Some(&model),
+                entity_id,
+                false,
+                flinderize_debris,
+            )
+            .expect("dimension-less debris should retain a model-bounds collider");
+
+            let bodies = physics.debug_list_bodies();
+            assert_eq!(bodies.len(), 1);
+            assert_eq!(bodies[0].body_type, expected_body_type);
+            assert!(
+                bodies[0].mass.is_finite() && bodies[0].mass > 0.0 && bodies[0].mass < 1.0,
+                "small gib bounds should yield a finite, bounded mass, got {}",
+                bodies[0].mass
+            );
+            assert!(!bodies[0].blocks_player);
+            assert!(!bodies[0].blocks_actor);
         }
     }
 
