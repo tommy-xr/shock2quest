@@ -1217,7 +1217,23 @@ fn create_physics_representation_with_options(
                 && maybe_dimensions.is_none()
                 && !immobile
                 && !is_climbable;
-            let group = if is_unsimulated_debris {
+            // An explicit SPHERE with no usable radius has no authored
+            // collision volume. `add_dynamic` still sanitizes it to a tiny
+            // ball because Rapier cannot index a degenerate AABB, but that
+            // crash guard is not level geometry: leaving it solid turns a
+            // dimensionless point into an invisible character obstacle. This
+            // is especially destructive above moving terrain, where the point
+            // can deflect a carried capsule off its support (#592).
+            //
+            // Keep the body and ENTITY membership for save/physics identity,
+            // raycasts, and script effects. Only character solidity changes;
+            // positive authored spheres remain ordinary solid dynamic props.
+            let is_dimensionless_authored_sphere = phys_type.phys_type == PhysicsModelType::SPHERE
+                && maybe_dimensions.is_some_and(|dimensions| {
+                    let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+                    !radius.is_finite() || radius <= 0.0
+                });
+            let group = if is_unsimulated_debris || is_dimensionless_authored_sphere {
                 group.non_solid_to_characters()
             } else {
                 group
@@ -1574,6 +1590,31 @@ mod tests {
         entity_id
     }
 
+    fn add_authored_sphere(world: &mut World, radius: f32) -> EntityId {
+        world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: radius,
+                radius1: 0.0,
+                offset0: Vector3::zero(),
+                offset1: Vector3::zero(),
+                size: Vector3::zero(),
+                unk1: 0,
+                unk2: 0,
+            },
+        ))
+    }
+
     /// `eggbit.bin`'s bounds, the annelid gib a smashed Floor Pod flinderizes
     /// into: measured live off its collider at 0.66 x 0.74 x 0.31 wu.
     fn gib_model() -> Model {
@@ -1637,6 +1678,45 @@ mod tests {
             );
             assert_eq!(bodies[0].blocks_player, should_block);
             assert_eq!(bodies[0].blocks_actor, should_block);
+        }
+    }
+
+    /// A zero-radius authored SPHERE has no collision volume. Physics keeps a
+    /// tiny sanitized body so Rapier never sees a degenerate AABB, but that
+    /// implementation detail must not turn the point into solid geometry for
+    /// character capsules. Positive authored spheres remain ordinary solid
+    /// dynamic props.
+    ///
+    /// Negative-first: before the fix both cases blocked characters.
+    #[test]
+    fn authored_zero_radius_sphere_does_not_block_characters() {
+        for (radius, should_block) in [(0.0, false), (0.25, true)] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_authored_sphere(&mut world, radius);
+
+            let handle = create_physics_representation(&mut world, &mut physics, &None, entity_id)
+                .expect("an authored sphere should retain its runtime body");
+
+            assert_eq!(
+                physics.collider_blocks_player(handle),
+                should_block,
+                "radius {radius} should{} block the player",
+                if should_block { "" } else { " not" }
+            );
+            assert_eq!(
+                physics.collider_blocks_actor(handle),
+                should_block,
+                "radius {radius} should{} block actors",
+                if should_block { "" } else { " not" }
+            );
+            let bodies = physics.debug_list_bodies();
+            assert_eq!(bodies.len(), 1);
+            assert_eq!(bodies[0].body_type, "dynamic");
+            assert!(
+                bodies[0].collision_groups.iter().any(|g| g == "entity"),
+                "the sphere must remain raycastable"
+            );
         }
     }
 
