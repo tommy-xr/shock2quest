@@ -3077,13 +3077,14 @@ impl PhysicsWorld {
     pub fn get_aabb2(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);
-            maybe_rigid_body.map(|rigid_body| {
-                let character_collider = &self.collider_set[rigid_body.colliders()[0]];
+            maybe_rigid_body.and_then(|rigid_body| {
+                let collider_handle = rigid_body.colliders().first()?;
+                let character_collider = self.collider_set.get(*collider_handle)?;
                 let aabb = character_collider.compute_aabb();
-                Aabb3 {
+                Some(Aabb3 {
                     min: point3(aabb.mins.x, aabb.mins.y, aabb.mins.z),
                     max: point3(aabb.maxs.x, aabb.maxs.y, aabb.maxs.z),
-                }
+                })
             })
         } else {
             None
@@ -3224,6 +3225,38 @@ impl PhysicsWorld {
         is_sensor: bool,
     ) -> RigidBodyHandle {
         //for (pos, size, facing, id, is_sensor) in &phys_objs {
+        let handle = self.add_kinematic_anchor(entity_id, pos, facing);
+        let size = sanitize_collider_size(entity_id, "add_kinematic", size);
+        let mut collider = ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
+            //.rotation(vector!(angles.0, angles.1, angles.2))
+            //.rotation(vector!(facing.z, facing.x, facing.y))
+            .translation(vec_to_nvec(offset))
+            //.position(test)
+            .restitution(0.7)
+            .build();
+
+        collider.set_enabled(true);
+        collider.set_sensor(is_sensor);
+        collider.user_data = entity_id.inner() as u128;
+        collider.set_collision_groups(collision_groups.0);
+
+        self.collider_set
+            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+        handle
+    }
+
+    /// Create a kinematic transform anchor without collision geometry.
+    ///
+    /// Zero-volume PhysAttach objects (notably `Lift 1 Walls`) still own a
+    /// render transform that follows moving terrain, but contribute no shape
+    /// to collision queries. A bare body preserves that transform flow without
+    /// turning the marker into a tiny solid collider.
+    pub fn add_kinematic_anchor(
+        &mut self,
+        entity_id: EntityId,
+        pos: Vector3<f32>,
+        facing: Quaternion<f32>,
+    ) -> RigidBodyHandle {
         let nquat =
             nalgebra::geometry::Quaternion::new(facing.s, facing.v.x, facing.v.y, facing.v.z);
         let nquat_unit = UnitQuaternion::from_quaternion(nquat);
@@ -3247,26 +3280,9 @@ impl PhysicsWorld {
             .pose(test)
             .build();
         rigid_body.user_data = entity_id.inner() as u128;
-        let handle = &self.rigid_body_set.insert(rigid_body);
-        let size = sanitize_collider_size(entity_id, "add_kinematic", size);
-        let mut collider = ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
-            //.rotation(vector!(angles.0, angles.1, angles.2))
-            //.rotation(vector!(facing.z, facing.x, facing.y))
-            .translation(vec_to_nvec(offset))
-            //.position(test)
-            .restitution(0.7)
-            .build();
-
-        self.entity_id_to_body.insert(entity_id, *handle);
-
-        collider.set_enabled(true);
-        collider.set_sensor(is_sensor);
-        collider.user_data = entity_id.inner() as u128;
-        collider.set_collision_groups(collision_groups.0);
-
-        self.collider_set
-            .insert_with_parent(collider, *handle, &mut self.rigid_body_set);
-        *handle
+        let handle = self.rigid_body_set.insert(rigid_body);
+        self.entity_id_to_body.insert(entity_id, handle);
+        handle
     }
 
     /// Attach one kinematic entity to another using Dark's PhysAttach

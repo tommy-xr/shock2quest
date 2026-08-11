@@ -1194,6 +1194,28 @@ fn create_physics_representation_with_options(
                 }
             };
 
+            // `Lift 1 Walls` is authored as a zero-radius SPHERE with an
+            // outgoing PhysAttach link. Treat that zero-volume marker as the
+            // transform anchor for the visible wall shell, not a simulated
+            // ball: its authored dimensions contribute no collision geometry.
+            // Keep a collider-less kinematic body so the attachment machinery
+            // can drive its render transform without inventing a model-bounds
+            // OBB that would fill the lift's hollow interior.
+            let is_zero_radius_phys_attach_anchor = phys_type.phys_type == PhysicsModelType::SPHERE
+                && maybe_dimensions.is_some_and(|dimensions| {
+                    dimensions.radius0 == 0.0 && dimensions.radius1 == 0.0
+                })
+                && world
+                    .borrow::<View<Links>>()
+                    .unwrap()
+                    .get(entity_id)
+                    .is_ok_and(|links| {
+                        links
+                            .to_links
+                            .iter()
+                            .any(|link| matches!(link.link, Link::PhysAttach(_)))
+                    });
+
             let group = if is_climbable {
                 CollisionGroup::climbable_entity()
             } else {
@@ -1244,7 +1266,9 @@ fn create_physics_representation_with_options(
                 && phys_type.phys_type == PhysicsModelType::SPHERE;
             let is_dynamic_flinder =
                 flinderize_debris && is_movable_dimensionless_sphere && !is_sensor;
-            let rigid_body_handle = if is_authored_dynamic_sphere || is_dynamic_flinder {
+            let rigid_body_handle = if is_zero_radius_phys_attach_anchor {
+                physics.add_kinematic_anchor(entity_id, pos.position, qrotation)
+            } else if is_authored_dynamic_sphere || is_dynamic_flinder {
                 physics_log!(DEBUG, "Creating dynamic hitbox entity");
                 physics.add_dynamic(
                     entity_id,
@@ -1830,6 +1854,87 @@ mod tests {
             physics.collider_blocks_player(handle),
             "a climbable must stay solid to the player"
         );
+    }
+
+    /// The shipped `Lift 1 Walls` uses a zero-radius SPHERE as its physical
+    /// attachment anchor. The anchor must be kinematic so the PhysAttach link
+    /// can drive it with the lift; simulating the zero-volume marker as a
+    /// dynamic ball makes attachment registration fail and lets the visible
+    /// walls separate from the moving platform.
+    #[test]
+    fn zero_radius_phys_attach_sphere_is_a_kinematic_anchor() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let parent = world.add_entity((
+            PropPosition {
+                position: vec3(2.0, 3.0, 4.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                num_submodels: 6,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: 0.0,
+                radius1: 0.0,
+                offset0: Vector3::zero(),
+                offset1: Vector3::zero(),
+                size: vec3(2.4, 0.4, 2.4),
+                unk1: 0,
+                unk2: 0,
+            },
+        ));
+        let child = world.add_entity((
+            PropPosition {
+                position: vec3(2.0, 4.0, 4.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: 0.0,
+                radius1: 0.0,
+                offset0: Vector3::zero(),
+                offset1: Vector3::zero(),
+                size: Vector3::zero(),
+                unk1: 0,
+                unk2: 0,
+            },
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(parent)),
+                    link: Link::PhysAttach(dark::properties::PhysAttachOptions {
+                        offset: vec3(0.0, 1.0, 0.0),
+                    }),
+                }],
+            },
+        ));
+
+        let _parent_handle = create_physics_representation(&mut world, &mut physics, &None, parent)
+            .expect("the lift floor should get its authored OBB");
+        let _child_handle = create_physics_representation(&mut world, &mut physics, &None, child)
+            .expect("the attached wall shell should retain a transform anchor");
+
+        let child_body = physics
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(child.inner() as i32))
+            .expect("the attached shell should have a body");
+        assert_eq!(child_body.body_type, "kinematic");
+        assert!(
+            physics.get_aabb2(child).is_none(),
+            "a zero-radius authored anchor must not invent collision geometry"
+        );
+        assert!(physics.attach_kinematic(child, parent, vec3(0.0, 1.0, 0.0)));
     }
 
     /// `PhysType::NONE` means the archetype deliberately disables physical
