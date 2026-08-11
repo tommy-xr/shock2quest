@@ -22,14 +22,16 @@ impl Script for FrobQB {
             MessagePayload::Frob => match set_quest_bit_effect(world, entity_id) {
                 Some(quest_bit_effect) => {
                     // What happens to the object after the quest bit is awarded
-                    // is decided by its `PropFrobInfo`, not by this script: a
+                    // is decided by its `PropFrobInfo`, not by this script. A
                     // pickup item (`world_action` with MOVE/USE_AMMO - the
                     // Engineering circuit board, the access key cards, the Big
                     // Bomb) is *taken*, so it goes into the player's backpack
                     // through the same `DropEntityInfo` transfer the grab and
-                    // loot-container paths use. Everything else (buttons,
-                    // corpses, computers) is used in place and consumed, as
-                    // before. `can_grab_item` is the shared eligibility rule -
+                    // loot-container paths use. A use-in-place host (buttons,
+                    // corpses, computers) remains alive: its sibling scripts
+                    // own the host lifetime and may need it after this effect
+                    // batch, notably `ContainerScript`'s open loot panel.
+                    // `can_grab_item` is the shared eligibility rule -
                     // reparenting anything else would corrupt it.
                     //
                     // A take-able object only goes to the backpack if there is
@@ -38,27 +40,22 @@ impl Script for FrobQB {
                     // and leaving the object frobbable would let a second frob
                     // re-fire the other scripts attached to it - `BaseButton`
                     // resends every SwitchLink - after the bit is already set.
-                    let backpack = if crate::virtual_hand::can_grab_item(world, entity_id) {
-                        world
-                            .borrow::<UniqueView<PlayerInfo>>()
-                            .map(|player| player.inventory_entity_id)
-                            .ok()
+                    if crate::virtual_hand::can_grab_item(world, entity_id) {
+                        match world.borrow::<UniqueView<PlayerInfo>>() {
+                            Ok(player) => Effect::combine(vec![
+                                quest_bit_effect,
+                                Effect::DropEntityInfo {
+                                    parent_entity_id: player.inventory_entity_id,
+                                    dropped_entity_id: entity_id,
+                                },
+                            ]),
+                            Err(_) => Effect::combine(vec![
+                                quest_bit_effect,
+                                Effect::DestroyEntity { entity_id },
+                            ]),
+                        }
                     } else {
-                        None
-                    };
-
-                    match backpack {
-                        Some(parent_entity_id) => Effect::combine(vec![
-                            quest_bit_effect,
-                            Effect::DropEntityInfo {
-                                parent_entity_id,
-                                dropped_entity_id: entity_id,
-                            },
-                        ]),
-                        None => Effect::combine(vec![
-                            quest_bit_effect,
-                            Effect::DestroyEntity { entity_id },
-                        ]),
+                        quest_bit_effect
                     }
                 }
                 None => Effect::NoEffect,
@@ -74,12 +71,13 @@ mod tests {
     use dark::properties::{
         FrobFlag, Links, PropFrobInfo, PropQuestBitName, PropQuestBitValue, QuestBitValue,
     };
-    use shipyard::World;
+    use shipyard::{EntitiesView, World};
 
     use crate::{
+        gui::gui_script,
         mission::PlayerInfo,
         physics::PhysicsWorld,
-        scripts::{Effect, MessagePayload, Script},
+        scripts::{CompositeScript, ContainerGui, Effect, MessagePayload, Script, script_util},
     };
 
     use super::FrobQB;
@@ -190,9 +188,10 @@ mod tests {
     }
 
     /// Use-in-place objects (corpses, the Shield Computer, plot buttons) have no
-    /// MOVE in their world action and keep the consume-on-frob behavior.
+    /// MOVE in their world action. `FrobQB` contributes the quest transition but
+    /// leaves their lifetime to their sibling scripts.
     #[test]
-    fn frobbing_a_use_only_object_still_consumes_it() {
+    fn frobbing_a_use_only_object_leaves_its_lifetime_to_sibling_scripts() {
         let (world, object, _inventory) = quest_object_world(FrobFlag::SCRIPT);
 
         let effects = Effect::flatten(vec![FrobQB::new().handle_message(
@@ -210,11 +209,122 @@ mod tests {
             "the quest bit must be awarded, got {effects:?}"
         );
         assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == object)),
+            "FrobQB must not consume a sibling-owned use-only host, got {effects:?}"
+        );
+    }
+
+    /// Rickenbacker 1 corpse 1636 is an authored composite host: its
+    /// `ContainerScript` owns the loot panel while `FrobQB` awards Note_7_8.
+    /// One Frob must not tear down that shared host (and its Contains links)
+    /// after opening the panel.
+    #[test]
+    fn frobbing_a_quest_container_opens_it_without_destroying_its_contents() {
+        let mut world = World::new();
+        let card = world.add_entity(());
+        let corpse = world.add_entity((
+            PropQuestBitName("Note_7_8".to_owned()),
+            PropQuestBitValue(QuestBitValue::COMPLETE),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            Links {
+                to_links: vec![dark::properties::ToLink {
+                    to_template_id: 1779,
+                    to_entity_id: Some(dark::properties::WrappedEntityId(card)),
+                    link: dark::properties::Link::Contains(0),
+                }],
+            },
+        ));
+        let mut scripts = CompositeScript::new(vec![
+            gui_script(Box::new(ContainerGui::loot_container())),
+            Box::new(FrobQB::new()),
+        ]);
+
+        let effects = Effect::flatten(vec![scripts.handle_message(
+            corpse,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        )]);
+
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::OpenPanel { entity } if *entity == corpse)),
+            "the container sibling must open its panel, got {effects:?}"
+        );
+        assert!(
             effects.iter().any(|effect| matches!(
                 effect,
-                Effect::DestroyEntity { entity_id } if *entity_id == object
+                Effect::SetQuestBit { quest_bit_name, .. } if quest_bit_name == "Note_7_8"
             )),
-            "a use-only object must still be consumed, got {effects:?}"
+            "FrobQB must still award the corpse's quest bit, got {effects:?}"
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == corpse)),
+            "FrobQB must not destroy a use-in-place host owned by sibling scripts, got {effects:?}"
+        );
+
+        // Apply the only lifetime-changing effect relevant to this regression.
+        // Production handles OpenPanel/SetQuestBit without modifying the host;
+        // DestroyEntity is what removed the corpse and orphaned its children.
+        for effect in &effects {
+            if matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == corpse) {
+                world.delete_entity(corpse);
+            }
+        }
+
+        assert!(
+            world.borrow::<EntitiesView>().unwrap().is_alive(corpse),
+            "the shared quest/container host must survive the effect batch"
+        );
+        let contains = script_util::get_all_links_with_data(&world, corpse, |link| match link {
+            dark::properties::Link::Contains(_) => Some(()),
+            _ => None,
+        })
+        .into_iter()
+        .map(|(entity, ())| entity)
+        .collect::<Vec<_>>();
+        assert_eq!(
+            contains,
+            vec![card],
+            "the corpse must retain its authored Contains link"
+        );
+
+        // Setting the same Dark quest value is idempotent. A later Frob may
+        // reopen a sibling-owned panel, but FrobQB must never start owning the
+        // persistent host's lifetime on a repeat interaction.
+        let repeat = Effect::flatten(vec![scripts.handle_message(
+            corpse,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        )]);
+        assert!(repeat.iter().any(|effect| matches!(
+            effect,
+            Effect::SetQuestBit { quest_bit_name, .. } if quest_bit_name == "Note_7_8"
+        )));
+        assert!(
+            !repeat
+                .iter()
+                .any(|effect| matches!(effect, Effect::DestroyEntity { entity_id } if *entity_id == corpse)),
+            "repeat Frob must remain an idempotent quest transition, got {repeat:?}"
+        );
+        assert_eq!(
+            script_util::get_all_links_with_data(&world, corpse, |link| match link {
+                dark::properties::Link::Contains(_) => Some(()),
+                _ => None,
+            })
+            .len(),
+            1,
+            "repeat Frob must leave the quest container's contents intact"
         );
     }
 }

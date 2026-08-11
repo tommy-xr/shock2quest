@@ -18,9 +18,8 @@ use super::{BaseButton, Effect, MessagePayload, Script};
 /// `TurnOn`.
 ///
 /// A frob changes level immediately rather than by way of a self-addressed
-/// `TurnOn`: sibling scripts on the same entity can consume the frob too (the
-/// rick3 shuttle button also runs `FrobQB`, which destroys the entity), and a
-/// deferred message would never reach it.
+/// `TurnOn`: the transition should be part of the player's direct action, not
+/// depend on a self-addressed message surviving until the next script update.
 pub struct LevelChangeButton {
     base_button: BaseButton,
 }
@@ -145,8 +144,7 @@ mod tests {
             "frob must relay TurnOn over switch links, got {sent:?}"
         );
         // The transition is in the frob's own effect, not deferred behind a
-        // self-addressed message - a sibling script (rick3's FrobQB) can
-        // destroy the entity on the same frob.
+        // self-addressed message that would not run until the next update.
         assert_eq!(
             transition_target(&effect),
             Some("ops3.mis".to_owned()),
