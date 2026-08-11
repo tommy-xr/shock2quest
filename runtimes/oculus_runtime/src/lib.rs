@@ -470,6 +470,14 @@ fn main() {
     let mut ready_reported = false;
     let mut session_focused = false;
     'main_loop: loop {
+        // Drain Android's NativeActivity queues. OpenXR is the real input
+        // path - nothing here feeds gameplay - but NativeActivity hands the
+        // app a lifecycle event pipe and an input queue, and leaving them
+        // unconsumed is what makes Horizon OS raise "shock2quest isn't
+        // responding" while the OpenXR session renders happily at 90 Hz.
+        #[cfg(target_os = "android")]
+        android_pump_events();
+
         // println!(
         //     " - Before polling events: {}",
         //     render_time.elapsed().as_secs_f32()
@@ -1008,6 +1016,99 @@ fn create_projection_matrix(fov: &xr::Fovf, near_z: f32, far_z: f32) -> cgmath::
         c0r0, c1r0, c2r0, c3r0, c0r1, c1r1, c2r1, c3r1, c0r2, c1r2, c2r2, c3r2, c0r3, c1r3, c2r3,
         c3r3,
     )
+}
+
+/// Non-blockingly drain the Android lifecycle and input queues once per frame.
+///
+/// This must go through the thread's `ALooper`: `ndk_glue::poll_events()` is a
+/// raw read on the event pipe, and that pipe is left in blocking mode, so
+/// calling it speculatively would park the render thread forever the moment
+/// the queue ran dry. Polling the looper with a zero timeout first tells us
+/// which queue actually has something pending, so every read below is
+/// guaranteed not to block.
+///
+/// Teardown is deliberately *not* driven from here. The OpenXR session state
+/// machine already exits the main loop on EXITING/LOSS_PENDING after a clean
+/// `session.end()`; breaking out on ndk-glue's `Destroy` instead would tear
+/// down GL and XR objects after the activity is already gone, with the session
+/// possibly never ended - strictly worse ordering. `Destroy` is logged and the
+/// drain stops for the frame.
+///
+/// The input events are finished as *unhandled* on purpose: gameplay input
+/// arrives through OpenXR actions, and these only need to be consumed so the
+/// watchdog sees the app servicing its queues. Reporting them unhandled lets
+/// the platform apply its own default handling (e.g. BACK). `pre_dispatch`
+/// must be honored - when it takes the event (IME and friends) it owns it, and
+/// finishing it ourselves would be a double free.
+#[cfg(target_os = "android")]
+fn android_pump_events() {
+    use ndk::looper::{Poll, ThreadLooper};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Upper bound on Android queue events serviced per frame, so a burst can
+    /// never stall the 90 Hz render loop. Leftovers are handled next frame.
+    const MAX_ANDROID_EVENTS_PER_FRAME: u32 = 32;
+
+    static NO_LOOPER_REPORTED: AtomicBool = AtomicBool::new(false);
+
+    let Some(looper) = ThreadLooper::for_thread() else {
+        // No looper on this thread means the pump is inert and the ANR is
+        // back - say so once rather than failing silently.
+        if !NO_LOOPER_REPORTED.swap(true, Ordering::Relaxed) {
+            println!(
+                "android_pump_events: no ALooper for this thread - Android queues are NOT being serviced"
+            );
+        }
+        return;
+    };
+
+    // Bounded so a flooded queue can never starve rendering; anything left
+    // over is picked up on the next frame. A single budget covers both the
+    // outer poll and the inner input drain, so the cap is a real per-frame
+    // event budget rather than just a poll count.
+    let mut budget = MAX_ANDROID_EVENTS_PER_FRAME;
+    while budget > 0 {
+        budget -= 1;
+        match looper.poll_all_timeout(Duration::ZERO) {
+            Ok(Poll::Event { ident, .. }) => match ident {
+                ndk_glue::NDK_GLUE_LOOPER_EVENT_PIPE_IDENT => {
+                    if let Some(event) = ndk_glue::poll_events() {
+                        // Rendering is already governed by the OpenXR session
+                        // state, so the rest of the lifecycle is informational.
+                        if event == ndk_glue::Event::Destroy {
+                            println!("android_pump_events: activity destroyed");
+                            return;
+                        }
+                    }
+                }
+                ndk_glue::NDK_GLUE_LOOPER_INPUT_QUEUE_IDENT => {
+                    if let Some(input_queue) = ndk_glue::input_queue().as_ref() {
+                        while budget > 0 {
+                            let Some(event) = input_queue.get_event() else {
+                                break;
+                            };
+                            budget -= 1;
+                            if let Some(event) = input_queue.pre_dispatch(event) {
+                                input_queue.finish_event(event, false);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+            // Both queues are empty (Timeout), we were only woken up (Wake),
+            // or the looper ran a callback itself (Callback, which
+            // `poll_all_timeout` never actually yields) - nothing more to
+            // service this frame.
+            Ok(Poll::Timeout) | Ok(Poll::Wake) | Ok(Poll::Callback) => break,
+            Err(e) => {
+                // A permanently failing looper would silently disable the
+                // pump; keep it visible.
+                println!("android_pump_events: looper poll failed: {e:?}");
+                break;
+            }
+        }
+    }
 }
 
 /// Convert a floor-origin STAGE-space position (meters) into the game's pawn
