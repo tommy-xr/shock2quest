@@ -307,6 +307,12 @@ const CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
 /// needed when the compressed route fits beside a wall but the standing
 /// capsule must clear that wall before expanding.
 const CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY: f32 = 5.0 * CLIMB_TOP_OUT_RADIUS;
+/// A fixed mantle sample may land on a lower pipe or shelf while the player's
+/// head is already touching the underside of the actual deck. Only in that
+/// separate-ceiling case, sample the same bounded lateral offsets used by the
+/// landing search for a floor face locally connected to that exact underside.
+/// Crouching is the largest grid: eight radius steps on either side.
+const CLIMB_TOP_OUT_MAX_LATERAL_MANTLE_CANDIDATES: usize = 8 * 2;
 /// Only redirect a valid forward landing onto a recessed approach-side floor
 /// when the forward route needs at least a full compressed-body-width dogleg.
 /// A one-radius sidestep is ordinary ledge recovery and must keep the player's
@@ -1528,6 +1534,80 @@ fn mantle_lip_patch(
     Some(MantleLipPatch { handle, faces })
 }
 
+/// Find a laterally offset mantle floor belonging to the exact local terrain
+/// slab currently obstructing the player's rise.
+///
+/// WorldRep is one mission-wide trimesh, so a shared collider handle and equal
+/// height are not proof of one surface. The downward floor sample must be
+/// connected to the canonical upward-hit face inside the same bounded probe
+/// corridor. This permits a ladder to exit beside a lower pipe without
+/// authorizing a disconnected ceiling or another island in WorldRep.
+fn lateral_same_slab_mantle_hit(
+    queries: &QueryPipeline,
+    up_hit: Option<(ColliderHandle, RayIntersection)>,
+    head: Vector<Real>,
+    probe_ahead: Vector<Real>,
+    lateral: Vector<Real>,
+    compressed_radius: Real,
+    lateral_steps: usize,
+) -> Option<(Vector<Real>, ColliderHandle, RayIntersection)> {
+    let (up_handle, up) = up_hit?;
+    let FeatureId::Face(up_face) = up.feature else {
+        return None;
+    };
+    if up.normal.y >= -CLIMB_TOP_OUT_MIN_GROUND_NORMAL {
+        return None;
+    }
+    let collider = queries.colliders.get(up_handle)?;
+    let mesh = collider.shape().as_trimesh()?;
+    let face_count = mesh.indices().len() as u32;
+    if face_count == 0 {
+        return None;
+    }
+    let canonical_up_face = up_face % face_count;
+    let underside = head + Vector::y() * up.time_of_impact;
+    let mut evaluated = 0;
+    for lateral_step in 1..=lateral_steps {
+        for side in [1.0, -1.0] {
+            if evaluated == CLIMB_TOP_OUT_MAX_LATERAL_MANTLE_CANDIDATES {
+                return None;
+            }
+            evaluated += 1;
+            let origin = probe_ahead + lateral * (side * lateral_step as Real * compressed_radius);
+            let Some((floor_handle, floor)) = queries
+                .cast_ray_and_get_normal(
+                    &Ray::new(Point::from(origin), -Vector::y()),
+                    CLIMB_TOP_OUT_MAX_DROP,
+                    true,
+                )
+                .filter(|(_, floor)| floor.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+            else {
+                continue;
+            };
+            let floor_point = origin - Vector::y() * floor.time_of_impact;
+            if floor_handle != up_handle
+                || floor_point.y + 1.0e-4 < underside.y
+                || floor_point.y - underside.y > CLIMB_TOP_OUT_MAX_LOCAL_SLAB_THICKNESS + 1.0e-4
+            {
+                continue;
+            }
+            let floor_patch = mantle_lip_patch(
+                queries,
+                Some((floor_handle, floor.feature)),
+                floor_point,
+                &[underside, floor_point],
+                false,
+            );
+            if floor_patch.is_some_and(|patch| {
+                patch.handle == up_handle && patch.faces.contains(&canonical_up_face)
+            }) {
+                return Some((origin, floor_handle, floor));
+            }
+        }
+    }
+    None
+}
+
 /// Extend a floor-seeded mantle patch with only the underside faces crossed by
 /// the actual recovered rise.
 ///
@@ -1988,6 +2068,8 @@ fn plan_climb_top_out(
         )
     };
     let compressed_radius = body_radius / SCALE_FACTOR;
+    let lateral = vector![direction.z, 0.0, -direction.x];
+    let lateral_steps = (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / compressed_radius).ceil() as usize;
     let head_offset = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
     let raised = head + Vector::y() * CLIMB_TOP_OUT_UP;
@@ -2072,7 +2154,7 @@ fn plan_climb_top_out(
         .is_none()
         .then(|| mantle_probe(route_ahead))
         .flatten();
-    let same_mantle_slab = match (up_hit, route_mantle_hit) {
+    let route_same_mantle_slab = match (up_hit, route_mantle_hit) {
         (Some((up_handle, up)), Some((origin, floor_handle, floor)))
             if up_handle == floor_handle
                 && (origin - probe_ahead).norm() > CLIMB_TOP_OUT_RECOVERY_RETREAT =>
@@ -2086,26 +2168,44 @@ fn plan_climb_top_out(
         }
         _ => false,
     };
-    let mantle_hit = fixed_mantle_hit.or_else(|| {
-        if same_mantle_slab {
+    let initial_mantle_hit = fixed_mantle_hit.or_else(|| {
+        if route_same_mantle_slab {
             route_mantle_hit
         } else {
             None
         }
     });
-    let mantle_floor =
-        mantle_hit.map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
-    if up_obstruction.is_some_and(|(_, obstruction_y)| {
+    let initial_mantle_floor = initial_mantle_hit
+        .map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
+    let separate_ceiling = up_obstruction.is_some_and(|(_, obstruction_y)| {
         // A lip can have a thin underside above its adjacent landing. Treat
         // surfaces within one compressed radius plus the solver gap on both
         // faces as the same landing edge; a genuinely separate low ceiling
         // remains farther above the probed floor.
-        mantle_floor.is_none_or(|floor| {
+        initial_mantle_floor.is_none_or(|floor| {
             floor.y + compressed_radius + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
                 < obstruction_y
         })
-    }) && ladder_exit_hit.is_none()
-    {
+    });
+    let lateral_mantle_hit = (separate_ceiling && ladder_exit_hit.is_none())
+        .then(|| {
+            lateral_same_slab_mantle_hit(
+                probe_queries,
+                up_hit,
+                head,
+                probe_ahead,
+                lateral,
+                compressed_radius,
+                lateral_steps,
+            )
+        })
+        .flatten();
+    let lateral_mantle_slab = lateral_mantle_hit.is_some();
+    let mantle_hit = lateral_mantle_hit.or(initial_mantle_hit);
+    let same_mantle_slab = route_same_mantle_slab || lateral_mantle_slab;
+    let mantle_floor =
+        mantle_hit.map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
+    if separate_ceiling && lateral_mantle_hit.is_none() && ladder_exit_hit.is_none() {
         reject_top_out!("separate_ceiling");
     }
 
@@ -2438,8 +2538,6 @@ fn plan_climb_top_out(
     // recovery stays within four radii and lateral recovery within five. The
     // compressed route first reaches the geometry-derived `lip_clear` before
     // moving to the selected landing.
-    let lateral = vector![direction.z, 0.0, -direction.x];
-    let lateral_steps = (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / compressed_radius).ceil() as usize;
     let forward_steps = (CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY / compressed_radius).ceil() as usize;
     // Breadth-first by total recovery distance. Within an equal distance,
     // consider lateral recovery first so the fixed candidate budget reaches
@@ -2530,6 +2628,14 @@ fn plan_climb_top_out(
         let Some(landing) = landing_pose(candidate) else {
             continue;
         };
+        if lateral_mantle_slab
+            && mantle_floor.is_some_and(|floor| {
+                (landing.standing.y - standing_floor_offset - floor.y).abs()
+                    > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
+            })
+        {
+            continue;
+        }
         let Some(validated) = validated_landing(landing) else {
             continue;
         };
@@ -8360,6 +8466,222 @@ mod tests {
             final_pose,
             &crouched_player_capsule(),
         ));
+    }
+
+    fn merged_cuboid_worldrep(parts: &[(Vector<Real>, Vector<Real>)]) -> PhysicsWorld {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for (center, half_extents) in parts {
+            let (part_vertices, part_indices) = Cuboid::new(*half_extents).to_trimesh();
+            let base = vertices.len() as u32;
+            vertices.extend(
+                part_vertices
+                    .into_iter()
+                    .map(|vertex| Point::from(vertex + *center)),
+            );
+            indices.extend(
+                part_indices
+                    .into_iter()
+                    .map(|triangle| triangle.map(|index| index + base)),
+            );
+        }
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("merged WorldRep")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        world
+    }
+
+    fn diagonal_slab_worldrep() -> PhysicsWorld {
+        let (vertices, indices) = Cuboid::new(vector![1.0, 0.05, 0.2]).to_trimesh();
+        let angle = -std::f32::consts::FRAC_PI_4;
+        let (sin, cos) = angle.sin_cos();
+        let vertices = vertices
+            .into_iter()
+            .map(|vertex| {
+                Point::new(
+                    0.48 + cos * vertex.x + sin * vertex.z,
+                    1.55 + vertex.y,
+                    0.48 - sin * vertex.x + cos * vertex.z,
+                )
+            })
+            .collect();
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("diagonal WorldRep slab")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        world
+    }
+
+    fn diagonal_ribbon_worldrep(stations: &[(Real, Real)]) -> PhysicsWorld {
+        let along = vector![
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2
+        ];
+        let across = vector![
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            -std::f32::consts::FRAC_1_SQRT_2
+        ];
+        let half_width = 0.3;
+        let mut vertices = Vec::new();
+        for &(distance, y) in stations {
+            let center = along * distance + Vector::y() * y;
+            vertices.push(Point::from(center - across * half_width));
+            vertices.push(Point::from(center + across * half_width));
+        }
+        let mut indices = Vec::new();
+        for segment in 0..stations.len() - 1 {
+            let left = (2 * segment) as u32;
+            let right = left + 1;
+            let next_left = left + 2;
+            let next_right = left + 3;
+            indices.push([left, next_left, next_right]);
+            indices.push([left, next_right, right]);
+        }
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("diagonal WorldRep ribbon")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        world
+    }
+
+    fn lateral_slab_test_hit(world: &PhysicsWorld) -> Option<(Vector<Real>, Real)> {
+        let queries = query_pipeline(world, QueryFilter::default());
+        let head = vector![0.0, 0.72, 0.0];
+        let probe_ahead = vector![2.0 * CLIMB_TOP_OUT_RADIUS, 2.12, 0.0];
+        let up_hit = queries.cast_ray_and_get_normal(
+            &Ray::new(Point::from(head), Vector::y()),
+            CLIMB_TOP_OUT_UP,
+            true,
+        );
+        lateral_same_slab_mantle_hit(
+            &queries,
+            up_hit,
+            head,
+            probe_ahead,
+            Vector::z(),
+            CLIMB_TOP_OUT_RADIUS,
+            (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / CLIMB_TOP_OUT_RADIUS).ceil() as usize,
+        )
+        .map(|(origin, _, hit)| (origin, origin.y - hit.time_of_impact))
+    }
+
+    #[test]
+    fn lateral_mantle_finds_an_edge_connected_same_slab_floor() {
+        // A thin closed slab runs diagonally through U and T. Dark's fixed
+        // forward probe lies outside its near edge, while the second lateral
+        // sample reaches the top through that edge inside the local corridor.
+        let world = diagonal_slab_worldrep();
+        let (origin, floor_y) = lateral_slab_test_hit(&world)
+            .expect("the edge-connected lateral top should identify the rise's local slab");
+
+        assert!((origin.z - 2.0 * CLIMB_TOP_OUT_RADIUS).abs() < 1.0e-4);
+        assert!((floor_y - 1.6).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn lateral_mantle_rejects_a_disconnected_island_in_one_worldrep() {
+        // The same collider and same top height are insufficient: these two
+        // closed boxes are separated in x/z and have no local edge path.
+        let world = merged_cuboid_worldrep(&[
+            (vector![0.0, 1.55, 0.0], vector![0.2, 0.05, 0.2]),
+            (vector![0.96, 1.55, 0.96], vector![0.2, 0.05, 0.2]),
+        ]);
+
+        assert!(
+            lateral_slab_test_hit(&world).is_none(),
+            "mission-wide WorldRep identity must not connect a lateral island to the sampled underside"
+        );
+    }
+
+    #[test]
+    fn lateral_mantle_rejects_a_broad_ceiling_without_a_local_edge() {
+        // U and T are opposite sides of one same-height closed slab, but its
+        // nearest edge lies far outside the bounded probe corridor. Treating
+        // collider identity or thickness as sufficient would turn an ordinary
+        // room ceiling into a through-ceiling mantle.
+        let world = merged_cuboid_worldrep(&[(vector![0.0, 1.55, 0.0], vector![4.0, 0.05, 4.0])]);
+
+        assert!(
+            lateral_slab_test_hit(&world).is_none(),
+            "a broad solid ceiling must remain an obstruction when no slab edge is locally reachable"
+        );
+    }
+
+    #[test]
+    fn lateral_mantle_rejects_a_parented_floor_before_the_worldrep_top() {
+        let mut world = diagonal_slab_worldrep();
+        // Model the authored Pipe8x3 failure mode: a live parented OBB is the
+        // first downward floor hit at the otherwise-valid lateral sample.
+        world.add_kinematic(
+            EntityId::from_inner(3).unwrap(),
+            vec3(0.96, 1.86, 0.96),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.35, 0.1, 0.35),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(4).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        assert!(
+            lateral_slab_test_hit(&world).is_none(),
+            "a parented pipe floor must not inherit the WorldRep underside exception"
+        );
+    }
+
+    #[test]
+    fn lateral_mantle_rejects_a_floor_below_the_sampled_underside() {
+        // One connected ribbon starts horizontal above the upward sample,
+        // slopes down, and becomes horizontal again under lateral T. Deleting
+        // the explicit T >= U gate would therefore make this negative pass.
+        let world = diagonal_ribbon_worldrep(&[(-0.3, 1.5), (0.3, 1.5), (1.0, 1.0), (1.7, 1.0)]);
+
+        assert!(
+            lateral_slab_test_hit(&world).is_none(),
+            "a lower shelf must not be paired with an unrelated overhead underside"
+        );
+    }
+
+    #[test]
+    fn lateral_mantle_rejects_an_edge_connected_floor_above_the_thin_slab_bound() {
+        // The same local ribbon stays connected but rises by 1.1 wu from U to
+        // T, just beyond the standing-profile slab bound of 1.04 wu. Its ramp
+        // is split into short faces so topology alone still reaches both ends.
+        let world = diagonal_ribbon_worldrep(&[
+            (-0.3, 1.0),
+            (0.2, 1.0),
+            (0.7, 1.55),
+            (1.1, 2.1),
+            (1.7, 2.1),
+        ]);
+
+        assert!(
+            lateral_slab_test_hit(&world).is_none(),
+            "a thick local shell must remain a ceiling rather than becoming a mantle slab"
+        );
     }
 
     #[test]

@@ -1130,6 +1130,136 @@ test(
   },
 );
 
+// Rick1 object532 is a tall south-face ladder whose authored exit is the y42
+// deck west of the column. A lower y38.8 floor also fits a standing capsule,
+// but it is a sealed pocket beneath that deck and cannot be accepted merely
+// because it is locally supported.
+test(
+  "flat climbing: rick1 ladder 532 reaches the connected y42 deck",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "rick1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    const ladder = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 532);
+    assert.ok(ladder, "rick1 should contain authored ladder object 532");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+
+    // Geometry-relative setup reproduces the reachable supported south-face
+    // stage. The climb and all post-setup movement use production controls.
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderY - 7.15797,
+      z: ladderZ - 0.62918,
+    });
+    await game.input.set("crouch", 0);
+    await game.input.setJump(false);
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const startFrame = await game.info();
+    assert.ok(
+      Math.hypot(start.x - ladderX, start.z - (ladderZ - 0.62918)) < 0.05 &&
+        Math.abs(startFrame.player.camera_offset[1] - 1.04) < 0.02,
+      `expected standing south-face stage; ladder=${JSON.stringify(ladder.position)}, ` +
+        `start=${JSON.stringify(start)}, camera=${JSON.stringify(startFrame.player.camera_offset)}`,
+    );
+
+    const horizontal = 10;
+    await game.input.lookAtWorldPoint([
+      start.x - 0.35 * horizontal,
+      start.y + Math.tan(Math.PI / 3) * horizontal,
+      start.z + 0.94 * horizontal,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let peak = start;
+    let reachedUpperDeck = false;
+    let landing = start;
+    for (let frame = 0; frame < 360; frame += 1) {
+      await game.step({ frames: 1 });
+      const position = await game.player.position();
+      if (position.y > peak.y) peak = position;
+      if (position.y > 43.1) {
+        const support = await game.raycast({
+          start: [position.x, position.y + 0.1, position.z],
+          end: [position.x, position.y - 3, position.z],
+          collision_groups: ["world", "entity", "selectable"],
+          ignore_sensors: true,
+        });
+        if (
+          support.hit_point !== null &&
+          support.hit_normal !== null &&
+          Math.abs(support.hit_point[1] - 42) < 0.05 &&
+          support.hit_normal[1] > 0.5
+        ) {
+          reachedUpperDeck = true;
+          landing = position;
+          break;
+        }
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y + 0.1, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      reachedUpperDeck &&
+        Math.abs(stable.y - 43.244) < 0.08 &&
+        stable.x < ladderX - 0.5 &&
+        stableSupport.hit &&
+        stableSupport.hit_point !== null &&
+        Math.abs(stableSupport.hit_point[1] - 42) < 0.05 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `ordinary standing input must reject the lower pocket and settle on the connected y42 deck; ` +
+        `start=${JSON.stringify(start)}, peak=${JSON.stringify(peak)}, landing=${JSON.stringify(landing)}, ` +
+        `stable=${JSON.stringify(stable)}, support=${JSON.stringify(stableSupport)}`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      stable.x + 10,
+      stable.y + 1.6,
+      stable.z,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let egress = stable;
+    for (let frame = 0; frame < 180; frame += 1) {
+      await game.step({ frames: 1 });
+      egress = await game.player.position();
+      if (egress.x > stable.x + 0.75) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    egress = await game.player.position();
+    const egressSupport = await game.raycast({
+      start: [egress.x, egress.y + 0.1, egress.z],
+      end: [egress.x, egress.y - 3, egress.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      egress.x > stable.x + 0.7 &&
+        Math.abs(egress.y - stable.y) < 0.08 &&
+        egressSupport.hit_point !== null &&
+        Math.abs(egressSupport.hit_point[1] - 42) < 0.05 &&
+        egressSupport.hit_normal !== null &&
+        egressSupport.hit_normal[1] > 0.5,
+      `the selected top-out must permit ordinary eastward egress on y42; ` +
+        `stable=${JSON.stringify(stable)}, egress=${JSON.stringify(egress)}, ` +
+        `support=${JSON.stringify(egressSupport)}`,
+    );
+  },
+);
+
 // Issue #657's Eng1 blocker is a different Dark BreakClimb shape from Rick1:
 // authored ladder 317 ends under a thick terrain slab. The player must rise
 // through the slab's two locally sampled wall planes, then descend to the
