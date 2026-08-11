@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, findRepoRoot } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
 
 // End-to-end: a calm AI flagged to patrol (P$AI_Patrol) walks its authored
@@ -10,6 +12,18 @@ import type { EntityDetailResult } from "../src/index.js";
 //
 // Opt-in (needs Data/ assets + compiles the runtime): npm run test:e2e
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
+
+function findSavePath(saveName: string): string | undefined {
+  const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
+  const roots = [
+    process.env.DARK_ASSET_PATH,
+    join(repoRoot, "Data"),
+    join(repoRoot, "..", "Data"),
+  ].filter((directory): directory is string => Boolean(directory));
+  return roots
+    .map((root) => join(root, "saves", `${saveName}.sav`))
+    .find(existsSync);
+}
 
 function aiProp(detail: EntityDetailResult, name: string): string | undefined {
   return detail.properties.find((p) => p.name === name)?.value;
@@ -117,6 +131,96 @@ test(
   },
 );
 
+test(
+  "a patroller resumes its live target across alertness and save/load (#410)",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async (t) => {
+    const saveName = `patrol_target_resume_${Date.now()}`;
+    t.after(() => {
+      const path = findSavePath(saveName);
+      if (path) rmSync(path, { force: true });
+    });
+
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8163),
+    });
+    await game.player.teleport({ x: 300, y: 0, z: 300 });
+    await game.step({ frames: 2 });
+
+    const findPatroller = async () => {
+      const pipes = await game.entities.list({ filter: "OG-Pipe", limit: 100 });
+      const patroller = pipes.entities.find(
+        (entity) => entity.template_id === MEDSCI1_PATROLLER_OBJ,
+      );
+      assert.ok(patroller, "medsci1 native patroller should exist");
+      return patroller;
+    };
+    let patroller = await findPatroller();
+    let detail = await game.entities.detail(patroller.id);
+    const current = detail.outgoing_links.find(
+      (link) => link.link_type === "AICurrentPatrol",
+    );
+    assert.ok(current, "active patrol should publish its live destination");
+    const targetTemplate = (await game.entities.detail(current.target_id)).template_id;
+
+    await game.entities.sendMessage(patroller.id, {
+      type: "SetAlertness",
+      level: "Moderate",
+    });
+    await game.step({ frames: 5 });
+    detail = await game.entities.detail(patroller.id);
+    assert.equal(aiProp(detail, "AIBehavior"), "Chase");
+    assert.equal(
+      detail.outgoing_links.find(
+        (link) => link.link_type === "AICurrentPatrol",
+      )?.target_id,
+      current.target_id,
+      "an alertness interruption must not discard the patrol destination",
+    );
+
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 1 });
+
+    patroller = await findPatroller();
+    detail = await game.entities.detail(patroller.id);
+    const restoredCurrent = detail.outgoing_links.find(
+      (link) => link.link_type === "AICurrentPatrol",
+    );
+    assert.ok(restoredCurrent, "save/load should retain the current patrol link");
+    assert.equal(
+      (await game.entities.detail(restoredCurrent.target_id)).template_id,
+      targetTemplate,
+      "the restored relation must point to the same authored patrol marker",
+    );
+    assert.equal(aiProp(detail, "AIBehavior"), "Patrol");
+
+    // A second live interruption after hydration proves the restored relation
+    // is also the handback target, not merely inert serialized metadata.
+    await game.entities.sendMessage(patroller.id, {
+      type: "SetAlertness",
+      level: "Moderate",
+    });
+    await game.step({ frames: 5 });
+    await game.entities.sendMessage(patroller.id, {
+      type: "SetAlertness",
+      level: "Lowest",
+    });
+    await game.step({ frames: 1 });
+    detail = await game.entities.detail(patroller.id);
+    const resumed = detail.outgoing_links.find(
+      (link) => link.link_type === "AICurrentPatrol",
+    );
+    assert.ok(resumed);
+    assert.equal(
+      (await game.entities.detail(resumed.target_id)).template_id,
+      targetTemplate,
+    );
+    assert.equal(aiProp(detail, "AIBehavior"), "Patrol");
+  },
+);
+
 // #807: the test above starts its patroller with a SetAlertness, and that
 // forced transition is the ONLY reason patrol used to engage - behavior was
 // picked exclusively on an alertness LEVEL CHANGE, so a creature that spawns
@@ -155,11 +259,9 @@ test(
       `medsci1 should have its native patroller (object ${MEDSCI1_PATROLLER_OBJ})`,
     );
 
-    // Its authored route, resolved the way ai_util::nearest_patrol_point
-    // does: the 3D-nearest marker that actually has an outgoing AIPatrol link
-    // (so the chain can be walked from it), then whatever that link chains to.
-    // Following the link matters - medsci1 has unrelated markers on the
-    // walkway above that a proximity guess would pick up.
+    // Resolve the two-point authored loop around it. Dark measures the initial
+    // distance to an AIPatrol link's source but targets that link's destination;
+    // following the edge also avoids unrelated markers on the walkway above.
     const candidates = await Promise.all(
       (await game.entities.list({ limit: 5000 })).entities
         .filter((e) => e.name === "Patrol Path")

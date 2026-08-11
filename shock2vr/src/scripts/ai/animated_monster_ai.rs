@@ -298,7 +298,9 @@ impl AnimatedMonsterAI {
         }
         if is_patroller(world, entity_id) {
             let (position, _) = get_position_and_forward(world, entity_id);
-            if let Some((point, goal)) = nearest_patrol_point(world, position.to_vec()) {
+            if let Some((point, goal)) = current_patrol_point(world, entity_id)
+                .or_else(|| nearest_patrol_point(world, position.to_vec()))
+            {
                 return Box::new(RefCell::new(PatrolBehavior::new(point, goal)));
             }
         }
@@ -1475,6 +1477,8 @@ fn is_attack_animation(motion_query_items: &[MotionQueryItem]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::Transform;
+    use shipyard::{IntoIter, IntoWithId};
 
     /// A live monster at the origin, turned `heading` degrees off +Z, with the
     /// player standing 10 units down +Z. The physics world is empty, so
@@ -1646,6 +1650,73 @@ mod tests {
             monster.current_behavior.borrow().name(),
             "Patrol",
             "a flagged patroller with a reachable route patrols from spawn",
+        );
+    }
+
+    #[test]
+    fn patroller_resumes_current_target_after_alertness_interrupts_it() {
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(180.0));
+        make_patroller(&mut world, entity_id, true);
+
+        // The fresh nearest-source rule would target the x=20 destination.
+        // Persist x=10 instead, as Dark's AICurrentPatrol relation does after
+        // a route has already advanced, so the two cases are distinguishable.
+        let resume_target = {
+            let transforms = world
+                .borrow::<shipyard::View<crate::runtime_props::RuntimePropTransform>>()
+                .unwrap();
+            let links = world
+                .borrow::<shipyard::View<dark::properties::Links>>()
+                .unwrap();
+            (&links)
+                .iter()
+                .with_id()
+                .filter(|(id, links)| {
+                    *id != entity_id
+                        && links
+                            .to_links
+                            .iter()
+                            .any(|link| link.link == Link::AIPatrol)
+                })
+                .find_map(|(id, _)| {
+                    let x = transforms
+                        .get(id)
+                        .ok()?
+                        .0
+                        .transform_point(cgmath::point3(0.0, 0.0, 0.0))
+                        .x;
+                    ((x - 10.0).abs() < 0.01).then_some(id)
+                })
+                .unwrap()
+        };
+        world.add_component(
+            entity_id,
+            dark::properties::Links {
+                to_links: vec![dark::properties::ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(dark::properties::WrappedEntityId(resume_target)),
+                    link: Link::AICurrentPatrol,
+                }],
+            },
+        );
+
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+        assert_eq!(
+            monster.current_behavior.borrow().patrol_target(),
+            Some(resume_target),
+            "fresh script initialization must hydrate the saved route target"
+        );
+
+        monster.force_alertness(AIAlertLevel::Moderate, &world, &physics, entity_id);
+        assert_eq!(monster.current_behavior.borrow().name(), "Chase");
+        monster.force_alertness(AIAlertLevel::Lowest, &world, &physics, entity_id);
+        assert_eq!(monster.current_behavior.borrow().name(), "Patrol");
+        assert_eq!(
+            monster.current_behavior.borrow().patrol_target(),
+            Some(resume_target),
+            "calming down must resume the interrupted destination"
         );
     }
 

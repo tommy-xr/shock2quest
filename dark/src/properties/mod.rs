@@ -443,6 +443,11 @@ pub struct PropHUDSelect(pub bool);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropAIPatrol(pub bool);
 
+/// "AI_PtrlRnd": when true, the patrol ability may pick any other point in
+/// the connected patrol graph instead of following one outgoing branch.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropAIPatrolRandom(pub bool);
+
 //  This is a backlink to the template ID from the ss2 map file
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropTemplateId {
@@ -512,6 +517,10 @@ pub enum Link {
     /// with `PropAIPatrol(true)` walks this chain of points while idle. The
     /// link carries no data (a bare "go to the next point" edge).
     AIPatrol,
+    /// Runtime-only current patrol destination, from the AI to the marker it
+    /// must resume after an interruption or save/load. Dark names this local
+    /// relation `AICurrentPatrol`; it is not authored in mission data.
+    AICurrentPatrol,
     /// Names a destination object for scripted teleports (CS9 eggs/rumblers,
     /// TrapTeleport family, TrapDestroyTeleport's destroy target).
     Teleport,
@@ -1239,6 +1248,14 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$AI_Patrol",
             |reader, _len| read_bool(reader),
             PropAIPatrol,
+            accumulator::latest,
+        ),
+        // Dark chunk keys retain at most 11 characters, so the property
+        // `AI_PtrlRnd` is stored as `P$AI_PtrlRn` in retail missions.
+        define_prop(
+            "P$AI_PtrlRn",
+            |reader, _len| read_bool(reader),
+            PropAIPatrolRandom,
             accumulator::latest,
         ),
         define_prop(

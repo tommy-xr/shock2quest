@@ -85,6 +85,17 @@ fn count_patrolling_entities(info: &SystemShock2EntityInfo) -> usize {
         .count()
 }
 
+fn count_random_patrolling_entities(info: &SystemShock2EntityInfo) -> usize {
+    info.entity_to_properties
+        .values()
+        .filter(|props| {
+            props
+                .iter()
+                .any(|p| format!("{p:?}").contains("PropAIPatrolRandom(true)"))
+        })
+        .count()
+}
+
 /// Every `.mis` filename in `data`.
 fn all_missions(data: &Path) -> Vec<String> {
     std::fs::read_dir(data)
@@ -213,6 +224,19 @@ fn eng1_patrol_data_parses() {
     // ...and the AIs flagged to walk it (P$AI_Patrol = true).
     let patrollers = count_patrolling_entities(&info);
     assert_eq!(patrollers, 17, "eng1 PropAIPatrol(true) AI count changed");
+
+    // Dark's 12-character property name is truncated to the 11-character
+    // chunk key P$AI_PtrlRn in the mission file. Keep that real key registered
+    // so random-sequence patrols are not silently treated as ordinary routes.
+    assert!(
+        !info.unparsed_properties.contains_key("P$AI_PtrlRn"),
+        "P$AI_PtrlRn should parse as PropAIPatrolRandom"
+    );
+    assert_eq!(
+        count_random_patrolling_entities(&info),
+        14,
+        "eng1 PropAIPatrolRandom(true) AI count changed"
+    );
 }
 
 #[test]

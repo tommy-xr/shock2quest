@@ -9,8 +9,8 @@ use crate::{
         Effect,
         ai::ai_util,
         ai::steering::{
-            self, CollisionAvoidanceSteeringStrategy, PathFollowSteeringStrategy, SteeringOutput,
-            SteeringStrategy,
+            self, CollisionAvoidanceSteeringStrategy, PathFollowSteeringStrategy, Steering,
+            SteeringOutput, SteeringStrategy,
         },
     },
     time::Time,
@@ -65,6 +65,9 @@ pub struct PatrolBehavior {
     stall_seconds: f32,
     /// Points given up on since the last one actually reached.
     skipped_points: u32,
+    /// The runtime AICurrentPatrol link must be published once for a fresh
+    /// behavior and whenever the target changes.
+    target_dirty: bool,
 }
 
 impl PatrolBehavior {
@@ -77,6 +80,7 @@ impl PatrolBehavior {
             stall_anchor: None,
             stall_seconds: 0.0,
             skipped_points: 0,
+            target_dirty: true,
         }
     }
 
@@ -98,16 +102,39 @@ impl PatrolBehavior {
 
     /// Advance to the next point on the route; a closed loop repeats. A
     /// dead-end (no next link) ends the patrol.
-    fn advance(&mut self, world: &World) {
-        match ai_util::next_patrol_point(world, self.target_point) {
+    fn advance(
+        &mut self,
+        world: &World,
+        entity_id: EntityId,
+        clear_flag_on_dead_end: bool,
+    ) -> Effect {
+        match ai_util::next_patrol_point(world, entity_id, self.target_point) {
             Some((next, goal)) => {
                 self.target_point = next;
                 self.goal = goal;
                 self.steering_strategy = Self::steering_to(goal);
                 self.stall_anchor = None;
                 self.stall_seconds = 0.0;
+                self.target_dirty = false;
+                Effect::SetAICurrentPatrol {
+                    entity_id,
+                    target: Some(next),
+                }
             }
-            None => self.finished = true,
+            None => {
+                self.finished = true;
+                let mut effects = vec![Effect::SetAICurrentPatrol {
+                    entity_id,
+                    target: None,
+                }];
+                if clear_flag_on_dead_end {
+                    effects.push(Effect::SetAIProperty {
+                        entity_id,
+                        update: crate::scripts::AIPropertyUpdate::PatrolEnabled { enabled: false },
+                    });
+                }
+                Effect::combine(effects)
+            }
         }
     }
 
@@ -143,12 +170,20 @@ impl Behavior for PatrolBehavior {
         entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
+        let mut patrol_effects = Vec::new();
+        if self.target_dirty {
+            self.target_dirty = false;
+            patrol_effects.push(Effect::SetAICurrentPatrol {
+                entity_id,
+                target: Some(self.target_point),
+            });
+        }
         if !self.finished {
             let (position, _) = ai_util::get_position_and_forward(world, entity_id);
             let position = position.to_vec();
             if self.arrived(position) {
                 self.skipped_points = 0;
-                self.advance(world);
+                patrol_effects.push(self.advance(world, entity_id, true));
             } else if self.stalled(position, time) {
                 // Going nowhere: give up on this point and try the next one.
                 // Enough of those in a row and the whole route is out of
@@ -157,18 +192,29 @@ impl Behavior for PatrolBehavior {
                 self.skipped_points += 1;
                 if self.skipped_points >= PATROL_MAX_SKIPPED_POINTS {
                     self.finished = true;
+                    patrol_effects.push(Effect::SetAICurrentPatrol {
+                        entity_id,
+                        target: None,
+                    });
                 } else {
-                    self.advance(world);
+                    patrol_effects.push(self.advance(world, entity_id, false));
                 }
             }
         }
 
         if self.finished {
-            return None;
+            return Some((
+                Steering::from_current(current_heading),
+                Effect::combine(patrol_effects),
+            ));
         }
 
-        self.steering_strategy
+        let (steering, steering_effect) = self
+            .steering_strategy
             .steer(current_heading, world, physics, entity_id, time)
+            .unwrap_or((Steering::from_current(current_heading), Effect::NoEffect));
+        patrol_effects.push(steering_effect);
+        Some((steering, Effect::combine(patrol_effects)))
     }
 
     fn next_behavior(
@@ -196,6 +242,11 @@ impl Behavior for PatrolBehavior {
 
     fn is_locomotion(&self) -> bool {
         !self.finished
+    }
+
+    #[cfg(test)]
+    fn patrol_target(&self) -> Option<EntityId> {
+        (!self.finished).then_some(self.target_point)
     }
 }
 
@@ -251,12 +302,15 @@ mod tests {
         // 20 simulated seconds without the body ever moving - four times the
         // stall window, so every point on the loop gets its turn.
         let mut elapsed = 0.0;
+        let mut emitted = Vec::new();
         for _ in 0..200 {
             let time = Time {
                 elapsed: std::time::Duration::from_millis(100),
                 total: std::time::Duration::from_millis(0),
             };
-            patrol.steer(Deg(0.0), &world, &physics, creature, &time);
+            if let Some((_, effect)) = patrol.steer(Deg(0.0), &world, &physics, creature, &time) {
+                emitted.extend(Effect::flatten(vec![effect]));
+            }
             elapsed += 0.1;
             if patrol.finished {
                 break;
@@ -273,6 +327,23 @@ mod tests {
                 NextBehavior::Next(_)
             ),
             "giving up should hand back to idle",
+        );
+        assert!(emitted.iter().any(|effect| matches!(
+            effect,
+            Effect::SetAICurrentPatrol {
+                entity_id,
+                target: None,
+            } if *entity_id == creature
+        )));
+        assert!(
+            !emitted.iter().any(|effect| matches!(
+                effect,
+                Effect::SetAIProperty {
+                    update: crate::scripts::AIPropertyUpdate::PatrolEnabled { enabled: false },
+                    ..
+                }
+            )),
+            "movement failure stops this attempt but leaves the authored patrol flag enabled"
         );
     }
 
@@ -302,5 +373,62 @@ mod tests {
             "a moving patroller must stay on its route"
         );
         assert_eq!(patrol.target_point, first, "and keep the same point");
+    }
+
+    #[test]
+    fn patrol_publishes_its_live_target_relation() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(first, goal);
+        let time = Time {
+            elapsed: std::time::Duration::from_millis(100),
+            total: std::time::Duration::from_millis(0),
+        };
+
+        let (_, effect) = patrol
+            .steer(Deg(0.0), &world, &physics, creature, &time)
+            .expect("an active patrol steers");
+        assert!(Effect::flatten(vec![effect]).iter().any(|effect| matches!(
+            effect,
+            Effect::SetAICurrentPatrol {
+                entity_id,
+                target: Some(target),
+            } if *entity_id == creature && *target == first
+        )));
+    }
+
+    #[test]
+    fn patrol_dead_end_clears_flag_and_current_target() {
+        let mut world = World::new();
+        let creature = world.add_entity(RuntimePropTransform(Matrix4::from_scale(1.0)));
+        let final_point = world.add_entity((
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+            Links::empty(),
+        ));
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(final_point, vec3(0.0, 0.0, 0.0));
+        let time = Time {
+            elapsed: std::time::Duration::from_millis(100),
+            total: std::time::Duration::from_millis(0),
+        };
+
+        let (_, effect) = patrol
+            .steer(Deg(0.0), &world, &physics, creature, &time)
+            .expect("the terminal transition must still emit its effects");
+        let effects = Effect::flatten(vec![effect]);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SetAIProperty {
+                entity_id,
+                update: crate::scripts::AIPropertyUpdate::PatrolEnabled { enabled: false },
+            } if *entity_id == creature
+        )));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SetAICurrentPatrol {
+                entity_id,
+                target: None,
+            } if *entity_id == creature
+        )));
     }
 }
