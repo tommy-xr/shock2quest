@@ -3749,8 +3749,8 @@ impl MissionCore {
                     // is unreachable there and the disc is retired from the world
                     // on collection - without this, a Quest player could never
                     // hear a log at all. Flat keeps the faithful split (collecting
-                    // files it; reading plays it). Remove once VR can trigger the
-                    // action (#916 tracks the surrounding player-feedback work).
+                    // files it; reading plays it). Stopgap: remove once VR can
+                    // trigger the action (#921).
                     if game_options.presentation_mode != crate::PresentationMode::Flat {
                         effects.push_front(Effect::PlaySound {
                             handle: AudioHandle::new(),
