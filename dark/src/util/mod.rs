@@ -95,10 +95,21 @@ fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) ->
     Some(texture)
 }
 
+/// Find the texture a render-material script substitutes for the model's own
+/// diffuse, if any.
+///
+/// Only a *base* pass can supply the diffuse. 25AE materials routinely open
+/// with an additive shine or modulate overlay whose texture is a specular map,
+/// and reach their real diffuse through an `include` (not yet followed - see
+/// #912); treating such an overlay as the diffuse renders the object with its
+/// spec map and can make it disappear. Passes that cannot be a base pass are
+/// skipped, and `$TEXTURE` means the model keeps its authored texture.
 fn primary_render_pass_texture(script: &str) -> Option<String> {
     let mut in_render_pass = false;
-    let mut saw_open_brace = false;
     let mut brace_depth = 0_i32;
+    let mut saw_open_brace = false;
+    let mut pass_texture: Option<String> = None;
+    let mut pass_is_base = true;
 
     for raw_line in script.lines() {
         let line = raw_line
@@ -110,23 +121,38 @@ fn primary_render_pass_texture(script: &str) -> Option<String> {
         }
 
         if !in_render_pass {
-            let directive = line.split_whitespace().next()?;
-            if !directive.eq_ignore_ascii_case("render_pass") {
+            if !line
+                .split_whitespace()
+                .next()
+                .is_some_and(|directive| directive.eq_ignore_ascii_case("render_pass"))
+            {
                 continue;
             }
             in_render_pass = true;
+            saw_open_brace = false;
+            brace_depth = 0;
+            pass_texture = None;
+            pass_is_base = true;
         }
 
         let mut fields = line.split_whitespace();
-        if fields
-            .next()
-            .is_some_and(|field| field.eq_ignore_ascii_case("texture"))
-        {
-            let texture = fields.next()?.trim_matches('"');
-            if texture.eq_ignore_ascii_case("$texture") {
-                return None;
+        match fields.next() {
+            Some(field) if field.eq_ignore_ascii_case("texture") => {
+                let texture = fields.next()?.trim_matches('"');
+                if texture.eq_ignore_ascii_case("$texture") {
+                    // The material asks for the model's own texture, so there
+                    // is nothing to redirect - and no later pass overrides that.
+                    return None;
+                }
+                pass_texture = Some(texture.to_owned());
             }
-            return normalize_material_texture_reference(texture);
+            Some(field) if field.eq_ignore_ascii_case("blend") => {
+                // `blend <source> <destination>`; the destination factor is
+                // what distinguishes a base pass from an overlay.
+                let _source_factor = fields.next();
+                pass_is_base = is_base_pass_blend(fields.next());
+            }
+            _ => {}
         }
 
         brace_depth += line.chars().filter(|character| *character == '{').count() as i32;
@@ -134,12 +160,28 @@ fn primary_render_pass_texture(script: &str) -> Option<String> {
             saw_open_brace = true;
         }
         brace_depth -= line.chars().filter(|character| *character == '}').count() as i32;
+
         if saw_open_brace && brace_depth <= 0 {
-            return None;
+            if pass_is_base {
+                if let Some(texture) = pass_texture.take() {
+                    return normalize_material_texture_reference(&texture);
+                }
+            }
+            // Not a base pass (or carried no texture): keep looking.
+            in_render_pass = false;
         }
     }
 
     None
+}
+
+/// Whether a `blend <src> <dst>` destination factor describes a base pass.
+///
+/// Ordinary alpha blending (`INV_SRC_ALPHA`) replaces what is underneath and so
+/// can carry the diffuse. Additive (`ONE`) and modulate (`ZERO`) destinations
+/// composite *onto* an earlier pass, which makes them overlays.
+fn is_base_pass_blend(destination_factor: Option<&str>) -> bool {
+    destination_factor.is_none_or(|factor| factor.eq_ignore_ascii_case("INV_SRC_ALPHA"))
 }
 
 fn normalize_material_texture_reference(reference: &str) -> Option<String> {
@@ -339,6 +381,88 @@ mod tests {
         assert_eq!(
             resolve_object_material_texture_name(&asset_cache, "PANEL.PCX"),
             Some("txt16/panel.dds".to_owned())
+        );
+    }
+
+    /// 25AE viewmodel materials open with an *additive* shine overlay whose
+    /// texture is the specular map (`ND-atek.mtl` is the pistol); the diffuse
+    /// pass arrives through an `include`. Taking that overlay as the diffuse
+    /// swapped the pistol's base texture for its spec map and rendered it
+    /// see-through.
+    #[test]
+    fn object_material_ignores_an_additive_overlay_pass() {
+        let asset_cache = cache(&[
+            (
+                "txt16/nd-atek.mtl",
+                b"include ../../materials/ND-viewmodel.inc
+render_pass
+{
+ blend SRC_ALPHA ONE
+ texture obj/txt16/nd-atek_S
+ shaded 1
+}
+",
+            ),
+            ("txt16/nd-atek.dds", b"diffuse"),
+            ("txt16/nd-atek_s.dds", b"specular map"),
+        ]);
+
+        assert_eq!(
+            resolve_object_material_texture_name(&asset_cache, "ND-atek"),
+            Some("txt16/nd-atek.dds".to_owned())
+        );
+    }
+
+    /// `blend DST_COLOR ZERO` modulates what is already in the framebuffer, so
+    /// it is an overlay too.
+    #[test]
+    fn object_material_ignores_a_modulate_overlay_pass() {
+        let asset_cache = cache(&[
+            (
+                "txt16/panel.mtl",
+                b"render_pass
+{
+ blend DST_COLOR ZERO
+ texture OBJ\\TXT16\\shine
+}
+",
+            ),
+            ("txt16/panel.dds", b"diffuse"),
+            ("txt16/shine.dds", b"shine"),
+        ]);
+
+        assert_eq!(
+            resolve_object_material_texture_name(&asset_cache, "PANEL.PCX"),
+            Some("txt16/panel.dds".to_owned())
+        );
+    }
+
+    /// An overlay first, then a real base pass: the base pass wins.
+    #[test]
+    fn object_material_takes_the_first_base_pass_after_an_overlay() {
+        let asset_cache = cache(&[
+            (
+                "txt16/screen.mtl",
+                b"render_pass
+{
+ blend SRC_ALPHA ONE
+ texture OBJ\\TXT16\\glow
+}
+render_pass
+{
+ blend SRC_ALPHA INV_SRC_ALPHA
+ texture OBJ\\TXT16\\screen_2
+}
+",
+            ),
+            ("txt16/screen.dds", b"placeholder"),
+            ("txt16/glow.dds", b"glow"),
+            ("txt16/screen_2.dds", b"real screen"),
+        ]);
+
+        assert_eq!(
+            resolve_object_material_texture_name(&asset_cache, "SCREEN"),
+            Some("txt16/screen_2.dds".to_owned())
         );
     }
 
