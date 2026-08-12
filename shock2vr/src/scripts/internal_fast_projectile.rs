@@ -22,6 +22,14 @@ use crate::{
 
 use super::{Effect, MessagePayload, Script};
 
+/// How far an impact spang is backed off the surface it struck - just enough
+/// to keep it out of the world, matching the original engine's hair-width
+/// backup (0.01 Dark units). Clearance for the decal riding the spang (the
+/// bullet hole) is the decal surface offset's job, applied when its model is
+/// created; spawning the spang a visible distance out stacked the two and
+/// left the hole hanging off the wall.
+const SPANG_SURFACE_BACKUP: f32 = 0.01 / SCALE_FACTOR;
+
 pub struct InternalFastProjectileScript {
     velocity: Vector3<f32>,
 }
@@ -129,7 +137,7 @@ impl Script for InternalFastProjectileScript {
             if let Some(template_id) = choose_impact_spang(world, entity_id, hit_entity_id) {
                 effects.push(Effect::CreateEntity {
                     template_id,
-                    position: hit_point + hit_normal * SCALE_FACTOR / 25.0,
+                    position: hit_point + hit_normal * SPANG_SURFACE_BACKUP,
                     orientation: get_rotation_from_forward_vector(hit_normal)
                         * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Deg(90.0)),
                     root_transform: Matrix4::identity(),
