@@ -969,12 +969,11 @@ fn create_physics_representation_with_options(
         if v_creature.get(entity_id).is_ok() && v_creature_pose.get(entity_id).is_err() {
             let creature_type = v_creature.get(entity_id).unwrap();
             let creature_def = get_creature_definition(creature_type.0).unwrap();
-            let bbox = creature_def.bounding_size;
-            let radius = bbox.x.max(bbox.z) / 2.0;
-            let creature_shape = PhysicsShape::Capsule {
-                height: radius.max(bbox.y - radius * 2.0),
-                radius,
-            };
+            let creature_shape = live_creature_shape(
+                &creature_def,
+                v_phys_type.get(entity_id).ok(),
+                v_phys_dimensions.get(entity_id).ok(),
+            );
             rigid_body_handle = physics.add_dynamic(
                 entity_id,
                 pos.position + vec3(0.0, SCALE_FACTOR / 6.0, 0.0) /* bump up so that character is not stuck in geometry */,
@@ -1250,6 +1249,58 @@ fn create_physics_representation_with_options(
     }
 }
 
+fn live_creature_shape(
+    creature_def: &crate::creature::CreatureDefinition,
+    phys_type: Option<&PropPhysType>,
+    dimensions: Option<&PropPhysDimensions>,
+) -> PhysicsShape {
+    let bbox = creature_def.bounding_size;
+    let fallback_radius = bbox.x.max(bbox.z) / 2.0;
+    let fallback = || PhysicsShape::Capsule {
+        // Preserve the established fallback for creatures without a complete
+        // authored sphere model. Small animation bounds can otherwise leave a
+        // zero-length capsule segment, which Rapier does not accept here.
+        height: fallback_radius.max(bbox.y - fallback_radius * 2.0),
+        radius: fallback_radius,
+    };
+
+    let (Some(phys_type), Some(dimensions)) = (phys_type, dimensions) else {
+        return fallback();
+    };
+    if phys_type.phys_type != PhysicsModelType::SPHERE
+        || !(1..=2).contains(&phys_type.num_submodels)
+    {
+        return fallback();
+    }
+
+    // Dark drives a live creature's sphere submodels from animated joints and
+    // applies the creature descriptor's per-submodel radii (`SetPhysSubModScale`),
+    // rather than using the animation model's visual width as collision. The
+    // instantiated P$PhysDims mirrors those radii. This importer's historical
+    // representation stores each Dark radius at half its scaled value, so the
+    // conversion is deliberately scoped to live-creature SPHERE models; loose
+    // props keep their existing parser/physics semantics.
+    let imported_radii = [dimensions.radius0, dimensions.radius1];
+    let declared_radii = &imported_radii[..phys_type.num_submodels as usize];
+    if declared_radii
+        .iter()
+        .any(|radius| !radius.is_finite() || *radius <= 0.0)
+    {
+        return fallback();
+    }
+    let radius = declared_radii.iter().copied().fold(0.0, f32::max) * 2.0;
+    let segment_height = bbox.y - radius * 2.0;
+    if !radius.is_finite() || radius <= 0.0 || !segment_height.is_finite() || segment_height <= 0.0
+    {
+        return fallback();
+    }
+
+    PhysicsShape::Capsule {
+        height: segment_height,
+        radius,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CreateEntityOptions {
     pub force_visible: bool,
@@ -1287,6 +1338,7 @@ impl Default for CreateEntityOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::creature::{RUMBLER_HEIGHT, RUMBLER_WIDTH};
     use cgmath::InnerSpace;
     use collision::Aabb3;
     use dark::properties::{Links, ToLink};
@@ -1335,6 +1387,165 @@ mod tests {
     }
 
     const LADDER_SIZE: Vector3<f32> = Vector3::new(1.646, 6.4, 0.142);
+
+    /// A live Rumbler authors two 1.5 SS2-foot physics spheres. The property
+    /// importer's historical radius representation is half the scaled Dark
+    /// radius, so those values appear here as 0.3 world units. Its animated
+    /// model is five feet wide, but that is not its locomotion hull: Dark's
+    /// creature descriptor drives the two authored spheres independently.
+    ///
+    /// Negative-first: creature creation previously ignored both sphere
+    /// radii and built a 1.0-world-unit-radius capsule from animation bounds,
+    /// too broad for Rick1's shipped WALK|SMALL_CREATURE junction.
+    #[test]
+    fn live_creature_uses_authored_sphere_width_with_animation_height() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(0.0, 4.0, 0.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropCreature(3),
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 2,
+                remove_on_sleep: false,
+                is_special: true,
+            },
+            PropPhysDimensions {
+                radius0: 0.3,
+                radius1: 0.3,
+                offset0: Vector3::zero(),
+                offset1: Vector3::zero(),
+                size: Vector3::zero(),
+                unk1: 0,
+                unk2: 0,
+            },
+        ));
+
+        let handle = create_physics_representation(&mut world, &mut physics, &None, entity_id)
+            .expect("a live creature should get a dynamic physics body");
+        let (radius, segment_height) = physics
+            .capsule_dimensions(handle)
+            .expect("the live creature body should remain a capsule");
+
+        assert!(
+            (radius - 0.6).abs() < 0.001,
+            "expected radius 0.6, got {radius}"
+        );
+        assert!(
+            (segment_height + radius * 2.0 - RUMBLER_HEIGHT).abs() < 0.001,
+            "authored width must not change the full animation-derived height"
+        );
+        let body = physics
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(entity_id.inner() as i32))
+            .expect("the creature body should remain introspectable");
+        assert_eq!(body.body_type, "dynamic");
+        assert!(body.blocks_player && body.blocks_actor);
+        assert!(body.collision_groups.iter().any(|group| group == "actor"));
+    }
+
+    fn capsule(shape: PhysicsShape) -> (f32, f32) {
+        match shape {
+            PhysicsShape::Capsule { height, radius } => (radius, height),
+            other => panic!("expected creature capsule, got {other:?}"),
+        }
+    }
+
+    fn sphere_type(num_submodels: u32) -> PropPhysType {
+        PropPhysType {
+            phys_type: PhysicsModelType::SPHERE,
+            num_submodels,
+            remove_on_sleep: false,
+            is_special: true,
+        }
+    }
+
+    fn sphere_dimensions(radius0: f32, radius1: f32) -> PropPhysDimensions {
+        PropPhysDimensions {
+            radius0,
+            radius1,
+            offset0: vec3(9.0, 8.0, 7.0),
+            offset1: vec3(-6.0, -5.0, -4.0),
+            size: Vector3::zero(),
+            unk1: 0,
+            unk2: 0,
+        }
+    }
+
+    #[test]
+    fn live_creature_shape_uses_largest_declared_sphere_radius() {
+        let rumbler = get_creature_definition(3).unwrap();
+        let two_spheres = sphere_type(2);
+        let dimensions = sphere_dimensions(0.25, 0.3);
+        let (radius, segment_height) = capsule(live_creature_shape(
+            &rumbler,
+            Some(&two_spheres),
+            Some(&dimensions),
+        ));
+
+        assert!((radius - 0.6).abs() < 0.001);
+        assert!((segment_height + 2.0 * radius - RUMBLER_HEIGHT).abs() < 0.001);
+    }
+
+    #[test]
+    fn invalid_or_incomplete_creature_spheres_keep_animation_fallback() {
+        let rumbler = get_creature_definition(3).unwrap();
+        let fallback = capsule(live_creature_shape(&rumbler, None, None));
+        assert_eq!(fallback, (RUMBLER_WIDTH / 2.0, RUMBLER_WIDTH / 2.0));
+
+        let mut obb = sphere_type(2);
+        obb.phys_type = PhysicsModelType::ORIENTED_BOUNDING_BOX;
+        let invalid_cases = [
+            (Some(sphere_type(0)), Some(sphere_dimensions(0.3, 0.3))),
+            (Some(sphere_type(3)), Some(sphere_dimensions(0.3, 0.3))),
+            (Some(sphere_type(2)), Some(sphere_dimensions(0.3, 0.0))),
+            (Some(sphere_type(2)), Some(sphere_dimensions(0.3, f32::NAN))),
+            (Some(sphere_type(2)), Some(sphere_dimensions(0.7, 0.7))),
+            (Some(obb), Some(sphere_dimensions(0.3, 0.3))),
+            (Some(sphere_type(2)), None),
+        ];
+        for (phys_type, dimensions) in invalid_cases {
+            assert_eq!(
+                capsule(live_creature_shape(
+                    &rumbler,
+                    phys_type.as_ref(),
+                    dimensions.as_ref(),
+                )),
+                fallback,
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_creature_sphere_radii_match_original_descriptor_envelopes() {
+        for (creature_type, imported, expected_radius) in [
+            (0, [0.2, 0.24], 0.48),
+            (3, [0.3, 0.3], 0.6),
+            (4, [0.39, 0.0], 0.78),
+            (6, [0.16, 0.2], 0.4),
+        ] {
+            let creature = get_creature_definition(creature_type).unwrap();
+            let num_submodels = if imported[1] > 0.0 { 2 } else { 1 };
+            let dimensions = sphere_dimensions(imported[0], imported[1]);
+            let (radius, segment_height) = capsule(live_creature_shape(
+                &creature,
+                Some(&sphere_type(num_submodels)),
+                Some(&dimensions),
+            ));
+            assert!((radius - expected_radius).abs() < 0.001);
+            assert!((segment_height + radius * 2.0 - creature.bounding_size.y).abs() < 0.001);
+        }
+    }
 
     /// A wall fixture the player can frob but never pick up or move - a
     /// console, a card slot, the Resurrection Station casing. `phys_type` is
