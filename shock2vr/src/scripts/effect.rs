@@ -180,6 +180,13 @@ pub enum Effect {
         log: u32,
     },
 
+    /// Play back the most recently collected audio log the player has not read
+    /// yet (the original's `play_unread_log`): open the reader bound to that
+    /// disc's backing entity, mark it read, and play its `LOG<dd><nn>` audio.
+    /// No-op when every collected log has been read. Emitted by
+    /// `InputAction::ReadLastUnreadLog`.
+    ReadLastUnreadLog,
+
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the
     /// synthetic map-panel entity, or closes it if it is already open. No-op in

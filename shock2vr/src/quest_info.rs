@@ -21,6 +21,12 @@ use crate::research::ResearchState;
 pub struct CollectedLog {
     pub deck: u32,
     pub log: u32,
+    /// Whether the player has actually played this log back. Collecting a disc
+    /// only files it in the PDA; the reader is opened explicitly (the
+    /// `ReadLastUnreadLog` action). `#[serde(default)]` keeps saves written
+    /// before read tracking loadable - their logs restore as unread.
+    #[serde(default)]
+    pub read: bool,
 }
 
 #[derive(Deserialize, Serialize, Unique, Clone, Debug)]
@@ -93,7 +99,11 @@ impl QuestInfo {
         if self.has_collected_log(deck, log) {
             return false;
         }
-        self.collected_logs.push(CollectedLog { deck, log });
+        self.collected_logs.push(CollectedLog {
+            deck,
+            log,
+            read: false,
+        });
         true
     }
 
@@ -106,6 +116,31 @@ impl QuestInfo {
     /// The player's collected audio logs, in pickup order.
     pub fn collected_logs(&self) -> &[CollectedLog] {
         &self.collected_logs
+    }
+
+    /// The most recently collected log the player has not played back yet.
+    ///
+    /// The original gathers every unread log across all decks, sorts them by
+    /// acquisition time ascending and plays the *last* one - i.e. the newest
+    /// unread disc, not the oldest backlog entry. `collected_logs` is kept in
+    /// pickup order, so the newest unread is the last matching entry.
+    pub fn last_unread_log(&self) -> Option<&CollectedLog> {
+        self.collected_logs.iter().rev().find(|entry| !entry.read)
+    }
+
+    /// Mark a collected log as played back. Returns `true` when this flipped it
+    /// from unread (re-reading an already-read log is a no-op).
+    pub fn mark_log_read(&mut self, deck: u32, log: u32) -> bool {
+        let Some(entry) = self
+            .collected_logs
+            .iter_mut()
+            .find(|entry| entry.deck == deck && entry.log == log)
+        else {
+            return false;
+        };
+        let was_unread = !entry.read;
+        entry.read = true;
+        was_unread
     }
 
     /// The player's persistent character sheet.
@@ -165,5 +200,83 @@ impl QuestInfo {
 
     pub fn mark_email_as_played(&mut self, email: &str) {
         self.played_emails.insert(email.to_owned());
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    fn quest_info_with(logs: &[(u32, u32)]) -> QuestInfo {
+        let mut quest_info = QuestInfo::new();
+        for (deck, log) in logs {
+            quest_info.collect_log(*deck, *log);
+        }
+        quest_info
+    }
+
+    #[test]
+    fn collected_logs_start_unread() {
+        let quest_info = quest_info_with(&[(2, 20)]);
+
+        assert_eq!(quest_info.collected_logs()[0].read, false);
+    }
+
+    /// The original sorts unread logs by acquisition time and plays the *last*
+    /// one - the newest unread disc, not the oldest outstanding backlog entry.
+    #[test]
+    fn the_newest_unread_log_is_the_one_played_back() {
+        let quest_info = quest_info_with(&[(1, 1), (2, 2), (3, 3)]);
+
+        let unread = quest_info.last_unread_log().expect("nothing read yet");
+
+        assert_eq!((unread.deck, unread.log), (3, 3));
+    }
+
+    #[test]
+    fn reading_the_newest_falls_back_to_the_next_newest_unread() {
+        let mut quest_info = quest_info_with(&[(1, 1), (2, 2), (3, 3)]);
+
+        assert!(quest_info.mark_log_read(3, 3));
+        let unread = quest_info.last_unread_log().expect("two still unread");
+
+        assert_eq!((unread.deck, unread.log), (2, 2));
+    }
+
+    #[test]
+    fn nothing_is_played_back_once_every_log_is_read() {
+        let mut quest_info = quest_info_with(&[(1, 1), (2, 2)]);
+
+        quest_info.mark_log_read(1, 1);
+        quest_info.mark_log_read(2, 2);
+
+        assert!(quest_info.last_unread_log().is_none());
+    }
+
+    /// Re-reading is a no-op, and an unknown log is not silently inserted.
+    #[test]
+    fn marking_read_reports_only_the_first_transition() {
+        let mut quest_info = quest_info_with(&[(2, 20)]);
+
+        assert!(quest_info.mark_log_read(2, 20));
+        assert!(!quest_info.mark_log_read(2, 20));
+        assert!(!quest_info.mark_log_read(9, 9));
+        assert_eq!(quest_info.collected_logs().len(), 1);
+    }
+
+    /// Saves written before read tracking restore their logs as unread.
+    #[test]
+    fn logs_from_older_saves_deserialize_as_unread() {
+        let restored: CollectedLog =
+            serde_json::from_str(r#"{"deck":2,"log":20}"#).expect("older save shape should load");
+
+        assert_eq!(
+            restored,
+            CollectedLog {
+                deck: 2,
+                log: 20,
+                read: false
+            }
+        );
     }
 }

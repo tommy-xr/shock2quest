@@ -141,6 +141,9 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ToggleMap) {
             effects.push(Effect::ToggleMap);
         }
+        if state.just_triggered(InputAction::ReadLastUnreadLog) {
+            effects.push(Effect::ReadLastUnreadLog);
+        }
         effects
     }
 }

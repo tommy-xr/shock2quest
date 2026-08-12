@@ -210,6 +210,12 @@ pub struct DamageImpact {
 pub enum MessagePayload {
     Frob,
 
+    /// This entity's MFD panel was opened. Frobbing used to be the only way in,
+    /// so panels reset their per-open state on `Frob`; the audio-log reader is
+    /// opened by `ReadLastUnreadLog` instead, and any panel may later be opened
+    /// without a frob.
+    PanelOpened,
+
     // Physics events
     SensorBeginIntersect {
         with: EntityId,

@@ -32,8 +32,8 @@ test(
 
     assert.deepEqual(
       (await game.info()).player.collected_logs,
-      [{ deck: 6, log: 1 }],
-      "frobbing the disc should download its log into the player's PDA state",
+      [{ deck: 6, log: 1, read: false }],
+      "frobbing the disc should download its log into the PDA, unread",
     );
     assert.equal(
       (await game.physics.bodies({ entityId: disc.id })).bodies.length,

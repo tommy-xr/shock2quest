@@ -113,12 +113,19 @@ where
             // playing its clip) fire in both presentations. A gui can veto the
             // open (a content-less log disc) and/or ask for fresh per-open
             // state (the reader's scroll position).
+            // Opened without a frob (the audio-log reader): give the gui the
+            // same fresh per-open state a frob-open would have.
+            MessagePayload::PanelOpened => {
+                self.gui.prepare_state_on_frob(&mut self.state);
+                Effect::NoEffect
+            }
             MessagePayload::Frob => {
                 let frob_effect = self.gui.on_frob(entity_id, world);
                 if !self.gui.opens_on_frob(entity_id, world) {
                     return frob_effect;
                 }
-                self.gui.prepare_state_on_frob(&mut self.state);
+                // The per-open reset arrives via `PanelOpened`, dispatched by
+                // the `OpenPanel` handler, so both open paths share one hook.
                 Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
             }
             MessagePayload::GUIHover {

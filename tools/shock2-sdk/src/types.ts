@@ -397,6 +397,8 @@ export interface PlayerSnapshot {
 export interface CollectedLog {
   deck: number;
   log: number;
+  /** Whether the player has played this log back. Collecting only files it. */
+  read: boolean;
 }
 
 /** Trainable skill levels (weapon proficiencies + tech skills). */

@@ -32,7 +32,7 @@ import { teleportVerified } from "./helpers/teleport.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 test(
-  "log reader MFD: frob opens transcript with 45100, collects the log, persists",
+  "log reader MFD: collecting files the log, reading it opens the 45100 transcript, persists",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -70,19 +70,41 @@ test(
     const [lx, ly, lz] = detail.position;
     await teleportVerified(game, { x: lx, y: ly + 0.5, z: lz });
 
-    // --- Frob: the reader panel opens, bound to the disc ---
+    // --- Frob: the disc is filed in the PDA, and nothing opens ---
+    // The original files the entry and leaves reading to the player: its
+    // pickup path never opens the overlay (the call that would is commented
+    // out in the reference engine).
     await game.entities.sendMessage(amanpour.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "collecting a log must not pop the reader over the world",
+    );
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 2, log: 20, read: false }],
+      "the collected log should be filed unread",
+    );
+
+    // --- Read it: the original's `play_unread_log` opens the newest unread ---
+    await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
 
     const opened = await game.ui.state();
     assert.ok(
       opened.active_panel,
-      "frobbing the audio log should open the reader MFD panel",
+      "ReadLastUnreadLog should open the reader MFD panel",
     );
     assert.equal(
       opened.active_panel.template_id,
       1608,
       "the reader panel should be bound to the Amanpour log entity",
+    );
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 2, log: 20, read: true }],
+      "playing a log back should mark it read",
     );
 
     // The transcript must surface the code 45100 in-fiction.
@@ -154,15 +176,23 @@ test(
     );
     assert.ok(
       sounds.includes("log0220"),
-      `frobbing the log should play LOG0220 (recent: ${sounds.join(", ")})`,
+      `playing the log back should play LOG0220 (recent: ${sounds.join(", ")})`,
     );
 
     // --- The log is recorded in the persistent collection ---
     const collected = (await game.info()).player.collected_logs;
     assert.deepEqual(
       collected,
-      [{ deck: 2, log: 20 }],
-      "the Amanpour log should be recorded in the collection",
+      [{ deck: 2, log: 20, read: true }],
+      "the Amanpour log should be recorded in the collection, now read",
+    );
+
+    // --- Tab dismisses the reader, as it does any open MFD panel ---
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "Tab should dismiss the reader",
     );
 
     // Re-frobbing does not duplicate the collection entry.
@@ -193,8 +223,60 @@ test(
     await game.step({ frames: 5 });
     assert.deepEqual(
       (await game.info()).player.collected_logs,
-      [{ deck: 2, log: 20 }],
-      "the log collection should survive save/load",
+      [{ deck: 2, log: 20, read: true }],
+      "the collection and its read state should survive save/load",
+    );
+  },
+);
+
+// `RuntimePropLogData` (the resolved header/transcript/portrait/icon) is
+// runtime-only and deliberately not serialized. It used to be attached by the
+// same frob that opened the reader, so nothing noticed; now that reading is a
+// separate act, a log collected before a save must still render after loading.
+test(
+  "log reader MFD: a log collected before a save still reads back after loading",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8233),
+    });
+    await game.step({ frames: 5 });
+
+    const amanpour = (
+      await game.entities.list({ filter: "Audio Log", limit: 80 })
+    ).entities.find((e) => e.template_id === 1608);
+    assert.ok(amanpour, "medsci1 should contain the Amanpour log (obj 1608)");
+
+    // Collect it, and deliberately do NOT read it.
+    await game.entities.sendMessage(amanpour.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 2, log: 20, read: false }],
+      "the log should be collected and still unread",
+    );
+
+    await game.save("log-unread-roundtrip");
+    await game.load("log-unread-roundtrip");
+    await game.step({ frames: 5 });
+
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+
+    const panel = (await game.ui.state()).active_panel;
+    assert.ok(panel, "the unread log should still open after a save/load");
+    const text = panel.elements
+      .filter((e) => e.kind === "text" && e.text)
+      .map((e) => e.text)
+      .join(" ");
+    assert.ok(
+      text.includes("45100"),
+      `the reloaded reader must render its transcript, not a blank backdrop (got: ${text.slice(0, 160)})`,
+    );
+    assert.ok(
+      text.toUpperCase().includes("AMANPOUR"),
+      "the reloaded reader should still name the sender",
     );
   },
 );
