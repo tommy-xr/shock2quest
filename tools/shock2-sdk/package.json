@@ -13,10 +13,15 @@
     }
   },
   "scripts": {
+    "prebuild": "node scripts/check-deps.mjs",
     "build": "tsc",
+    "pretest": "node scripts/check-deps.mjs",
     "test": "tsc && node --test \"dist/test/*.test.js\"",
+    "pretest:e2e": "node scripts/check-deps.mjs",
     "test:e2e": "tsc && SHOCK2_E2E=1 node --test --test-concurrency=1 \"dist/test/*.test.js\"",
+    "pretest:e2e:reliability": "node scripts/check-deps.mjs",
     "test:e2e:reliability": "tsc && node scripts/reliability.mjs",
+    "preanim-smoothness": "node scripts/check-deps.mjs",
     "anim-smoothness": "tsc && node dist/scripts/anim-smoothness.js"
   },
   "engines": {

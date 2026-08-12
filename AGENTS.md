@@ -317,7 +317,7 @@ For debugging visual/rendering changes without a full interactive session:
 
    ```bash
    cd tools/shock2-sdk
-   npm install         # first time only
+   npm install         # first time only (per worktree - node_modules is not shared)
    npm test            # fast unit tests
    npm run test:e2e    # launches real debug runtimes (pathfinding scenario, mission load smoke tests)
    ```
