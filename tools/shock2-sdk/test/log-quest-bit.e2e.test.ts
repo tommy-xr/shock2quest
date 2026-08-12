@@ -54,9 +54,8 @@ test(
       "reading the log should grant Note_4_6 as an active (INCOMPLETE) objective",
     );
 
-    // Once the player has actually completed the objective, re-reading the disc
-    // (which survives, unlike the original's destroy-on-pickup) must leave it
-    // complete.
+    // Once the player has actually completed the objective, a direct debug
+    // replay against the hidden reader-backing entity must leave it complete.
     await game.quests.set("note_4_6", "complete");
     await game.entities.sendMessage(discs[0].id, { type: "Frob" });
     await game.step({ frames: 30 });

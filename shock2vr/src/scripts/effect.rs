@@ -169,9 +169,10 @@ pub enum Effect {
     },
 
     /// Record an audio log the player just frobbed into the persistent
-    /// collection (`QuestInfo`) and resolve its transcript/portrait strings onto
-    /// the disc entity (`RuntimePropLogData`) for the reader panel. Emitted by
-    /// the log disc's `MediaGui` on frob. `entity_id` is the disc; `deck`/`log`
+    /// collection (`QuestInfo`), resolve its transcript/portrait strings onto
+    /// the disc entity (`RuntimePropLogData`) for the reader panel, then retire
+    /// the pickup's world presence. Emitted by the log disc's `MediaGui` on
+    /// frob. `entity_id` is retained only as reader backing state; `deck`/`log`
     /// key the `level<deck>.str` strings.
     CollectLog {
         entity_id: EntityId,
