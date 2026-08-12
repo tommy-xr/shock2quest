@@ -32,9 +32,6 @@ pub use renderable::{
     scene_objects_to_renderables,
 };
 
-pub mod ui_2d_renderer;
-pub use ui_2d_renderer::UI2DRenderer;
-
 pub mod geometry;
 pub use geometry::Geometry;
 

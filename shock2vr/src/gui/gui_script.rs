@@ -6,6 +6,7 @@ use crate::{
     physics::PhysicsWorld,
     scripts::{Effect, MessagePayload, Script},
     time::Time,
+    ui::UiCanvas,
 };
 
 use super::{GUI_PIXEL_TO_WORLD_SIZE, GuiCursor};
@@ -57,20 +58,23 @@ where
         _time: &Time,
     ) -> Effect {
         let config = self.gui.get_config_for(entity_id, world, &self.state);
-        let mut components = {
+        let components = {
             let cursor = &self.last_cursor;
             self.gui
                 .get_components(cursor, entity_id, world, &self.state)
         };
         self.last_cursor = None;
+        let mut canvas = UiCanvas::from_elements(config.screen_size_in_pixels, components);
         let size = vec2(16.0, 16.0);
-        components.push(GuiComponent::Image {
+        canvas.push(GuiComponent::Image {
             alpha: 0.5,
             position: vec2(self.cursor.x, self.cursor.y),
             size,
             texture: "cursor.pcx".to_owned(),
+            transparent_index_0: false,
         });
-        let render_components = components
+        let render_components = canvas
+            .into_elements()
             .into_iter()
             .map(|c| c.to_render_info(config.screen_size_in_pixels, self.cursor))
             .collect();
@@ -148,12 +152,18 @@ where
                 let components =
                     self.gui
                         .get_components(&cursor_obj, entity_id, world, &self.state);
+                let canvas = UiCanvas::from_elements(
+                    self.gui
+                        .get_config_for(entity_id, world, &self.state)
+                        .screen_size_in_pixels,
+                    components,
+                );
                 self.last_cursor = cursor_obj;
 
                 // Is the UI going to generate an event, based on the input state?
                 let mut maybe_output_event = None;
                 if let Some(last) = &self.last_input_info {
-                    for c in components {
+                    for c in canvas.elements() {
                         let maybe_event = c.get_event(last, &current_input_info);
                         if maybe_event.is_some() {
                             maybe_output_event = maybe_event;

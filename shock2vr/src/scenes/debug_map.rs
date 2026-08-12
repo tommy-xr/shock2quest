@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector3, point2, vec3};
+use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector3, vec2, vec3};
 use dark::properties::{PropMapRef, PropPosition};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -20,6 +20,7 @@ use crate::{
     scripts::Effect,
     scripts::gui::{MapGui, MapGuiState},
     time::Time,
+    ui::UiCanvas,
 };
 
 /// Debug scene constants. The mission string doubles as the `QuestInfo`
@@ -227,9 +228,8 @@ impl GameScene for DebugMapScene {
         let rotation_matrix = Matrix3::from_cols(right, true_up, -look_dir);
 
         // Compose the panel through MapGui - the automap's composition path -
-        // and present its components exactly like the VR world-quad path
-        // (`GuiComponent::to_render_info` + `GuiComponentRenderInfo::render`,
-        // as `GuiManager` does), anchored at the debug panel transform.
+        // and present the shared UiCanvas in world space, anchored at the
+        // debug panel transform.
         let map_gui = MapGui;
         let components =
             map_gui.get_components(&None, self.map_entity, &self.world, &MapGuiState::default());
@@ -239,29 +239,18 @@ impl GameScene for DebugMapScene {
             * Matrix4::from(Quaternion::from(rotation_matrix))
             * Matrix4::from_nonuniform_scale(world_size.x, world_size.y, 1.0);
 
-        let objects = components
-            .into_iter()
-            .enumerate()
-            .map(|(index, component)| {
-                // Draw opaque, like the flat host does ("the original MFD art
-                // is opaque on screen") - the shared components' default alpha
-                // is a VR world-quad translucency. No cursor over the debug
-                // panel (MapGui has no buttons).
-                let info = component
-                    .with_alpha(1.0)
-                    .to_render_info(screen_size, point2(-1.0, -1.0));
-                let mut object = info.render(asset_cache);
-                object.set_transform(
-                    root_transform
-                        * Matrix4::from_translation(vec3(
-                            0.0,
-                            0.0,
-                            -COMPONENT_Z_STEP * index as f32,
-                        )),
-                );
-                object
-            })
-            .collect();
+        // Draw opaque, like the flat host does ("the original MFD art is
+        // opaque on screen"). No cursor over the debug panel (MapGui has no
+        // buttons). This is the same canvas description used by screen-space
+        // presentation; only the presentation method differs.
+        let canvas = UiCanvas::from_elements(screen_size, components);
+        let objects = canvas.render_world_space(
+            asset_cache,
+            root_transform,
+            Some(vec2(-1.0, -1.0)),
+            Some(1.0),
+            COMPONENT_Z_STEP,
+        );
 
         (objects, self.player_position, self.player_rotation)
     }

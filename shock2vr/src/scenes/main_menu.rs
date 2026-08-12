@@ -108,19 +108,19 @@ fn resolve_click(
     match pointer {
         Some(p) => {
             let action = if p.pressed && !last_pressed {
+                let mut canvas = UiCanvas::<MenuAction>::with_events(vec2(CANVAS_W, CANVAS_H));
+                for (item, rect) in MENU_ITEMS.iter().zip(rects) {
+                    // The backdrop already contains the button art; this
+                    // button is the shared canvas hit region for its label.
+                    canvas.button(*rect, "", item.action);
+                }
                 pointer_to_canvas(
                     vec2(CANVAS_W, CANVAS_H),
                     p.position,
                     screen_size,
                     SCALE_MODE,
                 )
-                .and_then(|c| {
-                    MENU_ITEMS
-                        .iter()
-                        .zip(rects)
-                        .find(|(_, rect)| rect.contains(c))
-                })
-                .map(|(it, _)| it.action)
+                .and_then(|point| canvas.click_at(point))
             } else {
                 None
             };

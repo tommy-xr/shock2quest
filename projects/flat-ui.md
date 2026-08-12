@@ -426,11 +426,12 @@ a **flat presentation + a mouse-cursor input source**, and an **open/close model
   `handle_msg(...) -> (TState, Effect)`. Completely presentation-agnostic — layouts
   are in **panel-local pixels** (`GuiConfig::screen_size_in_pixels`, e.g. 188×296
   for the keypad, `scripts/gui/keypad.rs:171-176`).
-- **`GuiComponent`** (`gui/gui_component.rs:17-46`): `Image` / `Button` (with
-  `on_click`, `on_grab`, `ButtonHoverBehavior::Texture` hover swap) / `Text` /
-  `Inventory`. Hit-testing is already pure: `GuiComponent::get_event(last, current)`
-  (`gui_component.rs:532-576`) resolves rising-edge clicks/grabs against component
-  rects in panel pixels.
+- **`UiElement<TMsg>`** (`ui/mod.rs`; re-exported as the compatibility alias
+  `GuiComponent<TMsg>`): the single image / clipped bar / text / button
+  description used by both `UiCanvas` screens and GUI panels. Buttons carry
+  click/grab messages plus hover art; `UiCanvas::click_at` and
+  `GuiComponent::get_event` share the same canvas-pixel rectangle hit-testing.
+  `GuiScript` keeps the existing Elm-style state/message loop on top.
 - **`GuiScript`** (`gui/gui_script.rs:42-160`): the host `Script` attached to the
   entity. Each `update` it emits `Effect::SetUI { components, world_size, … }`
   (`:78-84`); on `MessagePayload::GUIHover { screen_coordinates, is_triggered,

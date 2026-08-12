@@ -449,8 +449,7 @@ Surprisingly far along on data, zero on gameplay:
 - ~~**`MapRenderer`** (`shock2vr/src/map_renderer.rs`)~~: removed (issue #492) —
   the **`debug_map`** scene now composes through the automap panel's `MapGui`
   (page art, dim explored vs bright current decals, `MapRef` pip), presenting
-  its components as world-space quads via the shared
-  `GuiComponentRenderInfo::render` path and walking the map on a timer.
+  its shared `UiCanvas` as world-space quads and walks the map on a timer.
 - **`MapChunkData`** (`dark/src/map/mod.rs`): loads both `P001RA.BIN` and
   `P001XA.BIN` rect lists.
 - **All map properties parse already**: `PropMapLoc` (32 entities in medsci1

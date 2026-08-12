@@ -2,23 +2,23 @@
 //!
 //! UI is described in **canvas pixels** at a fixed virtual resolution (e.g.
 //! 640x480, matching the original SS2 art). The content never encodes where it
-//! is shown; a *renderer* maps the canvas to a target. Today that is a
-//! screen-space overlay (`render_screen_space`); later the same canvas can be
-//! rendered into a texture and placed on a world surface for diegetic VR (see
-//! `projects/flatscreen-and-vr-architecture.md`).
+//! is shown; a *presenter* maps the canvas either to a screen-space overlay
+//! (`render_screen_space`) or a world-space panel (`render_world_space`). A
+//! future render-target presenter can consume the same description for
+//! diegetic screens.
 //!
 //! Alignment is resolved at render time (the renderer has the font, so it
 //! measures text and centers it), which keeps layout out of hand-tuned
 //! coordinates.
 
-// Foundational UI toolkit: a few API items (the full alignment variants,
+// Foundational UI toolkit: a few API items (the full alignment variants and
 // geometry/introspection helpers) are intentionally complete ahead of their
-// call sites - later flat screens (inventory, log, upgrade) exercise the rest.
+// call sites.
 #![allow(dead_code)]
 
 use std::rc::Rc;
 
-use cgmath::{Matrix4, Vector2, vec2, vec3};
+use cgmath::{Deg, Matrix4, Vector2, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -26,6 +26,9 @@ use engine::{
     scene::SceneObject,
     texture::{TextureOptions, TextureTrait},
 };
+use shipyard::EntityId;
+
+use crate::vr_config::Handedness;
 
 /// A rectangle in canvas pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,43 +141,143 @@ pub fn canvas_rect_to_screen(
     )
 }
 
-enum UiElement {
+/// How a button changes while the pointer is inside its rectangle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ButtonHoverBehavior {
+    None,
+    Texture(String),
+}
+
+/// One item in the shared 2D UI description language.
+///
+/// `TEvent` is presentation-agnostic: interactive panels attach their
+/// Elm-style message type, while HUD/loading canvases use the default `()` and
+/// simply never add a button. Positions and sizes are always canvas pixels
+/// with a top-left origin.
+#[derive(Clone, Debug)]
+pub enum UiElement<TEvent = ()>
+where
+    TEvent: Clone,
+{
     Image {
-        rect: Rect,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
         texture: String,
-        opacity: f32,
+        alpha: f32,
+        /// Dark's paletted object-icon art keys transparency on palette index
+        /// 0, independent of that entry's RGB (see [`UiCanvas::object_icon`]).
         transparent_index_0: bool,
     },
     /// Horizontally-filling bar; `fill` (0..1) clips the texture from the left.
     Bar {
-        rect: Rect,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
         texture: String,
         fill: f32,
-        opacity: f32,
+        alpha: f32,
+    },
+    Button {
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        texture: String,
+        on_click: Option<TEvent>,
+        on_grab: Option<(TEvent, TEvent)>,
+        hover: ButtonHoverBehavior,
+        alpha: f32,
+        /// The world entity this button represents, for UI introspection.
+        entity: Option<EntityId>,
+        /// Optional semantic label, for UI introspection and automation.
+        label: Option<String>,
     },
     Text {
-        rect: Rect,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
         text: String,
         font: String,
-        size: f32,
+        /// Glyph-cell height in canvas pixels; `<= 0` means native font size.
+        font_size: f32,
         h: HAlign,
         v: VAlign,
-        opacity: f32,
+        alpha: f32,
     },
+}
+
+impl<TEvent> UiElement<TEvent>
+where
+    TEvent: Clone,
+{
+    pub fn rect(&self) -> Rect {
+        let (position, size) = match self {
+            Self::Image { position, size, .. }
+            | Self::Bar { position, size, .. }
+            | Self::Button { position, size, .. }
+            | Self::Text { position, size, .. } => (*position, *size),
+        };
+        Rect::new(position.x, position.y, size.x, size.y)
+    }
+
+    pub fn click_event(&self) -> Option<&TEvent> {
+        match self {
+            Self::Button { on_click, .. } => on_click.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn grab_event(&self, hand: Handedness) -> Option<&TEvent> {
+        match self {
+            Self::Button {
+                on_grab: Some((left, right)),
+                ..
+            } => Some(if hand == Handedness::Left {
+                left
+            } else {
+                right
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// A resolution-independent 2D UI description in canvas pixels.
-pub struct UiCanvas {
+#[derive(Clone, Debug)]
+pub struct UiCanvas<TEvent = ()>
+where
+    TEvent: Clone,
+{
     size: Vector2<f32>,
-    elements: Vec<UiElement>,
+    elements: Vec<UiElement<TEvent>>,
 }
 
-impl UiCanvas {
-    pub fn new(size: Vector2<f32>) -> Self {
+impl<TEvent> UiCanvas<TEvent>
+where
+    TEvent: Clone,
+{
+    pub fn with_events(size: Vector2<f32>) -> Self {
         Self {
             size,
             elements: Vec::new(),
         }
+    }
+
+    pub fn from_elements(size: Vector2<f32>, elements: Vec<UiElement<TEvent>>) -> Self {
+        Self { size, elements }
+    }
+
+    pub fn size(&self) -> Vector2<f32> {
+        self.size
+    }
+
+    pub fn elements(&self) -> &[UiElement<TEvent>] {
+        &self.elements
+    }
+
+    pub fn into_elements(self) -> Vec<UiElement<TEvent>> {
+        self.elements
+    }
+
+    pub fn push(&mut self, element: UiElement<TEvent>) -> &mut Self {
+        self.elements.push(element);
+        self
     }
 
     pub fn element_count(&self) -> usize {
@@ -187,9 +290,10 @@ impl UiCanvas {
         if let Some(last) = self.elements.last_mut() {
             let o = opacity.clamp(0.0, 1.0);
             match last {
-                UiElement::Image { opacity, .. }
-                | UiElement::Bar { opacity, .. }
-                | UiElement::Text { opacity, .. } => *opacity = o,
+                UiElement::Image { alpha, .. }
+                | UiElement::Bar { alpha, .. }
+                | UiElement::Button { alpha, .. }
+                | UiElement::Text { alpha, .. } => *alpha = o,
             }
         }
         self
@@ -197,9 +301,10 @@ impl UiCanvas {
 
     pub fn image(&mut self, rect: Rect, texture: &str) -> &mut Self {
         self.elements.push(UiElement::Image {
-            rect,
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
             texture: texture.to_owned(),
-            opacity: 1.0,
+            alpha: 1.0,
             transparent_index_0: false,
         });
         self
@@ -209,9 +314,10 @@ impl UiCanvas {
     /// Ordinary UI images remain opaque through [`Self::image`].
     pub fn object_icon(&mut self, rect: Rect, texture: &str) -> &mut Self {
         self.elements.push(UiElement::Image {
-            rect,
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
             texture: texture.to_owned(),
-            opacity: 1.0,
+            alpha: 1.0,
             transparent_index_0: true,
         });
         self
@@ -219,12 +325,41 @@ impl UiCanvas {
 
     pub fn bar(&mut self, rect: Rect, texture: &str, fill: f32) -> &mut Self {
         self.elements.push(UiElement::Bar {
-            rect,
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
             texture: texture.to_owned(),
             fill: fill.clamp(0.0, 1.0),
-            opacity: 1.0,
+            alpha: 1.0,
         });
         self
+    }
+
+    /// Add a textured button. Its rectangle participates in
+    /// [`click_at`](Self::click_at), and the last-painted matching button wins.
+    pub fn button(&mut self, rect: Rect, texture: &str, on_click: TEvent) -> &mut Self {
+        self.elements.push(UiElement::Button {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            texture: texture.to_owned(),
+            on_click: Some(on_click),
+            on_grab: None,
+            hover: ButtonHoverBehavior::None,
+            alpha: 1.0,
+            entity: None,
+            label: None,
+        });
+        self
+    }
+
+    /// Resolve a click in canvas pixels. Elements are tested back-to-front so
+    /// interaction follows paint order when button rectangles overlap.
+    pub fn click_at(&self, point: Vector2<f32>) -> Option<TEvent> {
+        self.elements
+            .iter()
+            .rev()
+            .find(|element| element.click_event().is_some() && element.rect().contains(point))
+            .and_then(UiElement::click_event)
+            .cloned()
     }
 
     /// Add a text element sized in **canvas pixels** (`size` = the full
@@ -242,13 +377,14 @@ impl UiCanvas {
         v: VAlign,
     ) -> &mut Self {
         self.elements.push(UiElement::Text {
-            rect,
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
             text: text.to_owned(),
             font: font.to_owned(),
-            size,
+            font_size: size,
             h,
             v,
-            opacity: 1.0,
+            alpha: 1.0,
         });
         self
     }
@@ -278,6 +414,18 @@ impl UiCanvas {
         screen_size: Vector2<f32>,
         mode: ScaleMode,
     ) -> Vec<SceneObject> {
+        self.render_screen_space_with_pointer(asset_cache, screen_size, mode, None)
+    }
+
+    /// Render in screen space while resolving button hover art from a pointer
+    /// expressed in canvas pixels.
+    pub fn render_screen_space_with_pointer(
+        &self,
+        asset_cache: &mut AssetCache,
+        screen_size: Vector2<f32>,
+        mode: ScaleMode,
+        pointer: Option<Vector2<f32>>,
+    ) -> Vec<SceneObject> {
         let (scale, offset) = fit(self.size, screen_size, mode);
         let texture_options = TextureOptions {
             wrap: false,
@@ -288,9 +436,10 @@ impl UiCanvas {
         for element in &self.elements {
             match element {
                 UiElement::Image {
-                    rect,
+                    position,
+                    size,
                     texture,
-                    opacity,
+                    alpha,
                     transparent_index_0,
                 } => {
                     let tex = asset_cache.get_ext(
@@ -303,16 +452,46 @@ impl UiCanvas {
                     );
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
-                        vec2(rect.x * scale.x + offset.x, rect.y * scale.y + offset.y),
-                        vec2(rect.w * scale.x, rect.h * scale.y),
-                        *opacity,
+                        vec2(
+                            position.x * scale.x + offset.x,
+                            position.y * scale.y + offset.y,
+                        ),
+                        vec2(size.x * scale.x, size.y * scale.y),
+                        *alpha,
+                    ));
+                }
+                UiElement::Button {
+                    position,
+                    size,
+                    texture,
+                    hover,
+                    alpha,
+                    ..
+                } => {
+                    let hovered = pointer.is_some_and(|point| {
+                        Rect::new(position.x, position.y, size.x, size.y).contains(point)
+                    });
+                    let texture = match (hovered, hover) {
+                        (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
+                        _ => texture,
+                    };
+                    let tex = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
+                    objs.push(SceneObject::screen_space_quad2(
+                        tex.clone() as Rc<dyn TextureTrait>,
+                        vec2(
+                            position.x * scale.x + offset.x,
+                            position.y * scale.y + offset.y,
+                        ),
+                        vec2(size.x * scale.x, size.y * scale.y),
+                        *alpha,
                     ));
                 }
                 UiElement::Bar {
-                    rect,
+                    position,
+                    size,
                     texture,
                     fill,
-                    opacity: _,
+                    alpha: _,
                 } => {
                     let tex = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
                     let material = engine::scene::clipped_screen_material::create_screen_space(
@@ -322,36 +501,40 @@ impl UiCanvas {
                     let mut obj =
                         SceneObject::new(material, Box::new(engine::scene::quad::create()));
                     obj.set_local_transform(screen_space_quad_transform(
-                        vec2(rect.x * scale.x + offset.x, rect.y * scale.y + offset.y),
-                        vec2(rect.w * scale.x, rect.h * scale.y),
+                        vec2(
+                            position.x * scale.x + offset.x,
+                            position.y * scale.y + offset.y,
+                        ),
+                        vec2(size.x * scale.x, size.y * scale.y),
                     ));
                     objs.push(obj);
                 }
                 UiElement::Text {
-                    rect,
+                    position,
+                    size,
                     text,
                     font,
-                    size,
+                    font_size,
                     h,
                     v,
-                    opacity,
+                    alpha,
                 } => {
                     let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
                     // `size <= 0` renders at the font's native pixel height, so
                     // Dark `.FON` bitmap fonts draw at their authored size (the
                     // way the original engine does) instead of an ad-hoc scale.
-                    let canvas_size = if *size > 0.0 {
-                        *size
+                    let canvas_size = if *font_size > 0.0 {
+                        *font_size
                     } else {
                         font_obj.base_height()
                     };
                     let font_size = canvas_size * scale.y;
                     let width = measure_text_width(&**font_obj, text, font_size);
 
-                    let rx = rect.x * scale.x + offset.x;
-                    let ry = rect.y * scale.y + offset.y;
-                    let rw = rect.w * scale.x;
-                    let rh = rect.h * scale.y;
+                    let rx = position.x * scale.x + offset.x;
+                    let ry = position.y * scale.y + offset.y;
+                    let rw = size.x * scale.x;
+                    let rh = size.y * scale.y;
                     let x = match h {
                         HAlign::Left => rx,
                         HAlign::Center => rx + (rw - width) / 2.0,
@@ -364,13 +547,132 @@ impl UiCanvas {
                     };
 
                     objs.push(SceneObject::screen_space_text(
-                        text, font_obj, font_size, *opacity, x, y,
+                        text, font_obj, font_size, *alpha, x, y,
                     ));
                 }
             }
         }
 
         objs
+    }
+
+    /// Present this canvas as a world-space panel. `root_transform` places a
+    /// unit canvas in the world; pixel coordinates are normalized here. The
+    /// authored elements are the same ones consumed by the screen presenter.
+    pub fn render_world_space(
+        &self,
+        asset_cache: &mut AssetCache,
+        root_transform: Matrix4<f32>,
+        pointer: Option<Vector2<f32>>,
+        force_alpha: Option<f32>,
+        component_z_step: f32,
+    ) -> Vec<SceneObject> {
+        let texture_options = TextureOptions {
+            wrap: false,
+            ..Default::default()
+        };
+        let mut objects = Vec::with_capacity(self.elements.len());
+
+        for (index, element) in self.elements.iter().enumerate() {
+            let mut object = match element {
+                UiElement::Image {
+                    position,
+                    size,
+                    texture,
+                    alpha,
+                    transparent_index_0,
+                } => world_image(
+                    asset_cache,
+                    texture,
+                    *position,
+                    *size,
+                    self.size,
+                    force_alpha.unwrap_or(*alpha),
+                    *transparent_index_0,
+                ),
+                UiElement::Button {
+                    position,
+                    size,
+                    texture,
+                    hover,
+                    alpha,
+                    entity,
+                    ..
+                } => {
+                    let hovered = pointer.is_some_and(|point| {
+                        Rect::new(position.x, position.y, size.x, size.y).contains(point)
+                    });
+                    let texture = match (hovered, hover) {
+                        (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
+                        _ => texture,
+                    };
+                    world_image(
+                        asset_cache,
+                        texture,
+                        *position,
+                        *size,
+                        self.size,
+                        force_alpha.unwrap_or(*alpha),
+                        // Entity-backed buttons are inventory/loot object
+                        // icons: Dark keys their paletted art on index 0.
+                        entity.is_some(),
+                    )
+                }
+                UiElement::Bar {
+                    position,
+                    size,
+                    texture,
+                    fill,
+                    ..
+                } => {
+                    let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
+                    let material = engine::scene::clipped_screen_material::create(
+                        texture.clone() as Rc<dyn TextureTrait>,
+                        *fill,
+                    );
+                    let mut object =
+                        SceneObject::new(material, Box::new(engine::scene::quad::create()));
+                    object.set_local_transform(world_element_transform(
+                        *position, *size, self.size, 0.0,
+                    ));
+                    object
+                }
+                UiElement::Text {
+                    position,
+                    text,
+                    font,
+                    alpha,
+                    ..
+                } => {
+                    let font = asset_cache.get(&FONT_IMPORTER, font).clone();
+                    let alpha = force_alpha.unwrap_or(*alpha);
+                    let mut object =
+                        SceneObject::world_space_text(text, font, (1.0 - alpha).clamp(0.0, 1.0));
+                    object.set_local_transform(
+                        Matrix4::from_angle_y(Deg(180.0))
+                            * Matrix4::from_translation(vec3(
+                                position.x / self.size.x - 0.5,
+                                -position.y / self.size.y - 0.5,
+                                0.01,
+                            )),
+                    );
+                    object
+                }
+            };
+            object.set_transform(
+                root_transform
+                    * Matrix4::from_translation(vec3(0.0, 0.0, -component_z_step * index as f32)),
+            );
+            objects.push(object);
+        }
+
+        objects
+    }
+}
+
+impl UiCanvas<()> {
+    pub fn new(size: Vector2<f32>) -> Self {
+        Self::with_events(size)
     }
 }
 
@@ -380,6 +682,48 @@ fn screen_space_quad_transform(position: Vector2<f32>, size: Vector2<f32>) -> Ma
     Matrix4::from_translation(vec3(position.x, position.y, 0.0))
         * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
         * Matrix4::from_translation(vec3(0.5, 0.5, 0.0))
+}
+
+fn world_image(
+    asset_cache: &mut AssetCache,
+    texture: &str,
+    position: Vector2<f32>,
+    size: Vector2<f32>,
+    canvas_size: Vector2<f32>,
+    alpha: f32,
+    transparent_index_0: bool,
+) -> SceneObject {
+    let texture: Rc<dyn TextureTrait> = asset_cache
+        .get_ext(
+            &TEXTURE_IMPORTER,
+            texture,
+            &TextureOptions {
+                wrap: false,
+                transparent_index_0,
+            },
+        )
+        .clone();
+    let material = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
+    let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
+    object.set_local_transform(world_element_transform(position, size, canvas_size, 0.0));
+    object
+}
+
+fn world_element_transform(
+    position: Vector2<f32>,
+    size: Vector2<f32>,
+    canvas_size: Vector2<f32>,
+    z: f32,
+) -> Matrix4<f32> {
+    let position = vec2(position.x / canvas_size.x, position.y / canvas_size.y);
+    let size = vec2(size.x / canvas_size.x, size.y / canvas_size.y);
+    Matrix4::from_angle_z(Deg(180.0))
+        * Matrix4::from_translation(vec3(
+            position.x - 0.5 + size.x / 2.0,
+            position.y - 0.5 + size.y / 2.0,
+            z,
+        ))
+        * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
 }
 
 #[cfg(test)]
@@ -394,6 +738,17 @@ mod tests {
         assert!(r.contains(vec2(110.0, 60.0)));
         assert!(!r.contains(vec2(9.0, 40.0)));
         assert!(!r.contains(vec2(60.0, 61.0)));
+    }
+
+    #[test]
+    fn canvas_buttons_hit_test_in_reverse_paint_order() {
+        let mut canvas = UiCanvas::<&'static str>::with_events(vec2(100.0, 100.0));
+        canvas.button(Rect::new(10.0, 10.0, 40.0, 40.0), "bottom.pcx", "bottom");
+        canvas.button(Rect::new(20.0, 20.0, 40.0, 40.0), "top.pcx", "top");
+
+        assert_eq!(canvas.click_at(vec2(25.0, 25.0)), Some("top"));
+        assert_eq!(canvas.click_at(vec2(15.0, 15.0)), Some("bottom"));
+        assert_eq!(canvas.click_at(vec2(80.0, 80.0)), None);
     }
 
     #[test]
