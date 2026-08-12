@@ -10,9 +10,10 @@ use crate::{
 use engine::physics_log;
 
 use cgmath::{
-    EuclideanSpace, Matrix4, Point3, Quaternion, Rotation, SquareMatrix, Transform, Vector3, Zero,
+    EuclideanSpace, Matrix4, Point3, Quaternion, SquareMatrix, Transform, Vector3, Zero,
     num_traits::abs, vec3,
 };
+use collision::Aabb3;
 use dark::{
     BitmapAnimation, SCALE_FACTOR,
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
@@ -465,38 +466,60 @@ fn initialize_sym_name_from_obj_map(
     }
 }
 
-/// How far a decal is pushed off the surface it is stuck to, in model-local
+/// How far a decal is pushed off the surface it is stuck to, in **world**
 /// units (1 world unit = `SCALE_FACTOR` Dark units). Small enough not to read
 /// as floating at grazing angles, large enough to clear depth-buffer precision
 /// at the ranges decals are legible from.
 const DECAL_SURFACE_OFFSET: f32 = 0.02;
+
+/// The local-space X translation that lifts a paper-thin decal off its
+/// surface, or `None` when the model is not a decal.
+///
+/// A decal model has (near-)zero thickness along its local X axis (Dark's
+/// forward) and its visible face points along local -X, i.e. out of the wall,
+/// so the nudge is along -X.
+///
+/// `scale_x` is the X component of the entity's `PropScale` **as the renderer
+/// applies it** - `RuntimePropTransform` uses the raw, signed value, and the
+/// shipped data stores it negative (the property reader mirrors X). Since the
+/// offset rides inside that transform, it is divided out here so the world
+/// displacement is always `DECAL_SURFACE_OFFSET` along local -X, whatever the
+/// entity is scaled by.
+fn decal_local_x_offset(bbox: Aabb3<f32>, scale_x: f32) -> Option<f32> {
+    let thickness = bbox.max.x - bbox.min.x;
+    let extent = (bbox.max.y - bbox.min.y).max(bbox.max.z - bbox.min.z);
+
+    // Paper-thin in absolute terms, not merely relative: a long pipe is 1%
+    // as thick as it is long and is not a decal.
+    if thickness > DECAL_SURFACE_OFFSET || extent <= DECAL_SURFACE_OFFSET {
+        return None;
+    }
+
+    if scale_x.abs() < f32::EPSILON {
+        return None;
+    }
+
+    Some(-DECAL_SURFACE_OFFSET / scale_x)
+}
 
 /// Decals (blood splatters, signs, bullet holes) are paper-thin models placed
 /// exactly coplanar with the surface they are stuck to, so they z-fight with
 /// the level geometry - they flicker, or vanish entirely, as the viewpoint
 /// moves. Lift such a model off its surface along its own outward normal.
 ///
-/// A decal model has (near-)zero thickness along its local X axis (Dark's
-/// forward) and its visible face points along local -X, i.e. out of the wall.
 /// The offset is applied as the scene objects' *local* transform: the render
 /// path overwrites the model transform with the entity's
 /// `RuntimePropTransform` every frame, but composes it with the local one.
-fn apply_decal_offset(model: &mut Model) {
+fn apply_decal_offset(model: &mut Model, scale_x: f32) {
     let Some(bbox) = model.bounding_box() else {
         return;
     };
 
-    let thickness = bbox.max.x - bbox.min.x;
-    let extent = (bbox.max.y - bbox.min.y).max(bbox.max.z - bbox.min.z);
-    if extent <= 0.0 || thickness > extent * 0.01 {
+    let Some(offset) = decal_local_x_offset(bbox, scale_x) else {
         return;
-    }
+    };
 
-    model.set_local_transform(Matrix4::from_translation(vec3(
-        -DECAL_SURFACE_OFFSET,
-        0.0,
-        0.0,
-    )));
+    model.apply_local_transform(Matrix4::from_translation(vec3(offset, 0.0, 0.0)));
 }
 
 fn create_model(
@@ -544,10 +567,7 @@ fn create_model(
         let rotation = Matrix4::<f32>::from(qrotation);
         let mut scale = Matrix4::<f32>::from_nonuniform_scale(1.0, 1.0, 1.0);
 
-        // HACK:
-        // Move decals up slightly, to avoid z-fighting with level geometry...
-        let forward = qrotation.rotate_vector(vec3(0.0, 0.1, 0.0));
-        let translation = Matrix4::from_translation(pos.position + forward);
+        let translation = Matrix4::from_translation(pos.position);
 
         if v_scale.contains(entity_id) {
             let scale_vec = v_scale.get(entity_id).unwrap().0;
@@ -616,7 +636,11 @@ fn create_model(
             }
         };
 
-        apply_decal_offset(&mut model);
+        // The raw, signed scale - matching `RuntimePropTransform`, which is what
+        // the renderer composes the local offset with (note the model bake
+        // above deliberately uses the absolute value instead).
+        let render_scale_x = v_scale.get(entity_id).map(|s| s.0.x).unwrap_or(1.0);
+        apply_decal_offset(&mut model, render_scale_x);
 
         Some((model, animation_player))
     } else {
@@ -1377,9 +1401,71 @@ impl Default for CreateEntityOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::InnerSpace;
+    use cgmath::{InnerSpace, point3};
     use collision::Aabb3;
     use dark::properties::{Links, ToLink};
+
+    /// `BLOOD02.BIN`-shaped: zero thickness in X, 6x6 Dark units across
+    /// (bounds are stored already divided by `SCALE_FACTOR`).
+    fn decal_bbox() -> Aabb3<f32> {
+        Aabb3::new(
+            point3(-2.0e-6, -3.0 / SCALE_FACTOR, -3.0 / SCALE_FACTOR),
+            point3(2.0e-6, 3.0 / SCALE_FACTOR, 3.0 / SCALE_FACTOR),
+        )
+    }
+
+    /// The world displacement the renderer ends up applying: the local offset
+    /// rides inside `RuntimePropTransform`, which scales by the raw signed X.
+    fn world_offset(bbox: Aabb3<f32>, scale_x: f32) -> Option<f32> {
+        decal_local_x_offset(bbox, scale_x).map(|local| local * scale_x)
+    }
+
+    #[test]
+    fn decal_is_lifted_off_its_surface() {
+        let offset = decal_local_x_offset(decal_bbox(), 1.0).unwrap();
+        assert!(offset < 0.0, "decal must move along local -X, got {offset}");
+    }
+
+    /// medsci1's entity 772 (`Blood Splatter Small`) carries
+    /// `PropScale([-1.013279, 0.667, 1.0])`, and the renderer applies that sign,
+    /// so an uncompensated local offset is mirrored *into* the floor.
+    #[test]
+    fn decal_lift_survives_a_mirrored_scale() {
+        for scale_x in [1.0, -1.013_279, 0.5, -3.0] {
+            let world = world_offset(decal_bbox(), scale_x).unwrap();
+            assert!(
+                (world + DECAL_SURFACE_OFFSET).abs() < 1.0e-6,
+                "scale {scale_x} displaced the decal by {world}, want {}",
+                -DECAL_SURFACE_OFFSET
+            );
+        }
+    }
+
+    #[test]
+    fn a_degenerate_scale_is_left_alone() {
+        assert_eq!(decal_local_x_offset(decal_bbox(), 0.0), None);
+    }
+
+    /// `pipe312.BIN` is 1% as thick as it is long, but it is a 312-unit pipe,
+    /// not a decal - the flatness test must be absolute, not a ratio.
+    #[test]
+    fn a_long_thin_pipe_is_not_a_decal() {
+        let pipe = Aabb3::new(
+            point3(0.0, 0.0, 0.0),
+            point3(
+                3.0 / SCALE_FACTOR,
+                3.005 / SCALE_FACTOR,
+                312.0 / SCALE_FACTOR,
+            ),
+        );
+        assert_eq!(decal_local_x_offset(pipe, 1.0), None);
+    }
+
+    #[test]
+    fn an_ordinary_prop_is_not_a_decal() {
+        let crate_bbox = Aabb3::new(point3(-1.0, -1.0, -1.0), point3(1.0, 1.0, 1.0));
+        assert_eq!(decal_local_x_offset(crate_bbox, 1.0), None);
+    }
 
     /// A ladder-shaped entity: climbable terrain with a physics type but - like
     /// most shipped ladders - no `P$PhysDims` at all.
