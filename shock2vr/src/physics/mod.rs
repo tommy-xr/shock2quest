@@ -120,21 +120,34 @@ fn crouched_player_shared_shape() -> SharedShape {
 /// Gap (SS2 ft) the character controller keeps between the player collider
 /// and world geometry (`KinematicCharacterController::offset`).
 const PLAYER_CONTACT_OFFSET: f32 = 0.1;
+/// Crouching is the authored small-creature profile, including its tighter
+/// clearance through low utility passages. Keep a nonzero target distance for
+/// robust contact resolution, but do not charge the standing margin against
+/// both sides of an opening only the crouched body is intended to cross.
+const PLAYER_CROUCH_CONTACT_OFFSET: f32 = 0.05;
 
 /// Extra height (SS2 ft) the player is lifted each grounded frame, keeping the
-/// resting gap a hair above `PLAYER_CONTACT_OFFSET`. Load-bearing: movement
-/// casts use `PLAYER_CONTACT_OFFSET` as their target distance, so a capsule
-/// resting at exactly that gap starts every cast already "in contact" with
-/// its own floor. On a yaw-ROTATED support (e.g. the earth.mis tram floor
-/// slab) the rotated top-face normal carries ~1e-6 float error, which makes
-/// even purely tangential walking read as "approaching" - every solver
-/// iteration then re-hits the same contact at toi=0, applies zero
-/// translation, and the player freezes in place. (Axis-aligned floors yield
-/// an exact (0,1,0) normal, where tangential motion reports no hit - which is
-/// why flat test floors work without this.) The next frame's gravity pass
-/// consumes the lift again, so the rest height is stable. Regression-tested
-/// by `player_walks_on_rotated_platform`.
+/// resting gap a hair above the active posture-specific contact offset.
+/// Load-bearing: movement casts use that target distance, so a capsule resting
+/// at exactly that gap starts every cast already "in contact" with its own
+/// floor. On a yaw-ROTATED support (e.g. the earth.mis tram floor slab) the
+/// rotated top-face normal carries ~1e-6 float error, which makes even purely
+/// tangential walking read as "approaching" - every solver iteration then
+/// re-hits the same contact at toi=0, applies zero translation, and the player
+/// freezes in place. (Axis-aligned floors yield an exact (0,1,0) normal, where
+/// tangential motion reports no hit - which is why flat test floors work
+/// without this.) The next frame's gravity pass consumes the lift again, so
+/// the rest height is stable. Regression-tested by
+/// `player_walks_on_rotated_platform`.
 const PLAYER_REST_LIFT: f32 = 0.01;
+
+fn player_contact_offset(is_crouched: bool) -> f32 {
+    if is_crouched {
+        PLAYER_CROUCH_CONTACT_OFFSET
+    } else {
+        PLAYER_CONTACT_OFFSET
+    }
+}
 
 /// Half-life for gravity-induced horizontal displacement after a slope hands
 /// the player onto walkable flat ground. Dark's dynamic player coasts through
@@ -1802,7 +1815,7 @@ fn player_pose_matches_current_support(
         PLAYER_STANDING_HEIGHT
     };
     let floor_offset = body_height / 2.0 / SCALE_FACTOR
-        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+        + player_contact_offset(is_crouched) / SCALE_FACTOR
         + PLAYER_REST_LIFT / SCALE_FACTOR;
     // The waypoint loop intentionally stops within arrival epsilon. Allow the
     // same residual plus one probe skin for floating-point/contact seams while
@@ -5165,6 +5178,8 @@ impl PhysicsWorld {
 
         if want_crouch {
             self.collider_set[collider_handle].set_shape(crouched_player_shared_shape());
+            player_handle.controller.offset =
+                CharacterLength::Absolute(PLAYER_CROUCH_CONTACT_OFFSET / SCALE_FACTOR);
             let body = &mut self.rigid_body_set[character_handle];
             let mut translation = *body.translation();
             translation.y -= center_shift;
@@ -5249,6 +5264,8 @@ impl PhysicsWorld {
 
             if !blocked {
                 self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
+                player_handle.controller.offset =
+                    CharacterLength::Absolute(PLAYER_CONTACT_OFFSET / SCALE_FACTOR);
                 let body = &mut self.rigid_body_set[character_handle];
                 let mut translation = *body.translation();
                 translation.y += center_shift;
@@ -7518,6 +7535,17 @@ mod tests {
         );
     }
 
+    fn assert_player_contact_offset(player: &PlayerHandle, expected_ss2_feet: f32) {
+        let CharacterLength::Absolute(offset) = player.controller.offset else {
+            panic!("player controller offset must remain absolute");
+        };
+        assert!(
+            (offset * SCALE_FACTOR - expected_ss2_feet).abs() < 1.0e-6,
+            "expected a {expected_ss2_feet}-foot controller offset, got {}",
+            offset * SCALE_FACTOR
+        );
+    }
+
     /// Standing restores Dark's original 6 x 2.4-foot body, while crouch and
     /// direct relocation retain the 2.8 x 1.6-foot profile added in #513.
     #[test]
@@ -7526,6 +7554,7 @@ mod tests {
         let mut player = world.create_player(vec3(0.0, 0.0, 0.0), EntityId::from_inner(1).unwrap());
 
         assert_player_capsule_dimensions(&world, &player, 6.0, 2.4);
+        assert_player_contact_offset(&player, PLAYER_CONTACT_OFFSET);
         assert!(
             (player_crouch_center_shift() - 0.64).abs() < 1.0e-6,
             "save/load normalization must use the new feet-planted center shift"
@@ -7533,6 +7562,7 @@ mod tests {
 
         assert!(world.set_player_crouch(true, &mut player));
         assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
+        assert_player_contact_offset(&player, PLAYER_CROUCH_CONTACT_OFFSET);
         world.set_player_translation(vec3(1.0, 2.0, 3.0), &mut player);
         assert_player_capsule_dimensions(&world, &player, 2.8, 1.6);
 
@@ -7541,6 +7571,7 @@ mod tests {
         step(&mut world, &mut player, 1);
         assert!(!world.set_player_crouch(false, &mut player));
         assert_player_capsule_dimensions(&world, &player, 6.0, 2.4);
+        assert_player_contact_offset(&player, PLAYER_CONTACT_OFFSET);
     }
 
     /// The scene-wide query pipeline the climb/top-out helpers take.
@@ -11647,6 +11678,129 @@ mod tests {
         );
     }
 
+    fn world_with_parentless_wall_and_parented_gap(gap: f32) -> PhysicsWorld {
+        let mut world = PhysicsWorld::new();
+        let half_gap = gap / 2.0;
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::cuboid(4.0, 2.0, 0.1)
+                .translation(vector![-2.0, 2.0, half_gap + 0.1])
+                .build(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(-2.0, 2.0, -half_gap - 0.1),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 4.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.add_collider(
+            EntityId::from_inner(1002).unwrap(),
+            ColliderBuilder::cuboid(5.0, 0.1, 5.0)
+                .translation(vector![0.0, -0.1, 0.0])
+                .build(),
+        );
+        world
+    }
+
+    fn walk_west_through_gap(gap: f32, crouched: bool) -> (Vector3<f32>, Vector3<f32>) {
+        let mut world = world_with_parentless_wall_and_parented_gap(gap);
+
+        let mut player = world.create_player(
+            vec3(0.15, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        if crouched {
+            assert!(world.set_player_crouch(true, &mut player));
+        }
+        step(&mut world, &mut player, 30);
+        let start = world.get_player_translation(&player);
+        for _ in 0..90 {
+            world.update(vec3(-0.05, 0.0, 0.0), &mut player);
+        }
+        let end = world.get_player_translation(&player);
+        (start, end)
+    }
+
+    /// Rick1's upper-deck portal leaves an authored 1.72-SS2-foot passage
+    /// between a WorldRep wall and the square end of a live pipe. The
+    /// 1.6-foot crouched body fits, but charging the standing 0.1-foot
+    /// controller margin on both sides makes its effective width 1.8 feet and
+    /// pins it at the pipe corner. Crouched locomotion must retain both solid
+    /// colliders while fitting through the real opening.
+    #[test]
+    fn crouched_player_crosses_a_tight_world_and_parented_collider_gap() {
+        let gap = 1.72 / SCALE_FACTOR;
+        let (start, end) = walk_west_through_gap(gap, true);
+        assert!(
+            end.x < -1.0,
+            "the 1.6-foot crouched body should cross the 1.72-foot opening without ignoring either collider, moved {start:?} -> {end:?}"
+        );
+        assert!(
+            end.z.abs() + PLAYER_CROUCH_RADIUS / SCALE_FACTOR < gap / 2.0 + 1.0e-3,
+            "the player must stay inside the authored gap, not escape around a collider: {end:?}"
+        );
+    }
+
+    #[test]
+    fn tight_gap_still_rejects_standing_and_subdiameter_profiles() {
+        let (_, standing) = walk_west_through_gap(1.72 / SCALE_FACTOR, false);
+        assert!(
+            standing.x > -0.2,
+            "the 2.4-foot standing body must remain blocked by the 1.72-foot gap: {standing:?}"
+        );
+
+        let (_, too_narrow) = walk_west_through_gap(1.55 / SCALE_FACTOR, true);
+        assert!(
+            too_narrow.x > -0.2,
+            "a gap narrower than the 1.6-foot crouched body must remain blocked: {too_narrow:?}"
+        );
+    }
+
+    #[test]
+    fn crouch_offset_does_not_cross_real_world_or_parented_walls() {
+        for parented in [false, true] {
+            let mut world = world_with_parentless_wall_and_parented_gap(1.72 / SCALE_FACTOR);
+            let wall = ColliderBuilder::cuboid(0.1, 2.0, 1.0)
+                .translation(vector![-0.4, 2.0, 0.0])
+                .build();
+            if parented {
+                world.add_kinematic(
+                    EntityId::from_inner(1003).unwrap(),
+                    vec3(-0.4, 2.0, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.2, 4.0, 2.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            } else {
+                world.add_collider(EntityId::from_inner(1003).unwrap(), wall);
+            }
+            let mut player = world.create_player(
+                vec3(0.15, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+                EntityId::from_inner(2000).unwrap(),
+            );
+            assert!(world.set_player_crouch(true, &mut player));
+            step(&mut world, &mut player, 30);
+            for _ in 0..90 {
+                world.update(vec3(-0.05, 0.0, 0.0), &mut player);
+            }
+            let end = world.get_player_translation(&player);
+            assert!(
+                end.x > -0.25,
+                "the crouched margin must not cross a {} wall: {end:?}",
+                if parented {
+                    "parented"
+                } else {
+                    "parentless world"
+                }
+            );
+        }
+    }
+
     /// Build a floor whose top face is flush with the bottom of a walk-in
     /// fixture's model-bounds box - hydro2's Resurrection Station casing sits
     /// on the alcove floor exactly like this - and return the world plus the
@@ -12602,6 +12756,8 @@ mod tests {
             crouched_world.set_player_crouch(false, &mut crouched_player),
             "standing must be refused under the five-foot ceiling"
         );
+        assert_player_capsule_dimensions(&crouched_world, &crouched_player, 2.8, 1.6);
+        assert_player_contact_offset(&crouched_player, PLAYER_CROUCH_CONTACT_OFFSET);
     }
 
     /// A crawlspace whose 3.875 ft clearance admits the 2.8 ft crouched body
@@ -12609,7 +12765,10 @@ mod tests {
     /// collider centre a save file stores (`GlobalData::position`).
     fn world_with_low_ceiling_crawlspace() -> (PhysicsWorld, PlayerHandle) {
         let mut world = PhysicsWorld::new();
-        for (entity, y) in [(1000u64, 0.0), (1001, 1.55)] {
+        for (entity, y, triangles) in [
+            (1000u64, 0.0, vec![[0u32, 2, 1], [0, 3, 2]]),
+            (1001, 1.55, vec![[0u32, 1, 2], [0, 2, 3]]),
+        ] {
             world.add_collider(
                 EntityId::from_inner(entity).unwrap(),
                 ColliderBuilder::trimesh(
@@ -12619,7 +12778,7 @@ mod tests {
                         point![50.0, y, 50.0],
                         point![-50.0, y, 50.0],
                     ],
-                    vec![[0u32, 1, 2], [0, 2, 3]],
+                    triangles,
                 )
                 .expect("crawlspace trimesh")
                 .build(),
@@ -12659,6 +12818,7 @@ mod tests {
             world.set_player_crouch(false, &mut player),
             "standing must stay refused before the world can answer a query"
         );
+        assert_player_contact_offset(&player, PLAYER_CROUCH_CONTACT_OFFSET);
 
         // ...and the player is still free to crawl back out.
         step(&mut world, &mut player, 10);
@@ -12675,6 +12835,7 @@ mod tests {
             player.is_crouched(),
             "the ceiling must still refuse standing once the world is queryable"
         );
+        assert_player_contact_offset(&player, PLAYER_CROUCH_CONTACT_OFFSET);
     }
 
     /// The same first-frame load against the real hydro2 geometry and the exact
