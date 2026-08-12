@@ -18,6 +18,23 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::gui::{self, Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::quest_info::QuestInfo;
 use crate::runtime_props::RuntimePropLogData;
+
+/// Acknowledgement cue played when a disc is collected.
+///
+/// This is the original's generic **HUD-message beep**, not a log or pickup
+/// sound. Retail posts an on-screen "Picked up log: <name>" line, and the
+/// overlay-text system plays `linebeep` unconditionally for every message it
+/// posts; that beep is the only audio a log pickup produces. The port has no
+/// overlay-text facility yet, so the cue is fired here as a stand-in.
+///
+/// When that facility lands (#N), this moves with it: `linebeep` belongs to
+/// posting a message, not to collecting a log. Note the original does *not*
+/// play its item-pickup cue (`pickup_item`) for discs - that fires only on the
+/// frob path that moves an object into the inventory, and `Audio Log` (-76)
+/// overrides `FrobInfo` to `world_action: SCRIPT`, dropping the `MOVE` bit it
+/// would inherit from `Goodies` (-49). Compare `cargo dq templates 76` with
+/// `cargo dq templates 49`.
+const LOG_PICKUP_SOUND: &str = "linebeep";
 use crate::scripts::{
     Effect, MessagePayload,
     script_util::{send_to_all_switch_links, set_quest_bit_effect},
@@ -254,10 +271,15 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         let Some((deck, log)) = readable_log(world, entity_id) else {
             return Effect::NoEffect;
         };
+        // Collecting a disc files it in the PDA; it does not play it. The
+        // transcript audio (`LOG{deck}{log}`) belongs to playback, which the
+        // player triggers explicitly via `InputAction::ReadLastUnreadLog` - in
+        // the original the call that would play it on pickup is commented out.
+        // See `LOG_PICKUP_SOUND` for why the cue here is a deviation.
         let audio = Effect::PlaySound {
             handle: AudioHandle::new(),
             source: Some(entity_id),
-            name: format!("LOG{deck:02}{log:02}"),
+            name: LOG_PICKUP_SOUND.to_owned(),
             spatial: false,
         };
         let collect = Effect::CollectLog {
@@ -287,11 +309,12 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         Effect::combine(vec![collect, audio, switchlinks, quest_bit])
     }
 
-    /// A disc with no readable log (unset `PropLog` sentinel) must not open an
-    /// empty backdrop with dead scroll buttons - its frob does nothing, just
-    /// like `on_frob` above.
-    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
-        readable_log(world, entity_id).is_some()
+    /// Collecting a log never opens the reader. The original files the entry
+    /// in the PDA and leaves reading to the player; popping a full-screen
+    /// transcript over the world on every pickup interrupts play and buries the
+    /// disc's own audio. Playback is the `ReadLastUnreadLog` action instead.
+    fn opens_on_frob(&self, _entity_id: EntityId, _world: &World) -> bool {
+        false
     }
 
     /// The original resets the reader on every open - a reopened transcript
@@ -388,10 +411,11 @@ mod tests {
         );
     }
 
-    /// A real log still opens, and reopening resets the scroll position to the
-    /// top (the original re-creates the overlay on every open).
+    /// Collecting a real log does not open the reader, and each open resets the
+    /// scroll position to the top (the original re-creates the overlay on every
+    /// open).
     #[test]
-    fn frob_opens_a_real_log_and_reopening_resets_scroll() {
+    fn collecting_a_real_log_does_not_open_it_and_opening_resets_scroll() {
         let mut world = World::new();
         let physics = PhysicsWorld::new();
         // 20 one-word lines: one PageDown scrolls to the clamped last page
@@ -419,7 +443,10 @@ mod tests {
         script.initialize(disc, &world);
 
         let effect = script.handle_message(disc, &world, &physics, &MessagePayload::Frob);
-        assert!(opens_panel(effect), "a readable log must open the panel");
+        assert!(
+            !opens_panel(effect),
+            "collecting a log files it in the PDA; it must not open the reader"
+        );
         assert_eq!(
             drawn_lines(&mut script, disc, &world, &physics)
                 .first()
@@ -440,9 +467,9 @@ mod tests {
             "PageDown should scroll to the clamped last page"
         );
 
-        // Re-frob: the reader reopens scrolled back to the top.
-        let effect = script.handle_message(disc, &world, &physics, &MessagePayload::Frob);
-        assert!(opens_panel(effect));
+        // Opening again (the reader is reached via `ReadLastUnreadLog`, which
+        // dispatches `PanelOpened`) starts scrolled back to the top.
+        script.handle_message(disc, &world, &physics, &MessagePayload::PanelOpened);
         assert_eq!(
             drawn_lines(&mut script, disc, &world, &physics)
                 .first()

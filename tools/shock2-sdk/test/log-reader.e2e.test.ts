@@ -70,19 +70,41 @@ test(
     const [lx, ly, lz] = detail.position;
     await teleportVerified(game, { x: lx, y: ly + 0.5, z: lz });
 
-    // --- Frob: the reader panel opens, bound to the disc ---
+    // --- Frob: the disc is filed in the PDA, and nothing opens ---
+    // The original files the entry and leaves reading to the player: its
+    // pickup path never opens the overlay (the call that would is commented
+    // out in the reference engine).
     await game.entities.sendMessage(amanpour.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "collecting a log must not pop the reader over the world",
+    );
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 2, log: 20, read: false }],
+      "the collected log should be filed unread",
+    );
+
+    // --- Read it: the original's `play_unread_log` opens the newest unread ---
+    await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
 
     const opened = await game.ui.state();
     assert.ok(
       opened.active_panel,
-      "frobbing the audio log should open the reader MFD panel",
+      "ReadLastUnreadLog should open the reader MFD panel",
     );
     assert.equal(
       opened.active_panel.template_id,
       1608,
       "the reader panel should be bound to the Amanpour log entity",
+    );
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 2, log: 20, read: true }],
+      "playing a log back should mark it read",
     );
 
     // The transcript must surface the code 45100 in-fiction.
@@ -154,15 +176,23 @@ test(
     );
     assert.ok(
       sounds.includes("log0220"),
-      `frobbing the log should play LOG0220 (recent: ${sounds.join(", ")})`,
+      `playing the log back should play LOG0220 (recent: ${sounds.join(", ")})`,
     );
 
     // --- The log is recorded in the persistent collection ---
     const collected = (await game.info()).player.collected_logs;
     assert.deepEqual(
       collected,
-      [{ deck: 2, log: 20 }],
-      "the Amanpour log should be recorded in the collection",
+      [{ deck: 2, log: 20, read: true }],
+      "the Amanpour log should be recorded in the collection, now read",
+    );
+
+    // --- Dismissing closes the reader (the original's Tab) ---
+    await game.input.trigger("CloseActivePanel");
+    await game.step({ frames: 5 });
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "CloseActivePanel should dismiss the reader",
     );
 
     // Re-frobbing does not duplicate the collection entry.
@@ -193,8 +223,8 @@ test(
     await game.step({ frames: 5 });
     assert.deepEqual(
       (await game.info()).player.collected_logs,
-      [{ deck: 2, log: 20 }],
-      "the log collection should survive save/load",
+      [{ deck: 2, log: 20, read: true }],
+      "the collection and its read state should survive save/load",
     );
   },
 );

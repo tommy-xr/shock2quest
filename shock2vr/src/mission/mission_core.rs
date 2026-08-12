@@ -3582,29 +3582,37 @@ impl MissionCore {
                 Effect::ToggleUseMode => {
                     // Flat-presentation only: VR has no cursor mode to toggle.
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
-                        self.flat_use_mode = !self.flat_use_mode;
-                        // Use mode shows the player's backpack as the
-                        // top-docked inventory strip: bind the strip to the
-                        // `internal_inventory` entity (whose GuiScript
-                        // already emits SetUI every frame).
-                        // Leaving use mode drops any item on the cursor. It was
-                        // never removed from the backpack (the host only hid it
-                        // from the strip), so clearing the cursor is enough -
-                        // the item is already reachable there (projects/flat-ui.md
-                        // §1.5). This also means a save/transition mid-drag
-                        // serializes it correctly, with no orphan.
-                        if !self.flat_use_mode {
-                            self.flat_ui.take_cursor_item();
-                        }
-                        let strip_entity = if self.flat_use_mode {
-                            self.world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .ok()
-                                .map(|player| player.inventory_entity_id)
+                        // Tab dismisses an open overlay first, as the original
+                        // does - reading a log (or looting a container) and
+                        // pressing Tab should put the panel away, not drop the
+                        // player into shooter mode with it still up.
+                        if self.flat_ui.active_panel().is_some() {
+                            self.flat_ui.close();
                         } else {
-                            None
-                        };
-                        self.flat_ui.set_strip(strip_entity);
+                            self.flat_use_mode = !self.flat_use_mode;
+                            // Use mode shows the player's backpack as the
+                            // top-docked inventory strip: bind the strip to the
+                            // `internal_inventory` entity (whose GuiScript
+                            // already emits SetUI every frame).
+                            // Leaving use mode drops any item on the cursor. It was
+                            // never removed from the backpack (the host only hid it
+                            // from the strip), so clearing the cursor is enough -
+                            // the item is already reachable there (projects/flat-ui.md
+                            // §1.5). This also means a save/transition mid-drag
+                            // serializes it correctly, with no orphan.
+                            if !self.flat_use_mode {
+                                self.flat_ui.take_cursor_item();
+                            }
+                            let strip_entity = if self.flat_use_mode {
+                                self.world
+                                    .borrow::<UniqueView<PlayerInfo>>()
+                                    .ok()
+                                    .map(|player| player.inventory_entity_id)
+                            } else {
+                                None
+                            };
+                            self.flat_ui.set_strip(strip_entity);
+                        }
                     }
                 }
 
@@ -3720,6 +3728,72 @@ impl MissionCore {
                     // pickup. Keep only the entity-bound reader state; retire
                     // the disc from the rendered, physical, frobbable world.
                     self.consume_log_pickup(entity_id);
+                }
+
+                Effect::CloseActivePanel => {
+                    self.flat_ui.close();
+                }
+
+                Effect::ReadLastUnreadLog => {
+                    // The reader is entity-bound, so playback needs the disc
+                    // entity carrying this log. Discs collected on an earlier
+                    // deck are gone with their mission - cross-mission replay
+                    // is tracked separately (#741).
+                    let target =
+                        self.world
+                            .borrow::<UniqueView<QuestInfo>>()
+                            .ok()
+                            .and_then(|quest_info| {
+                                quest_info.last_unread_log().map(|log| (log.deck, log.log))
+                            });
+
+                    if let Some((deck, log)) = target {
+                        let disc = {
+                            let v_log = self
+                                .world
+                                .borrow::<View<dark::properties::PropLog>>()
+                                .unwrap();
+                            v_log
+                                .iter()
+                                .with_id()
+                                .find(|(_, authored)| authored.deck == deck && authored.log == log)
+                                .map(|(entity_id, _)| entity_id)
+                        };
+
+                        match disc {
+                            Some(disc) => {
+                                if let Ok(mut quest_info) =
+                                    self.world.borrow::<UniqueViewMut<QuestInfo>>()
+                                {
+                                    quest_info.mark_log_read(deck, log);
+                                }
+                                // Reaching the reader without a frob still needs
+                                // the per-open reset a frob-open would have
+                                // given it (the transcript starts at the top).
+                                self.script_world.dispatch(Message {
+                                    to: disc,
+                                    payload: MessagePayload::PanelOpened,
+                                });
+                                if game_options.presentation_mode == crate::PresentationMode::Flat {
+                                    self.flat_ui.open_unbound(disc);
+                                }
+                                effects.push_front(Effect::PlaySound {
+                                    handle: AudioHandle::new(),
+                                    source: None,
+                                    name: format!("LOG{deck:02}{log:02}"),
+                                    spatial: false,
+                                });
+                            }
+                            None => {
+                                game_log!(
+                                    INFO,
+                                    "no backing disc for unread log {}/{}; cannot open the reader",
+                                    deck,
+                                    log
+                                );
+                            }
+                        }
+                    }
                 }
 
                 Effect::ToggleMap => {

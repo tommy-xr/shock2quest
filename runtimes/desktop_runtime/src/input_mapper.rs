@@ -159,6 +159,11 @@ impl DesktopInputMapper {
                 action: InputAction::DebugCalmAll,
             },
             Binding {
+                key: Key::U,
+                modifier: Modifier::None,
+                action: InputAction::ReadLastUnreadLog,
+            },
+            Binding {
                 key: Key::M,
                 modifier: Modifier::None,
                 action: InputAction::ToggleMap,
